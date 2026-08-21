@@ -257,7 +257,9 @@ class AdCPError(Exception):
     # Optional class-level suggestion default (#1417 round-8 review item 4): a subclass
     # whose every rejection shares one buyer fix hint (e.g. AUTH_REQUIRED →
     # "provide valid credentials") sets this so no raise site can forget the
-    # graded top-level ``suggestion``. Per-raise ``suggestion=`` overrides.
+    # graded top-level ``suggestion``. ``None`` means CODE_TABLE owns the value.
+    # There is no per-raise override: the ``suggestion=`` parameter was DELETED
+    # (salesagent-3dawm.12) precisely so a raise site cannot author one.
     _default_suggestion: ClassVar[str | None] = None
 
     # Instance attributes — set in __init__ from _default_* unless overridden.

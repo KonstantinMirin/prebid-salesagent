@@ -51,6 +51,7 @@ from src.core.exceptions import (
     AdCPBudgetExceededError,
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
+    AdCPConfigurationError,
     AdCPCreativeRejectedError,
     AdCPFormatNotFoundError,
     AdCPNotFoundError,
@@ -894,7 +895,13 @@ class TestMainFlowObligations:
 
     @pytest.mark.asyncio
     async def test_tenant_setup_validation(self):
-        """Tenant setup completion is validated before processing.
+        """Tenant setup completion is checked before processing, and an incomplete
+        seller setup is a CONFIGURATION_ERROR, not a VALIDATION_ERROR.
+
+        The buyer's request is well-formed; the SELLER has not finished configuring.
+        VALIDATION_ERROR is recovery=correctable, which would tell the buyer to fix a
+        request that has nothing wrong with it. CONFIGURATION_ERROR is terminal and
+        says "surface to a human at the seller" -- the only honest classification.
 
         Covers: UC-002-MAIN-04
         """
@@ -922,10 +929,10 @@ class TestMainFlowObligations:
                 "Setup incomplete", missing_tasks=[{"name": "Configure Products", "description": "Add products"}]
             )
 
-            with pytest.raises(AdCPValidationError) as exc_info:
+            with pytest.raises(AdCPConfigurationError) as exc_info:
                 await _create_media_buy_impl(req=req, identity=identity)
 
-            assert exc_info.value.error_code == "VALIDATION_ERROR"
+            assert exc_info.value.error_code == "CONFIGURATION_ERROR"
 
     @pytest.mark.asyncio
     async def test_ordering_mode_detection_package_based(self):
@@ -1812,7 +1819,13 @@ class TestExtensionObligations:
         assert error.details["error_code"] == "CURRENCY_MISMATCH"
 
     def test_product_with_no_pricing_options(self, integration_db):
-        """Product with no pricing options returns PRICING_ERROR.
+        """A product carrying no pricing option at all is a CONFIGURATION_ERROR.
+
+        Seller-side product misconfiguration, so the same reasoning as
+        test_tenant_setup_validation applies: the buyer cannot fix it and must not be
+        told to retry. NOTE: no generated scenario names a code for this path -- the
+        BR-UC-002 pricing Examples rows grade "error with suggestion" without naming
+        one -- so this assertion is the only grading it has.
 
         Covers: UC-002-EXT-N-02
         """
@@ -1822,15 +1835,15 @@ class TestExtensionObligations:
             tenant, _principal = env.setup_default_data()
             # Product created WITHOUT any pricing option.
             env.setup_product_chain(tenant, with_pricing=False)
-            with pytest.raises(AdCPValidationError) as excinfo:
+            with pytest.raises(AdCPConfigurationError) as excinfo:
                 env.call_impl(req=req)
 
-        # Pricing-error sites in _validate_pricing_model_selection tag the error
-        # via details={"error_code": "PRICING_ERROR"} while the wire code stays
-        # VALIDATION_ERROR — verify both layers so we don't regress either one.
+        # The former shape tagged details={"error_code": "PRICING_ERROR"} while the wire
+        # code stayed VALIDATION_ERROR, and asserted the same thing twice. Both are gone:
+        # the code IS the classification now, and details carries the product identity.
         exc = excinfo.value
-        assert exc.error_code == "VALIDATION_ERROR"
-        assert exc.error_code == "VALIDATION_ERROR"
+        assert exc.error_code == "CONFIGURATION_ERROR"
+        assert exc.details["product_id"] is not None
 
     @pytest.mark.asyncio
     async def test_creative_ids_not_in_database(self):

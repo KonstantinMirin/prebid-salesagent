@@ -46,9 +46,7 @@ if TYPE_CHECKING:
 
 def _adcp_error_from_code(
     error_code: str,
-    recovery: str | None = None,
     details: dict | None = None,
-    suggestion: str | None = None,
     field: str | None = None,
 ) -> Exception:
     """Reconstruct the exact AdCPError subclass from an error_code string.
@@ -138,26 +136,44 @@ def _adcp_error_from_code(
         f"code {error_code!r} reached harness reconstruction but is absent from CODE_TABLE — "
         "no raise site can emit it, so the wire produced a code nothing defines"
     )
-    # A reconstructed exception can no longer carry the wire's SENTENCE: ``message`` is
-    # derived from the code, so the only faithful source for text is the envelope itself.
+
+    # A reconstructed exception can no longer carry the wire's SENTENCE: ``message`` AND
+    # ``suggestion`` are both derived from the code (salesagent-3dawm.11/.12 deleted the
+    # parameters), so the only faithful source for text is the envelope itself. Passing
+    # either here was a TypeError, which the dispatchers swallowed into
+    # ``wire_error_envelope=None`` -- 44 integration tests failed with "no wire error
+    # envelope captured" rather than naming the real cause.
     # Assertions on message text therefore belong on ``wire_error_envelope`` (see
     # tests/CLAUDE.md § Error Verification Policy), which is where they should always
     # have been -- this reconstruction is lossy by construction.
+    # Construction is wrapped so that HARNESS DRIFT reports itself. The dispatchers
+    # catch Exception broadly to capture a production error as a transport outcome
+    # (dispatchers.py:104/:126/:180/:194), which means a TypeError raised HERE -- this
+    # function handing production a parameter production no longer accepts -- became
+    # ``wire_error_envelope=None``. That is how salesagent-3dawm.12 shipped: 44
+    # integration tests failed reporting "no wire error envelope captured" while the
+    # real cause was ``AdCPError.__init__() got an unexpected keyword argument
+    # 'suggestion'``, four call sites away. A signature change in production must be
+    # loud here, not silently indistinguishable from an operation that never errored.
+    def _build(cls_or_none: type | None) -> Exception:
+        try:
+            if cls_or_none is None:
+                return AdCPError(error_code=error_code, details=details, field=field)
+            return cls_or_none(details=details, field=field)
+        except TypeError as drift:
+            raise AssertionError(
+                f"harness/production drift reconstructing {error_code!r}: {drift}. "
+                "This function passes a parameter the exception class no longer accepts. "
+                "Fix the harness to match the production signature -- do NOT re-add the "
+                "parameter."
+            ) from drift
+
     exc_cls = _CODE_TO_CLASS.get(error_code)
     if exc_cls is None:
         # No typed class owns this code: name it on the base rather than routing through
         # a stand-in class whose identity would contradict the code it carries.
-        return AdCPError(
-            error_code=error_code,
-            details=details,
-            suggestion=suggestion,
-            field=field,
-        )
-    return exc_cls(
-        details=details,
-        suggestion=suggestion,
-        field=field,
-    )
+        return _build(None)
+    return _build(exc_cls)
 
 
 def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
@@ -201,35 +217,34 @@ def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
         parsed = ast.literal_eval(error_str)
         if isinstance(parsed, tuple) and len(parsed) >= 2:
             error_code = str(parsed[0])
-            message = str(parsed[1])
-            recovery = str(parsed[2]) if len(parsed) > 2 else None
 
             # 4th element is a JSON-serialized extra blob that may contain
-            # "details", "suggestion", and "field" as separate top-level keys
-            # (packed by tool_error_logging._translate_to_tool_error).
+            # "details" and "field" as separate top-level keys (packed by
+            # tool_error_logging._translate_to_tool_error). The blob's
+            # "suggestion", like parsed[1]'s message and parsed[2]'s recovery,
+            # is not read: the code owns all three, so reconstructing from the
+            # wire's copy could only disagree with the table.
             details = None
-            suggestion = None
             field = None
             if len(parsed) > 3 and parsed[3] is not None:
                 try:
                     extra = json.loads(str(parsed[3]))
                     if isinstance(extra, dict):
                         details = extra.get("details")
-                        suggestion = extra.get("suggestion")
                         field = extra.get("field")
                 except (json.JSONDecodeError, TypeError):
                     pass
 
-            return _adcp_error_from_code(error_code, recovery, details, suggestion, field)
+            return _adcp_error_from_code(error_code, details, field)
     except (ValueError, SyntaxError):
         pass
 
     # Fallback: try extract_error_info (handles ToolError("message") single-arg form)
     from src.core.tool_error_logging import extract_error_info
 
-    error_code, message, recovery = extract_error_info(exc)
+    error_code, _message, _recovery = extract_error_info(exc)
     if error_code != "TOOL_ERROR":
-        return _adcp_error_from_code(error_code, recovery)
+        return _adcp_error_from_code(error_code)
 
     return exc
 
@@ -251,28 +266,25 @@ def _envelope_to_adcp_error(envelope: dict) -> Exception | None:
     if not isinstance(envelope, dict):
         return None
     error_code: str | None = None
-    recovery: str | None = None
     details: dict | None = None
-    suggestion: str | None = None
     field: str | None = None
     adcp_err = envelope.get("adcp_error")
     if isinstance(adcp_err, dict):
         error_code = adcp_err.get("code")
-        recovery = adcp_err.get("recovery")
         details = adcp_err.get("details")
-        suggestion = adcp_err.get("suggestion")
         field = adcp_err.get("field")
     errors = envelope.get("errors")
     if isinstance(errors, list) and errors and isinstance(errors[0], dict):
         first = errors[0]
         error_code = error_code or first.get("code")
-        recovery = recovery or first.get("recovery")
         details = details or first.get("details")
-        suggestion = suggestion or first.get("suggestion")
         field = field or first.get("field")
     if not error_code:
         return None
-    reconstructed = _adcp_error_from_code(error_code, recovery, details, suggestion, field)
+    # ``recovery`` and ``suggestion`` are deliberately NOT read off the envelope:
+    # the reconstructed exception derives both from the code, and the envelope
+    # itself stays attached below for assertions that need the wire's own text.
+    reconstructed = _adcp_error_from_code(error_code, details, field)
     if reconstructed is not None:
         # Stash the REAL wire envelope on the reconstructed exception so the
         # A2A/REST dispatchers can capture the actual wire bytes (artifact

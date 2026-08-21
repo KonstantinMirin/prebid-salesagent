@@ -50,7 +50,6 @@ def _inject_privilege_error(ctx: dict) -> None:
     # correctable) but no typed subclass models it, so synthesize the code.
     error = AdCPError(
         error_code="PERMISSION_DENIED",
-        recovery="correctable",
         details={"suggestion": "Request admin privileges or contact an administrator to perform this action"},
     )
     mock_adapter.update_media_buy.side_effect = error
@@ -689,7 +688,6 @@ def given_media_buy_uncancellable(ctx: dict) -> None:
     mock_adapter = env.mock["update_adapter"].return_value
     mock_adapter.update_media_buy.side_effect = AdCPError(
         error_code="NOT_CANCELLABLE",
-        recovery="correctable",
         details={"suggestion": "Pause the buy instead (paused: true) or contact the seller to arrange cancellation"},
     )
 
@@ -712,7 +710,6 @@ def given_adapter_error_during_update(ctx: dict) -> None:
     env = ctx["env"]
     mock_adapter = env.mock["adapter"].return_value
     error = AdCPAdapterError(
-        recovery="retryable",
         details={"suggestion": "Retry the operation or contact ad server support"},
     )
     # Inject into all adapter methods that update_media_buy_impl might call.

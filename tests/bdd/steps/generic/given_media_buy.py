@@ -2335,16 +2335,14 @@ def given_ad_server_rejects_creative_upload(ctx: dict) -> None:
     from src.core.exceptions import AdCPAdapterError
 
     message = "Ad server rejected the creative upload"
-    suggestion = "Retry the upload or verify the creative meets the ad server's requirements"
 
     env = ctx["env"]
     mock_adapter = env.mock["adapter"].return_value
-    # Model a CONFORMANT adapter error: the buyer suggestion rides the first-class
-    # suggestion= param so the envelope builder lifts it to the top-level error.json
-    # position. Burying it in details={"suggestion": ...} yields a non-conformant wire
-    # error (empty top-level suggestion). The e2e sibling below keeps error_details;
-    # mock_ad_server pops it back to first-class.
-    mock_adapter.add_creative_assets.side_effect = AdCPAdapterError(suggestion=suggestion)
+    # Model a CONFORMANT adapter error: the buyer suggestion arrives at the top-level
+    # error.json position on its own, because the code resolves it from CODE_TABLE. The
+    # step used to hand-author it through a suggestion= parameter; that parameter no
+    # longer exists, and the scenario asserts the code rather than the sentence.
+    mock_adapter.add_creative_assets.side_effect = AdCPAdapterError()
     # E2E path: write the failure to the adapter test-behavior config so the
     # Docker-hosted adapter raises the same error on creative upload
     # (MockAdServer.add_creative_assets reads the fail_on_upload flag).

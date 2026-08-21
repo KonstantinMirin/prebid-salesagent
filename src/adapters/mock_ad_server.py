@@ -334,11 +334,13 @@ class MockAdServer(AdServerAdapter):
         the same fault the in-process mock raises via side_effect. No-op when
         the flag is absent.
 
-        The buyer suggestion rides the first-class ``suggestion=`` param —
-        error.json places it at the top level of the error object, so a copy
-        buried in ``details`` never reaches the protocol position
-        (#1417, same disease as cx41/58hl). ``error_details`` from
-        test behavior stays in ``details`` for any other injected keys.
+        The buyer suggestion reaches error.json's top-level position on its own,
+        because the raised code resolves it from CODE_TABLE. This used to pass a
+        first-class ``suggestion=`` param for that; the param was deleted
+        (salesagent-3dawm.12) and the derivation replaced it, so a copy buried in
+        ``details`` is still wrong but there is no longer anything to hand over.
+        ``error_details`` from test behavior stays in ``details`` for any other
+        injected keys.
         """
         test_behavior = self._read_test_behavior()
         if not test_behavior.get(flag):
