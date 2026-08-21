@@ -41,6 +41,7 @@ permits removing an entry, only adding one — so this module reads
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -49,12 +50,16 @@ from adcp.signing.jws import JWS_ALG_TO_INTERNAL
 from adcp.signing.revocation_fetcher import REVOCATION_LIST_TYP
 
 from src.core.agent_identity import canonical_agent_url
+from src.core.exceptions import AdCPConfigurationError
 from src.core.signing._rfc3339 import rfc3339
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
 
     from src.core.database.models import SigningKey, Tenant
+    from src.core.database.repositories.signing_key import SigningKeyRepository
     from src.core.signing.provider import SigningMaterial
 
 #: The JWS ``alg`` name (what the protected header carries) for each internal
@@ -137,3 +142,50 @@ def sign_revocation_list(payload: dict[str, Any], material: SigningMaterial) -> 
             }
         ],
     }
+
+
+def publishable_revocation_list(
+    repo: SigningKeyRepository,
+    tenant: Tenant,
+    *,
+    now: datetime,
+) -> tuple[dict[str, Any], datetime] | None:
+    """The signed combined revocation list for *tenant*, and when it goes stale.
+
+    ONE operation, so the route does not assemble a pipeline out of layer primitives.
+    Before #1757 the ``/.well-known`` handler resolved the signing material, read the
+    revoked rows, reached into config for the interval, built the payload and signed it —
+    five layer decisions in an HTTP handler, each of which could be made differently by
+    the next caller that needed this document.
+
+    Returns ``(document, next_update)``, or ``None`` when no active request-signing key
+    resolves. ``None`` is a DELIBERATE WITHDRAWAL, not an error: revoking a tenant's only
+    key withdraws this document rather than serving one unsigned or signed by a dead key
+    (security.mdx :1543). "Rotate before revoke" is the operational invariant that
+    behaviour asserts, and the caller turns it into a 404.
+
+    ``next_update`` is returned as an INSTANT, not as a cache lifetime. When the document
+    goes stale is a property of the revocation interval — a domain fact, and the reason
+    this document's freshness is not ``CACHE_MAX_AGE_SECONDS`` like its three siblings.
+    Converting that instant into a ``max-age`` is HTTP shaping and stays with the
+    transport.
+    """
+    from src.core.config import get_config
+    from src.core.signing.provider import resolve_signing_material
+
+    try:
+        material = resolve_signing_material(repo, tenant_id=tenant.tenant_id, now=now)
+    except AdCPConfigurationError:
+        logger.warning(
+            "[TRUST-ROOT] no active request-signing key for tenant %s — revocation list unpublishable",
+            tenant.tenant_id,
+        )
+        return None
+
+    payload = build_revocation_list(
+        tenant,
+        repo.all_revoked(),
+        now=now,
+        interval_seconds=get_config().signing.revocation_interval_seconds,
+    )
+    return sign_revocation_list(payload, material), datetime.fromisoformat(payload["next_update"])

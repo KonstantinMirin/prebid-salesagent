@@ -78,7 +78,11 @@ from src.core.signing.provider import (
     signing_config_from_material,
 )
 from src.core.signing.request_verifier_middleware import RequestSignatureMiddleware
-from src.core.signing.revocation_list import build_revocation_list, sign_revocation_list
+from src.core.signing.revocation_list import (
+    build_revocation_list,
+    publishable_revocation_list,
+    sign_revocation_list,
+)
 from src.core.signing.trust_root import (
     build_adagents_json,
     build_brand_json,
@@ -150,6 +154,7 @@ __all__ = [
     "operation_for_rest_route",
     "origin_is_publishable",
     "posture_for_tenant",
+    "publishable_revocation_list",
     "posture_from_declarations",
     "provision_signing_key",
     "reject_malformed_target",

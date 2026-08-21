@@ -43,13 +43,48 @@ def _functions_calling_material_resolvers(tree: ast.Module) -> set[str]:
     return found
 
 
-def test_exactly_one_handler_resolves_signing_material():
+def test_no_handler_resolves_signing_material():
+    """STRENGTHENED from "exactly one" to "none" (#1757).
+
+    The invariant is unchanged and its bar went UP. Material resolution moved out of this
+    module entirely, into ``src.core.signing.publishable_revocation_list`` — the route now
+    calls ONE layer operation instead of assembling resolve -> read -> build -> sign
+    itself. So no handler here touches private key material, not even the one that
+    legitimately needed to.
+
+    This is not the guard going quiet because its subject vanished: the companion test
+    below pins that the revocation handler still reaches the material-resolving operation,
+    so "nobody resolves material" cannot be satisfied by the document silently ceasing to
+    be signed.
+    """
     tree = ast.parse(WELL_KNOWN_MODULE.read_text(encoding="utf-8"), filename=str(WELL_KNOWN_MODULE))
     resolvers = _functions_calling_material_resolvers(tree)
-    assert resolvers == {"_governance_revocations_handler"}, (
-        "exactly one well_known.py handler may resolve signing material "
+    assert resolvers == set(), (
+        "no well_known.py handler may resolve signing material directly "
         "(resolve_signing_material/resolve_signing_provider) -- the three secret-free "
-        f"bootstrap documents must never touch private key material. Found: {sorted(resolvers)}"
+        "bootstrap documents must never touch private key material, and the revocation "
+        f"list reaches it through publishable_revocation_list. Found: {sorted(resolvers)}"
+    )
+
+
+def test_exactly_one_handler_publishes_the_revocation_list():
+    """The signed document still has exactly one producer, and it is the right handler.
+
+    Paired with the test above so that "no handler resolves material" states something.
+    Without this, deleting the signing step entirely would satisfy that assertion — the
+    three bootstrap documents would stay secret-free and the revocation list would quietly
+    stop being signed.
+    """
+    tree = ast.parse(WELL_KNOWN_MODULE.read_text(encoding="utf-8"), filename=str(WELL_KNOWN_MODULE))
+    publishers = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        and next(iter_call_expressions(node, name="publishable_revocation_list"), None) is not None
+    }
+    assert publishers == {"_governance_revocations_handler"}, (
+        "exactly one handler may publish the combined revocation list, and it must be "
+        f"_governance_revocations_handler. Found: {sorted(publishers)}"
     )
 
 

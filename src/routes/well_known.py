@@ -62,15 +62,12 @@ from src.core.agent_identity import (
 from src.core.config import get_config
 from src.core.database.repositories.uow import TrustRootUoW
 from src.core.domain_routing import route_landing_page
-from src.core.exceptions import AdCPConfigurationError
 from src.core.signing import (
     CACHE_MAX_AGE_SECONDS,
     build_adagents_json,
     build_brand_json,
     build_jwks,
-    build_revocation_list,
-    resolve_signing_material,
-    sign_revocation_list,
+    publishable_revocation_list,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -182,32 +179,31 @@ def _jwks_json_handler(uow: TrustRootUoWType, tenant: Tenant, now: datetime) -> 
 def _governance_revocations_handler(uow: TrustRootUoWType, tenant: Tenant, now: datetime) -> Document | None:
     """The combined revocation list this agent PUBLISHES as a signer (security.mdx :1543).
 
-    The ONLY handler in this module that resolves signing MATERIAL — a
-    structural guard pins that. Returns None (-> 404, its own log message,
-    never the vanished-tenant one) when no active request-signing key
-    resolves: revoking a tenant's only key withdraws this document rather
-    than serving one unsigned or signed by a dead key. Fail-closed, not a
-    security hole — "rotate before revoke" is the operational invariant this
-    behavior asserts.
+    HTTP CONCERNS ONLY. The document is one layer operation —
+    :func:`~src.core.signing.publishable_revocation_list` — which resolves the signing
+    material, reads the revoked rows, applies the configured interval, builds and signs.
+    This handler used to assemble those five steps itself (#1757); a route that composes a
+    pipeline out of layer primitives is a second place the pipeline can be composed
+    differently.
+
+    ``None`` -> 404 with its own log message, never the vanished-tenant one: revoking a
+    tenant's only key WITHDRAWS this document rather than serving one unsigned or signed
+    by a dead key. Fail-closed, and "rotate before revoke" is the operational invariant it
+    asserts.
+
+    The max-age is derived HERE and not in the layer, deliberately. When the document goes
+    stale is a domain fact (the revocation interval), so the layer returns ``next_update``
+    as an INSTANT; turning an instant into a cache lifetime is HTTP shaping. It is also why
+    this document alone does not use ``CACHE_MAX_AGE_SECONDS`` like its three siblings —
+    their freshness is a published TTL, this one's is when the next list is due.
     """
     assert uow.signing_keys is not None
-    try:
-        material = resolve_signing_material(uow.signing_keys, tenant_id=tenant.tenant_id, now=now)
-    except AdCPConfigurationError:
-        logger.warning(
-            "[TRUST-ROOT] no active request-signing key for tenant %s — revocation list unpublishable",
-            tenant.tenant_id,
-        )
+    published = publishable_revocation_list(uow.signing_keys, tenant, now=now)
+    if published is None:
         return None
 
-    revoked_keys = uow.signing_keys.all_revoked()
-    interval_seconds = get_config().signing.revocation_interval_seconds
-    payload = build_revocation_list(tenant, revoked_keys, now=now, interval_seconds=interval_seconds)
-    document = sign_revocation_list(payload, material)
-
-    next_update = datetime.fromisoformat(payload["next_update"])
-    max_age = max(1, int((next_update - now).total_seconds()))
-    return document, max_age
+    document, next_update = published
+    return document, max(1, int((next_update - now).total_seconds()))
 
 
 @router.get(BRAND_JSON_PATH)
