@@ -3578,7 +3578,7 @@ async def _create_media_buy_impl(
             response = _execute_adapter_media_buy_creation(
                 req, packages, start_time, end_time, package_pricing_info, principal, testing_ctx, tenant=tenant
             )
-        except Exception as adapter_error:
+        except Exception:
             raise
 
         # Check if adapter returned an error response FIRST (before accessing any fields)
