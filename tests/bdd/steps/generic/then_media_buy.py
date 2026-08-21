@@ -726,34 +726,28 @@ def then_each_error_has_suggestion(ctx: dict) -> None:
 
 @then('the error should include "retry_after" field')
 def then_error_has_retry_after(ctx: dict) -> None:
-    """Assert the error includes a retry_after hint (transient error recovery).
+    """Assert the WIRE envelope carries a positive retry_after hint.
 
-    Step claims the field should be 'included' — verify it exists and contains
-    a positive numeric value (retry delay in seconds).
-
-    Checks both ctx["error"] (AdCPError from dispatch) and ctx["error_response"]
-    (structured error response) to match the dispatch contract.
+    Reads ``errors[0].details`` from the envelope the buyer received. The former
+    implementation inspected a reconstructed ``AdCPError`` and fell back to
+    ``getattr(error, "retry_after", None)`` on anything else — a read that
+    silently yields ``None`` for an object that is not the expected shape, which
+    is indistinguishable from a wire that genuinely omitted the hint
+    (salesagent-3dawm.18).
     """
-    # Check both error keys to match the dispatch contract used by other error steps
-    error = ctx.get("error") or ctx.get("error_response")
-    assert error is not None, (
-        "No error recorded in ctx (checked both 'error' and 'error_response') — "
-        "step claims error should include retry_after but no error was captured"
+    result = ctx["result"]
+    code = result.wire_error_code()
+    assert code is not None, (
+        "expected a wire rejection carrying retry_after, but no wire error envelope was "
+        "captured — the operation either succeeded or errored before reaching a transport"
     )
-    # AdCPError stores retry_after in details dict
-    from src.core.exceptions import AdCPError
-
-    retry_after = None
-    if isinstance(error, AdCPError):
-        assert error.details is not None, "Expected error details with retry_after"
-        assert "retry_after" in error.details, f"Expected 'retry_after' in error details, got: {error.details}"
-        retry_after = error.details["retry_after"]
-    else:
-        # adcp.types.Error model — check for retry_after attribute
-        retry_after = getattr(error, "retry_after", None)
-        if retry_after is None and hasattr(error, "details"):
-            retry_after = (error.details or {}).get("retry_after")
-    assert retry_after is not None, f"Expected retry_after field on error, but it is absent: {error}"
+    # wire_error_details asserts the code first, so a details block belonging to a
+    # DIFFERENT error cannot satisfy this step.
+    details = result.wire_error_details(code)
+    retry_after = details.get("retry_after")
+    assert retry_after is not None, (
+        f"expected a retry_after hint in errors[0].details for {code}, got {dict(details)!r}"
+    )
     # retry_after should be a positive number (seconds to wait before retrying)
     assert isinstance(retry_after, (int, float)), (
         f"Expected retry_after to be a number (seconds), got {type(retry_after).__name__}: {retry_after!r}"
