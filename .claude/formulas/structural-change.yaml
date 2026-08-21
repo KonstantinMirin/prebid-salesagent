@@ -193,6 +193,16 @@ iterate:
         and e2e_rest, asserting on the wire envelope. Route that half through
         the `author-bdd-steps` skill. A behavior change graded by a unit test is
         not graded.
+
+        ## On success, and ONLY on success, stamp the task
+
+        ```bash
+        bd label add {TASK_ID} atom:predict
+        ```
+
+        The implement atom's gate reads this label off {TASK_ID}. Do NOT add it until all
+        four fields are recorded -- the label IS the gate, so stamping an incomplete
+        prediction silently authorises implementation against nothing.
       acceptance: "measure_cmd, before, predicted, and deletes recorded in {TASK_ID}; no file added under tests/unit/ or tests/integration/; BDD scenario authored if behavior-delta is yes."
       depends_on: ["solution-review-{TASK_ID}"]
       labels: ["atom:predict", "atom:gate"]

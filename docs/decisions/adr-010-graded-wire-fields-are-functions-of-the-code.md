@@ -70,11 +70,18 @@ a per-site decision, and 4 of them look like a wrong-class problem rather than a
 re-classing those changes the buyer-visible **code**, which requires spec grounding under
 CLAUDE.md's Spec-Grounding Gate before any code is written.
 
-**A testing affordance is the current blocker for recovery.** Two sites
-(`mock_ad_server.py`, `helpers/adapter_helpers.py`) read `recovery` from a test-behaviour hook,
-so a testing convenience is keeping a production parameter alive that lets 14 real sites
-contradict the pin. The hook needs a different injection path; the production signature must not
-be shaped by it.
+**A testing affordance is entangled with recovery.** Two production sites
+(`mock_ad_server.py`, `helpers/adapter_helpers.py`) read `recovery` from a test-behaviour hook.
+CORRECTION (independent scope review, 2026-08-21): an earlier note here claimed that hook has no
+writer. It does — `tests/bdd/steps/generic/given_media_buy.py:164` sets it, reached from `:2354`
+(`"transient"`) and `:2854` (`"retryable"`). A line-scan missed them because the key and the value
+are on different lines. The conclusion survives for a *better* reason: `"transient"` is already
+`AdCPAdapterError`'s table value, so that writer is value-neutral, and **`"retryable"` is not in
+`RecoveryHint` at all** — the field is assigned without validation, so an invalid recovery reaches
+the buyer's wire today. Deleting the parameter is the only fix that closes that; flipping call
+sites does not. `.11`/`.12` must therefore edit `tests/` too — 6 sites pass `recovery=`/
+`suggestion=` (`harness/_base.py:150`, `given_media_buy.py:2351`/`:2839`,
+`uc003_ext_error_scenarios.py:51`/`:690`/`:714`), which no bead currently mentions.
 
 **When to revisit.** If AdCP ever makes recovery or suggestion request-dependent rather than
 code-dependent, (2) and (3) stop being true and this ADR is superseded.
@@ -85,5 +92,41 @@ code-dependent, (2) and (3) stop being true and this ADR is superseded.
 |---|---|
 | delete the `recovery=` parameter; resolve the 14 contradicting sites | `salesagent-3dawm.11` |
 | delete the `suggestion=` parameter (61 sites) | `salesagent-3dawm.12` |
-| drop `GateFailure.suggestion` (required field) | `salesagent-3dawm.13` — subsumed by `.14` |
+| drop `GateFailure.suggestion`/`message` (required fields) | `salesagent-3dawm.13` — **NOT subsumed**; must FOLLOW `.14` |
 | advisory constructible only from a typed exception; delete the normalizer and its guard | `salesagent-3dawm.14` |
+
+## Amendment, 2026-08-21 — `model_copy` is guarded, not designed out
+
+**Decision (owner).** Keep construction-time derivation. Do NOT contort the type system to make a
+derived field proof against `pydantic.model_copy(update=...)`. Instead add an AST guard that bans
+`model_copy` on the AdCPError / advisory-Error classes, with a **zero-entry allowlist**.
+
+**Why this is the right trade, stated plainly.** It is a DETECT, and this ADR's own rule is REMOVE.
+The exception is deliberate. Measured, the remove options are all worse:
+
+    model_validator(mode="after")   derives at construction, but model_copy(update=) OVERWRITES it
+    frozen = True                   same — model_copy bypasses it too
+    @computed_field                 TypeError at class creation: pydantic refuses to let a subclass
+                                    replace an inherited field, and message/suggestion/recovery are
+                                    inherited from the SDK's Error
+    override model_copy()           works, but puts a pydantic-internals workaround in a wire model
+
+So closing it structurally means either abandoning SDK inheritance (violating critical pattern #1)
+or shipping a `model_copy` override in a schema class. A guard is cheaper and more honest than
+either.
+
+**And the hole is not a human-shaped hole.** The rule for a person writing a raise site is: subclass,
+raise the class for the code you mean, put specifics in `details`. Nobody reaches for
+`model_copy(update={"message": ...})` to edit a graded wire field. This is an agent-shaped hole —
+reachable only by someone who knows an obscure pydantic escape and looks for it — which is exactly
+what a cheap AST check is for.
+
+**Zero allowlist is arithmetically achievable, not aspirational.** MEASURED: 9 `model_copy` calls in
+src/, of which exactly ONE is on an error class — src/core/exceptions.py:128, inside
+`normalize_advisory_errors`, the function salesagent-3dawm.14 deletes. The other 8 are on
+`base_format`, `identity`, `adcp_response`, `response`, `pkg` — non-error models the guard does not
+scan. So the guard lands with no violations because .14 removes its only legitimate caller.
+
+**Honest cost:** guard files go 134 -> 135. This epic has removed zero guards and now adds one. That
+is a real regression against "remove the guards", accepted knowingly because the alternative is
+worse, and recorded here rather than buried.
