@@ -58,7 +58,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, runtime_checkable
 
 import httpx
 from adcp.webhooks import WebhookDeliveryResult, WebhookSender
@@ -71,7 +71,6 @@ from src.core.signing.provider import resolve_signing_material
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from adcp.webhook_auth import JwkSignerStrategy
 
-    from src.core.database.models import PushNotificationConfig
     from src.core.database.repositories.signing_key import SigningKeyRepository
 
 logger = logging.getLogger(__name__)
@@ -145,7 +144,32 @@ class _UnauthenticatedStrategy:
         return frozenset({"content-length", "content-type", "host"})
 
 
-def legacy_auth_mode(config: PushNotificationConfig | None) -> str | None:
+@runtime_checkable
+class WebhookAuthConfig(Protocol):
+    """What the sender READS off a receiver registration — three attributes, no more.
+
+    Declared structurally so the boundary names the SHAPE it needs instead of a concrete
+    ORM class. Both a ``PushNotificationConfig`` row and the delivery service's frozen
+    ``QueuedWebhook`` projection satisfy it, which is what lets the retry loop carry
+    primitives instead of a live ORM instance whose lazy-loads need a session that may
+    already be closed (#1757, salesagent-n78j0.4).
+
+    Naming the concrete model here instead was a real constraint, not a cosmetic one: it
+    made "queue a projection rather than the row" a type error, so the only way to keep
+    mypy happy was to keep the ORM object on the queue.
+    """
+
+    @property
+    def url(self) -> str: ...
+
+    @property
+    def authentication_type(self) -> str | None: ...
+
+    @property
+    def authentication_token(self) -> str | None: ...
+
+
+def legacy_auth_mode(config: WebhookAuthConfig | None) -> str | None:
     """Which legacy mode *config* selected, or ``None`` for the RFC 9421 arm.
 
     ``None`` is returned only when ``authentication`` is ABSENT, which is the default
@@ -307,7 +331,7 @@ def legacy_hmac_fallback_supported() -> bool:
     return bool(_HMAC_SCHEMES)
 
 
-def _log_legacy_registration(config: PushNotificationConfig, mode: str) -> None:
+def _log_legacy_registration(config: WebhookAuthConfig, mode: str) -> None:
     """security.mdx @ v3.1.1 :1464 — "Sellers MUST log" every legacy registration.
 
     The inbound twin of this obligation is ``src/core/signing/operations.py``
@@ -424,7 +448,7 @@ def _rfc9421_sender(
 
 def build_webhook_sender(
     *,
-    config: PushNotificationConfig | None,
+    config: WebhookAuthConfig | None,
     tenant_id: str | None,
     repo: SigningKeyRepository | None,
     now: datetime,
@@ -598,16 +622,21 @@ def _warn_unsignable_challenge(tenant_id: str, _canonical: Any) -> None:
 
 
 @contextmanager
-def _signing_repo(repo: SigningKeyRepository | None, tenant_id: str | None) -> Iterator[SigningKeyRepository | None]:
-    """The tenant-scoped signing repository, opening a session only if we must.
+def _signing_repo(tenant_id: str | None) -> Iterator[SigningKeyRepository | None]:
+    """The tenant-scoped signing repository, on a session THIS function owns.
 
-    Callers that already hold a session (``webhook_delivery_service`` reads its
-    receiver rows inside one) pass their own repository; callers that do not get one
-    opened here rather than each growing its own ``get_db_session`` + repository
-    construction — the duplication the DRY invariant names.
+    It always opens its own and takes none from a caller. A ``repo=`` parameter used to
+    let a caller donate one built on ITS session, which is how the webhook delivery loop
+    came to hold a pooled connection across ``time.sleep`` and a POST to a buyer-supplied
+    URL: the connection's lifetime belonged to whoever called, not to the work.
+
+    Removing the parameter makes that UNREPRESENTABLE rather than merely discouraged — a
+    caller cannot donate a lifetime it has no way to pass (#1757, salesagent-n78j0.4).
+    The session opened here lives for the key read and closes with the block, so it is
+    never held across a delivery.
     """
-    if repo is not None or tenant_id is None:
-        yield repo
+    if tenant_id is None:
+        yield None
         return
 
     from src.core.database.database_session import get_db_session
@@ -620,9 +649,8 @@ def _signing_repo(repo: SigningKeyRepository | None, tenant_id: str | None) -> I
 @asynccontextmanager
 async def adcp_webhook_sender(
     *,
-    config: PushNotificationConfig | None,
+    config: WebhookAuthConfig | None,
     tenant_id: str | None,
-    repo: SigningKeyRepository | None = None,
     now: datetime | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> AsyncIterator[WebhookSender]:
@@ -654,7 +682,7 @@ async def adcp_webhook_sender(
     SDK check; closing that is the egress-seam work in GH #1802.
     """
     with ExitStack() as stack:
-        resolved_repo = stack.enter_context(_signing_repo(repo, tenant_id))
+        resolved_repo = stack.enter_context(_signing_repo(tenant_id))
         yield build_webhook_sender(
             config=config,
             tenant_id=tenant_id,
@@ -669,9 +697,8 @@ async def deliver_adcp_webhook(
     url: str,
     payload: dict[str, Any],
     idempotency_key: str,
-    config: PushNotificationConfig | None,
+    config: WebhookAuthConfig | None,
     tenant_id: str | None,
-    repo: SigningKeyRepository | None = None,
     now: datetime | None = None,
     extra_headers: Mapping[str, str] | None = None,
     client: httpx.AsyncClient | None = None,
@@ -682,7 +709,7 @@ async def deliver_adcp_webhook(
     its retries; the SDK injects it into the signed body, so a fresh key per attempt
     would defeat receiver-side dedup.
     """
-    async with adcp_webhook_sender(config=config, tenant_id=tenant_id, repo=repo, now=now, client=client) as sender:
+    async with adcp_webhook_sender(config=config, tenant_id=tenant_id, now=now, client=client) as sender:
         return await sender.send_raw(
             url=url,
             idempotency_key=idempotency_key,
@@ -696,9 +723,8 @@ def deliver_adcp_webhook_sync(
     url: str,
     payload: dict[str, Any],
     idempotency_key: str,
-    config: PushNotificationConfig | None,
+    config: WebhookAuthConfig | None,
     tenant_id: str | None,
-    repo: SigningKeyRepository | None = None,
     now: datetime | None = None,
     extra_headers: Mapping[str, str] | None = None,
 ) -> WebhookDeliveryResult:
@@ -719,7 +745,6 @@ def deliver_adcp_webhook_sync(
             idempotency_key=idempotency_key,
             config=config,
             tenant_id=tenant_id,
-            repo=repo,
             now=now,
             extra_headers=extra_headers,
         )

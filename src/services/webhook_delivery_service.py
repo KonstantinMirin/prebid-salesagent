@@ -20,6 +20,7 @@ import random
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
@@ -27,6 +28,7 @@ from typing import Any
 import httpx
 from adcp import get_adcp_spec_version
 from adcp.webhooks import generate_webhook_idempotency_key
+from pydantic import JsonValue
 
 from src.core.signing import deliver_adcp_webhook_sync
 from src.core.webhook_validator import (
@@ -129,6 +131,50 @@ class CircuitBreaker:
                 logger.warning("Circuit breaker reopened (recovery test failed)")
 
 
+@dataclass(frozen=True, slots=True)
+class QueuedWebhook:
+    """One queued delivery — PRIMITIVES ONLY, and that is the invariant.
+
+    Every field is a plain value. No ORM model, no ``Mapped[...]``, no session, no
+    repository. That is what makes the retry loop STRUCTURALLY unable to hold a database
+    connection: a loop whose only input is primitives cannot lazy-load a relationship,
+    cannot touch a session, and cannot keep one alive across ``time.sleep`` — no matter
+    how many call frames deep the sleep sits (#1757, salesagent-n78j0.4).
+
+    THIS REPLACED A ``dict[str, Any]`` CARRYING TWO NON-PRIMITIVES:
+
+    * ``signing_repo`` — a ``SigningKeyRepository`` built on the caller's open session.
+      That was the connection riding on the queue, and it is why the delivery loop ran
+      inside a ``with get_db_session()`` block at all.
+    * ``config`` — a live ``PushNotificationConfig`` ORM row, whose lazy-loads need a
+      session that may well be closed by the time a retry touches it.
+
+    ``url`` / ``authentication_type`` / ``authentication_token`` are exactly the three
+    attributes the sender reads off a config (``webhook_sender_factory`` :167-168, :183,
+    :321-322, :445, :452), so this projection satisfies the same attribute contract the
+    ORM row did and is passed as ``config=`` unchanged — the sender's signature does not
+    move.
+
+    ``payload`` is ``dict[str, JsonValue]``, NOT ``dict[str, Any]``: ``JsonValue`` is
+    pydantic's recursive JSON type, so an ORM object in the payload is a TYPE ERROR at
+    every producer rather than a runtime possibility. It is deliberately NOT pre-
+    serialized bytes — ``_deliver_with_backoff`` must "serialize, authenticate and POST
+    as one act, so the bytes signed are the bytes sent" (#1441), and bytes on the queue
+    would be something the sent body could diverge from.
+
+    Pinned by ``tests/unit/test_architecture_repository_pattern.py``; the mutations that
+    turn it red are an ORM-typed or ``Mapped[...]`` field, or dropping ``frozen=True``.
+    """
+
+    url: str
+    authentication_type: str | None
+    authentication_token: str | None
+    payload: dict[str, JsonValue]
+    tenant_id: str
+    idempotency_key: str
+    timestamp: datetime
+
+
 class WebhookQueue:
     """Bounded queue for webhook delivery per endpoint."""
 
@@ -143,7 +189,7 @@ class WebhookQueue:
         self._lock = threading.Lock()
         self._dropped_count = 0
 
-    def enqueue(self, webhook_data: dict[str, Any]) -> bool:
+    def enqueue(self, webhook_data: QueuedWebhook) -> bool:
         """Add webhook to queue.
 
         Args:
@@ -163,7 +209,7 @@ class WebhookQueue:
             self.queue.append(webhook_data)
             return True
 
-    def dequeue(self) -> dict[str, Any] | None:
+    def dequeue(self) -> QueuedWebhook | None:
         """Remove and return oldest webhook from queue.
 
         Returns:
@@ -337,14 +383,8 @@ class WebhookDeliveryService:
 
             from src.core.database.database_session import get_db_session
             from src.core.database.models import PushNotificationConfig
-            from src.core.database.repositories.signing_key import SigningKeyRepository
 
             with get_db_session() as db:
-                # The signing boundary needs the tenant's key material. Building the
-                # repository on THIS session (rather than opening a second one per
-                # delivery) is why ``_deliver_with_backoff`` runs inside this block.
-                signing_repo = SigningKeyRepository(db, tenant_id)
-
                 stmt = select(PushNotificationConfig).filter_by(
                     tenant_id=tenant_id, principal_id=principal_id, is_active=True
                 )
@@ -391,19 +431,29 @@ class WebhookDeliveryService:
                     if self._reject_unsafe_outbound_url(config.url, circuit_breaker):
                         continue
 
-                    # Add to queue (bounded). ``tenant_id`` and the signing repository
-                    # ride on the entry because ``_deliver_with_backoff`` is reached
-                    # through ``endpoint_key`` alone, and splitting that composite
-                    # string back apart to recover a tenant id is not a data path.
-                    webhook_data = {
-                        "config": config,
-                        "payload": delivery_payload,
-                        "timestamp": datetime.now(UTC),
-                        "tenant_id": tenant_id,
-                        "signing_repo": signing_repo,
+                    # Add to queue (bounded). ``tenant_id`` rides on the entry because
+                    # ``_deliver_with_backoff`` is reached through ``endpoint_key``
+                    # alone, and splitting that composite string back apart to recover a
+                    # tenant id is not a data path. It is a ``str``, so it costs nothing.
+                    # THE SIGNING REPOSITORY USED TO RIDE ALONG FOR THE SAME STATED
+                    # REASON, and that was the fault: a repository carries a SESSION, so
+                    # the entry carried a pooled connection into a loop that sleeps and
+                    # POSTs to a buyer-supplied URL. ``_signing_repo`` now opens its own
+                    # short session, so there is nothing left to hand over (#1757).
+                    # Projected off the ORM row HERE, while the session is open — that
+                    # read is legitimate and stays inside the block. What LEAVES the
+                    # block is primitives only, so nothing downstream can reach back
+                    # into a session (#1757).
+                    webhook_data = QueuedWebhook(
+                        url=config.url,
+                        authentication_type=config.authentication_type,
+                        authentication_token=config.authentication_token,
+                        payload=delivery_payload,
+                        timestamp=datetime.now(UTC),
+                        tenant_id=tenant_id,
                         # ONE key per distinct event, reused across its retries.
-                        "idempotency_key": generate_webhook_idempotency_key(),
-                    }
+                        idempotency_key=generate_webhook_idempotency_key(),
+                    )
 
                     if not queue.enqueue(webhook_data):
                         logger.warning("⚠️ Queue full for %s, webhook dropped", safe_url)
@@ -455,9 +505,8 @@ class WebhookDeliveryService:
         if not webhook_data:
             return False
 
-        config = webhook_data["config"]
-        payload = webhook_data["payload"]
-        safe_url = webhook_url_for_log(config.url)
+        payload = webhook_data.payload
+        safe_url = webhook_url_for_log(webhook_data.url)
 
         # Authentication is NOT decided here — the receiver's registration selects
         # exactly one mode at the single boundary (#1291 C1). What stays local is the
@@ -482,12 +531,11 @@ class WebhookDeliveryService:
                 # ``follow_redirects`` at its False default, so an open redirect
                 # cannot walk the POST off the vetted host.
                 delivery = deliver_adcp_webhook_sync(
-                    url=config.url,
+                    url=webhook_data.url,
                     payload=payload,
-                    idempotency_key=webhook_data["idempotency_key"],
-                    config=config,
-                    tenant_id=webhook_data["tenant_id"],
-                    repo=webhook_data["signing_repo"],
+                    idempotency_key=webhook_data.idempotency_key,
+                    config=webhook_data,
+                    tenant_id=webhook_data.tenant_id,
                     extra_headers=headers,
                 )
 

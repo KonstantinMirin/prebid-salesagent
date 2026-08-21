@@ -1476,3 +1476,174 @@ class TestRepositoriesDoNotImportProtocolResponseTypes:
         today (e.g. src/core/database/repositories/media_buy.py) -- not a violation."""
         generic = ast.parse("from adcp.types import ContextObject, Error\n")
         assert _scan_for_protocol_imports(generic) == []
+
+
+# ---------------------------------------------------------------------------
+# The webhook delivery path owns its connection — enforced by SHAPE, not by scan
+# ---------------------------------------------------------------------------
+#
+# These two grade the same fault from opposite ends: a POOLED DB CONNECTION HELD ACROSS
+# time.sleep() AND A POST TO A BUYER-SUPPLIED URL, so a hanging receiver consumes a
+# database connection.
+#
+# A LEXICAL GUARD FOR THAT WAS WRITTEN AND DISCARDED, and the reason belongs here so it
+# is not helpfully re-added. The obvious invariant — "a `with get_db_session()` block
+# must not enclose a sleep or an outbound POST" — was GREEN ON ITS OWN MOTIVATING
+# DEFECT: the session block called ``self._deliver_with_backoff(...)`` and the
+# ``time.sleep`` lived one call frame deeper, inside that method, so a body-subtree scan
+# saw nothing. Any such scan is defeated by ordinary helper extraction. Measured on the
+# tree at the time it found 2 violations, neither of them the defect it existed for.
+#
+# So the API SHAPE is the guard instead. Together these make the defect UNREPRESENTABLE
+# rather than detectable after the fact, and neither needs a call graph:
+#
+#   (i)  a caller cannot DONATE a session lifetime, because no parameter accepts one;
+#   (ii) the retry loop cannot REACH a session, because the only thing it can see is a
+#        frozen dataclass of primitives — true at any call depth.
+#
+# Both allowlists are EMPTY and stay empty (#1757, salesagent-n78j0.4).
+
+#: Parameter names by which a caller could hand its own connection lifetime to the
+#: delivery boundary. ``repo=`` was the real one; the siblings are named so the next
+#: shape of the same mistake is covered rather than only the one we removed.
+_DONATED_SESSION_PARAMS = frozenset({"repo", "session", "db", "db_session", "uow"})
+
+#: The delivery boundary: the functions a caller reaches to send a webhook.
+_DELIVERY_BOUNDARY = (
+    ("src/core/signing/webhook_sender_factory.py", "deliver_adcp_webhook"),
+    ("src/core/signing/webhook_sender_factory.py", "deliver_adcp_webhook_sync"),
+    ("src/core/signing/webhook_sender_factory.py", "adcp_webhook_sender"),
+    ("src/core/signing/webhook_sender_factory.py", "_signing_repo"),
+)
+
+#: The queued-delivery entry, which the retry loop is the sole consumer of.
+_QUEUE_ENTRY = ("src/services/webhook_delivery_service.py", "QueuedWebhook")
+
+
+def _function_def(rel_path: str, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    """The named top-level function in *rel_path*, or fail loudly naming it.
+
+    Failing loudly matters: if a rename made this lookup return None and the test
+    silently passed, the guard would grade a function that no longer exists.
+    """
+    tree = ast.parse((ROOT / rel_path).read_text(encoding="utf-8"), rel_path)
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name:
+            return node
+    raise AssertionError(
+        f"{rel_path} defines no top-level function {name!r} — this guard grades the webhook "
+        "delivery boundary and cannot silently stop grading it because something was renamed."
+    )
+
+
+def _class_def(rel_path: str, name: str) -> ast.ClassDef:
+    """The named top-level class in *rel_path*, or fail loudly naming it."""
+    tree = ast.parse((ROOT / rel_path).read_text(encoding="utf-8"), rel_path)
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == name:
+            return node
+    raise AssertionError(f"{rel_path} defines no top-level class {name!r} — see {_QUEUE_ENTRY!r}.")
+
+
+class TestDeliveryBoundaryTakesNoDonatedSession:
+    """(i) No delivery entry point accepts a caller's session, repository or UoW.
+
+    ``deliver_adcp_webhook*`` used to take ``repo=``, and the webhook delivery service
+    passed one built on ITS OWN open session. That is how a pooled connection came to be
+    held across the retry loop's ``time.sleep`` and its POST to a buyer-supplied URL: the
+    connection's lifetime belonged to the caller, not to the work.
+
+    The parameter is gone, so the defect is unrepresentable at this boundary —
+    ``_signing_repo`` always opens its own short session.
+
+    MUTATION: add ``repo: SigningKeyRepository | None = None`` back to any of the four
+    signatures and this goes RED.
+    """
+
+    @pytest.mark.arch_guard
+    def test_no_delivery_entry_point_accepts_a_session(self) -> None:
+        found: set[tuple[str, str]] = set()
+        for rel_path, name in _DELIVERY_BOUNDARY:
+            func = _function_def(rel_path, name)
+            args = func.args
+            for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs]:
+                if arg.arg in _DONATED_SESSION_PARAMS:
+                    found.add((f"{rel_path}::{name}", arg.arg))
+        assert found == set(), (
+            "the webhook delivery boundary must not accept a caller's connection "
+            f"lifetime; found {sorted(found)}. A donated session is held for the whole "
+            "retry loop — across time.sleep and a POST to a buyer-supplied URL — so a "
+            "hanging receiver consumes a database connection. The callee opens its own "
+            "short session instead (_signing_repo)."
+        )
+
+
+class TestQueuedWebhookCarriesPrimitivesOnly:
+    """(ii) The queue entry is a frozen dataclass of primitives — no ORM, no session.
+
+    The retry loop's only input is this entry. If it can hold nothing but plain values,
+    it cannot lazy-load a relationship, cannot touch a session and cannot keep a
+    connection alive across a sleep — REGARDLESS of how many call frames deep the sleep
+    is, which is exactly what the discarded lexical scan could not express.
+
+    MUTATION: annotate any field with an ORM model (``PushNotificationConfig``), a
+    ``Mapped[...]``, or a repository/session type, or drop ``frozen=True``, and this
+    goes RED.
+    """
+
+    #: Annotations a queued entry may carry. Anything else — an ORM model, a
+    #: ``Mapped[...]``, a repository, a session — fails.
+    #: ``Any`` IS DELIBERATELY ABSENT. It was admitted for one revision, because the
+    #: payload is arbitrary JSON and ``Any`` is the ABSENCE of a type rather than an ORM
+    #: type — but that left the one hole this guard exists to close: an ``Any``-annotated
+    #: field can be handed an ORM row at runtime, which is precisely the shape that
+    #: occurred (a live ``PushNotificationConfig`` on the queue entry).
+    #:
+    #: ``pydantic.JsonValue`` closes it with no schema project: it is the recursive JSON
+    #: type (``str | int | float | bool | None | list[JsonValue] | dict[str, JsonValue]``),
+    #: so an ORM object in the payload is a TYPE ERROR at every producer, enforced by mypy,
+    #: rather than a runtime possibility this guard merely hopes against.
+    _PRIMITIVE_ROOTS = frozenset(
+        {"str", "int", "float", "bool", "bytes", "dict", "list", "tuple", "datetime", "None", "JsonValue"}
+    )
+
+    def _annotation_roots(self, node: ast.expr) -> set[str]:
+        """Every bare name appearing in an annotation, unions and subscripts included."""
+        return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)} | {
+            n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)
+        }
+
+    @pytest.mark.arch_guard
+    def test_every_field_is_a_primitive(self) -> None:
+        rel_path, name = _QUEUE_ENTRY
+        cls = _class_def(rel_path, name)
+
+        offenders: set[tuple[str, str]] = set()
+        for stmt in cls.body:
+            if not isinstance(stmt, ast.AnnAssign) or stmt.annotation is None:
+                continue
+            field = stmt.target.id if isinstance(stmt.target, ast.Name) else "<expr>"
+            for root in self._annotation_roots(stmt.annotation) - self._PRIMITIVE_ROOTS:
+                offenders.add((field, root))
+
+        assert offenders == set(), (
+            f"{name} must carry PRIMITIVES ONLY; found {sorted(offenders)}. The retry loop's "
+            "sole input is this entry — an ORM row or a repository on it can lazy-load or hold "
+            "a session open across the loop's sleep and its outbound POST. Project the values "
+            "you need off the ORM row while the session is open, and queue those."
+        )
+
+    @pytest.mark.arch_guard
+    def test_it_is_frozen(self) -> None:
+        rel_path, name = _QUEUE_ENTRY
+        cls = _class_def(rel_path, name)
+        frozen = any(
+            isinstance(d, ast.Call)
+            and any(kw.arg == "frozen" and getattr(kw.value, "value", False) is True for kw in d.keywords)
+            for d in cls.decorator_list
+        )
+        assert frozen, (
+            f"{name} must be @dataclass(frozen=True): a mutable queue entry can be handed a "
+            "session-bound object after enqueue, which reintroduces exactly what the primitive "
+            "field rule removes."
+        )
