@@ -49,6 +49,7 @@ refused, because that decision is made from the address, not from the lookup.
 from __future__ import annotations
 
 import json
+import threading
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
@@ -240,7 +241,32 @@ def capture_outbound_webhooks(
     """
     captured: list[CapturedWebhook] = []
 
+    # SCOPED TO THIS TEST'S OWN TRAFFIC (#2055). The rebind below is process-global — it
+    # replaces the socket, so it sees EVERY outbound POST, including one made by a
+    # background thread belonging to a test that has already finished. That made this
+    # helper structurally unable to tell "my sender delivered twice" from "someone else's
+    # delivery landed in my list", and every assertion that COUNTS captures inherited the
+    # blindness: tests/unit/test_order_approval_service.py had already been widened to
+    # tolerate it ("may see 4 calls ... 3 + 1 pollution"), and its idempotency-key
+    # assertion — which cannot be widened, because an intruder brings its own key —
+    # reddened the CI matrix twice.
+    #
+    # A delivery is OURS when it comes from the thread that opened this block, or from a
+    # thread that did not exist when it opened (one the test itself spawned). A thread
+    # alive BEFORE the block and not ours belongs to somebody else. That is a property of
+    # provenance rather than of timing, so it does not depend on how slow the runner is —
+    # which is what made this reproduce on CI (~620s) and not locally (~175s).
+    owner = threading.get_ident()
+    pre_existing = {thread.ident for thread in threading.enumerate()} - {owner}
+
+    def _is_ours() -> bool:
+        return threading.get_ident() not in pre_existing
+
     def _responder(url: str, *, headers: Any, content: Any) -> SimpleNamespace:
+        if not _is_ours():
+            # Answer it — the foreign sender is mid-delivery and must not crash — but do
+            # not let it into this test's evidence.
+            return SimpleNamespace(status_code=200, content=None)
         _record(captured, url, headers, content)
         status = 200 if not status_codes else status_codes[min(len(captured) - 1, len(status_codes) - 1)]
         body: bytes | None = None

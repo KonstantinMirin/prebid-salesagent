@@ -313,10 +313,12 @@ def test_webhook_retries_on_failure(mock_sleep):
             message="Order approved",
         )
 
-        # Verify retry logic works - should be at least 3 attempts
-        # Note: Due to test pollution in full suite, may see 4 calls, but minimum is 3
-        assert len(captured) >= 3, f"Expected at least 3 retry attempts, got {len(captured)}"
-        assert len(captured) <= 4, f"Expected at most 4 retry attempts (3 + 1 pollution), got {len(captured)}"
+        # EXACTLY three: two refusals and the acceptance. This was `>= 3 and <= 4` with
+        # the comment "may see 4 calls ... 3 + 1 pollution" — a bound widened to tolerate
+        # another test's delivery landing in the capture window. The capture is scoped to
+        # this test's own traffic now (GH #2055), so the tolerance is no longer needed and
+        # an extra delivery is a defect again rather than an expected nuisance.
+        assert len(captured) == 3, f"Expected exactly 3 retry attempts, got {len(captured)}"
 
         # Every retry carries the SAME idempotency_key, so the receiver dedupes the
         # event rather than processing it three times.
