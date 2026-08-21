@@ -844,6 +844,24 @@ def then_error_field_with_value(ctx: dict, field: str, value: str) -> None:
 # ── Error details assertions ────────────────────────────────────────
 
 
+def _scalar_leaves(value: object) -> list[str]:
+    """Every scalar inside a details value, stringified, at any nesting depth.
+
+    A details value is a list of SCALARS for the simple cases (duplicate ids, missing
+    ids) but a list of RECORDS when one violation needs more than one field to describe
+    it -- ``geo_overlaps`` carries ``{include, exclude, values}`` per conflicting pair.
+    Flattening lets a scenario name any one of those identifiers, which is what the
+    contract asks for: assert a value the SCENARIO supplied. Stringifying the record
+    itself (the previous behaviour) could only ever match a dict repr, which no scenario
+    would write.
+    """
+    if isinstance(value, dict):
+        return [leaf for item in value.values() for leaf in _scalar_leaves(item)]
+    if isinstance(value, (list, tuple)):
+        return [leaf for item in value for leaf in _scalar_leaves(item)]
+    return [str(value)]
+
+
 @then(parsers.parse('the wire error details should include {key} "{value}"'))
 def then_wire_error_details_include(ctx: dict, key: str, value: str) -> None:
     """Assert ``errors[0].details[key]`` carries ``value`` ON THE WIRE.
@@ -864,9 +882,7 @@ def then_wire_error_details_include(ctx: dict, key: str, value: str) -> None:
     assert key in details, f"expected {key!r} in errors[0].details; keys present: {sorted(details)}"
     actual = details[key]
     if isinstance(actual, (list, tuple)):
-        assert value in [str(item) for item in actual], (
-            f"expected {value!r} among errors[0].details[{key!r}] = {actual!r}"
-        )
+        assert value in _scalar_leaves(actual), f"expected {value!r} among errors[0].details[{key!r}] = {actual!r}"
     else:
         assert str(actual) == value, f"expected errors[0].details[{key!r}] == {value!r}, got {actual!r}"
 

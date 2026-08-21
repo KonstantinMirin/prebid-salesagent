@@ -41,40 +41,10 @@ class TestForbidRejectsUnknownFields:
 
 
 class TestValidateUnknownTargetingFields:
-    """validate_unknown_targeting_fields should report model_extra keys.
+    """Unknown targeting fields are rejected by PYDANTIC, not by business logic.
 
-    With extra='forbid', unknown fields are rejected at parse time, so
-    model_extra is always empty/None. These tests verify the validator
-    handles both modes correctly.
+    ``Targeting`` resolves ``extra`` through ``get_pydantic_extra_mode()``: ``forbid`` in
+    dev/CI (rejected at construction, as the tests above assert) and ``ignore`` in
+    production (silently dropped). A business-logic ``model_extra`` scan therefore could
+    never fire, and was deleted in salesagent-3dawm.9.
     """
-
-    def test_accepts_all_known_fields(self):
-        from src.services.targeting_capabilities import validate_unknown_targeting_fields
-
-        t = Targeting(geo_countries=["US"], device_type_any_of=["mobile"])
-        violations = validate_unknown_targeting_fields(t)
-        assert violations == []
-
-    def test_accepts_managed_fields(self):
-        """Managed fields are known model fields — they should NOT be flagged here.
-        (They are caught separately by validate_overlay_targeting's access checks.)"""
-        from src.services.targeting_capabilities import validate_unknown_targeting_fields
-
-        t = Targeting(key_value_pairs={"k": "v"}, axe_include_segment="seg")
-        violations = validate_unknown_targeting_fields(t)
-        assert violations == []
-
-    def test_accepts_v2_normalized_fields(self):
-        """v2 fields converted by normalizer should not be flagged."""
-        from src.services.targeting_capabilities import validate_unknown_targeting_fields
-
-        t = Targeting(geo_country_any_of=["US"])
-        violations = validate_unknown_targeting_fields(t)
-        assert violations == []
-
-    def test_empty_targeting_no_violations(self):
-        from src.services.targeting_capabilities import validate_unknown_targeting_fields
-
-        t = Targeting()
-        violations = validate_unknown_targeting_fields(t)
-        assert violations == []

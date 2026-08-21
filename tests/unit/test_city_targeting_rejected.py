@@ -1,7 +1,7 @@
 """Tests for city targeting rejection.
 
 Regression tests for salesagent-hfz: ensures geo_city_any_of/geo_city_none_of
-sent in targeting_overlay are caught by validate_overlay_targeting instead of
+sent in targeting_overlay are caught by removed_dimensions() instead of
 being silently dropped.
 
 Updated for salesagent-17b: validation now accepts Targeting model directly.
@@ -14,7 +14,7 @@ from src.core.schemas import Targeting
 from src.services.targeting_capabilities import (
     TARGETING_CAPABILITIES,
     get_overlay_dimensions,
-    validate_overlay_targeting,
+    removed_dimensions,
 )
 
 
@@ -22,38 +22,43 @@ class TestCityFieldsRejected:
     """geo_city_any_of and geo_city_none_of must produce violations."""
 
     def test_geo_city_any_of_violation(self):
-        violations = validate_overlay_targeting(Targeting(geo_city_any_of=["New York"]))
-        assert len(violations) == 1
-        assert "City targeting is not supported" in violations[0]
+        violations = removed_dimensions(Targeting(geo_city_any_of=["New York"]))
+        assert violations == ["geo_city"]
 
     def test_geo_city_none_of_violation(self):
-        violations = validate_overlay_targeting(Targeting(geo_city_none_of=["Los Angeles"]))
-        assert len(violations) == 1
-        assert "City targeting is not supported" in violations[0]
+        violations = removed_dimensions(Targeting(geo_city_none_of=["Los Angeles"]))
+        assert violations == ["geo_city"]
 
     def test_both_city_fields_produce_one_violation(self):
         """Both geo_city fields trigger the same had_city_targeting flag → 1 violation."""
-        violations = validate_overlay_targeting(Targeting(geo_city_any_of=["NYC"], geo_city_none_of=["LA"]))
+        violations = removed_dimensions(Targeting(geo_city_any_of=["NYC"], geo_city_none_of=["LA"]))
         assert len(violations) == 1
 
-    def test_city_error_mentions_removed(self):
-        """Error message should indicate city targeting is removed/not supported."""
-        violations = validate_overlay_targeting(Targeting(geo_city_any_of=["NYC"]))
-        assert "removed" in violations[0].lower() or "not supported" in violations[0].lower()
+    def test_city_reported_under_removed_not_managed_only(self):
+        """The city dimension is reported as REMOVED, which is a different reason from
+        managed-only, and the two must not be conflated.
+
+        This used to assert the violation SENTENCE contained "removed" or "not supported".
+        That wording is now CODE_TABLE's, not the validator's (salesagent-3dawm.9); what
+        the validator owns is which dimension, and under which reason.
+        """
+        from src.services.targeting_capabilities import managed_only_dimensions
+
+        overlay = Targeting(geo_city_any_of=["NYC"])
+        assert removed_dimensions(overlay) == ["geo_city"]
+        assert managed_only_dimensions(overlay) == []
 
 
 class TestCityMixedWithValidFields:
     """Valid overlay fields alongside city fields should only flag city."""
 
     def test_valid_geo_plus_city_only_city_flagged(self):
-        violations = validate_overlay_targeting(Targeting(geo_countries=["US"], geo_city_any_of=["NYC"]))
-        assert len(violations) == 1
-        assert "City targeting is not supported" in violations[0]
+        violations = removed_dimensions(Targeting(geo_countries=["US"], geo_city_any_of=["NYC"]))
+        assert violations == ["geo_city"]
 
     def test_device_plus_city_only_city_flagged(self):
-        violations = validate_overlay_targeting(Targeting(device_type_any_of=["mobile"], geo_city_none_of=["LA"]))
-        assert len(violations) == 1
-        assert "City targeting is not supported" in violations[0]
+        violations = removed_dimensions(Targeting(device_type_any_of=["mobile"], geo_city_none_of=["LA"]))
+        assert violations == ["geo_city"]
 
 
 class TestGeoCityDimensionRemoved:

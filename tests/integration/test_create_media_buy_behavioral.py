@@ -995,14 +995,12 @@ class TestMainFlowObligations:
         with _env() as env:
             tenant, _principal = env.setup_default_data()
             env.setup_product_chain(tenant)
-            with (
-                patch("src.services.targeting_capabilities.validate_unknown_targeting_fields", return_value=[]),
-                patch("src.services.targeting_capabilities.validate_overlay_targeting", return_value=[]),
-                patch("src.services.targeting_capabilities.validate_geo_overlap", return_value=[]),
-            ):
-                result = env.call_impl(req=req)
+            result = env.call_impl(req=req)
 
-        # Valid targeting overlay does not block the pipeline.
+        # Valid targeting overlay does not block the pipeline. The geo-overlap validator
+        # used to be patched to return [] here, which short-circuited the very check this
+        # test claims to exercise -- and the overlay has no exclude field, so there was
+        # never an overlap to suppress. It now runs for real.
         assert isinstance(result.response, CreateMediaBuySuccess)
 
     def test_auto_approval_determination(self, integration_db):
@@ -1594,17 +1592,20 @@ class TestExtensionObligations:
 
         Covers: UC-002-EXT-F-01
         """
-        from src.services.targeting_capabilities import validate_unknown_targeting_fields
+        from pydantic import ValidationError
 
-        # Create a mock targeting object with model_extra (unknown fields)
-        mock_targeting = MagicMock()
-        mock_targeting.model_extra = {"mood": "happy", "weather": "sunny"}
+        from src.core.schemas import Targeting
 
-        violations = validate_unknown_targeting_fields(mock_targeting)
+        # Rejected by PYDANTIC at construction, not by business logic. The previous
+        # version of this test built a MagicMock with model_extra populated and asserted
+        # a business-logic scan found 2 entries -- an object production can never produce,
+        # since Targeting resolves extra through get_pydantic_extra_mode() (forbid in
+        # dev/CI, ignore in production). That scan was deleted in salesagent-3dawm.9.
+        with pytest.raises(ValidationError) as exc_info:
+            Targeting(mood="happy", weather="sunny")
 
-        assert len(violations) == 2
-        assert any("mood" in v for v in violations)
-        assert any("weather" in v for v in violations)
+        offending = {err["loc"][0] for err in exc_info.value.errors()}
+        assert offending == {"mood", "weather"}
 
     @pytest.mark.asyncio
     async def test_managed_only_dimension_rejected(self):
@@ -1614,15 +1615,14 @@ class TestExtensionObligations:
         """
         # Build a targeting object with key_value_pairs set
         from src.core.schemas import Targeting
-        from src.services.targeting_capabilities import validate_overlay_targeting
+        from src.services.targeting_capabilities import managed_only_dimensions
 
         targeting = Targeting(key_value_pairs={"segment": "premium"})
 
-        violations = validate_overlay_targeting(targeting)
-
-        assert len(violations) > 0
-        assert any("key_value_pairs" in v for v in violations)
-        assert any("managed" in v.lower() for v in violations)
+        # Exact equality on the DIMENSION NAME. This asserted substrings of a rendered
+        # sentence ("managed" in v.lower()) until salesagent-3dawm.9 made the wording
+        # CODE_TABLE's and the validator's return the offending dimension.
+        assert managed_only_dimensions(targeting) == ["key_value_pairs"]
 
     @pytest.mark.asyncio
     async def test_unregistered_creative_agent_rejected(self):

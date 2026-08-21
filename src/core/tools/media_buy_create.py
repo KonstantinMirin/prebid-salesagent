@@ -166,12 +166,10 @@ from src.core.webhook_validator import reject_unsafe_webhook_registration_url, w
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
 from src.services.targeting_capabilities import (
+    collect_targeting_violations,
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
-    validate_geo_overlap,
-    validate_overlay_targeting,
     validate_property_targeting_allowed,
-    validate_unknown_targeting_fields,
 )
 
 # --- Helper Functions ---
@@ -2593,27 +2591,10 @@ async def _create_media_buy_impl(
         if req.packages:
             for pkg in req.packages:
                 if pkg.targeting_overlay is not None:
-                    # Reject unknown targeting fields (typos, bogus names) via model_extra
-                    unknown_violations = validate_unknown_targeting_fields(pkg.targeting_overlay)
-
-                    # Validate access control (managed-only, removed dimensions)
-                    access_violations = validate_overlay_targeting(pkg.targeting_overlay)
-
-                    # Reject same-value geo inclusion/exclusion overlap (AdCP SHOULD requirement)
-                    geo_overlap_violations = validate_geo_overlap(pkg.targeting_overlay)
-
-                    violations = unknown_violations + access_violations + geo_overlap_violations
+                    violations = collect_targeting_violations(pkg.targeting_overlay)
                     if violations:
-                        # NOT routed to details, deliberately. All three validators return
-                        # RENDERED SENTENCES ("weather_targeting is not a recognized targeting
-                        # field", "key_value_pairs is managed-only and cannot be set via
-                        # overlay"), and a sentence in details is the message smuggled back in
-                        # -- the one thing salesagent-3dawm.9 forbids. Routing this needs
-                        # validate_unknown_targeting_fields / validate_overlay_targeting /
-                        # validate_geo_overlap (src/services/targeting_capabilities.py) to
-                        # return the offending KEYS instead, which is a wider change than that
-                        # step's boundary. The buyer keeps the code plus field= until then.
                         raise AdCPInvalidRequestError(
+                            details=violations,
                             field="targeting_overlay",
                         )
 

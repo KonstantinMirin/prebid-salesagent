@@ -279,7 +279,16 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
+    And the error recovery should be "correctable"
+    And the wire error details should include geo_overlaps "US"
     And the error should include "suggestion" field
+    # The colliding VALUE the scenario itself supplied reaches the buyer in
+    # errors[0].details, not in the message -- the sentence is a function of the CODE
+    # through CODE_TABLE. Before salesagent-3dawm.9 the validators rendered
+    # "geo_countries/geo_countries_exclude conflict: values US appear in both ..." and
+    # the raise discarded it, so the buyer learned only that targeting was rejected.
+    # details now carries {include, exclude, values} per conflicting pair, so all four
+    # targeting violation kinds stay distinguishable under one INVALID_REQUEST code.
     # --- ext-g: Creative Validation Failure ---
 
   @T-UC-002-ext-g @extension @ext-g @error @post-f1 @post-f2 @post-f3
