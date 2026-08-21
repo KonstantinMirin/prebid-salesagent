@@ -150,7 +150,7 @@ Feature: BR-UC-002 Create Media Buy
     And the error code should be "BUDGET_TOO_LOW"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
-    And the suggestion should contain "positive"
+    And the error should include "field" field with value "packages[].budget"
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
@@ -442,7 +442,7 @@ Feature: BR-UC-002 Create Media Buy
     And the request includes a reporting_webhook with url "http://169.254.169.254/latest/meta-data/"
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "URL_NOT_ALLOWED"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     # Repo-local SSRF policy (ungraded extension): reuses AdCP 3.1.1

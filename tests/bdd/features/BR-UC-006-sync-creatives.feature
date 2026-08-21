@@ -164,11 +164,14 @@ Feature: BR-UC-006 Sync Creative Assets
     And the request includes a push_notification_config with url "http://169.254.169.254/latest/meta-data/"
     When the Buyer Agent syncs the creative
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "URL_NOT_ALLOWED"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
-    # Repo-local SSRF policy (ungraded extension): reuses AdCP 3.1.1
-    # VALIDATION_ERROR / recovery=correctable enum values + suggestion on
+    # Repo-local SSRF policy (ungraded extension): AdCP 3.1.1 makes the error-code
+    # vocabulary OPEN (core/error.json), so a refused URL now carries the platform code
+    # URL_NOT_ALLOWED (recovery=correctable) rather than borrowing
+    # VALIDATION_ERROR. The borrowed code told the buyer their request was malformed
+    # when the objection is to the HOST they named. Suggestion on
     # MCP/REST/A2A tool transports. Schema is silent on SSRF. A2A-native
     # push-config endpoints map the same gate to InvalidParamsError with the
     # AdCP VALIDATION_ERROR envelope in data= — unit-pinned, not this scenario.

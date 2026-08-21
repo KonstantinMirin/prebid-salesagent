@@ -542,7 +542,7 @@ Feature: BR-UC-003 Update Media Buy
     And the error code should be "BUDGET_TOO_LOW"
     And the error should include "recovery" field with value "correctable"
     And the error should include "suggestion" field
-    And the suggestion should contain "positive"
+    And the error should include "field" field with value "budget"
     # POST-F1: System state unchanged
     # POST-F2: Error code BUDGET_TOO_LOW
     # POST-F3: Suggestion to provide positive budget
@@ -642,8 +642,9 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
+    And the error recovery should be "correctable"
     And the error should include "suggestion" field
-    And the suggestion should contain "package_id"
+    And the error should include "field" field with value "packages[].package_id"
     # POST-F1: System state unchanged
     # POST-F2: Error explains missing package identifier
     # POST-F3: Suggestion for recovery
@@ -830,8 +831,8 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "VALIDATION_ERROR"
+    And the error recovery should be "correctable"
     And the error should include "suggestion" field
-    And the suggestion should contain "at least 16 characters"
     # BR-RULE-081 INV-3: key < 16 chars → rejected (schema minLength 16; value/format → VALIDATION_ERROR)
     # POST-F1: System state unchanged
     # POST-F2: Error explains key too short
@@ -846,8 +847,8 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "VALIDATION_ERROR"
+    And the error recovery should be "correctable"
     And the error should include "suggestion" field
-    And the suggestion should contain "255 characters"
     # BR-RULE-081 INV-4: key > 255 chars → rejected (schema maxLength 255; value/format → VALIDATION_ERROR)
     # POST-F1: System state unchanged
     # POST-F3: Suggestion for recovery
