@@ -1,10 +1,16 @@
 """Generic Then steps that grade a response against the pinned AdCP schema.
 
 ``the response should be schema-valid against <file>`` lived at module scope in
-tests/bdd/test_uc018_list_creatives.py, so only UC-018 could use it — which is why
-the UC-019 scenario asserting the same thing went dormant. It overrides no generic
-text, so unlike the eight deliberately module-scoped UC-019 steps there is nothing
-to keep it local.
+tests/bdd/test_uc018_list_creatives.py, so only UC-018 could use it. Moving it here
+is correct on its own merits — it overrides no generic text, so unlike the eight
+deliberately module-scoped UC-019 steps there is nothing to keep it local.
+
+It was NOT, however, why the UC-019 scenario was dormant, and this docstring used
+to say it was (round-1 R1-9). Measured: ``-k freshly`` reported ``2 xfailed`` with
+``Step definition not found: Given "the buyer captured a media_buy_id from a
+successful create_media_buy response"``. The blocker was the missing ``Given`` —
+moving this ``Then`` would not have woken the scenario. That ``Given`` now exists
+(``steps/domain/uc019_query_media_buys.py``), which is what actually woke it.
 
 Grades the REAL WIRE. When a dispatcher stashed ``ctx["wire_response"]`` (REST's
 HTTP body, MCP's structured_content, A2A's artifact DataPart) that is the document
