@@ -990,7 +990,24 @@ def then_terminal_failure(ctx: dict) -> None:
 
     Verifies both that an error occurred and that its recovery hint is
     'terminal' -- meaning the buyer cannot retry with corrected input.
+
+    Wire-first (salesagent-3dawm.18). This step previously had NO wire path at
+    all: it read recovery off the reconstructed ``ctx['error']``, and its final
+    branch fell off the end asserting nothing, on the reasoning quoted below
+    that a non-AdCP exception is terminal anyway. That made it the step most
+    exposed to a change in what ``ctx['error']`` holds -- an object that is not
+    an AdCPError satisfied neither branch and the scenario passed having graded
+    no recovery hint whatsoever. On a wire transport the buyer-facing hint now
+    comes from the envelope, where a missing or wrong recovery fails.
     """
+    result = ctx.get("result")
+    wire_code = result.wire_error_code() if result is not None else None
+    if wire_code is not None:
+        # The code is read from the wire (this step names none); the graded claim
+        # is that its recovery is terminal, pinned on both envelope layers.
+        result.assert_wire_error(wire_code, recovery="terminal")
+        return
+
     error = ctx.get("error")
     assert error is not None, (
         "Expected a terminal failure but no error was recorded. "
