@@ -132,7 +132,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from dataclasses import dataclass
-from typing import Any, Literal, NoReturn, cast
+from typing import Any, Literal, NoReturn, cast, get_args
 
 from adcp.signing.agent_resolver import AgentResolution, AgentResolverError, BrandAgentType, async_resolve_agent
 from adcp.signing.brand_authz import BrandAuthorizationResult, BrandJsonAuthorizationResolver
@@ -168,6 +168,7 @@ from src.core.config import SigningConfig, get_config
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.replay_nonce import ReplayNonceRepository
+from src.core.exceptions import AdCPConfigurationError
 from src.core.http_utils import headers_from_asgi_scope, path_from_asgi_scope
 from src.core.metrics import record_request_unsigned, record_signature_failed, record_signature_verified
 
@@ -186,6 +187,7 @@ from src.core.signing.operations import (
 )
 from src.core.signing.posture import (
     PostureBucket,
+    PostureTenant,
     RequestSigningPosture,
     posture_for_tenant,
     request_signing_is_declarable,
@@ -593,6 +595,38 @@ def _bearer_token(scope: Mapping[str, Any], headers: Mapping[str, str]) -> str |
     return _extract_auth_token(dict(headers))[0]
 
 
+def narrow_agent_type(agent_type: str) -> BrandAgentType:
+    """Validate a configured counterparty agent type, or refuse to start resolving.
+
+    ``SigningConfig.counterparty_agent_type`` is a plain ``str`` in pydantic-settings
+    (``config.py`` :256) and therefore ENV-OVERRIDABLE, while ``async_resolve_agent`` wants
+    the SDK's ``BrandAgentType`` Literal. The two call sites used ``cast(...)``, which is a
+    RUNTIME NO-OP: a typo passed validation, passed the cast, reached the resolver, matched
+    no ``agents[]`` entry in the counterparty's brand.json, and 401'd EVERY signed
+    counterparty with nothing in the logs naming the cause.
+
+    THIS IS THE SHAPE THIS PR ALREADY INTRODUCED TWO FILES AWAY.
+    :func:`~src.core.signing_contract.algorithms.narrow_alg` and ``narrow_purpose`` check
+    membership against an owned value set and raise ``AdCPConfigurationError`` BEFORE
+    casting, for exactly this reason. The values are read from the Literal itself via
+    ``get_args`` rather than re-typed, so an SDK that adds an agent type cannot leave a
+    hand-written copy behind.
+
+    Raises:
+        AdCPConfigurationError: *agent_type* is not one the SDK can resolve. Deliberately
+            fail-fast: a misconfigured deployment stops at the boundary instead of
+            refusing every counterparty that signs correctly.
+    """
+    permitted = get_args(BrandAgentType)
+    if agent_type not in permitted:
+        raise AdCPConfigurationError(
+            f"counterparty_agent_type {agent_type!r} is not a resolvable agent type; "
+            f"expected one of {permitted!r}. Left uncorrected this refuses every signed "
+            f"counterparty with a 401 that names no cause."
+        )
+    return cast(BrandAgentType, agent_type)
+
+
 def _fail_closed_bucket(posture: RequestSigningPosture, bucket: PostureBucket) -> PostureBucket:
     """Promote a request nothing could NAME to the strictest bucket *posture* declares.
 
@@ -632,7 +666,7 @@ def _credentials_force_a_signature(posture: RequestSigningPosture, resolved: Res
     return resolved.signature_forced and posture.supported
 
 
-def _detect_tenant_for_posture(headers: dict[str, str]) -> tuple[str | None, dict[str, Any] | None]:
+def _detect_tenant_for_posture(headers: dict[str, str]) -> tuple[str | None, PostureTenant | None]:
     """The seller's tenant, or ``(None, None)`` if it cannot be read at all.
 
     ``_detect_tenant`` opens a database session. Since #1291 D1 made ``request_signing``
@@ -659,7 +693,22 @@ def _detect_tenant_for_posture(headers: dict[str, str]) -> tuple[str | None, dic
     driver's, not ours, and the WARNING carries them.
     """
     try:
-        return _detect_tenant(headers)
+        tenant_id, detected = _detect_tenant(headers)
+        # PROJECTED at the boundary, not cast (#1879). ``_detect_tenant`` lives in
+        # src/core/resolved_identity.py and returns an untyped dict; that function is
+        # identity resolution and belongs to #1870, so its signature is not ours to change.
+        # Naming the two keys the posture actually reads states the shape HERE, where the
+        # value crosses into the signing layer, and leaves the ORM boundary where #1870
+        # will find it. A cast would assert the shape; this one carries it.
+        tenant = (
+            PostureTenant(
+                tenant_id=str(detected.get("tenant_id") or ""),
+                capability_declarations=detected.get("capability_declarations"),
+            )
+            if detected
+            else None
+        )
+        return tenant_id, tenant
     except Exception as exc:
         logger.warning(
             "Could not resolve the seller tenant for signature-posture purposes, so no "
@@ -919,7 +968,7 @@ async def _resolution_for(
             agent_url,
             # The agents that sign requests TO a sales agent are the buy side, so the
             # brand.json entry to match is the counterparty's buying agent.
-            agent_type=cast(BrandAgentType, config.counterparty_agent_type),
+            agent_type=narrow_agent_type(config.counterparty_agent_type),
         )
     except AgentResolverError as exc:
         mapped = _map_agent_resolver_error(exc)
@@ -1097,7 +1146,7 @@ async def _check_brand_authorization(resolution: AgentResolution, config: Signin
         result = await resolver.check(
             agent_url=resolution.agent_url,
             brand_domain=host_from(resolution.brand_json_url),
-            agent_type=cast(BrandAgentType, config.counterparty_agent_type),
+            agent_type=narrow_agent_type(config.counterparty_agent_type),
             brand_id=None,
         )
     except Exception as exc:

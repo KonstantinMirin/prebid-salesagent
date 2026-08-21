@@ -66,6 +66,7 @@ do not "correct" the code from the prose.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from urllib.parse import urlsplit
 
 from adcp.signing.errors import SignatureVerificationError
@@ -167,7 +168,7 @@ def canonical_authority(url: str) -> str:
     return _delegated(_vendored_canonicalize_authority, url)
 
 
-def _delegated(canonicalize, url: str) -> str:
+def _delegated(canonicalize: Callable[[str], str], url: str) -> str:
     """Run a vendored canonicalizer, folding its rejections onto the facade type.
 
     The vendored code catches shapes the raw-netloc gate cannot see (a host that

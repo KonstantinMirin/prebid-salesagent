@@ -25,6 +25,7 @@ import logging
 from datetime import UTC, datetime
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask.typing import ResponseReturnValue
 
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.helpers import require_tenant_access
@@ -45,7 +46,7 @@ signing_keys_bp = Blueprint("signing_keys", __name__)
 
 @signing_keys_bp.route("/")
 @require_tenant_access()
-def list_signing_keys(tenant_id):
+def list_signing_keys(tenant_id: str) -> ResponseReturnValue:
     """List the tenant's signing keys: what is PUBLISHED, and which one SIGNS.
 
     Two selectors because they answer two different questions and disagree during
@@ -72,7 +73,7 @@ def list_signing_keys(tenant_id):
 @signing_keys_bp.route("/create", methods=["POST"])
 @require_tenant_access()
 @log_admin_action("provision_signing_key")
-def create_signing_key(tenant_id):
+def create_signing_key(tenant_id: str) -> ResponseReturnValue:
     """Provision a signing key for the tenant.
 
     The ``kid`` is minted server-side: it must be unique within the published
@@ -118,7 +119,7 @@ def create_signing_key(tenant_id):
 @signing_keys_bp.route("/<kid>/revoke", methods=["POST"])
 @require_tenant_access()
 @log_admin_action("revoke_signing_key")
-def revoke_signing_key_route(tenant_id, kid):
+def revoke_signing_key_route(tenant_id: str, kid: str) -> ResponseReturnValue:
     """Revoke a signing key through the layer's one revocation operation.
 
     ``revoke_signing_key`` owns BOTH effects — the row transition and the cached-provider

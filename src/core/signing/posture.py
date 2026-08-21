@@ -34,8 +34,10 @@ socket cannot disagree about whether we sign or with what.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypedDict, cast
 
 from adcp.signing.verifier import CoversDigestPolicy, VerifierCapability
 from adcp.signing.webhook_signer import WEBHOOK_TAG
@@ -43,7 +45,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import Ide
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import KeyOrigins
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import RequestSigning as LibraryRequestSigning
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import WebhookSigning as LibraryWebhookSigning
-from pydantic import ConfigDict, RootModel, model_validator
+from pydantic import AnyUrl, ConfigDict, RootModel, model_validator
 
 from src.core.enum_helpers import enum_value
 
@@ -82,7 +84,16 @@ def _name(item: Any) -> str:
     return enum_value(item)
 
 
-def bucket_names(items: Any) -> frozenset[str]:
+#: One declared bucket as it arrives off the wire. Named rather than left as ``Any``
+#: (#1879) so the call sites state what they accept — and the members are NOT uniform:
+#: ``required_for`` / ``warn_for`` / ``supported_for`` are plain strings, while the three
+#: ``protocol_methods_*`` buckets are generated ``RootModel[str]`` wrappers. That
+#: non-uniformity is exactly what :func:`_name` exists to flatten, and stating it here is
+#: what stopped a fourth member shape being added silently.
+type DeclaredBucket = Iterable[str | Enum | RootModel[str]] | None
+
+
+def bucket_names(items: DeclaredBucket) -> frozenset[str]:
     """Wire-format names from a declared bucket, ``None`` -> empty."""
     if not items:
         return frozenset()
@@ -264,7 +275,33 @@ def posture_from_declarations(declarations: CapabilityDeclarations | None) -> Re
     return declared
 
 
-def posture_for_tenant(tenant: dict[str, Any] | None) -> RequestSigningPosture:
+class PostureTenant(TypedDict, total=False):
+    """The two keys :func:`posture_for_tenant` reads off a detected tenant.
+
+    ``total=False`` because this is what ``_detect_tenant`` HAPPENS to carry, not a
+    contract that function declares — every member is read with ``.get``.
+
+    WHY A TypedDict AND NOT ``Tenant`` (#1879). The prescription for this item asked for
+    ``posture_for_tenant(tenant: Tenant | None)``. That signature is UNREACHABLE from
+    here: the caller does not hold an ORM row. ``_detect_tenant_for_posture`` delegates to
+    ``_detect_tenant`` (``src/core/resolved_identity.py`` :71), which returns a DICT and is
+    shared with the identity/auth path at :161 — so reaching the ORM type would mean
+    either changing that function's return type, which is IDENTITY RESOLUTION and belongs
+    to #1870 ("out of scope: identity/ACL collapse"), or reading the tenant a SECOND time
+    on the request path, inside the very function whose docstring exists to avoid a second
+    read. The first is out of scope by the charter's own words; the second is a behaviour
+    change smuggled in as a type fix.
+
+    So this states the shape that actually flows, keeps the ORM boundary where #1870 will
+    find it, and costs nothing at runtime. DO NOT "finish the job" by editing
+    ``resolved_identity.py``.
+    """
+
+    tenant_id: str
+    capability_declarations: dict[str, Any] | None
+
+
+def posture_for_tenant(tenant: PostureTenant | None) -> RequestSigningPosture:
     """The resolved tenant's declared posture — the ONE reader of that declaration.
 
     Parses ``tenant["capability_declarations"]`` through the store and projects it with
@@ -401,9 +438,14 @@ def emitted_identity(
     if brand_json_url is None or not requires_trust_root(posture, webhook_signing_supported=webhook_signing_supported):
         return None
     anchored = jwks_origin is not None and request_signing_buckets_declared(posture)
+    origins = KeyOrigins(request_signing=AnyUrl(jwks_origin)) if anchored and jwks_origin else None
     return IdentityDeclaration(
-        brand_json_url=cast(Any, brand_json_url),
-        key_origins=KeyOrigins(request_signing=cast(Any, jwks_origin)) if anchored else None,
+        # AnyUrl(...), not cast(Any, ...) (#1879). Both fields are declared
+        # ``AnyUrl | None``; a cast is a RUNTIME NO-OP, so a malformed URL reached the
+        # served capabilities document unvalidated. Constructing the type validates it
+        # here, where the declaration is, instead of asserting it is already right.
+        brand_json_url=AnyUrl(brand_json_url),
+        key_origins=origins,
     )
 
 

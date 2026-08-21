@@ -388,7 +388,7 @@ logger.info("A2A routes added: /a2a, /.well-known/agent-card.json")
 
 
 @app.api_route("/a2a/", methods=["GET", "POST", "OPTIONS"])
-async def a2a_trailing_slash_redirect():
+async def a2a_trailing_slash_redirect() -> RedirectResponse:
     """Preserve historical /a2a/ compatibility.
 
     The admin root fallback mount would otherwise catch `/a2a/` and hand it to

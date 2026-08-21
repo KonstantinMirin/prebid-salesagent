@@ -21,6 +21,7 @@ silently clamping or emitting a non-conformant response.
 """
 
 from collections.abc import Iterable
+from enum import Enum
 from typing import Any, NamedTuple
 
 from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
@@ -156,9 +157,9 @@ _BACKED_SPECIALISMS: dict[AdcpSpecialism, SupportedProtocol] = {
 }
 
 
-def _reject_unbacked(
-    claimed: Iterable[Any],
-    backed: Iterable[Any],
+def _reject_unbacked[T: Enum](
+    claimed: Iterable[T],
+    backed: Iterable[T],
     *,
     field: str,
     noun: str,
@@ -171,6 +172,14 @@ def _reject_unbacked(
     checks (#1721 M1 / D1 -- was duplicated verbatim). ``backed`` may be
     a frozenset (protocols) or a dict keyed by the claimed enum (specialisms) --
     ``in`` and iteration both work identically for either.
+
+    GENERIC IN ``T`` (#1879), which is the whole point: with ``Iterable[Any]`` on both
+    sides the signature stated neither the element type nor the RELATION between them, so
+    a protocol list checked against a specialisms dict typechecked cleanly — the two
+    call sites could be crossed and nothing would say so. Tying both parameters to one
+    ``T`` makes that a type error. Bounded to ``Enum`` because the refusal message reads
+    ``.value`` off the offending member — the bound states that requirement instead of
+    leaving it to fail at runtime on a non-enum caller.
     """
     from src.core.exceptions import AdCPConfigurationError
 
@@ -292,8 +301,15 @@ class CapabilityDeclarations(BaseModel):
     reporting_delivery_methods: list[ReportingDeliveryMethod] | None = None
 
     @classmethod
-    def from_tenant(cls, declared: Any) -> "CapabilityDeclarations | None":
+    def from_tenant(cls, declared: object) -> "CapabilityDeclarations | None":
         """Parse a tenant's stored declarations, or ``None`` when nothing is declared.
+
+        ``declared: object``, NOT ``Any`` (#1879). This is the entry point
+        ``posture_for_tenant`` calls on EVERY AdCP request to decide whether that request
+        is refused, so it is the parse boundary of the request path. Under ``Any`` the
+        ``isinstance`` guard below was invisible to mypy — every attribute access past it
+        typechecked whatever the shape — which is the opposite of what a parse boundary is
+        for. Under ``object`` the narrowing is the only way through, and mypy enforces it.
 
         ``None``/empty reproduces the pre-#1592 wire exactly, which is what every
         tenant that never declared anything must keep seeing.

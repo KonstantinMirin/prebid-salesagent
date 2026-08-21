@@ -61,6 +61,7 @@ import logging
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import httpx
+from adcp.types import NotificationConfig
 
 from src.core.security.url_validator import check_url_ssrf, is_reserved_tld_host
 
@@ -105,7 +106,7 @@ class NotificationProofService:
     async def prove(
         self,
         account_id: str,
-        config: object,
+        config: NotificationConfig,
         *,
         signing: ChallengeSigning | None = None,
     ) -> bool:
@@ -120,7 +121,7 @@ class NotificationProofService:
         transport with no published ``agents[].url``. Either way there is nothing to send
         that a conformant receiver could attribute to us, so no POST is made at all.
         """
-        url = str(getattr(config, "url", "") or "")
+        url = str(config.url or "")
         if not url:
             return False
 
@@ -209,7 +210,7 @@ class NotificationProofService:
         return _response_proves_control(account_id, url, response, challenge.challenge)
 
 
-def _has_uncredentialed_legacy_auth(config: object) -> bool:
+def _has_uncredentialed_legacy_auth(config: NotificationConfig) -> bool:
     """Whether the candidate declares a legacy scheme but supplies no credential.
 
     Split out so the refusal reads as a named condition at the call site rather than as an
@@ -218,11 +219,11 @@ def _has_uncredentialed_legacy_auth(config: object) -> bool:
     """
     from src.core.signing import declared_auth
 
-    auth = declared_auth(getattr(config, "authentication", None))
+    auth = declared_auth(config.authentication)
     return auth.scheme is not None and auth.credential is None
 
 
-def _build_challenge(account_id: str, config: object, seller_agent_url: str) -> tuple[Any, bytes]:
+def _build_challenge(account_id: str, config: NotificationConfig, seller_agent_url: str) -> tuple[Any, bytes]:
     """The seven-field ``webhook.challenge`` document, and the exact bytes to sign and send.
 
     Returns both because the two are not interchangeable here: the MODEL is the validator and
@@ -260,11 +261,11 @@ def _build_challenge(account_id: str, config: object, seller_agent_url: str) -> 
 
     from src.core.signing import credential_fingerprint, declared_auth, delivery_auth_mode
 
-    auth = declared_auth(getattr(config, "authentication", None))
+    auth = declared_auth(config.authentication)
     challenge = WebhookChallenge(
         challenge=generate_webhook_challenge_value(),
         account_id=account_id,
-        subscriber_id=str(getattr(config, "subscriber_id", "") or ""),
+        subscriber_id=str(config.subscriber_id or ""),
         seller_agent_url=seller_agent_url,
         # The CANDIDATE's future delivery mode, as DATA. It never selects how this
         # challenge is signed -- :207 requires the webhook profile key either way.
@@ -272,7 +273,7 @@ def _build_challenge(account_id: str, config: object, seller_agent_url: str) -> 
             mode=delivery_auth_mode(auth),
             credential_fingerprint=credential_fingerprint(auth),
         ),
-        event_types=list(getattr(config, "event_types", None) or []),
+        event_types=list(config.event_types or []),
     )
 
     payload = challenge.model_dump(mode="json", exclude_none=True)
