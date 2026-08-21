@@ -55,7 +55,7 @@ _SCHEME_LITERALS = frozenset(
 # ``src/admin/blueprints/principals.py`` was here as DEBT, with the note that its
 # ``auth_type == "hmac_sha256"`` was the smaller half of the defect and that
 # converting the route to register through the gate would fix both at once. That
-# is what happened (salesagent-h585d): the route now goes
+# is what happened (#1802): the route now goes
 # ``accept_push_notification_primitives`` -> ``PushNotificationConfigRepository``
 # and constructs no ORM model, and the form's option value is rendered from
 # ``AuthenticationScheme`` so no spelling is written by hand. Entry removed —
