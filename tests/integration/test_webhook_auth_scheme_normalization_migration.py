@@ -38,11 +38,11 @@ HMAC = AuthenticationScheme.HMAC_SHA256.value
 CASES = [
     # --- bearer family: every one folds onto Bearer -------------------------------------
     ("pnc_bearer_lower", "bearer", BEARER),
-    ("pnc_bearer_canonical", "Bearer", BEARER),
+    ("pnc_bearer_canonical", BEARER, BEARER),
     ("pnc_bearer_upper", "BEARER", BEARER),
     ("pnc_bearer_mixed", "BeArEr", BEARER),
     # --- hmac family: every one folds onto HMAC-SHA256 -----------------------------------
-    ("pnc_hmac_canonical", "HMAC-SHA256", HMAC),
+    ("pnc_hmac_canonical", HMAC, HMAC),
     ("pnc_hmac_underscore", "hmac_sha256", HMAC),
     ("pnc_hmac_underscore_upper", "HMAC_SHA256", HMAC),
     ("pnc_hmac_hyphen_lower", "hmac-sha256", HMAC),

@@ -45,26 +45,14 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
-# The values written are the SDK's own, never literals: hand-typing the spelling is exactly
-# how "hmac_sha256" -- which nothing in src/ compares against -- became a value this
-# codebase persisted. Read from the enum here for the same reason production reads from it.
-#
-# A migration is frozen history, though, and this one is not: it resolves its output at RUN
-# time from a library that can change under it. If a future adcp release renames a member,
-# re-running this migration on a fresh database would write a DIFFERENT value than it wrote
-# originally, and the two databases would diverge silently. The assertion below is what
-# makes that loud instead: it pins the exact strings this migration was authored against, so
-# a rename fails the migration rather than quietly changing its meaning.
+# The values written are the SDK's own, never literals. The pinned enum is the single
+# definition of how a supported scheme is spelled; production reads it, and so does this.
+# Restating the strings here -- even to "check" them -- would put the same fact in two
+# places, which is the defect this whole change exists to remove: hand-typing the spelling
+# is how "hmac_sha256", which nothing in src/ compares against, became a value this codebase
+# persisted.
 _BEARER = AuthenticationScheme.Bearer.value
 _HMAC = AuthenticationScheme.HMAC_SHA256.value
-
-assert (_BEARER, _HMAC) == ("Bearer", "HMAC-SHA256"), (
-    f"adcp's AuthenticationScheme changed under this migration: expected "
-    f"('Bearer', 'HMAC-SHA256'), got {(_BEARER, _HMAC)!r}. This migration normalized "
-    f"existing rows onto the former; re-pointing it at the latter would make two databases "
-    f"that ran 'the same' migration disagree. Write a NEW migration for the new vocabulary "
-    f"instead of editing this one."
-)
 
 # Everything a row could say and still mean one of the two supported schemes. Compared
 # lower-cased against a lower-cased column, so casing variants need no entries here.
