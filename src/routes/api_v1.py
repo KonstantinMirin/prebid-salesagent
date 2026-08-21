@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
@@ -20,7 +20,6 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     ReportingDimensions,
 )
 from fastapi import APIRouter, Depends, Request
-from pydantic import model_validator
 
 from src.core.auth_context import require_auth, resolve_auth
 from src.core.schema_helpers import (
@@ -44,12 +43,7 @@ from src.core.tools import properties as properties_module
 from src.core.tools.creatives import listing as creatives_listing_module
 from src.core.tools.creatives import sync_wrappers as creatives_sync_module
 from src.core.validation_helpers import adcp_validation_boundary
-from src.core.version_compat import (
-    SPEC_ENVELOPE_FIELDS,
-    apply_version_compat,
-    pinned_request_schema_fields,
-    spec_request_model,
-)
+from src.core.version_compat import apply_version_compat
 
 logger = logging.getLogger(__name__)
 
@@ -71,40 +65,7 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 # extra="ignore" in prod) — the same validation the MCP/A2A request models get.
 
 
-class SeamAwareBody(SalesAgentBaseModel):
-    """A REST body whose spec fields are carried by the acceptance seam.
-
-    Restores the invariant's SECOND arm, which a blanket `extra="ignore"` had
-    removed. The problem it solves: once the seam decides acceptance, a Body that
-    does not DECLARE a spec field would 422 it (SalesAgentBaseModel forbids extras
-    in dev/CI) — refusing a field the seller honors. But answering that with
-    `extra="ignore"` accepts EVERYTHING, so a field nothing honors returns 200 OK
-    with no effect and no signal: silently dropped, which is precisely what the
-    Core Invariant forbids.
-
-    So this drops exactly the fields the PINNED SCHEMA defines — those reach the
-    tool through the seam, not through this model — and leaves every other unknown
-    field to the inherited `extra="forbid"`, which refuses it loudly. Honored or
-    refused; nothing silent in between.
-    """
-
-    _SPEC_TOOL: ClassVar[str] = ""
-
-    @model_validator(mode="before")
-    @classmethod
-    def _drop_fields_the_seam_carries(cls, data: Any) -> Any:
-        if not isinstance(data, dict) or not cls._SPEC_TOOL:
-            return data
-        model = spec_request_model(cls._SPEC_TOOL)
-        schema_fields, _ = pinned_request_schema_fields(cls._SPEC_TOOL)
-        carried = (set(model.model_fields) if model else set()) | set(schema_fields) | SPEC_ENVELOPE_FIELDS
-        declared = set(cls.model_fields)
-        return {k: v for k, v in data.items() if k in declared or k not in carried}
-
-
-class GetProductsBody(SeamAwareBody):
-    _SPEC_TOOL: ClassVar[str] = "get_products"
-
+class GetProductsBody(SalesAgentBaseModel):
     brief: str = ""
     # dict BrandReference or string domain/URL shorthand (#1324)
     brand: dict[str, Any] | str | None = None
@@ -112,9 +73,7 @@ class GetProductsBody(SeamAwareBody):
     adcp_version: str = "1.0.0"
 
 
-class CreateMediaBuyBody(SeamAwareBody):
-    _SPEC_TOOL: ClassVar[str] = "create_media_buy"
-
+class CreateMediaBuyBody(SalesAgentBaseModel):
     # dict BrandReference or string domain/URL shorthand (#1324); coerced to
     # BrandReference at the boundary via to_brand_reference.
     brand: BrandReference | dict[str, Any] | str | None = None  # adcp 3.6.0: BrandReference with domain field
@@ -134,9 +93,7 @@ class CreateMediaBuyBody(SeamAwareBody):
     adcp_version: str = "1.0.0"
 
 
-class UpdateMediaBuyBody(SeamAwareBody):
-    _SPEC_TOOL: ClassVar[str] = "update_media_buy"
-
+class UpdateMediaBuyBody(SalesAgentBaseModel):
     paused: bool | None = None
     flight_start_date: str | None = None
     flight_end_date: str | None = None
@@ -160,9 +117,7 @@ class UpdateMediaBuyBody(SeamAwareBody):
     adcp_version: str = "1.0.0"
 
 
-class GetMediaBuyDeliveryBody(SeamAwareBody):
-    _SPEC_TOOL: ClassVar[str] = "get_media_buy_delivery"
-
+class GetMediaBuyDeliveryBody(SalesAgentBaseModel):
     media_buy_ids: list[str] | None = None
     status_filter: Any = None
     start_date: str | None = None
@@ -175,9 +130,7 @@ class GetMediaBuyDeliveryBody(SeamAwareBody):
     adcp_version: str = "1.0.0"
 
 
-class SyncCreativesBody(SeamAwareBody):
-    _SPEC_TOOL: ClassVar[str] = "sync_creatives"
-
+class SyncCreativesBody(SalesAgentBaseModel):
     creatives: list[dict[str, Any]] = []
     assignments: dict[str, Any] | None = None
     creative_ids: list[str] | None = None
@@ -190,9 +143,7 @@ class SyncCreativesBody(SeamAwareBody):
     adcp_version: str = "1.0.0"
 
 
-class ListCreativesBody(SeamAwareBody):
-    _SPEC_TOOL: ClassVar[str] = "list_creatives"
-
+class ListCreativesBody(SalesAgentBaseModel):
     media_buy_id: str | None = None
     media_buy_ids: list[str] | None = None
     status: str | None = None
@@ -276,28 +227,19 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
     ``ToolError`` propagates to the global handler in ``src.app`` for envelope
     translation; no defensive catch needed here.
     """
-    # Routed through the DECORATED raw wrapper, like every other /api/v1 route.
-    # This was the ONE route that hand-built a request and called `_impl`
-    # directly, and that made it the one transport where the acceptance seam was
-    # bypassed: `RestCompatMiddleware` publishes the wire body for `/products`,
-    # but only `@accepts_spec_request_fields` reads it onto `_spec_request`, so
-    # every field not named in these three arguments — `account`, `buying_mode`,
-    # `time_budget`, the whole pinned set — was silently dropped between the
-    # transport and the tool. MCP and A2A refused/honored them correctly while
-    # REST answered 200 and ignored them.
     with adcp_validation_boundary(context="get_products request"):
-        response = await products_module.get_products_raw(
+        req = products_module.create_get_products_request(
             brief=body.brief,
             brand=body.brand,
             filters=body.filters,
-            identity=identity,
         )
+    response = await products_module._get_products_impl(req, identity)
     result = response.model_dump(mode="json")
     return apply_version_compat("get_products", result, body.adcp_version)
 
 
-@router.get("/capabilities", operation_id="get_adcp_capabilities")
-async def get_capabilities(identity: ResolvedIdentity | None = resolve_auth):
+@router.get("/capabilities")
+async def get_adcp_capabilities(identity: ResolvedIdentity | None = resolve_auth):
     """Get AdCP capabilities (auth-optional discovery skill)."""
     response = await capabilities_module.get_adcp_capabilities_raw(identity=identity)
     return response.model_dump(mode="json")

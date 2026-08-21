@@ -172,6 +172,34 @@ def pytest_configure(config: pytest.Config) -> None:
 # Each xfail has a FIXME pointing to the work needed.
 
 _XFAIL_TAGS: dict[str, str] = {
+    # ── Wired by this sweep; they FAIL, and that failure is the finding. ──
+    # These three scenarios were dormant on main (routed to the uc003/uc006
+    # not-wired catch-alls). This sweep wired them deliberately, because a
+    # storyboard step graded them and the matching BDD scenario existed. They
+    # now execute and fail, which CORROBORATES an already-filed gap from the
+    # opposite direction: the GitHub issue predicted the storyboard step was
+    # unreachable; the BDD scenario independently shows the behavior is absent.
+    #
+    # Ledgered, not hidden: each carries the issue that owns the fix, and each
+    # graduates the moment that issue lands. See the PR description's
+    # "corroborated gaps" table for the full evidence chain.
+    #
+    # GH #1261 -- salesagent silently ignores `canceled`/`cancellation_reason`
+    # on update_media_buy; the issue itself names
+    # media_buy_state_machine/terminal_enforcement (recancel) as unreachable.
+    "T-UC-003-storyboard-not-cancellable-on-recancel": (
+        "re-cancel returns silent success instead of NOT_CANCELLABLE; production has no "
+        "terminal-state guard — GH #1261, corroborated by the storyboard's own unreachability note"
+    ),
+    # GH #1075 -- idempotency_key support on update_media_buy and sync_creatives.
+    "T-UC-006-idempotency-replay": (
+        "sync_creatives re-executes the write on a repeated idempotency_key; no replay "
+        "record exists in production — GH #1075"
+    ),
+    "T-UC-006-idempotency-conflict": (
+        "sync_creatives does not detect a materially different payload under a reused "
+        "idempotency_key; no payload hash is stored — GH #1075"
+    ),
     # FIXME(salesagent-ghgx): UC-003 main/alt-timing — production doesn't populate these fields
     # Steps have hard assertions now; xfail at scenario level until production catches up.
     "T-UC-003-main": "implementation_date, budget, sandbox not populated in update response — spec-production gap",

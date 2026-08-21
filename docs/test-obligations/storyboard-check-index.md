@@ -4,12 +4,12 @@
 
 - graded checks on our conformance path: **1135** across **61** storyboards
 - claimed by a BDD scenario: **184**
-- graded by a LIVE scenario (steps bound + registry-verified harness): **0**
+- graded by a LIVE scenario (steps bound + registry-verified harness): **75**
 - tracked by an issue: **442**
 - **neither scenario nor ticket: 509**
 - measured FAILING: **130**
 - permanently ungradable (`comply_test_controller`): **481**
-- graduation candidates (ledgered, not measured FAILING): **0**
+- graduation candidates (ledgered, not measured FAILING): **75**
 
 E2E wireability — **451** wireable as-is, **197** conditional on provisioning, **487** not wireable.
 
@@ -140,17 +140,17 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `media_buy_seller/create_media_buy_async/create_media_buy_submitted/field_value#1` | ungradable | — |
 | `media_buy_seller/create_media_buy_async/create_media_buy_submitted/field_present#1` | ungradable | — |
 | `media_buy_seller/create_media_buy_async/create_media_buy_submitted/field_value#2` | ungradable | — |
-| `media_buy_seller/creative_fate_after_cancellation/get_products_brief/response_schema` | FAILING | `mcp` |
-| `media_buy_seller/creative_fate_after_cancellation/get_products_brief/field_present` | FAILING | `mcp` |
-| `media_buy_seller/creative_fate_after_cancellation/get_products_brief/field_present#1` | FAILING | `mcp` |
+| `media_buy_seller/creative_fate_after_cancellation/get_products_brief/response_schema` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/creative_fate_after_cancellation/get_products_brief/field_present` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/creative_fate_after_cancellation/get_products_brief/field_present#1` | FAILING | `a2a`, `mcp` |
 | `media_buy_seller/creative_reception/get_capabilities/response_schema` | FAILING | `mcp` |
 | `media_buy_seller/creative_reception/get_capabilities/field_present` | FAILING | `mcp` |
 | `media_buy_seller/creative_reception/get_capabilities/field_present#1` | FAILING | `mcp` |
 | `media_buy_seller/creative_reception/get_capabilities/field_value` | FAILING | `mcp` |
-| `media_buy_seller/creative_reception/sync_creatives/response_schema` | FAILING | `mcp` |
-| `media_buy_seller/creative_reception/sync_creatives/field_present` | FAILING | `mcp` |
-| `media_buy_seller/creative_reception/sync_creatives/field_present#1` | FAILING | `mcp` |
-| `media_buy_seller/creative_reception/sync_creatives/field_value` | FAILING | `mcp` |
+| `media_buy_seller/creative_reception/sync_creatives/response_schema` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/creative_reception/sync_creatives/field_present` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/creative_reception/sync_creatives/field_present#1` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/creative_reception/sync_creatives/field_value` | FAILING | `a2a`, `mcp` |
 | `media_buy_seller/delivery_reporting/sync_accounts/response_schema` | ungradable | — |
 | `media_buy_seller/delivery_reporting/sync_accounts/field_present` | ungradable | — |
 | `media_buy_seller/delivery_reporting/get_products_brief/response_schema` | ungradable | — |
@@ -311,16 +311,16 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#4` | ungradable | — |
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#5` | ungradable | — |
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#6` | ungradable | — |
-| `media_buy_seller/invalid_transitions/get_products_brief/response_schema` | FAILING | `mcp` |
-| `media_buy_seller/invalid_transitions/get_products_brief/field_present` | FAILING | `mcp` |
-| `media_buy_seller/invalid_transitions/update_unknown_package/error_code` | FAILING | `mcp` |
-| `media_buy_seller/invalid_transitions/update_unknown_package/field_present` | FAILING | `mcp` |
-| `media_buy_seller/invalid_transitions/update_unknown_package/field_value` | FAILING | `mcp` |
-| `media_buy_seller/inventory_list_no_match/get_products_brief/response_schema` | FAILING | `mcp` |
-| `media_buy_seller/inventory_list_no_match/get_products_brief/field_present` | FAILING | `mcp` |
-| `media_buy_seller/inventory_list_targeting/get_products_brief/response_schema` | FAILING | `mcp` |
-| `media_buy_seller/inventory_list_targeting/get_products_brief/field_present` | FAILING | `mcp` |
-| `media_buy_seller/inventory_list_targeting/get_products_brief/field_present#1` | FAILING | `mcp` |
+| `media_buy_seller/invalid_transitions/get_products_brief/response_schema` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/invalid_transitions/get_products_brief/field_present` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/invalid_transitions/update_unknown_package/error_code` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/invalid_transitions/update_unknown_package/field_present` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/invalid_transitions/update_unknown_package/field_value` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/inventory_list_no_match/get_products_brief/response_schema` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/inventory_list_no_match/get_products_brief/field_present` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/inventory_list_targeting/get_products_brief/response_schema` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/inventory_list_targeting/get_products_brief/field_present` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/inventory_list_targeting/get_products_brief/field_present#1` | FAILING | `a2a`, `mcp` |
 | `media_buy_seller/measurement_accountability/sync_accounts/response_schema` | ungradable | — |
 | `media_buy_seller/measurement_accountability/sync_accounts/field_present` | ungradable | — |
 | `media_buy_seller/measurement_accountability/get_products_required_metrics/response_schema` | ungradable | — |
@@ -332,12 +332,12 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `media_buy_seller/measurement_accountability/simulate_delivery/field_value` | ungradable | — |
 | `media_buy_seller/measurement_accountability/get_delivery_clean/response_schema` | ungradable | — |
 | `media_buy_seller/measurement_accountability/get_delivery_clean/field_value_or_absent` | ungradable | — |
-| `media_buy_seller/measurement_terms_rejected/get_products_brief/response_schema` | FAILING | `mcp` |
-| `media_buy_seller/measurement_terms_rejected/get_products_brief/field_present` | FAILING | `mcp` |
-| `media_buy_seller/measurement_terms_rejected/get_products_brief/field_present#1` | FAILING | `mcp` |
-| `media_buy_seller/measurement_terms_rejected/create_media_buy_aggressive_terms/error_code` | FAILING | `mcp` |
-| `media_buy_seller/measurement_terms_rejected/create_media_buy_aggressive_terms/field_present` | FAILING | `mcp` |
-| `media_buy_seller/measurement_terms_rejected/create_media_buy_aggressive_terms/field_value` | FAILING | `mcp` |
+| `media_buy_seller/measurement_terms_rejected/get_products_brief/response_schema` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/measurement_terms_rejected/get_products_brief/field_present` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/measurement_terms_rejected/get_products_brief/field_present#1` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/measurement_terms_rejected/create_media_buy_aggressive_terms/error_code` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/measurement_terms_rejected/create_media_buy_aggressive_terms/field_present` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/measurement_terms_rejected/create_media_buy_aggressive_terms/field_value` | FAILING | `a2a`, `mcp` |
 | `media_buy_seller/performance_buy_flow/sync_accounts/response_schema` | ungradable | — |
 | `media_buy_seller/performance_buy_flow/sync_accounts/field_present` | ungradable | — |
 | `media_buy_seller/performance_buy_flow/get_products_for_performance/response_schema` | ungradable | — |
@@ -464,11 +464,11 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `media_buy_seller/reach_buy_flow/simulate_reach_no_window/field_value` | ungradable | — |
 | `media_buy_seller/reach_buy_flow/get_delivery_reach_no_window/response_schema` | ungradable | — |
 | `media_buy_seller/reach_buy_flow/get_delivery_reach_no_window/field_present` | ungradable | — |
-| `media_buy_seller/refine_products/sync_accounts/response_schema` | FAILING | `mcp` |
-| `media_buy_seller/refine_products/sync_accounts/field_present` | FAILING | `mcp` |
-| `media_buy_seller/refine_products/get_products_brief/response_schema` | FAILING | `mcp` |
-| `media_buy_seller/refine_products/get_products_brief/field_present` | FAILING | `mcp` |
-| `media_buy_seller/refine_products/get_products_brief/field_present#1` | FAILING | `mcp` |
+| `media_buy_seller/refine_products/sync_accounts/response_schema` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/refine_products/sync_accounts/field_present` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/refine_products/get_products_brief/response_schema` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/refine_products/get_products_brief/field_present` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/refine_products/get_products_brief/field_present#1` | FAILING | `a2a`, `mcp` |
 | `media_buy_seller/vendor_metric_accountability/sync_accounts/response_schema` | ungradable | — |
 | `media_buy_seller/vendor_metric_accountability/sync_accounts/field_present` | ungradable | — |
 | `media_buy_seller/vendor_metric_accountability/get_products_required_vendor_metrics/response_schema` | ungradable | — |
@@ -516,24 +516,24 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `media_buy_seller/vendor_metric_optimization_flow/create_media_buy_missing_committed/field_value` | ungradable | — |
 | `media_buy_seller/vendor_metric_optimization_flow/create_media_buy_unreportable_metric/error_code` | ungradable | — |
 | `media_buy_seller/vendor_metric_optimization_flow/create_media_buy_unreportable_metric/field_value` | ungradable | — |
-| `billing_gate_dispatch/get_capabilities/response_schema` | FAILING | `mcp` |
-| `billing_gate_dispatch/get_capabilities/field_present` | FAILING | `mcp` |
-| `billing_gate_dispatch/get_capabilities/field_present#1` | FAILING | `mcp` |
-| `billing_gate_dispatch/get_capabilities/field_value` | FAILING | `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/response_schema` | FAILING | `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value` | FAILING | `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#1` | FAILING | `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#2` | FAILING | `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#3` | FAILING | `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#4` | FAILING | `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_present` | FAILING | `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent` | FAILING | `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#1` | FAILING | `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#2` | FAILING | `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#3` | FAILING | `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#4` | FAILING | `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#5` | FAILING | `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#5` | FAILING | `mcp` |
+| `billing_gate_dispatch/get_capabilities/response_schema` | FAILING | `a2a`, `mcp` |
+| `billing_gate_dispatch/get_capabilities/field_present` | FAILING | `a2a`, `mcp` |
+| `billing_gate_dispatch/get_capabilities/field_present#1` | FAILING | `a2a`, `mcp` |
+| `billing_gate_dispatch/get_capabilities/field_value` | FAILING | `a2a`, `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/response_schema` | FAILING | `a2a`, `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value` | FAILING | `a2a`, `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#1` | FAILING | `a2a`, `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#2` | FAILING | `a2a`, `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#3` | FAILING | `a2a`, `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#4` | FAILING | `a2a`, `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_present` | FAILING | `a2a`, `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent` | FAILING | `a2a`, `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#1` | FAILING | `a2a`, `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#2` | FAILING | `a2a`, `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#3` | FAILING | `a2a`, `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#4` | FAILING | `a2a`, `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#5` | FAILING | `a2a`, `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#5` | FAILING | `a2a`, `mcp` |
 | `capability_discovery/get_capabilities/response_schema` | FAILING | `mcp` |
 | `capability_discovery/get_capabilities/field_present` | FAILING | `mcp` |
 | `capability_discovery/get_capabilities/field_present#1` | FAILING | `mcp` |
@@ -546,39 +546,39 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `error_compliance/get_capabilities/field_present` | FAILING | `mcp` |
 | `error_compliance/get_capabilities/field_present#1` | FAILING | `mcp` |
 | `error_compliance/get_capabilities/field_value` | FAILING | `mcp` |
-| `error_compliance/nonexistent_product/error_code` | FAILING | `mcp` |
-| `error_compliance/nonexistent_product/field_present` | FAILING | `mcp` |
-| `error_compliance/nonexistent_product/field_value` | FAILING | `mcp` |
-| `error_compliance/reversed_dates_error/error_code` | FAILING | `mcp` |
-| `error_compliance/reversed_dates_error/field_present` | FAILING | `mcp` |
-| `error_compliance/reversed_dates_error/field_value` | FAILING | `mcp` |
-| `error_compliance/unsupported_major_version/error_code` | FAILING | `mcp` |
-| `error_compliance/unsupported_major_version/field_present` | FAILING | `mcp` |
-| `error_compliance/unsupported_major_version/field_value` | FAILING | `mcp` |
-| `error_compliance/unsupported_release_version/error_code` | FAILING | `mcp` |
-| `error_compliance/unsupported_release_version/field_present` | FAILING | `mcp` |
-| `error_compliance/unsupported_release_version/field_value` | FAILING | `mcp` |
-| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/response_schema` | FAILING | `mcp` |
-| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value` | FAILING | `mcp` |
-| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value#1` | FAILING | `mcp` |
-| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value#2` | FAILING | `mcp` |
-| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value#3` | FAILING | `mcp` |
-| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value#4` | FAILING | `mcp` |
-| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/response_schema` | FAILING | `mcp` |
-| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_present` | FAILING | `mcp` |
-| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value` | FAILING | `mcp` |
-| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#1` | FAILING | `mcp` |
-| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#2` | FAILING | `mcp` |
-| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#3` | FAILING | `mcp` |
-| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#4` | FAILING | `mcp` |
-| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_absent` | FAILING | `mcp` |
-| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#5` | FAILING | `mcp` |
-| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/response_schema` | FAILING | `mcp` |
-| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value` | FAILING | `mcp` |
-| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#1` | FAILING | `mcp` |
-| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#2` | FAILING | `mcp` |
-| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#3` | FAILING | `mcp` |
-| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#4` | FAILING | `mcp` |
+| `error_compliance/nonexistent_product/error_code` | FAILING | `a2a`, `mcp` |
+| `error_compliance/nonexistent_product/field_present` | FAILING | `a2a`, `mcp` |
+| `error_compliance/nonexistent_product/field_value` | FAILING | `a2a`, `mcp` |
+| `error_compliance/reversed_dates_error/error_code` | FAILING | `a2a`, `mcp` |
+| `error_compliance/reversed_dates_error/field_present` | FAILING | `a2a`, `mcp` |
+| `error_compliance/reversed_dates_error/field_value` | FAILING | `a2a`, `mcp` |
+| `error_compliance/unsupported_major_version/error_code` | FAILING | `a2a`, `mcp` |
+| `error_compliance/unsupported_major_version/field_present` | FAILING | `a2a`, `mcp` |
+| `error_compliance/unsupported_major_version/field_value` | FAILING | `a2a`, `mcp` |
+| `error_compliance/unsupported_release_version/error_code` | FAILING | `a2a`, `mcp` |
+| `error_compliance/unsupported_release_version/field_present` | FAILING | `a2a`, `mcp` |
+| `error_compliance/unsupported_release_version/field_value` | FAILING | `a2a`, `mcp` |
+| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/response_schema` | FAILING | `a2a`, `mcp` |
+| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value` | FAILING | `a2a`, `mcp` |
+| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value#1` | FAILING | `a2a`, `mcp` |
+| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value#2` | FAILING | `a2a`, `mcp` |
+| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value#3` | FAILING | `a2a`, `mcp` |
+| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value#4` | FAILING | `a2a`, `mcp` |
+| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/response_schema` | FAILING | `a2a`, `mcp` |
+| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_present` | FAILING | `a2a`, `mcp` |
+| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value` | FAILING | `a2a`, `mcp` |
+| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#1` | FAILING | `a2a`, `mcp` |
+| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#2` | FAILING | `a2a`, `mcp` |
+| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#3` | FAILING | `a2a`, `mcp` |
+| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#4` | FAILING | `a2a`, `mcp` |
+| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_absent` | FAILING | `a2a`, `mcp` |
+| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#5` | FAILING | `a2a`, `mcp` |
+| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/response_schema` | FAILING | `a2a`, `mcp` |
+| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value` | FAILING | `a2a`, `mcp` |
+| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#1` | FAILING | `a2a`, `mcp` |
+| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#2` | FAILING | `a2a`, `mcp` |
+| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#3` | FAILING | `a2a`, `mcp` |
+| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#4` | FAILING | `a2a`, `mcp` |
 | `pagination_integrity_creative_formats/seed_format_1/field_value` | ungradable | — |
 | `pagination_integrity_creative_formats/seed_format_2/field_value` | ungradable | — |
 | `pagination_integrity_list_accounts/seed_account_1/field_value` | ungradable | — |
@@ -588,10 +588,10 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `read_tool_idempotency/get_capabilities_with_idempotency_key/field_present` | FAILING | `mcp` |
 | `read_tool_idempotency/get_capabilities_with_idempotency_key/field_present#1` | FAILING | `mcp` |
 | `read_tool_idempotency/get_capabilities_with_idempotency_key/field_value` | FAILING | `mcp` |
-| `read_tool_idempotency/list_creative_formats_with_idempotency_key/response_schema` | FAILING | `mcp` |
-| `read_tool_idempotency/list_creative_formats_with_idempotency_key/field_present` | FAILING | `mcp` |
-| `read_tool_idempotency/list_creative_formats_with_idempotency_key/field_present#1` | FAILING | `mcp` |
-| `read_tool_idempotency/list_creative_formats_with_idempotency_key/field_value` | FAILING | `mcp` |
+| `read_tool_idempotency/list_creative_formats_with_idempotency_key/response_schema` | FAILING | `a2a`, `mcp` |
+| `read_tool_idempotency/list_creative_formats_with_idempotency_key/field_present` | FAILING | `a2a`, `mcp` |
+| `read_tool_idempotency/list_creative_formats_with_idempotency_key/field_present#1` | FAILING | `a2a`, `mcp` |
+| `read_tool_idempotency/list_creative_formats_with_idempotency_key/field_value` | FAILING | `a2a`, `mcp` |
 | `read_tool_idempotency/get_capabilities_without_idempotency_key_3_1_accept/response_schema` | FAILING | `mcp` |
 | `read_tool_idempotency/get_capabilities_without_idempotency_key_3_1_accept/field_present` | FAILING | `mcp` |
 | `read_tool_idempotency/get_capabilities_without_idempotency_key_3_1_accept/field_value` | FAILING | `mcp` |
@@ -599,9 +599,9 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `read_tool_idempotency/get_capabilities_without_idempotency_key_3_1_reject/field_present` | FAILING | `mcp` |
 | `read_tool_idempotency/get_capabilities_without_idempotency_key_3_1_reject/field_value` | FAILING | `mcp` |
 | `read_tool_idempotency/assert_omitted_key_grace_handled/any_of` | FAILING | `mcp` |
-| `security_baseline/probe_unauth/http_status_in` | FAILING | `mcp` |
-| `security_baseline/probe_unauth/on_401_require_header` | FAILING | `mcp` |
-| `security_baseline/assert_mechanism/any_of` | FAILING | `mcp` |
+| `security_baseline/probe_unauth/http_status_in` | FAILING | `a2a`, `mcp` |
+| `security_baseline/probe_unauth/on_401_require_header` | FAILING | `a2a`, `mcp` |
+| `security_baseline/assert_mechanism/any_of` | FAILING | `a2a`, `mcp` |
 | `stale_response_advisory/get_capabilities/response_schema` | FAILING | `mcp` |
 | `stale_response_advisory/get_capabilities/field_present` | FAILING | `mcp` |
 | `stale_response_advisory/get_capabilities/field_present#1` | FAILING | `mcp` |
@@ -623,13 +623,13 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `v3_envelope_integrity/no_legacy_status_fields/envelope_field_absent#1` | FAILING | `mcp` |
 | `v3_envelope_integrity/no_legacy_status_fields/field_present` | FAILING | `mcp` |
 | `v3_envelope_integrity/no_legacy_status_fields/field_value` | FAILING | `mcp` |
-| `version_negotiation/get_capabilities_with_version/response_schema` | FAILING | `mcp` |
-| `version_negotiation/get_capabilities_with_version/field_present` | FAILING | `mcp` |
-| `version_negotiation/get_capabilities_with_version/field_present#1` | FAILING | `mcp` |
-| `version_negotiation/get_capabilities_with_version/envelope_field_present` | FAILING | `mcp` |
-| `version_negotiation/get_capabilities_with_version/envelope_field_pattern` | FAILING | `mcp` |
-| `version_negotiation/get_capabilities_with_version/field_present#2` | FAILING | `mcp` |
-| `version_negotiation/get_capabilities_with_version/field_value` | FAILING | `mcp` |
+| `version_negotiation/get_capabilities_with_version/response_schema` | FAILING | `a2a`, `mcp` |
+| `version_negotiation/get_capabilities_with_version/field_present` | FAILING | `a2a`, `mcp` |
+| `version_negotiation/get_capabilities_with_version/field_present#1` | FAILING | `a2a`, `mcp` |
+| `version_negotiation/get_capabilities_with_version/envelope_field_present` | FAILING | `a2a`, `mcp` |
+| `version_negotiation/get_capabilities_with_version/envelope_field_pattern` | FAILING | `a2a`, `mcp` |
+| `version_negotiation/get_capabilities_with_version/field_present#2` | FAILING | `a2a`, `mcp` |
+| `version_negotiation/get_capabilities_with_version/field_value` | FAILING | `a2a`, `mcp` |
 
 ## 2. Tracking
 
@@ -1086,57 +1086,57 @@ Checks whose storyboard carries an issue. `coverage` is the map's own assessment
 
 | Check | Scenario(s) claiming the storyboard | live? |
 |---|---|---|
-| `media_buy_seller/get_capabilities/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/get_capabilities/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/get_capabilities/field_present#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/get_capabilities/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/sync_accounts/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/sync_accounts/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/sync_accounts/field_present#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/sync_accounts/field_present#2` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/sync_accounts/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/sync_governance/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/sync_governance/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/sync_governance/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/get_products_brief/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/get_products_brief/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/get_products_brief/field_present#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/get_products_brief/field_present#2` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/get_products_brief/field_present#3` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/get_products_brief/field_present#4` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/get_products_brief/field_present#5` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/get_products_brief/field_present#6` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/get_products_brief/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/get_products_brief/field_present#7` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/list_formats_integrity/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/list_formats_integrity/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/list_formats_integrity/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/list_formats_integrity/field_present#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/list_formats_integrity/field_value#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/create_media_buy/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/create_media_buy/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/create_media_buy/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/check_buy_status/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/check_buy_status/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/check_buy_status/field_present#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/check_buy_status/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/check_buy_status/field_equals_context` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/check_buy_status/field_value#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/list_formats/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/list_formats/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/list_formats/field_present#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/list_formats/field_present#2` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/list_formats/field_present#3` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/list_formats/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/list_formats/refs_resolve` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/sync_creatives/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/sync_creatives/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/sync_creatives/field_present#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/sync_creatives/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/get_delivery/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/get_delivery/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/get_delivery/field_present#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
-| `media_buy_seller/get_delivery/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-019-storyboard-post-create-status-poll` | claimed only |
+| `media_buy_seller/get_capabilities/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/get_capabilities/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/get_capabilities/field_present#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/get_capabilities/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/sync_accounts/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/sync_accounts/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/sync_accounts/field_present#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/sync_accounts/field_present#2` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/sync_accounts/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/sync_governance/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/sync_governance/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/sync_governance/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/get_products_brief/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/get_products_brief/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/get_products_brief/field_present#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/get_products_brief/field_present#2` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/get_products_brief/field_present#3` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/get_products_brief/field_present#4` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/get_products_brief/field_present#5` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/get_products_brief/field_present#6` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/get_products_brief/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/get_products_brief/field_present#7` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/list_formats_integrity/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/list_formats_integrity/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/list_formats_integrity/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/list_formats_integrity/field_present#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/list_formats_integrity/field_value#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/create_media_buy/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/create_media_buy/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/create_media_buy/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/check_buy_status/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/check_buy_status/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/check_buy_status/field_present#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/check_buy_status/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/check_buy_status/field_equals_context` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/check_buy_status/field_value#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/list_formats/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/list_formats/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/list_formats/field_present#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/list_formats/field_present#2` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/list_formats/field_present#3` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/list_formats/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/list_formats/refs_resolve` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/sync_creatives/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/sync_creatives/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/sync_creatives/field_present#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/sync_creatives/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/get_delivery/response_schema` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/get_delivery/field_present` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/get_delivery/field_present#1` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
+| `media_buy_seller/get_delivery/field_value` | `T-UC-005-storyboard-format-id-roundtrip-from-products`, `T-UC-005-storyboard-format-id-third-party-agent-out-of-scope`, `T-UC-006-storyboard-format-id-roundtrip-on-sync`, `T-UC-006-storyboard-multi-format-sync`, `T-UC-006-storyboard-multi-format-sync-status`, `T-UC-019-storyboard-post-create-status-poll` | yes |
 | `media_buy_seller/creative_fate_after_cancellation/get_products_brief/response_schema` | `T-UC-003-storyboard-creative-fate-after-cancellation` | claimed only |
 | `media_buy_seller/creative_fate_after_cancellation/get_products_brief/field_present` | `T-UC-003-storyboard-creative-fate-after-cancellation` | claimed only |
 | `media_buy_seller/creative_fate_after_cancellation/get_products_brief/field_present#1` | `T-UC-003-storyboard-creative-fate-after-cancellation` | claimed only |
@@ -1229,30 +1229,30 @@ Checks whose storyboard carries an issue. `coverage` is the map's own assessment
 | `media_buy_seller/measurement_terms_rejected/create_media_buy_relaxed_terms/field_present` | `T-UC-002-storyboard-measurement-terms-rejected` | claimed only |
 | `media_buy_seller/measurement_terms_rejected/create_media_buy_relaxed_terms/field_present#1` | `T-UC-002-storyboard-measurement-terms-rejected` | claimed only |
 | `media_buy_seller/measurement_terms_rejected/create_media_buy_relaxed_terms/field_value` | `T-UC-002-storyboard-measurement-terms-rejected` | claimed only |
-| `media_buy_seller/provenance_enforcement/get_products_with_disclosure_policy/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/get_products_with_disclosure_policy/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/get_products_with_disclosure_policy/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/get_products_with_disclosure_policy/field_present` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/get_products_with_disclosure_policy/field_value#2` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_no_provenance/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_no_provenance/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_no_provenance/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_no_provenance/field_value#2` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_no_digital_source_type/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_no_digital_source_type/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_no_digital_source_type/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_no_digital_source_type/field_value#2` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_off_list_verifier/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_off_list_verifier/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_off_list_verifier/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_off_list_verifier/field_value#2` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_missing_disclosure/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_missing_disclosure/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_missing_disclosure/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_missing_disclosure/field_value#2` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_with_disclosure/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_with_disclosure/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
-| `media_buy_seller/provenance_enforcement/sync_creatives_with_disclosure/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | claimed only |
+| `media_buy_seller/provenance_enforcement/get_products_with_disclosure_policy/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/get_products_with_disclosure_policy/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/get_products_with_disclosure_policy/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/get_products_with_disclosure_policy/field_present` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/get_products_with_disclosure_policy/field_value#2` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_no_provenance/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_no_provenance/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_no_provenance/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_no_provenance/field_value#2` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_no_digital_source_type/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_no_digital_source_type/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_no_digital_source_type/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_no_digital_source_type/field_value#2` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_off_list_verifier/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_off_list_verifier/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_off_list_verifier/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_off_list_verifier/field_value#2` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_missing_disclosure/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_missing_disclosure/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_missing_disclosure/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_missing_disclosure/field_value#2` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_with_disclosure/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_with_disclosure/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
+| `media_buy_seller/provenance_enforcement/sync_creatives_with_disclosure/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` | yes |
 | `media_buy_seller/vendor_metric_accountability/sync_accounts/response_schema` | `T-UC-004-storyboard-vendor-metric-end-to-end` | claimed only |
 | `media_buy_seller/vendor_metric_accountability/sync_accounts/field_present` | `T-UC-004-storyboard-vendor-metric-end-to-end` | claimed only |
 | `media_buy_seller/vendor_metric_accountability/get_products_required_vendor_metrics/response_schema` | `T-UC-004-storyboard-vendor-metric-end-to-end` | claimed only |
@@ -1277,6 +1277,81 @@ A claiming scenario locally xfails this check's storyboard as a known gap (the `
 
 | Check | Ledgered scenario(s) |
 |---|---|
+| `media_buy_seller/get_capabilities/response_schema` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/get_capabilities/field_present` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/get_capabilities/field_present#1` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/get_capabilities/field_value` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/sync_accounts/response_schema` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/sync_accounts/field_present` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/sync_accounts/field_present#1` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/sync_accounts/field_present#2` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/sync_accounts/field_value` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/sync_governance/response_schema` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/sync_governance/field_present` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/sync_governance/field_value` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/get_products_brief/response_schema` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/get_products_brief/field_present` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/get_products_brief/field_present#1` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/get_products_brief/field_present#2` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/get_products_brief/field_present#3` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/get_products_brief/field_present#4` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/get_products_brief/field_present#5` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/get_products_brief/field_present#6` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/get_products_brief/field_value` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/get_products_brief/field_present#7` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/list_formats_integrity/response_schema` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/list_formats_integrity/field_present` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/list_formats_integrity/field_value` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/list_formats_integrity/field_present#1` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/list_formats_integrity/field_value#1` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/create_media_buy/response_schema` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/create_media_buy/field_present` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/create_media_buy/field_value` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/check_buy_status/response_schema` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/check_buy_status/field_present` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/check_buy_status/field_present#1` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/check_buy_status/field_value` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/check_buy_status/field_equals_context` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/check_buy_status/field_value#1` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/list_formats/response_schema` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/list_formats/field_present` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/list_formats/field_present#1` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/list_formats/field_present#2` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/list_formats/field_present#3` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/list_formats/field_value` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/list_formats/refs_resolve` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/sync_creatives/response_schema` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/sync_creatives/field_present` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/sync_creatives/field_present#1` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/sync_creatives/field_value` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/get_delivery/response_schema` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/get_delivery/field_present` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/get_delivery/field_present#1` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/get_delivery/field_value` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/provenance_enforcement/get_products_with_disclosure_policy/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/get_products_with_disclosure_policy/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/get_products_with_disclosure_policy/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/get_products_with_disclosure_policy/field_present` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/get_products_with_disclosure_policy/field_value#2` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_no_provenance/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_no_provenance/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_no_provenance/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_no_provenance/field_value#2` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_no_digital_source_type/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_no_digital_source_type/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_no_digital_source_type/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_no_digital_source_type/field_value#2` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_off_list_verifier/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_off_list_verifier/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_off_list_verifier/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_off_list_verifier/field_value#2` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_missing_disclosure/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_missing_disclosure/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_missing_disclosure/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_missing_disclosure/field_value#2` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_with_disclosure/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_with_disclosure/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
+| `media_buy_seller/provenance_enforcement/sync_creatives_with_disclosure/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
 
 ## 5. End-to-end wireability
 

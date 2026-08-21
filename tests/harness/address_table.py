@@ -64,9 +64,11 @@ PATH_PARAM_RE = re.compile(r"\{(\w+)\}")
 # ``operation_id`` yet; it is reviewed-growth-only: pinned exactly by
 # TestRestAliasesAndAbsence.test_rest_tool_aliases_pinned_exactly, so adding
 # an entry requires a deliberate, reviewed edit to that test too. It reached
-# empty once ``/api/v1/capabilities`` adopted
-# ``operation_id="get_adcp_capabilities"`` (the one prior divergence) — the
-# endgame described above.
+# empty, and stays empty: every /api/v1 handler is now named after the AdCP tool
+# it implements, so the handler name IS the tool identity and nothing needs
+# aliasing. AdCP does not define REST -- this project does -- so the tool name is
+# the canonical name across every transport, and a REST handler diverging from it
+# is a defect, not a naming choice.
 REST_TOOL_ALIASES: dict[str, str] = {}
 
 # AdCP tool names known to have NO REST route at all (as opposed to a REST

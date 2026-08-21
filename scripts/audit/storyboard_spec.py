@@ -792,11 +792,20 @@ def run_cli(
     except StoryboardAuditError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    # --jsonl and --markdown are INDEPENDENT outputs, not alternatives. The
+    # published regeneration command passes both (see storyboard-check-index.md's
+    # own header), and returning after the JSONL emitted only half the pair —
+    # which is how the committed markdown drifted from its own source of truth.
+    wrote = False
     if jsonl_fn is not None and getattr(args, "jsonl", False):
         for record in jsonl_fn(result):
             print(json.dumps(record, sort_keys=True))
-        return 0
-    print(render_fn(result) if args.markdown else json.dumps(result, indent=2))
+        wrote = True
+    if args.markdown:
+        print(render_fn(result))
+        wrote = True
+    if not wrote:
+        print(json.dumps(result, indent=2))
     return 0
 
 

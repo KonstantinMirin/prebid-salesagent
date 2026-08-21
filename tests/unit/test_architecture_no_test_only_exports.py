@@ -27,10 +27,10 @@ def test_spec_response_model_resolves_from_its_new_home():
     from tests.harness.spec_models import spec_response_model
 
     assert spec_response_model("get_products").__name__ == "GetProductsResponse"
-    # The request-side sibling STAYS in production — the acceptance seam needs it.
-    from src.core.version_compat import spec_request_model
-
-    assert spec_request_model("get_products").__name__ == "GetProductsRequest"
+    # The request-side sibling used to stay in production because the acceptance
+    # seam needed it. This sweep reverted that seam — src/ is byte-identical to
+    # origin/main — so `spec_request_model` no longer exists in production and
+    # asserting on it here would grade a symbol this branch deliberately removed.
 
 
 def test_no_production_module_imports_the_harness_helper():

@@ -14,7 +14,6 @@ from adcp.types.generated_poc.creative.list_creatives_request import (
     Sort,
 )
 from fastmcp.server.context import Context
-from pydantic import BaseModel
 from pydantic import Field as PydanticField
 
 from src.core.audit_logger import get_audit_logger
@@ -30,11 +29,9 @@ from src.core.schemas import (
     ListCreativesRequest,
     ListCreativesResponse,
 )
-from src.core.spec_request_carrier import merge_spec_request, refuse_unsupported_fields
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
 from src.core.validation_helpers import adcp_validation_boundary
-from src.core.version_compat import accepts_spec_request_fields
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +196,6 @@ def _build_list_creatives_request(
     sort_by: str = "created_date",
     sort_order: str = "desc",
     context: ContextObject | None = None,
-    spec_request: BaseModel | None = None,
 ) -> "ListCreativesRequest":
     """Build a ListCreativesRequest from individual wire params.
 
@@ -296,7 +292,7 @@ def _build_list_creatives_request(
     structured_sort = LibrarySort(field=mapped_field, direction=valid_sort_order)
 
     with adcp_validation_boundary(context="list_creatives request"):
-        req = ListCreativesRequest(
+        return ListCreativesRequest(
             filters=structured_filters,
             pagination=structured_pagination,
             sort=structured_sort,
@@ -304,32 +300,6 @@ def _build_list_creatives_request(
             include_assignments=include_assignments,
             context=context,
         )
-    # Body-semantic fields the flat parameters above never declared (account, the
-    # include_* projections) ride in on the seam's carrier — `_impl` then honors or
-    # refuses each one instead of dropping it one frame past the transport.
-    return merge_spec_request(req, spec_request)
-
-
-# Body-semantic fields `list_creatives` ACCEPTS on the wire (its pinned 3.1.1
-# request schema defines them) and this seller cannot act on. Each one asks for
-# EXTRA data on the returned creatives; answering without it, while reporting
-# success, tells the buyer the creative has no items / no variables / no pricing
-# when the truth is that this seller never looked. They are REFUSED, loudly.
-#
-# Named here, in the tool that owes the disposition — "what this seller
-# implements" exists nowhere else to derive it from. Every OTHER field of the
-# pinned model reaches `_impl` on the seam's carrier and is honored (filters,
-# sort, pagination, fields, include_assignments).
-_UNSUPPORTED_LIST_CREATIVES_FIELDS = {
-    "account": "per-account creative scoping and rate-card pricing are not implemented",
-    "include_items": "multi-asset item expansion is not implemented",
-    "include_pricing": "per-account creative pricing_options are not implemented",
-    "include_purged": "soft-purge tombstones are not implemented",
-    "include_snapshot": "per-creative delivery snapshots are not implemented",
-    "include_variables": "dynamic-content variable (DCO slot) definitions are not implemented",
-    "include_webhook_activity": "per-creative webhook activity is not implemented",
-    "webhook_activity_limit": "per-creative webhook activity is not implemented",
-}
 
 
 def _list_creatives_impl(
@@ -357,8 +327,6 @@ def _list_creatives_impl(
         ListCreativesResponse with filtered creative assets and pagination info
     """
     from typing import Literal
-
-    refuse_unsupported_fields(req, tool="list_creatives", unsupported=_UNSUPPORTED_LIST_CREATIVES_FIELDS)
 
     # Derive flat DB-query params from the structured request.
     req_filters = req.filters
@@ -655,10 +623,6 @@ async def list_creatives(
     sort_order: Annotated[str, PydanticField(description="Sort direction: 'asc' or 'desc'")] = "desc",
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
-    # Seam carrier: the wire request as this tool's pinned model. Present on
-    # EVERY seam member under the same name — uniform or it is not a seam —
-    # and filtered out of the published schema by the decorator.
-    _spec_request: ListCreativesRequest | None = None,
 ):
     """List and filter creative assets from the centralized library (AdCP v2.5).
 
@@ -705,7 +669,6 @@ async def list_creatives(
         sort_by=sort_by,
         sort_order=sort_order,
         context=context,
-        spec_request=_spec_request,
     )
     response = _list_creatives_impl(
         req=req,
@@ -718,7 +681,6 @@ async def list_creatives(
     return mcp_result(response)
 
 
-@accepts_spec_request_fields
 def list_creatives_raw(
     media_buy_id: str = None,
     media_buy_ids: list[str] = None,
@@ -740,18 +702,10 @@ def list_creatives_raw(
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
-    # Seam carrier — see the MCP sibling above. Present on every seam member,
-    # raw wrappers included: the decorator passes it unconditionally.
-    _spec_request: ListCreativesRequest | None = None,
 ):
     """List creative assets with filtering and pagination (raw function for A2A server use, AdCP v2.5).
 
     Delegates to the shared implementation.
-
-    @accepts_spec_request_fields additionally lets this function be CALLED
-    with every field ListCreativesRequest defines (e.g. ext) without raising
-    TypeError — accepted, not yet forwarded or honored by _impl
-    (salesagent-g6m2.10).
 
     Args:
         media_buy_id: Filter by single media buy ID (backward compat)
@@ -798,7 +752,6 @@ def list_creatives_raw(
         sort_by=sort_by,
         sort_order=sort_order,
         context=to_context_object(context),
-        spec_request=_spec_request,
     )
     return _list_creatives_impl(
         req=req,

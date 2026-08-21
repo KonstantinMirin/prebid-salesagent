@@ -27,7 +27,7 @@ and it maps back to a path with no invented naming convention in between.
 
 The pure resolution primitives (``schema_root``, ``normalize_ref``, ``load``,
 ``PinnedSchemaError``, and their private helpers) live in
-``src/core/adcp_pinned_schema.py`` — a stdlib-only module production code
+``tests/helpers/adcp_pinned_schema.py`` — a stdlib-only module test code
 (``src/core/version_compat.py``) also imports, so there is exactly ONE
 resolution implementation shared by prod and tests, never a test-only copy
 duplicated into src/. This module re-exports every one of those names and
@@ -37,7 +37,7 @@ adds only the jsonschema-validation-specific pieces on top:
   ``$ref`` resolution wired, for validating a payload against a schema
   (``validate_against_pinned_schema`` is the convenience wrapper most
   callers want).
-- ``load(ref)`` — re-exported from ``src/core/adcp_pinned_schema`` — a
+- ``load(ref)`` — re-exported from ``tests/helpers/adcp_pinned_schema`` — a
   single schema's raw dict, ``$ref``s left as-is, for callers that WALK the
   schema tree themselves (the alignment suite's synthetic-example
   generator) rather than validating a concrete payload. Callers that want
@@ -56,7 +56,7 @@ import referencing
 from jsonschema.validators import Draft7Validator
 from referencing.jsonschema import DRAFT7
 
-from src.core.adcp_pinned_schema import (
+from tests.helpers.adcp_pinned_schema import (
     PinnedSchemaError,
     _contained_path,
     _load_with_id,
@@ -65,7 +65,7 @@ from src.core.adcp_pinned_schema import (
     normalize_ref,
     schema_root,
 )
-from src.core.adcp_pinned_schema import (
+from tests.helpers.adcp_pinned_schema import (
     # Re-exported for tests.unit.test_pinned_schema_single_source, which reads
     # this module's own private resolution helper directly. Not used in this
     # file's body — the `as` self-alias is the standard re-export idiom that

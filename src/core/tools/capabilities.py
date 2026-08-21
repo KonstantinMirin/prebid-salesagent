@@ -9,7 +9,7 @@ This module follows the MCP/A2A shared implementation pattern from CLAUDE.md.
 import logging
 from datetime import UTC, datetime
 
-from adcp.types import ContextObject, GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
+from adcp.types import GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
 from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
 from adcp.types.generated_poc.core.postal_area_support import (
     PostalAreaSupport,  # adcp 6.6: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
@@ -41,7 +41,6 @@ from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
-from src.core.version_compat import accepts_spec_request_fields
 from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
@@ -81,21 +80,12 @@ def _get_adcp_capabilities_impl(
     Returns the capabilities of this sales agent per AdCP spec.
 
     Args:
-        req: GetAdcpCapabilitiesRequest, carrying (among other fields) the
-            caller's opaque ``context`` object, which AdCP 3.1.1's normative
-            echo contract (docs/building/by-layer/L2/context-sessions.mdx)
-            requires be echoed byte-for-byte on every response path.
+        req: GetAdcpCapabilitiesRequest (optional, currently unused)
         identity: Resolved identity from transport boundary
 
     Returns:
         GetAdcpCapabilitiesResponse containing agent capabilities
     """
-    # Computed once -- req is Optional only because ~20 unit tests call this
-    # _impl directly with req=None; both production wrappers always build a
-    # real req. Every response-construction / error-echo site below reuses
-    # this instead of repeating the `req.context if req else None` ternary.
-    request_context = req.context if req else None
-
     # Extract principal and tenant from resolved identity
     principal_id = identity.principal_id if identity else None
     tenant = identity.tenant if identity else None
@@ -109,11 +99,10 @@ def _get_adcp_capabilities_impl(
             ),
             supported_protocols=[SupportedProtocol.media_buy],
             specialisms=[AdcpSpecialism.sales_non_guaranteed],
-            context=request_context,
         )
 
     # If we got here, tenant is truthy, which means identity was not None on line 84
-    identity = require_identity(identity, context=request_context)
+    identity = require_identity(identity, context=req.context if req else None)
 
     tenant_id = tenant["tenant_id"]
     tenant_name = tenant.get("name", "Unknown")
@@ -284,7 +273,6 @@ def _get_adcp_capabilities_impl(
         specialisms=[AdcpSpecialism.sales_non_guaranteed],
         media_buy=media_buy,
         last_updated=datetime.now(UTC),
-        context=request_context,
     )
 
     return response
@@ -292,12 +280,7 @@ def _get_adcp_capabilities_impl(
 
 async def get_adcp_capabilities(
     protocols: list[str] | None = None,
-    context: ContextObject | None = None,
     ctx: Context | None = None,
-    # Seam carrier: the wire request as this tool's pinned model. Present on
-    # EVERY seam member under the same name — uniform or it is not a seam —
-    # and filtered out of the published schema by the decorator.
-    _spec_request: GetAdcpCapabilitiesRequest | None = None,
 ) -> ToolResult:
     """Get the capabilities of this AdCP sales agent.
 
@@ -305,9 +288,6 @@ async def get_adcp_capabilities(
 
     Args:
         protocols: Specific protocols to query (optional, currently ignored)
-        context: Application-level context object (optional). Opaque per AdCP
-            3.1.1's normative echo contract -- never parsed, always echoed
-            byte-for-byte in the response when supplied.
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -315,7 +295,8 @@ async def get_adcp_capabilities(
     """
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
-    req = GetAdcpCapabilitiesRequest(context=context)
+    # Build request object (currently minimal)
+    req = GetAdcpCapabilitiesRequest()
 
     # Call shared implementation
     response = _get_adcp_capabilities_impl(req, identity)
@@ -340,30 +321,17 @@ async def get_adcp_capabilities(
     return mcp_result(response, content=summary)
 
 
-@accepts_spec_request_fields
 async def get_adcp_capabilities_raw(
     protocols: list[str] | None = None,
-    context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
-    # Seam carrier — see the MCP sibling above. Present on every seam member,
-    # raw wrappers included: the decorator passes it unconditionally.
-    _spec_request: GetAdcpCapabilitiesRequest | None = None,
 ) -> GetAdcpCapabilitiesResponse:
     """Get the capabilities of this AdCP sales agent.
 
     Raw function without @mcp.tool decorator for A2A server use.
 
-    @accepts_spec_request_fields additionally lets this function be CALLED
-    with every field GetAdcpCapabilitiesRequest defines (e.g. ext) without
-    raising TypeError — accepted, not yet forwarded or honored by _impl
-    (salesagent-g6m2.10).
-
     Args:
         protocols: Specific protocols to query (optional, currently ignored)
-        context: Application-level context object (optional), echoed
-            byte-for-byte in the response per AdCP 3.1.1's normative echo
-            contract.
         ctx: FastMCP context (automatically provided)
         identity: Pre-resolved identity (preferred over ctx)
 
@@ -374,5 +342,5 @@ async def get_adcp_capabilities_raw(
         from src.core.transport_helpers import resolve_identity_from_context
 
         identity = resolve_identity_from_context(ctx, require_valid_token=False)
-    req = GetAdcpCapabilitiesRequest(context=context)
+    req = GetAdcpCapabilitiesRequest()
     return _get_adcp_capabilities_impl(req, identity)

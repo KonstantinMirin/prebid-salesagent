@@ -91,15 +91,22 @@ storyboards:
     # runStoryboardBody discovers its own and hands it to checkRequires).
     # Full evidence chain: salesagent-g6m2.3.
     note: >-
-      #1291 is the implementation epic. RESOLVED: the 40 ledgered failures here
-      were never a conformance obligation — 3.1.1 exempts agents that do not
-      advertise request_signing.supported — and they are now gone. They existed
-      because our capability probe was rejected (MCP tools rejected the 3.1
-      version envelope, GH #1512), which no-oped the skip gate. With that fixed
-      (salesagent-g6m2.6), the in-network run test-results/innet_130826_0940
-      MEASURES the storyboard skipping: 40 entries removed from the ledger, and
-      the roadmap's measured-failing total drops from 80 checks to 48. The
-      remaining gap here is the unwritten scenario, not a measured failure.
+      #1291 is the implementation epic. MEASURED 2026-08-21
+      (test-results/innet_210826_1048/, in-network, MCP pass): the 40 checks
+      here are GRADED AND FAILING. They are not a conformance obligation --
+      3.1.1 exempts agents that do not advertise request_signing.supported, and
+      request_signing appears nowhere in src/ -- but they are collected anyway
+      because the capability probe is REJECTED (#1512), which no-ops the skip
+      gate. They are ledgered against #1291, which is open and owns the RFC 9421
+      implementation, per this repo's known_failures.txt policy that signing
+      entries are "regular shrinking genuine-gap entries tied to #1291".
+      When #1546 lands the envelope fix, the gate closes and these 40 stop being
+      COLLECTED rather than starting to pass -- remove them in that same change.
+      A previous revision of this note claimed the 40 "are now gone" and that
+      the roadmap dropped "from 80 checks to 48". That was measured against a
+      branch carrying a production fix this PR reverts; on the reverted tree it
+      is false. The roadmap now reports 70 ledgered checks.
+      The remaining gap here is the unwritten scenario, not a measured failure.
 
   universal/idempotency.yaml:
     issues: [1683, 1685, 1470, 1075]

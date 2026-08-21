@@ -48,7 +48,6 @@ from src.core.exceptions import (
     AdCPCreativeRejectedError,
     AdCPGoneError,
     AdCPInvalidRequestError,
-    AdCPNotCancellableError,
     AdCPValidationError,
 )
 from src.core.tool_context import ToolContext
@@ -85,7 +84,6 @@ from src.core.schemas import (
     UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
 )
-from src.core.spec_request_carrier import merge_spec_request, refuse_unsupported_fields
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools._mcp import mcp_result
 from src.core.tools.creatives import _sync_creatives_impl
@@ -99,7 +97,6 @@ from src.core.tools.financial_validation import (
 from src.core.transport_helpers import resolve_identity_from_context
 from src.core.utils import utc_flight_start
 from src.core.validation_helpers import adcp_validation_boundary, package_field_path
-from src.core.version_compat import accepts_spec_request_fields
 from src.services.targeting_capabilities import (
     property_list_unsupported_advisories,
     raise_if_property_targeting_violations,
@@ -154,13 +151,6 @@ def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
     be intersected against ``valid_actions_for_status(current_status)``.
     """
     actions: list[str] = []
-    # `cancel` is already a first-class action in the SDK's state machine (valid
-    # from active, absent from canceled's empty action set). Deriving it here is
-    # what connects a buyer's `canceled: true` to that machine — without this the
-    # field arrived, matched no action, and the update proceeded as though it had
-    # never been sent, which is the accept-and-drop this lane exists to close.
-    if req.canceled is True:
-        actions.append("cancel")
     if req.paused is True:
         actions.append("pause")
     if req.paused is False:
@@ -353,22 +343,6 @@ def _verify_principal(
         )
 
 
-# Body-semantic fields `update_media_buy` ACCEPTS on the wire (its pinned 3.1.1
-# request schema defines them) and this seller cannot act on. These are the fields
-# the seam carries all the way to the request model, where nothing reads them —
-# accept-and-drop one frame past the transport, which is the failure this lane
-# exists to close. Every one is on the money path.
-_UNSUPPORTED_UPDATE_MEDIA_BUY_FIELDS = {
-    "account": "re-billing a buy to a different account is not implemented",
-    "invoice_recipient": (
-        "per-buy billing-entity override is not implemented, and the spec requires the seller to "
-        "validate the recipient is authorized for the account"
-    ),
-    "new_packages": "adding packages to an existing buy is not implemented; use `packages` to update existing ones",
-    "revision": "revision-scoped updates are not implemented",
-}
-
-
 def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
     identity: ResolvedIdentity | None = None,
@@ -391,8 +365,6 @@ def _update_media_buy_impl(
     """
     # Initialize tracking for affected packages (internal tracking, not part of schema)
     affected_packages_list: list[AffectedPackage] = []
-
-    refuse_unsupported_fields(req, tool="update_media_buy", unsupported=_UNSUPPORTED_UPDATE_MEDIA_BUY_FIELDS)
 
     identity = require_identity(identity, context=req.context)
 
@@ -437,28 +409,6 @@ def _update_media_buy_impl(
             # ``adcp.server.helpers.MEDIA_BUY_STATE_MACHINE`` for the source of truth.
             _current_mb = uow.media_buys.get_by_id(media_buy_id_to_use)
             _current_status = _current_mb.status if _current_mb else ""
-            # A re-cancel is NOT the generic terminal-state rejection. AdCP 3.1.1
-            # reserves NOT_CANCELLABLE for "cannot be canceled in its current
-            # state" (compliance `invalid_transitions`, phase `double_cancel`),
-            # and keeps INVALID_STATE for NON-cancel updates to a terminal buy.
-            # Both are 410/correctable; only the code distinguishes them, which is
-            # exactly what a buyer needs to tell "your cancel was redundant" from
-            # "this buy is finished, stop editing it". Checked BEFORE the generic
-            # branch below, which would otherwise swallow it as INVALID_STATE.
-            if req.canceled is True and _current_status == "canceled":
-                raise AdCPNotCancellableError(
-                    "Media buy is already canceled and cannot be canceled again",
-                    field="canceled",
-                    suggestion=(
-                        "The media buy is already in the canceled state; no further "
-                        "cancellation is possible. Create a new media buy to run a new campaign."
-                    ),
-                    # Echo the caller's context back on the error envelope. A buyer
-                    # correlating a retry needs its correlation_id on the FAILURE at
-                    # least as much as on the success — dropping it here is how an
-                    # error becomes unattributable to the request that caused it.
-                    context=req.context,
-                )
             if is_terminal_status(_current_status):
                 raise AdCPGoneError(
                     f"Cannot update media buy in terminal state: {_current_status}",
@@ -748,47 +698,6 @@ def _update_media_buy_impl(
                                 )
 
             # Handle campaign-level updates
-            if req.canceled is True:
-                # HONOR the cancel. The re-cancel refusal above is only half the
-                # contract: a seller that refuses every cancel passes the
-                # NOT_CANCELLABLE scenario while still never cancelling anything.
-                # AdCP 3.1.1's `invalid_transitions` scenario grades both arms —
-                # step `first_cancel` expects "Seller acknowledges the cancellation
-                # and transitions the buy to canceled".
-                #
-                # The state machine already gated this: `cancel` is in
-                # valid_actions_for_status("active") and absent from "canceled",
-                # so reaching here means the transition is legal.
-                adapter.update_media_buy(
-                    media_buy_id=req.media_buy_id,
-                    action="cancel_media_buy",
-                    package_id=None,
-                    budget=None,
-                    today=utc_flight_start(today),
-                )
-                # Persist through the repository, not a bare attribute write — the
-                # DB row is the source of truth for status (never re-derived from
-                # flight dates: a canceled buy inside its flight window is canceled,
-                # per _media_buy_status.TERMINAL_STATUSES).
-                uow.media_buys.update_status(req.media_buy_id, "canceled")
-                # HONOR `cancellation_reason`. The pinned schema defines it beside
-                # `canceled` and nothing else in this system records why a buy
-                # stopped spending, so dropping it loses the only account of the
-                # decision. The audit trail is where it belongs — it is the
-                # persisted, queryable record of who did what to this buy.
-                get_audit_logger("AdCP", tenant["tenant_id"]).log_operation(
-                    operation="update_media_buy",
-                    principal_name=principal_id or "anonymous",
-                    principal_id=principal_id or "anonymous",
-                    adapter_id="mcp_server",
-                    success=True,
-                    details={
-                        "media_buy_id": req.media_buy_id,
-                        "action": "cancel_media_buy",
-                        "cancellation_reason": req.cancellation_reason,
-                    },
-                )
-
             if req.paused is not None:
                 # adcp 2.12.0+: paused=True means pause, paused=False means resume
                 action = "pause_media_buy" if req.paused else "resume_media_buy"
@@ -1530,7 +1439,6 @@ def _build_update_request(
     reporting_webhook: Any = None,
     ext: Any = None,
     idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
-    spec_request: UpdateMediaBuyRequest | None = None,
 ) -> UpdateMediaBuyRequest:
     """Build UpdateMediaBuyRequest from flat parameters.
 
@@ -1590,13 +1498,6 @@ def _build_update_request(
     with adcp_validation_boundary(context="update_media_buy request"):
         req = UpdateMediaBuyRequest(**request_params)
 
-    # Body-semantic fields ride in on the pinned request model the seam built
-    # from the wire, not as per-tool parameters. One shared merge for every tool
-    # at the seam (src/core/spec_request_carrier.py) — a second copy of this loop
-    # is how `account`, `invoice_recipient`, `new_packages` and `revision` came to
-    # be dropped one frame past the seam in the first place.
-    merge_spec_request(req, spec_request)
-
     # BR-RULE-022: reject empty updates (no updatable fields beyond identifier).
     # This is a SEMANTIC rejection of a schema-valid request (update fields are all
     # optional per AdCP 3.1 GA update-media-buy-request.json), so the canonical code
@@ -1617,16 +1518,6 @@ def _build_update_request(
     return req
 
 
-# `targeting_overlay` and `creatives` are deliberately NOT parameters here.
-# They were declared, PUBLISHED on the MCP input schema, and read by nothing —
-# a buyer who sent either was told it applied while it was dropped at the
-# wrapper. Neither is a field of the pinned 3.1.1 update-media-buy-request.json
-# (targeting overlay is per-PACKAGE, `packages[].targeting_overlay`, which
-# `_impl` does honor), so removing them also stops the tool advertising
-# fields the spec does not define. Restoring one without a body that reads it
-# reintroduces the silent drop; `test_architecture_spec_field_disposition.py`
-# now catches that, because a declared parameter only counts as disposed if the
-# wrapper body actually references it.
 async def update_media_buy(
     media_buy_id: Annotated[str | None, Field(description="Publisher media buy ID to update")] = None,
     paused: Annotated[bool | None, Field(description="True to pause campaign delivery, False to resume")] = None,
@@ -1634,23 +1525,18 @@ async def update_media_buy(
     flight_end_date: Annotated[str | None, Field(description="New campaign end date in YYYY-MM-DD format")] = None,
     budget: Annotated[float | None, Field(description="New total campaign budget amount")] = None,
     currency: Annotated[str | None, Field(description="ISO 4217 currency code (e.g. 'USD')")] = None,
+    targeting_overlay: TargetingOverlay | None = None,
     start_time: Annotated[str | None, Field(description="New campaign start time in ISO 8601 format")] = None,
     end_time: Annotated[str | None, Field(description="New campaign end time in ISO 8601 format")] = None,
     pacing: Annotated[str | None, Field(description="Budget pacing strategy: 'even' or 'asap'")] = None,
     daily_budget: Annotated[float | None, Field(description="Maximum daily spend cap")] = None,
     packages: list[UpdatePackage] | None = None,
+    creatives: list = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # payload-level context
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: Annotated[str | None, Field(description="Idempotency key for retry safety")] = None,
-    # The seam's uniform carrier: the wire request as its pinned model. Same
-    # NAME on every tool that opts in; the TYPE is the tool's own pinned
-    # request model, so the carrier stays introspectable and does not need an
-    # `Any` escape (test_architecture_wrapper_typed_params forbids Any here,
-    # and it is right to — a carrier typed `Any` tells a reader nothing about
-    # what actually arrives). Filtered out of the published schema.
-    _spec_request: UpdateMediaBuyRequest | None = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Update a media buy with campaign-level and/or package-level changes.
@@ -1665,11 +1551,13 @@ async def update_media_buy(
         flight_end_date: Extend or shorten campaign
         budget: Update total budget
         currency: Update currency (ISO 4217)
+        targeting_overlay: Update global targeting
         start_time: Update start datetime
         end_time: Update end datetime
         pacing: Pacing strategy (even, asap, daily_budget)
         daily_budget: Daily spend cap across all packages
         packages: Package-specific updates
+        creatives: Add new creatives
         push_notification_config: Push notification config for async notifications (AdCP spec, optional)
         context: Application-level context per adcp spec
         reporting_webhook: Webhook configuration for automated reporting delivery (optional, per AdCP spec)
@@ -1699,7 +1587,6 @@ async def update_media_buy(
         reporting_webhook=reporting_webhook,
         ext=ext,
         idempotency_key=idempotency_key,
-        spec_request=_spec_request,
     )
     # Read identity and context_id pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
@@ -1708,7 +1595,6 @@ async def update_media_buy(
     return mcp_result(response)
 
 
-@accepts_spec_request_fields
 def update_media_buy_raw(
     media_buy_id: str | None = None,
     paused: bool = None,
@@ -1730,7 +1616,6 @@ def update_media_buy_raw(
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
     ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
     idempotency_key: str | None = None,  # AdCP idempotency key for retry safety
-    _spec_request: UpdateMediaBuyRequest | None = None,  # seam carrier: the wire request as its pinned model
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
 ):
@@ -1780,7 +1665,6 @@ def update_media_buy_raw(
         reporting_webhook=reporting_webhook,
         ext=ext,
         idempotency_key=idempotency_key,
-        spec_request=_spec_request,
     )
     if identity is None:
         identity = resolve_identity_from_context(ctx, require_valid_token=True)

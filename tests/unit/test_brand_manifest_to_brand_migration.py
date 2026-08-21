@@ -18,27 +18,19 @@ from pydantic import ValidationError
 class TestGetProductsRawRejectsBrandManifest:
     """get_products_raw no longer accepts brand_manifest keyword."""
 
-    async def test_brand_manifest_kwarg_raises_type_error(self):
+    def test_brand_manifest_kwarg_raises_type_error(self):
         """Calling get_products_raw with brand_manifest= raises TypeError.
 
         This reproduces the failure in:
         - tests/integration_v2/test_get_products_filters.py (8+ tests)
-
-        get_products_raw is decorated with accepts_spec_request_fields
-        (salesagent-g6m2.10), which lets it accept every field the pinned
-        GetProductsRequest schema defines. brand_manifest is NOT one of
-        those fields, so it is still rejected — but the decorator's wrapper
-        takes **kwargs at the Python level (it must, to accept the pinned
-        fields generically) and only rejects the truly-unknown keyword once
-        the coroutine actually runs, hence the await here rather than a
-        synchronous pre-await TypeError. Every real caller (A2A, MCP) always
-        awaits, so this matches production behavior.
         """
         from src.core.tools.products import get_products_raw
 
         with pytest.raises(TypeError, match="brand_manifest"):
             # brand_manifest is not a valid parameter — brand is the new name.
-            await get_products_raw(
+            # TypeError is raised at call time (before coroutine creation)
+            # because the function signature has no **kwargs.
+            get_products_raw(
                 brand_manifest={"name": "Test Brand"},
                 brief="",
             )

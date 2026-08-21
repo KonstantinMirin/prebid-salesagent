@@ -4358,13 +4358,7 @@ class TestGetMediaBuysImplAuth:
             testing_context=None,
         )
 
-        # Matches the refusal wording every `_UNSUPPORTED_*` map now emits —
-        # "<tool> does not support <field>" (PR #1858 Lane A). The previous pattern
-        # was an ordered wildcard, `account.*not.*supported`, which required the
-        # literal "supported"; the message says "does not support account_id", so
-        # it could never match. Naming the field explicitly is also stricter than
-        # the old wildcard, which any sentence mentioning an account could satisfy.
-        with pytest.raises(AdCPCapabilityNotSupportedError, match=r"(?i)does not support account_id"):
+        with pytest.raises(AdCPCapabilityNotSupportedError, match="(?i)account.*not.*supported"):
             _get_media_buys_impl(req, identity=identity)
 
     def test_account_id_unsupported_recovery_is_correctable(self):

@@ -189,14 +189,6 @@ class TestSchemaInheritance:
             ("ListCreativesResponse", "pagination"),
             ("ListCreativesResponse", "query_summary"),
             ("ListCreativesResponse", "creatives"),
-            # Same Pattern #4 shape as ListCreativesResponse.creatives: the item
-            # type is local. AdCP 3.1.1 protocol/list-tasks-response.json types
-            # tasks[] with REQUIRED task_type/domain/updated_at; this seller's
-            # queue (workflow_steps) also holds steps that are not AdCP tasks
-            # (publisher approvals, adapter calls) and has no updated_at column,
-            # so those fields have no honest value for such a row. See
-            # src/core/schemas/task_management.py's module docstring.
-            ("ListTasksResponse", "tasks"),
             ("PackageRequest", "targeting_overlay"),
             ("PackageRequest", "impressions"),
             ("PackageRequest", "creatives"),

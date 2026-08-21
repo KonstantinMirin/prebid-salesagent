@@ -382,13 +382,9 @@ def _create_dynamic_agent_card(request: Request):
 
     dynamic_card = A2AAgentCard()
     dynamic_card.CopyFrom(_agent_card)
-    # Update the URL on every supported_interfaces entry (both the A2A 1.0
-    # entry and the legacy-compat entry that agent_card_to_dict() promotes to
-    # a top-level `url` — see create_agent_card() for why two entries exist).
-    # Only rewriting index 0 would leave the compat-derived top-level `url`
-    # pointing at the static default instead of this request's host.
-    for interface in dynamic_card.supported_interfaces:
-        interface.url = server_url
+    # Update the URL in supported_interfaces
+    if dynamic_card.supported_interfaces:
+        dynamic_card.supported_interfaces[0].url = server_url
     return dynamic_card
 
 

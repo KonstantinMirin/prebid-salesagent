@@ -14,9 +14,8 @@ from adcp import FormatId, ProductFilters
 from adcp import GetProductsRequest as GetProductsRequestGenerated
 from adcp import Product as LibraryProduct
 from adcp.types import BrandReference, ContextObject, PropertyListReference
-from adcp.types.generated_poc.media_buy.get_products_request import GetProductsRequest as LibraryGetProductsRequest
 from fastmcp.server.context import Context
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
@@ -25,7 +24,6 @@ from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthenticationError,
     AdCPAuthorizationError,
-    AdCPCapabilityNotSupportedError,
     AdCPError,
     AdCPPolicyViolationError,
     AdCPValidationError,
@@ -37,12 +35,10 @@ from src.core.schemas import (
     GetProductsResponse,
     Product,  # Extends library Product
 )
-from src.core.spec_request_carrier import refuse_unsupported_fields
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
-from src.core.transport_helpers import honor_account_reference, resolve_identity_from_context
+from src.core.transport_helpers import resolve_identity_from_context
 from src.core.validation_helpers import adcp_validation_boundary, safe_parse_json_field
-from src.core.version_compat import accepts_spec_request_fields
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
 logger = logging.getLogger(__name__)
@@ -154,55 +150,6 @@ def filter_products_by_property_list(
     return [p for p in products if should_include_product_for_property_list(p, allowed_properties)]
 
 
-# Body-semantic fields `get_products` ACCEPTS on the wire (its pinned 3.1.1 request
-# schema defines them, so a buyer is entitled to send them) and this seller cannot
-# act on. They are REFUSED rather than dropped: a buyer that caps its wait with
-# `time_budget`, or narrows to `required_policies`, and gets back a full uncapped
-# catalog has been told its constraints were applied when they never were.
-#
-# Named here, in the tool that owes the disposition, because "what this seller
-# implements" exists nowhere else to derive it from. Every OTHER field of the
-# pinned model reaches `_impl` on the seam's carrier and is honored.
-_UNSUPPORTED_GET_PRODUCTS_FIELDS = {
-    "refine": "iterating on a previous response's products/proposals is not implemented",
-    "catalog": "catalog matching against seller inventory is not implemented",
-    "fields": "response field projection is not implemented; all product fields are returned",
-    "required_policies": "registry policy enforcement filtering is not implemented",
-    "time_budget": "bounded-time discovery is not implemented",
-    "preferred_delivery_types": "delivery-type curation preference is not implemented",
-    "pagination": "paged product discovery is not implemented; the full result set is returned",
-    "if_pricing_version": "conditional pricing-version reads are wholesale-mode only",
-    "if_wholesale_feed_version": "conditional wholesale-feed reads are wholesale-mode only",
-}
-
-# The one buying mode this seller implements. `buying_mode` is REQUIRED by
-# `media-buy/get-products-request.json` at the 3.1.1 pin, so it cannot be refused
-# outright the way the fields above are — the disposition is per VALUE: 'brief' is
-# what every code path below does, and the two modes this seller does not implement
-# are refused instead of being answered with brief-mode results.
-_SUPPORTED_BUYING_MODE = "brief"
-
-
-def _dispose_get_products_request_fields(req: GetProductsRequestGenerated) -> None:
-    """Honor or refuse every body-semantic field the buyer sent — never drop one."""
-    if not isinstance(req, BaseModel):
-        # See refuse_unsupported_fields: a mocked request cannot be dispositioned.
-        # `enum_value` intentionally stringifies a mock's `.value`, so buying_mode
-        # would arrive as a repr STRING and be refused as an unsupported mode.
-        return
-    refuse_unsupported_fields(req, tool="get_products", unsupported=_UNSUPPORTED_GET_PRODUCTS_FIELDS)
-
-    buying_mode = enum_value(req.buying_mode) if req.buying_mode is not None else None
-    if buying_mode is not None and buying_mode != _SUPPORTED_BUYING_MODE:
-        raise AdCPCapabilityNotSupportedError(
-            f"get_products does not support buying_mode {buying_mode!r}",
-            suggestion=(
-                f"Send buying_mode {_SUPPORTED_BUYING_MODE!r} with a brief. Call get_adcp_capabilities "
-                "to see what this seller supports."
-            ),
-        )
-
-
 async def _get_products_impl(
     req: GetProductsRequestGenerated, identity: ResolvedIdentity | None
 ) -> GetProductsResponse:
@@ -224,18 +171,8 @@ async def _get_products_impl(
     if not req.brief and not req.brand and not req.filters:
         raise AdCPValidationError("At least one of 'brief', 'brand', or 'filters' is required")
 
-    _dispose_get_products_request_fields(req)
-
     # Extract identity fields
     identity = require_identity(identity, context=req.context)
-
-    # HONOR `account`: resolve the reference the buyer sent (access check, status
-    # check) so the products it gets back are priced for an account it may
-    # actually buy on. This seller keeps one rate card per tenant, so a resolved
-    # account selects the same pricing — what resolution adds is that an account
-    # the caller has no access to, or one that is suspended/pending setup, is
-    # REJECTED here instead of being answered with pricing it cannot transact on.
-    identity = honor_account_reference(identity, req.account)
 
     testing_ctx: AdCPTestContext | None = identity.testing_context or AdCPTestContext()
     principal_id: str | None = identity.principal_id
@@ -852,10 +789,6 @@ async def get_products(
     filters: ProductFilters | None = None,
     property_list: PropertyListReference | None = None,
     context: ContextObject | None = None,  # payload-level context
-    # Seam carrier: the wire request as its pinned model. Same NAME on every
-    # tool that opts in; typed as this tool's own pinned request model, and
-    # filtered out of the published schema by the decorator.
-    _spec_request: LibraryGetProductsRequest | None = None,
     ctx: Context | ToolContext | None = None,
 ):
     """Get available products matching the brief.
@@ -882,7 +815,6 @@ async def get_products(
                 filters=filters,
                 property_list=property_list,
                 context=context,
-                spec_request=_spec_request,
             )
     except ValueError as e:
         # Helper raises ValueError for semantic (non-Pydantic) input problems.
@@ -901,7 +833,6 @@ async def get_products(
     return mcp_result(response)
 
 
-@accepts_spec_request_fields
 async def get_products_raw(
     brief: str = "",
     brand: BrandReference | str | None = None,
@@ -910,21 +841,12 @@ async def get_products_raw(
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
-    # Seam carrier — see the MCP sibling above. Present on every seam member,
-    # raw wrappers included: the decorator passes it unconditionally.
-    _spec_request: LibraryGetProductsRequest | None = None,
 ) -> GetProductsResponse:
     """Get available products matching the brief.
 
     Raw function without @mcp.tool decorator for A2A server use.
     Returns a clean GetProductsResponse model — v2 compat is applied
     at the caller's boundary (A2A handler), not here.
-
-    @accepts_spec_request_fields additionally lets this function be CALLED
-    with every field GetProductsRequest defines (e.g. account, buying_mode,
-    pagination) without raising TypeError, and hands them here on the
-    `_spec_request` carrier. They are merged into `req` below, so `_impl`
-    honors or refuses each one — never drops it (salesagent-qbac1.1).
 
     Args:
         brief: Brief description of the advertising campaign or requirements
@@ -949,7 +871,6 @@ async def get_products_raw(
         filters=filters,
         property_list=property_list,
         context=context,
-        spec_request=_spec_request,
     )
 
     # Call shared implementation

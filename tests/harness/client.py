@@ -514,10 +514,9 @@ DELIVER: dict[Transport, Callable[[BaseTestEnv, ToolAddress, Any, Any], Any]] = 
 def _parse_pinned_response(tool_name: str, raw: dict[str, Any]) -> Any | None:
     """Parse *raw* wire JSON back into ``tool_name``'s pinned SDK response model.
 
-    Mirrors the production request seam (``spec_request_model`` /
-    ``accepts_spec_request_fields``, ``src/core/version_compat.py``) on the
-    response side: ``spec_response_model(tool_name)`` resolves the one pinned
-    class for tools that have one. ``None`` is the explicit named case for
+    Resolves the one pinned response class for tools that have one, via
+    ``spec_response_model(tool_name)``. This is harness-side only: the sweep
+    changes no production code, so nothing here mirrors a production seam. ``None`` is the explicit named case for
     tools that don't — either genuinely no pinned schema, or (e.g.
     ``create_media_buy``) a ``Union`` of outcome variants with no single class
     to parse into (see ``spec_response_model``'s docstring) — callers keep

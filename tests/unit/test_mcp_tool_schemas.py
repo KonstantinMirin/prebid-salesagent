@@ -113,38 +113,19 @@ class TestMCPToolTypedSchemas:
 
         V3 Migration: Packages renamed to PackageUpdate in adcp library.
         """
-        from adcp.types import PackageUpdate
-
         from src.core.tools.media_buy_update import update_media_buy
 
         sig = inspect.signature(update_media_buy)
         params = sig.parameters
 
+        # Check targeting_overlay uses TargetingOverlay type
+        assert "TargetingOverlay" in str(params["targeting_overlay"].annotation), (
+            f"targeting_overlay should use TargetingOverlay type, got {params['targeting_overlay'].annotation}"
+        )
+
         # Check packages uses PackageUpdate type (V3: was Packages)
         assert "PackageUpdate" in str(params["packages"].annotation), (
             f"packages should use PackageUpdate type (V3), got {params['packages'].annotation}"
-        )
-
-        # Asserted against the PUBLISHED schema — what `tools/list` actually exposes
-        # to a buyer — not against the Python signature. The signature is a proxy;
-        # the published schema is the thing this module's docstring claims to care
-        # about, and `published_input_fields` is the one reader for it.
-        #
-        # `update_media_buy` used to declare a top-level `targeting_overlay=` that
-        # nothing in its body read: published to buyers and silently dropped. It is
-        # not a field of the pinned 3.1.1 update-media-buy-request.json, and `_impl`
-        # honors only the per-package `packages[].targeting_overlay`, so it was
-        # removed (PR #1858 Lane A).
-        from tests.harness.spec_field_consumption import published_input_fields
-
-        assert "targeting_overlay" not in published_input_fields("update_media_buy"), (
-            "update_media_buy advertises a top-level targeting_overlay on its published MCP "
-            "schema. It is not a pinned request field and _impl reads only the per-package one, "
-            "so a value sent here would be accepted and dropped."
-        )
-        overlay_field = PackageUpdate.model_fields["targeting_overlay"]
-        assert "TargetingOverlay" in str(overlay_field.annotation), (
-            f"packages[].targeting_overlay should use TargetingOverlay type, got {overlay_field.annotation}"
         )
 
     def test_list_creative_formats_uses_typed_parameters(self):

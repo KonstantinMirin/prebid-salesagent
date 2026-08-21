@@ -47,10 +47,9 @@ from a2a.types import (
     TaskStatus,
     UnsupportedOperationError,
 )
-from a2a.utils.constants import PROTOCOL_VERSION_0_3
 from a2a.utils.errors import A2AError
 from adcp import create_a2a_webhook_payload
-from adcp.types import CreativeAsset, GeneratedTaskStatus
+from adcp.types import ContextObject, CreativeAsset, GeneratedTaskStatus
 from adcp.types.base import AdCPBaseModel
 from google.protobuf import json_format, struct_pb2
 
@@ -70,7 +69,7 @@ from src.core.exceptions import (
     normalize_to_adcp_error,
 )
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import coerce_creative_filters, to_account_reference, to_brand_reference, to_context_object
+from src.core.schema_helpers import coerce_creative_filters, to_account_reference, to_brand_reference
 from src.core.schemas import CreativeStatusEnum
 from src.core.tool_context import ToolContext
 from src.core.tool_error_logging import record_boundary_error
@@ -113,7 +112,6 @@ from src.core.validation_helpers import (
     adcp_validation_boundary,
 )
 from src.core.version import get_version
-from src.core.version_compat import set_wire_request
 from src.core.webhook_validator import (
     reject_unsafe_webhook_registration_url,
     webhook_ssrf_suggestion,
@@ -1506,23 +1504,11 @@ class AdCPRequestHandler(RequestHandler):
 
         try:
             handler = skill_handlers[skill_name]
-            # Publish the NORMALIZED wire request to the acceptance seam
-            # (Lane A / S4) around the one dispatch every skill goes through.
-            # One site covers all 14 handlers and every future one, and no
-            # handler's own curated `parameters` forwarding changes — the seam
-            # reads the wire dict directly, so a handler that forwards a narrow
-            # subset no longer decides what the seller accepts.
-            #
-            # `parameters`, NOT `raw_wire_payload`: the latter is deliberately
-            # PRE-normalization for the idempotency payload hash, and feeding it
-            # here would reintroduce the deprecated-name drops normalize_request_params
-            # exists to fix.
-            with set_wire_request(skill_name, parameters):
-                # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
-                if skill_name == "create_media_buy":
-                    result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
-                else:
-                    result = await handler(parameters, identity)
+            # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
+            if skill_name == "create_media_buy":
+                result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
+            else:
+                result = await handler(parameters, identity)
             # Serialize at the boundary — models become dicts with protocol fields
             return self._serialize_for_a2a(result)
         except A2AError:
@@ -1720,7 +1706,7 @@ class AdCPRequestHandler(RequestHandler):
                 creatives.append(CreativeAsset(**c) if isinstance(c, dict) else c)
 
             ctx_param = parameters.get("context")
-            context = to_context_object(ctx_param)
+            context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param
 
         # Call core function with spec-compliant parameters (AdCP v2.5)
         response = core_sync_creatives_tool(
@@ -1860,20 +1846,9 @@ class AdCPRequestHandler(RequestHandler):
         # Import and call the core implementation
         from src.core.tools.capabilities import get_adcp_capabilities_raw
 
-        # Caller's context is opaque correlation data (AdCP 3.1.1 normative
-        # echo contract) -- construct the typed model so it round-trips
-        # through the response unchanged, matching the sync_creatives
-        # conversion above. Same context= boundary discipline (#1417): a
-        # malformed context object surfaces as a suggestion-bearing envelope,
-        # not a raw pydantic ValidationError.
-        with adcp_validation_boundary(context="get_adcp_capabilities request"):
-            ctx_param = parameters.get("context")
-            context = to_context_object(ctx_param)
-
         # Call core function with identity
         response = await get_adcp_capabilities_raw(
             protocols=parameters.get("protocols"),
-            context=context,
             identity=identity,
         )
 
@@ -2232,28 +2207,12 @@ def create_agent_card() -> AgentCard:
     )
 
     # Create the agent card with minimal required fields
-    #
-    # supported_interfaces carries TWO entries for the same JSON-RPC endpoint:
-    # the A2A 1.0 entry (protocol_version="1.0") and a legacy-compatible entry
-    # (protocol_version=PROTOCOL_VERSION_0_3) so a2a-sdk's own backward-compat
-    # bridge (a2a.compat.v0_3.conversions.to_compat_agent_card, wired through
-    # response_helpers.agent_card_to_dict()) can promote it to a top-level
-    # `url` field. Without a legacy-eligible interface entry, that bridge
-    # raises VersionNotSupportedError internally (caught, silently producing
-    # an empty compat dict) and no top-level `url` is ever emitted.
-    #
-    # This matters because clients still on pre-1.0 A2A SDKs (e.g. the
-    # storyboard conformance runner's bundled @a2a-js/sdk 0.3.14) read only
-    # the legacy top-level `url` and report the agent unreachable otherwise —
-    # a discovery skew, not a JSON-RPC gap (our route is already 0.3-compatible
-    # via enable_v0_3_compat=True in src/app.py). See GH #1440 (ChrisHuie).
     agent_card = AgentCard(
         name="Prebid Sales Agent",
         description="AI agent for programmatic advertising campaigns via AdCP protocol",
         version=sales_agent_version,
         supported_interfaces=[
             AgentInterface(url=server_url, protocol_version="1.0"),
-            AgentInterface(url=server_url, protocol_version=PROTOCOL_VERSION_0_3),
         ],
         capabilities=AgentCapabilities(
             push_notifications=True,

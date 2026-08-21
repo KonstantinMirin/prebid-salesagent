@@ -63,6 +63,7 @@ from src.core.database.models import CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import (
+    AdCPCapabilityNotSupportedError,
     AdCPValidationError,
 )
 from src.core.helpers.adapter_helpers import get_adapter
@@ -78,23 +79,8 @@ from src.core.schemas import (
     SnapshotUnavailableReason,
     Targeting,
 )
-from src.core.spec_request_carrier import refuse_unsupported_fields
 from src.core.tools._mcp import mcp_result
 from src.core.validation_helpers import adcp_validation_boundary
-from src.core.version_compat import accepts_spec_request_fields
-
-# Body-semantic fields `get_media_buys` ACCEPTS on the wire (its pinned 3.1.1
-# request schema defines them) and this seller cannot act on. Refused rather than
-# dropped: a buyer that asked for history, or for page 2, and got the first page
-# with no marker has been told it saw everything.
-_UNSUPPORTED_GET_MEDIA_BUYS_FIELDS = {
-    "account": "account filtering is not implemented; the seller infers the account from the auth token",
-    "account_id": "account filtering is not implemented; the seller infers the account from the auth token",
-    "include_history": "media-buy change history is not implemented",
-    "include_webhook_activity": "per-buy webhook activity is not implemented",
-    "webhook_activity_limit": "per-buy webhook activity is not implemented",
-    "pagination": "cursor pagination is not implemented; the full result set is returned",
-}
 
 
 def _get_media_buys_impl(
@@ -115,7 +101,11 @@ def _get_media_buys_impl(
     """
     identity = require_identity(identity, context=req.context)
 
-    refuse_unsupported_fields(req, tool="get_media_buys", unsupported=_UNSUPPORTED_GET_MEDIA_BUYS_FIELDS)
+    if req.account is not None or req.account_id is not None:
+        raise AdCPCapabilityNotSupportedError(
+            "account filtering is not yet supported",
+            suggestion="Omit account/account_id from the request; the seller infers the account from the auth token.",
+        )
 
     testing_ctx = identity.testing_context
     principal_id = identity.principal_id
@@ -336,10 +326,6 @@ async def get_media_buys(
     account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
-    # Seam carrier: the wire request as this tool's pinned model. Present on
-    # EVERY seam member under the same name — uniform or it is not a seam —
-    # and filtered out of the published schema by the decorator.
-    _spec_request: GetMediaBuysRequest | None = None,
 ):
     """Get media buys with status, creative approval state, and optional delivery snapshots.
 
@@ -363,7 +349,6 @@ async def get_media_buys(
     return mcp_result(response)
 
 
-@accepts_spec_request_fields
 def get_media_buys_raw(
     media_buy_ids: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
@@ -372,24 +357,8 @@ def get_media_buys_raw(
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: ResolvedIdentity | None = None,
-    # Seam carrier — see the MCP sibling above. Present on every seam member,
-    # raw wrappers included: the decorator passes it unconditionally.
-    _spec_request: GetMediaBuysRequest | None = None,
 ):
     """Get media buys (raw function for A2A server use).
-
-    @accepts_spec_request_fields additionally lets this function be CALLED
-    with every field GetMediaBuysRequest (the SDK model) defines (e.g. ext)
-    without raising TypeError — accepted, not yet forwarded or honored by
-    _impl (salesagent-g6m2.10).
-
-    NOTE: this function currently has ZERO production callers — A2A's
-    ``_handle_get_media_buys_skill`` bypasses it entirely, validating
-    against a separate, locally-defined, non-SDK ``GetMediaBuysRequest``
-    (src/core/schemas) instead. That divergence is a live, deeper defect —
-    tracked separately as salesagent-hg1lu, not fixed by this decorator (see
-    the dead-path guard in tests/unit/test_guards_no_dead_path_raw_calls.py,
-    which names this exact function).
 
     Args:
         media_buy_ids: Array of publisher media buy IDs to retrieve (optional)

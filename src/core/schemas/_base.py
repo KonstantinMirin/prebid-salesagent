@@ -502,34 +502,6 @@ class CreateMediaBuySubmitted(AdCPCreateMediaBuySubmitted):
 CreateMediaBuyResponse = CreateMediaBuySuccess | CreateMediaBuyError
 
 
-def apply_replay_marker(result: dict[str, Any], replayed: bool) -> dict[str, Any]:
-    """Stamp the spec's envelope-level ``replayed`` marker onto a serialized body.
-
-    AdCP 3.1.1 puts ``replayed`` on the protocol envelope (``protocol-envelope.json``),
-    so it is NOT a create_media_buy field -- every idempotent tool's response carries
-    it. Two graded storyboard steps in
-    ``compliance/3.1.1/universal/idempotency.yaml`` pin the asymmetry this helper
-    encodes:
-
-    * line 332-335 ``field_value_or_absent replayed in [false]`` -- a FRESH call may
-      omit the key entirely, but must never report ``true``.
-    * line 389-392 ``field_value replayed == true`` -- a REPLAY must report ``true``.
-
-    Hence: always pop first (library bases such as the adcp 6.6 submitted variant
-    declare ``replayed=False`` as a real field, which would otherwise serialize a
-    literal ``false`` and make fresh responses differ byte-wise across variants),
-    then re-add ONLY when true.
-
-    Extracted rather than repeated: this is the same logical operation on every
-    idempotent tool's envelope, and a second hand-written copy is how one tool
-    silently stops advertising replays (CLAUDE.md DRY invariant).
-    """
-    result.pop("replayed", None)
-    if replayed:
-        result["replayed"] = True
-    return result
-
-
 class TaskResultEnvelope(SalesAgentBaseModel):
     """DRY base for protocol-status-wrapping result types.
 
@@ -572,9 +544,12 @@ class CreateMediaBuyResult(TaskResultEnvelope):
         result = self.response.model_dump(mode=info.mode, context=info.context)
         result["status"] = self.status
         # The adcp 6.6 submitted base declares replayed=False as a FIELD, so it
-        # rides response.model_dump(); the shared helper strips it — the wrapper
-        # is the marker's single source (PR #1567 round-3).
-        return apply_replay_marker(result, self.replayed)
+        # rides response.model_dump(); strip it — the wrapper is the marker's
+        # single source (PR #1567 round-3).
+        result.pop("replayed", None)
+        if self.replayed:
+            result["replayed"] = True
+        return result
 
     def __iter__(self):
         """Support tuple unpacking: response, status = result."""
@@ -2168,11 +2143,6 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
         return any(
             f is not None
             for f in (
-                # A cancel IS an update — the most consequential one. Omitting it
-                # here made a cancel-only request look empty and fail BR-RULE-022
-                # with INVALID_REQUEST, which is how `canceled: true` came back as
-                # "include at least one updatable field" instead of cancelling.
-                self.canceled,
                 self.paused,
                 self.start_time,
                 self.end_time,

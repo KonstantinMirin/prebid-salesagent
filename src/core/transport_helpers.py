@@ -9,7 +9,7 @@ Each transport boundary calls one of these helpers before invoking _impl.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Literal, overload
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from adcp.types import AccountReference
@@ -146,48 +146,3 @@ def enrich_identity_with_account(
         account_id = resolve_account(account_ref, identity, uow.accounts)
 
     return identity.model_copy(update={"account_id": account_id})
-
-
-@overload
-def honor_account_reference(identity: ResolvedIdentity, account_ref: AccountReference | None) -> ResolvedIdentity: ...
-
-
-@overload
-def honor_account_reference(identity: None, account_ref: AccountReference | None) -> None: ...
-
-
-def honor_account_reference(
-    identity: ResolvedIdentity | None,
-    account_ref: AccountReference | None,
-) -> ResolvedIdentity | None:
-    """Honor the `account` a buyer sent on a tool request.
-
-    The ONE way a tool honors `account`, so a second tool joining the contract
-    cannot get a subtly different version of it (CLAUDE.md's DRY invariant —
-    a duplicate here would be a defect, not a style preference).
-
-    Callers pass ``req.account`` rather than ``req`` deliberately. It keeps the
-    field read visible in the TOOL's own source, which is what
-    ``tests/harness/spec_field_consumption.py`` reads to decide the field was
-    disposed; hiding it behind a whole-request parameter would make an honored
-    field look undisposed and push the tool back onto the undisposed ledger.
-
-    The overloads carry the narrowing a caller needs: this returns None ONLY
-    when the identity it was handed is None, so a tool that has already run
-    ``require_identity`` keeps a non-optional identity across the call instead of
-    having every later attribute access widened back to ``| None``.
-
-    The ``isinstance`` check is the real guard, not a None check: a unit test
-    that mocks the request has a MagicMock for EVERY attribute, so ``req.account``
-    is non-None and resolution would run — demanding an authenticated principal
-    the test deliberately omitted (get_products is a discovery endpoint that
-    legitimately serves anonymous callers). Checking the reference's own type
-    admits exactly the real thing and skips both None and a test's stand-in.
-    """
-    from adcp.types import AccountReference as _AccountReference
-
-    if not isinstance(account_ref, _AccountReference):
-        return identity
-    # `or identity` narrows the helper's `| None` return: it returns None only
-    # when the identity it was GIVEN is None.
-    return enrich_identity_with_account(identity, account_ref) or identity

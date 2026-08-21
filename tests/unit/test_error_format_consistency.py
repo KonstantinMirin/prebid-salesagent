@@ -764,10 +764,6 @@ class TestErrorCodeVocabularyConsistency:
         "BUDGET_TOO_LOW",  # SDK standard: AdCPBudgetTooLowError
         "UNSUPPORTED_FEATURE",  # SDK standard: AdCPCapabilityNotSupportedError
         "IDEMPOTENCY_CONFLICT",  # SDK standard: AdCPIdempotencyConflictError
-        # Pinned 3.1.1 ErrorCode enum member. media-buy.mdx:40 and
-        # storyboard-authoring.md:271 both mandate it as THE canonical code for
-        # re-cancelling an already-canceled buy: AdCPNotCancellableError.
-        "NOT_CANCELLABLE",
         "IDEMPOTENCY_EXPIRED",  # SDK standard: AdCPIdempotencyExpiredError
         # Adapter-taxonomy codes (internal; wire → SERVICE_UNAVAILABLE via ERROR_CODE_MAPPING)
         "WORKFLOW_CREATION_FAILED",  # Internal: AdCPWorkflowError

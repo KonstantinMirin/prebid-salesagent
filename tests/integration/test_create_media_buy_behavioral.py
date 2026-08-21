@@ -1412,32 +1412,14 @@ class TestProposalBasedObligations:
         assert req.proposal_id == "prop_abc"
         assert req.total_budget is not None
 
-    def test_proposal_id_is_refused_because_proposals_are_not_implemented(self, integration_db):
-        """`proposal_id` is REFUSED, not accepted-and-dropped.
+    def test_proposal_based_product_validation(self, integration_db):
+        """Derived packages still require valid product_ids.
 
         Covers: UC-002-ALT-PROPOSAL-BASED-MEDIA-06
 
-        This obligation reads "even with proposal_id, product validation still
-        runs on packages", and it used to pass: `proposal_id` was accepted on the
-        wire, silently discarded, and the request proceeded as an ordinary media
-        buy — so what the test actually observed was the ordinary
-        product-validation path, with the proposal playing no part. That silent
-        drop is the defect PR #1858 Lane A closes: this seller does not implement
-        proposal resolution (the class docstring above says so, and no line of
-        `create_media_buy` reads `req.proposal_id`), so the honest disposition is
-        an explicit refusal rather than a success the buyer will misread as "my
-        proposal was applied".
-
-        The obligation as written therefore cannot hold until proposals are
-        actually implemented — a buyer never reaches package validation. The
-        product_ids half of it is not lost: `TestProductNotFound` (above) grades
-        exactly that contract on a request without a proposal.
-
-        Refusal contract: AdCP 3.1.1 UNSUPPORTED_FEATURE, recovery `correctable`
-        ("remove unsupported fields"). Asserted on the typed error here because
-        this is an `_impl`-level call with no wire; the wire-envelope assertion
-        for refusals lives in the transport-level spec-field grader.
+        Note: Even with proposal_id, product validation still runs on packages.
         """
+        # Request with proposal_id but packages referencing non-existent product
         req = _make_request(
             proposal_id="prop_123",
             packages=[
@@ -1450,15 +1432,16 @@ class TestProposalBasedObligations:
         )
 
         with _env() as env:
+            # No products in DB -> products not found.
             env.setup_default_data()
-            with pytest.raises(AdCPCapabilityNotSupportedError) as excinfo:
+            # Missing product_ids raise the typed AdCPProductNotFoundError.
+            with pytest.raises(AdCPProductNotFoundError) as excinfo:
                 env.call_impl(req=req)
 
         exc = excinfo.value
-        assert exc.wire_error_code == "UNSUPPORTED_FEATURE"
-        assert exc.recovery == "correctable"
-        # Names the offending field, so the buyer can act on it.
-        assert "proposal_id" in exc.message
+        assert exc.error_code == "PRODUCT_NOT_FOUND"
+        assert "not found" in exc.message.lower()
+        assert "nonexistent_product" in exc.message
 
 
 class TestCrossCuttingObligations:

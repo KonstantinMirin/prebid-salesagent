@@ -41,7 +41,6 @@ from pydantic import Field
 
 from src.core.exceptions import AdCPError, AdCPServiceUnavailableError
 from src.core.helpers import enum_value
-from src.core.spec_request_carrier import refuse_unsupported_fields
 from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
@@ -181,24 +180,6 @@ def build_list_creative_formats_request(
     )
 
 
-# Body-semantic fields `list_creative_formats` ACCEPTS on the wire (its pinned
-# 3.1.1 request schema defines them) and this seller cannot act on. Refused rather
-# than dropped: a buyer that scoped the query to one property and got every format
-# this seller supports would traffic creatives the property cannot run.
-_UNSUPPORTED_FORMAT_FILTER_FIELDS = {
-    "property_id": "per-property format scoping is not implemented",
-    "publisher_domain": "per-publisher-domain format scoping is not implemented",
-    # `pagination` is deliberately NOT here: this tool IMPLEMENTS cursor-based
-    # pagination below (it reads max_results, decodes the cursor, and emits
-    # next_cursor in a PaginationResponse). It was briefly listed as unsupported,
-    # which made `refuse_unsupported_fields` raise at the top of `_impl` — before
-    # the honoring code could run — and reddened the eight behavioral tests in
-    # tests/integration/test_creative_formats_pagination.py that grade the real
-    # traversal. A refusal asserts a fact about production; asserting one the
-    # code contradicts turns a working feature off.
-}
-
-
 def _list_creative_formats_impl(
     req: ListCreativeFormatsRequest | None, identity: ResolvedIdentity | None
 ) -> ListCreativeFormatsResponse:
@@ -214,8 +195,6 @@ def _list_creative_formats_impl(
     # All ListCreativeFormatsRequest fields have defaults (None) per AdCP spec
     if req is None:
         req = ListCreativeFormatsRequest()
-
-    refuse_unsupported_fields(req, tool="list_creative_formats", unsupported=_UNSUPPORTED_FORMAT_FILTER_FIELDS)
 
     # Extract principal and tenant from resolved identity
     principal_id = identity.principal_id if identity else None
@@ -566,10 +545,6 @@ async def list_creative_formats(
     ] = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
-    # Seam carrier: the wire request as this tool's pinned model. Present on
-    # EVERY seam member under the same name — uniform or it is not a seam —
-    # and filtered out of the published schema by the decorator.
-    _spec_request: ListCreativeFormatsRequest | None = None,
 ):
     """List all available creative formats (AdCP spec endpoint).
 

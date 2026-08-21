@@ -267,22 +267,14 @@ class CreativeUoW(BaseUoW):
 
     creatives: CreativeRepository | None
     assignments: CreativeAssignmentRepository | None
-    # sync_creatives is a MUTATING task whose pinned schema marks idempotency_key
-    # REQUIRED, so it needs the same verbatim-replay cache create_media_buy uses.
-    # Same repository class, wired the same way on MediaBuyUoW above — one
-    # implementation of the idempotency contract, reached from two unit-of-work
-    # boundaries, rather than a second cache that would drift from the first.
-    idempotency_attempts: IdempotencyAttemptRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.creatives = CreativeRepository(self._session, self._tenant_id)
         self.assignments = CreativeAssignmentRepository(self._session, self._tenant_id)
-        self.idempotency_attempts = IdempotencyAttemptRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.creatives = None
-        self.idempotency_attempts = None
         self.assignments = None
 
 

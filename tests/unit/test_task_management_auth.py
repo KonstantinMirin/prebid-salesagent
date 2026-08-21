@@ -114,8 +114,8 @@ async def test_list_tasks_authenticated_proceeds_past_auth_check(
 
     result = await list_tasks(identity=_identity_with_principal())
 
-    assert result.tasks == []
-    assert result.total == 0
+    assert result["tasks"] == []
+    assert result["total"] == 0
 
 
 @pytest.mark.asyncio

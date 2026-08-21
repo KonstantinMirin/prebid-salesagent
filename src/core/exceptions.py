@@ -599,26 +599,6 @@ class AdCPGoneError(AdCPError):
     _default_recovery: ClassVar[RecoveryHint] = "correctable"
 
 
-class AdCPNotCancellableError(AdCPGoneError):
-    """The media buy cannot be canceled in the state it is currently in (410).
-
-    Subclasses ``AdCPGoneError`` because this IS the terminal-state family — it
-    carries the same 410 and the same ``correctable`` recovery, and differs only
-    in being the SPECIFIC code the spec reserves for a cancel that cannot be
-    honored. Keeping the relationship in the type is what stops the two drifting
-    apart the next time the family's status or recovery changes.
-
-    Distinct from its parent's ``INVALID_STATE``, which covers NON-cancel updates
-    to a terminal buy. AdCP 3.1.1 reserves ``NOT_CANCELLABLE`` for the re-cancel
-    case specifically (compliance scenario ``invalid_transitions``, phase
-    ``double_cancel``), and the pinned ``enums/error-code.json`` classifies it
-    Recovery: correctable — "check the seller's cancellation policy or contact
-    the seller".
-    """
-
-    _default_error_code: ClassVar[str] = "NOT_CANCELLABLE"
-
-
 class AdCPBudgetExhaustedError(AdCPError):
     """Budget or spend limit has been reached (422).
 
