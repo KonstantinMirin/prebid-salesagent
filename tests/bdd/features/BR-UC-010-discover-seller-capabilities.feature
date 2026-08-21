@@ -504,7 +504,6 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the Buyer has an invalid authentication token
     When the Buyer Agent sends a get_adcp_capabilities skill request via A2A with the token
     Then the wire error envelope should carry code "AUTH_INVALID" with recovery "terminal"
-    And the wire error message should contain "token" and "invalid"
     # Graduated (salesagent-7moz): A2A now always validates a presented token
     # regardless of the requested skill's own auth requirement.
     # POST-F2: Buyer knows what failed and the error code

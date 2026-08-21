@@ -165,7 +165,6 @@ Feature: BR-UC-002 Create Media Buy
     Then the operation should fail
     And the error code should be "PRODUCT_NOT_FOUND"
     And the error recovery should be "correctable"
-    And the error message should contain "prod-nonexistent"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
@@ -181,14 +180,17 @@ Feature: BR-UC-002 Create Media Buy
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
-    And the error message should contain "past"
-    And the wire error message should contain "2020-01-01 00:00:00+00:00"
-    And the wire error message should not contain "root="
+    And the wire error details should include start_time "2020-01-01 00:00:00+00:00"
+    And the wire envelope should not carry the marker "root="
     And the error should include "suggestion" field
-    # POST-F2 hardening (locally added): the submitted start_time must render as its
-    # VALUE in the buyer-facing message. req.start_time is adcp StartTiming (a pydantic
-    # RootModel), so naive interpolation yields "root=datetime.datetime(2020, ...)" —
-    # a rendering defect only observable on the wire text, hence the wire-message steps.
+    # POST-F2 hardening (locally added): the submitted start_time must reach the buyer as its
+    # VALUE. It now travels in errors[0].details, not in the message: the buyer-facing sentence
+    # is a function of the error CODE through CODE_TABLE and cannot carry request data.
+    # req.start_time is adcp StartTiming (a pydantic RootModel), so str() of it yields
+    # "root=datetime.datetime(2020, ...)"; production must stringify the UNWRAPPED
+    # computed_start_time instead. The marker check now scans the WHOLE envelope, so it also
+    # covers the details slot the value just moved into — strictly stronger than the old
+    # message-scoped scan, and non-vacuous precisely because of that move.
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
@@ -202,8 +204,7 @@ Feature: BR-UC-002 Create Media Buy
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
-    And the error message should contain "end time"
-    And the wire error message should not contain "root="
+    And the wire envelope should not carry the marker "root="
     And the error should include "suggestion" field
     # POST-F2 hardening (locally added): this message interpolates BOTH times; the
     # start_time side is a StartTiming RootModel and must render as its value, not
@@ -233,8 +234,7 @@ Feature: BR-UC-002 Create Media Buy
     But both packages reference the same product_id "prod-001"
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error message should contain "Duplicate"
-    And the error message should contain "prod-001"
+    And the wire error details should include duplicate_product_ids "prod-001"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
@@ -264,7 +264,6 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "managed"
     And the error should include "suggestion" field
 
   @T-UC-002-ext-f-geo @extension @ext-f @error
@@ -286,7 +285,6 @@ Feature: BR-UC-002 Create Media Buy
     And the creative format is not generative
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error message should contain "URL"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
@@ -336,7 +334,6 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
     And the error message should contain "Principal"
-    And the error message should contain "authentication"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
@@ -464,7 +461,6 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
     And the error code should be "CREATIVE_REJECTED"
-    And the error message should contain "cr-nonexistent"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
@@ -546,7 +542,6 @@ Feature: BR-UC-002 Create Media Buy
     Then the operation should fail
     And the error code should be "ACCOUNT_AMBIGUOUS"
     And the error recovery should be "correctable"
-    And the error message should contain "3 accounts"
     And the error should include "suggestion" field
     And the suggestion should contain "account_id"
     # POST-F1: System state is unchanged on failure

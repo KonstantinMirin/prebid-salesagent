@@ -87,9 +87,18 @@ def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
         with pytest.raises((ToolError, AdCPAuthenticationError)) as exc_info:
             get_principal_from_context(mock_context)
 
-        # Verify the error message mentions the tenant
-        error_str = str(exc_info.value)
-        assert "tenant_wonderstruck" in error_str
+        # The rejection is graded on its CODE. Asserting a tenant id appears in the
+        # buyer-facing sentence would both pin prose and assert that a tenant identifier
+        # from another tenancy is echoed back to the caller.
+        # Pinned to the ONE code this path raises: a cross-tenant token reaches
+        # `raise AdCPAuthenticationError()` at src/core/auth.py:266, whose error_code is
+        # AUTH_INVALID. A disjunction over several codes would grade nothing — every
+        # production auth path satisfies it — which is the "never weaken to either form"
+        # rule this epic is built on.
+        assert isinstance(exc_info.value, AdCPAuthenticationError), (
+            f"expected AdCPAuthenticationError, got {type(exc_info.value).__name__}: {exc_info.value!r}"
+        )
+        assert exc_info.value.error_code == "AUTH_INVALID"
 
 
 @pytest.mark.requires_db

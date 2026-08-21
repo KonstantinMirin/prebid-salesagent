@@ -64,10 +64,10 @@ class TestMissingFormatIdRejectedThroughImpl:
         assert result.action == "failed"
         assert result.errors is not None
         assert len(result.errors) > 0
-        error_msgs = [e.message if hasattr(e, "message") else str(e) for e in result.errors]
-        assert any("format_id" in msg.lower() for msg in error_msgs), (
-            f"Expected error about format_id, got: {error_msgs}"
-        )
+        # WHICH field was rejected is graded on the structured `field` pointer, not on the
+        # sentence — the sentence is a CODE_TABLE function of the code and cannot name it.
+        fields = [str(getattr(e, "field", "") or "") for e in result.errors]
+        assert any("format_id" in f for f in fields), f"Expected the rejection to name format_id, got fields: {fields}"
 
 
 # ---------------------------------------------------------------------------

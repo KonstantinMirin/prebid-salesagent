@@ -637,22 +637,14 @@ def then_response_has_success_fields(ctx: dict) -> None:
 
 @then('the response should NOT have an "errors" field')
 def then_response_no_errors_field(ctx: dict) -> None:
-    """Assert the success response has no errors field or errors is None/absent.
+    """Assert the success response has no errors field on the wire.
 
-    Step says 'NOT have an "errors" field' — the field should be absent or None,
-    not merely an empty list (which would mean the field IS present but empty).
+    Step says 'NOT have an "errors" field' — the key must be absent, not merely an empty
+    list. Asserted on the WIRE rather than by unwrapping the typed result: the old form
+    hand-rolled a CreateMediaBuyResult unwrap plus a dict/object branch, both of which are
+    shape-guessing that wire_absent does not need.
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
-    # Check the inner response (unwrap CreateMediaBuyResult)
-    inner = getattr(resp, "response", resp)
-    if isinstance(inner, dict):
-        assert "errors" not in inner or inner["errors"] is None, (
-            f'Expected no "errors" field on success response, got: {inner.get("errors")}'
-        )
-    else:
-        errors = getattr(inner, "errors", None)
-        assert errors is None, f'Expected "errors" field to be absent/None on success response, got: {errors!r}'
+    wire_absent(ctx, "errors")
 
 
 @then('the response should have an "errors" array')

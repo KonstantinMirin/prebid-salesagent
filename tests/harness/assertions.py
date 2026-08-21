@@ -60,8 +60,7 @@ def assert_rejected(
     *,
     code: str | None = None,
     field: str | None = None,
-    reason: str | None = None,
-    message_contains: str | None = None,
+    validation_type: str | None = None,
 ) -> None:
     """Assert the request was rejected, checking WHAT field and WHY.
 
@@ -71,36 +70,42 @@ def assert_rejected(
     Args:
         result: TransportResult from env.call_via()
         code: Expected error code (e.g., "VALIDATION_ERROR").
-        field: Expected field name (e.g., "max_width", "agent_url").
-        reason: Expected error reason (e.g., "Field required",
-            "Input should be a valid integer"). This distinguishes
-            "field missing" from "field has wrong type" on the same field.
-        message_contains: Additional substring that must appear in the error.
+        field: Expected field name (e.g., "max_width", "agent_url"). Matched against the
+            typed ``field`` pointer and the projected pydantic ``loc`` paths in
+            ``details.validation_errors`` — the STRUCTURED carriers, never the sentence.
+        validation_type: Expected pydantic error type (e.g. "missing", "int_parsing",
+            "string_too_short"). Replaces the old ``reason`` substring, and distinguishes
+            "field missing" from "field has the wrong type" on the same field WITHOUT
+            reading prose: the type is a stable machine token, the sentence is not.
+
+    The former ``reason`` and ``message_contains`` parameters are GONE. Both pinned the
+    buyer-facing sentence, which is a function of the error CODE through CODE_TABLE — so
+    asserting the code and the sentence together checked the table against itself. Passing
+    either is now a TypeError rather than a convention violation.
     """
     assert result.is_error, f"Expected rejection but got success: {result.payload}"
 
     error = result.error
-    error_str = str(error)
+    details = getattr(error, "details", None) or {}
+    entries = details.get("validation_errors") or [] if isinstance(details, dict) else []
 
     if code is not None:
-        error_code = getattr(error, "error_code", None)
-        assert error_code == code or code in error_str, (
-            f"Expected error code '{code}', got {error_code!r}. Full error: {error_str[:200]}"
-        )
+        error_code = getattr(error, "error_code", None) or getattr(error, "code", None)
+        assert error_code == code, f"Expected error code {code!r}, got {error_code!r}"
 
     if field is not None:
-        details = getattr(error, "details", None) or {}
-        details_str = str(details)
-        assert field in error_str or field in details_str, (
-            f"Expected field '{field}' in error. Error: {error_str[:200]}"
+        carriers = [str(getattr(error, "field", "") or "")]
+        for entry in entries:
+            carriers.extend(str(part) for part in (entry.get("loc") or []))
+        assert any(field == carrier or field in carrier for carrier in carriers), (
+            f"Expected field {field!r} among the structured carriers {carriers!r}"
         )
 
-    if reason is not None:
-        assert reason in error_str, f"Expected reason '{reason}' in error. Got: {error_str[:200]}"
-
-    if message_contains is not None:
-        message = getattr(error, "message", error_str)
-        assert message_contains in str(message), f"Expected '{message_contains}' in message. Got: {str(message)[:200]}"
+    if validation_type is not None:
+        types = [str(entry.get("type", "")) for entry in entries]
+        assert any(t == validation_type or t.endswith(validation_type) for t in types), (
+            f"Expected validation type {validation_type!r} among {types!r}"
+        )
 
 
 def assert_payload_field(

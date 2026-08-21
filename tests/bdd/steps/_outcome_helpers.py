@@ -208,11 +208,20 @@ def wire_entry_errors(ctx: dict, collection: str, *, index: int | None = None, *
     otherwise successful response. Defaults to ``[]`` — an entry that succeeded
     carries no errors, and that absence is a legitimate outcome to assert on, not
     a missing-wire defect.
+
+    RESTRICTED: the buyer-facing ``message`` is stripped from every entry before it is
+    returned. This is the one GUARD-SANCTIONED per-entry reader (it is blessed in the wire
+    discipline guard's ``_PRIMITIVE_FUNCTIONS``), so handing back the sentence would make it
+    the single blessed door through which a step could assert prose — the exact class this
+    reader is sanctioned to replace. The sentence is a function of the entry's CODE through
+    CODE_TABLE, so nothing is lost: assert ``code``, ``recovery``, ``field`` or ``details``.
     """
     entry = _locate_entry(ctx, collection, index, match)
     errors = entry.get("errors") or []
     assert isinstance(errors, list), f"{collection} entry errors is not a JSON array on the wire: {errors!r}"
-    return errors
+    return [
+        {k: v for k, v in error.items() if k != "message"} if isinstance(error, dict) else error for error in errors
+    ]
 
 
 def wire_absent(ctx: dict, path: str) -> None:

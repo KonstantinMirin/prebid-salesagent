@@ -330,7 +330,6 @@ Feature: BR-UC-028 Manage Collection Lists
     Given no collection list exists with list_id "list-missing"
     When the Buyer Agent sends a get_collection_list request for "list-missing"
     Then the error code should be "REFERENCE_NOT_FOUND"
-    And the error message references list_id "list-missing"
     And the error should include "suggestion" field
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/collection/list-collection-lists-request.json
 
@@ -407,7 +406,6 @@ Feature: BR-UC-028 Manage Collection Lists
     Given no collection list exists with list_id "list-missing"
     When the Buyer Agent updates "list-missing" with name "Whatever"
     Then the error code should be "REFERENCE_NOT_FOUND"
-    And the error message references list_id "list-missing"
     And the error should include "suggestion" field
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/collection/list-collection-lists-request.json
 
@@ -443,7 +441,6 @@ Feature: BR-UC-028 Manage Collection Lists
     Given no collection list exists with list_id "list-missing"
     When the Buyer Agent deletes "list-missing"
     Then the error code should be "REFERENCE_NOT_FOUND"
-    And the error message references list_id "list-missing"
     And the error should include "suggestion" field
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/collection/list-collection-lists-request.json
 
@@ -462,7 +459,6 @@ Feature: BR-UC-028 Manage Collection Lists
     Given an existing collection list "list-in-use" referenced by an active media buy
     When the Buyer Agent deletes "list-in-use"
     Then the error code should be "LIST_IN_USE"
-    And the error message references list_id "list-in-use"
     And the error should include "suggestion" field
     And the list "list-in-use" still exists
 

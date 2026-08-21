@@ -245,7 +245,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_send_message with session_id "nonexistent-sess" and message "hello"
     Then the operation should fail
     And the error code should be "session_not_found"
-    And the error message should contain "session"
     And the error should include "suggestion" field
     And the suggestion should contain "session_id"
     And the error references session_id "nonexistent-sess"
@@ -259,7 +258,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_terminate_session with session_id "ghost-session" and reason "user_exit"
     Then the operation should fail
     And the error code should be "session_not_found"
-    And the error message should contain "session"
     And the error should include "suggestion" field
     And the suggestion should contain "session_id"
     And the error references session_id "ghost-session"
@@ -274,7 +272,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_get_offering with offering_id "nonexistent-offer"
     Then the operation should fail
     And the error code should be "offer_unavailable"
-    And the error message should contain "offering"
     And the error should include "suggestion" field
     And the suggestion should contain "offering"
     And the response may contain alternative_offering_ids
@@ -299,7 +296,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_initiate_session requiring video modality as essential
     Then the operation should fail
     And the error code should be "capability_unsupported"
-    And the error message should contain "capability"
     And the error should include "suggestion" field
     And the suggestion should contain "conversational"
     # POST-F1: No session created when required capability is missing
@@ -312,7 +308,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_get_offering with offering_id "any-offer"
     Then the operation should fail
     And the error code should be "rate_limited"
-    And the error message should contain "rate"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
     And the error includes retry_after seconds
@@ -326,7 +321,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_send_message with session_id "sess-abc123" and message "hello"
     Then the operation should fail
     And the error code should be "rate_limited"
-    And the error message should contain "rate"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
     # POST-F1: Request not processed
@@ -339,7 +333,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_send_message with session_id "sess-done" and message "hello again"
     Then the operation should fail
     And the error code should be "SESSION_TERMINATED"
-    And the error message should contain "terminated"
     And the error should include "suggestion" field
     And the suggestion should contain "new session"
     # POST-F1: System state unchanged
@@ -354,7 +347,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_send_message with session_id "sess-complete" and message "one more question"
     Then the operation should fail
     And the error code should be "SESSION_TERMINATED"
-    And the error message should contain "ended"
     And the error should include "suggestion" field
     And the suggestion should contain "si_initiate_session"
     # POST-F1: System state unchanged
@@ -724,7 +716,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_get_offering with offering_id "shoes-fall" and intent "shoes for john@example.com at 123 Main St"
     Then the operation should fail
     And the error code should be "INTENT_PII_DETECTED"
-    And the error message should contain "personally identifiable information"
     And the error should include "suggestion" field
     And the suggestion should contain "Remove PII"
     # BR-RULE-095 INV-4: PII in intent → rejected (v3.1 NEW intent surface)
@@ -748,7 +739,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_initiate_session with identity missing consent_granted field
     Then the operation should fail
     And the error code should be "CONSENT_GRANTED_REQUIRED"
-    And the error message should contain "consent_granted"
     And the error should include "suggestion" field
     And the suggestion should contain "boolean consent_granted"
     # BR-RULE-096 INV-3: missing consent_granted → rejected
@@ -758,7 +748,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_initiate_session with identity consent_granted true but no consent_scope
     Then the operation should fail
     And the error code should be "CONSENT_SCOPE_REQUIRED"
-    And the error message should contain "consent_scope"
     And the error should include "suggestion" field
     And the suggestion should contain "consent_scope array"
     # BR-RULE-096 INV-4: consent true but no scope → rejected
@@ -768,7 +757,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_initiate_session with identity consent_granted false but user object with email "j@x.com"
     Then the operation should fail
     And the error code should be "IDENTITY_CONSENT_CONFLICT"
-    And the error message should contain "user data"
     And the error should include "suggestion" field
     And the suggestion should contain "Remove user data"
     # BR-RULE-096 INV-5: consent false + user data → conflict
@@ -829,7 +817,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_send_message with session_id "sess-ended" and message "hello"
     Then the operation should fail
     And the error code should be "SESSION_TERMINATED"
-    And the error message should contain "terminated"
     And the error should include "suggestion" field
     And the suggestion should contain "new session"
     # BR-RULE-098 INV-4: terminal session (complete OR terminated) rejects messages
@@ -875,7 +862,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_send_message with session_id "sess-msg" and no message and no action_response
     Then the operation should fail
     And the error code should be "MESSAGE_CONTENT_REQUIRED"
-    And the error message should contain "message or action_response"
     And the error should include "suggestion" field
     And the suggestion should contain "text message or an action_response"
     # BR-RULE-099 INV-3: neither present → rejected
@@ -900,7 +886,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_terminate_session with session_id "sess-bad" and reason "cancelled"
     Then the operation should fail
     And the error code should be "TERMINATION_REASON_INVALID"
-    And the error message should contain "reason"
     And the error should include "suggestion" field
     And the suggestion should contain "enumerated termination reasons"
     # BR-RULE-100 INV-3: invalid reason → rejected
@@ -911,7 +896,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_terminate_session with session_id "sess-nope" without a reason
     Then the operation should fail
     And the error code should be "TERMINATION_REASON_REQUIRED"
-    And the error message should contain "reason"
     And the error should include "suggestion" field
     And the suggestion should contain "termination reason"
     # BR-RULE-100 INV-4: absent reason → rejected
@@ -963,7 +947,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_send_message with session_id "no-such-session"
     Then the operation should fail
     And the error code should be "SESSION_NOT_FOUND"
-    And the error message should contain "session"
     And the error should include "suggestion" field
     And the suggestion should contain "active session"
     # BR-RULE-102 INV-3: nonexistent ID → SESSION_NOT_FOUND
@@ -1023,7 +1006,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_get_offering with include_products true and product_limit 0
     Then the operation should fail
     And the error code should be "PRODUCT_LIMIT_TOO_LOW"
-    And the error message should contain "product_limit"
     And the error should include "suggestion" field
     And the suggestion should contain "between 1 and 50"
     # BR-RULE-104 INV-3: < 1 → PRODUCT_LIMIT_TOO_LOW
@@ -1033,7 +1015,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_get_offering with include_products true and product_limit 51
     Then the operation should fail
     And the error code should be "PRODUCT_LIMIT_TOO_HIGH"
-    And the error message should contain "product_limit"
     And the error should include "suggestion" field
     And the suggestion should contain "between 1 and 50"
     # BR-RULE-104 INV-4: > 50 → PRODUCT_LIMIT_TOO_HIGH
@@ -1080,7 +1061,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_terminate_session with session_id "sess-empty-reason" and reason ""
     Then the operation should fail
     And the error code should be "TERMINATION_REASON_REQUIRED"
-    And the error message should contain "reason"
     And the error should include "suggestion" field
     And the suggestion should contain "termination reason"
     # BVA: empty string for required enum field
@@ -1122,7 +1102,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_terminate_session with reason "handoff_transaction" and transaction_intent action ""
     Then the operation should fail
     And the error code should be "TRANSACTION_ACTION_INVALID"
-    And the error message should contain "action"
     And the error should include "suggestion" field
     And the suggestion should contain "purchase or subscribe"
     # BVA: empty string for transaction_intent.action enum
@@ -1132,7 +1111,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_get_offering without an offering_id
     Then the operation should fail
     And the error code should be "OFFERING_ID_REQUIRED"
-    And the error message should contain "offering_id"
     And the error should include "suggestion" field
     And the suggestion should contain "offering_id"
     # POST-F1: System state unchanged
@@ -1144,7 +1122,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_initiate_session with idempotency_key "uuid-noid-1234567890123456" and intent "explore shoes" but no identity object
     Then the operation should fail
     And the error code should be "IDENTITY_REQUIRED"
-    And the error message should contain "identity"
     And the error should include "suggestion" field
     And the suggestion should contain "identity"
     # POST-F1: System state unchanged
@@ -1157,7 +1134,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the brand agent responds with session_status "pending_handoff" but omits the handoff object
     Then the response is invalid
     And the error code should be "HANDOFF_REQUIRED"
-    And the error message should contain "handoff"
     And the error should include "suggestion" field
     And the suggestion should contain "handoff object"
     # BR-RULE-098 INV-2 violated: pending_handoff without handoff object
@@ -1168,7 +1144,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the brand agent returns a UI element with type "link" but data object missing url field
     Then the UI element is invalid
     And the error code should be "UI_ELEMENT_DATA_REQUIRED"
-    And the error message should contain "data fields"
     And the error should include "suggestion" field
     And the suggestion should contain "required data fields"
     # BR-RULE-103: Standard component missing required data
@@ -1179,7 +1154,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_terminate_session with session_id "sess-acp-fail" and reason "handoff_transaction" but ACP generation fails
     Then the operation should fail
     And the error code should be "ACP_HANDOFF_REQUIRED"
-    And the error message should contain "acp_handoff"
     And the error should include "suggestion" field
     And the suggestion should contain "ACP checkout data"
     # BR-RULE-100: handoff_transaction requires ACP data
@@ -1189,7 +1163,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_send_message with message "hello" but no session_id
     Then the operation should fail
     And the error code should be "SESSION_ID_REQUIRED"
-    And the error message should contain "session_id"
     And the error should include "suggestion" field
     And the suggestion should contain "session_id from si_initiate_session"
     # BR-RULE-099: session_id is co-required with content
@@ -1241,7 +1214,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the brand response declares a surface with catalogId "si-experimental"
     Then the surface is rejected with error "UI_ELEMENT_TYPE_INVALID"
     And the error code should be "UI_ELEMENT_TYPE_INVALID"
-    And the error message references catalogId
     # BR-RULE-103: catalog identifier is a const in the SI standard catalog schema
 
   @T-UC-014-user-action-roundtrip @a2ui @user-action @happy-path @post-s3 @br-rule-099
@@ -1276,7 +1248,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_initiate_session with offering_id "winter-sale-2025"
     Then the operation should fail
     And the error code should be "OFFER_UNAVAILABLE"
-    And the error message should contain the offering_id "winter-sale-2025"
     And the error should include "suggestion" field
     # Expired offering cannot anchor a new session
 
@@ -1316,7 +1287,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_initiate_session without idempotency_key but with intent "find shoes" and identity
     Then the operation should fail
     And the error code should be "IDEMPOTENCY_KEY_REQUIRED"
-    And the error message should contain "idempotency_key"
     And the error should include "suggestion" field
     And the suggestion should contain "UUID"
     # BR-RULE-286 INV-2: idempotency_key absent → IDEMPOTENCY_KEY_REQUIRED
@@ -1328,7 +1298,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_initiate_session with idempotency_key "uuid-def-1234567890123456" and identity but without intent
     Then the operation should fail
     And the error code should be "INTENT_REQUIRED"
-    And the error message should contain "intent"
     And the error should include "suggestion" field
     And the suggestion should contain "natural-language"
     # BR-RULE-286 INV-3: intent absent → INTENT_REQUIRED
@@ -1340,7 +1309,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the Buyer Agent sends si_initiate_session with idempotency_key "uuid-ghi-1234567890123456" and intent "find shoes" but without identity
     Then the operation should fail
     And the error code should be "IDENTITY_REQUIRED"
-    And the error message should contain "identity"
     And the error should include "suggestion" field
     And the suggestion should contain "consent_granted"
     # BR-RULE-286 INV-4: identity absent → IDENTITY_REQUIRED
@@ -1392,7 +1360,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the host validates the acp_handoff
     Then the validation should fail
     And the error code should be "CHECKOUT_URL_NOT_HTTPS"
-    And the error message should contain "HTTPS"
     And the error should include "suggestion" field
     # BR-RULE-287 INV-2: non-HTTPS scheme → CHECKOUT_URL_NOT_HTTPS
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
@@ -1404,7 +1371,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the host validates the acp_handoff
     Then the validation should fail
     And the error code should be "CHECKOUT_URL_INVALID"
-    And the error message should contain "valid URI"
     And the error should include "suggestion" field
     # BR-RULE-287 INV-3: syntactically invalid URI → CHECKOUT_URL_INVALID
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json
@@ -1434,7 +1400,6 @@ Feature: BR-UC-014 Sponsored Intelligence Session
     When the host validates the acp_handoff
     Then the validation should fail
     And the error code should be "HANDOFF_EXPIRES_AT_INVALID"
-    And the error message should contain "future ISO 8601"
     And the error should include "suggestion" field
     # BR-RULE-287 INV-6: past or malformed expires_at → HANDOFF_EXPIRES_AT_INVALID
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/sponsored-intelligence/si-get-offering-request.json

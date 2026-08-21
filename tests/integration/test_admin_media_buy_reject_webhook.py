@@ -288,8 +288,9 @@ class TestAdminMediaBuyRejectWebhook:
             f"rejected webhook leaked code {errors[0]['code']!r} to the buyer — the wire code for a "
             "seller rejection is POLICY_VIOLATION (ERROR_CODE_MAPPING; MEDIA_BUY_REJECTED is internal)"
         )
-        assert "Budget too low" in errors[0].get("message", ""), (
-            "rejection reason must reach the buyer in the error message"
+        assert (errors[0].get("details") or {}).get("rejection_reason") == "Budget too low", (
+            "the seller's typed rejection reason must reach the buyer — it is operator data, so "
+            "it travels in details, not in the CODE_TABLE-derived message"
         )
 
     def test_approve_webhook_embeds_confirmed_success_via_factory(
@@ -371,8 +372,9 @@ class TestAdminMediaBuyRejectWebhook:
             f"A2A reject artifact leaked code {errors and errors[0].get('code')!r} — the wire code for a "
             "seller rejection is POLICY_VIOLATION (same contract the MCP sibling pins)"
         )
-        assert "Budget too low" in errors[0].get("message", ""), (
-            "rejection reason must reach the buyer in the A2A error message"
+        assert (errors[0].get("details") or {}).get("rejection_reason") == "Budget too low", (
+            "the seller's typed rejection reason must reach the buyer on A2A too — operator data "
+            "travels in details, not in the CODE_TABLE-derived message"
         )
         # A rejection must not embed a completed-Success shape in the artifact.
         assert result_data.get("status") != "completed", (

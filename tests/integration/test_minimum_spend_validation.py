@@ -354,9 +354,6 @@ class TestMinimumSpendValidation:
 
         exc = excinfo.value
         assert exc.error_code == "BUDGET_TOO_LOW"
-        error_msg = exc.message.lower()
-        assert "minimum spend" in error_msg or "does not meet" in error_msg
-        assert "usd" in error_msg
 
     async def test_product_override_enforced(self, setup_test_data):
         """Test that product-specific minimum spend override is enforced."""
@@ -391,9 +388,6 @@ class TestMinimumSpendValidation:
 
         exc = excinfo.value
         assert exc.error_code == "VALIDATION_ERROR"
-        error_msg = exc.message.lower()
-        assert "minimum spend" in error_msg or "does not meet" in error_msg
-        assert "usd" in error_msg
 
     async def test_lower_override_allows_smaller_spend(self, setup_test_data):
         """Test that lower product override allows smaller spend than currency limit."""
@@ -526,9 +520,6 @@ class TestMinimumSpendValidation:
 
         exc = excinfo.value
         assert exc.error_code == "BUDGET_TOO_LOW"
-        error_msg = exc.message.lower()
-        assert "minimum spend" in error_msg or "does not meet" in error_msg
-        assert "usd" in error_msg
 
     async def test_no_minimum_when_not_set(self, setup_test_data):
         """Test that media buys with no minimum set in currency limit are allowed."""

@@ -1924,22 +1924,46 @@ def then_config_rejected(ctx: dict) -> None:
     The short credential is rejected by production's Pydantic boundary
     (Authentication.credentials MinLen=32) — assert the real two-layer AdCP
     wire envelope, not a reconstructed/hand-built exception.
+
+    Graded STRUCTURALLY: the code plus the projected Pydantic entry
+    (build_validation_error_details -> validation_errors[].type), never a substring
+    of the buyer-facing sentence, which is derived from the code through CODE_TABLE.
     """
-    result = ctx["result"]
-    result.assert_wire_error("VALIDATION_ERROR", recovery="correctable", message_substr="32")
+    details = ctx["result"].wire_error_details("VALIDATION_ERROR", recovery="correctable")
+    entries = details.get("validation_errors") or []
+    # pydantic v2 emits "string_too_short" for a MinLen violation on a str. Matched by
+    # suffix so a sibling constraint type (e.g. too_short on a collection) still reads.
+    assert any(str(e.get("type", "")).endswith("too_short") for e in entries), (
+        f"expected a too_short validation entry, got {entries!r}"
+    )
 
 
 @then("the error should indicate minimum credential length is 32 characters")
 def then_error_min_credential_length(ctx: dict) -> None:
-    """Assert the wire error message names the 32-character minimum.
+    """Assert the wire envelope names the 32-character minimum on the credentials field.
 
-    The 32-char minimum surfaces in the wire error MESSAGE (Pydantic's
-    "String should have at least 32 characters"). Production's RequestValidationError
-    envelope does NOT emit a suggestion for this path, so the message — not a
-    suggestion — carries the boundary value.
+    The boundary VALUE lives only inside the projected Pydantic entry's ``msg``
+    ("String should have at least 32 characters"): build_validation_error_details
+    projects loc/msg/type and drops Pydantic's ``ctx``, so ``min_length`` is not
+    available structurally. Reading it through wire_error_details is the sanctioned
+    path — errors[0].details is a channel this suite keeps, and the text there is
+    PYDANTIC's, not the CODE_TABLE sentence, so pinning it is not a tautology
+    against the code. Pinned to the credentials entry specifically, which the old
+    envelope-wide substring was not.
     """
-    result = ctx["result"]
-    result.assert_wire_error("VALIDATION_ERROR", recovery="correctable", message_substr="32 characters")
+    details = ctx["result"].wire_error_details("VALIDATION_ERROR", recovery="correctable")
+    entries = details.get("validation_errors") or []
+    credentials_entry = next(
+        (e for e in entries if "credentials" in [str(part) for part in (e.get("loc") or [])]),
+        None,
+    )
+    assert credentials_entry is not None, f"no validation entry names the credentials field; entries were {entries!r}"
+    assert str(credentials_entry.get("type", "")).endswith("too_short"), (
+        f"expected a too_short constraint on credentials, got {credentials_entry!r}"
+    )
+    assert "32" in (credentials_entry.get("msg") or ""), (
+        f"expected the 32-character minimum on the credentials entry, got {credentials_entry!r}"
+    )
 
 
 @then("the configuration should be accepted")
@@ -2823,11 +2847,15 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
     wire: not a server fault (INTERNAL_ERROR / transient) and not an auth failure. The
     precise code/recovery is asserted only once the scenario carries it.
     """
-    envelope = ctx.get("wire_error_envelope")
-    if isinstance(envelope, dict) and "adcp_error" in envelope:
-        layer = envelope["adcp_error"]
-        code = layer.get("code")
-        recovery = layer.get("recovery")
+    # Read through the sanctioned harness readers rather than digging the envelope by
+    # hand. wire_error_code() reads errors[0].code; the two-layer invariant guarantees it
+    # agrees with adcp_error.code, so the payload layer is the position to read.
+    result = ctx.get("result")
+    error_object = result.wire_error_object() if result is not None else None
+    if error_object is not None:
+        envelope = result.wire_error_envelope
+        code = result.wire_error_code()
+        recovery = error_object.get("recovery")
         # SERVICE_UNAVAILABLE must be excluded too: ERROR_CODE_MAPPING remaps
         # INTERNAL_ERROR to SERVICE_UNAVAILABLE — a server fault would otherwise
         # pass as a field rejection. (#1420 should-fix) CONFIGURATION_ERROR now

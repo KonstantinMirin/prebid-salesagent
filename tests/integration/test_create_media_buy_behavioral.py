@@ -554,12 +554,13 @@ class TestMultipleInvalidCreativesAccumulated:
                     [mock_package], "test_tenant", "test_principal", session=session
                 )
 
-            error_message = str(exc_info.value)
+            # The accumulated ids reach the buyer through DETAILS, not the sentence: the
+            # sentence is a function of the code through CODE_TABLE and cannot carry them.
             assert "creative_errors" in exc_info.value.details
-            # All three creative IDs should appear in the accumulated error
-            assert "creative_1" in error_message
-            assert "creative_2" in error_message
-            assert "creative_3" in error_message
+            accumulated = str(exc_info.value.details["creative_errors"])
+            assert "creative_1" in accumulated
+            assert "creative_2" in accumulated
+            assert "creative_3" in accumulated
             assert exc_info.value.error_code == "CREATIVE_REJECTED"
             assert exc_info.value.suggestion
 
@@ -1579,9 +1580,6 @@ class TestExtensionObligations:
 
         exc = excinfo.value
         assert exc.error_code == "UNSUPPORTED_FEATURE"
-        error_msg = exc.message.lower()
-        assert "not supported" in error_msg
-        assert "gam" in error_msg
 
     @pytest.mark.asyncio
     async def test_unknown_targeting_fields_rejected(self):
@@ -1759,7 +1757,6 @@ class TestExtensionObligations:
         """
         error = AdCPNotFoundError(details={"error_code": "PROPOSAL_NOT_FOUND"})
         assert error.details["error_code"] == "PROPOSAL_NOT_FOUND"
-        assert "prop_123" in str(error)
 
     def test_proposal_expired_error_code(self):
         """PROPOSAL_EXPIRED error code is used for expired proposals.
@@ -1867,7 +1864,6 @@ class TestExtensionObligations:
         error = AdCPAdapterError()
         # Partial execution: error is about upload, not about the order
         assert error.error_code == "SERVICE_UNAVAILABLE"
-        assert "cr_1" in str(error)
 
 
 class TestPostconditionObligations:

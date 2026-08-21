@@ -80,7 +80,10 @@ _DISPATCH_IN_THEN_ALLOWLIST: set[str] = {
     "bdd/steps/domain/uc002_nfr.py:126 then_auth_before_business_logic",
     "bdd/steps/domain/uc002_nfr.py:193 then_rate_limiting_enforced",
     "bdd/steps/domain/uc002_nfr.py:235 then_payload_size_limits",
-    "bdd/steps/domain/uc002_nfr.py:411 then_budget_validated_against_min_order",
+    # Line 411 -> 406: the entry is keyed by LINE NUMBER, so an unrelated edit above it in the
+    # same file (removing six message-substring branches from then_payload_size_limits) moves it
+    # without changing the violation. Same function, same defect, five lines up.
+    "bdd/steps/domain/uc002_nfr.py:406 then_budget_validated_against_min_order",
 }
 
 _ASSERT_ON_REQUEST_ALLOWLIST: set[str] = set()

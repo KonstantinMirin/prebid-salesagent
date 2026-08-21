@@ -401,12 +401,15 @@ class TestWireErrorDetailsReader:
 
 
 class TestWireErrorTolerantReaders:
-    """``wire_error_code`` / ``wire_error_object`` / ``wire_error_message`` on the harness.
+    """``wire_error_code`` / ``wire_error_object`` on the harness.
 
     The disease's root is that the harness offered ASSERTIONS but no READERS, so
     hand-rolling ``(envelope.get("errors") or [{}])[0].get(...)`` in a step module
     was the only option. These three are the sanctioned readers the step-layer
-    copies delegate to. They are deliberately TOLERANT of a missing envelope
+    copies delegate to. ``wire_error_message`` was a third such reader; it is gone —
+    the buyer-facing sentence is a function of the error CODE through CODE_TABLE, so a
+    sanctioned way to read it only enabled assertions that check the table against itself.
+    They are deliberately TOLERANT of a missing envelope
     (returning ``None``) — the step helpers built on them keep their ``| None``
     contract for the no-wire branches that depend on it (then_error.py:348, :857,
     :896). Strictness lives in ``wire_error_details`` / ``assert_wire_error``.
@@ -421,9 +424,6 @@ class TestWireErrorTolerantReaders:
     def test_wire_error_object_returns_the_payload_layer_error(self):
         """``errors[0]`` is the layer carrying the per-error fields (field, details)."""
         assert self._errored().wire_error_object() == _details_envelope(_SUPPORTED)["errors"][0]
-
-    def test_wire_error_message_reads_the_payload_layer_message(self):
-        assert self._errored().wire_error_message() == "adcp 2.9 is not supported"
 
     @pytest.mark.parametrize("reader", ["wire_error_code", "wire_error_object"])
     def test_no_envelope_reads_as_none_not_a_raise(self, reader):
@@ -515,9 +515,20 @@ class TestWireEntryErrors:
     def test_locates_by_index_too(self):
         from tests.bdd.steps._outcome_helpers import wire_entry_errors
 
-        assert wire_entry_errors(_ctx(_ACCOUNTS_WIRE), "accounts", index=1)[0]["message"] == (
-            "brand.domain is malformed"
-        )
+        assert wire_entry_errors(_ctx(_ACCOUNTS_WIRE), "accounts", index=1)[0]["code"] == "VALIDATION_ERROR"
+
+    def test_strips_the_buyer_facing_message(self):
+        """The one guard-blessed per-entry reader must not hand back the sentence.
+
+        It is sanctioned in the wire-discipline guard's ``_PRIMITIVE_FUNCTIONS``, so if it
+        returned ``message`` it would be the single blessed door for asserting prose — the
+        very thing it exists to replace. The code survives; the sentence does not.
+        """
+        from tests.bdd.steps._outcome_helpers import wire_entry_errors
+
+        errors = wire_entry_errors(_ctx(_ACCOUNTS_WIRE), "accounts", index=1)
+        assert "message" not in errors[0]
+        assert errors[0]["code"] == "VALIDATION_ERROR"
 
 
 class TestEntryHelpersInheritTheLoudGuard:

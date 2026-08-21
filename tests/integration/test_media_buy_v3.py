@@ -237,8 +237,6 @@ class TestCreateMediaBuyCurrencyValidation:
 
         exc = excinfo.value
         assert exc.error_code == "UNSUPPORTED_FEATURE"
-        msg = exc.message.lower()
-        assert "currency" in msg or "eur" in msg
 
 
 class TestCreateMediaBuyManualApproval:

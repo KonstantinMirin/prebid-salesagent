@@ -142,7 +142,6 @@ Feature: BR-UC-006 Sync Creative Assets
     When the Buyer Agent syncs the creative
     Then the operation should fail
     And the error code should be "AUTH_MISSING"
-    And the error message should contain "authentication"
     And the error should include a "suggestion" field
     And the suggestion should contain "authentication credentials"
     # POST-F1: Buyer knows the operation failed

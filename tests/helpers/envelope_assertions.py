@@ -69,8 +69,8 @@ def assert_no_marker_in_envelope(envelope: Mapping[str, Any] | None, marker: str
     """Assert ``marker`` is absent from the FULL wire error envelope.
 
     Sibling to :func:`assert_no_raw_validation_leak`, for the wire-safety
-    obligation: unlike ``assert_envelope_shape``'s ``message_substr`` (a
-    positive match scoped to ``errors[0].message`` only), this scans
+    obligation: unlike a positive match scoped to ``errors[0].message``,
+    this scans
     ``str(envelope)`` so a leak buried anywhere in the envelope
     (``adcp_error.message``, ``errors[0].details``, ``suggestion``, ``context``)
     fails the check — mirroring the exemplar
@@ -108,7 +108,6 @@ def assert_envelope_shape(
     code: str,
     *,
     recovery: str,
-    message_substr: str | None = None,
     field: str | None = None,
     details: Mapping[str, Any] | None = None,
     check_mcp_tool_error: bool = False,
@@ -129,9 +128,6 @@ def assert_envelope_shape(
                 (``correctable`` / ``transient`` / ``terminal``) and a silent
                 drift between a typed exception's recovery and the wire is
                 exactly the regression this helper exists to catch.
-        message_substr: If provided, must appear in ``errors[0].message``.
-                ``adcp_error.message`` is allowed to differ (it carries the
-                envelope-level summary).
         field: If provided, ``errors[0].field`` must equal it exactly — the
                 error.json ``field`` pointer naming WHICH request field was
                 rejected. Asserted at the protocol top level only: a copy buried
@@ -186,10 +182,6 @@ def assert_envelope_shape(
         f"adcp_error.recovery={body['adcp_error'].get('recovery')!r}, expected {recovery!r}"
     )
     assert error.get("recovery") == recovery, f"errors[0].recovery={error.get('recovery')!r}, expected {recovery!r}"
-
-    if message_substr is not None:
-        actual = error.get("message", "")
-        assert message_substr in actual, f"errors[0].message={actual!r} does not contain {message_substr!r}"
 
     if field is not None:
         actual_field = error.get("field")

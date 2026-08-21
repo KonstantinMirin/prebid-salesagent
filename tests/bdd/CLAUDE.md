@@ -23,7 +23,7 @@ and the per-scenario graduation protocol.
 |---|---|---|
 | Given: seed state | env-owned setup method (factories via the harness env; `realize_e2e` in `tests/harness/_realize.py` for the e2e branch) | hand-stashing wire data into `ctx` |
 | When: make the request | `dispatch_request(ctx, **kwargs)` (`tests/bdd/steps/generic/_dispatch.py`) — the ONE writer of `ctx["result"]` / `ctx["wire_response"]` / `ctx["wire_error_envelope"]` | a local `_get_error*`/`call_impl` shortcut, a `# TRANSPORT-BYPASS` in new code |
-| Then: error path | `ctx["result"].assert_wire_error(code, recovery=..., message_substr=..., field=...)` (`tests/harness/transport.py`) | `ctx["error"]`, `.error_code` on a reconstructed exception, hand-rolled envelope `.get()` chains |
+| Then: error path | `ctx["result"].assert_wire_error(code, recovery=..., field=...)` (`tests/harness/transport.py`) | `ctx["error"]`, `.error_code` on a reconstructed exception, hand-rolled envelope `.get()` chains, ANY assertion on the buyer-facing message text |
 | Then: success path | `wire_field(ctx, "x")` / `wire_dict(ctx)` / `wire_lookup(ctx, path)` (`tests/bdd/steps/_outcome_helpers.py`) | `result.payload.model_dump()` round-trips (proves serializer self-consistency, not what the buyer received) |
 
 ## Where domain-env wiring lives

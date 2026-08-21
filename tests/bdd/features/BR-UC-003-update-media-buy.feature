@@ -468,7 +468,6 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "AUTH_MISSING"
-    And the error message should contain "authentication"
     And the error should include "suggestion" field
     And the suggestion should contain "credentials"
     # POST-F1: System state unchanged

@@ -590,9 +590,21 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # the same WIRE code the tool path emits for this event
                     # (MEDIA_BUY_REJECTED is internal-only; wire_error_code translates it
                     # to POLICY_VIOLATION — never hand-pick codes here; PR #1567 round-2 item 1).
+                    # The seller's typed reason is OPERATOR DATA, not the buyer-facing
+                    # sentence: `message` is a function of the code through CODE_TABLE and so
+                    # cannot carry it. It travels in `details` — without this the buyer is told
+                    # only "The media buy was declined" and never learns why, which is what the
+                    # comment above has always promised ("embed that with the reason").
                     rejection = AdCPMediaBuyRejectedError()
+                    rejection_details = {"rejection_reason": reason} if reason else None
                     create_media_buy_rejected_result = CreateMediaBuyError(
-                        errors=[Error(code=rejection.wire_error_code, message=rejection.message)]
+                        errors=[
+                            Error(
+                                code=rejection.wire_error_code,
+                                message=rejection.message,
+                                details=rejection_details,
+                            )
+                        ]
                     )
                     metadata = _media_buy_webhook_metadata(step_data, tenant_id, media_buy_id, media_buy_data)
 

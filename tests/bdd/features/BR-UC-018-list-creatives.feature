@@ -93,7 +93,6 @@ Feature: BR-UC-018 List Creatives
     When the Buyer Agent sends a list_creatives request
     Then the operation should fail with error code "AUTH_MISSING"
     And the error code should be "AUTH_MISSING"
-    And the error message should contain "authentication"
     And the error should include a "suggestion" field
     And the suggestion should contain "valid authentication credentials"
     # POST-F1: Buyer knows the operation failed

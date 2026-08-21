@@ -188,11 +188,6 @@ class TransportResult:
         error = self.wire_error_object()
         return error.get("code") if error else None
 
-    def wire_error_message(self) -> str | None:
-        """``errors[0].message`` from the captured wire, or ``None`` with no wire."""
-        error = self.wire_error_object()
-        return error.get("message") if error else None
-
     def wire_error_details(self, code: str, *, recovery: str | None = None) -> Mapping[str, Any]:
         """The ``errors[0].details`` block, AFTER asserting the envelope carries ``code``.
 
@@ -220,7 +215,6 @@ class TransportResult:
         *,
         recovery: str | None = None,
         require_suggestion: bool = False,
-        message_substr: str | None = None,
         field: str | None = None,
         details: Mapping[str, Any] | None = None,
     ) -> None:
@@ -261,7 +255,6 @@ class TransportResult:
             envelope,
             code,
             recovery=expected_recovery,
-            message_substr=message_substr,
             field=field,
             details=details,
         )

@@ -94,18 +94,6 @@ class TestGenericWireEnvelopeStepsRequireWireBytes:
             _wire_ctx(_two_layer("AUTH_INVALID", _AUTH_MESSAGE, recovery="terminal")), "AUTH_INVALID"
         )
 
-    def test_auth_message_step_reddens_without_wire_bytes(self):
-        from tests.bdd.steps.generic.then_error import then_error_references_auth
-
-        ctx = _no_wire_ctx(_two_layer("AUTH_INVALID", _AUTH_MESSAGE, recovery="terminal"))
-        with pytest.raises(AssertionError):
-            then_error_references_auth(ctx)
-
-    def test_auth_message_step_passes_on_real_wire_bytes(self):
-        from tests.bdd.steps.generic.then_error import then_error_references_auth
-
-        then_error_references_auth(_wire_ctx(_two_layer("AUTH_INVALID", _AUTH_MESSAGE, recovery="terminal")))
-
 
 class TestCapabilitiesDetailStepsRequireWireBytes:
     """``uc010``'s version-negotiation details oracles (the ``_error_details`` consumers)."""

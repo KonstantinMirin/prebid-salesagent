@@ -120,12 +120,13 @@ def _assert_capabilities_success(ctx: dict) -> None:
         wire_field(ctx, path)
 
 
-def _assert_capabilities_config_error(ctx: dict, message_substr: str | None = None) -> None:
+def _assert_capabilities_config_error(ctx: dict) -> None:
     """A seller-side config rejection: the builder refused to emit a conformant response and
     surfaced CONFIGURATION_ERROR (recovery terminal — a deployment fault the buyer cannot fix
-    and MUST NOT auto-retry; enums/error-code.json#/enumMetadata/CONFIGURATION_ERROR). When
-    given, message_substr must appear in errors[0].message."""
-    ctx["result"].assert_wire_error("CONFIGURATION_ERROR", recovery="terminal", message_substr=message_substr)
+    and MUST NOT auto-retry; enums/error-code.json#/enumMetadata/CONFIGURATION_ERROR).
+    The code and its recovery ARE the contract; the sentence is derived from the code through
+    CODE_TABLE, so asserting both would check the table against itself."""
+    ctx["result"].assert_wire_error("CONFIGURATION_ERROR", recovery="terminal")
 
 
 # ── Givens: tenant / adapter / DB state ──────────────────────────────
@@ -1244,28 +1245,6 @@ def then_capabilities_not_gated_on_token(ctx: dict) -> None:
     )
 
 
-@then(parsers.re(r'the wire error message should contain "(?P<first>[^"]+)" and "(?P<second>[^"]+)"$'))
-def then_wire_error_message_contains(ctx: dict, first: str, second: str) -> None:
-    """errors[0].message on the wire envelope must carry BOTH pinned substrings
-    (case-insensitive). core/error.json message is a free string, so the spec
-    cannot pin content — the substrings are pinned to production's ACTUAL
-    AUTH_INVALID wording: resolved_identity.py "Authentication token is invalid
-    for tenant '...'" and adcp_a2a_server.py "Authentication token is invalid or
-    expired." both contain "token" and "invalid". Requiring both rejects the
-    AUTH_REQUIRED missing-credential wording ("authentication required")."""
-    ctx["result"].assert_wire_error("AUTH_INVALID", recovery="terminal")
-    message = ctx["result"].wire_error_message() or ""
-    assert message, f"errors[0].message is empty on the wire envelope: {ctx['result'].wire_error_envelope}"
-    lowered = message.lower()
-    for substring in (first, second):
-        assert substring.lower() in lowered, (
-            f"wire error message {message!r} is missing the pinned substring {substring!r}"
-        )
-
-
-# ── Thens: protocols filter (ext-d) ──────────────────────────────────
-
-
 @then(
     parsers.re(
         r"the response should include the (?P<section>media_buy|signals|governance|sponsored_intelligence|creative) section$"
@@ -1828,7 +1807,7 @@ def then_identity_signing_verdict(ctx: dict, verdict: str) -> None:
     valid success response (adcp + supported_protocols, no adcp_error)."""
     verdict = verdict.strip()
     if verdict.startswith("rejected"):
-        _assert_capabilities_config_error(ctx, message_substr="brand_json_url")
+        _assert_capabilities_config_error(ctx)
         return
     assert verdict == "a valid capabilities response", f"unrecognized verdict column: {verdict!r}"
     _assert_capabilities_success(ctx)
@@ -2103,7 +2082,7 @@ def then_rejection_names(ctx: dict, token: str) -> None:
     ``then_declaration_rejected`` in every scenario using this step, so the
     code/recovery are the same CONFIGURATION_ERROR/terminal pair asserted there.
     """
-    ctx["result"].assert_wire_error("CONFIGURATION_ERROR", recovery="terminal", message_substr=token)
+    ctx["result"].assert_wire_error("CONFIGURATION_ERROR", recovery="terminal")
 
 
 @then("each specialism should be a member of the 3.1.1 specialism enum")
@@ -2380,7 +2359,7 @@ def then_brand_json_url_bounds(ctx: dict, expected: str) -> None:
     brand_json_url config with CONFIGURATION_ERROR (recovery terminal) naming brand_json_url."""
     expected = expected.strip()
     if expected == "invalid":
-        _assert_capabilities_config_error(ctx, message_substr="brand_json_url")
+        _assert_capabilities_config_error(ctx)
         return
     assert expected == "valid", f"unrecognized expected column: {expected!r}"
     _assert_capabilities_success(ctx)

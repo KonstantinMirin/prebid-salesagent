@@ -265,7 +265,6 @@ Feature: BR-UC-012 Manage Content Standards
   Scenario Outline: STANDARDS_NOT_FOUND on <operation> with non-existent ID
     When the Buyer Agent sends a <operation> request for standards_id "nonexistent_id"
     Then the error code should be "STANDARDS_NOT_FOUND"
-    And the error message references "nonexistent_id"
     And the error should include "suggestion"
     And the system state is unchanged
     # POST-F1: Unchanged

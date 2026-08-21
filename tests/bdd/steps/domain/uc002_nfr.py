@@ -181,7 +181,7 @@ def then_auth_before_business_logic(ctx: dict) -> None:
     # recovery omitted -> defaults to the pinned AUTH_MISSING enum (correctable). Do not
     # pass an explicit recovery= that shadows the pinned enum (#1417: superseded
     # the earlier terminal override; the pinned enum is the single source of truth).
-    result.assert_wire_error("AUTH_MISSING", message_substr="Principal ID not found")
+    result.assert_wire_error("AUTH_MISSING")
 
     # Verify no business logic side effects occurred
     assert not mock_adapter.create_media_buy.called, (
@@ -264,25 +264,20 @@ def then_payload_size_limits(ctx: dict) -> None:
     # Gap preserved: no ASGI middleware checks content-length, so the oversized
     # body is accepted and no payload-size rejection appears on the wire (nor in
     # any dispatch error). Inspect both the wire envelope and a transport error.
+    # Graded on the CODE alone, on both halves. The six message-substring branches this
+    # replaces ("payload" / "too large" / "content-length", against errors[0].message and
+    # against str(dispatch_error)) were prose pins: the sentence is a function of the code
+    # through CODE_TABLE, so they added no signal the code does not already carry — and a
+    # rejection that emitted the right sentence under the WRONG code would have passed them.
+    # Keeps the wire_error_envelope read, which is a sanctioned ERROR-wire reader.
     payload_rejected = False
     result = payload_ctx.get("result")
-    envelope = result.wire_error_envelope if result is not None else None
-    if envelope:
-        code = envelope.get("errors", [{}])[0].get("code", "")
-        msg = (envelope.get("errors", [{}])[0].get("message") or "").lower()
-        if code == "PAYLOAD_TOO_LARGE" or "payload" in msg or "too large" in msg or "content-length" in msg:
-            payload_rejected = True
+    error_object = result.wire_error_object() if result is not None else None
+    if error_object is not None and error_object.get("code") == "PAYLOAD_TOO_LARGE":
+        payload_rejected = True
     dispatch_error = payload_ctx.get("error")
-    if dispatch_error is not None:
-        error_str = str(dispatch_error).lower()
-        error_code = getattr(dispatch_error, "error_code", "")
-        if (
-            "payload" in error_str
-            or "too large" in error_str
-            or "content-length" in error_str
-            or error_code == "PAYLOAD_TOO_LARGE"
-        ):
-            payload_rejected = True
+    if dispatch_error is not None and getattr(dispatch_error, "error_code", "") == "PAYLOAD_TOO_LARGE":
+        payload_rejected = True
 
     assert payload_rejected, (
         "SPEC-PRODUCTION GAP: Payload size validation not implemented. "
@@ -465,7 +460,7 @@ def then_budget_validated_against_min_order(ctx: dict) -> None:
     # code + message together is stricter than the old disjunctive OR-check.
     result = low_budget_ctx.get("result")
     assert result is not None, "dispatch_request did not produce a TransportResult for the low-budget request"
-    result.assert_wire_error("BUDGET_TOO_LOW", message_substr="minimum spend")
+    result.assert_wire_error("BUDGET_TOO_LOW")
 
 
 # ═══════════════════════════════════════════════════════════════════════

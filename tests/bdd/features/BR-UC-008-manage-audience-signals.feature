@@ -259,7 +259,6 @@ Feature: BR-UC-008 Manage Audience Signals
     Then the response contains errors array (error variant)
     And the response does not contain deployments
     And the error code is "APPROVAL_REQUIRED"
-    And the error message contains "requires manual approval"
     And the error should include "suggestion" field
     And the suggestion should contain "contact the Seller for approval"
     And the response context equals {"trace_id": "premium-trace"}
@@ -276,7 +275,6 @@ Feature: BR-UC-008 Manage Audience Signals
     Then the response contains errors array (error variant)
     And the response does not contain deployments
     And the error code is "APPROVAL_REQUIRED"
-    And the error message contains "requires manual approval"
     And the error should include "suggestion" field
     And the suggestion should contain "contact the Seller for approval"
     # POST-F1: No activation occurred
@@ -294,7 +292,6 @@ Feature: BR-UC-008 Manage Audience Signals
     Then the response contains errors array (error variant)
     And the response does not contain deployments
     And the error code is "ACTIVATION_FAILED"
-    And the error message contains "provider unavailable"
     And the error should include "suggestion" field
     And the suggestion should contain "retry later or contact support"
     And the response context equals {"trace_id": "fail-trace"}

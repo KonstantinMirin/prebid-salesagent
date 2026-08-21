@@ -40,7 +40,6 @@ Feature: UC-010 get_adcp_capabilities — capability declarations must be implem
     And the tenant declares specialisms ["creative-generative"] with supported_protocols ["media_buy"]
     When the Buyer Agent calls get_adcp_capabilities
     Then the capability declaration should be rejected as terminal misconfiguration
-    And the rejection should name "creative-generative"
     # Nothing implements generative creative, and the AAO compliance runner grades
     # the claim, so echoing the declaration would be a false conformance claim.
     # Tracked by #1724.
@@ -51,7 +50,6 @@ Feature: UC-010 get_adcp_capabilities — capability declarations must be implem
     And the tenant declares specialisms ["signal-owned"] without declaring its parent protocol
     When the Buyer Agent calls get_adcp_capabilities
     Then the capability declaration should be rejected as terminal misconfiguration
-    And the rejection should name "signal-owned"
     # Roll-up coherence: /properties/specialisms — "the runner rejects a specialism
     # claim whose parent protocol is missing". Boundary case for the backing rule:
     # the specialism IS backed, so only the roll-up check can catch this.
@@ -62,7 +60,6 @@ Feature: UC-010 get_adcp_capabilities — capability declarations must be implem
     And the tenant declares supported_protocols ["creative"]
     When the Buyer Agent calls get_adcp_capabilities
     Then the capability declaration should be rejected as terminal misconfiguration
-    And the rejection should name "creative"
     # A protocol claim commits the seller to that domain's required tool surface
     # (protocols/<p>/index.yaml#required_tools). Generative creative is unimplemented
     # here, so advertising `creative` would route buyer traffic to a domain that

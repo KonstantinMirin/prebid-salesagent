@@ -29,11 +29,17 @@ DEFAULT_AGENT_URL = "https://creative.test.example.com"
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
-def _error_messages(errors: list | None) -> list[str]:
-    """Extract message strings from Error objects or plain strings."""
+def _error_codes(errors: list | None) -> list[str]:
+    """Extract the machine CODE from each per-creative error entry.
+
+    Production emits these entries TYPED — src/core/tools/creatives/_processing.py builds
+    each with build_error_object(), so every element carries a code. The message is not
+    read: it is a function of the code through CODE_TABLE, so asserting both would check
+    the table against itself.
+    """
     if not errors:
         return []
-    return [e.message if hasattr(e, "message") else str(e) for e in errors]
+    return [str(getattr(e, "code", None) or getattr(e, "error_code", "")) for e in errors]
 
 
 def _creative(**overrides) -> dict:
@@ -364,7 +370,7 @@ class TestGenerativeUpdateGeminiKeyMissing:
 
             creative_result = result.creatives[0]
             assert creative_result.action == "failed"
-            assert any("GEMINI_API_KEY" in e for e in _error_messages(creative_result.errors))
+            assert "CONFIGURATION_ERROR" in _error_codes(creative_result.errors)
 
 
 # ── Approval Mode UPDATE Tests (covers lines 97-139) ──────────────────────
@@ -488,10 +494,7 @@ class TestStaticPreviewUpdate:
 
             creative_result = result.creatives[0]
             assert creative_result.action == "failed"
-            assert any(
-                "no previews" in e.lower() or "no media_url" in e.lower()
-                for e in _error_messages(creative_result.errors)
-            )
+            assert "CREATIVE_REJECTED" in _error_codes(creative_result.errors)
 
     def test_update_no_format_with_url_succeeds(self, integration_db):
         """Update creative: no matching format BUT has media_url → succeeds.
@@ -550,9 +553,7 @@ class TestStaticPreviewUpdate:
 
             creative_result = result.creatives[0]
             assert creative_result.action == "failed"
-            assert any(
-                "unreachable" in e.lower() or "retry" in e.lower() for e in _error_messages(creative_result.errors)
-            )
+            assert "SERVICE_UNAVAILABLE" in _error_codes(creative_result.errors)
 
 
 class TestStaticPreviewDimensionExtraction:

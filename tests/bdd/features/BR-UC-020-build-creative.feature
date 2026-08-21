@@ -98,7 +98,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent sends a build_creative request via A2A with the target_format_id
     Then the operation should fail
     And the error code should be "FORMAT_NOT_SUPPORTED"
-    And the error message should contain "not supported"
     And the error should include "suggestion" field
     And the suggestion should contain "list_creative_formats"
     And the error recovery should be "correctable"
@@ -113,7 +112,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent calls build_creative MCP tool with the target_format_id
     Then the operation should fail
     And the error code should be "FORMAT_NOT_SUPPORTED"
-    And the error message should contain "not supported"
     And the error should include "suggestion" field
     And the suggestion should contain "list_creative_formats"
     And the error recovery should be "correctable"
@@ -128,7 +126,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent sends a build_creative request via A2A with the target_format_id
     Then the operation should fail
     And the error code should be "FORMAT_NOT_SUPPORTED"
-    And the error message should contain "not supported"
     And the error should include "suggestion" field
     And the suggestion should contain "list_creative_formats"
     And the error recovery should be "correctable"
@@ -143,7 +140,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent sends a build_creative request via A2A with the invalid creative_manifest
     Then the operation should fail
     And the error code should be "INVALID_MANIFEST"
-    And the error message should contain "manifest"
     And the error should include "field" pointing to the problematic path
     And the error should include "suggestion" field
     And the suggestion should contain "fix"
@@ -159,7 +155,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent calls build_creative MCP tool with the invalid creative_manifest
     Then the operation should fail
     And the error code should be "INVALID_MANIFEST"
-    And the error message should contain "manifest"
     And the error should include "field" pointing to the problematic path
     And the error should include "suggestion" field
     And the suggestion should contain "fix"
@@ -175,7 +170,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent sends a build_creative request
     Then the operation should fail
     And the error code should be "INVALID_MANIFEST"
-    And the error message should describe the asset incompatibility
     And the error should include "field" pointing to the incompatible asset path
     And the error should include "suggestion" field
     And the suggestion should contain "required assets"
@@ -191,7 +185,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent sends a build_creative request via A2A with the target_format_id
     Then the operation should fail
     And the error code should be "FORMAT_ID_DIMENSION_INCOMPLETE"
-    And the error message should contain "width and height must both be present"
     And the error should include "suggestion" field
     And the suggestion should contain "both width and height"
     And the error recovery should be "correctable"
@@ -206,7 +199,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent sends a build_creative request
     Then the operation should fail
     And the error code should be "CREATIVE_REJECTED"
-    And the error message should identify the disclosure that cannot be rendered
     And the error should include "field" pointing to the unsatisfied disclosure path
     And the error should include "details" with disclosure_text and position
     And the error should include "suggestion" field
@@ -224,7 +216,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent calls build_creative MCP tool with the request
     Then the operation should fail
     And the error code should be "CREATIVE_REJECTED"
-    And the error message should identify the disclosure that cannot be rendered
     And the error should include "field" pointing to the unsatisfied disclosure path
     And the error should include "details" with disclosure_text and position
     And the error should include "suggestion" field
@@ -243,7 +234,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent sends a build_creative request
     Then the operation should fail with the entire request rejected
     And the error code should be "CREATIVE_REJECTED"
-    And the error message should identify the unsatisfied footer disclosure
     And the error should include "suggestion" field
     And the suggestion should contain "format that supports"
     And the error recovery should be "correctable"
@@ -258,7 +248,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent sends a build_creative request
     Then the operation should fail
     And the error code should be "SERVICE_UNAVAILABLE"
-    And the error message should contain "unreachable" or "unavailable"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
     And the error should include "retry_after" field with a delay value
@@ -275,7 +264,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent calls build_creative MCP tool with the request
     Then the operation should fail
     And the error code should be "SERVICE_UNAVAILABLE"
-    And the error message should contain "unreachable" or "unavailable"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
     And the error should include "retry_after" field with a delay value
@@ -292,7 +280,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent sends a build_creative request
     Then the operation should fail
     And the error code should be "SERVICE_UNAVAILABLE"
-    And the error message should contain "timed out"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
     And the error should include "retry_after" field with a delay value
@@ -309,7 +296,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent sends a build_creative request
     Then the operation should fail
     And the error code should be "SERVICE_UNAVAILABLE"
-    And the error message should contain "response" or "parse"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"
     And the error recovery should be "transient"
@@ -357,7 +343,6 @@ Feature: BR-UC-020 Build Creative
     And the response should not contain a creative_manifests array
     And no partial manifests should be returned
     And the error code should be "FORMAT_MISMATCH" or "BUILD_FAILED"
-    And the error message should identify which requested format failed
     And the error should include "suggestion" field
     And the error recovery should be "correctable"
     # POST-F1: Operation failed atomically (no partial manifests)
@@ -487,7 +472,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent sends a build_creative request
     Then the operation should fail
     And the error code should be "FORMAT_ID_DIMENSION_INCOMPLETE"
-    And the error message should contain "width and height must both be present"
     And the error should include "suggestion" field
     And the suggestion should contain "both width and height"
     # POST-F3: Suggestion for recovery
@@ -499,7 +483,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent sends a build_creative request
     Then the operation should fail
     And the error code should be "FORMAT_ID_DIMENSION_INCOMPLETE"
-    And the error message should contain "width and height must both be present"
     And the error should include "suggestion" field
     And the suggestion should contain "both width and height"
     # POST-F3: Suggestion for recovery
@@ -511,7 +494,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent sends a build_creative request
     Then the operation should fail
     And the error code should be "FORMAT_ID_INVALID_FORMAT"
-    And the error message should contain "invalid characters"
     And the error should include "suggestion" field
     And the suggestion should contain "letters, digits, underscores, and hyphens"
     # POST-F3: Suggestion for recovery
@@ -523,7 +505,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent sends a build_creative request
     Then the operation should fail
     And the error code should be "FORMAT_ID_DIMENSION_INVALID"
-    And the error message should contain "positive integers"
     And the error should include "suggestion" field
     And the suggestion should contain "integers >= 1"
     # POST-F3: Suggestion for recovery
@@ -559,7 +540,6 @@ Feature: BR-UC-020 Build Creative
     When the Buyer Agent sends a build_creative request
     Then the operation should fail
     And the error code should be "IDEMPOTENCY_KEY_INVALID_FORMAT"
-    And the error message should contain "16"
     And the error should include "suggestion" field
     And the suggestion should contain "16"
     # POST-F3: Suggestion for recovery
@@ -619,7 +599,6 @@ Feature: BR-UC-020 Build Creative
     When the system validates the creative agent response
     Then the operation should fail with a system-level error
     And the error code should be "FORMAT_MISMATCH"
-    And the error message should contain "does not match"
     And the error should include "suggestion" field
     And the suggestion should contain "correct target format"
     # POST-F3: Suggestion for recovery
@@ -632,7 +611,6 @@ Feature: BR-UC-020 Build Creative
     When the system validates the creative agent response
     Then the operation should fail with a system-level error
     And the error code should be "FORMAT_MISMATCH"
-    And the error message should contain "does not match"
     And the error should include "suggestion" field
     And the suggestion should contain "correct target format"
     # POST-F3: Suggestion for recovery
@@ -665,7 +643,6 @@ Feature: BR-UC-020 Build Creative
     When the system validates the creative agent response
     Then the operation should fail with a system-level error
     And the error code should be "FORMAT_MISMATCH"
-    And the error message should contain "does not match"
     And the error should include "suggestion" field
     # POST-F3: Suggestion for recovery
     # BR-RULE-156 INV-6: each manifest format_id must match one of the requested target_format_ids
@@ -762,7 +739,6 @@ Feature: BR-UC-020 Build Creative
     When the system validates the creative agent response
     Then the operation should fail
     And the error code should be "PROVENANCE_REQUIRED"
-    And the error message should contain "provenance"
     And the error should include "suggestion" field
     And the suggestion should contain "provenance"
     # POST-F3: Suggestion for recovery
@@ -781,7 +757,6 @@ Feature: BR-UC-020 Build Creative
     When the system validates the creative agent response
     Then the operation should fail
     And the error code should be "AI_TOOL_NAME_REQUIRED"
-    And the error message should contain "ai_tool.name"
     And the error should include "suggestion" field
     And the suggestion should contain "name of the AI tool"
     # POST-F3: Suggestion for recovery

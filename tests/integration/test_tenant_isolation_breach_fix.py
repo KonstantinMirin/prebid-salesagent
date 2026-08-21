@@ -152,8 +152,15 @@ def test_cross_tenant_token_rejected(integration_db):
         with pytest.raises((ToolError, AdCPAuthenticationError)) as exc_info:
             get_principal_from_context(context)
 
-        error_str = str(exc_info.value)
-        assert "tenant_test_agent" in error_str
+        # Pinned to the ONE code this path raises: a cross-tenant token reaches
+        # `raise AdCPAuthenticationError()` at src/core/auth.py:266, whose error_code is
+        # AUTH_INVALID. A disjunction over several codes would grade nothing — every
+        # production auth path satisfies it — which is the "never weaken to either form"
+        # rule this epic is built on.
+        assert isinstance(exc_info.value, AdCPAuthenticationError), (
+            f"expected AdCPAuthenticationError, got {type(exc_info.value).__name__}: {exc_info.value!r}"
+        )
+        assert exc_info.value.error_code == "AUTH_INVALID"
 
 
 @pytest.mark.requires_db

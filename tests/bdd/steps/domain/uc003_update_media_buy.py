@@ -1079,21 +1079,13 @@ def then_response_has_sandbox(ctx: dict) -> None:
 def then_no_errors_field(ctx: dict) -> None:
     """Assert the response does not contain an 'errors' field at all.
 
-    Step text says 'NOT contain' — the field should be absent (None),
-    not just empty. An empty list ``[]`` still means the field exists.
+    Step text says 'NOT contain' — the key must be ABSENT, not merely null: an empty list
+    or a serialized null both mean the field exists. wire_absent encodes that distinction.
+
+    Asserted on the WIRE rather than on resp.model_dump(): a round-trip through the model
+    proves the serializer is self-consistent, not what the buyer actually received.
     """
-    resp = ctx.get("response")
-    assert resp is not None, "Expected a response"
-    # "NOT contain" means the key must be absent, not just None.
-    # Use exclude_none=True (AdCP default) so errors=None is excluded from the dict.
-    if hasattr(resp, "model_dump"):
-        data = resp.model_dump(exclude_none=True)
-        assert "errors" not in data, (
-            f"Expected 'errors' key absent from response (exclude_none=True), but found: {data.get('errors')!r}"
-        )
-    else:
-        errors = getattr(resp, "errors", None)
-        assert errors is None, f"Expected no 'errors' field in response, got: {errors}"
+    wire_absent(ctx, "errors")
 
 
 @then('the response should contain an "errors" array')

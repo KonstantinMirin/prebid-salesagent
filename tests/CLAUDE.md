@@ -395,7 +395,6 @@ assert_envelope_shape(
     result.wire_error_envelope,
     "VALIDATION_ERROR",
     recovery="correctable",
-    message_substr="budget must be positive",
 )
 ```
 
@@ -417,8 +416,14 @@ and the wire is exactly the regression this helper exists to catch.
 | Wire shape | Two-layer envelope structure | `assert_envelope_shape(envelope, code, recovery="correctable")` |
 | HTTP status | REST status code | `assert result.envelope["status_code"] == 400` |
 | Error code | Machine-readable wire code | `assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")` |
-| Message | Human-readable content | `assert_envelope_shape(envelope, code, recovery=..., message_substr="...")` |
 | Recovery | Buyer retry semantics | `assert_envelope_shape(envelope, code, recovery="correctable")` |
+| Field / details | WHICH field was rejected, and structured specifics | `assert_envelope_shape(envelope, code, recovery=..., field="start_time")`, or `result.wire_error_details(code)` for non-equality oracles |
+
+**Never assert the buyer-facing message.** It is a function of the error CODE through
+`CODE_TABLE` (`src/core/errors/codes.py`), so asserting the code and the sentence checks the
+table against itself. `assert_envelope_shape` and `assert_wire_error` therefore have no
+`message_substr` parameter — the drift it used to detect is no longer expressible. Assert the
+code, the recovery, the field, and the details.
 
 ### What NOT to assert on (in new error tests)
 

@@ -647,6 +647,65 @@ def _transform_step_text(keyword: str, text: str) -> str:
     return text
 
 
+#: Step-text shapes that assert on the BUYER-FACING MESSAGE. These are refused at COMPILE
+#: time, not merely deleted from the tree, because the tree is regenerated: upstream
+#: (adcp-req) still authors them, and a plain deletion is undone by the next
+#: ``--merge``. The buyer-facing sentence is a function of the error CODE through
+#: CODE_TABLE (src/core/errors/codes.py), so asserting both the code and the sentence
+#: checks the table against itself; and because the step DEFINITIONS are gone, a
+#: regenerated prose line does not fail loudly — it raises StepDefinitionNotFoundError,
+#: which tests/bdd/conftest.py converts to a NON-STRICT XFAIL, silently un-grading the
+#: whole scenario including its code assertions. Assert the code, the recovery, the
+#: field, or errors[0].details instead.
+#: Prose steps refused during this run, recorded into the merge manifest so a compile-time
+#: deletion is auditable rather than silent.
+_DROPPED_PROSE: list[str] = []
+
+_PROSE_ASSERTION_MARKERS: tuple[str, ...] = (
+    "error message",
+    "the error indicates",
+    "rejection should name",
+)
+
+
+def _is_prose_assertion(keyword: str, text: str) -> bool:
+    """True if this step asserts on the buyer-facing message text.
+
+    THEN-side only: a Given/When may legitimately mention a message (it is setting up
+    or sending one), and the negative wire-safety checks are NOT prose pins — they assert
+    the ABSENCE of a leak, which nothing derives from a code, so no tautology exists.
+    """
+    if keyword not in ("Then", "And", "But"):
+        return False
+    lowered = text.lower()
+    if "should not contain" in lowered or "must not contain" in lowered:
+        return False
+    return any(marker in lowered for marker in _PROSE_ASSERTION_MARKERS)
+
+
+def _apply_step_transforms(scenario: Scenario) -> None:
+    """Transform every step's text and DROP prose assertions, recording what was dropped.
+
+    One helper for all three call sites (compile, and both merge paths) — the same
+    two-line loop copied three times would be a DRY defect, and a deny-list that only
+    some paths honour is worse than none.
+
+    Dropping caller-side rather than raising inside ``_transform_step_text`` is
+    deliberate: while upstream still carries these lines, a raising compiler would fail
+    EVERY run and make an upstream mirror a hard prerequisite for pulling any unrelated
+    change. Dropping keeps compiles working, and the dropped lines are RECORDED in the
+    manifest — the property that matters is not-silent, not never-dropped.
+    """
+    kept: list[Step] = []
+    for step in scenario.steps:
+        step.text = _transform_step_text(step.keyword, step.text)
+        if _is_prose_assertion(step.keyword, step.text):
+            _DROPPED_PROSE.append(f"{step.keyword} {step.text}")
+            continue
+        kept.append(step)
+    scenario.steps = kept
+
+
 def _strip_transport_from_scenario(scenario: Scenario) -> None:
     """Strip <transport> placeholder from Scenario Outline if fully removed from steps.
 
@@ -759,9 +818,8 @@ def _render_feature(
         if scenario.contextgit is not None:
             all_scenario_ids.add(scenario.contextgit.id)
 
-        # Transform step text first (strip transport suffixes)
-        for step in scenario.steps:
-            step.text = _transform_step_text(step.keyword, step.text)
+        # Transform step text first (strip transport suffixes) and refuse prose assertions
+        _apply_step_transforms(scenario)
 
         # Strip <transport> from Scenario Outline if fully removed from steps
         _strip_transport_from_scenario(scenario)
@@ -1288,8 +1346,7 @@ def merge_feature(
             output_tags, new_mapping = _transform_scenario_tags(scen, traceability, uc_key, feature_filename)
             if new_mapping is not None:
                 new_mappings.append(new_mapping)
-            for step in scen.steps:
-                step.text = _transform_step_text(step.keyword, step.text)
+            _apply_step_transforms(scen)
             _strip_transport_from_scenario(scen)
             merged_scenarios.append(
                 Scenario(
@@ -1328,8 +1385,7 @@ def merge_feature(
                 output_tags, new_mapping = _transform_scenario_tags(scen, traceability, uc_key, feature_filename)
                 if new_mapping is not None:
                     new_mappings.append(new_mapping)
-                for step in scen.steps:
-                    step.text = _transform_step_text(step.keyword, step.text)
+                _apply_step_transforms(scen)
                 _strip_transport_from_scenario(scen)
                 merged_scenarios.append(
                     Scenario(
@@ -1547,6 +1603,7 @@ def merge_features(
     if not dry_run:
         import json
 
+        manifest["dropped_prose_assertions"] = sorted(set(_DROPPED_PROSE))
         manifest_path.write_text(json.dumps(manifest, indent=2))
         total_nsm = sum(len(uc["needs_semantic_merge"]) for uc in manifest["per_uc"].values())
         try:

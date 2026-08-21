@@ -2230,10 +2230,12 @@ async def _create_media_buy_impl(
                 computed_start_time = computed_start_time.replace(tzinfo=UTC)
 
             if computed_start_time < now:
-                # req.start_time is a StartTiming RootModel — interpolating it renders
-                # the repr (root=...); the buyer must see the value.
-                error_msg = f"Invalid start time: {computed_start_time}. Start time cannot be in the past."
+                # computed_start_time is the UNWRAPPED, tz-normalized value. Never put
+                # req.start_time here: it is an adcp StartTiming RootModel, and str() of it
+                # renders "root=datetime.datetime(...)" — the rendering defect the wire-safety
+                # marker check grades. The unwrapped value renders as "2020-01-01 00:00:00+00:00".
                 raise AdCPInvalidRequestError(
+                    details={"start_time": str(computed_start_time)},
                     suggestion="Use a future datetime or 'asap' for immediate start.",
                     field="start_time",
                 )
@@ -2249,12 +2251,13 @@ async def _create_media_buy_impl(
             computed_end_time = computed_end_time.replace(tzinfo=UTC)
 
         if computed_end_time <= computed_start_time:
-            # computed_* are the unwrapped, tz-normalized values; req.start_time is a
-            # StartTiming RootModel whose interpolation would render root=... instead.
-            error_msg = (
-                f"Invalid time range: end time ({computed_end_time}) must be after start time ({computed_start_time})."
-            )
+            # computed_* are the UNWRAPPED, tz-normalized values — see the start_time branch
+            # above for why req.start_time must never be stringified into details.
             raise AdCPInvalidRequestError(
+                details={
+                    "start_time": str(computed_start_time),
+                    "end_time": str(computed_end_time),
+                },
                 suggestion="Set end_time to a datetime after start_time.",
                 field="end_time",
             )
@@ -2293,8 +2296,8 @@ async def _create_media_buy_impl(
 
             duplicate_products = [pid for pid, count in product_id_counts.items() if count > 1]
             if duplicate_products:
-                error_msg = f"Duplicate product_id(s) found in packages: {', '.join(duplicate_products)}. Each product can only be used once per media buy."
                 raise AdCPValidationError(
+                    details={"duplicate_product_ids": sorted(duplicate_products)},
                     suggestion="Each package must reference a distinct product_id; remove the duplicate package or change its product_id.",
                 )
 

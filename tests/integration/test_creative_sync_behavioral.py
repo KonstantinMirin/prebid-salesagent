@@ -36,11 +36,16 @@ _WIRE_TRANSPORTS = [Transport.REST, Transport.MCP, Transport.A2A]
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
-def _error_messages(errors: list | None) -> list[str]:
-    """Extract message strings from Error objects or plain strings."""
+def _error_codes(errors: list | None) -> list[str]:
+    """Extract the machine CODE from each per-creative error entry.
+
+    Production emits these entries TYPED (_processing.py builds each with
+    build_error_object), so the code is present. The message is not read: it is a function
+    of the code through CODE_TABLE, so asserting both would check the table against itself.
+    """
     if not errors:
         return []
-    return [e.message if hasattr(e, "message") else str(e) for e in errors]
+    return [str(getattr(e, "code", None) or getattr(e, "error_code", "")) for e in errors]
 
 
 _make_creative_asset = make_test_banner_creative  # Canonical version from tests.factories.creative_asset
@@ -1805,7 +1810,7 @@ class TestSyncExtensions:
         assert len(response.creatives) == 1
         result = response.creatives[0]
         assert result.action == "failed"
-        assert any("list_creative_formats" in e for e in _error_messages(result.errors))
+        assert "VALIDATION_ERROR" in _error_codes(result.errors)
 
     def test_unreachable_agent_fails_with_retry(self, integration_db):
         """Covers: UC-006-EXT-G-01 — agent unreachable → buyer told to retry.

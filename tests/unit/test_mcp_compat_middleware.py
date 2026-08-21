@@ -186,7 +186,7 @@ class TestTypeAdapterValidationEnvelope:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("tool_name", "arguments", "line_error", "field", "message"),
+        ("tool_name", "arguments", "line_error", "field"),
         [
             (
                 "list_creatives",
@@ -198,7 +198,6 @@ class TestTypeAdapterValidationEnvelope:
                     "ctx": {"field_type": "List", "min_length": 1, "actual_length": 0},
                 },
                 "filters.statuses",
-                "List should have at least 1 item",
             ),
             (
                 "list_creatives",
@@ -209,12 +208,11 @@ class TestTypeAdapterValidationEnvelope:
                     "input": {},
                 },
                 "filters.format_ids[0].agent_url",
-                "Field required",
             ),
         ],
     )
     async def test_typeadapter_validation_errors_are_adcp_tool_errors(
-        self, middleware, tool_name, arguments, line_error, field, message
+        self, middleware, tool_name, arguments, line_error, field
     ):
         ctx = _make_context(tool_name, arguments)
         validation_error = _typeadapter_validation_error(tool_name, line_error)

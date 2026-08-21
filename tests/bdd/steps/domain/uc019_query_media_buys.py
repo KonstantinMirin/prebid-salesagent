@@ -1686,21 +1686,34 @@ def then_error_field_validation(ctx: dict) -> None:
     specific field names or paths (media_buy_ids, status_filter, buyer_refs, etc.),
     not just generic words like "type" or "expected" that appear in any error.
     """
-    # Require actual field names from GetMediaBuysRequest schema.
+    # Require actual field names from the GetMediaBuysRequest schema, read from the
+    # STRUCTURED carriers only: the `field` pointer and the projected pydantic entries in
+    # details.validation_errors[].loc. The buyer-facing message is excluded deliberately —
+    # it is a function of the code through CODE_TABLE and can never name a request field,
+    # so including it in the search text made the assertion satisfiable by wording rather
+    # than by the field-level detail the step name promises.
     field_names = ("media_buy_ids", "status_filter", "buyer_refs", "account_id")
     wire = _wire_error_object(ctx)
     if wire is not None:
-        # Wire-first: the buyer-facing message and the structured ``field``
-        # selector must reference an actual request schema field.
-        text = f"{wire.get('message', '')} {wire.get('field', '')}".lower()
-        source = f"wire error object {wire!r}"
+        field_value = wire.get("field")
+        details = wire.get("details") or {}
+        source: object = wire
     else:
+        # No envelope captured on this transport. Fall back to the TYPED error's structured
+        # attributes — never to str(error), which reads the CODE_TABLE sentence and can
+        # never contain a field name.
         error = ctx.get("error")
         assert error is not None, "Expected a validation error"
-        text = str(error).lower()
-        source = f"error message {error}"
+        field_value = getattr(error, "field", None)
+        details = getattr(error, "details", None) or {}
+        source = error
+    carriers = [str(field_value or "")]
+    for entry in details.get("validation_errors") or []:
+        carriers.extend(str(part) for part in (entry.get("loc") or []))
+    text = " ".join(carriers).lower()
     assert any(field_name in text for field_name in field_names), (
-        f"Expected field-level validation details (containing actual field names like {field_names}) in {source}"
+        f"Expected field-level validation details naming one of {field_names}; "
+        f"the structured carriers held {carriers!r}: {source!r}"
     )
 
 

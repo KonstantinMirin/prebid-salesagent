@@ -76,15 +76,18 @@ _WIRE_REFERENCES = _derive_wire_references()
 # -- Check A: test-side error construction ------------------------------------
 # Keyed by "<relative path> <enclosing func> <ErrorClass>" (NOT line numbers — those
 # shift on unrelated edits). Each remaining entry is a 33r0-reclassified production gap.
-_ERROR_CONSTRUCTION_ALLOWLIST: set[str] = {
-    # Production gap: _SyntheticError wraps the REAL production per-creative error
-    # string — production emits unstructured per-creative errors (no machine code). Remove
-    # when sync_creatives emits structured per-creative codes.
-    "bdd/steps/domain/uc006_sync_creatives.py _promote_creative_errors_to_ctx _SyntheticError",
-    # (Retired) The null-date phantom (uc019 _create_media_buy_with_null_dates) is gone:
-    # the scenario was retired (schema-impossible + not spec-graded) and resolve_canonical_status
-    # now guards the null edge, so no test-side error construction remains here.
-}
+# EMPTY, and it must stay a set() — a bare {} is an empty DICT and the comparison against it
+# raises TypeError rather than failing a check.
+#
+# (Retired) _SyntheticError in uc006 _promote_creative_errors_to_ctx: its own removal criterion
+# fired. The comment here used to read "production emits unstructured per-creative errors (no
+# machine code). Remove when sync_creatives emits structured per-creative codes." Production now
+# does exactly that — src/core/tools/creatives/_processing.py builds every per-creative entry with
+# build_error_object(), so the entry carries a code and the test no longer synthesizes one.
+# (Retired) The null-date phantom (uc019 _create_media_buy_with_null_dates): the scenario was
+# retired (schema-impossible + not spec-graded) and resolve_canonical_status now guards the null
+# edge, so no test-side error construction remains here.
+_ERROR_CONSTRUCTION_ALLOWLIST: set[str] = set()
 
 # -- Check B: reconstructed-only error assertions -----------------------------
 _RECONSTRUCTED_ASSERTION_ALLOWLIST: set[str] = set()
@@ -100,13 +103,8 @@ _HAND_ROLLED_PARSING_ALLOWLIST: set[str] = {
     # Each digs errors[]/adcp_error out of a payload by hand instead of calling the
     # harness readers (TransportResult.wire_error_object/_code/_message) or, for the
     # per-entry arrays, wire_entry_errors(). Retire with the #1880 typed-Then cluster.
-    "bdd/steps/domain/uc002_nfr.py then_payload_size_limits",
-    "bdd/steps/domain/uc003_update_media_buy.py then_no_errors_field",
-    "bdd/steps/domain/uc004_delivery.py _assert_wire_rejection",
     "bdd/steps/domain/uc006_sync_creatives.py _assert_per_creative_failure",
     "bdd/steps/domain/uc006_sync_creatives.py _extract_error_code_and_suggestion",
-    "bdd/steps/domain/uc011_accounts.py _assert_error_has_code_and_message",
-    "bdd/steps/generic/then_media_buy.py then_response_no_errors_field",
 }
 
 
@@ -471,7 +469,7 @@ def test_no_hand_rolled_envelope_parsing() -> None:
         fix_hint=(
             "An error Then-step hand-rolls envelope/error parsing (bare getattr(error, "
             "'error_code', ...) or ctx.get('wire_error_envelope'/'synthesized_error_envelope')). "
-            "Use ctx['result'].assert_wire_error(code, recovery=..., message_substr=...) instead "
+            "Use ctx['result'].assert_wire_error(code, recovery=...) instead "
             "(tests/harness/transport.py) -- the single sanctioned envelope-parsing mechanism. "
             "See then_error_code / then_declaration_rejected for the reference pattern."
         ),

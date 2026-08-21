@@ -731,7 +731,6 @@ Feature: BR-UC-013 Manage Property Lists
     When the Buyer Agent sends a get_property_list request for "list-shared" with account omitted
     Then the request is rejected with code "ACCOUNT_REQUIRED"
     And the error code should be "ACCOUNT_REQUIRED"
-    And the error message indicates that account is required to disambiguate ownership
     # BR-RULE-258 INV-2: ambiguous ownership must be disambiguated by account
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/property/list-property-lists-request.json
 

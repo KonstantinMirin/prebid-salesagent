@@ -1508,6 +1508,11 @@ def _assert_per_creative_failure(ctx: dict, expected_code: str) -> None:
     """Assert a per-creative failure with the expected error code.
 
     Checks SyncCreativeResult.action=="failed" first, then falls back to ctx["error"].
+
+    Reads the per-creative entry's CODE. Production emits these entries typed
+    (src/core/tools/creatives/_processing.py builds each with build_error_object), so the
+    code is present and does not need to be inferred from the message — inferring it was
+    the defect: a keyword ladder over prose, whose verdict then drove an xfail.
     """
     from src.core.exceptions import AdCPError
 
@@ -1520,12 +1525,12 @@ def _assert_per_creative_failure(ctx: dict, expected_code: str) -> None:
             if action_str == "failed":
                 errs = getattr(r, "errors", None) or []
                 if errs:
-                    inferred = _infer_error_code_from_message(str(errs[0]))
-                    if inferred == expected_code:
+                    actual = getattr(errs[0], "code", None) or getattr(errs[0], "error_code", None)
+                    if actual == expected_code:
                         return
                     pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: expected {expected_code}, inferred '{inferred}' "
-                        f"from error message: {errs[0]}"
+                        f"SPEC-PRODUCTION GAP: expected {expected_code}, wire code {actual!r} "
+                        f"on the per-creative entry: {errs[0]!r}"
                     )
     if error is not None:
         if isinstance(error, AdCPError) and error.error_code == expected_code:
@@ -2133,62 +2138,20 @@ def then_creative_action_failed(ctx: dict) -> None:
 def _promote_creative_errors_to_ctx(ctx: dict, errs: list) -> None:
     """Promote SyncCreativeResult.errors[] to ctx["error"] for downstream Then steps.
 
-    Production stores per-creative failures as plain strings in errors[]. Some
-    error strings contain structured info (e.g. "GEMINI_API_KEY not configured")
-    that downstream steps can parse. We wrap the first error as a synthetic object
-    with error_code/message/suggestion derived from the string content.
+    Production emits per-creative failures as TYPED errors — src/core/tools/creatives/
+    _processing.py builds each entry with build_error_object(), so every element is an
+    adcp Error carrying code/recovery/suggestion/field/details. This helper therefore
+    just forwards the first one.
+
+    It used to SYNTHESIZE an error object, inferring the code from the message text with
+    a keyword ladder. That existed because production once emitted unstructured strings
+    here; it no longer does, and inferring a code from prose is the exact defect this
+    epic removes — it laundered a guess into something downstream steps read as if it
+    were the real typed error.
     """
     if not errs:
         return
-
-    first_err = str(errs[0])
-    error_code = _infer_error_code_from_message(first_err)
-    suggestion = _infer_suggestion_from_message(first_err)
-
-    class _SyntheticError:
-        def __init__(self, code: str, message: str, suggestion: str | None):
-            self.error_code = code
-            self.code = code
-            self.message = message
-            # STRICT error.json conformance: suggestion is top-level ONLY —
-            # synthesizing a details copy would feed the exact non-conformant
-            # position the harness must reject (#1417).
-            self.suggestion = suggestion
-            self.details: dict = {}
-
-        def __str__(self) -> str:
-            return self.message
-
-    ctx["error"] = _SyntheticError(error_code, first_err, suggestion)
-
-
-def _infer_error_code_from_message(msg: str) -> str:
-    """Map production error strings to spec error codes."""
-    lower = msg.lower()
-    if "gemini_api_key" in lower and "not configured" in lower:
-        return "CREATIVE_GEMINI_KEY_MISSING"
-    if "preview" in lower and ("failed" in lower or "no preview" in lower):
-        return "CREATIVE_PREVIEW_FAILED"
-    if "format" in lower and "required" in lower:
-        return "CREATIVE_FORMAT_REQUIRED"
-    if "name" in lower and ("required" in lower or "empty" in lower or "blank" in lower):
-        return "CREATIVE_NAME_EMPTY"
-    return "CREATIVE_VALIDATION_FAILED"
-
-
-def _infer_suggestion_from_message(msg: str) -> str | None:
-    """Extract or generate a suggestion from a production error message."""
-    lower = msg.lower()
-    if "gemini_api_key" in lower:
-        return "Ask the seller to configure GEMINI_API_KEY in their agent settings"
-    if "preview" in lower:
-        return "Provide a media_url for the creative"
-    return None
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# GIVEN steps — assignment-format / package boundary (bxhz + ryv4)
-# ═══════════════════════════════════════════════════════════════════════
+    ctx["error"] = errs[0]
 
 
 @given(parsers.parse('assignments to a package whose product only accepts "{accepted_format}"'))

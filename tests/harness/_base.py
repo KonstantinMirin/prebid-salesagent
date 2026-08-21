@@ -46,7 +46,6 @@ if TYPE_CHECKING:
 
 def _adcp_error_from_code(
     error_code: str,
-    message: str,
     recovery: str | None = None,
     details: dict | None = None,
     suggestion: str | None = None,
@@ -216,7 +215,7 @@ def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
                 except (json.JSONDecodeError, TypeError):
                     pass
 
-            return _adcp_error_from_code(error_code, message, recovery, details, suggestion, field)
+            return _adcp_error_from_code(error_code, recovery, details, suggestion, field)
     except (ValueError, SyntaxError):
         pass
 
@@ -225,12 +224,12 @@ def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
 
     error_code, message, recovery = extract_error_info(exc)
     if error_code != "TOOL_ERROR":
-        return _adcp_error_from_code(error_code, message, recovery)
+        return _adcp_error_from_code(error_code, recovery)
 
     return exc
 
 
-def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Exception | None:
+def _envelope_to_adcp_error(envelope: dict) -> Exception | None:
     """Reconstruct an AdCPError subclass from a two-layer envelope dict.
 
     Accepts the envelope shape produced by ``build_two_layer_error_envelope``:
@@ -247,7 +246,6 @@ def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Excep
     if not isinstance(envelope, dict):
         return None
     error_code: str | None = None
-    message = fallback_message
     recovery: str | None = None
     details: dict | None = None
     suggestion: str | None = None
@@ -255,7 +253,6 @@ def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Excep
     adcp_err = envelope.get("adcp_error")
     if isinstance(adcp_err, dict):
         error_code = adcp_err.get("code")
-        message = adcp_err.get("message", message) or message
         recovery = adcp_err.get("recovery")
         details = adcp_err.get("details")
         suggestion = adcp_err.get("suggestion")
@@ -264,14 +261,13 @@ def _envelope_to_adcp_error(envelope: dict, fallback_message: str = "") -> Excep
     if isinstance(errors, list) and errors and isinstance(errors[0], dict):
         first = errors[0]
         error_code = error_code or first.get("code")
-        message = first.get("message", message) or message
         recovery = recovery or first.get("recovery")
         details = details or first.get("details")
         suggestion = suggestion or first.get("suggestion")
         field = field or first.get("field")
     if not error_code:
         return None
-    reconstructed = _adcp_error_from_code(error_code, message, recovery, details, suggestion, field)
+    reconstructed = _adcp_error_from_code(error_code, recovery, details, suggestion, field)
     if reconstructed is not None:
         # Stash the REAL wire envelope on the reconstructed exception so the
         # A2A/REST dispatchers can capture the actual wire bytes (artifact
@@ -303,7 +299,7 @@ def _unwrap_a2a_server_error(exc: Exception) -> Exception:
     message = getattr(exc, "message", str(exc))
     data = getattr(exc, "data", None) or {}
 
-    reconstructed = _envelope_to_adcp_error(data, fallback_message=message) if isinstance(data, dict) else None
+    reconstructed = _envelope_to_adcp_error(data) if isinstance(data, dict) else None
     if reconstructed is not None:
         return reconstructed
 
@@ -832,7 +828,7 @@ class BaseTestEnv:
         if task_result.status.state == TaskState.TASK_STATE_FAILED:
             if task_result.artifacts:
                 envelope = extract_data_from_artifact(task_result.artifacts[0])
-                reconstructed = _envelope_to_adcp_error(envelope, fallback_message="A2A skill failed")
+                reconstructed = _envelope_to_adcp_error(envelope)
                 if reconstructed is not None:
                     raise reconstructed
             raise AdCPError(
@@ -1143,7 +1139,7 @@ class BaseTestEnv:
             if isinstance(first, dict) and first.get("msg"):
                 message = first["msg"]
 
-        reconstructed = _envelope_to_adcp_error(data, fallback_message=message)
+        reconstructed = _envelope_to_adcp_error(data)
         if reconstructed is not None:
             return reconstructed
 

@@ -29,11 +29,17 @@ from tests.harness import CreativeSyncEnv, Transport, assert_envelope, make_iden
 from tests.helpers.creative_test_helpers import assert_stored_creative_assets, creative_payload
 
 
-def _error_messages(errors: list | None) -> list[str]:
-    """Extract message strings from Error objects or plain strings."""
+def _error_codes(errors: list | None) -> list[str]:
+    """Extract the machine CODE from each per-creative error entry.
+
+    Production emits these entries TYPED — src/core/tools/creatives/_processing.py builds
+    each one with build_error_object(), so every element is an adcp Error carrying a code.
+    The message is deliberately not read: it is a function of the code through CODE_TABLE,
+    so asserting both would check the table against itself.
+    """
     if not errors:
         return []
-    return [e.message if hasattr(e, "message") else str(e) for e in errors]
+    return [str(getattr(e, "code", None) or getattr(e, "error_code", "")) for e in errors]
 
 
 # All four transports: IMPL, A2A, REST, MCP
@@ -304,7 +310,7 @@ class TestSyncFormatValidationTransport:
         assert len(result.payload.creatives) == 1
         creative_result = result.payload.creatives[0]
         assert creative_result.action == "failed"
-        assert any("list_creative_formats" in e for e in _error_messages(creative_result.errors))
+        assert "VALIDATION_ERROR" in _error_codes(creative_result.errors)
 
 
 @pytest.mark.requires_db
@@ -1037,7 +1043,7 @@ class TestMissingFormatFails:
 
         if result.is_error:
             # MCP: TypeAdapter rejected missing format_id — correct behavior
-            assert_rejected(result, field="format_id", reason="Field required")
+            assert_rejected(result, field="format_id", validation_type="missing")
         else:
             # impl/a2a/rest: _impl handled it, returned action=failed
             assert_envelope(result, transport)
@@ -1095,16 +1101,13 @@ class TestStaticPreviewFailed:
             # MCP: TypeAdapter rejects missing assets field — correct schema rejection
             from tests.harness.assertions import assert_rejected
 
-            assert_rejected(result, field="assets", reason="Field required")
+            assert_rejected(result, field="assets", validation_type="missing")
         else:
             # impl/a2a/rest: _impl handles it, returns action=failed
             assert_envelope(result, transport)
             creative_result = result.payload.creatives[0]
             assert creative_result.action == "failed"
-            assert any(
-                "no previews" in e.lower() or "no media_url" in e.lower()
-                for e in _error_messages(creative_result.errors)
-            )
+            assert "CREATIVE_REJECTED" in _error_codes(creative_result.errors)
 
 
 @pytest.mark.requires_db
@@ -1141,7 +1144,7 @@ class TestGeminiKeyMissing:
         assert_envelope(result, transport)
         creative_result = result.payload.creatives[0]
         assert creative_result.action == "failed"
-        assert any("gemini" in e.lower() for e in _error_messages(creative_result.errors))
+        assert "CONFIGURATION_ERROR" in _error_codes(creative_result.errors)
 
 
 # ---------------------------------------------------------------------------

@@ -281,7 +281,6 @@ Feature: BR-UC-015 Track Conversions
     When the Buyer Agent logs events to event_source_id "nonexistent_src"
     Then the operation should fail
     And the error code should be "EVENT_SOURCE_NOT_FOUND"
-    And the error message should reference "nonexistent_src"
     And the error should include "suggestion" field
     And the suggestion should contain "sync_event_sources"
     And the request context is echoed in the response
@@ -304,7 +303,6 @@ Feature: BR-UC-015 Track Conversions
     When the Buyer Agent sends a sync_event_sources request via <transport> with account "nonexistent_acc"
     Then the operation should fail
     And the error code should be "ACCOUNT_NOT_FOUND"
-    And the error message should contain "nonexistent_acc"
     And the error should include "suggestion" field
     And the suggestion should contain "account_id"
     And the request context is echoed in the response
@@ -365,7 +363,6 @@ Feature: BR-UC-015 Track Conversions
     When the Buyer Agent logs 10001 events to "src_web"
     Then the operation should fail
     And the error code should be "BATCH_TOO_LARGE"
-    And the error message should contain "10,000"
     And the error should include "suggestion" field
     And the suggestion should contain "split"
     And no events are processed
@@ -400,7 +397,6 @@ Feature: BR-UC-015 Track Conversions
     When the Buyer Agent syncs event_sources via <transport> with two entries both having event_source_id "src_dup"
     Then the operation should fail
     And the error code should be "DUPLICATE_EVENT_SOURCE_ID"
-    And the error message should reference "src_dup"
     And the error should include "suggestion" field
     And the suggestion should contain "unique"
     And no sources are modified
@@ -1022,7 +1018,6 @@ Feature: BR-UC-015 Track Conversions
     When the Buyer Agent sends a sync_event_sources request without an idempotency_key field and account "acc_acme_001"
     Then the operation should fail
     And the error code should be "VALIDATION_ERROR"
-    And the error indicates idempotency_key is required
     And the error should include "suggestion" field
     # BR-RULE-232 INV-1: idempotency_key is REQUIRED
     # boundary: idempotency_key field omitted
@@ -1034,7 +1029,6 @@ Feature: BR-UC-015 Track Conversions
     When the Buyer Agent sends a log_event request without an idempotency_key field and event_source_id "src_web"
     Then the operation should fail
     And the error code should be "VALIDATION_ERROR"
-    And the error indicates idempotency_key is required
     And the error should include "suggestion" field
     # BR-20: idempotency_key is REQUIRED on log_event
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/sync-event-sources-request.json

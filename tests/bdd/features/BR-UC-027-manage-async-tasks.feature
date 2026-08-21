@@ -237,7 +237,6 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes get_task with task_id "task_nonexistent_999"
     Then the operation should fail with error code "REFERENCE_NOT_FOUND"
     And the error code should be "REFERENCE_NOT_FOUND"
-    And the error message should reference task_id "task_nonexistent_999"
     And the error should include "suggestion" field
     And the suggestion should contain "Verify the task_id"
     And the request context is echoed in the response
@@ -253,7 +252,6 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes complete_task with task_id "task_ghost_001" and status "completed"
     Then the operation should fail with error code "REFERENCE_NOT_FOUND"
     And the error code should be "REFERENCE_NOT_FOUND"
-    And the error message should reference task_id "task_ghost_001"
     And the error should include "suggestion" field
     And the suggestion should contain "Verify the task_id"
     # POST-F1: System state unchanged, no task modified
@@ -268,7 +266,6 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes get_task with task_id "task_cross_001"
     Then the operation should fail with error code "REFERENCE_NOT_FOUND"
     And the error code should be "REFERENCE_NOT_FOUND"
-    And the error message should reference task_id "task_cross_001"
     And the error should include "suggestion" field
     And the suggestion should contain "belongs to the current tenant"
     # POST-F1: Tenant isolation enforced
@@ -281,7 +278,6 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes complete_task with task_id "task_done_001" and status "completed"
     Then the operation should fail with error code "TASK_NOT_COMPLETABLE"
     And the error code should be "TASK_NOT_COMPLETABLE"
-    And the error message should indicate the task is already in status "completed"
     And the error should include "suggestion" field
     And the suggestion should contain "pending, in_progress, or requires_approval"
     And the request context is echoed in the response
@@ -296,7 +292,6 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes complete_task with task_id "task_failed_001" and status "completed"
     Then the operation should fail with error code "TASK_NOT_COMPLETABLE"
     And the error code should be "TASK_NOT_COMPLETABLE"
-    And the error message should indicate the task is already in status "failed"
     And the error should include "suggestion" field
     And the suggestion should contain "pending, in_progress, or requires_approval"
     # POST-F1: System state unchanged
@@ -308,7 +303,6 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes complete_task with task_id "task_val_001" and status "pending"
     Then the operation should fail with error code "COMPLETION_STATUS_INVALID"
     And the error code should be "COMPLETION_STATUS_INVALID"
-    And the error message should indicate "pending" is invalid
     And the error should include "suggestion" field
     And the suggestion should contain "'completed' or 'failed'"
     And the request context is echoed in the response
@@ -323,7 +317,6 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes complete_task with task_id "task_val_002" and status "canceled"
     Then the operation should fail with error code "COMPLETION_STATUS_INVALID"
     And the error code should be "COMPLETION_STATUS_INVALID"
-    And the error message should indicate "canceled" is invalid
     And the error should include "suggestion" field
     And the suggestion should contain "'completed' or 'failed'"
     # POST-F1: Canceled not allowed via complete_task
@@ -336,7 +329,6 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes complete_task with task_id "task_val_003" and status "approved"
     Then the operation should fail with error code "COMPLETION_STATUS_INVALID"
     And the error code should be "COMPLETION_STATUS_INVALID"
-    And the error message should indicate "approved" is invalid
     And the error should include "suggestion" field
     And the suggestion should contain "'completed' or 'failed'"
     # POST-F1: Unknown values rejected
@@ -348,7 +340,6 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes list_tasks
     Then the operation should fail with error code "AUTH_REQUIRED"
     And the error code should be "AUTH_REQUIRED"
-    And the error message should contain "tenant context"
     And the error should include "suggestion" field
     And the suggestion should contain "x-adcp-auth token"
     # POST-F1: System state unchanged
@@ -362,7 +353,6 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes get_task with task_id "task_any_001"
     Then the operation should fail with error code "AUTH_REQUIRED"
     And the error code should be "AUTH_REQUIRED"
-    And the error message should contain "tenant context"
     And the error should include "suggestion" field
     And the suggestion should contain "x-adcp-auth token"
     # POST-F1: System state unchanged
@@ -376,7 +366,6 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes complete_task with task_id "task_any_002" and status "completed"
     Then the operation should fail with error code "AUTH_REQUIRED"
     And the error code should be "AUTH_REQUIRED"
-    And the error message should contain "tenant context"
     And the error should include "suggestion" field
     And the suggestion should contain "x-adcp-auth token"
     # POST-F1: System state unchanged
@@ -1076,7 +1065,6 @@ Feature: BR-UC-027 Manage Async Tasks
     When the Buyer Agent invokes list_tasks with no filters
     Then the operation should fail with error code "SUMMARY_INCONSISTENT"
     And the error code should be "SUMMARY_INCONSISTENT"
-    And the error message identifies the inconsistent counter
     And the error should include "suggestion" field
     And the request context is echoed in the response
     # EC-013: server self-check at response construction

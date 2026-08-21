@@ -216,7 +216,6 @@ Feature: BR-UC-024 Content Compliance
     When the Seller invokes calibrate_content with standards_id "nonexistent-std" and the artifact
     Then the operation should fail
     And the error code should be "STANDARDS_NOT_FOUND"
-    And the error message should contain "nonexistent-std"
     And the error should include "suggestion" field
     And the suggestion should contain "content standard"
     # POST-F1: System state unchanged
@@ -230,7 +229,6 @@ Feature: BR-UC-024 Content Compliance
     When the Buyer Agent invokes validate_content_delivery with standards_id "missing-std" and records
     Then the operation should fail
     And the error code should be "STANDARDS_NOT_FOUND"
-    And the error message should contain "missing-std"
     And the error should include "suggestion" field
     And the suggestion should contain "content standard"
     # POST-F1: System state unchanged
@@ -243,7 +241,6 @@ Feature: BR-UC-024 Content Compliance
     When the Buyer Agent invokes get_media_buy_artifacts via MCP with media_buy_id "nonexistent-mb"
     Then the operation should fail
     And the error code should be "MEDIA_BUY_NOT_FOUND"
-    And the error message should contain "nonexistent-mb"
     And the error should include "suggestion" field
     And the suggestion should contain "media buy"
     # POST-F1: System state unchanged
@@ -256,7 +253,6 @@ Feature: BR-UC-024 Content Compliance
     When the Buyer Agent sends get_media_buy_artifacts A2A task with media_buy_id "missing-mb"
     Then the operation should fail
     And the error code should be "MEDIA_BUY_NOT_FOUND"
-    And the error message should contain "missing-mb"
     And the error should include "suggestion" field
     And the suggestion should contain "media buy"
     # POST-F1: System state unchanged
@@ -269,7 +265,6 @@ Feature: BR-UC-024 Content Compliance
     When the Buyer Agent invokes validate_content_delivery with standards_id "std-020" and an empty records array
     Then the operation should fail
     And the error code should be "RECORDS_REQUIRED"
-    And the error message should contain "records"
     And the error should include "suggestion" field
     And the suggestion should contain "at least 1 delivery record"
     # POST-F1: System state unchanged
@@ -282,7 +277,6 @@ Feature: BR-UC-024 Content Compliance
     When the Buyer Agent invokes validate_content_delivery with standards_id "std-021" and no records field
     Then the operation should fail
     And the error code should be "RECORDS_REQUIRED"
-    And the error message should contain "records"
     And the error should include "suggestion" field
     And the suggestion should contain "at least 1 delivery record"
     # POST-F1: System state unchanged
@@ -295,7 +289,6 @@ Feature: BR-UC-024 Content Compliance
     When the Buyer Agent invokes validate_content_delivery with standards_id "std-030" and 10001 records
     Then the operation should fail
     And the error code should be "RECORDS_LIMIT_EXCEEDED"
-    And the error message should contain "10,000"
     And the error should include "suggestion" field
     And the suggestion should contain "split the batch"
     # POST-F1: System state unchanged
@@ -309,7 +302,6 @@ Feature: BR-UC-024 Content Compliance
     When the Seller invokes calibrate_content with standards_id "std-040" and the incomplete artifact
     Then the operation should fail
     And the error code should be "ARTIFACT_REQUIRED"
-    And the error message should contain "property_rid"
     And the error should include "suggestion" field
     And the suggestion should contain "property_rid"
     # POST-F1: System state unchanged
@@ -324,7 +316,6 @@ Feature: BR-UC-024 Content Compliance
     When the Buyer Agent invokes validate_content_delivery with standards_id "std-041" and the record
     Then the operation should fail
     And the error code should be "ARTIFACT_REQUIRED"
-    And the error message should contain "assets"
     And the error should include "suggestion" field
     And the suggestion should contain "property_rid, artifact_id, and at least one asset"
     # POST-F1: System state unchanged
@@ -337,8 +328,6 @@ Feature: BR-UC-024 Content Compliance
     When the Buyer Agent invokes get_media_buy_artifacts with media_buy_id "mb-060" and pagination max_results 0
     Then the operation should fail
     And the error code should be "PAGINATION_INVALID"
-    And the error message should contain "1"
-    And the error message should contain "10,000"
     And the error should include "suggestion" field
     And the suggestion should contain "between 1 and 10,000"
     # POST-F1: System state unchanged
@@ -351,7 +340,6 @@ Feature: BR-UC-024 Content Compliance
     When the Buyer Agent invokes get_media_buy_artifacts with media_buy_id "mb-061" and pagination max_results 10001
     Then the operation should fail
     And the error code should be "PAGINATION_INVALID"
-    And the error message should contain "10,000"
     And the error should include "suggestion" field
     And the suggestion should contain "between 1 and 10,000"
     # POST-F1: System state unchanged
@@ -364,7 +352,6 @@ Feature: BR-UC-024 Content Compliance
     When the Buyer Agent invokes get_media_buy_artifacts with media_buy_id "mb-062" and pagination max_results -1
     Then the operation should fail
     And the error code should be "PAGINATION_INVALID"
-    And the error message should contain "1"
     And the error should include "suggestion" field
     And the suggestion should contain "between 1 and 10,000"
     # POST-F1: System state unchanged
@@ -377,7 +364,6 @@ Feature: BR-UC-024 Content Compliance
     When the Buyer Agent invokes get_media_buy_artifacts with media_buy_id "mb-063" and pagination cursor "expired_xyz"
     Then the operation should fail
     And the error code should be "PAGINATION_CURSOR_INVALID"
-    And the error message should contain "cursor"
     And the error should include "suggestion" field
     And the suggestion should contain "omit cursor to start from the beginning"
     # POST-F1: System state unchanged
@@ -413,7 +399,6 @@ Feature: BR-UC-024 Content Compliance
     When the Seller invokes calibrate_content with standards_id "std-103" and the artifact
     Then the operation should fail
     And the error code should be "ARTIFACT_REQUIRED"
-    And the error message should contain "property_rid"
     And the error should include "suggestion" field
     And the suggestion should contain "property_rid, artifact_id, and at least one asset"
     # POST-F3: Recovery suggestion provided
@@ -426,7 +411,6 @@ Feature: BR-UC-024 Content Compliance
     When the Seller invokes calibrate_content with standards_id "std-104" and the artifact
     Then the operation should fail
     And the error code should be "ARTIFACT_REQUIRED"
-    And the error message should contain "artifact_id"
     And the error should include "suggestion" field
     And the suggestion should contain "property_rid, artifact_id, and at least one asset"
     # POST-F3: Recovery suggestion provided
@@ -439,7 +423,6 @@ Feature: BR-UC-024 Content Compliance
     When the Seller invokes calibrate_content with standards_id "std-105" and the artifact
     Then the operation should fail
     And the error code should be "ARTIFACT_REQUIRED"
-    And the error message should contain "assets"
     And the error should include "suggestion" field
     And the suggestion should contain "at least one asset"
     # POST-F3: Recovery suggestion provided
@@ -452,7 +435,6 @@ Feature: BR-UC-024 Content Compliance
     When the Seller invokes calibrate_content with standards_id "std-106" and the artifact
     Then the operation should fail
     And the error code should be "ARTIFACT_REQUIRED"
-    And the error message should contain "content"
     And the error should include "suggestion" field
     And the suggestion should contain "required fields"
     # POST-F3: Recovery suggestion provided
@@ -464,7 +446,6 @@ Feature: BR-UC-024 Content Compliance
     When the Seller invokes calibrate_content with standards_id "std-107" and the artifact
     Then the operation should fail
     And the error code should be "ARTIFACT_REQUIRED"
-    And the error message should contain "url"
     And the error should include "suggestion" field
     And the suggestion should contain "required fields"
     # POST-F3: Recovery suggestion provided
@@ -584,7 +565,6 @@ Feature: BR-UC-024 Content Compliance
     When the Seller submits a calibration follow-up using contextId "nonexistent-conv"
     Then the operation should fail
     And the error code should be "CONTEXT_NOT_FOUND"
-    And the error message should contain "nonexistent-conv"
     And the error should include "suggestion" field
     And the suggestion should contain "new calibration conversation"
     # POST-F3: Recovery suggestion provided
@@ -687,7 +667,6 @@ Feature: BR-UC-024 Content Compliance
     When the Buyer Agent invokes validate_content_delivery with feature_ids as an empty array
     Then the operation should fail
     And the error code should be "FEATURE_IDS_EMPTY"
-    And the error message should contain "feature_ids"
     And the error should include "suggestion" field
     And the suggestion should contain "one or more feature IDs"
     # POST-F3: Recovery suggestion provided
@@ -1136,7 +1115,6 @@ Feature: BR-UC-024 Content Compliance
     When the Seller invokes calibrate_content with standards_id "std-260"
     Then the operation should fail
     And the error code should be "VALIDATION_ERROR"
-    And the error message should contain "idempotency_key"
     And the error should include "suggestion" field
     # POST-F2: missing required field identified
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
@@ -1181,7 +1159,6 @@ Feature: BR-UC-024 Content Compliance
     When a corrected re-emission reuses idempotency_key "ck_conflict_0001_wxyz" with a changed payload
     Then the operation should fail
     And the error code should be "IDEMPOTENCY_CONFLICT"
-    And the error message should indicate a fresh idempotency_key is required for a corrected re-emission
     And the error should include "suggestion" field
     # POST-F2: corrected re-emission must mint a fresh key
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json

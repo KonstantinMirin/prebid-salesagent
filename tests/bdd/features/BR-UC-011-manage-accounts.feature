@@ -89,7 +89,6 @@ Feature: BR-UC-011 Manage Accounts
     When the Buyer Agent sends a list_accounts request without an authentication token
     Then the response is an error variant with no accounts array
     And the error code is "AUTH_MISSING"
-    And the error message describes the authentication requirement
     # @bva authentication (account operations): no token on list
 
   @T-UC-011-ext-c-a2a @list @extension @ext-c @error @a2a @post-f1 @post-f2 @post-f3
@@ -98,7 +97,6 @@ Feature: BR-UC-011 Manage Accounts
     And the Buyer has an invalid authentication token
     When the Buyer Agent sends a list_accounts skill request via A2A with the token
     Then the wire error envelope should carry code "AUTH_INVALID" with recovery "terminal"
-    And the error message should reference authentication or token validation
     # Coverage gap alongside salesagent-7moz (BR-UC-010 @T-UC-010-ext-c-a2a): A2A
     # always validates a presented token regardless of the requested DISCOVERY_SKILLS
     # member (get_adcp_capabilities and list_accounts share the same boundary code path).
@@ -520,7 +518,6 @@ Feature: BR-UC-011 Manage Accounts
     | acme-corp.com   | acme-corp.com | operator |
     Then the response is an error variant with no accounts array
     And the error code is "AUTH_MISSING"
-    And the error message describes the authentication requirement
     And the error should include "suggestion" field with remediation guidance
     And no accounts were modified on the seller
     # @bva authentication (account operations): no token on sync

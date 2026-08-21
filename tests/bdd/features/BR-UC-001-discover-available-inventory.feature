@@ -303,7 +303,6 @@ Feature: BR-UC-001 Discover Available Inventory
     | brief        | Tobacco advertising for teens        |
     Then the operation should fail with error code "POLICY_VIOLATION"
     And the error code should be "POLICY_VIOLATION"
-    And the error message should contain the LLM-provided reason
     And the error should include "suggestion" field
     And the suggestion should contain "revise" or "comply"
     # POST-F1: System state is unchanged
@@ -322,7 +321,6 @@ Feature: BR-UC-001 Discover Available Inventory
     | brief        | Alcohol advertising campaign         |
     Then the operation should fail with error code "POLICY_VIOLATION"
     And the error code should be "POLICY_VIOLATION"
-    And the error message should include restrictions details
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged
     # POST-F2: Buyer knows brief was restricted
@@ -352,7 +350,6 @@ Feature: BR-UC-001 Discover Available Inventory
     | brief        | Display ads  |
     Then the operation should fail with error code "authentication_error"
     And the error code should be "authentication_error"
-    And the error message should contain "Authentication required"
     And the error should include "suggestion" field
     And the suggestion should contain "credentials" or "authenticate"
     # POST-F1: System state is unchanged
@@ -369,7 +366,6 @@ Feature: BR-UC-001 Discover Available Inventory
     | brief        | Display ads for tech audience        |
     Then the operation should fail with error code "validation_error"
     And the error code should be "validation_error"
-    And the error message should contain "Brand required"
     And the error should include "suggestion" field
     And the suggestion should contain "brand" or "domain"
     # POST-F1: System state is unchanged
@@ -382,7 +378,6 @@ Feature: BR-UC-001 Discover Available Inventory
     When the Buyer Agent sends a get_products request with <invalid_fields>
     Then the operation should fail with error code "validation_error"
     And the error code should be "validation_error"
-    And the error message should contain "<error_message>"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged
     # POST-F2: Buyer knows which constraint was violated

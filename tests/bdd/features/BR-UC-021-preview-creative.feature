@@ -206,7 +206,6 @@ Feature: BR-UC-021 Preview Creative
     When the Buyer Agent invokes preview_creative with request_type "single"
     Then the operation should fail
     And the error code should be "FORMAT_NOT_FOUND"
-    And the error message should contain "nonexistent_format"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "format"
@@ -263,7 +262,6 @@ Feature: BR-UC-021 Preview Creative
     When the Buyer Agent invokes preview_creative with request_type "single"
     Then the operation should fail
     And the error code should be "MANIFEST_VALIDATION_ERROR"
-    And the error message should contain "width" and "height"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "both width and height"
@@ -276,7 +274,6 @@ Feature: BR-UC-021 Preview Creative
     When the Buyer Agent invokes preview_creative with request_type "single"
     Then the operation should fail
     And the error code should be "MANIFEST_VALIDATION_ERROR"
-    And the error message should contain "Banner-Image"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "lowercase"
@@ -289,7 +286,6 @@ Feature: BR-UC-021 Preview Creative
     When the Buyer Agent invokes preview_creative with request_type "batch"
     Then the operation should fail
     And the error code should be "BATCH_LIMIT_EXCEEDED"
-    And the error message should contain "50"
     And the error field should be "requests"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
@@ -304,7 +300,6 @@ Feature: BR-UC-021 Preview Creative
     When the Buyer Agent invokes preview_creative with request_type "variant" and variant_id "v-nonexistent"
     Then the operation should fail
     And the error code should be "REFERENCE_NOT_FOUND"
-    And the error message should contain "v-nonexistent"
     And the error field should be "variant_id"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
@@ -321,7 +316,6 @@ Feature: BR-UC-021 Preview Creative
     When the Buyer Agent invokes preview_creative with request_type "variant" and variant_id "v-expired"
     Then the operation should fail
     And the error code should be "REFERENCE_NOT_FOUND"
-    And the error message should contain "expired"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "variant"
@@ -334,7 +328,6 @@ Feature: BR-UC-021 Preview Creative
     When the Buyer Agent invokes preview_creative with request_type "single"
     Then the operation should fail
     And the error code should be "OUTPUT_FORMAT_INVALID"
-    And the error message should contain "url" and "html"
     And the error field should be "output_format"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
@@ -350,7 +343,6 @@ Feature: BR-UC-021 Preview Creative
     When the Buyer Agent invokes preview_creative with request_type "single"
     Then the operation should fail
     And the error code should be "SERVICE_UNAVAILABLE"
-    And the error message should contain the agent URL
     And the error recovery should be "transient"
     And the error should include "suggestion" field
     And the suggestion should contain "retry"

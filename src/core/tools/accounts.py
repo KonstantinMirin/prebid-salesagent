@@ -1608,9 +1608,12 @@ async def _sync_accounts_impl(
     tenant = require_tenant(identity, context=req.context)
     tenant_id = tenant["tenant_id"]
 
-    # Validate non-empty accounts array
+    # Validate non-empty accounts array. field= names WHICH input was rejected: the
+    # buyer-facing sentence is derived from the code through CODE_TABLE and so cannot say
+    # "accounts", which would otherwise leave the buyer with a bare "Request validation
+    # failed" and no way to know what to fix.
     if not req.accounts:
-        raise AdCPValidationError()
+        raise AdCPValidationError(field="accounts")
     dry_run = bool(req.dry_run)
     delete_missing = bool(req.delete_missing)
 

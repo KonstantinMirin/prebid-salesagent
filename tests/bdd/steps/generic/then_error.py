@@ -205,35 +205,6 @@ def then_wire_envelope_code(ctx: dict, code: str) -> None:
     ctx["result"].assert_wire_error(code)
 
 
-@then("the error message should reference authentication or token validation")
-def then_error_references_auth(ctx: dict) -> None:
-    """The payload-level wire message must state that a PRESENTED credential
-    failed verification — the AUTH_INVALID semantics (enums/error-code.json:
-    "Authorization header was present but verification failed").
-
-    Strict two-part contract on ``errors[0].message`` (no envelope-level
-    fallback): it must name the credential (token / credential /
-    authentication / authorization) AND state the verification failure
-    (invalid / failed / rejected / not valid / verification). A generic
-    "authentication required" (missing-credential wording) does NOT satisfy
-    it — that is AUTH_REQUIRED language, the deprecated 3.x alias.
-    """
-    import re as _re
-
-    message = _wire_error_message(ctx)
-    assert message, f"errors[0].message is empty on the wire envelope: {ctx['result'].wire_error_envelope}"
-    lowered = message.lower()
-    names_credential = _re.search(r"\b(token|credential|authenticat\w*|authoriz\w*)\b", lowered)
-    states_failure = _re.search(r"\b(invalid|failed|failure|rejected|not valid|verification|unrecognized)\b", lowered)
-    assert names_credential and states_failure, (
-        "errors[0].message must state that a presented credential failed verification "
-        f"(AUTH_INVALID semantics), got: {message!r}"
-    )
-
-
-# ── Operation failure ────────────────────────────────────────────────
-
-
 @then("the operation should fail")
 def then_operation_fails(ctx: dict) -> None:
     """Assert the operation resulted in an error.
@@ -349,38 +320,6 @@ def then_error_message_contains(ctx: dict, text: str) -> None:
     assert error is not None, "No error recorded in ctx"
     msg = _get_error_message(error).lower()
     assert text.lower() in msg, f"Expected '{text}' in error message: {_get_error_message(error)}"
-
-
-def _wire_error_message(ctx: dict) -> str:
-    """The buyer-facing ``message`` from the captured wire envelope — no fallback.
-
-    Message-RENDERING defects (e.g. a pydantic RootModel interpolated as
-    ``root='...'`` instead of its value) are graded on the exact text the buyer
-    receives, so these steps refuse to fall back to the reconstructed
-    ``ctx['error']``: BDD always dispatches on a wire transport, so a missing
-    envelope is a wiring bug to surface, not to paper over.
-    """
-    result = ctx.get("result")
-    message = result.wire_error_message() if result is not None else None
-    assert message is not None, (
-        "No wire error envelope captured — the scenario must dispatch through a wire "
-        f"transport before asserting on the wire message. Recorded error: {ctx.get('error')!r}"
-    )
-    return message
-
-
-@then(parsers.parse('the wire error message should contain "{text}"'))
-def then_wire_error_message_contains(ctx: dict, text: str) -> None:
-    """Assert the buyer-facing WIRE message contains the text (case-insensitive)."""
-    msg = _wire_error_message(ctx)
-    assert text.lower() in msg.lower(), f"Expected {text!r} in wire error message: {msg!r}"
-
-
-@then(parsers.parse('the wire error message should not contain "{text}"'))
-def then_wire_error_message_not_contains(ctx: dict, text: str) -> None:
-    """Assert the buyer-facing WIRE message does NOT contain the text (case-insensitive)."""
-    msg = _wire_error_message(ctx)
-    assert text.lower() not in msg.lower(), f"Unexpected {text!r} in wire error message: {msg!r}"
 
 
 @then(parsers.parse('the suggestion should contain "{text}"'))
@@ -903,6 +842,51 @@ def then_error_field_with_value(ctx: dict, field: str, value: str) -> None:
 
 
 # ── Error details assertions ────────────────────────────────────────
+
+
+@then(parsers.parse('the wire error details should include {key} "{value}"'))
+def then_wire_error_details_include(ctx: dict, key: str, value: str) -> None:
+    """Assert ``errors[0].details[key]`` carries ``value`` ON THE WIRE.
+
+    The wire variant of the reconstructed-error step below, and the one to prefer:
+    ``details`` is where request-derived values legitimately reach the buyer now that
+    the message is a function of the error CODE through CODE_TABLE. Reading the real
+    envelope rather than ``ctx["error"]`` keeps the assertion on what the buyer
+    actually received.
+
+    Accepts a scalar (equality) or a list (membership), because a details value that
+    names several offending items — duplicate ids, unsupported values — is naturally
+    an array and the scenario names ONE of them.
+    """
+    error_object = ctx["result"].wire_error_object()
+    assert error_object is not None, "no wire error object captured"
+    details = error_object.get("details") or {}
+    assert key in details, f"expected {key!r} in errors[0].details; keys present: {sorted(details)}"
+    actual = details[key]
+    if isinstance(actual, (list, tuple)):
+        assert value in [str(item) for item in actual], (
+            f"expected {value!r} among errors[0].details[{key!r}] = {actual!r}"
+        )
+    else:
+        assert str(actual) == value, f"expected errors[0].details[{key!r}] == {value!r}, got {actual!r}"
+
+
+@then(parsers.parse('the wire envelope should not carry the marker "{marker}"'))
+def then_wire_envelope_marker_absent(ctx: dict, marker: str) -> None:
+    """Assert ``marker`` appears NOWHERE in the wire error envelope.
+
+    Replaces the message-scoped ``should not contain`` check and is strictly stronger:
+    it scans the FULL envelope, so it also covers ``errors[0].details`` — which is
+    exactly where request-derived values now travel. A RootModel stringified into
+    details would render ``root=...`` there, so this check becomes MORE load-bearing
+    after that move, not less.
+
+    Not a prose pin: it asserts the ABSENCE of a leak. Nothing derives this marker from
+    the error code, so there is no code/sentence tautology to guard against.
+    """
+    from tests.helpers import assert_no_marker_in_envelope
+
+    assert_no_marker_in_envelope(ctx["result"].wire_error_envelope, marker)
 
 
 @then(parsers.parse("the error details should include {key} {value}"))

@@ -160,7 +160,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_delivery without media_buy_ids or creative_ids
     Then the operation should fail
     And the error code should be "SCOPING_FILTER_REQUIRED"
-    And the error message should contain "at least one scoping filter"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "media_buy_ids"
@@ -175,7 +174,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids []
     Then the operation should fail
     And the error code should be "SCOPING_FILTER_EMPTY"
-    And the error message should contain "at least one element"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "Add at least one identifier"
@@ -189,7 +187,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-nonexistent"]
     Then the operation should fail
     And the error code should be "MEDIA_BUY_NOT_FOUND"
-    And the error message should contain "media buy"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "verify media buy"
@@ -203,7 +200,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_delivery with creative_ids ["cr-nonexistent"]
     Then the operation should fail
     And the error code should be "CREATIVE_NOT_FOUND"
-    And the error message should contain "creative"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "verify creative"
@@ -217,7 +213,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-010"] and start_date "2026-03-15" and end_date "2026-03-01"
     Then the operation should fail
     And the error code should be "DATE_RANGE_INVALID"
-    And the error message should contain "start_date"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "start_date is before end_date"
@@ -231,7 +226,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-011"] and start_date "2026-03-10" and end_date "2026-03-10"
     Then the operation should fail
     And the error code should be "DATE_RANGE_INVALID"
-    And the error message should contain "start_date"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "before end_date"
@@ -245,7 +239,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-012"] and start_date "03/15/2026"
     Then the operation should fail
     And the error code should be "DATE_INVALID_FORMAT"
-    And the error message should contain "date"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "YYYY-MM-DD"
@@ -259,7 +252,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-013"] and start_date "2026-03-01" and end_date "2026/03/31"
     Then the operation should fail
     And the error code should be "DATE_INVALID_FORMAT"
-    And the error message should contain "date"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "YYYY-MM-DD"
@@ -273,7 +265,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_features without creative_manifest
     Then the operation should fail
     And the error code should be "CREATIVE_MANIFEST_REQUIRED"
-    And the error message should contain "creative_manifest"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "format_id and assets"
@@ -287,7 +278,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_features with a manifest missing format_id
     Then the operation should fail
     And the error code should be "MANIFEST_VALIDATION_ERROR"
-    And the error message should contain "format_id"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "format_id with agent_url and id"
@@ -301,7 +291,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_features with a manifest that has format_id but no assets
     Then the operation should fail
     And the error code should be "MANIFEST_VALIDATION_ERROR"
-    And the error message should contain "assets"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "assets map"
@@ -315,7 +304,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_features with a manifest where format_id has id but no agent_url
     Then the operation should fail
     And the error code should be "MANIFEST_VALIDATION_ERROR"
-    And the error message should contain "agent_url"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "agent_url"
@@ -329,7 +317,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_features with a manifest where format_id has agent_url but no id
     Then the operation should fail
     And the error code should be "MANIFEST_VALIDATION_ERROR"
-    And the error message should contain "id"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "format_id"
@@ -343,7 +330,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-014"] and account "acct-nonexistent"
     Then the operation should fail
     And the error code should be "ACCOUNT_NOT_FOUND"
-    And the error message should contain "account"
     And the error recovery should be "terminal"
     And the error should include "suggestion" field
     And the suggestion should contain "verify account"
@@ -358,7 +344,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_features with a valid creative_manifest and account "acct-nonexistent"
     Then the operation should fail
     And the error code should be "ACCOUNT_NOT_FOUND"
-    And the error message should contain "account"
     And the error recovery should be "terminal"
     And the error should include "suggestion" field
     And the suggestion should contain "list_accounts"
@@ -373,7 +358,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_features with feature_ids ["nonexistent_metric"]
     Then the operation should fail
     And the error code should be "UNSUPPORTED_FEATURE"
-    And the error message should contain "feature"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "get_adcp_capabilities"
@@ -388,7 +372,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_features with a valid creative_manifest
     Then the operation should fail
     And the error code should be "UNSUPPORTED_FEATURE"
-    And the error message should contain "creative_features"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "capabilities"
@@ -403,7 +386,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_features with a valid creative_manifest
     Then the operation should fail
     And the error code should be "GOVERNANCE_UNAVAILABLE"
-    And the error message should contain "governance"
     And the error recovery should be "transient"
     And the error should include "retry_after" field
     And the error should include "suggestion" field
@@ -419,7 +401,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-015"]
     Then the operation should fail
     And the error code should be "SERVICE_UNAVAILABLE"
-    And the error message should contain "adapter"
     And the error recovery should be "transient"
     And the error should include "retry_after" field
     And the error should include "suggestion" field
@@ -500,7 +481,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_features with a manifest where format_id has width 300 but no height
     Then the operation should fail
     And the error code should be "MANIFEST_VALIDATION_ERROR"
-    And the error message should contain "height"
     And the error should include "suggestion" field
     And the suggestion should contain "width and height"
 
@@ -516,7 +496,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_features with a manifest having asset key "Hero-Image!"
     Then the operation should fail
     And the error code should be "MANIFEST_VALIDATION_ERROR"
-    And the error message should contain "asset key"
     And the error should include "suggestion" field
     And the suggestion should contain "lowercase alphanumeric"
 
@@ -553,7 +532,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-033"] and max_variants 0
     Then the operation should fail
     And the error code should be "MAX_VARIANTS_INVALID"
-    And the error message should contain "max_variants"
     And the error should include "suggestion" field
     And the suggestion should contain "at least 1"
 
@@ -791,7 +769,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_features with feature_ids []
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "feature_ids"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "at least one feature"
@@ -823,7 +800,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-063"] and pagination max_results 0
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "max_results"
     And the error should include "suggestion" field
     And the suggestion should contain "1"
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/get-creative-delivery-request.json
@@ -834,7 +810,6 @@ Feature: BR-UC-022 Creative Delivery & Features
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-064"] and pagination max_results 101
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "max_results"
     And the error should include "suggestion" field
     And the suggestion should contain "100"
 

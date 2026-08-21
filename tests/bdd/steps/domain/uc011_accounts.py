@@ -1760,18 +1760,17 @@ def _get_error(ctx: dict) -> Exception:
     return error
 
 
-def _assert_error_has_code_and_message(err: Any, index: int) -> None:
-    """Assert a single error object has non-empty code and message fields.
+def _assert_error_has_code(err: Any, index: int) -> None:
+    """Assert a single error object carries a non-empty machine CODE.
 
     Checks .code first (per-account errors), then .error_code (AdCPError).
-    Checks .message attribute directly (not str() which is always truthy).
+
+    The message half is deliberately gone: the buyer-facing sentence is derived from the
+    code through CODE_TABLE, so a present code guarantees a present sentence and
+    asserting both checked the table against itself.
     """
-    code = getattr(err, "code", None) or getattr(err, "error_code", None)
+    code = err.code if hasattr(err, "code") else err.error_code
     assert isinstance(code, str) and code, f"Error [{index}] missing non-empty code: code={code!r}, error={err}"
-    message = getattr(err, "message", None)
-    assert isinstance(message, str) and message.strip(), (
-        f"Error [{index}] missing non-empty message attribute: message={message!r}, error={err}"
-    )
 
 
 def _get_errors_collection(error: Exception) -> list[Any]:
@@ -1847,7 +1846,7 @@ def then_errors_array_may_contain_multiple(ctx: dict) -> None:
     error = _get_error(ctx)
     items = _get_errors_collection(error)
     for i, err in enumerate(items):
-        _assert_error_has_code_and_message(err, i)
+        _assert_error_has_code(err, i)
 
 
 @then(parsers.parse('the error code is "{code}"'))
@@ -2011,7 +2010,7 @@ def then_each_error_has_code_message(ctx: dict) -> None:
     error = _get_error(ctx)
     items = _get_errors_collection(error)
     for i, err in enumerate(items):
-        _assert_error_has_code_and_message(err, i)
+        _assert_error_has_code(err, i)
 
 
 @then("a response with both accounts and errors arrays is invalid")
@@ -3097,8 +3096,16 @@ def then_empty_accounts_error(ctx: dict) -> None:
     assert isinstance(error, (AdCPValidationError, ValueError)), (
         f"Expected AdCPValidationError, got {type(error).__name__}: {error}"
     )
-    msg = str(error).lower()
-    assert "empty" in msg and "account" in msg, f"Expected error about empty accounts array, got: {error}"
+    # WHICH input was rejected is graded on the protocol `field` pointer, not on the
+    # sentence: the sentence is a function of the code through CODE_TABLE and cannot name
+    # a request field, so the old "empty"/"account" substring pair could only ever have
+    # passed by accident of wording.
+    result = ctx.get("result")
+    error_object = result.wire_error_object() if result is not None else None
+    assert error_object is not None, "no wire error object captured"
+    assert error_object.get("field") == "accounts", (
+        f"expected the rejection to name the accounts field, got field={error_object.get('field')!r}: {error_object!r}"
+    )
 
 
 @then("the per-account error indicates brand domain is required")

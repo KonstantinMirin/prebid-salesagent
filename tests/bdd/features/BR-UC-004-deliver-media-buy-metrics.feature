@@ -398,7 +398,6 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     When the Buyer Agent sends a delivery metrics request without authentication
     Then the operation should fail
     And the error code should be "principal_id_missing"
-    And the error message should contain "authentication"
     And the error should include "suggestion" field
     And the suggestion should contain "provide valid credentials"
     # POST-F1: System state unchanged

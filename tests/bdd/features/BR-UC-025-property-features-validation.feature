@@ -240,7 +240,6 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     When the Buyer Agent sends validate_property_delivery with list_id "pl-nonexistent"
     Then the operation should fail
     And the error code should be "REFERENCE_NOT_FOUND"
-    And the error message should contain "not found"
     And the error should include "suggestion" field
     And the suggestion should contain "verify the list_id"
     # POST-F1: System state unchanged (read-only)
@@ -253,7 +252,6 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     When the Buyer Agent sends validate_property_delivery with list_id "pl-other-tenant"
     Then the operation should fail
     And the error code should be "LIST_ACCESS_DENIED"
-    And the error message should contain "access denied"
     And the error should include "suggestion" field
     And the suggestion should contain "permission"
     # POST-F1: System state unchanged (read-only)
@@ -266,7 +264,6 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     When the Buyer Agent sends validate_property_delivery with list_id "pl-valid" and <records_state>
     Then the operation should fail
     And the error code should be "RECORDS_REQUIRED"
-    And the error message should contain "records"
     And the error should include "suggestion" field
     And the suggestion should contain "at least one delivery record"
     # POST-F1: System state unchanged
@@ -284,7 +281,6 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     When the Buyer Agent sends validate_property_delivery with list_id "pl-valid" and 10001 records
     Then the operation should fail
     And the error code should be "RECORDS_LIMIT_EXCEEDED"
-    And the error message should contain "10,000"
     And the error should include "suggestion" field
     And the suggestion should contain "batch"
     # POST-F1: System state unchanged
@@ -726,7 +722,6 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     When the Buyer Agent sends validate_property_delivery with list_id "pl-valid" and 1 record
     Then the operation should fail
     And the error code should be "ACCOUNT_REQUIRED"
-    And the error message should indicate that an account reference must be supplied
     And the error should include "suggestion" field
     And the suggestion should contain "account"
     # POST-F1: System state unchanged (read-only)
