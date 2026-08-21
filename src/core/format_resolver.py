@@ -39,6 +39,7 @@ def _as_ref(value: FormatRef) -> Any:
         return value.model_dump(mode="json", exclude_none=True)
     return value
 
+
 logger = logging.getLogger(__name__)
 
 

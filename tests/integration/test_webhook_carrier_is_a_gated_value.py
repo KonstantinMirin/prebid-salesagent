@@ -25,8 +25,8 @@ be listed first. That is silent wrong-scheme delivery, not a dropped field.
 
 from __future__ import annotations
 
-from uuid import uuid4
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 import pytest
 
@@ -102,9 +102,7 @@ async def _run_scheduler_for(reporting_webhook: dict):
 
     with IntegrationEnv() as env:
         tenant = TenantFactory(tenant_id=f"t_{suffix}")
-        principal = PrincipalFactory(
-            tenant=tenant, principal_id=f"p_{suffix}", access_token=f"tok_{suffix}"
-        )
+        principal = PrincipalFactory(tenant=tenant, principal_id=f"p_{suffix}", access_token=f"tok_{suffix}")
         media_buy = MediaBuyFactory(
             tenant=tenant,
             principal=principal,
@@ -122,9 +120,7 @@ async def _run_scheduler_for(reporting_webhook: dict):
                 return_value=_delivery_response(),
             ),
         ):
-            await scheduler._send_report_for_media_buy(
-                media_buy, reporting_webhook, env.get_session(), force=True
-            )
+            await scheduler._send_report_for_media_buy(media_buy, reporting_webhook, env.get_session(), force=True)
         return mock_send
 
 
