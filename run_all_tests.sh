@@ -165,20 +165,55 @@ E2E_ENV_ARGS=""
 if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
     N="$E2E_WORKERS"
     _admin="postgresql://adcp_user:secure_password_change_me@postgres:5432"
-    psql_admin() { dc exec -T postgres psql -U adcp_user -d postgres -c "$1" >/dev/null 2>&1 || true; }
+    # Two admin-SQL helpers, deliberately NOT one. The old single helper ended in
+    # `|| true` and discarded both streams, so a failed CREATE DATABASE was
+    # indistinguishable from a successful one. The failure then resurfaced four
+    # steps later as the opaque "e2e template migration failed", whose real cause
+    # (`database "adcp_e2e_template" does not exist`) was unrecoverable from any
+    # log. A DROP that fails is tolerable; a CREATE that fails is not.
+    _psql_admin() { dc exec -T postgres psql -U adcp_user -d postgres -v ON_ERROR_STOP=1 -c "$1" 2>&1; }
+    # Tolerant: reports, then continues. For DROP ... IF EXISTS, where "it was
+    # already gone" and "the server refused" are both survivable.
+    psql_admin_try() {
+        local out
+        if ! out=$(_psql_admin "$1"); then
+            echo "WARNING: admin SQL failed (continuing): $1" >&2
+            echo "$out" >&2
+        fi
+    }
+    # Fatal: a database the rest of this block depends on either exists or we stop.
+    psql_admin() {
+        local out
+        if ! out=$(_psql_admin "$1"); then
+            echo "ERROR: admin SQL failed: $1" >&2
+            echo "$out" >&2
+            exit 1
+        fi
+    }
     echo "Provisioning $N per-worker e2e server stacks..."
-    psql_admin "DROP DATABASE IF EXISTS adcp_e2e_template"
+    # A crashed previous run leaves backends attached to the template, and
+    # DROP DATABASE refuses while any connection remains. Evict them first so the
+    # DROP below fails only for reasons worth reporting.
+    psql_admin_try "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'adcp_e2e_template' AND pid <> pg_backend_pid()"
+    psql_admin_try "DROP DATABASE IF EXISTS adcp_e2e_template"
     psql_admin "CREATE DATABASE adcp_e2e_template"
     # Fail fast: if the template migration fails, every per-worker DB below would
     # be cloned from an un-migrated template and the whole e2e_rest pass would
-    # error confusingly. Surface it here instead.
+    # error confusingly. Surface it here instead -- WITH the migrator's own output,
+    # which this block used to throw away.
+    _migrate_log="$(mktemp)"
     if ! dc run --rm --no-deps -e DATABASE_URL="$_admin/adcp_e2e_template?sslmode=disable" \
-            tests python scripts/ops/migrate.py >/dev/null 2>&1; then
+            tests python scripts/ops/migrate.py >"$_migrate_log" 2>&1; then
         echo "ERROR: e2e template migration failed — aborting per-worker provisioning" >&2
+        echo "--- migrate.py output ---" >&2
+        cat "$_migrate_log" >&2
+        rm -f "$_migrate_log"
         exit 1
     fi
+    rm -f "$_migrate_log"
     for i in $(seq 0 $((N - 1))); do
-        psql_admin "DROP DATABASE IF EXISTS adcp_gw$i"
+        psql_admin_try "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'adcp_gw$i' AND pid <> pg_backend_pid()"
+        psql_admin_try "DROP DATABASE IF EXISTS adcp_gw$i"
         psql_admin "CREATE DATABASE adcp_gw$i TEMPLATE adcp_e2e_template"
         dc run -d --no-deps --name "${COMPOSE_PROJECT_NAME}-server-gw$i" \
             -e DATABASE_URL="$_admin/adcp_gw$i?sslmode=disable" adcp-server >/dev/null
