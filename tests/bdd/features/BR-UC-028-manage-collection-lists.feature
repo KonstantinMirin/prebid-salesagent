@@ -381,7 +381,7 @@ Feature: BR-UC-028 Manage Collection Lists
   Scenario: Update collection list -- webhook_url targeting a blocked host is rejected
     Given an existing collection list "list-ssrf" without webhook_url
     When the Buyer Agent updates "list-ssrf" with webhook_url "http://169.254.169.254/latest/meta-data"
-    Then the error code should be "URL_NOT_ALLOWED"
+    Then the error code should be "VALIDATION_ERROR"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/collection/list-collection-lists-request.json

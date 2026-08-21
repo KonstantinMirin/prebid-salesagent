@@ -725,24 +725,38 @@ class AdCPInternalError(AdCPError):
 class AdCPUrlNotAllowedError(AdCPError):
     """A buyer-supplied URL names a host this seller will not contact (400).
 
-    Not SERVICE_UNAVAILABLE: nothing of ours is down, and retrying the same URL can
-    never succeed. Not the generic VALIDATION_ERROR either — the pin reserves that for
-    "invalid field values or business rules beyond schema validation", which is true but
-    tells a buyer nothing they can act on differently. This is its own condition: the URL
-    is well formed and schema-valid, and refused for where it points.
+    Emits the PUBLISHED ``VALIDATION_ERROR``, not a platform code. This class briefly
+    carried a minted ``URL_NOT_ALLOWED`` on the reasoning that VALIDATION_ERROR "tells a
+    buyer nothing they can act on differently". That reasoning does not survive the pin:
+    malformed-vs-value-refused is already the published INVALID_REQUEST / VALIDATION_ERROR
+    split (INVALID_REQUEST is "malformed, missing required fields, or violates schema
+    constraints"; VALIDATION_ERROR is "invalid field values or violates business rules
+    beyond schema validation"), and a schema-valid https URI refused by a deny-list is the
+    second. The pinned spec then applies it to this exact vector:
+    ``dist/docs/3.1.0/learning/specialist/security.mdx:84`` has the practitioner register
+    ``https://169.254.169.254/latest/meta-data/`` and "observe that the agent refuses it
+    synchronously with a ``VALIDATION_ERROR`` on ``notification_configs[].url``".
 
-    A platform code, legal because AdCP 3.1.1's core/error.json makes the vocabulary open
-    — published codes are documentary and senders MAY emit codes outside the set, provided
-    recovery stays inside its three values. Correctable: a different URL works.
+    The open vocabulary permits minting a code the spec has NOT defined; it does not make
+    a private synonym of a published member a good idea, because a buyer switching on
+    ``error.code`` across sellers loses the ability to handle this uniformly.
 
-    The rejection REASON never reaches the buyer. The spec's Security Considerations
-    forbid disclosing internal service names, hostnames or IP addresses, so the specific
-    cause rides ``internal_detail`` (server log only) while the table's suggestion names
-    the closed set of host classes a buyer must avoid.
+    The class survives the code change on purpose: the A2A boundary catches it BY TYPE to
+    select ``InvalidParamsError``, which a bare ``AdCPValidationError`` could not express
+    without also catching every other validation failure.
+
+    The buyer's actionable signal is the CODE plus ``field`` (which URL was refused). The
+    rejection REASON never reaches the buyer -- the spec's Security Considerations forbid
+    disclosing internal service names, hostnames or IP addresses, so the cause rides
+    ``internal_detail`` (server log only). Deliberate loss in the switch: the retired
+    entry's suggestion enumerated the refused host classes, where VALIDATION_ERROR's is
+    the generic "review error details and fix field values". A per-class override is NOT
+    the fix -- ``_default_suggestion`` would make the suggestion a function of the class
+    rather than the code, which ADR-010 forbids.
     """
 
     _default_status_code: ClassVar[int] = 400
-    _code: ClassVar[ErrorCodeT] = AppErrorCode.URL_NOT_ALLOWED
+    _code: ClassVar[ErrorCodeT] = ErrorCode.VALIDATION_ERROR
 
 
 # ---------------------------------------------------------------------------

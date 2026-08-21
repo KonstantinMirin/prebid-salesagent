@@ -157,7 +157,7 @@ def _reject_unsafe_a2a_webhook_url(url: str) -> None:
 
     A2A push-config endpoints (message/send configuration, setTaskPushNotificationConfig)
     translate SSRF failures to ``InvalidParamsError`` (-32602) while attaching the
-    two-layer AdCP envelope in ``data`` (``URL_NOT_ALLOWED`` / ``recovery=correctable``
+    two-layer AdCP envelope in ``data`` (``VALIDATION_ERROR`` / ``recovery=correctable``
     + suggestion) — same pattern as the auth rejection on ``on_message_send``.
     Delegates to ``reject_unsafe_webhook_registration_url`` so recovery/suggestion/field
     cannot drift from the tool-path gate.

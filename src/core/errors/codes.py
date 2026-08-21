@@ -202,17 +202,6 @@ class AppErrorCode(StrEnum):
             message="Some items in the request succeeded and others failed",
         ),
     )
-    URL_NOT_ALLOWED = (
-        "URL_NOT_ALLOWED",
-        CodeEntry(
-            recovery=Recovery.CORRECTABLE,
-            suggestion=(
-                "Provide a public https URL that does not target private, loopback, "
-                "link-local, CGNAT, multicast, or cloud-metadata hosts"
-            ),
-            message="The supplied URL is not one this seller will contact",
-        ),
-    )
     TASK_NOT_FOUND = (
         "TASK_NOT_FOUND",
         CodeEntry(

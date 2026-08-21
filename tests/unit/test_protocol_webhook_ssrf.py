@@ -293,7 +293,7 @@ def test_reject_unsafe_a2a_webhook_url_rejects_metadata() -> None:
     """A2A registration helper maps SSRF to InvalidParamsError + AdCP envelope in data."""
     with pytest.raises(InvalidParamsError) as exc_info:
         _reject_unsafe_a2a_webhook_url(_METADATA_URL)
-    assert_envelope_shape(exc_info.value.data, "URL_NOT_ALLOWED", recovery="correctable")
+    assert_envelope_shape(exc_info.value.data, "VALIDATION_ERROR", recovery="correctable")
     assert exc_info.value.data["errors"][0].get("suggestion")
 
 
@@ -313,7 +313,7 @@ async def test_a2a_message_send_rejects_unsafe_push_config_url() -> None:
     with pytest.raises(InvalidParamsError) as exc_info:
         await handler.on_message_send(params, context=MagicMock())
 
-    assert_envelope_shape(exc_info.value.data, "URL_NOT_ALLOWED", recovery="correctable")
+    assert_envelope_shape(exc_info.value.data, "VALIDATION_ERROR", recovery="correctable")
     assert handler._task_push_configs == {}
 
 
@@ -336,5 +336,5 @@ async def test_a2a_set_push_handler_rejects_metadata_url() -> None:
     ):
         await handler.on_create_task_push_notification_config(params, context=MagicMock())
 
-    assert_envelope_shape(exc_info.value.data, "URL_NOT_ALLOWED", recovery="correctable")
+    assert_envelope_shape(exc_info.value.data, "VALIDATION_ERROR", recovery="correctable")
     mock_uow.assert_not_called()
