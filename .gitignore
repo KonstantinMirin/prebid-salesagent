@@ -151,6 +151,7 @@ test-results/
 .claude/commands/code-review.md
 .claude/skills/code-review/
 .claude/reports
+.claude/scheduled_tasks.lock
 .perles/
 
 # Private local rules (agent tooling, personal workflows)
