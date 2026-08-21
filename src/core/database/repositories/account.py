@@ -254,7 +254,12 @@ class AccountRepository:
         status: str,
         brand_domain: str,
         brand_id: str | None,
-        operator: str,
+        # ``str | None``, matching the NULLABLE column this writes (``models.py`` :864).
+        # It was declared ``str`` and the sync path simply never passed None, so the
+        # narrowing never surfaced; routing the admin blueprint — which writes
+        # ``operator or None`` so an empty form field becomes SQL NULL rather than "" —
+        # through the shared builder is what exposed a pre-existing type lie (#1878).
+        operator: str | None,
         principal_id: str | None,
         created_fields: dict[str, object],
     ) -> Account:

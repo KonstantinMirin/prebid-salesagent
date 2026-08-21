@@ -43,6 +43,18 @@ from typing import TYPE_CHECKING, Any
 
 from adcp import get_adcp_spec_version
 
+# ``BrandDiscovery3`` is a POSITIONAL generated name — "the third oneOf variant in
+# generation order", not "the brand-agent document". Aliased semantically (CLAUDE.md
+# Pattern #1) so the call site says what it means, and NOT to ``BrandDiscovery``, which is
+# the SDK's own RootModel union wrapper. A regeneration that adds or reorders variants
+# would silently rebind this name to a different shape; ``extra: forbid`` catches that
+# unless the new variant is a superset of our keys, so the binding itself is pinned by
+# ``test_the_brand_agent_variant_is_still_the_one_we_bind`` in
+# tests/unit/test_adcp_spec_version.py.
+from adcp.types.generated_poc.brand import BrandDiscovery3 as LibraryBrandAgentDocument
+from adcp.types.generated_poc.core.agent_signing_key import AgentSigningKey
+from pydantic import BaseModel
+
 from src.core.agent_identity import agent_endpoint_urls, agent_entry_id, canonical_agent_url, jwks_uri
 from src.core.signing._rfc3339 import rfc3339
 
@@ -63,6 +75,22 @@ _SCHEMA_BASE = f"https://adcontextprotocol.org/schemas/{get_adcp_spec_version()}
 
 # ``brand_agent_entry.type`` — this agent sells inventory.
 _SALES_AGENT_TYPE = "sales"
+
+
+def _validated(model: type[BaseModel], document: dict[str, Any]) -> dict[str, Any]:
+    """Round-trip *document* through its PINNED SDK model, or fail here.
+
+    The point of the atom (#1757): the trust-root documents are schema-valid BY
+    CONSTRUCTION rather than by a test that validates a dict assembled two lines earlier.
+    O1 — "a third party fetches our JWKS and verifies" — only means something if an
+    invalid document cannot leave this module.
+
+    ``by_alias`` is load-bearing for brand.json: ``BrandDiscovery3`` carries ``$schema`` as
+    ``field_schema`` with an alias, so dumping by field name would emit ``field_schema``
+    on the wire. ``exclude_none`` keeps optional members absent rather than null, which is
+    what the oneOf variants distinguish on.
+    """
+    return model.model_validate(document).model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
 def _published_jwk(key: SigningKey) -> dict[str, Any]:
@@ -94,7 +122,12 @@ def build_jwks(keys: Sequence[SigningKey]) -> dict[str, Any]:
     Authoritative for request-signature verification: this is where the
     brand.json hop lands.
     """
-    return {"keys": [_published_jwk(key) for key in keys]}
+    return {
+        "keys": [
+            AgentSigningKey.model_validate(_published_jwk(key)).model_dump(mode="json", exclude_none=True)
+            for key in keys
+        ]
+    }
 
 
 def build_brand_json(tenant: Tenant, keys: Sequence[SigningKey]) -> dict[str, Any]:
@@ -132,7 +165,7 @@ def build_brand_json(tenant: Tenant, keys: Sequence[SigningKey]) -> dict[str, An
     }
     if last_updated := _last_updated(keys):
         document["last_updated"] = last_updated
-    return document
+    return _validated(LibraryBrandAgentDocument, document)
 
 
 def _property_entry(prop: AuthorizedProperty) -> dict[str, Any]:
@@ -191,4 +224,13 @@ def build_adagents_json(
 
     if last_updated := _last_updated(keys):
         document["last_updated"] = last_updated
+    # NOT routed through ``AdcpAgentsAuthorization`` (#1757): that generated model is
+    # STRICTER THAN THE PINNED SCHEMA our documents are graded against. It applies
+    # ``minItems: 1`` to ``authorized_agents``, and this builder DELIBERATELY emits an
+    # empty list when no authorized-property record backs a claim — "an empty
+    # authorized_agents asserts NO sales authorization", which the schema distinguishes
+    # from deny-all, authorize-all and revocation. The pinned schema accepts it (this
+    # document passes ``validate_against_pinned_schema`` today); the model refuses it.
+    # Converting would mean either fabricating an authorization we were never granted or
+    # dropping the document — so this one stays a dict and is validated after the fact.
     return document
