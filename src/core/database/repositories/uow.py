@@ -28,8 +28,9 @@ from __future__ import annotations
 
 import logging
 import warnings
+from collections.abc import Mapping
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 from sqlalchemy.orm import Session
 
@@ -113,11 +114,39 @@ class BaseUoW:
             self._session = None
             self._clear_repos()
 
+    #: ``attribute name -> repository class`` for subclasses that declare their
+    #: repositories instead of hand-writing the two hooks below. Every repository in this
+    #: layer takes ``(session, tenant_id)``, so the construction is the SAME line with a
+    #: different class — which is exactly the shape that should be data, not code.
+    #:
+    #: Subclasses may still override ``_init_repos``/``_clear_repos`` directly; the eight
+    #: pre-#1757 units of work do, and they keep working unchanged. New ones declare.
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {}
+
     def _init_repos(self) -> None:
-        raise NotImplementedError
+        """Construct every declared repository on the open session.
+
+        Raises when a subclass declares nothing AND does not override, so "forgot to
+        wire the repositories" stays a loud failure rather than a unit of work whose
+        attributes are all ``None`` at the first use.
+        """
+        if not self._REPOSITORIES:
+            raise NotImplementedError(
+                f"{type(self).__name__} must declare _REPOSITORIES or override _init_repos/_clear_repos"
+            )
+        assert self._session is not None
+        for attribute, repository in self._REPOSITORIES.items():
+            setattr(self, attribute, repository(self._session, self._tenant_id))
 
     def _clear_repos(self) -> None:
-        raise NotImplementedError
+        """Drop every declared repository, so a closed unit of work holds no session.
+
+        The mirror of :meth:`_init_repos`, and derived from the SAME declaration — the
+        two hand-written halves could previously disagree, leaving a repository (and its
+        session) attached after ``__exit__``.
+        """
+        for attribute in self._REPOSITORIES:
+            setattr(self, attribute, None)
 
 
 class MediaBuyUoW(BaseUoW):
@@ -336,12 +365,7 @@ class SigningKeyUoW(BaseUoW):
 
     signing_keys: SigningKeyRepository | None
 
-    def _init_repos(self) -> None:
-        assert self._session is not None
-        self.signing_keys = SigningKeyRepository(self._session, self._tenant_id)
-
-    def _clear_repos(self) -> None:
-        self.signing_keys = None
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {"signing_keys": SigningKeyRepository}
 
 
 class CapabilitiesUoW(BaseUoW):
@@ -366,14 +390,10 @@ class CapabilitiesUoW(BaseUoW):
     tenant_config: TenantConfigRepository | None
     signing_keys: SigningKeyRepository | None
 
-    def _init_repos(self) -> None:
-        assert self._session is not None
-        self.tenant_config = TenantConfigRepository(self._session, self._tenant_id)
-        self.signing_keys = SigningKeyRepository(self._session, self._tenant_id)
-
-    def _clear_repos(self) -> None:
-        self.tenant_config = None
-        self.signing_keys = None
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {
+        "tenant_config": TenantConfigRepository,
+        "signing_keys": SigningKeyRepository,
+    }
 
 
 class TrustRootUoW(BaseUoW):
@@ -395,13 +415,8 @@ class TrustRootUoW(BaseUoW):
     signing_keys: SigningKeyRepository | None
     authorized_properties: AuthorizedPropertyRepository | None
 
-    def _init_repos(self) -> None:
-        assert self._session is not None
-        self.tenant_config = TenantConfigRepository(self._session, self._tenant_id)
-        self.signing_keys = SigningKeyRepository(self._session, self._tenant_id)
-        self.authorized_properties = AuthorizedPropertyRepository(self._session, self._tenant_id)
-
-    def _clear_repos(self) -> None:
-        self.tenant_config = None
-        self.signing_keys = None
-        self.authorized_properties = None
+    _REPOSITORIES: ClassVar[Mapping[str, type]] = {
+        "tenant_config": TenantConfigRepository,
+        "signing_keys": SigningKeyRepository,
+        "authorized_properties": AuthorizedPropertyRepository,
+    }
