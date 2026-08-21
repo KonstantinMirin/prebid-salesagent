@@ -29,6 +29,8 @@ from functools import lru_cache
 from typing import Any
 from unittest.mock import patch
 
+from adcp import get_adcp_spec_version
+
 from tests.helpers.webhook_wire import CapturedWebhook
 
 # An RFC 9421 signature base: the canonicalized component list joined by LF with
@@ -540,7 +542,11 @@ def authorizing_brand_json(agent_url: str) -> dict[str, Any]:
     ``_brand_authorization``).
     """
     return {
-        "$schema": "https://adcontextprotocol.org/schemas/v1/brand.json",
+        # DERIVED from the pin, not the literal "v1" this carried (#1757): production
+        # serves .../schemas/3.1.1/brand.json, so a v1 literal here meant the fixture and
+        # the deployment DISAGREED ABOUT THE SPEC VERSION ON THE WIRE — invisible to the
+        # key-set pin, which only grades that "$schema" is present.
+        "$schema": f"https://adcontextprotocol.org/schemas/{get_adcp_spec_version()}/brand.json",
         "name": "Test Brand",
         "agents": [{"type": "buying", "url": agent_url}],
     }

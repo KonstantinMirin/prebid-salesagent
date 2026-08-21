@@ -66,6 +66,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import pytest
+from adcp import get_adcp_spec_version
 
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.pinned_schema import validate_against_pinned_schema
@@ -334,6 +335,18 @@ class TestBrandJsonSchemaConformance:
             assert set(document) <= _BRAND_AGENT_KEYS, (
                 "the Brand Agent variant is additionalProperties: false; unexpected keys "
                 f"{sorted(set(document) - _BRAND_AGENT_KEYS)}"
+            )
+            # THE VALUE, not its presence. "$schema" is a MEMBER of _BRAND_AGENT_KEYS
+            # above, and a key-set check grades that the key EXISTS — it is structurally
+            # blind to a document pointing at the wrong spec version, which is exactly the
+            # drift a $schema exists to prevent. Derived from the pinned SDK here for the
+            # same reason production derives it (#1757): a literal on both sides agrees
+            # with itself while both are stale.
+            assert (
+                document["$schema"] == f"https://adcontextprotocol.org/schemas/{get_adcp_spec_version()}/brand.json"
+            ), (
+                "brand.json must point $schema at the PINNED spec version; got "
+                f"{document['$schema']!r} against pin {get_adcp_spec_version()!r}"
             )
             assert "agents" in document, "the Brand Agent variant requires agents (or brand_agent)"
             assert "house" not in document, (

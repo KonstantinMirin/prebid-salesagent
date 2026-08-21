@@ -60,6 +60,7 @@ from contextlib import contextmanager
 from typing import Any
 
 import pytest
+from adcp import get_adcp_spec_version
 from adcp.signing.errors import (
     REQUEST_SIGNATURE_AGENT_NOT_IN_BRAND_JSON,
     REQUEST_SIGNATURE_BRAND_ORIGIN_MISMATCH,
@@ -187,7 +188,11 @@ def _brand_json(*listed_agent_urls: str) -> dict[str, Any]:
     mangled one.
     """
     return {
-        "$schema": "https://adcontextprotocol.org/schemas/v1/brand.json",
+        # DERIVED from the pin, not the literal "v1" this carried (#1757): production
+        # serves .../schemas/3.1.1/brand.json, so a v1 literal here meant the fixture and
+        # the deployment DISAGREED ABOUT THE SPEC VERSION ON THE WIRE — invisible to the
+        # key-set pin, which only grades that "$schema" is present.
+        "$schema": f"https://adcontextprotocol.org/schemas/{get_adcp_spec_version()}/brand.json",
         "name": "Buyer Example",
         "agents": [{"type": "buying", "url": url} for url in listed_agent_urls],
     }

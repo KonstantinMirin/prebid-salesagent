@@ -41,6 +41,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+from adcp import get_adcp_spec_version
+
 from src.core.agent_identity import agent_endpoint_urls, agent_entry_id, canonical_agent_url, jwks_uri
 from src.core.signing._rfc3339 import rfc3339
 
@@ -48,7 +50,16 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from src.core.database.models import AuthorizedProperty, SigningKey, Tenant
 
 
-_SCHEMA_BASE = "https://adcontextprotocol.org/schemas/3.1.1"
+#: The schema origin every trust-root document points ``$schema`` at, DERIVED from the
+#: pinned SDK rather than typed as a literal (#1757). The version here is the one the
+#: documents are actually built against, so an ``adcp`` bump moves the served value with
+#: the pin instead of leaving a stale literal that no test could see — the ``$schema`` pin
+#: in ``tests/integration/test_trust_root_documents.py`` was a KEY-SET membership check,
+#: which grades PRESENCE and is structurally blind to a wrong value.
+#:
+#: Same derivation the A2A extension URI already uses
+#: (``adcp_a2a_server.py`` :2362), so the two cannot drift.
+_SCHEMA_BASE = f"https://adcontextprotocol.org/schemas/{get_adcp_spec_version()}"
 
 # ``brand_agent_entry.type`` — this agent sells inventory.
 _SALES_AGENT_TYPE = "sales"

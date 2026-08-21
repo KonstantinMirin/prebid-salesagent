@@ -64,8 +64,14 @@ normalizes to release-precision on the wire.
 2. Update the `adcp` pin in `pyproject.toml` (confirm its spec target with the
    command above).
 3. `uv lock --upgrade-package adcp`.
-4. Update `EXPECTED_SPEC_VERSION` in `tests/unit/test_adcp_spec_version.py`.
-5. Re-vendor the request-signing conformance vectors and their `MANIFEST.json`:
+4. Update `EXPECTED_SPEC_VERSION` in `tests/helpers/adcp_pin.py` (the constant lives
+   there; `tests/unit/test_adcp_spec_version.py` imports it).
+5. Re-vendor the **pinned schema tree** to the new version — the directory under
+   `tests/fixtures/adcp_schemas_pinned/` is named for the spec version, and
+   `test_the_vendored_schema_tree_matches_the_pin` fails until it matches. A stale tree
+   grades our trust-root documents against the previous version's schemas while every
+   version literal in production has already moved.
+6. Re-vendor the request-signing conformance vectors and their `MANIFEST.json`:
 
    ```bash
    uv run python tests/fixtures/adcp_schemas_pinned/_refresh.py
@@ -76,8 +82,15 @@ normalizes to release-precision on the wire.
    snapshot to `adcp.get_adcp_spec_version()`, so skipping this step fails CI
    rather than silently grading the verifier against the previous version's
    conformance data.
-6. Update this document.
-7. Run `make quality` and address Pydantic field/type changes.
+7. Update this document.
+8. Run `make quality` and address Pydantic field/type changes.
+
+Nothing needs updating for the served `$schema` values: `_SCHEMA_BASE`
+(`src/core/signing/trust_root.py`) derives them from `adcp.get_adcp_spec_version()`, so
+they move with the pin. They were literals until #1757, and the `$schema` assertion in
+`tests/integration/test_trust_root_documents.py` graded only that the KEY was present —
+so a bump would have left every trust-root document pointing at the previous version with
+nothing to catch it.
 8. Re-verify integration and BDD coverage.
 
 ## Pinned schema sources

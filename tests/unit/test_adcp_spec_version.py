@@ -19,3 +19,30 @@ def test_adcp_spec_version_matches_pin() -> None:
         f"{EXPECTED_SPEC_VERSION}. See docs/adcp-spec-version.md for "
         f"reconciliation steps."
     )
+
+
+def test_the_vendored_schema_tree_matches_the_pin() -> None:
+    """The vendored schema fixtures must be the version the SDK pin targets.
+
+    ``tests/fixtures/adcp_schemas_pinned/<version>/`` carries the schema documents the
+    trust-root tests validate against, and the version is a DIRECTORY NAME — a literal.
+    The guard above pins the SDK against ``EXPECTED_SPEC_VERSION``; nothing pinned the
+    neighbouring schema tree, so a bump could move the SDK and the served ``$schema``
+    while the documents were still graded against the previous version's fixtures.
+
+    That is the same mechanism the vector guard already applies, applied to the tree
+    beside it (#1757). It fails LOUDLY at bump time — which is the point: the bump
+    procedure in ``docs/adcp-spec-version.md`` then has something to tell you to do.
+    """
+    from pathlib import Path
+
+    tree = Path(__file__).resolve().parents[1] / "fixtures" / "adcp_schemas_pinned"
+    versions = {child.name for child in tree.iterdir() if child.is_dir() and child.name[0].isdigit()}
+
+    assert versions == {EXPECTED_SPEC_VERSION}, (
+        f"the vendored schema tree carries {sorted(versions)} but the codebase is pinned to "
+        f"{EXPECTED_SPEC_VERSION}. Re-vendor the fixtures for the pinned version (see "
+        f"tests/fixtures/adcp_schemas_pinned/_refresh.py) and update the references "
+        f"docs/adcp-spec-version.md lists — a stale tree grades our documents against the "
+        f"wrong spec while every version literal in production has already moved."
+    )
