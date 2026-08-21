@@ -2799,7 +2799,7 @@ class TestPartialFailureTolerance:
             # The advisory carries SERVICE_UNAVAILABLE, not the internal-only
             # INTERNAL_ERROR: hand-built errors[] entries serialize verbatim, so
             # the code must already be wire-compliant (normalized through
-            # translate_error_code at response assembly).
+            # emitted as declared at response assembly).
             assert response.errors is not None
 
 

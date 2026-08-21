@@ -30,7 +30,7 @@ made to pass any other way.
 
 from __future__ import annotations
 
-from src.core.exceptions import ERROR_CODE_MAPPING, WIRE_STANDARD_CODES
+from src.core.exceptions import WIRE_STANDARD_CODES
 from tests.harness.transport import _pinned_error_metadata
 
 
@@ -55,29 +55,12 @@ def test_wire_standard_codes_are_all_canonical() -> None:
     canonical = _canonical_codes()
     offenders = sorted(emittable - canonical)
     assert not offenders, (
-        "WIRE_STANDARD_CODES contains non-canonical wire codes not in the pinned "
-        f"AdCP error-code enum: {offenders}. Production may emit these on the wire "
-        "but no buyer-facing AdCP spec defines them (assert_wire_error would "
-        "hard-fail on them). Map each to a canonical code via ERROR_CODE_MAPPING "
-        "(or bump the pin if the code is genuinely canonical in v3.1.1)."
-    )
-
-
-def test_error_code_mapping_targets_are_all_emittable() -> None:
-    """Every ERROR_CODE_MAPPING target is an emittable standard code.
-
-    Mirrors the runtime assert at ``src/core/exceptions.py`` (mapping targets must
-    be a subset of ``WIRE_STANDARD_CODES``) as a first-class test. Combined with
-    the canonical-subset check above, this transitively proves every translation
-    target is also a canonical AdCP code.
-    """
-    targets = set(ERROR_CODE_MAPPING.values())
-    emittable = set(WIRE_STANDARD_CODES)
-    offenders = sorted(targets - emittable)
-    assert not offenders, (
-        "ERROR_CODE_MAPPING translates internal codes to targets that are not in "
-        f"WIRE_STANDARD_CODES: {offenders}. Every translation target must itself be "
-        "an emittable standard code."
+        "WIRE_STANDARD_CODES contains codes not in the pinned AdCP error-code enum: "
+        f"{offenders}. That is not automatically wrong — the vocabulary is OPEN and a "
+        "platform code is emittable — but this table claims to hold the PUBLISHED set, "
+        "so an entry outside it belongs in CODE_TABLE instead. (assert_wire_error no "
+        "longer hard-fails on a non-pinned code; it asks CODE_TABLE whether production "
+        "can emit it at all.) Bump the pin if the code is genuinely canonical in v3.1.1."
     )
 
 

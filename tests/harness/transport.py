@@ -51,14 +51,25 @@ def is_pinned_error_code(code: str | None) -> bool:
     """Whether ``code`` is a canonical AdCP error code in the pinned enum.
 
     The guard an outcome-dispatch step needs BEFORE calling
-    :meth:`TransportResult.assert_wire_error`: that method HARD-FAILS on any
-    non-pinned code (a scenario-only code like ``DOMAIN_INVALID_FORMAT`` that
-    production never emits), so a step whose scenarios can carry a non-pinned
-    code must route those through a reconstructed-exception branch instead of
-    the wire assertion. Same pinned source as ``assert_wire_error`` (pin-wins),
-    so the two never disagree on what "canonical" means.
+    :meth:`TransportResult.assert_wire_error`: that method hard-fails on a code
+    production cannot emit (a scenario-only code like ``DOMAIN_INVALID_FORMAT``),
+    so a step whose scenarios can carry one must route those through a
+    reconstructed-exception branch instead of the wire assertion.
+
+    EMITTABILITY, not spec membership. The question is CODE_TABLE membership —
+    "can production put this code on the wire at all" — not "is this code in the
+    pinned spec enum". Those diverged when the code rewriters were deleted: the
+    AdCP error vocabulary is OPEN (core/error.json: ``error.code`` is a wire-typed
+    string, published codes are documentary, senders MAY emit codes outside the
+    set), so a platform code like ``MEDIA_BUY_REJECTED`` now reaches the buyer
+    unrewritten and IS assertable on the wire. Keeping the pinned-enum question
+    here would silently route every platform-coded wire error to the lossy
+    reconstruction branch. Same source as ``assert_wire_error``, so the two never
+    disagree on what "emittable" means.
     """
-    return code is not None and code in _pinned_error_metadata()
+    from src.core.errors.codes import CODE_TABLE
+
+    return code is not None and code in CODE_TABLE
 
 
 def extract_wire_suggestion(envelope: dict | None) -> str | None:
@@ -235,15 +246,18 @@ class TransportResult:
         sanctioned error surface means a step never has to decide which
         mechanism to reach for.
         """
+        from src.core.errors.codes import CODE_TABLE
         from tests.helpers import assert_envelope_shape
 
-        meta = _pinned_error_metadata()
-        spec = meta.get(code)
-        assert spec is not None, (
-            f"{code!r} is not a canonical AdCP error code (pinned error-code.json). "
-            "Reconcile the feature to a canonical code."
+        entry = CODE_TABLE.get(code)
+        assert entry is not None, (
+            f"{code!r} is not an emittable error code (absent from CODE_TABLE, so no raise site "
+            "can put it on the wire). Reconcile the feature to a code production can emit."
         )
-        expected_recovery = recovery if recovery is not None else spec["recovery"]
+        # CODE_TABLE, not the pinned spec enum: the vocabulary is OPEN and platform codes reach
+        # the buyer unrewritten, so the default must come from the one table that classifies
+        # every emittable code rather than from the spec subset.
+        expected_recovery = recovery if recovery is not None else entry.recovery.value
 
         envelope = self.wire_error_envelope
         assert envelope is not None, (

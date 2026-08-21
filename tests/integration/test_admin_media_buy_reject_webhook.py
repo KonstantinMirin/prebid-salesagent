@@ -284,9 +284,17 @@ class TestAdminMediaBuyRejectWebhook:
         embedded = body.get("result") or {}
         errors = embedded.get("errors") or []
         assert errors, f"rejected webhook must embed an errors array, got result={embedded!r}"
-        assert errors[0]["code"] == "POLICY_VIOLATION", (
-            f"rejected webhook leaked code {errors[0]['code']!r} to the buyer — the wire code for a "
-            "seller rejection is POLICY_VIOLATION (ERROR_CODE_MAPPING; MEDIA_BUY_REJECTED is internal)"
+        assert errors[0]["code"] == "MEDIA_BUY_REJECTED", (
+            f"rejected webhook emitted {errors[0]['code']!r}; a seller rejection must reach the buyer "
+            "as the code the raise site declared. AdCP 3.1.1 core/error.json makes the vocabulary "
+            "OPEN — error.code is a wire-typed string, the published enum is documentary, and a "
+            "receiver decodes an unknown code via error.recovery — so collapsing this onto "
+            "POLICY_VIOLATION discarded information the spec asks senders to keep."
+        )
+        assert errors[0]["recovery"] == "terminal", (
+            f"recovery={errors[0].get('recovery')!r}; MEDIA_BUY_REJECTED is terminal in CODE_TABLE, "
+            "and recovery is the mandated decode path for a code outside the published enum — a "
+            "correctable hint here would tell the buyer to retry a decision the seller has made."
         )
         assert (errors[0].get("details") or {}).get("rejection_reason") == "Budget too low", (
             "the seller's typed rejection reason must reach the buyer — it is operator data, so "
@@ -368,9 +376,12 @@ class TestAdminMediaBuyRejectWebhook:
         result_data = next((d for d in datas if isinstance(d, dict) and "errors" in d), None)
         assert result_data is not None, f"A2A reject artifact must carry the errors payload, got {artifacts!r}"
         errors = result_data["errors"]
-        assert errors and errors[0].get("code") == "POLICY_VIOLATION", (
-            f"A2A reject artifact leaked code {errors and errors[0].get('code')!r} — the wire code for a "
-            "seller rejection is POLICY_VIOLATION (same contract the MCP sibling pins)"
+        assert errors and errors[0].get("code") == "MEDIA_BUY_REJECTED", (
+            f"A2A reject artifact emitted {errors and errors[0].get('code')!r} — a seller rejection "
+            "reaches the buyer as declared, same contract the MCP sibling pins"
+        )
+        assert errors[0].get("recovery") == "terminal", (
+            f"A2A recovery={errors[0].get('recovery')!r}; MEDIA_BUY_REJECTED is terminal in CODE_TABLE"
         )
         assert (errors[0].get("details") or {}).get("rejection_reason") == "Budget too low", (
             "the seller's typed rejection reason must reach the buyer on A2A too — operator data "

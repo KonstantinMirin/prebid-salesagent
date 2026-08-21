@@ -204,8 +204,8 @@ async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
 
     HTTP status comes from ``exc.status_code``; the matching MCP/A2A
     transport markers (``isError: true`` / ``failed``) are set by their
-    own boundary translators. Wire codes are translated through
-    ``ERROR_CODE_MAPPING`` inside the envelope builder. Logging happens
+    own boundary translators. The code is carried verbatim -- the envelope
+    builder no longer translates it. Logging happens
     in ``_envelope_response`` so all three handlers leave a uniform
     breadcrumb.
     """

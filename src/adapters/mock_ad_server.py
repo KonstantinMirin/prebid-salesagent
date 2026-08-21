@@ -357,6 +357,33 @@ class MockAdServer(AdServerAdapter):
             internal_detail=test_behavior.get("error_message"),
         )
 
+    def _raise_injected_rejection(self) -> None:
+        """Raise a SELLER REJECTION when the injected ``reject_on_create`` flag is set.
+
+        Sibling of :meth:`_raise_injected_failure`, and it exists for the same reason: the
+        E2E path runs this real adapter inside Docker, so a BDD Given can only reach it
+        through ``AdapterConfig.config_json["test_behavior"]``. Without this, a rejection
+        could only be produced in-process (via the harness MagicMock) and the e2e_rest
+        transport would silently grade nothing.
+
+        A rejection is NOT an adapter failure: it is a seller decision, so it raises
+        AdCPMediaBuyRejectedError (MEDIA_BUY_REJECTED, terminal) rather than
+        AdCPAdapterError. The buyer-facing reason rides ``details`` — the buyer needs to
+        know WHY the seller declined, and the sentence is a function of the code.
+
+        The adapter's other rejection trigger, ``approval_simulation``, is reachable only
+        from the sync-with-delay and async workflow paths, never from
+        ``_create_media_buy_immediate`` — so it cannot serve a scenario that dispatches an
+        immediate create.
+        """
+        test_behavior = self._read_test_behavior()
+        if not test_behavior.get("reject_on_create"):
+            return
+        from src.core.exceptions import AdCPMediaBuyRejectedError
+
+        reason = test_behavior.get("rejection_reason")
+        raise AdCPMediaBuyRejectedError(details={"rejection_reason": reason} if reason else None)
+
     def _validate_targeting(self, targeting_overlay):
         """Mock adapter accepts all targeting."""
         return []  # No unsupported features
@@ -545,6 +572,7 @@ class MockAdServer(AdServerAdapter):
 
         # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
         self._raise_injected_failure("fail_on_create")
+        self._raise_injected_rejection()
 
         # Log pricing model info if provided (AdCP PR #88)
         if package_pricing_info:

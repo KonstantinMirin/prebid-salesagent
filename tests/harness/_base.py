@@ -126,10 +126,17 @@ def _adcp_error_from_code(
     # through to the base AdCPError below — matching prior behavior for
     # AdCPAuthorizationError (no test currently needs isinstance() on it via
     # wire reconstruction).
-    from src.core.exceptions import INTERNAL_CODES
+    from src.core.errors.codes import CODE_TABLE
 
-    assert error_code not in INTERNAL_CODES, (
-        f"INTERNAL code {error_code!r} reached harness reconstruction — production wire leaked an internal-only code"
+    # EMITTABILITY, not the old internal/external split. This assertion used to read
+    # `error_code not in INTERNAL_CODES` — the belief that some codes are server-only and
+    # must never reach a buyer. That belief is what this step overturns: the AdCP error
+    # vocabulary is OPEN, so a platform code on the wire is correct, not a leak. The gate
+    # stays because it gates every BDD transport; only the QUESTION changes, from "was this
+    # code allowed past the rewriter" to "can any raise site emit this code at all".
+    assert error_code in CODE_TABLE, (
+        f"code {error_code!r} reached harness reconstruction but is absent from CODE_TABLE — "
+        "no raise site can emit it, so the wire produced a code nothing defines"
     )
     # A reconstructed exception can no longer carry the wire's SENTENCE: ``message`` is
     # derived from the code, so the only faithful source for text is the envelope itself.

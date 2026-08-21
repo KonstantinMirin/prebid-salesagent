@@ -17,7 +17,6 @@ from fastmcp.server import Context as FastMCPContext
 
 from src.core.errors.codes import CODE_TABLE, AppErrorCode
 from src.core.exceptions import (
-    ERROR_CODE_MAPPING,
     AdCPError,
     RecoveryHint,
     build_two_layer_error_envelope,
@@ -378,10 +377,8 @@ def with_error_logging(tool_func: Callable) -> Callable:
 def _build_error_code_to_status() -> dict[str, int]:
     """Derive the wire-code → HTTP status map from ``AdCPError`` subclasses.
 
-    Walks every concrete subclass of ``AdCPError`` and reads its
-    class-level ``error_code`` + ``status_code`` declarations, then
-    propagates each declaration to its wire-translated equivalents via
-    ``ERROR_CODE_MAPPING``. Eliminates the drift potential of a
+    Walks every concrete subclass of ``AdCPError`` and reads its class-level
+    ``error_code`` + ``status_code`` declarations. Eliminates the drift potential of a
     hand-maintained table — historically the table declared
     ``AUTH_REQUIRED → 401`` while ``AdCPAuthorizationError`` (same wire
     code at the time) carried ``status_code = 403``; a plain-ToolError raise
@@ -397,14 +394,15 @@ def _build_error_code_to_status() -> dict[str, int]:
     (``AdCPAuthorizationError`` no longer shares AUTH_REQUIRED with
     ``AdCPAuthenticationError`` — it emits PERMISSION_DENIED, salesagent-otc5.)
     """
-    # INVALID_REQUEST is AdCP's "generic 4xx bucket" wire code that does not
-    # correspond to any specific typed subclass — it's the translation target
-    # for several upstream codes. Anchor it to HTTP 400 (the conventional
-    # bad-request status) so propagation from differently-statused upstream
-    # codes (e.g., NOT_FOUND=404 -> INVALID_REQUEST) doesn't accidentally
-    # promote it to 404.
+    # INVALID_REQUEST is AdCP's "generic 4xx bucket" wire code that no specific typed
+    # subclass claims, so nothing else would seed its status. Anchor it to HTTP 400, the
+    # conventional bad-request status.
+    #
+    # (_GENERIC_CATCHALLS lived here to stop a status propagating onto a TRANSLATION
+    # target. Codes are no longer translated, so no propagation can occur and the set had
+    # no remaining reader. Ruff does not flag it -- the leading underscore matches the
+    # default dummy-variable pattern -- so it is removed by hand.)
     table: dict[str, int] = {"INVALID_REQUEST": 400}
-    _GENERIC_CATCHALLS = {"INVALID_REQUEST"}
 
     # iter_concrete_subclasses() is the single source of truth for the subclass
     # walk — shared with the error-code compliance tests. Class-level identity
@@ -419,15 +417,6 @@ def _build_error_code_to_status() -> dict[str, int]:
         existing = table.get(code)
         if existing is None or status > existing:
             table[code] = status
-        # Also index the wire-translated code so the same status applies after
-        # ``translate_error_code()`` rewrites it at the boundary. Skip generic
-        # catchall targets like INVALID_REQUEST — they have a fixed status
-        # independent of which specific upstream code triggered them.
-        wire_code = ERROR_CODE_MAPPING.get(code)
-        if wire_code and wire_code not in _GENERIC_CATCHALLS:
-            existing_wire = table.get(wire_code)
-            if existing_wire is None or status > existing_wire:
-                table[wire_code] = status
     return table
 
 

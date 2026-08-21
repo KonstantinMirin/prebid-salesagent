@@ -70,6 +70,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_brand_shorthand",
     "tests.bdd.steps.domain.compat_normalization",
+    "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
 ]
 
@@ -3263,6 +3264,13 @@ _UC002_MANUAL_APPROVAL_WIRED: set[str] = {
     "T-UC-002-alt-manual",
 }
 
+#: BR-CODES-001 — a declared error code reaches the buyer unrewritten. Needs the same
+#: FULL create-through-the-wire dispatch as the manual-approval scenarios, but is not a
+#: manual-approval scenario, so it gets its own set rather than overloading that name.
+_UC002_FULL_CREATE_WIRED: set[str] = {
+    "T-CODES-001-platform-code-reaches-buyer",
+}
+
 
 def _is_brand_shorthand_media_buy(marker_names: set[str]) -> bool:
     """True when a brand_shorthand scenario targets create_media_buy (UC-002 harness)."""
@@ -3647,6 +3655,13 @@ def _detect_uc(request: pytest.FixtureRequest) -> str | None:
         return "COMPAT"
     if any(t.startswith("T-SECURITY-001") for t in marker_names):
         return "SECURITY"
+    if any(t.startswith("T-CODES-001") for t in marker_names):
+        # BR-CODES-001 is a cross-cutting WIRE obligation (a declared error code reaches the
+        # buyer unrewritten), but it exercises it through a full create_media_buy, so it needs
+        # the UC-002 harness. Mapped explicitly rather than by feature name, the same way
+        # T-SECURITY-001 is: the tag says what the scenario grades, this says which harness
+        # serves it.
+        return "UC-002"
     return None
 
 
@@ -3803,10 +3818,10 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
                 ctx["default_pricing_option"] = pricing_option
                 ctx["dispatch_mode"] = "create"
                 yield
-        elif marker_names & (_UC002_IDEMPOTENCY_WIRED | _UC002_MANUAL_APPROVAL_WIRED) or _is_brand_shorthand_media_buy(
-            marker_names
-        ):
-            if marker_names & _UC002_MANUAL_APPROVAL_WIRED:
+        elif marker_names & (
+            _UC002_IDEMPOTENCY_WIRED | _UC002_MANUAL_APPROVAL_WIRED | _UC002_FULL_CREATE_WIRED
+        ) or _is_brand_shorthand_media_buy(marker_names):
+            if marker_names & (_UC002_MANUAL_APPROVAL_WIRED | _UC002_FULL_CREATE_WIRED):
                 # Tells the shared When step to dispatch a FULL create through
                 # the parametrized transport (not account resolution). (PR #1567)
                 ctx["uc002_full_create"] = True

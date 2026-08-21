@@ -60,8 +60,20 @@ def test_resolver_crash_is_not_reported_as_the_buyers_validation_error(integrati
             "a crash inside property-list resolution must fail the request, got "
             f"{getattr(result, 'wire_response', None) or result.payload!r}"
         )
+        # EXPECTATION REVERSED by salesagent-3dawm.6. This asserted SERVICE_UNAVAILABLE,
+        # which was never what the raise site declared: normalize_to_adcp_error turns an
+        # untyped crash into INTERNAL_ERROR, and a now-deleted table rewrote that to
+        # SERVICE_UNAVAILABLE at the boundary. With the rewriters gone the buyer sees the
+        # code the server actually produced.
+        #
+        # This test's own point still holds, and holds better: a resolver crash must not be
+        # reported as the BUYER's validation error. INTERNAL_ERROR says "the seller broke",
+        # and recovery=transient — unchanged by the reversal — tells the buyer what to do
+        # about it, which is what AdCP 3.1.1 core/error.json makes the decode path for a code
+        # outside the published enum. No internal detail reaches the wire: the message is
+        # CODE_TABLE's generic sentence, which BR-SECURITY-001 grades separately.
         assert_envelope_shape(
             result.wire_error_envelope,
-            "SERVICE_UNAVAILABLE",
+            "INTERNAL_ERROR",
             recovery="transient",
         )

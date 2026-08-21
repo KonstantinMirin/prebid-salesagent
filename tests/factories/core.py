@@ -222,7 +222,8 @@ def set_adapter_test_behavior(env: Any, tenant_id: str, **behavior: Any) -> Adap
 
     The Docker-hosted mock adapter reads injected behavior — ``manual_approval_required``,
     ``fail_on_create``, ``fail_on_update``, ``error_message``, ``error_details``,
-    ``recovery`` — from ``AdapterConfig.config_json["test_behavior"]`` (see
+    ``recovery``, ``reject_on_create``/``rejection_reason`` — from
+    ``AdapterConfig.config_json["test_behavior"]`` (see
     ``mock_ad_server._read_test_behavior``). In-process transports use the env's
     MagicMock adapter directly and ignore this row; it exists so the same BDD Given
     steps also drive the real adapter over E2E.

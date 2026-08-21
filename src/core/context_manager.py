@@ -9,7 +9,7 @@ from typing import Any
 
 from a2a.types import Task, TaskStatusUpdateEvent
 from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
-from adcp.types import ErrorCode, McpWebhookPayload
+from adcp.types import McpWebhookPayload
 from adcp.webhooks import GeneratedTaskStatus
 from pydantic import BaseModel
 from rich.console import Console
@@ -23,7 +23,7 @@ from src.core.database.jsonb_append import jsonb_list_append
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
 from src.core.database.repositories.workflow import append_step_comment, build_context, build_workflow_step
-from src.core.exceptions import AdCPError, build_two_layer_error_envelope, normalize_to_adcp_error
+from src.core.exceptions import build_two_layer_error_envelope, normalize_to_adcp_error
 from src.core.webhook_validator import (
     validate_webhook_task_type,
     webhook_url_for_log,
@@ -364,33 +364,9 @@ class ContextManager(DatabaseManager):
         hiccup during audit doesn't replace the original exception that the
         caller is about to re-raise.
         """
-        from src.core.exceptions import WIRE_STANDARD_CODES
 
         try:
             source = normalize_to_adcp_error(exc)
-
-            # Defensive wire-code enforcement: webhook subscribers must only
-            # see codes in ``WIRE_STANDARD_CODES``. If the wire code falls
-            # outside the standard set, override with SERVICE_UNAVAILABLE
-            # so async subscribers never receive an internal-only code.
-            # Structured fields (details/field/suggestion/context) carry
-            # forward so buyer agents and webhook subscribers retain
-            # machine-actionable correction context across the rewrite.
-            wire_code = source.wire_error_code
-            if wire_code not in WIRE_STANDARD_CODES:
-                # The base form, not AdCPServiceUnavailableError: naming the code on
-                # the base keeps status 500, which is what the previous path produced.
-                # The source's sentence is deliberately NOT carried: the rewritten code
-                # owns the text, so a message from the pre-rewrite code cannot disagree
-                # with the code the subscriber receives.
-                source = AdCPError(
-                    error_code=ErrorCode.SERVICE_UNAVAILABLE,
-                    recovery="terminal",
-                    details=source.details,
-                    field=source.field,
-                    suggestion=source.suggestion,
-                    context=source.context,
-                )
 
             response_data = build_two_layer_error_envelope(source)
             error_message = source.message or str(source)

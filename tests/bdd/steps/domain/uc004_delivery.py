@@ -2856,8 +2856,7 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
         envelope = result.wire_error_envelope
         code = result.wire_error_code()
         recovery = error_object.get("recovery")
-        # SERVICE_UNAVAILABLE must be excluded too: ERROR_CODE_MAPPING remaps
-        # INTERNAL_ERROR to SERVICE_UNAVAILABLE — a server fault would otherwise
+        # SERVICE_UNAVAILABLE must be excluded too: it is a server fault that would otherwise
         # pass as a field rejection. (#1420 should-fix) CONFIGURATION_ERROR now
         # passes through untranslated (salesagent-nr2q) and is likewise a
         # seller-side fault, never a field rejection. AUTH_MISSING/AUTH_INVALID
@@ -2866,6 +2865,18 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
         # string let an auth failure (e.g. resolve_principal_or_raise's
         # "principal not found" -> AUTH_INVALID) masquerade as a legitimate
         # client field rejection once the split landed.
+        # The three codes below were added when the code rewriters were deleted. They used to
+        # arrive here as SERVICE_UNAVAILABLE — already excluded — because a collapse rewrote
+        # every non-standard code before the wire. With the collapse gone they arrive as
+        # themselves, and each would otherwise pass as a legitimate "client field rejection":
+        #   PARTIAL_FAILURE       correctable, but a SERVER-side partial failure
+        #   MEDIA_BUY_REJECTED    terminal, a SELLER decision, not a field being invalid
+        #   INVENTORY_UNAVAILABLE correctable, but about availability rather than the field
+        # The recovery check below already catches the transient server faults
+        # (ACTIVATION_WORKFLOW_FAILED, AD_SERVER_CREATE_FAILED, AD_SERVER_UPDATE_FAILED,
+        # WORKFLOW_CREATION_FAILED), and ACTIVATION_ERROR / ACTIVATION_FAILED / ADAPTER_ERROR /
+        # CREATIVE_SYNC_FAILED are absent from CODE_TABLE entirely, so no raise site can emit
+        # them. Without these three the assertion would silently WEAKEN as a result of this step.
         assert code and code not in {
             "INTERNAL_ERROR",
             "SERVICE_UNAVAILABLE",
@@ -2873,6 +2884,9 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
             "AUTH_REQUIRED",
             "AUTH_MISSING",
             "AUTH_INVALID",
+            "PARTIAL_FAILURE",
+            "MEDIA_BUY_REJECTED",
+            "INVENTORY_UNAVAILABLE",
         }, (
             f"Invalid {field}: expected a client rejection on the wire, got code={code!r} "
             f"— a server crash or auth failure is not a field rejection. Envelope: {envelope}"

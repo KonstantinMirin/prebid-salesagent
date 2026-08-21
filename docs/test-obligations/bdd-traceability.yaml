@@ -21,6 +21,13 @@ source:
   compiled_at: "2026-06-04T09:53:13Z"
 
 mappings:
+  CODES-001:
+    - adcp_scenario_id: "T-CODES-001-platform-code-reaches-buyer"
+      adcp_feature: "BR-CODES-001-open-vocabulary-wire-codes.feature"
+      obligation_id: null
+      upstream_refs: ["BR-CODES-001"]
+      business_rules: []
+      status: new
   SECURITY-001:
     - adcp_scenario_id: "T-SECURITY-001-untyped-exception"
       adcp_feature: "BR-SECURITY-001-wire-error-safety.feature"

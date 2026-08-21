@@ -587,9 +587,9 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # outcome as the CreateMediaBuyError variant — embed that with the reason.
                     #
                     # Route the code through the typed AdCPError cascade so the buyer sees
-                    # the same WIRE code the tool path emits for this event
-                    # (MEDIA_BUY_REJECTED is internal-only; wire_error_code translates it
-                    # to POLICY_VIOLATION — never hand-pick codes here; PR #1567 round-2 item 1).
+                    # the same WIRE code the tool path emits for this event — which is now
+                    # MEDIA_BUY_REJECTED itself, not a POLICY_VIOLATION rewrite. Never
+                    # hand-pick codes here (PR #1567 round-2 item 1); the class declares it.
                     # The seller's typed reason is OPERATOR DATA, not the buyer-facing
                     # sentence: `message` is a function of the code through CODE_TABLE and so
                     # cannot carry it. It travels in `details` — without this the buyer is told
@@ -600,8 +600,9 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     create_media_buy_rejected_result = CreateMediaBuyError(
                         errors=[
                             Error(
-                                code=rejection.wire_error_code,
+                                code=rejection.error_code,
                                 message=rejection.message,
+                                recovery=rejection.recovery,
                                 details=rejection_details,
                             )
                         ]

@@ -1655,7 +1655,7 @@ class TestDeliveryAdapterError:
         SERVICE_UNAVAILABLE advisory, mirroring the adapter handler. The code is the
         wire-compliant SERVICE_UNAVAILABLE (not the internal-only INTERNAL_ERROR):
         advisory errors[] entries serialize verbatim and are normalized through
-        translate_error_code at response assembly.
+        emitted as declared at response assembly.
         """
         good = _make_mock_media_buy(media_buy_id="mb_good")
         bad = _make_mock_media_buy(media_buy_id="mb_bad")
@@ -1684,27 +1684,36 @@ class TestDeliveryAdapterError:
         assert len(advisory_errors) == 1
         assert "mb_bad" in advisory_errors[0].message
 
-    def test_advisory_normalization_collapses_internal_code_to_standard(self):
-        """A hand-built advisory carrying a non-standard/internal code is re-coded to a
-        STANDARD wire code before it reaches the response.
+    def test_advisory_normalization_carries_the_declared_code_verbatim(self):
+        """A hand-built advisory reaches the buyer carrying the code its author declared.
 
-        Advisory errors[] entries serialize verbatim (no boundary translation), so this
-        is the only thing standing between an internal code and the buyer. Reddens if
-        normalize_advisory_errors stops normalizing (e.g. returns code=e.code).
+        EXPECTATION REVERSED by salesagent-3dawm.6. This test previously asserted that
+        INTERNAL_ERROR was re-coded to SERVICE_UNAVAILABLE, and its docstring said it would
+        redden "if normalize_advisory_errors stops normalizing (e.g. returns code=e.code)" —
+        which is exactly what that step did, deliberately.
+
+        AdCP 3.1.1 core/error.json makes the error-code vocabulary OPEN: error.code is a
+        wire-typed string, the published codes are documentary, senders MAY emit codes
+        outside that set, and receivers MUST decode an unknown code by reading
+        error.recovery. Collapsing a code onto a published one therefore DISCARDED
+        information the spec asks senders to keep, and the recovery hint — filled in below
+        from CODE_TABLE — is what makes the un-collapsed code decodable.
         """
         from src.core.exceptions import normalize_advisory_errors
         from src.core.schemas import Error
 
         out = normalize_advisory_errors(
             [
-                Error(code="SERVICE_UNAVAILABLE", message="internal adapter detail for mb_x"),  # internal, unmapped
-                Error(code="INTERNAL_ERROR", message="mapped internal for mb_y"),  # internal, mapped
+                Error(code="SERVICE_UNAVAILABLE", message="internal adapter detail for mb_x"),
+                Error(code="INTERNAL_ERROR", message="platform code for mb_y"),
                 Error(code="MEDIA_BUY_NOT_FOUND", message="already standard for mb_z"),
             ]
         )
-        assert [e.code for e in out] == ["SERVICE_UNAVAILABLE", "SERVICE_UNAVAILABLE", "MEDIA_BUY_NOT_FOUND"]
+        assert [e.code for e in out] == ["SERVICE_UNAVAILABLE", "INTERNAL_ERROR", "MEDIA_BUY_NOT_FOUND"]
         # Messages are preserved verbatim.
         assert out[0].message == "internal adapter detail for mb_x"
+        # And every entry carries the recovery its code means, so an unknown code stays decodable.
+        assert [e.recovery for e in out] == ["transient", "transient", "correctable"]
 
     def test_adapter_failure_audit_logged(self):
         """UC-004-EXT-F3: adapter failure logged to audit trail (NFR-003).

@@ -459,7 +459,7 @@ class TestGAMProductUnavailableRaiseSites:
     constructing the exception directly; here the production validation loop is
     driven so a class-swap at either site (e.g. AdCPProductUnavailableError ->
     AdCPError or AdCPCapabilityNotSupportedError) is caught. The wire collapses
-    PRODUCT_UNAVAILABLE through ERROR_CODE_MAPPING, pinned separately.
+    PRODUCT_UNAVAILABLE as its own declared code, pinned separately.
     """
 
     @pytest.mark.parametrize(

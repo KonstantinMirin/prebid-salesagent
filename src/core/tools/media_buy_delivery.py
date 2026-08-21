@@ -553,11 +553,10 @@ def _get_media_buy_delivery_impl(
                 logger.error("Error processing delivery for %s: %s", media_buy_id, e)
                 adapter_errors.append(
                     Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
-                        # SERVICE_UNAVAILABLE (not INTERNAL_ERROR) — advisory
-                        # errors[] entries serialize verbatim (they never pass
-                        # through translate_error_code), and INTERNAL_ERROR is an
-                        # internal-only code (exceptions.INTERNAL_CODES) that must
-                        # not reach the buyer. Matches the sibling adapter handler
+                        # SERVICE_UNAVAILABLE names what actually happened here: the
+                        # ADAPTER was unreachable. Codes now reach the buyer verbatim, so
+                        # this is a deliberate choice of code, not a stand-in for one that
+                        # would have been rewritten. Matches the sibling adapter handler
                         # above. The assembly-time normalization below is the
                         # backstop that keeps any hand-built code on the wire.
                         code="SERVICE_UNAVAILABLE",
