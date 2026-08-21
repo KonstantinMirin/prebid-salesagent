@@ -23,11 +23,18 @@ Multi-transport support (subclasses may also override):
 from __future__ import annotations
 
 import os
+import uuid
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from tests.harness._realize import realize_e2e
+
+#: Where an IN-PROCESS outbound webhook is addressed. A fixed public URL: the POST
+#: is intercepted before it leaves the process, so the address only has to survive
+#: production's SSRF gate. The e2e answer is a capture-origin key — see
+#: :meth:`BaseTestEnv.webhook_destination`.
+IN_PROCESS_WEBHOOK_URL = "https://buyer.example.com/webhook"
 
 # The MCP transport boots the real FastMCP app lifespan, which starts the
 # background schedulers. Those run a batch immediately on the *real* wall clock
@@ -796,6 +803,75 @@ class BaseTestEnv:
         self._last_wire_response = None
         self._signed_dispatch = signed
         return dispatcher.dispatch(self, signed=signed, **kwargs)
+
+    # -- Outbound webhooks: where they are addressed ------------------------
+    #
+    # The destination lives here rather than on a domain mixin because every env
+    # that REGISTERS a reporting webhook needs it (media-buy create as much as
+    # delivery), while only the delivery envs read the deliveries back. Which
+    # address a transport gets is realized once, here, so no step definition ever
+    # has to ask which transport it is running on (salesagent-n78j0.1.4).
+
+    def _realize_e2e_webhook_destination(self) -> str:
+        """E2E: a per-env key on the TLS capture origin the SERVER can actually reach.
+
+        ``https://webhooks.adcp-e2e.dev:8443`` is a real HTTPS origin on a non-private
+        address, so production's UNPATCHED SSRF gate accepts it on its own terms. The
+        key is this env's alone, which is what lets scenarios share one receiver
+        without reading each other's captures.
+
+        This is also the ONE place the key becomes an address something else can be
+        given, so it is where :attr:`webhook_capture_key_was_handed_out` is recorded —
+        see that property for why the recording cannot live on the minting path.
+        """
+        from tests.e2e._webhook_capture import delivery_url
+
+        url = delivery_url(self.webhook_capture_key)
+        self.__dict__["_webhook_capture_key_handed_out"] = True
+        return url
+
+    @property
+    def webhook_capture_key(self) -> str:
+        """This env's own key on the shared TLS capture receiver.
+
+        Minted LAZILY, which is a hazard as much as a convenience: a READER that
+        touches this property brings a key into existence that nothing was ever given.
+        Ask :attr:`webhook_capture_key_was_handed_out` before treating an empty
+        capture list as an answer.
+        """
+        if self.__dict__.get("_webhook_capture_key") is None:
+            self.__dict__["_webhook_capture_key"] = f"harness-{uuid.uuid4().hex}"
+        return str(self.__dict__["_webhook_capture_key"])
+
+    @property
+    def webhook_capture_key_was_handed_out(self) -> bool:
+        """Was this env's capture key ever given to anything as a DESTINATION?
+
+        The distinction the capture receiver cannot make for us. Its store
+        (``tests/e2e/webhook_capture_service.py`` ``_CaptureStore.get``) SYNTHESIZES
+        ``{"received": [], "received_raw": []}`` for any key it has never seen, so
+        "registered, and correctly received nothing" and "nobody was ever told this
+        address" are the same 200/empty answer server-side. That is right for the
+        service — it learns of a key only when a delivery arrives, so it has no notion
+        of registration to report — and it is why the distinction has to be made HERE,
+        where the fact actually exists.
+
+        Recorded on the HANDING-OUT path (:meth:`_realize_e2e_webhook_destination`),
+        never on the minting path: :attr:`webhook_capture_key` mints on demand, so a
+        flag set there would only ever say "a key exists" — which a vacuous reader
+        makes true by reading. The address being ISSUED is the fact; a key existing is
+        not (salesagent-n78j0.1.4).
+        """
+        return bool(self.__dict__.get("_webhook_capture_key_handed_out"))
+
+    @realize_e2e(_realize_e2e_webhook_destination)
+    def webhook_destination(self) -> str:
+        """Where this env's outbound webhook deliveries are addressed.
+
+        In process a fixed public URL: the POST is intercepted before it leaves, so
+        the address only has to survive production's SSRF gate.
+        """
+        return IN_PROCESS_WEBHOOK_URL
 
     # -- Request signing ----------------------------------------------------
 

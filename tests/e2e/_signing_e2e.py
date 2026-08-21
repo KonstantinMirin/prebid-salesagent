@@ -496,24 +496,26 @@ async def published_jwks_for_agent(
     return jwks, keys[0]["kid"]
 
 
-def _admin_post_expecting_flash(
+def _admin_post_rendered_page(
     base_url: str,
     *,
     tenant_id: str,
     path: str,
     data: dict[str, str],
-    pattern: re.Pattern[str],
-    not_found_hint: str = "",
 ) -> str:
-    """Authenticate, POST one admin form, and return the flash's captured group.
+    """Authenticate, POST one admin form, follow the redirect, return the RENDERED page.
 
-    The shared shape behind every signing-key admin-route driver in this module
-    (#1291 mp53.6, architect review MEDIUM-6): authenticate as the e2e
-    super-admin, POST *path* with *data* and follow the redirect (Flask renders
-    the flash on the destination page), assert 200, then extract *pattern*'s
-    first captured group. Extracting only the auth block and leaving the
-    POST/assert/extract steps duplicated per driver would be the same defect
-    one layer down, so this is the unit that gets shared.
+    The shared shape behind every admin-route driver in this module (#1291 mp53.6,
+    architect review MEDIUM-6): authenticate as the e2e super-admin, POST *path* with
+    *data* and follow the redirect (Flask renders the flash on the destination page),
+    assert 200.
+
+    Stops at the rendered page rather than at one matched pattern because callers do not
+    all ask the same question of it. A driver whose route has exactly one acceptable
+    outcome wants :func:`_admin_post_expecting_flash`; a driver whose route reports a
+    VERDICT — sent / declined / broken — has to read more than one flash, and folding
+    that into a single-pattern helper would have forced it to treat a legitimate decline
+    as a broken rig (salesagent-n78j0.1.4).
     """
     import requests
 
@@ -543,11 +545,30 @@ def _admin_post_expecting_flash(
             f"{tenant_id!r}. Body: {response.text[:300]!r}"
         )
 
-    match = pattern.search(response.text)
+    return str(response.text)
+
+
+def _admin_post_expecting_flash(
+    base_url: str,
+    *,
+    tenant_id: str,
+    path: str,
+    data: dict[str, str],
+    pattern: re.Pattern[str],
+    not_found_hint: str = "",
+) -> str:
+    """Drive one admin form whose route has exactly ONE acceptable outcome.
+
+    Returns *pattern*'s first captured group off the rendered page; anything else is a
+    failure, because for these routes (mint a key, revoke a key) there is no second
+    legitimate answer to report.
+    """
+    page = _admin_post_rendered_page(base_url, tenant_id=tenant_id, path=path, data=data)
+    match = pattern.search(page)
     assert match is not None, (
         f"the admin route {path!r} must report its outcome in a success flash matching "
         f"{pattern.pattern!r}; the rendered page carries no such message for tenant {tenant_id!r}. "
-        f"{not_found_hint}Page: {response.text[:600]!r}"
+        f"{not_found_hint}Page: {page[:600]!r}"
     )
     return match.group(1)
 
@@ -576,6 +597,66 @@ def provision_signing_key_via_admin(base_url: str, *, tenant_id: str, alg: str =
             "KEK (ADCP_SIGNING_DEV_KEK) is missing. "
         ),
     )
+
+
+#: The manual delivery-webhook trigger's TWO outcome flashes
+#: (``src/admin/blueprints/operations.py`` :660-663). The route flashes the first only when
+#: the scheduler actually SENT, and the second when it considered the media buy and declined.
+_TRIGGER_DELIVERY_SENT_FLASH = re.compile(r"Delivery webhook triggered successfully")
+_TRIGGER_DELIVERY_DECLINED_FLASH = re.compile(r"Failed to trigger delivery webhook")
+
+
+def trigger_delivery_webhook_via_admin(base_url: str, *, tenant_id: str, media_buy_id: str) -> bool:
+    """Ask the LIVE SERVER to send one delivery-report webhook, and report ITS VERDICT.
+
+    Drives ``/admin/tenant/<id>/media-buy/<id>/trigger-delivery-webhook``, which runs
+    ``DeliveryWebhookScheduler.trigger_report_for_media_buy_by_id(force=True)`` INSIDE
+    the server container: the report is built from the server's own delivery poll,
+    routed through the one signing boundary, and posted by the deployment under test.
+
+    Why an admin route rather than the harness's in-process ``WebhookDeliveryService``:
+    a delivery made in the test process is one the live server never made, so a leg
+    grading it grades nothing about the deployment (salesagent-n78j0.1.4). Same
+    admin-over-HTTP shape — and the same session/POST/render helper — as
+    :func:`provision_signing_key_via_admin`, for the same reason.
+
+    ``force=True`` is what the route passes, so neither the daily-frequency filter nor
+    the 24-hour duplicate check can silently turn a requested delivery into a no-op.
+
+    THREE OUTCOMES, and collapsing them to two is the defect this shape exists to avoid:
+
+    * the SENT flash            -> ``True``   — the server sent one;
+    * the DECLINED flash        -> ``False``  — the server considered it and declined.
+      A DECLINE IS A VERDICT, NOT AN ERROR. In process ``deliver_webhook`` returns
+      ``False`` for exactly this; raising here instead made the same operation mean two
+      different things depending on transport, which is the fault this atom exists to
+      remove — and it made "webhook fires for a media buy WITHOUT webhook configuration"
+      ungradeable over the wire, because a correct decline read as a broken rig.
+    * NEITHER flash             -> RAISE. Kept strict deliberately: it is what caught an
+      ``HTTP 404 'Media buy not found'`` that a laxer reading would have recorded as a
+      decline. "No flash at all" and "the failure flash" are different facts.
+
+    KNOWN CONFLATION, recorded rather than solved: the DECLINED flash covers BOTH
+    "declined because no reporting_webhook is configured" (a verdict) and "the delivery
+    poll returned errors so it declined to send" (arguably a rig problem). The route does
+    not distinguish them, so neither can this. Mapping both to ``False`` is right for the
+    scenarios here; a caller that needs to tell them apart needs the route to say more.
+    """
+    page = _admin_post_rendered_page(
+        base_url,
+        tenant_id=tenant_id,
+        path=f"{_ADMIN_PREFIX}/tenant/{tenant_id}/media-buy/{media_buy_id}/trigger-delivery-webhook",
+        data={},
+    )
+    if _TRIGGER_DELIVERY_SENT_FLASH.search(page):
+        return True
+    assert _TRIGGER_DELIVERY_DECLINED_FLASH.search(page), (
+        f"the delivery-webhook trigger for media buy {media_buy_id!r} (tenant {tenant_id!r}) reported "
+        f"NEITHER outcome: the rendered page carries neither {_TRIGGER_DELIVERY_SENT_FLASH.pattern!r} nor "
+        f"{_TRIGGER_DELIVERY_DECLINED_FLASH.pattern!r}. That is a broken rig, not a verdict — the route "
+        f"errored, redirected somewhere else, or the media buy does not exist server-side. Page: {page[:600]!r}"
+    )
+    return False
 
 
 def revoke_signing_key_via_admin(base_url: str, *, tenant_id: str, kid: str) -> str:

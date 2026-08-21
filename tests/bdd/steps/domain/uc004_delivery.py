@@ -28,12 +28,6 @@ from tests.helpers.webhook_wire import CapturedWebhook, signature_input_label, s
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
-#: Long enough for the sender's retry ladder on the wire, short enough that a
-#: missing delivery is a failure rather than a hang.
-_WIRE_DELIVERY_TIMEOUT_SECONDS = 45.0
-_WIRE_POLL_INTERVAL_SECONDS = 0.5
-
-
 def _pending(ctx: dict, step: str) -> None:
     """Mark a step as pending implementation (harness not yet wired for BDD).
 
@@ -48,104 +42,55 @@ def _parse_json_list(text: str) -> list[str]:
     return json.loads(text)
 
 
-def _sent_payload(call: Any) -> dict[str, Any]:
-    """The body of one captured webhook POST, parsed from the BYTES that went out.
+def _sent_payload(captured: CapturedWebhook) -> dict[str, Any]:
+    """The body of one captured delivery, parsed from the BYTES that went out.
 
-    ``env.mock["post"]`` is the socket (``tests.helpers.webhook_wire``), so the
-    body arrives as ``content`` — the exact bytes the signature covers — rather
-    than as the dict a client was asked to serialize. Reading the bytes is what
-    lets a signature assertion be about what the receiver got (#1441).
+    Reading the bytes rather than a dict a client was asked to serialize is what
+    lets a payload assertion be about what the receiver got (#1441). Tolerates an
+    empty body — a reader that scans EVERY delivery for one media_buy_id
+    (``then_skip_no_webhook``) must not die on a bodyless one.
     """
-    content = call[1].get("content")
-    if not content:
+    if not captured.content:
         return {}
-    return json.loads(content)
-
-
-def _last_delivery_call(ctx: dict) -> Any:
-    """The most recent outbound webhook POST as the socket recorded it.
-
-    One accessor for the three readings the delivery Thens make of it — payload,
-    headers, and the whole captured request — so "the last delivery" cannot come to
-    mean a different call in one of them.
-
-    Two sources, one shape. In process the socket is the patched ``requests.post``
-    mock. On the wire the server runs in its own container and no in-process mock
-    can see it, so the delivery is read back from the TLS capture service under
-    this scenario's own key. Both return the ``(args, kwargs)`` pair the readers
-    already expect, with ``content`` and ``headers`` — which is why none of the 21
-    call sites had to change (salesagent-og9k.9).
-    """
-    if _on_real_wire(ctx):
-        return _last_captured_delivery(ctx)
-    mock_post = ctx["env"].mock["post"]
-    assert mock_post.called, "No webhook POST was made"
-    return mock_post.call_args_list[-1]
-
-
-def _last_captured_delivery(ctx: dict) -> Any:
-    """The last delivery the capture service recorded for this scenario's key.
-
-    Polls, because delivery is asynchronous behind the sender's retry ladder —
-    unlike the in-process branch, where the POST has already happened by the time
-    a Then runs.
-    """
-    from time import sleep
-
-    from tests.e2e._webhook_capture import captured_deliveries
-
-    key = ctx.get("webhook_capture_key")
-    assert key is not None, (
-        "no capture key was allocated for this scenario — a Given must configure the webhook "
-        "destination through _webhook_destination() before a Then reads a delivery"
-    )
-
-    deliveries: list[Any] = []
-    elapsed = 0.0
-    while elapsed < _WIRE_DELIVERY_TIMEOUT_SECONDS and not deliveries:
-        deliveries = captured_deliveries(key)
-        if deliveries:
-            break
-        sleep(_WIRE_POLL_INTERVAL_SECONDS)
-        elapsed += _WIRE_POLL_INTERVAL_SECONDS
-
-    assert deliveries, (
-        f"No webhook POST reached the capture receiver for key {key!r} within {_WIRE_DELIVERY_TIMEOUT_SECONDS}s"
-    )
-    last = deliveries[-1]
-    return ((), {"content": last.content, "headers": dict(last.headers), "url": last.url})
-
-
-def _get_last_webhook_payload(ctx: dict) -> dict[str, Any]:
-    """Extract the JSON payload from the most recent webhook POST call."""
-    call = _last_delivery_call(ctx)
-    payload = _sent_payload(call)
-    assert payload, f"Webhook POST had no JSON payload: {call}"
-    return payload
-
-
-def _get_last_webhook_headers(ctx: dict) -> dict[str, str]:
-    """Extract headers from the most recent webhook POST call."""
-    return _last_delivery_call(ctx)[1].get("headers", {})
+    return json.loads(captured.content)
 
 
 def _captured_delivery(ctx: dict) -> CapturedWebhook:
     """The last delivery as a :class:`CapturedWebhook` — url, headers, BYTES.
 
-    The shape every RFC 9421 grader in this repo consumes
-    (``tests/helpers/webhook_wire.py``), so the signature assertions below run against
-    the same object ``tests/e2e/test_webhook_signature_e2e.py`` and
+    The env owns WHO made it and HOW it is read back per transport
+    (:meth:`CircuitBreakerMixin.last_delivery`); this step layer only knows that a
+    delivery has one shape. That shape is the one every RFC 9421 grader in this repo
+    consumes (``tests/helpers/webhook_wire.py``), so the signature assertions below run
+    against the same object ``tests/e2e/test_webhook_signature_e2e.py`` and
     ``tests/integration/test_notification_proof_challenge.py`` verify — a signature
     covers ``@target-uri`` and the body bytes, so a grader that reconstructed either
     would be verifying a message that never went out.
     """
-    args, kwargs = _last_delivery_call(ctx)
-    url = args[0] if args else kwargs.get("url", "")
-    return CapturedWebhook(
-        url=str(url),
-        headers=httpx.Headers(kwargs.get("headers") or {}),
-        content=kwargs.get("content") or b"",
-    )
+    return ctx["env"].last_delivery()
+
+
+def _get_last_webhook_payload(ctx: dict) -> dict[str, Any]:
+    """Extract the JSON payload from the most recent webhook delivery."""
+    captured = _captured_delivery(ctx)
+    payload = _sent_payload(captured)
+    assert payload, f"Webhook POST had no JSON payload: {captured}"
+    return payload
+
+
+def _get_last_webhook_headers(ctx: dict) -> httpx.Headers:
+    """Headers of the most recent webhook delivery, CASE-INSENSITIVELY.
+
+    A deliberate loosening, recorded because it is a decision and not an accident: this
+    returns :class:`httpx.Headers`, so ``X-AdCP-Timestamp`` / ``X-AdCP-Signature`` /
+    ``X-ADCP-Signature`` lookups that were exact-match dict reads are now
+    case-insensitive. That is HTTP-correct — RFC 9110 makes field names
+    case-insensitive and a sender is free to change its casing — and it stops these
+    assertions grading the sender's FORMATTING instead of the wire contract. The cost is
+    that a test can no longer pin a specific casing; nothing here wants to
+    (salesagent-n78j0.1.4).
+    """
+    return _captured_delivery(ctx).headers
 
 
 def _collect_all_packages(resp: Any) -> list[Any]:
@@ -417,43 +362,28 @@ def given_adapter_no_data_period(ctx: dict, mb_id: str) -> None:
 # ── Webhook configuration steps ─────────────────────────────────────
 
 
-_WEBHOOK_URL = "https://buyer.example.com/webhook"
+def _circuit_breaker_endpoint_key(ctx: dict, webhook_url: str | None = None) -> str:
+    """The key production files this scenario's circuit breaker under.
 
+    ``WebhookDeliveryService`` keys breakers ``f"{tenant_id}:{webhook_url}"``, so a step
+    that reads one must name the SAME url production delivered to. That url is
+    ``env.webhook_destination()`` — realized per transport — and NOT an in-process
+    literal. This module previously imported ``IN_PROCESS_WEBHOOK_URL`` and aliased it as
+    the fallback for all five reader sites, which was wrong twice over: over e2e the
+    destination is this env's capture-origin key, so the literal named a breaker no
+    delivery ever touched and every read of it saw a default state; and a symbol called
+    IN_PROCESS_* sitting in ``tests/bdd/steps/`` IS the step layer naming a transport,
+    against this atom's own constraint (salesagent-n78j0.1.4).
 
-def _on_real_wire(ctx: dict) -> bool:
-    """Whether this scenario's deliveries cross a real socket to a real receiver.
-
-    True only on the e2e transports, where the server runs in its own container:
-    an in-process mock cannot observe what it posts, and the destination has to be
-    somewhere the server can actually reach.
+    *webhook_url* overrides the destination for the two Givens that CREATE the breaker
+    from a url the scenario itself configured. Readers pass nothing and pick up whichever
+    key those Givens stashed, falling back to the env's destination when no Given ran.
     """
-    transport = ctx.get("transport")
-    return str(getattr(transport, "value", transport) or "").startswith("e2e")
-
-
-def _webhook_destination(ctx: dict) -> str:
-    """Where this scenario's deliveries should land.
-
-    In process: a fixed public URL — the POST is intercepted before it leaves, so
-    the address only has to survive the SSRF gate.
-
-    On the wire: a per-scenario key on the TLS capture origin
-    (``https://webhooks.adcp-e2e.dev:8443``), whose address production's UNPATCHED
-    gate accepts. The key is stored on ctx so :func:`_last_delivery_call` reads
-    back the same one — two scenarios running against the shared receiver must not
-    see each other's captures (salesagent-og9k.9).
-    """
-    if not _on_real_wire(ctx):
-        return _WEBHOOK_URL
-    key = ctx.get("webhook_capture_key")
-    if key is None:
-        from uuid import uuid4
-
-        key = f"uc004-{uuid4().hex}"
-        ctx["webhook_capture_key"] = key
-    from tests.e2e._webhook_capture import delivery_url
-
-    return delivery_url(key)
+    stashed = ctx.get("circuit_breaker_endpoint_key")
+    if webhook_url is None and stashed:
+        return str(stashed)
+    env = ctx["env"]
+    return f"{env._tenant_id}:{webhook_url or env.webhook_destination()}"
 
 
 def _set_active_webhook(ctx: dict, mb_id: str) -> None:
@@ -465,11 +395,11 @@ def _set_active_webhook(ctx: dict, mb_id: str) -> None:
     the row this writes is one the running server reads — the same mechanism
     ``_persist_simulation_config`` uses for delivery-poll responses.
     """
+    env = ctx["env"]
     ctx.setdefault("webhook_config", {})[mb_id] = {
-        "url": _webhook_destination(ctx),
+        "url": env.webhook_destination(),
         "active": True,
     }
-    env = ctx["env"]
     if getattr(env, "_session", None) is not None:
         _persist_webhook_config_if_needed(ctx, env)
 
@@ -533,7 +463,7 @@ def _persist_webhook_config_if_needed(ctx: dict, env: Any) -> None:
         select(PushNotificationConfig).where(
             PushNotificationConfig.tenant_id == tenant_id,
             PushNotificationConfig.principal_id == principal_id,
-            PushNotificationConfig.url == _webhook_destination(ctx),
+            PushNotificationConfig.url == env.webhook_destination(),
         )
     ).first()
     if existing is not None:
@@ -561,7 +491,7 @@ def _persist_webhook_config_if_needed(ctx: dict, env: Any) -> None:
     PushNotificationConfigFactory(
         tenant=tenant,
         principal=principal,
-        url=_webhook_destination(ctx),
+        url=env.webhook_destination(),
         is_active=True,
         **auth_fields,
     )
@@ -607,11 +537,11 @@ def given_webhook_auth_scheme(ctx: dict, mb_id: str, scheme: str) -> None:
     ``given_shared_secret_valid`` / ``given_bearer_token_valid`` step can
     update the same row in-place with the auth credentials.
     """
+    env = ctx["env"]
     wh = ctx.setdefault("webhook_config", {}).setdefault(mb_id, {})
     wh["auth_scheme"] = scheme
     wh["active"] = True
-    wh["url"] = _webhook_destination(ctx)
-    env = ctx["env"]
+    wh["url"] = env.webhook_destination()
     if getattr(env, "_session", None) is not None:
         _persist_webhook_config_if_needed(ctx, env)
 
@@ -646,10 +576,10 @@ def given_webhook_no_authentication(ctx: dict) -> None:
         select(PushNotificationConfig).where(
             PushNotificationConfig.tenant_id == env._tenant_id,
             PushNotificationConfig.principal_id == env._principal_id,
-            PushNotificationConfig.url == _webhook_destination(ctx),
+            PushNotificationConfig.url == env.webhook_destination(),
         )
     ).first()
-    assert row is not None, f"no PushNotificationConfig was registered for {_webhook_destination(ctx)}"
+    assert row is not None, f"no PushNotificationConfig was registered for {env.webhook_destination()}"
     assert (row.authentication_type, row.authentication_token) == (None, None), (
         "this registration must carry no authentication block — it is the ABSENCE that selects "
         f"RFC 9421 (:1424) — but it carries type={row.authentication_type!r} token set: "
@@ -760,8 +690,8 @@ def given_webhook_failed_n_times(ctx: dict, n: int) -> None:
 
     env = ctx["env"]
     service = env.get_service()
-    webhook_url = next(iter(ctx.get("webhook_config", {}).values()), {}).get("url", _WEBHOOK_URL)
-    endpoint_key = f"{env._tenant_id}:{webhook_url}"
+    configured_url = next(iter(ctx.get("webhook_config", {}).values()), {}).get("url")
+    endpoint_key = _circuit_breaker_endpoint_key(ctx, configured_url)
     if endpoint_key not in service._circuit_breakers:
         service._circuit_breakers[endpoint_key] = CircuitBreaker()
     cb = service._circuit_breakers[endpoint_key]
@@ -778,8 +708,8 @@ def given_circuit_breaker_state(ctx: dict, mb_id: str, state: str) -> None:
 
     env = ctx["env"]
     service = env.get_service()
-    webhook_url = ctx.get("webhook_config", {}).get(mb_id, {}).get("url", _WEBHOOK_URL)
-    endpoint_key = f"{env._tenant_id}:{webhook_url}"
+    configured_url = ctx.get("webhook_config", {}).get(mb_id, {}).get("url")
+    endpoint_key = _circuit_breaker_endpoint_key(ctx, configured_url)
     if endpoint_key not in service._circuit_breakers:
         service._circuit_breakers[endpoint_key] = CircuitBreaker()
     cb = service._circuit_breakers[endpoint_key]
@@ -801,7 +731,7 @@ def given_circuit_breaker_timeout(ctx: dict) -> None:
 
     env = ctx["env"]
     service = env.get_service()
-    endpoint_key = ctx.get("circuit_breaker_endpoint_key", f"{env._tenant_id}:{_WEBHOOK_URL}")
+    endpoint_key = _circuit_breaker_endpoint_key(ctx)
     cb = service._circuit_breakers.get(endpoint_key)
     if cb is not None:
         cb.last_failure_time = _dt.now(UTC) - timedelta(seconds=61)
@@ -1042,12 +972,27 @@ def when_request_no_auth(ctx: dict) -> None:
 # ── Webhook When steps ─────────────────────────────────────────────
 
 
+def _deliver_for_label(ctx: dict, mb_id: str) -> tuple[bool, dict[str, Any]]:
+    """Ask the env to deliver for the Gherkin LABEL *mb_id*, resolved to its real id.
+
+    THE RESOLUTION IS NOT OPTIONAL, and it is here so no caller can forget it. Gherkin
+    labels ("mb-001") are not database ids: ``_resolve_media_buy_id`` maps them through
+    ``ctx["media_buy_labels"]`` to whatever the Given actually created. A When that passed
+    the raw label reached the e2e action with an id no row has, and that action SEEDS the
+    row it is asked about (:func:`tests.harness._mixins._seed_media_buy_for_delivery`) —
+    so it fabricated a SECOND media buy at the literal id "mb-001" alongside the Given's
+    real one, delivered for the fabricated one, and the Thens graded that. Same scenario,
+    two media buys, and the one under test was not the one measured
+    (salesagent-n78j0.1.4).
+    """
+    return ctx["env"].deliver_webhook(media_buy_id=_resolve_media_buy_id(ctx, mb_id))
+
+
 @when(parsers.parse('the webhook scheduler fires for "{mb_id}"'))
 def when_webhook_fires(ctx: dict, mb_id: str) -> None:
     """Webhook scheduler fires for a media buy."""
-    env = ctx["env"]
     try:
-        ctx["webhook_result"] = env.call_deliver(media_buy_id=mb_id)
+        ctx["webhook_result"] = _deliver_for_label(ctx, mb_id)
     except Exception as exc:
         ctx["error"] = exc
 
@@ -1067,12 +1012,7 @@ def when_deliver_typed_webhook(ctx: dict, report_type: str, mb_id: str) -> None:
     """System delivers a typed webhook report via WebhookDeliveryService."""
     ctx["report_type"] = report_type
     try:
-        result = _call_webhook_service(
-            ctx,
-            mb_id=mb_id,
-            is_final=(report_type == "final"),
-            is_adjusted=(report_type == "adjusted"),
-        )
+        result = _call_webhook_service(ctx, mb_id=mb_id, report_type=report_type)
         ctx["webhook_result"] = result
     except Exception as exc:
         ctx["error"] = exc
@@ -1082,10 +1022,9 @@ def when_deliver_typed_webhook(ctx: dict, report_type: str, mb_id: str) -> None:
 def when_deliver_three_reports(ctx: dict, mb_id: str) -> None:
     """Deliver three consecutive webhook reports."""
     ctx["webhook_reports"] = []
-    env = ctx["env"]
     for _ in range(3):
         try:
-            result = env.call_deliver(media_buy_id=mb_id)
+            result = _deliver_for_label(ctx, mb_id)
             ctx["webhook_reports"].append(result)
         except Exception as exc:
             ctx["error"] = exc
@@ -1097,7 +1036,7 @@ def when_attempt_webhook(ctx: dict) -> None:
     """System attempts webhook delivery."""
     env = ctx["env"]
     try:
-        ctx["webhook_result"] = env.call_deliver()
+        ctx["webhook_result"] = env.deliver_webhook()
     except Exception as exc:
         ctx["error"] = exc
 
@@ -1111,7 +1050,7 @@ def when_evaluate_circuit_breaker(ctx: dict) -> None:
     """
     env = ctx["env"]
     service = env.get_service()
-    endpoint_key = ctx.get("circuit_breaker_endpoint_key", f"{env._tenant_id}:{_WEBHOOK_URL}")
+    endpoint_key = _circuit_breaker_endpoint_key(ctx)
     cb = service._circuit_breakers.get(endpoint_key)
     if cb is not None:
         ctx["cb_can_attempt"] = cb.can_attempt()
@@ -1126,7 +1065,7 @@ def when_deliver_probe_reports(ctx: dict, n: int) -> None:
     """Record n successful deliveries on the circuit breaker (simulates probe recovery)."""
     env = ctx["env"]
     service = env.get_service()
-    endpoint_key = ctx.get("circuit_breaker_endpoint_key", f"{env._tenant_id}:{_WEBHOOK_URL}")
+    endpoint_key = _circuit_breaker_endpoint_key(ctx)
     cb = service._circuit_breakers.get(endpoint_key)
     if cb is not None:
         for _ in range(n):
@@ -1166,7 +1105,7 @@ def when_validate_webhook_config(ctx: dict) -> None:
     if pricing_option is not None:
         kwargs["packages"][0]["pricing_option_id"] = _pricing_option_id(pricing_option)
     kwargs["reporting_webhook"] = {
-        "url": _WEBHOOK_URL,
+        "url": ctx["env"].webhook_destination(),
         "reporting_frequency": "daily",
         "authentication": {"schemes": ["Bearer"], "credentials": secret},
     }
@@ -1177,12 +1116,28 @@ def when_validate_webhook_config(ctx: dict) -> None:
 
 @when(parsers.parse('the webhook scheduler evaluates "{mb_id}"'))
 def when_webhook_evaluates(ctx: dict, mb_id: str) -> None:
-    """Webhook scheduler evaluates a media buy for delivery."""
-    wh = ctx.get("webhook_config", {}).get(mb_id, {})
-    if not wh.get("active"):
-        ctx["webhook_skipped"] = True
-    else:
-        ctx["webhook_evaluated"] = mb_id
+    """Ask the system under test to deliver for *mb_id*, and let PRODUCTION decide.
+
+    This step used to be test-local bookkeeping — it read ``ctx["webhook_config"]``
+    and set ``ctx["webhook_skipped"]``, calling no production code on any transport.
+    The Thens behind it ("the system should skip", "no delivery attempt should be
+    made") were therefore true because NOTHING RAN, not because production declined:
+    an assertion change to such a Then cannot mean anything (salesagent-n78j0.1.4).
+
+    The evaluation IS a delivery request: production's own skip lives at
+    ``WebhookDeliveryService._send_webhook_enhanced``, which looks up this
+    principal's active ``PushNotificationConfig`` rows and returns False without a
+    POST when there are none. Driving :meth:`deliver_webhook` is what puts that
+    branch under the scenario — the same seam every other delivery When uses, so the
+    step still names no transport.
+    """
+    # Recorded so the Then can pin that the verdict it grades belongs to the media buy
+    # the scenario named, rather than to whatever the step happened to ask about.
+    ctx["webhook_evaluated_media_buy"] = _resolve_media_buy_id(ctx, mb_id)
+    try:
+        ctx["webhook_result"] = _deliver_for_label(ctx, mb_id)
+    except Exception as exc:
+        ctx["error"] = exc
 
 
 # ── Reporting dimensions When steps ─────────────────────────────────
@@ -1835,10 +1790,15 @@ def then_next_expected(ctx: dict, next_expected: str) -> None:
 
 @then("each report should have a higher sequence_number than the previous")
 def then_sequence_ascending(ctx: dict) -> None:
-    """Assert sequence numbers are strictly increasing across consecutive POST calls."""
-    calls = ctx["env"].mock["post"].call_args_list
-    assert len(calls) >= 2, f"Expected at least 2 webhook POSTs for sequence check, got {len(calls)}"
-    seq_nums = [_sent_payload(call).get("sequence_number") for call in calls]
+    """Assert sequence numbers are strictly increasing across consecutive deliveries.
+
+    A MULTI-call read: it needs the whole stream, not the last one, which is why the
+    env's accessor takes ``at_least`` — on the wire the second delivery may not have
+    landed yet when this runs. [5/5 routed — salesagent-n78j0.1.4]
+    """
+    deliveries = ctx["env"].deliveries(at_least=2)
+    assert len(deliveries) >= 2, f"Expected at least 2 webhook deliveries for sequence check, got {len(deliveries)}"
+    seq_nums = [_sent_payload(delivery).get("sequence_number") for delivery in deliveries]
     for i in range(1, len(seq_nums)):
         assert seq_nums[i] is not None, f"POST call {i} payload missing sequence_number"
         assert seq_nums[i] > seq_nums[i - 1], (
@@ -1848,12 +1808,16 @@ def then_sequence_ascending(ctx: dict) -> None:
 
 @then("the first sequence_number should be >= 1")
 def then_first_sequence(ctx: dict) -> None:
-    """Assert first webhook POST has sequence_number >= 1."""
-    calls = ctx["env"].mock["post"].call_args_list
-    assert calls, "No webhook POSTs were made"
-    first_payload = _sent_payload(calls[0])
+    """Assert the FIRST delivery of the stream has sequence_number >= 1.
+
+    A MULTI-call read for the same reason as its sibling: "first" is only meaningful
+    against the whole stream. [5/5 routed — salesagent-n78j0.1.4]
+    """
+    deliveries = ctx["env"].deliveries()
+    assert deliveries, "No webhook deliveries were made"
+    first_payload = _sent_payload(deliveries[0])
     seq = first_payload.get("sequence_number")
-    assert seq is not None, f"First webhook POST payload missing sequence_number: {list(first_payload.keys())}"
+    assert seq is not None, f"First webhook delivery payload missing sequence_number: {list(first_payload.keys())}"
     assert seq >= 1, f"Expected sequence_number >= 1, got {seq}"
 
 
@@ -1987,7 +1951,7 @@ def then_circuit_breaker_recorded_failure(ctx: dict) -> None:
     """Assert the send-time SSRF path called circuit_breaker.record_failure()."""
     env = ctx["env"]
     service = env.get_service()
-    endpoint_key = ctx.get("circuit_breaker_endpoint_key", f"{env._tenant_id}:{_WEBHOOK_URL}")
+    endpoint_key = _circuit_breaker_endpoint_key(ctx)
     cb = service._circuit_breakers.get(endpoint_key)
     assert cb is not None, (
         f"Expected circuit breaker for {endpoint_key!r} after SSRF skip, found keys={list(service._circuit_breakers)}"
@@ -2081,7 +2045,7 @@ def then_deliveries_resume(ctx: dict) -> None:
 
     env = ctx["env"]
     service = env.get_service()
-    endpoint_key = ctx.get("circuit_breaker_endpoint_key", f"{env._tenant_id}:{_WEBHOOK_URL}")
+    endpoint_key = _circuit_breaker_endpoint_key(ctx)
     cb = service._circuit_breakers.get(endpoint_key)
 
     # The breaker must allow attempts (closed state permits delivery)
@@ -2187,14 +2151,14 @@ def then_hmac_computation(ctx: dict) -> None:
     Recomputed over ``content`` rather than over a re-serialization of the parsed
     payload, so this is canonicalization-agnostic AND able to fail when the bytes
     signed are not the bytes sent (#1441) — the whole point of the obligation.
+    [5/5 routed — salesagent-n78j0.1.4]
     """
     import hashlib
     import hmac as hmac_lib
 
-    env = ctx["env"]
-    call = env.mock["post"].call_args_list[-1]
-    headers = call[1].get("headers", {})
-    body: bytes = call[1].get("content") or b""
+    captured = ctx["env"].last_delivery()
+    headers = captured.headers
+    body: bytes = captured.content
     timestamp = headers.get("X-AdCP-Timestamp") or headers.get("X-Webhook-Timestamp", "")
     raw_sig = headers.get("X-AdCP-Signature") or headers.get("X-Webhook-Signature", "")
     signature = raw_sig.removeprefix("sha256=")
@@ -2430,29 +2394,74 @@ def then_error_no_reveal(ctx: dict) -> None:
 # ── Webhook skip assertions ─────────────────────────────────────────
 
 
+def _declined_delivery_outcome(ctx: dict) -> bool:
+    """Production's OWN verdict on the delivery this scenario asked for.
+
+    The observable for "the system considered this and declined". Receiver absence is
+    NOT that observable: nothing arriving is true for a dozen uninteresting reasons —
+    the request was never made, the address was never handed out, the receiver was
+    never asked — and that is exactly how this scenario stayed vacuous through three
+    review cycles (salesagent-n78j0.1.4). ``WebhookDeliveryService._send_webhook_enhanced``
+    (``src/services/webhook_delivery_service.py`` :348-355) selects this principal's
+    ACTIVE ``PushNotificationConfig`` rows and returns ``False`` WITHOUT a POST when
+    there are none, so the returned flag is production reporting its own skip.
+
+    Read strictly, because every lax reading of it is a way back into the bug:
+
+    * ``ctx["webhook_result"]`` is INDEXED, not ``.get()``-ed — a ``When`` that never
+      assigned it must raise ``KeyError``, not quietly become ``None``;
+    * ``ctx`` must carry no ``"error"`` — the delivery Whens store exceptions there, so
+      an assertion that tolerated a missing result would go GREEN when production BLEW
+      UP, which is worse than vacuous;
+    * the flag is returned to the caller UNCOERCED so the caller can pin ``is False``.
+      ``bool(...)`` here would let ``None`` / ``0`` / ``[]`` pass for a decline.
+    """
+    assert "error" not in ctx, (
+        f"the delivery request raised instead of returning a verdict, so there is no decline to grade: {ctx['error']!r}"
+    )
+    raw = ctx["webhook_result"]
+    return raw[0] if isinstance(raw, tuple) else raw
+
+
 @then(parsers.parse('the system should skip "{mb_id}" (no webhook to deliver to)'))
 def then_skip_no_webhook(ctx: dict, mb_id: str) -> None:
-    """Assert no webhook POST was made for this specific media buy.
+    """Production was asked to deliver for THIS media buy and declined.
 
-    Verifies that no POST call contains this media buy's ID in its payload,
-    confirming the system correctly skipped delivery when no webhook is configured.
+    Two things pinned together, because either alone is satisfiable by an accident: the
+    request the ``When`` actually made names the media buy the scenario names, and
+    production's verdict on it was ``False``. A verdict without the id would be green if
+    the step evaluated some other buy; an id without the verdict would be green if
+    production had happily delivered.
     """
-    env = ctx["env"]
     real_id = _resolve_media_buy_id(ctx, mb_id)
-    post_mock = env.mock["post"]
-    # Collect all media_buy_ids that received webhook POSTs
-    posted_mb_ids = [_sent_payload(call).get("media_buy_id") for call in post_mock.call_args_list]
-    assert real_id not in posted_mb_ids, (
-        f"Webhook POST was made for '{real_id}' but it should have been skipped "
-        f"(no webhook configured). All posted IDs: {posted_mb_ids}"
+    evaluated = ctx["webhook_evaluated_media_buy"]
+    outcome = _declined_delivery_outcome(ctx)
+    assert (evaluated, outcome) == (real_id, False), (
+        f"expected the system to be asked about {real_id!r} and to DECLINE (False); it was asked "
+        f"about {evaluated!r} and answered {outcome!r}"
     )
 
 
 @then("no delivery attempt should be made")
 def then_no_delivery_attempt(ctx: dict) -> None:
-    """Assert no delivery attempt was made."""
-    env = ctx["env"]
-    assert not env.mock["post"].called, "Expected no delivery attempt"
+    """No POST was attempted — production returned its verdict without sending.
+
+    Deliberately NOT an assertion about what a receiver saw. On the wire this scenario
+    hands no address to anything (its premise is that no webhook is configured), so the
+    capture receiver holds nothing for it and could hold nothing whatever production
+    did — the env now REFUSES that read rather than answering it
+    (:attr:`tests.harness._base.BaseTestEnv.webhook_capture_key_was_handed_out`).
+    Registering a destination to make the read answerable would INVERT the scenario's
+    premise while turning it green, which is the same disease one layer along.
+
+    ``is False`` and not ``not outcome``: the falsy set includes ``None``, which is what
+    a crashed ``When`` leaves behind (salesagent-n78j0.1.4).
+    """
+    outcome = _declined_delivery_outcome(ctx)
+    assert outcome is False, (
+        f"expected production to report that it made no delivery attempt (False); it returned "
+        f"{outcome!r}, so a POST was attempted or the verdict is not production's"
+    )
 
 
 # ── Reporting dimension assertions ─────────────────────────────────
@@ -3649,11 +3658,14 @@ def _wire_webhook_db(ctx: dict) -> None:
 def _call_webhook_service(
     ctx: dict,
     mb_id: str | None = None,
-    is_final: bool = False,
-    is_adjusted: bool = False,
-    next_expected_interval_seconds: float | None = 3600.0,
-) -> bool:
-    """Dispatch webhook delivery through the CircuitBreakerEnv.call_send."""
+    report_type: str | None = None,
+) -> tuple[bool, dict[str, Any]]:
+    """Ask the system under test to make ONE delivery, through the env's own seam.
+
+    ``report_type`` (the Gherkin word) is passed straight through as
+    ``notification_type``: which production flags it maps to is the env's business,
+    not this step layer's — the same reason the transport is.
+    """
     if mb_id is None:
         # Pick the first label from ctx, then resolve to real ID
         label = next(iter(ctx.get("media_buys", {})), None) or next(iter(ctx.get("webhook_config", {})), None)
@@ -3663,22 +3675,12 @@ def _call_webhook_service(
         mb_id = _resolve_media_buy_id(ctx, mb_id)
     _wire_webhook_db(ctx)
     env = ctx["env"]
-    kwargs: dict[str, Any] = {
-        "media_buy_id": mb_id,
-        "is_final": is_final,
-        "is_adjusted": is_adjusted,
-    }
-    if next_expected_interval_seconds is not None:
-        kwargs["next_expected_interval_seconds"] = next_expected_interval_seconds
-    return env.call_send(**kwargs)
+    return env.deliver_webhook(media_buy_id=mb_id, notification_type=report_type)
 
 
 def _get_webhook_payload(ctx: dict) -> dict:
-    """Extract the JSON payload from the most recent webhook POST call."""
-    env = ctx["env"]
-    call_args = env.mock["post"].call_args
-    assert call_args is not None, "No POST call recorded"
-    return _sent_payload(call_args)
+    """The JSON payload of the most recent delivery. [5/5 routed — salesagent-n78j0.1.4]"""
+    return _sent_payload(ctx["env"].last_delivery())
 
 
 _DEFAULT_PLACEMENT_DATA: list[dict[str, Any]] = [

@@ -3,17 +3,24 @@
 **The disease** (verbatim from the salesagent-mp53.6 codebase scan, #1291): an
 e2e admin-route driver POSTs ``{_ADMIN_PREFIX}/test/auth`` inline — inside a
 ``requests.Session``, asserting the 200/302 auth response — instead of routing
-through ``tests/e2e/_signing_e2e.py``'s shared ``_admin_post_expecting_flash``.
+through ``tests/e2e/_signing_e2e.py``'s shared driver helper.
 
 Pre-mp53.6 there was exactly ONE such block, inside
 ``provision_signing_key_via_admin``, with no second caller to prove the shared
 shape was correct. mp53.6 needed a SECOND admin-route driver
-(``revoke_signing_key_via_admin``) and extracted ``_admin_post_expecting_flash``
-(the full auth + POST + assert + flash-regex shape, architect review HIGH-2 /
-MEDIUM-6 — extracting only the auth block and leaving the rest duplicated per
-driver would be the same defect one layer down) rather than copying the block a
-second time. This guard pins that: any FUTURE e2e admin-route driver must route
-through the shared helper too.
+(``revoke_signing_key_via_admin``) and extracted the full auth + POST + assert +
+flash-regex shape (architect review HIGH-2 / MEDIUM-6 — extracting only the auth
+block and leaving the rest duplicated per driver would be the same defect one
+layer down) rather than copying the block a second time. This guard pins that:
+any FUTURE e2e admin-route driver must route through the shared helper too.
+
+The exempt name is now ``_admin_post_rendered_page``, the auth+POST+render half.
+It moved down one layer (salesagent-n78j0.1.4) because a THIRD driver
+(``trigger_delivery_webhook_via_admin``) reads a route that reports a VERDICT —
+sent / declined / broken — and so has to match more than one flash;
+``_admin_post_expecting_flash`` is now itself a caller of the exempt helper, for
+the routes that have exactly one acceptable outcome. The invariant is unchanged
+and the exemption is no wider: still exactly ONE function may POST the auth path.
 
 Method: SYNTACTIC/narrow disease (one exact literal, ``/test/auth``, POSTed via
 ``requests``) — an AST-node-precision guard, not a whole-file regex, so it
@@ -32,7 +39,7 @@ from tests.unit._architecture_helpers import (
     repo_root,
 )
 
-_ALLOWED_FUNCTION = "_admin_post_expecting_flash"
+_ALLOWED_FUNCTION = "_admin_post_rendered_page"
 _AUTH_PATH_LITERAL = "/test/auth"
 _SCOPE = ("tests/e2e/_signing_e2e.py",)
 
@@ -91,9 +98,10 @@ class TestNoDuplicateAdminAuthBlock:
             summary=f"An e2e admin-route driver POSTs the auth path inline instead of through {_ALLOWED_FUNCTION}():",
             violations=violations,
             fix_hint=(
-                f"Route the new driver through {_ALLOWED_FUNCTION}(base_url, tenant_id=..., path=..., data=..., "
-                "pattern=...) — copying the auth block (or the POST/assert/extract shape around it) is the "
-                "duplication mp53.6 extracted this helper to stop."
+                f"Route the new driver through {_ALLOWED_FUNCTION}(base_url, tenant_id=..., path=..., data=...) — "
+                "or through _admin_post_expecting_flash(..., pattern=...) if the route has exactly one "
+                "acceptable outcome. Copying the auth block (or the POST/assert/extract shape around it) is "
+                "the duplication mp53.6 extracted this helper to stop."
             ),
         )
 
@@ -119,11 +127,25 @@ class TestDetectorDoesNotOverfire:
 
     def test_the_shared_helper_itself_is_exempt(self):
         tree = ast.parse(
-            "def _admin_post_expecting_flash(base_url, *, tenant_id, path, data, pattern, not_found_hint=''):\n"
+            "def _admin_post_rendered_page(base_url, *, tenant_id, path, data):\n"
             "    with requests.Session() as session:\n"
             "        session.post(f'{base_url}{_ADMIN_PREFIX}/test/auth', data={}, timeout=30)\n"
         )
         assert find_inline_admin_auth_violations(tree) == []
+
+    def test_the_flash_wrapper_is_not_exempt_by_name(self):
+        """The exemption is ONE name, and it is the auth+POST helper — not its callers.
+
+        ``_admin_post_expecting_flash`` is now a wrapper that owns no session; if it ever
+        re-acquires an inline auth POST, that is the duplication returning and the guard
+        must say so rather than excusing it on its old reputation.
+        """
+        tree = ast.parse(
+            "def _admin_post_expecting_flash(base_url, *, tenant_id, path, data, pattern):\n"
+            "    with requests.Session() as session:\n"
+            "        session.post(f'{base_url}{_ADMIN_PREFIX}/test/auth', data={}, timeout=30)\n"
+        )
+        assert find_inline_admin_auth_violations(tree) == [3]
 
     def test_a_post_to_an_unrelated_path_is_clean(self):
         tree = ast.parse(

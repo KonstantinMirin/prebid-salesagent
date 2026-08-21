@@ -1214,27 +1214,41 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # must be rewritten to read that receiver's captures instead of the
         # in-process mock, and each scenario re-checked for vacuity under
         # .claude/rules/workflows/xpass-graduation.md. Removing the tags without
-        # that would turn 12 scenarios green against assertions that can no longer
-        # observe anything.
+        # that would turn the remaining 11 scenarios green against assertions that
+        # can no longer observe anything.
+        #
+        # The receiver is no longer the only prerequisite: a delivery that happens
+        # IN the test process is one the live server never made. `env.deliver_webhook()`
+        # / `env.last_delivery()` (tests/harness/_mixins.py) are the seam that fixes
+        # that; a tag graduates when its Thens read through them AND the behaviour it
+        # asserts is one the live delivery path actually has.
         _UC004_E2E_WEBHOOK_INTERNAL_TAGS: set[str] = {
             "T-UC-004-webhook-bearer",
             "T-UC-004-webhook-hmac",
-            # The mutually exclusive TWIN of -webhook-hmac (#1291 z6nr.31), classified
-            # with it for the same reason, not a new exemption: its Thens read the last
-            # delivery through `_last_delivery_call` -> `ctx["env"].mock["post"]`, the
-            # same in-process accessor every other tag in this set uses.
-            "T-UC-004-webhook-9421",
-            # STAYS PARKED, and the reason is now MEASURED rather than assumed.
-            # Graduating it alone (per the one-at-a-time protocol) produced:
-            #   AssertionError: No webhook POST reached the capture receiver for key
-            #   'uc004-...' within 45.0s   -- x3 parametrizations, bdd_e2e
-            # The receiver, the destination and the accessor all work; nothing is
-            # DELIVERED. Cause: the When step (`the webhook scheduler fires for X`,
-            # uc004_delivery.py:1044) calls env.call_deliver(...) IN-PROCESS on every
-            # transport, so on e2e_rest the delivery happens inside the test process
-            # against its own patched requests.post -- the live server never sends
-            # anything. That is transport bypass (salesagent-gnal.4), not a missing
-            # receiver, and no capture plumbing can fix it.
+            # Graduated e2e_rest (salesagent-n78j0.1.4): T-UC-004-webhook-9421. The
+            # bypass this set records is now GONE for that scenario — the delivery
+            # ACTION moved out of the step layer into `env.deliver_webhook()`, which
+            # over e2e drives the live server's own
+            # /admin/.../trigger-delivery-webhook route, its key is minted INSIDE the
+            # container (the feature file's :301 comment recorded that no key was ever
+            # provisioned for this leg), and its Thens read the TLS capture receiver
+            # through `env.last_delivery()`. Verified by mutation: deleting
+            # `_rfc9421_sender`'s signing arm turns the e2e_rest leg red. The two run ids
+            # behind that sentence are cited in the COMMIT BODY rather than here, and
+            # deliberately: any edit to this file voids the pair (tox.ini :181 collects
+            # `pytest tests/bdd/`), so a comment that must be rewritten with each new pair
+            # can never hold a valid citation. Whichever pair the commit cites, this
+            # sentence is only true of a run on the committed tree.
+            #
+            # ---- the note below governs the NEXT tag, not the graduated one ----
+            #
+            # STAYS PARKED, and the transport bypass is no longer the reason — that
+            # one is fixed (above). What remains is a real SERVER-SIDE gap: the live
+            # delivery path emits NotificationType.scheduled unconditionally
+            # (delivery_webhook_scheduler.py :267), so the `final` / `delayed` /
+            # `adjusted` Examples rows cannot pass over e2e_rest whatever the harness
+            # does. Unparks when production selects the notification type; grading that
+            # is not this atom's scope (salesagent-n78j0.1.4).
             "T-UC-004-webhook-notification-type",
             "T-UC-004-webhook-no-aggregated",
             "T-UC-004-webhook-circuit-open",
