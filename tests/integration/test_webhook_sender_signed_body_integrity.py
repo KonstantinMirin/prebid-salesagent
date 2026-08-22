@@ -46,7 +46,7 @@ class TestWebhookDeliveryWithRetrySignedBodyIntegrity:
     (line 99) and then calls ``send(..., json=delivery.payload, ...)``
     (line 131) — httpx re-serializes ``delivery.payload`` independently of
     what was signed. After: routes through
-    ``src.core.security.webhook_egress.deliver_signed_webhook``, which signs
+    ``src.core.security.webhook_egress.deliver_webhook``, which signs
     via ``adcp.sign_legacy_webhook`` and transmits its returned bytes via
     ``content=`` — spec headers only (``X-AdCP-Signature``/
     ``X-AdCP-Timestamp``; ``WebhookAuthenticator`` and its non-spec
@@ -83,7 +83,7 @@ class TestWebhookDeliveryServiceSignedBodyIntegrity:
     same re-serialization bug as ``deliver_webhook_with_retry``, under the
     spec-correct ``X-ADCP-Signature`` header name (bare hex, no ``sha256=``
     prefix). After: routes through
-    ``src.core.security.webhook_egress.deliver_signed_webhook``, same as every
+    ``src.core.security.webhook_egress.deliver_webhook``, same as every
     other sender.
 
     No custom payload is needed here: production's own delivery payload

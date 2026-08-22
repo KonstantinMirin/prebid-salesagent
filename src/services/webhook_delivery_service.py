@@ -545,9 +545,9 @@ class WebhookDeliveryService:
         safe_url = webhook_url_for_log(config.url)
 
         # Signing (X-ADCP-Signature / X-ADCP-Timestamp) is owned entirely by
-        # deliver_signed_webhook below -- it serializes, signs and stamps the
-        # timestamp as one decision, so this function never holds a signature
-        # and a body serialization as two independent things to keep in sync.
+        # deliver_webhook below -- it serializes, signs and stamps the timestamp
+        # as one decision, so this function never holds a signature and a body
+        # serialization as two independent things to keep in sync.
         #
         # The auth DECISION above that transport is owned entirely by
         # webhook_auth_for (salesagent-47n9.24, GH #1894). This sender used to make

@@ -287,7 +287,7 @@ def _canonical_body(payload: dict[str, Any]) -> bytes:
     Compact separators, insertion order — the canonical on-wire form pinned
     by adcontextprotocol/adcp#2478, and the same formula
     ``adcp.sign_legacy_webhook`` uses internally when it signs. Both the
-    signed and unsigned branches of :func:`_prepare_signed_request` route
+    signed and unsigned branches of :func:`prepare_signed_request` route
     through this single function so they cannot independently drift, the way
     the disease this module replaces did.
     """
@@ -315,7 +315,7 @@ def prepare_signed_request(
     or otherwise inspect the prepared request BEFORE sending it — logging the
     payload size ahead of a delivery that might fail before a response comes
     back — call this directly and pass the result to :func:`send`/:func:`asend`
-    themselves, rather than through :func:`_deliver_signed_webhook`. Call this
+    themselves. Call this
     at most ONCE per delivery: ``sign_legacy_webhook`` stamps the current time
     when no explicit ``timestamp`` is given, so calling it twice for the "same"
     delivery signs two different timestamps and only one bytes value may
@@ -331,39 +331,6 @@ def prepare_signed_request(
         return signed_headers, body_bytes
 
     return merged_headers, _canonical_body(payload)
-
-
-def _deliver_signed_webhook(
-    url: str,
-    payload: dict[str, Any],
-    *,
-    secret: str | None = None,
-    headers: dict[str, str] | None = None,
-    timeout: float = 10.0,
-    max_attempts: int = 3,
-) -> OutboundResult:
-    """Serialize, optionally sign, and send one webhook through the egress seam.
-
-    ``OutboundRequestBlocked``/``OutboundDeliveryFailed`` propagate — each
-    caller keeps its own catch/retry-record/circuit-breaker bookkeeping, which
-    differs per sender and is out of this function's remit.
-    """
-    signed_headers, body_bytes = prepare_signed_request(payload, secret, headers or {})
-    return send(url, content=body_bytes, headers=signed_headers, timeout=timeout, max_attempts=max_attempts)
-
-
-async def _adeliver_signed_webhook(
-    url: str,
-    payload: dict[str, Any],
-    *,
-    secret: str | None = None,
-    headers: dict[str, str] | None = None,
-    timeout: float = 10.0,
-    max_attempts: int = 3,
-) -> OutboundResult:
-    """Async twin of :func:`_deliver_signed_webhook` — identical policy."""
-    signed_headers, body_bytes = prepare_signed_request(payload, secret, headers or {})
-    return await asend(url, content=body_bytes, headers=signed_headers, timeout=timeout, max_attempts=max_attempts)
 
 
 # ── The seam: one decision, one outcome ───────────────────────────────────────
@@ -460,12 +427,18 @@ def deliver_webhook(
     if isinstance(decided, WebhookDeliveryOutcome):
         return decided
 
-    signed_headers, secret = _headers_for(decided, headers)
-    body_bytes = _canonical_body(payload)
+    auth_headers, secret = _headers_for(decided, headers)
+
+    # ONE serialization per delivery. The bytes that are measured, the bytes that
+    # are signed and the bytes that go on the wire are the same object, because
+    # there is only one. This used to run twice -- once here purely for len(),
+    # once again inside the delivery helper -- and two runs of a serializer are
+    # two things that can disagree, which is the whole reason the signed and
+    # transmitted bodies had to be asserted equal in tests rather than being
+    # equal by construction.
+    request_headers, body_bytes = prepare_signed_request(payload, secret, auth_headers)
     try:
-        result = _deliver_signed_webhook(
-            url, payload, secret=secret, headers=signed_headers, timeout=timeout, max_attempts=max_attempts
-        )
+        result = send(url, content=body_bytes, headers=request_headers, timeout=timeout, max_attempts=max_attempts)
     except (OutboundRequestBlocked, OutboundDeliveryFailed) as exc:
         return _outcome_for_outbound_error(exc, payload_size_bytes=len(body_bytes))
     return _delivered(result, payload_size_bytes=len(body_bytes))
@@ -486,11 +459,13 @@ async def adeliver_webhook(
     if isinstance(decided, WebhookDeliveryOutcome):
         return decided
 
-    signed_headers, secret = _headers_for(decided, headers)
-    body_bytes = _canonical_body(payload)
+    auth_headers, secret = _headers_for(decided, headers)
+
+    # One serialization, exactly as in the sync twin above.
+    request_headers, body_bytes = prepare_signed_request(payload, secret, auth_headers)
     try:
-        result = await _adeliver_signed_webhook(
-            url, payload, secret=secret, headers=signed_headers, timeout=timeout, max_attempts=max_attempts
+        result = await asend(
+            url, content=body_bytes, headers=request_headers, timeout=timeout, max_attempts=max_attempts
         )
     except (OutboundRequestBlocked, OutboundDeliveryFailed) as exc:
         return _outcome_for_outbound_error(exc, payload_size_bytes=len(body_bytes))

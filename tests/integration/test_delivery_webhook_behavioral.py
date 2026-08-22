@@ -86,7 +86,7 @@ class TestWebhookDeliveryHappyPath:
 
             # Verify HMAC signature headers were added. Spec header names
             # (X-AdCP-Signature/X-AdCP-Timestamp, from adcp.sign_legacy_webhook
-            # via the shared deliver_signed_webhook seam) since salesagent-47n9.1 —
+            # via the shared deliver_webhook seam) since salesagent-47n9.1 —
             # the non-spec X-Webhook-* pair no longer exists.
             sent_headers = env.last_delivery.headers
             assert "X-AdCP-Signature" in sent_headers

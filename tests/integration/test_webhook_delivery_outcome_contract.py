@@ -64,10 +64,11 @@ cycle — every webhook sender runs after the buyer's call has already returned
 no wire envelope for a ``Then`` step to assert on. The identical rationale is
 already recorded at ``tests/bdd/features/local-egress-ssrf-refusal.feature:45-51``.
 
-RED, and for which reason: ``deliver_webhook`` does not exist. The seam exposes
-``deliver_signed_webhook`` (which takes a ``secret`` a caller resolved for
-itself) and no outcome type at all, so every case here fails on the missing
-symbol until the lane lands. The two seats that consume the outcome are graded
+This module was authored RED, before ``deliver_webhook`` existed: the seam then
+exposed only a lower-level helper that took a ``secret`` the caller had resolved
+for itself, and no outcome type at all. That lane has since landed, and the
+helper it names was later folded into ``deliver_webhook`` itself. The two
+seats that consume the outcome are graded
 next door in ``tests/integration/test_webhook_refusal_reaches_both_seats.py``.
 """
 

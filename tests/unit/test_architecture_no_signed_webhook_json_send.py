@@ -11,9 +11,10 @@ unconstructible, but nothing stops a THIRD signer from being written tomorrow
 in the same shape. This guard closes that class going forward: no module under
 ``src/`` may hold a computed ``X-*-Signature`` header key and also call
 ``send``/``asend`` with ``json=`` — the only sound pattern is
-``src.core.security.webhook_egress.deliver_signed_webhook``/
-``adeliver_signed_webhook`` (or ``prepare_signed_request`` + ``content=``),
-which serializes once and transmits exactly those bytes.
+``src.core.security.webhook_egress.deliver_webhook``/``adeliver_webhook``
+(both of which are ``prepare_signed_request`` + ``content=`` internally, the
+shape any other caller must use directly), which serializes once and
+transmits exactly those bytes.
 
 What counts as a violation: a module that (a) uses a string matching
 ``X-*-Signature`` (case-insensitive) as a dict KEY — a headers-dict subscript
@@ -54,15 +55,16 @@ _SIGNATURE_HEADER_KEY = re.compile(r"^x-[a-z0-9-]*signature[a-z0-9-]*$", re.IGNO
 SEND_NAMES = frozenset({"send", "asend"})
 
 # Pre-existing violations: none. Seeded empty at salesagent-47n9.1 — the two
-# known signers were migrated onto webhook_egress.deliver_signed_webhook, not
-# allowlisted. Any entry here must name the ticket that removes it.
+# known signers were migrated onto the webhook_egress seam (today:
+# ``deliver_webhook``/``adeliver_webhook``), not allowlisted. Any entry here must
+# name the ticket that removes it.
 ALLOWLIST: frozenset[str] = frozenset()
 
 FIX_HINT = (
     "A module that computes an X-*-Signature header must not also call send/asend "
     "with json= -- httpx re-serializes the dict independently of whatever was signed. "
-    "Route through src.core.security.webhook_egress.deliver_signed_webhook / "
-    "adeliver_signed_webhook (or prepare_signed_request + content=) instead."
+    "Route through src.core.security.webhook_egress.deliver_webhook / "
+    "adeliver_webhook (or prepare_signed_request + content=) instead."
 )
 
 

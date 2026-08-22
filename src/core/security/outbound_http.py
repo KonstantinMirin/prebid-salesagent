@@ -150,8 +150,9 @@ import asyncio
 import logging
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Protocol
 
 import httpx  # noqa: TID251 - the seam itself; the one sanctioned httpx importer (GH #1589)
@@ -592,6 +593,79 @@ def _build_request(
     return request
 
 
+def _request_builder(
+    method: str,
+    url: str,
+    json_body: JsonValue | None,
+    params: QueryParams | None,
+    headers: Mapping[str, str] | None,
+    content: bytes | None,
+    sign: SignAttempt | None,
+) -> Callable[[httpx.Client | httpx.AsyncClient], httpx.Request]:
+    """Bind the seven passthrough values once; the CALL stays per-attempt.
+
+    ``_build_request`` must still run inside the retry loop: ``sign`` is
+    contracted to fire once per attempt, so a request built above the loop would
+    replay one signature across retries, which RFC 9421's nonce forbids. Binding
+    the arguments here keeps them in ONE place while keeping the call
+    per-attempt, and keeps the seven-argument spelling out of both drivers --
+    where it was two copies that had to be edited together.
+    """
+    return partial(
+        _build_request,
+        method=method,
+        url=url,
+        json_body=json_body,
+        params=params,
+        headers=headers,
+        content=content,
+        sign=sign,
+    )
+
+
+def _accumulate(body: bytearray, chunk: bytes, attempts: Attempts, status: int) -> None:
+    """Append one chunk, aborting the whole delivery if the cap is exceeded.
+
+    Exits NON-LOCALLY by raising ``attempts.failure()`` when the cap is hit --
+    the read stops mid-body rather than accumulating a response we have already
+    decided to refuse. Shared by both drivers so the cap, the log sentence and
+    the record call are one decision rather than two that can drift.
+    """
+    body.extend(chunk)
+    if _over_cap(len(body)):
+        logger.warning("Outbound response exceeded the size cap; aborting read")
+        attempts.record_oversized_response(status)
+        raise attempts.failure()
+
+
+def _record_transport_failure(attempts: Attempts, attempt: int, exc: BaseException) -> None:
+    """Log and record one transport-level failure. Shared wording, one home."""
+    logger.warning("Outbound attempt %d failed at the transport level: %s", attempt, exc)
+    attempts.record_transport_failure(exc)
+
+
+def _conclude_attempt(
+    attempts: Attempts,
+    response: httpx.Response,
+    body: bytes,
+    attempt: int,
+    started: float,
+) -> OutboundResult | None:
+    """Decide what one completed attempt means.
+
+    Returns the result on SUCCESS, raises on TERMINAL, and returns ``None`` to
+    say "retry" -- the three-way fork the plan names as the shared conclude
+    step. Pure sync, so both the sync and async drivers call it unchanged; the
+    async/sync difference lives entirely in the I/O verbs around it.
+    """
+    outcome = attempts.record_response(response.status_code, _retry_after_seconds(response))
+    if outcome is Attempts.Outcome.SUCCESS:
+        return _result(response, body, attempt, started)
+    if outcome is Attempts.Outcome.TERMINAL:
+        raise attempts.failure()
+    return None
+
+
 def _over_cap(size: int) -> bool:
     return size > _MAX_RESPONSE_BYTES
 
@@ -779,39 +853,25 @@ def send(
 
     # One transport per call, never cached: the pin is per-destination and fails
     # closed when reused for another host.
+    build = _request_builder(method, url, json, params, headers, content, sign)
+
     with httpx.Client(transport=transport, timeout=timeout) as client:
         for attempt in attempts.next_attempt():
-            request = _build_request(
-                client,
-                method=method,
-                url=url,
-                json_body=json,
-                params=params,
-                headers=headers,
-                content=content,
-                sign=sign,
-            )
+            request = build(client)
             try:
                 response = client.send(request, stream=True)
                 try:
                     body = bytearray()
                     for chunk in response.iter_bytes():
-                        body.extend(chunk)
-                        if _over_cap(len(body)):
-                            logger.warning("Outbound response exceeded the size cap; aborting read")
-                            attempts.record_oversized_response(response.status_code)
-                            raise attempts.failure()
+                        _accumulate(body, chunk, attempts, response.status_code)
                 finally:
                     response.close()
             except _RETRYABLE_EXCEPTIONS as exc:
-                logger.warning("Outbound attempt %d failed at the transport level: %s", attempt, exc)
-                attempts.record_transport_failure(exc)
+                _record_transport_failure(attempts, attempt, exc)
             else:
-                outcome = attempts.record_response(response.status_code, _retry_after_seconds(response))
-                if outcome is Attempts.Outcome.SUCCESS:
-                    return _result(response, bytes(body), attempt, started)
-                if outcome is Attempts.Outcome.TERMINAL:
-                    raise attempts.failure()
+                result = _conclude_attempt(attempts, response, bytes(body), attempt, started)
+                if result is not None:
+                    return result
 
             if attempt < max_attempts:
                 time.sleep(attempts.wait_seconds())
@@ -835,9 +895,16 @@ async def asend(
     """Async twin of :func:`send` — same policy, same failure modes.
 
     See :func:`send` for the contract, ``provenance`` included. The two differ
-    only in ``Client``/``AsyncClient`` and ``time.sleep``/``asyncio.sleep``;
-    every policy decision is a shared helper, driven by one Attempts
-    instance, so neither path can drift from the other.
+    in exactly FIVE lines, all of them I/O verbs that sync and async genuinely
+    spell differently: ``Client``/``AsyncClient``, ``client.send``/``await
+    client.send``, ``iter_bytes``/``aiter_bytes``, ``close``/``aclose``, and
+    ``time.sleep``/``asyncio.sleep``. Every policy decision between them is a
+    shared helper -- :func:`_request_builder`, :func:`_accumulate`,
+    :func:`_record_transport_failure`, :func:`_conclude_attempt` -- driven by
+    one ``Attempts`` instance, so neither path can drift from the other.
+
+    The count is stated because it is the thing worth watching: a sixth
+    difference appearing here means a policy decision has been written twice.
     """
     field = _checked_field(provenance, url)
     transport = _async_transport(url, field=field, allow_private=_env_flag(_ALLOW_PRIVATE_ENV))
@@ -845,39 +912,25 @@ async def asend(
     started = time.monotonic()
     attempts = Attempts(max_attempts)
 
+    build = _request_builder(method, url, json, params, headers, content, sign)
+
     async with httpx.AsyncClient(transport=transport, timeout=timeout) as client:
         for attempt in attempts.next_attempt():
-            request = _build_request(
-                client,
-                method=method,
-                url=url,
-                json_body=json,
-                params=params,
-                headers=headers,
-                content=content,
-                sign=sign,
-            )
+            request = build(client)
             try:
                 response = await client.send(request, stream=True)
                 try:
                     body = bytearray()
                     async for chunk in response.aiter_bytes():
-                        body.extend(chunk)
-                        if _over_cap(len(body)):
-                            logger.warning("Outbound response exceeded the size cap; aborting read")
-                            attempts.record_oversized_response(response.status_code)
-                            raise attempts.failure()
+                        _accumulate(body, chunk, attempts, response.status_code)
                 finally:
                     await response.aclose()
             except _RETRYABLE_EXCEPTIONS as exc:
-                logger.warning("Outbound attempt %d failed at the transport level: %s", attempt, exc)
-                attempts.record_transport_failure(exc)
+                _record_transport_failure(attempts, attempt, exc)
             else:
-                outcome = attempts.record_response(response.status_code, _retry_after_seconds(response))
-                if outcome is Attempts.Outcome.SUCCESS:
-                    return _result(response, bytes(body), attempt, started)
-                if outcome is Attempts.Outcome.TERMINAL:
-                    raise attempts.failure()
+                result = _conclude_attempt(attempts, response, bytes(body), attempt, started)
+                if result is not None:
+                    return result
 
             if attempt < max_attempts:
                 await asyncio.sleep(attempts.wait_seconds())

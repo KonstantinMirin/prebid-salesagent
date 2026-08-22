@@ -27,13 +27,15 @@ from tests.unit._architecture_helpers import repo_root
 
 _MODULE_PATH = "src/core/security/webhook_egress.py"
 # Repointed in Epic D lane C4 alongside the private rename, and EXTENDED to the two
-# new public entry points — leaving them out would let a future ``payload: bytes``
-# on the seam itself walk straight past this MUST.
+# public entry points — leaving them out would let a future ``payload: bytes``
+# on the seam itself walk straight past this MUST. Repointed again in
+# salesagent-pldmk.3, which deleted the two private payload-taking helpers and
+# folded their bodies into ``deliver_webhook`` / ``adeliver_webhook``. Every name here MUST resolve in the
+# module: see test_every_guarded_function_exists below, without which a deleted name
+# just stops being scanned and this guard degrades one silent notch at a time.
 _GUARDED_FUNCTIONS = frozenset(
     {
         "prepare_signed_request",
-        "_deliver_signed_webhook",
-        "_adeliver_signed_webhook",
         "deliver_webhook",
         "adeliver_webhook",
     }
@@ -116,7 +118,7 @@ def prepare_signed_request(payload: dict[str, Any] | bytes, secret, headers):
 
     def test_catches_a_bare_str_payload(self) -> None:
         snippet = """
-def _deliver_signed_webhook(url, payload: str, *, secret=None):
+def deliver_webhook(url, payload: str, *, scheme=None, credentials=None):
     pass
 """
         tree = ast.parse(snippet)
@@ -125,7 +127,7 @@ def _deliver_signed_webhook(url, payload: str, *, secret=None):
 
     def test_catches_a_bare_any_payload(self) -> None:
         snippet = """
-async def _adeliver_signed_webhook(url, payload: Any, *, secret=None):
+async def adeliver_webhook(url, payload: Any, *, scheme=None, credentials=None):
     pass
 """
         tree = ast.parse(snippet)
@@ -149,3 +151,23 @@ def some_other_function(payload: bytes):
 """
         tree = ast.parse(snippet)
         assert find_payload_annotation_violations(tree) == []
+
+
+class TestTheGuardHasSubjects:
+    """Every guarded name must still be defined in the scanned module.
+
+    Added in salesagent-pldmk.3. That change deleted two of the five names this set
+    then held, and nothing failed: a name that no longer resolves is simply never
+    matched by the AST walk, so the guard quietly shrank its own population while
+    still reporting green. This is the assertion that would have caught it.
+    """
+
+    def test_every_guarded_function_exists(self) -> None:
+        path = repo_root() / _MODULE_PATH
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        defined = {node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        missing = sorted(_GUARDED_FUNCTIONS - defined)
+        assert not missing, (
+            f"{missing} is guarded but no longer defined in {_MODULE_PATH} -- the scan silently "
+            "skips names that do not exist, so a stale entry is coverage this guard does not have"
+        )
