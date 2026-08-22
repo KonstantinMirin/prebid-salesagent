@@ -282,7 +282,6 @@ Feature: BR-UC-003 Update Media Buy
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
-    And the suggestion should contain "at least one updatable field"
     # BR-RULE-022 INV-3: No updatable fields → rejected
     # POST-F1: System state unchanged
     # POST-F2: Error code explains failure
@@ -469,7 +468,6 @@ Feature: BR-UC-003 Update Media Buy
     Then the operation should fail
     And the error code should be "AUTH_MISSING"
     And the error should include "suggestion" field
-    And the suggestion should contain "credentials"
     # POST-F1: System state unchanged
     # POST-F2: Error explains authentication failed
     # POST-F3: Suggestion to obtain credentials
@@ -511,7 +509,6 @@ Feature: BR-UC-003 Update Media Buy
     Then the operation should fail
     And the error code should be "MEDIA_BUY_NOT_FOUND"
     And the error should include "suggestion" field
-    And the suggestion should contain "verify"
     # POST-F1: System state unchanged
     # POST-F2: Error explains media buy not found
     # POST-F3: Suggestion to verify ID
@@ -572,7 +569,6 @@ Feature: BR-UC-003 Update Media Buy
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
-    And the suggestion should contain "end_time must be after start_time"
     # POST-F1: System state unchanged
     # POST-F2: Error explains date range invalid
     # POST-F3: Suggestion for recovery
@@ -606,7 +602,6 @@ Feature: BR-UC-003 Update Media Buy
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
-    And the suggestion should contain "currency"
     # POST-F1: System state unchanged
     # POST-F2: Error explains unsupported currency
     # POST-F3: Suggestion for recovery
@@ -769,7 +764,6 @@ Feature: BR-UC-003 Update Media Buy
     Then the operation should fail
     And the error code should be "PACKAGE_NOT_FOUND"
     And the error should include "suggestion" field
-    And the suggestion should contain "package"
     # POST-F1: System state unchanged
     # POST-F2: Error explains package not found
     # POST-F3: Suggestion for recovery
@@ -875,7 +869,6 @@ Feature: BR-UC-003 Update Media Buy
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
-    And the suggestion should contain "incremental operations" or "full replacement"
     # BR-RULE-083 INV-1: keyword_targets_add + overlay.keyword_targets → rejected
     # POST-F1: System state unchanged
     # POST-F3: Suggestion for recovery

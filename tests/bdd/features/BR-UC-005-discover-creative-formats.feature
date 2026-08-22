@@ -374,10 +374,9 @@ Feature: BR-UC-005 Discover Creative Formats
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with type "not_a_category"
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
-    And the error message should indicate which parameters are invalid
+    And the error code should be "INVALID_REQUEST"
+    And the error field should contain "type"
     And the error should include a "suggestion" field
-    And the suggestion should provide valid parameter values
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains which parameters are invalid and why
     # POST-F3: Suggestion provides valid values or format guidance
@@ -389,9 +388,8 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent requests formats with disclosure_positions filter ["sidebar"]
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should indicate "sidebar" is not a valid disclosure position
+    And the error field should contain "disclosure_positions"
     And the error should include a "suggestion" field
-    And the suggestion should advise using valid DisclosurePosition enum values
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains invalid value
     # POST-F3: Suggestion lists valid enum values
@@ -402,9 +400,8 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent requests formats with disclosure_positions filter []
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should indicate at least 1 item is required
+    And the error field should contain "disclosure_positions"
     And the error should include a "suggestion" field
-    And the suggestion should advise providing at least one position or omitting the filter
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains minItems violation
     # POST-F3: Suggestion for recovery
@@ -415,9 +412,8 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent requests formats with disclosure_positions filter ["prominent", "prominent"]
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should indicate duplicate values are not allowed
+    And the error field should contain "disclosure_positions"
     And the error should include a "suggestion" field
-    And the suggestion should advise removing duplicate positions
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains uniqueItems violation
     # POST-F3: Suggestion for recovery
@@ -428,10 +424,9 @@ Feature: BR-UC-005 Discover Creative Formats
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with disclosure_persistence filter ["permanent"]
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
-    And the error message should indicate "permanent" is not a valid persistence mode
+    And the error code should be "INVALID_REQUEST"
+    And the error field should contain "disclosure_persistence"
     And the error should include a "suggestion" field
-    And the suggestion should advise using valid DisclosurePersistence enum values
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains invalid enum value
     # POST-F3: Suggestion lists valid enum values
@@ -442,10 +437,9 @@ Feature: BR-UC-005 Discover Creative Formats
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with disclosure_persistence filter []
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
-    And the error message should indicate at least 1 item is required
+    And the error code should be "INVALID_REQUEST"
+    And the error field should contain "disclosure_persistence"
     And the error should include a "suggestion" field
-    And the suggestion should advise providing at least one mode or omitting the filter
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains minItems violation
     # POST-F3: Suggestion for recovery
@@ -456,10 +450,9 @@ Feature: BR-UC-005 Discover Creative Formats
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with disclosure_persistence filter ["continuous", "continuous"]
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
-    And the error message should indicate duplicate values are not allowed
+    And the error code should be "INVALID_REQUEST"
+    And the error field should contain "disclosure_persistence"
     And the error should include a "suggestion" field
-    And the suggestion should advise removing duplicate persistence modes
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains uniqueItems violation
     # POST-F3: Suggestion for recovery
@@ -472,9 +465,8 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent requests formats with output_format_ids filter []
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should indicate at least 1 item is required
+    And the error field should contain "output_format_ids"
     And the error should include a "suggestion" field
-    And the suggestion should advise providing at least one FormatId or omitting the filter
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains minItems violation
     # POST-F3: Suggestion for recovery
@@ -485,9 +477,8 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent requests formats with output_format_ids filter [{"id": "display_static"}]
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should indicate FormatId must include agent_url and id
+    And the error field should contain "output_format_ids"
     And the error should include a "suggestion" field
-    And the suggestion should advise including agent_url (URI) and id fields
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains invalid structure
     # POST-F3: Suggestion for correct FormatId structure
@@ -498,9 +489,8 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent requests formats with output_format_ids filter [{"agent_url": "https://example.com"}]
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should indicate FormatId must include agent_url and id
+    And the error field should contain "output_format_ids"
     And the error should include a "suggestion" field
-    And the suggestion should advise including agent_url (URI) and id fields
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains invalid structure
     # POST-F3: Suggestion for correct FormatId structure
@@ -512,9 +502,8 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent requests formats with input_format_ids filter []
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should indicate at least 1 item is required
+    And the error field should contain "input_format_ids"
     And the error should include a "suggestion" field
-    And the suggestion should advise providing at least one FormatId or omitting the filter
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains minItems violation
     # POST-F3: Suggestion for recovery
@@ -525,9 +514,8 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent requests formats with input_format_ids filter [{"id": "display_static"}]
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should indicate FormatId must include agent_url and id
+    And the error field should contain "input_format_ids"
     And the error should include a "suggestion" field
-    And the suggestion should advise including agent_url (URI) and id fields
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains invalid structure
     # POST-F3: Suggestion for correct FormatId structure
@@ -538,9 +526,8 @@ Feature: BR-UC-005 Discover Creative Formats
     When the Buyer Agent requests formats with input_format_ids filter [{"agent_url": "https://example.com"}]
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should indicate FormatId must include agent_url and id
+    And the error field should contain "input_format_ids"
     And the error should include a "suggestion" field
-    And the suggestion should advise including agent_url (URI) and id fields
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains invalid structure
     # POST-F3: Suggestion for correct FormatId structure

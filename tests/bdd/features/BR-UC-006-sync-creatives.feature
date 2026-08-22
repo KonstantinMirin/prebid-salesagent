@@ -143,7 +143,6 @@ Feature: BR-UC-006 Sync Creative Assets
     Then the operation should fail
     And the error code should be "AUTH_MISSING"
     And the error should include a "suggestion" field
-    And the suggestion should contain "authentication credentials"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains missing authentication
     # POST-F3: Suggestion for recovery
@@ -189,9 +188,7 @@ Feature: BR-UC-006 Sync Creative Assets
     When the Buyer Agent syncs the creative
     Then the operation should fail
     And the error code should be "AUTH_INVALID"
-    And the error message should contain "tenant"
     And the error should include a "suggestion" field
-    And the suggestion should contain "tenant"
     # POST-F1, POST-F2, POST-F3
     # --- ext-c: INVALID_REQUEST ---
 
@@ -202,9 +199,7 @@ Feature: BR-UC-006 Sync Creative Assets
     When the Buyer Agent syncs the creative
     Then the creative should have action "failed"
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "validation"
     And the error should include a "suggestion" field
-    And the suggestion should contain "CreativeAsset schema"
     # POST-F2: Error explains validation failure
     # POST-F3: Suggestion for corrective action
     # --- ext-d: INVALID_REQUEST ---
@@ -216,9 +211,7 @@ Feature: BR-UC-006 Sync Creative Assets
     When the Buyer Agent syncs the creative
     Then the creative should have action "failed"
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "name"
     And the error should include a "suggestion" field
-    And the suggestion should contain "non-empty name"
     # POST-F2, POST-F3
 
   @T-UC-006-ext-d-whitespace @extension @ext-d @error
@@ -239,9 +232,7 @@ Feature: BR-UC-006 Sync Creative Assets
     When the Buyer Agent syncs the creative
     Then the creative should have action "failed"
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "format"
     And the error should include a "suggestion" field
-    And the suggestion should contain "format_id"
     # POST-F2, POST-F3
     # --- ext-f: REFERENCE_NOT_FOUND ---
 
@@ -252,9 +243,7 @@ Feature: BR-UC-006 Sync Creative Assets
     When the Buyer Agent syncs the creative
     Then the creative should have action "failed"
     And the error code should be "REFERENCE_NOT_FOUND"
-    And the error message should contain "unknown format"
     And the error should include a "suggestion" field
-    And the suggestion should contain "list_creative_formats"
     # POST-F2, POST-F3
     # --- ext-g: AGENT_UNREACHABLE ---
 
@@ -265,9 +254,7 @@ Feature: BR-UC-006 Sync Creative Assets
     When the Buyer Agent syncs the creative
     Then the creative should have action "failed"
     And the error code should be "AGENT_UNREACHABLE"
-    And the error message should contain "unreachable"
     And the error should include a "suggestion" field
-    And the suggestion should contain "try again"
     # POST-F2, POST-F3
     # --- ext-h: INVALID_REQUEST ---
 
@@ -279,9 +266,7 @@ Feature: BR-UC-006 Sync Creative Assets
     When the Buyer Agent syncs the creative
     Then the creative should have action "failed"
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "preview"
     And the error should include a "suggestion" field
-    And the suggestion should contain "media_url"
     # POST-F2, POST-F3
     # --- ext-i: CONFIGURATION_ERROR ---
 
@@ -293,9 +278,7 @@ Feature: BR-UC-006 Sync Creative Assets
     When the Buyer Agent syncs the creative
     Then the creative should have action "failed"
     And the error code should be "CONFIGURATION_ERROR"
-    And the error message should contain "GEMINI_API_KEY"
     And the error should include a "suggestion" field
-    And the suggestion should contain "seller"
     # POST-F2, POST-F3
     # --- ext-j: PACKAGE_NOT_FOUND (strict) ---
 
@@ -308,9 +291,7 @@ Feature: BR-UC-006 Sync Creative Assets
     When the Buyer Agent syncs the creative
     Then the operation should fail with an assignment error
     And the error code should be "PACKAGE_NOT_FOUND"
-    And the error message should contain "package"
     And the error should include a "suggestion" field
-    And the suggestion should contain "media buys"
     # POST-F2, POST-F3
     # --- ext-k: CREATIVE_REJECTED (strict) ---
 

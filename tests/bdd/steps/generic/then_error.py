@@ -1255,3 +1255,35 @@ def _assert_no_new_media_buy(ctx: dict) -> None:
         "Cannot verify no media buy was created: no error recorded and "
         f"response has media_buy_id. ctx keys: {list(ctx.keys())}"
     )
+
+
+@then(parsers.parse('the error field should contain "{field}"'))
+def then_error_field_contains(ctx: dict, field: str) -> None:
+    """Assert the wire error object's ``field`` pointer names ``field``.
+
+    This step text has been written into scenarios since UC-004/UC-019/UC-021
+    were generated, but no step definition ever existed -- so every scenario
+    using it xfailed with "Step definition not found" while the TAUTOLOGICAL
+    prose steps next to it were implemented and ran. That is exactly backwards:
+    ``field`` is the only part of an error object that carries information the
+    CODE does not already determine (``message`` and ``suggestion`` are pure
+    functions of the code via CODE_TABLE), so it is the one part worth grading.
+
+    Substring, not equality: the spec's pointer is a PATH
+    (``packages[0].budget``), and a scenario legitimately grades the leaf it
+    cares about without pinning the whole path.
+
+    Wire-only, and deliberately loud: an error scenario that reached no wire
+    envelope has not graded the buyer-facing contract, and silently passing on
+    a reconstructed exception is the failure mode this epic removes.
+    """
+    result = ctx.get("result")
+    assert result is not None, "No transport result recorded -- the When step did not dispatch"
+    error = result.wire_error_object()
+    assert error is not None, (
+        f"No wire error envelope was captured, so there is no field pointer to grade. "
+        f"Transport={ctx.get('transport')!r}."
+    )
+    actual = error.get("field")
+    assert actual is not None, f"Wire error carries no 'field' pointer; error object was {error!r}"
+    assert field in str(actual), f"Expected error field to contain {field!r}, got {actual!r}"

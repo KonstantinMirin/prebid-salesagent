@@ -130,7 +130,6 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # message-contains-"minItems" assertion is gone with it: the sentence is derived
     # from the code (ADR-010) and cannot name a JSON-Schema keyword.
     And the error should include "suggestion" field
-    And the suggestion should contain "at least one identifier"
     # Traces to BR-RULE-030 INV-1/INV-2 (schema minItems constraint on identification arrays)
     # POST-F2: Error explains what failed
     # POST-F3: Suggestion for recovery
@@ -174,7 +173,6 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # Out-of-enum value -> schema constraint -> INVALID_REQUEST. WHICH parameter
     # failed travels on error.field, not in the sentence.
     And the error should include "suggestion" field
-    And the suggestion should contain "valid status values"
     # PRE-BIZ5: status_filter must be a valid value
     # POST-F2: Error explains invalid filter
     # POST-F3: Suggestion lists valid values
@@ -227,9 +225,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     When the Buyer Agent requests delivery metrics with start_date "2026-02-01" and end_date "2026-01-01"
     Then the operation should fail
     And the error code should be "invalid_date_range"
-    And the error message should contain "start_date must be before end_date"
     And the error should include "suggestion" field
-    And the suggestion should contain "ensure start_date is before end_date"
     # POST-F1: System state unchanged
     # POST-F2: Error explains invalid date range
     # POST-F3: Suggestion for recovery
@@ -406,7 +402,6 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the operation should fail
     And the error code should be "principal_id_missing"
     And the error should include "suggestion" field
-    And the suggestion should contain "provide valid credentials"
     # POST-F1: System state unchanged
     # POST-F2: Error explains authentication required
     # POST-F3: Suggestion to provide credentials
@@ -418,9 +413,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     When the Buyer Agent requests delivery metrics
     Then the operation should fail
     And the error code should be "principal_not_found"
-    And the error message should contain "principal"
     And the error should include "suggestion" field
-    And the suggestion should contain "verify account"
     # POST-F1: System state unchanged
     # POST-F2: Error explains principal not found
     # POST-F3: Suggestion to verify account
@@ -431,9 +424,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-nonexistent"]
     Then the operation should fail
     And the error code should be "media_buy_not_found"
-    And the error message should contain "media buy"
     And the error should include "suggestion" field
-    And the suggestion should contain "verify the identifier"
     # POST-F1: System state unchanged
     # POST-F2: Error explains media buy not found
     # POST-F3: Suggestion to verify identifiers
@@ -450,7 +441,6 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the error code should be "media_buy_not_found"
     And the error should NOT reveal that the media buy exists
     And the error should include "suggestion" field
-    And the suggestion should contain "verify the identifier"
     # POST-F1: System state unchanged
     # POST-F2: Error does not reveal existence (security)
     # POST-F3: Suggestion to verify identifier
@@ -467,7 +457,6 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # taxonomy leaking into a scenario as if it were a wire code. The
     # message-contains assertion is gone: the sentence is a function of the code.
     And the error should include "suggestion" field
-    And the suggestion should contain "retry later"
     # POST-F1: System state unchanged
     # POST-F2: Error explains adapter failure
     # POST-F3: Suggestion to retry

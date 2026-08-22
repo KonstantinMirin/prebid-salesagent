@@ -173,7 +173,6 @@ Feature: BR-UC-026 Package Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "NOT_CANCELLABLE"
-    And the error message should contain "cancel"
     And the error should include "suggestion" field
     And the suggestion should explain the condition blocking cancellation
     And the error recovery should be "correctable"
@@ -258,9 +257,7 @@ Feature: BR-UC-026 Package Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
     And the error code should be "PRODUCT_NOT_FOUND"
-    And the error message should contain "product"
     And the error should include "suggestion" field
-    And the suggestion should contain "get_products"
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error identifies unknown product_id
@@ -272,9 +269,8 @@ Feature: BR-UC-026 Package Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "<missing_field>"
+    And the error field should contain "<missing_field>"
     And the error should include "suggestion" field
-    And the suggestion should contain "product_id, budget, pricing_option_id"
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error identifies the specific missing field
@@ -297,9 +293,7 @@ Feature: BR-UC-026 Package Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "pricing_option_id"
     And the error should include "suggestion" field
-    And the suggestion should contain "pricing_options"
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error identifies invalid pricing_option_id
@@ -316,9 +310,7 @@ Feature: BR-UC-026 Package Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
     And the error code should be "BUDGET_TOO_LOW"
-    And the error message should contain "budget"
     And the error should include "suggestion" field
-    And the suggestion should contain "increase budget"
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error indicates budget is below product minimum
@@ -336,9 +328,7 @@ Feature: BR-UC-026 Package Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "format"
     And the error should include "suggestion" field
-    And the suggestion should contain "format_ids"
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error identifies unsupported format_ids
@@ -355,9 +345,7 @@ Feature: BR-UC-026 Package Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "catalog"
     And the error should include "suggestion" field
-    And the suggestion should contain "distinct type"
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error identifies duplicate catalog types
@@ -373,10 +361,7 @@ Feature: BR-UC-026 Package Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "product_id"
-    And the error message should contain "cannot be changed"
     And the error should include "suggestion" field
-    And the suggestion should contain "new package"
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error identifies immutable product_id field
@@ -392,10 +377,7 @@ Feature: BR-UC-026 Package Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "format_ids"
-    And the error message should contain "cannot be changed"
     And the error should include "suggestion" field
-    And the suggestion should contain "new package"
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error identifies immutable format_ids field
@@ -411,10 +393,7 @@ Feature: BR-UC-026 Package Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "pricing_option_id"
-    And the error message should contain "cannot be changed"
     And the error should include "suggestion" field
-    And the suggestion should contain "new package"
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error identifies immutable pricing_option_id field
@@ -431,10 +410,7 @@ Feature: BR-UC-026 Package Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "keyword"
-    And the error message should contain "mutually exclusive"
     And the error should include "suggestion" field
-    And the suggestion should contain "targeting_overlay.keyword_targets"
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains conflict between replacement and incremental modes
@@ -451,10 +427,7 @@ Feature: BR-UC-026 Package Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "negative_keywords"
-    And the error message should contain "mutually exclusive"
     And the error should include "suggestion" field
-    And the suggestion should contain "targeting_overlay.negative_keywords"
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains conflict between replacement and incremental modes
@@ -495,9 +468,7 @@ Feature: BR-UC-026 Package Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "package_id"
     And the error should include "suggestion" field
-    And the suggestion should contain "package_id"
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains that a package identifier is required
@@ -519,7 +490,6 @@ Feature: BR-UC-026 Package Media Buy
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
-    And the suggestion should contain "pricing_options"
     # BR-RULE-195 INV-2: pricing_option_id not found -> INVALID_REQUEST
 
   @T-UC-026-inv-195-3 @invariant @BR-RULE-195
@@ -567,7 +537,6 @@ Feature: BR-UC-026 Package Media Buy
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
-    And the suggestion should contain "format_ids"
     # BR-RULE-197 INV-4: Empty array violates minItems: 1
 
   @T-UC-026-inv-198-4 @invariant @BR-RULE-198

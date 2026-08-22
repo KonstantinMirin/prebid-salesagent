@@ -39,7 +39,6 @@ Feature: BR-UC-002 NFR Enforcement (restructured)
     # errors. Routes through each transport's REAL auth gate (A2A
     # on_message_send no-token gate, REST _require_auth_dep, MCP boundary).
     And the error code should be "AUTH_MISSING"
-    And the suggestion should contain "credentials"
     And no adapter calls should have been made
 
   # Replaces nfr-006 "Then the system should validate budget against minimum order requirements"

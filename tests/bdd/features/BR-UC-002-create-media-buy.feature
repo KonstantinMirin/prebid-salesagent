@@ -228,7 +228,6 @@ Feature: BR-UC-002 Create Media Buy
     Then the operation should fail
     And the error code should be "UNSUPPORTED_FEATURE"
     And the error recovery should be "correctable"
-    And the error message should contain "XYZ"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
@@ -258,7 +257,6 @@ Feature: BR-UC-002 Create Media Buy
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
-    And the error message should contain "Unknown targeting"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
@@ -398,7 +396,6 @@ Feature: BR-UC-002 Create Media Buy
     And the error code should be "PROPOSAL_EXPIRED"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
-    And the suggestion should contain "get_products"
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
@@ -520,7 +517,6 @@ Feature: BR-UC-002 Create Media Buy
     And the error code should be "ACCOUNT_NOT_FOUND"
     And the error recovery should be "terminal"
     And the error should include "suggestion" field
-    And the suggestion should contain "list_accounts"
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows to escalate (terminal)
@@ -560,7 +556,6 @@ Feature: BR-UC-002 Create Media Buy
     And the error code should be "ACCOUNT_AMBIGUOUS"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
-    And the suggestion should contain "account_id"
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
@@ -575,7 +570,6 @@ Feature: BR-UC-002 Create Media Buy
     Then the operation should fail
     And the error code should be "UNSUPPORTED_FEATURE"
     And the error recovery should be "correctable"
-    And the error message should contain "attention_score"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
@@ -590,9 +584,7 @@ Feature: BR-UC-002 Create Media Buy
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
-    And the error message should contain "not registered"
     And the error should include "suggestion" field
-    And the suggestion should contain "sync_event_sources"
     # --- ext-v: Catalog Validation Failure ---
 
   @T-UC-002-ext-v @extension @ext-v @error @post-f1 @post-f2 @post-f3
@@ -604,7 +596,6 @@ Feature: BR-UC-002 Create Media Buy
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
-    And the error message should contain "duplicate catalog type"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
@@ -618,9 +609,7 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error message should contain "not found"
     And the error should include "suggestion" field
-    And the suggestion should contain "sync_catalogs"
 
   @T-UC-002-inv-006-1 @invariant @BR-RULE-006
   Scenario: INV-1 holds -- fixed_price set and floor_price null (valid fixed pricing)
@@ -930,7 +919,6 @@ Feature: BR-UC-002 Create Media Buy
     Then the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
-    And the error message should contain "priority"
     And the error should include "suggestion" field
 
   @T-UC-002-inv-087-6 @invariant @BR-RULE-087 @error

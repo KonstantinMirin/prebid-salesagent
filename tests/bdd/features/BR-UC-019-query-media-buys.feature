@@ -72,7 +72,6 @@ Feature: BR-UC-019 Query Media Buys
     And the error message should indicate that identity is required
     And the error should include a "recovery" field indicating correctable failure
     And the error should include a "suggestion" field
-    And the suggestion should contain "authentication" or "credentials"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains authentication is missing
     # POST-F3: Recovery classification indicates how to fix
@@ -83,9 +82,7 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request
     Then the response should include an empty media_buys array
     And the response errors array should include error code "principal_id_missing"
-    And the error message should contain "Principal ID not found"
     And the error should include a "suggestion" field
-    And the suggestion should contain "re-authenticate" or "credentials"
     # POST-F1: Buyer knows no results were returned
     # POST-F2: Error explains principal_id is missing
     # POST-F3: Buyer can infer corrective action
@@ -97,9 +94,7 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request
     Then the response should include an empty media_buys array
     And the response errors array should include error code "principal_not_found"
-    And the error message should contain "not found"
     And the error should include a "suggestion" field
-    And the suggestion should contain "register" or "verify"
     # POST-F1: Buyer knows no results were returned
     # POST-F2: Error explains principal was not found
     # POST-F3: Buyer can infer corrective action
@@ -112,7 +107,6 @@ Feature: BR-UC-019 Query Media Buys
     And the error message should include field-level validation details
     And the error should include a "recovery" field indicating correctable failure
     And the error should include a "suggestion" field
-    And the suggestion should contain "fix" or "correct" or "valid"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error identifies which fields failed validation
     # POST-F3: Per-field details enable targeted correction
@@ -122,10 +116,8 @@ Feature: BR-UC-019 Query Media Buys
     Given an authenticated Buyer with principal_id "buyer-001"
     When the Buyer Agent sends a get_media_buys request with account_id "acc-001"
     Then the operation should fail with error code "UNSUPPORTED_FEATURE"
-    And the error message should contain "account_id filtering is not yet supported"
     And the error should include a "recovery" field indicating correctable failure
     And the error should include a "suggestion" field
-    And the suggestion should contain "remove account_id" or "omit account_id"
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains account filtering is not supported
     # POST-F3: Recovery is correctable -- omit account_id and retry
@@ -925,7 +917,6 @@ Feature: BR-UC-019 Query Media Buys
     And the error recovery classification should be "correctable"
     And no database query should have been executed
     And the error should include a "suggestion" field
-    And the suggestion should contain "remove" or "omit" or "without the `account` filter"
     # BR-RULE-293 INV-2: v3.x AccountReference -> AdCPCapabilityNotSupportedError
     # (UNSUPPORTED_FEATURE, correctable) before any DB read. The annotation used to say
     # AdCPValidationError while the step demanded ACCOUNT_FILTER_NOT_SUPPORTED and
