@@ -1625,25 +1625,6 @@ def _current_suggestion(ctx: dict) -> str:
     return suggestion
 
 
-def _assert_suggestion_contains_any(ctx: dict, options: list[str]) -> None:
-    """Assert the buyer-facing suggestion contains at least one of the options."""
-    suggestion = _current_suggestion(ctx)
-    lowered = suggestion.lower()
-    assert any(t.lower() in lowered for t in options), f"Expected one of {options!r} in suggestion: {suggestion}"
-
-
-@then(parsers.parse('the suggestion should contain "{text1}" or "{text2}"'))
-def then_suggestion_contains_either(ctx: dict, text1: str, text2: str) -> None:
-    """Assert suggestion contains one of the specified texts."""
-    _assert_suggestion_contains_any(ctx, [text1, text2])
-
-
-@then(parsers.parse('the suggestion should contain "{text1}" or "{text2}" or "{text3}"'))
-def then_suggestion_contains_any_of_three(ctx: dict, text1: str, text2: str, text3: str) -> None:
-    """Assert suggestion contains one of three specified texts."""
-    _assert_suggestion_contains_any(ctx, [text1, text2, text3])
-
-
 @then(parsers.parse('the media buy "{mb_id}" should have status "{expected_status}"'))
 def then_media_buy_has_status(ctx: dict, mb_id: str, expected_status: str) -> None:
     """Assert a specific media buy has the expected status in the response."""

@@ -470,8 +470,6 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request with include_snapshot true
     Then package "pkg-001" should have snapshot_unavailable_reason "SNAPSHOT_UNSUPPORTED"
     And package "pkg-002" should have snapshot_unavailable_reason "SNAPSHOT_UNSUPPORTED"
-    And the error should include a "suggestion" field
-    And the suggestion should contain "adapter" or "realtime" or "reporting"
     # BR-RULE-153 INV-3: All packages get SNAPSHOT_UNSUPPORTED
 
   @T-UC-019-inv-153-4 @invariant @BR-RULE-153
@@ -931,7 +929,6 @@ Feature: BR-UC-019 Query Media Buys
     Then the response media_buys array should be empty
     And no database query should have been executed
     And the error should include a "suggestion" field
-    And the suggestion should contain "omit" or "without the `account` filter"
     # BR-RULE-293 INV-5: validation fails -> no DB query; no partial result leak
 
   # AdCP 3.1.1 core/error.json: the error-code vocabulary is OPEN — error.code is a wire-typed

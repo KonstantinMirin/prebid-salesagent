@@ -326,7 +326,7 @@ Feature: BR-UC-002 Create Media Buy
     But a package format_id is a plain string "banner_300x250" instead of a FormatId object
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error message should contain "FormatId"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
@@ -339,7 +339,7 @@ Feature: BR-UC-002 Create Media Buy
     But a package format_id references an unregistered agent_url
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error message should contain "not registered"
+    And the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
     # --- ext-i: Authentication Error ---
 
@@ -348,7 +348,7 @@ Feature: BR-UC-002 Create Media Buy
     Given the Buyer has no authentication credentials
     When the Buyer Agent sends the create_media_buy request
     Then the operation should fail
-    And the error message should contain "Principal"
+    And the error code should be "AUTH_MISSING"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed

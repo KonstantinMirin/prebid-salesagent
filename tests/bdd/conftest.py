@@ -1670,11 +1670,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "adapter partial failure handling needs enriched test data or production fix",
                 True,
             ),
-            # Error response structure: same no-auth path as ext-a, suggestion missing
-            "T-UC-004-response-error": (
-                "error response structure needs suggestion field — production enhancement",
-                True,
-            ),
+            # Graduated (subdl): T-UC-004-response-error — the reason claimed the
+            # suggestion field was missing and needed a "production enhancement". It
+            # was never missing: ALL 100 CODE_TABLE entries carry a suggestion, so
+            # the presence check cannot fail for any emittable error. The scenario
+            # was actually blocked by demanding the SUGGESTION read "provide valid
+            # authentication", while the no-auth path raises AdCPAuthRequiredError
+            # -> AUTH_MISSING, whose table suggestion is "provide credentials via
+            # the auth header and retry". Replacing that sentence-match with the
+            # AUTH_MISSING code assertion — what the pin actually mandates for a
+            # request carrying no Authorization header — un-xfailed it.
         }
         for tag, (reason, strict) in _UC004_XFAIL_ADDITIONAL.items():
             if tag in marker_names:

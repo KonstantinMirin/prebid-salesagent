@@ -503,7 +503,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response should contain "errors" field
     And the response should not contain "media_buy_deliveries" field
     And the error should include "suggestion" field
-    And the suggestion should contain "provide valid authentication"
+    And the error code should be "AUTH_MISSING"
     # BR-RULE-018 INV-2: failure has errors, no data
     # POST-F3: Suggestion for recovery
 
