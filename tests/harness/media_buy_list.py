@@ -54,10 +54,23 @@ class MediaBuyListEnv(IntegrationEnv):
         return self._run_a2a_handler("get_media_buys", GetMediaBuysResponse, **kwargs)
 
     def call_mcp(self, **kwargs: Any) -> Any:
-        """Call get_media_buys MCP wrapper."""
-        from src.core.tools.media_buy_list import get_media_buys
+        """Call get_media_buys through the registered MCP client.
 
-        return self._run_mcp_wrapper(get_media_buys, GetMediaBuysResponse, **kwargs)
+        Not ``_run_mcp_wrapper``: that calls the UNDECORATED module function,
+        and ``with_error_logging`` is applied at registration time
+        (``src/core/main.py``). Through the wrapper no ``AdCPToolError`` is
+        ever raised, so nothing is stashed and the dispatcher captures ``None``
+        for both the error envelope and the success response — while this env
+        goes on declaring ``has_wire=True``. This env was the last one in
+        ``tests/harness/`` still on that path.
+
+        The rejection therefore moves from ``_resolve_status_filter`` inside
+        ``_impl`` to FastMCP's TypeAdapter at the schema boundary, which
+        changes the message and field shape. That is what a real MCP buyer
+        receives — ``RequestCompatMiddleware`` translates the TypeAdapter
+        rejection into the two-layer error — so grading it is the point.
+        """
+        return self._run_mcp_client("get_media_buys", GetMediaBuysResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to GetMediaBuysBody shape for REST POST."""
