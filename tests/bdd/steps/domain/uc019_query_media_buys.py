@@ -1581,17 +1581,6 @@ def then_fail_with_code(ctx: dict, code: str) -> None:
     )
 
 
-@then("the error message should indicate that identity is required")
-def then_error_identity_required(ctx: dict) -> None:
-    """Assert error mentions identity/authentication."""
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    msg = str(error).lower()
-    assert any(kw in msg for kw in ("identity", "auth", "principal", "credential")), (
-        f"Expected identity-related error message, got: {error}"
-    )
-
-
 def _assert_error_recovery(ctx: dict, expected: str) -> None:
     """Assert the error's recovery classification — wire-first, typed fallback.
 

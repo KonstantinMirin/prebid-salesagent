@@ -242,9 +242,11 @@ def _get_media_buys_impl(
                     # Seller-side data-integrity failure (the buyer can't fix it),
                     # surfaced with the standard ``SERVICE_UNAVAILABLE`` wire code —
                     # matching the sibling per-creative advisory in
-                    # creatives/_processing.py — with the specific
-                    # ``TARGETING_REHYDRATION_FAILED`` shape in the message so
-                    # callers can grep/route on it.
+                    # creatives/_processing.py. The discriminator is
+                    # ``details["reason"]``, NOT the message: ``Error.of()`` derives
+                    # message from CODE_TABLE, so no raise site can stamp a
+                    # ``TARGETING_REHYDRATION_FAILED:`` prefix into it any more
+                    # (salesagent-3dawm). Callers route on ``details.reason``.
                     hydration_errors.append(
                         Error.of(  # structural-guard: advisory per-package result in GetMediaBuysResponse.errors[]
                             ErrorCode.SERVICE_UNAVAILABLE,

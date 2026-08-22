@@ -174,15 +174,22 @@ class AdCPError(Exception):
 
     ``normalize_to_adcp_error()`` returns an already-typed ``AdCPError``
     unchanged, so for a typed error THE RAISE SITE IS THE WIRE — there is no
-    downstream sanitization point. The trust decision therefore has to be
-    taken at construction time, per raise site, and it is opt-in: the spec
-    also POSITIVELY requires specific first-party message content in places
-    (version negotiation must name the buyer's requested version and the
-    seller's supported set), so a blanket boundary scrub would regress a
-    graded conformance step. Hence: ``message`` stays first-party text the
-    seller authored, and anything third-party goes in ``internal_detail``,
-    which is logged server-side by ``normalize_to_adcp_error()`` and never
-    emitted.
+    downstream sanitization point. That is why ``message`` is no longer
+    authored at all: it is a read-only property returning
+    ``CODE_TABLE[code].message``, and ``__init__`` takes no ``message``
+    parameter, so the prohibited categories above cannot be interpolated into
+    buyer-facing text even by accident. The trust decision is made once, in the
+    table, instead of per raise site.
+
+    Where the spec POSITIVELY requires request-specific content — version
+    negotiation must name the buyer's requested version and the seller's
+    supported set — that content goes in ``details``, which is exactly where
+    the spec reads it from: see ``AdCPVersionUnsupportedError`` below, whose
+    recovery is "re-pin to a release in the returned
+    ``error.details.supported_versions``". Structured values in ``details``,
+    third-party text in ``internal_detail`` (logged server-side by
+    ``normalize_to_adcp_error()``, never emitted), and nothing at all in
+    ``message``.
     """
 
     # Class-level identity defaults. Subclasses override these.

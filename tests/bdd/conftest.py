@@ -1655,7 +1655,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Graduated: T-UC-004-identify-partial, T-UC-004-identify-batch-ownership
             # (merge from main fixed _impl to silently omit missing/non-owned IDs per BR-RULE-030 INV-5)
             # Adapter error: message text + suggestion not wired in partial-success response
-            "T-UC-004-ext-f": ("adapter error response needs suggestion field and message refinement", True),
+            # Graduated (subdl): T-UC-004-ext-f — the reason was "needs suggestion field
+            # and message refinement". The suggestion field was never missing: every one
+            # of the 100 CODE_TABLE entries carries one, and AdCPAdapterError resolves to
+            # SERVICE_UNAVAILABLE / transient / "retry with exponential backoff", matching
+            # the pin verbatim ("Seller service is temporarily unavailable. Retry with
+            # exponential backoff."). What blocked it was "message refinement" — the
+            # scenario demanding authored sentences that CODE_TABLE derivation makes
+            # unconstructible. Removing those tautologies un-xfailed it; the scenario now
+            # grades the code and the suggestion-presence (which does grade envelope
+            # serialization) and nothing derived.
             # Adapter partial failure: _impl silently swallows data construction exceptions
             "T-UC-004-adapter-partial": (
                 "adapter partial failure handling needs enriched test data or production fix",
@@ -2491,7 +2500,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # with VALIDATION_ERROR, field-level details (field="media_buy_ids"),
             # recovery=correctable and a top-level suggestion, on the A2A wire and via
             # the typed exception on the legacy MCP wrapper. Then steps assert wire-first.
-            "T-UC-019-ext-e",
+            # Graduated (subdl): T-UC-019-ext-e — the xfail reason "feature not yet
+            # implemented" was WRONG. The feature IS implemented: media_buy_list.py:107
+            # raises AdCPCapabilityNotSupportedError -> UNSUPPORTED_FEATURE / correctable
+            # / 422, which is exactly what the pin defines ("A requested feature or field
+            # is not supported by this seller"). What actually failed was the scenario
+            # demanding the MESSAGE contain "account_id filtering is not yet supported" —
+            # an authored sentence that cannot exist, since AdCPError.message is a
+            # read-only property returning CODE_TABLE[code].message ("Feature not
+            # supported"). Removing that tautology is what un-xfailed it. Then steps are
+            # wire-graded via then_fail_with_code (both envelope layers must agree, and
+            # a no-wire run raises). Verified xpassing on a2a and mcp — the only
+            # transports this module collects; its total absence of [rest] is a
+            # module-wide parametrize-time gap filed separately.
             # Transport-agnostic main scenario
             "T-UC-019-main",
         }
