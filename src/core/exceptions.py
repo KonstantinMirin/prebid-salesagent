@@ -1016,15 +1016,24 @@ class AdCPMediaBuyRejectedError(AdCPError):
 
 
 class AdCPInventoryUnavailableError(AdCPError):
-    """Requested inventory is not available (422 → PRODUCT_UNAVAILABLE).
+    """Requested inventory is not available (422, PRODUCT_UNAVAILABLE).
 
-    recovery=correctable: the buyer can select different inventory. Carries the
-    INVENTORY_UNAVAILABLE taxonomy as the class identity; the wire code is the
-    standard PRODUCT_UNAVAILABLE.
+    Emits the PUBLISHED ``PRODUCT_UNAVAILABLE``, whose pinned description is
+    exactly this condition: "The requested product is sold out or no longer
+    available." A private ``INVENTORY_UNAVAILABLE`` synonym of a published member
+    costs buyers the ability to switch on ``error.code`` across sellers, which is
+    the whole point of a published vocabulary -- the openness of that vocabulary
+    exists for conditions the spec has NOT named, not for renaming ones it has.
+
+    This docstring previously claimed "the wire code is the standard
+    PRODUCT_UNAVAILABLE" while ``_code`` said otherwise; the claim is now true.
+
+    recovery=correctable, unchanged: PRODUCT_UNAVAILABLE's pinned enumMetadata
+    classifies it correctable, the same class the retired platform code carried.
     """
 
     _default_status_code: ClassVar[int] = 422
-    _code: ClassVar[ErrorCodeT] = AppErrorCode.INVENTORY_UNAVAILABLE
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PRODUCT_UNAVAILABLE
 
 
 # ---------------------------------------------------------------------------

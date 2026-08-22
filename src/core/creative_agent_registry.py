@@ -32,6 +32,7 @@ from adcp.exceptions import ADCPError
 from adcp.types import AssetContentType as AssetType
 from pydantic import ValidationError
 
+from src.core.errors.codes import AppErrorCode
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPRateLimitError,
@@ -73,12 +74,6 @@ _SCHEMA_VALIDATION_FAILURE_MARKERS = (
     # post-pin additive asset_types, e.g. pixel_tracker).
     "schema validation failed",
 )
-
-#: Buyer-facing text for an AGENT_UNREACHABLE entry in the ``list_creative_formats``
-#: SUCCESS payload's ``errors[]``. A module constant, not a literal at the raise
-#: site, so the wire-safety tests assert the exact published sentence instead of
-#: re-typing it (and drifting from it).
-CREATIVE_AGENT_UNREACHABLE_MESSAGE = "A configured creative agent is unreachable; its formats were not included"
 
 
 def _as_format_dict(fmt: Any) -> dict[str, Any]:
@@ -842,10 +837,13 @@ class CreativeAgentRegistry:
                 # an SDK model with no internal_detail slot; the raw cause is
                 # captured by the ``logger.error(..., exc_info=True)`` above.
                 errors.append(
-                    AdCPResponseError(
-                        code="AGENT_UNREACHABLE",
-                        message=CREATIVE_AGENT_UNREACHABLE_MESSAGE,
-                    )
+                    # field="formats" names the response section this advisory
+                    # degrades, which the open-vocabulary permission depends on:
+                    # a receiver decodes an unpublished code by reading recovery
+                    # (derived from the code by CODE_TABLE) and locating what it
+                    # affects. message/suggestion/recovery are NOT passed -- there
+                    # is no parameter for them (salesagent-3dawm.14).
+                    AdCPResponseError.of(AppErrorCode.AGENT_UNREACHABLE, field="formats")
                 )
                 continue
 

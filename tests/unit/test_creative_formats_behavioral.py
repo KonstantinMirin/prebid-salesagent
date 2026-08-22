@@ -18,7 +18,7 @@ from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no
 # ImageFormatAsset = individual image, VideoFormatAsset = individual video
 # RepeatableAssetGroup = repeatable_group (has nested assets, no asset_type)
 # Nested group assets: ImageFormatGroupAsset, VideoFormatGroupAsset, TextFormatGroupAsset, etc.
-from src.core.creative_agent_registry import CREATIVE_AGENT_UNREACHABLE_MESSAGE
+from src.core.errors.codes import CODE_TABLE
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
 from tests.factories import PrincipalFactory
 
@@ -683,7 +683,7 @@ class TestPartialAgentFailureReturnsFormatsAndErrors:
         # Considerations makes errors[] client-facing too, so the fixture now
         # carries the first-party sentence and the assertions compare values.
         agent_errors = [
-            AdCPResponseError(code="AGENT_UNREACHABLE", message=CREATIVE_AGENT_UNREACHABLE_MESSAGE),
+            AdCPResponseError(code="AGENT_UNREACHABLE", message=CODE_TABLE["AGENT_UNREACHABLE"].message),
         ]
         response = _call_impl_raw(healthy_formats, errors=agent_errors)
 
@@ -694,7 +694,7 @@ class TestPartialAgentFailureReturnsFormatsAndErrors:
         assert response.errors is not None, "Response must include errors[] for failed agents, not silently drop them"
         assert len(response.errors) == 1
         assert response.errors[0].code == "AGENT_UNREACHABLE"
-        assert response.errors[0].message == CREATIVE_AGENT_UNREACHABLE_MESSAGE
+        assert response.errors[0].message == CODE_TABLE["AGENT_UNREACHABLE"].message
         # NOTE (honest limit): these fixtures are fed straight to _call_impl_raw,
         # so they grade the _impl's error PROPAGATION, never the registry's
         # message construction. The construction site is graded by
@@ -724,8 +724,8 @@ class TestAllAgentsFailReturnsEmptyFormatsAndErrors:
         # the first-party sentence the registry actually publishes, not the
         # leaking "<url> is unreachable: <raw cause>" shape they used to pin.
         agent_errors = [
-            AdCPResponseError(code="AGENT_UNREACHABLE", message=CREATIVE_AGENT_UNREACHABLE_MESSAGE),
-            AdCPResponseError(code="AGENT_UNREACHABLE", message=CREATIVE_AGENT_UNREACHABLE_MESSAGE),
+            AdCPResponseError(code="AGENT_UNREACHABLE", message=CODE_TABLE["AGENT_UNREACHABLE"].message),
+            AdCPResponseError(code="AGENT_UNREACHABLE", message=CODE_TABLE["AGENT_UNREACHABLE"].message),
         ]
         response = _call_impl_raw(formats=[], errors=agent_errors)
 
@@ -738,7 +738,7 @@ class TestAllAgentsFailReturnsEmptyFormatsAndErrors:
         assert len(response.errors) == 2
         for err in response.errors:
             assert err.code == "AGENT_UNREACHABLE"
-            assert err.message == CREATIVE_AGENT_UNREACHABLE_MESSAGE
+            assert err.message == CODE_TABLE["AGENT_UNREACHABLE"].message
 
 
 class TestRegistryCreationFailureRaisesServiceUnavailable:
@@ -784,14 +784,14 @@ class TestErrorEntriesFollowAdCPSchema:
         """
         from src.core.schemas import Error
 
-        agent_errors = [Error(code="AGENT_UNREACHABLE", message=CREATIVE_AGENT_UNREACHABLE_MESSAGE)]
+        agent_errors = [Error(code="AGENT_UNREACHABLE", message=CODE_TABLE["AGENT_UNREACHABLE"].message)]
         response = _call_impl_raw(formats=[], errors=agent_errors)
 
         assert response.errors is not None
         for err in response.errors:
             assert isinstance(err, Error), f"Error must be an AdCP Error instance, got {type(err)}"
             assert err.code == "AGENT_UNREACHABLE"
-            assert err.message == CREATIVE_AGENT_UNREACHABLE_MESSAGE
+            assert err.message == CODE_TABLE["AGENT_UNREACHABLE"].message
 
 
 class TestSuccessfulDiscoveryHasNoErrors:

@@ -162,14 +162,6 @@ class AppErrorCode(StrEnum):
             message="The request could not be completed",
         ),
     )
-    INVENTORY_UNAVAILABLE = (
-        "INVENTORY_UNAVAILABLE",
-        CodeEntry(
-            recovery=Recovery.CORRECTABLE,
-            suggestion="Call get_products for current availability and request what is offered",
-            message="Requested inventory is not available",
-        ),
-    )
     MEDIA_BUY_REJECTED = (
         "MEDIA_BUY_REJECTED",
         CodeEntry(

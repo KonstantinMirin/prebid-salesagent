@@ -40,7 +40,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.creative_agent_registry import CREATIVE_AGENT_UNREACHABLE_MESSAGE, CreativeAgentRegistry
+from src.core.creative_agent_registry import CreativeAgentRegistry
+from src.core.errors.codes import CODE_TABLE
 from tests.factories import PrincipalFactory, TenantFactory
 from tests.harness.creative_formats import CreativeFormatsEnv
 from tests.harness.transport import Transport
@@ -106,9 +107,9 @@ def test_unreachable_agent_yields_a_safe_payload_error(integration_db, transport
         # POSITIVE: the exact first-party sentence the seller publishes, at the
         # protocol position. Mandatory — a negative-only check passes vacuously.
         assert errors[0]["code"] == "AGENT_UNREACHABLE", f"errors[0].code={errors[0]['code']!r}"
-        assert errors[0]["message"] == CREATIVE_AGENT_UNREACHABLE_MESSAGE, (
+        assert errors[0]["message"] == CODE_TABLE["AGENT_UNREACHABLE"].message, (
             f"errors[0].message={errors[0]['message']!r}, expected the first-party sentence "
-            f"{CREATIVE_AGENT_UNREACHABLE_MESSAGE!r}"
+            f"{CODE_TABLE['AGENT_UNREACHABLE'].message!r}"
         )
 
         # NEGATIVE: neither the third party's text nor the seller-configured

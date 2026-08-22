@@ -193,4 +193,8 @@ class TestMockInventoryUnavailableRaiseSite:
                 end_time=end_time,
             )
 
-        assert exc_info.value.error_code == "INVENTORY_UNAVAILABLE"
+        # The published member, not a private synonym of it: PRODUCT_UNAVAILABLE's
+        # pinned description is exactly this condition ("The requested product is
+        # sold out or no longer available"), and a buyer must be able to switch on
+        # error.code across sellers (salesagent-3dawm.16).
+        assert exc_info.value.error_code == "PRODUCT_UNAVAILABLE"
