@@ -22,7 +22,7 @@ import copy
 import logging
 import os
 import typing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -165,6 +165,19 @@ class FormatFetchResult:
 
     formats: list[Format]
     errors: list[AdCPResponseError]
+    #: NON-WIRE. The agent_urls whose fetch failed, in the SAME ORDER as
+    #: ``errors`` -- entry i produced errors[i]. Never serialized: it exists so
+    #: the boundary can decide the CODE, which it can only do by comparing the
+    #: failed agent against what the REQUEST referenced, and the registry has no
+    #: access to the request. The advisory itself deliberately does not name the
+    #: agent (every wire field is client-facing -- see the comment at the append
+    #: site), so this is the only channel that carries the correlation.
+    #:
+    #: Per list_creative_formats.mdx:654, a format_id REFERENCING an unavailable
+    #: agent must be REFERENCE_NOT_FOUND with error.field naming the typed
+    #: parameter, not the AGENT_UNREACHABLE advisory that covers the
+    #: seller-aggregation branch (salesagent-3dawm.16).
+    failed_agent_urls: list[str] = field(default_factory=list)
 
 
 from src.core.utils.mcp_client import create_mcp_client  # Keep for custom tools (preview, build)
@@ -776,6 +789,7 @@ class CreativeAgentRegistry:
         agents = self._get_tenant_agents(tenant_id)
         all_formats: list[Format] = []
         errors: list[AdCPResponseError] = []
+        failed_agent_urls: list[str] = []
 
         logger.info(f"list_all_formats: Found {len(agents)} agents for tenant {tenant_id}")
 
@@ -845,10 +859,14 @@ class CreativeAgentRegistry:
                     # is no parameter for them (salesagent-3dawm.14).
                     AdCPResponseError.of(AppErrorCode.AGENT_UNREACHABLE, field="formats")
                 )
+                # Kept parallel to ``errors`` and NOT serialized -- see the field
+                # note on FormatFetchResult. Appended in the same breath as the
+                # advisory so the two cannot drift out of correspondence.
+                failed_agent_urls.append(agent.agent_url)
                 continue
 
         logger.info(f"list_all_formats: Returning {len(all_formats)} formats, {len(errors)} errors")
-        return FormatFetchResult(formats=all_formats, errors=errors)
+        return FormatFetchResult(formats=all_formats, errors=errors, failed_agent_urls=failed_agent_urls)
 
     async def search_formats(
         self, query: str, tenant_id: str | None = None, type_filter: str | None = None

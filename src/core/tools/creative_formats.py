@@ -14,7 +14,7 @@ import concurrent.futures
 import logging
 import time
 from collections.abc import Sequence
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 # FIXME(#1388): FormatId has a local subclass; import from src.core.schemas (Pattern #7/#4).
 from adcp import FormatId
@@ -88,9 +88,15 @@ def _ensure_backward_compatible_format[FormatT: AdcpFormat](f: FormatT) -> Forma
     return f
 
 
+from adcp import ErrorCode
+
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_tenant
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.schemas import Error as AdCPResponseError
+
+if TYPE_CHECKING:
+    from src.core.creative_agent_registry import FormatFetchResult
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse, format_id_identity
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.validation_helpers import adcp_validation_boundary
@@ -231,7 +237,7 @@ def _list_creative_formats_impl(
             loop.close()
 
     formats = fetch_result.formats
-    agent_errors = fetch_result.errors
+    agent_errors = _route_agent_failures(fetch_result, req)
 
     # Get formats from adapter if it provides them (e.g., Broadstreet acting as both sales and creative agent)
     # Check adapter type from tenant config and load formats without instantiating the full adapter
@@ -530,6 +536,51 @@ def _list_creative_formats_impl(
     # Always return Pydantic model - MCP wrapper will handle serialization
     # Schema enhancement (if needed) should happen in the MCP wrapper, not here
     return response
+
+
+def _route_agent_failures(
+    fetch_result: "FormatFetchResult",
+    req: ListCreativeFormatsRequest,
+) -> list[AdCPResponseError]:
+    """Split creative-agent fetch failures by whether the REQUEST referenced them.
+
+    Two different buyer-facing conditions share one internal cause, and only the
+    boundary can tell them apart -- the registry never sees ``req``:
+
+    * The buyer asked for a format from that agent (``req.format_ids`` carries a
+      matching ``agent_url``). Then the reference did not resolve, and
+      list_creative_formats.mdx:654 is explicit -- "REFERENCE_NOT_FOUND |
+      Requested format_id doesn't exist, or referenced creative agent is
+      unavailable / not accessible. error.field MUST identify which typed
+      parameter failed to resolve." Hence ``field="format_ids"``: the MUST is on
+      naming the parameter, and "format_ids" is the typed parameter that failed
+      to resolve.
+    * Nobody asked for it; the agent merely failed during seller-side
+      aggregation. That is the unreferenced branch, and it keeps the
+      AGENT_UNREACHABLE advisory with ``field="formats"`` naming the response
+      section it degrades.
+
+    RECOVERY DIFFERS, and that is the buyer-visible point of the split:
+    AGENT_UNREACHABLE is transient (retry may help), REFERENCE_NOT_FOUND is
+    correctable (retrying the same format_ids never will -- fix the reference).
+    Both derive from the code via CODE_TABLE, so neither is authored here.
+
+    Correlation comes from ``failed_agent_urls``, which is parallel to
+    ``errors`` and never reaches the wire; the advisory itself deliberately
+    omits the agent_url because every wire field is client-facing.
+    """
+    requested_agent_urls = {str(fid.agent_url) for fid in (req.format_ids or [])}
+    if not requested_agent_urls or not fetch_result.failed_agent_urls:
+        return fetch_result.errors
+
+    routed: list[AdCPResponseError] = []
+    for index, advisory in enumerate(fetch_result.errors):
+        failed_url = fetch_result.failed_agent_urls[index] if index < len(fetch_result.failed_agent_urls) else None
+        if failed_url is not None and str(failed_url) in requested_agent_urls:
+            routed.append(AdCPResponseError.of(ErrorCode.REFERENCE_NOT_FOUND, field="format_ids"))
+        else:
+            routed.append(advisory)
+    return routed
 
 
 async def list_creative_formats(

@@ -147,12 +147,43 @@ class CreativeFormatsEnv(IntegrationEnv):
         """Call list_creative_formats via Client(mcp) — full pipeline dispatch."""
         return self._run_mcp_client("list_creative_formats", ListCreativeFormatsResponse, **kwargs)
 
-    # build_rest_body is inherited from IntegrationEnv: it serializes the Pydantic
-    # ``req`` via model_dump(mode="json", exclude_none=True). ListCreativeFormatsBody
-    # (src/routes/api_v1.py) declares format_ids + every other filter and the route
-    # maps them into ListCreativeFormatsRequest, so REST filters for real — there is
-    # no need to drop kwargs. (A prior override returned {} behind a stale docstring
-    # claiming the body had no parameters; that suppressed REST filter coverage.)
+    def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """Forward FLAT kwargs to the REST body, matching a2a/mcp.
+
+        This env dispatches a2a and mcp BY TOOL NAME, so its callers pass flat
+        kwargs (``format_ids=[...]``) rather than a ``req`` object. The inherited
+        default only serializes a Pydantic ``req`` and returns ``{}`` for
+        anything else — so every flat-kwarg filter was silently dropped on REST
+        alone, and REST ran UNFILTERED while a2a and mcp filtered. A parametrized
+        test then reported three green transports while only two graded the
+        filter (found via salesagent-3dawm.16).
+
+        ListCreativeFormatsBody (src/routes/api_v1.py) declares format_ids and
+        every other filter, and the route maps them into
+        ListCreativeFormatsRequest, so forwarding them makes REST filter for real.
+
+        A Pydantic ``req`` still takes precedence, so callers that pass one keep
+        the inherited behaviour.
+        """
+        from pydantic import BaseModel as PydanticBaseModel
+
+        if isinstance(kwargs.get("req"), PydanticBaseModel):
+            return super().build_rest_body(**kwargs)
+
+        body: dict[str, Any] = {}
+        for key, value in kwargs.items():
+            if key in ("req", "identity") or value is None:
+                continue
+            if isinstance(value, PydanticBaseModel):
+                body[key] = value.model_dump(mode="json", exclude_none=True)
+            elif isinstance(value, list):
+                body[key] = [
+                    v.model_dump(mode="json", exclude_none=True) if isinstance(v, PydanticBaseModel) else v
+                    for v in value
+                ]
+            else:
+                body[key] = value
+        return body
 
     def parse_rest_response(self, data: dict[str, Any]) -> ListCreativeFormatsResponse:
         """Parse REST JSON into ListCreativeFormatsResponse."""
