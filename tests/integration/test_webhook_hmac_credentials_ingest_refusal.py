@@ -72,7 +72,7 @@ from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.transport import Transport
 from tests.helpers.adcp_factories import create_test_media_buy_request_dict
 from tests.helpers.envelope_assertions import assert_envelope_shape
-from tests.helpers.webhook_credential_refusal import assert_credentials_refusal_envelope
+from tests.helpers.webhook_credential_refusal import SHORT_CREDENTIAL, assert_credentials_refusal_envelope
 
 # The persistence assertion for this exact table, already written for the
 # sibling URL refusal. Imported rather than re-implemented: "the repository
@@ -222,6 +222,125 @@ class TestCreateMediaBuyRefusesHmacRegistrationWithoutCredentials:
                 "A complete HMAC-SHA256 registration is servable and must be accepted; "
                 f"got {result.wire_error_envelope or result.synthesized_error_envelope!r}"
             )
+
+
+# The URL the ADMIN form uses for its leg below. It is not ``_SAFE_URL``: the
+# admin route runs the same registration gate but reaches it through a form whose
+# positive control already uses this loopback URL, and loopback keeps that leg off
+# the network exactly as the protocol legs' public host does. Each surface's URL
+# only has to survive its OWN SSRF gate; what is being compared is the CREDENTIAL
+# verdict.
+_ADMIN_SAFE_URL = "https://127.0.0.1:9999/agent"
+
+
+class TestShortCredentialReachesOneVerdictOnEverySurface:
+    """REGRESSION PIN (salesagent-pldmk.8) — not the lane's red.
+
+    The red for this lane lives where the behaviour actually changes: the A2A
+    protocol envelope (``tests/bdd/features/local-egress-ssrf-refusal.feature``,
+    ``@T-EGRESS-CREDS-short-a2a-message-send``) and the admin form
+    (``tests/integration/test_admin_ingest_url_policy.py``). MCP and REST reach
+    the credential rule through the TYPED request model, which refuses 31
+    characters today and is untouched by the carve-out deletion, so a grader
+    written there alone would be green before the change and its green would
+    camouflage the two surfaces that matter.
+
+    What this class adds instead is the property that only exists once those two
+    are fixed: the same 31-character secret gets the SAME answer wherever a buyer
+    or operator can register one. Four surfaces, four different mechanisms —
+    FastMCP's TypeAdapter, the REST request model, the A2A ingest gate, the admin
+    form — and a divergence between them is exactly how the carve-out came to
+    exist in the first place.
+
+    The absolute ``error.field`` prefix is deliberately NOT unified here: the
+    admin gate is called with ``field_prefix="webhook"`` and the protocol
+    surfaces with ``push_notification_config``. Unifying those is gh-#1895, which
+    stays open; a suffix assertion keeps this pin honest about what it grades.
+    """
+
+    _EXPECTED = ("VALIDATION_ERROR", "correctable")
+
+    @staticmethod
+    def _verdict(result) -> tuple[str, str, str]:
+        """The (code, recovery, field) triple the buyer reads, from the wire envelope."""
+        envelope = result.wire_error_envelope or result.synthesized_error_envelope
+        body = envelope["errors"][0]
+        return (body["code"], body["recovery"], body.get("field") or "")
+
+    def test_every_protocol_transport_returns_the_same_triple(self, integration_db):
+        """MCP, REST and A2A refuse the same short secret with the same triple.
+
+        A2A was the leg that differed before salesagent-pldmk.8: its document is
+        destructured to primitives and rebuilt in
+        ``src/core/webhooks/registration.py``, which used to re-validate with a
+        padded secret and restore the buyer's short one — so the create succeeded
+        and the webhook was refused later, inside the sender, as
+        ``credentials_too_short``. All three refuse at ingest now; they stay in
+        the parametrization so the ASSERTION IS EQUIVALENCE rather than three
+        independent claims.
+        """
+        verdicts: dict[str, tuple[str, str, str]] = {}
+        for transport in (Transport.MCP, Transport.REST, Transport.A2A):
+            with MediaBuyCreateEnv() as env:
+                _tenant, _principal, product, _pricing = env.setup_media_buy_data()
+
+                result = env.call_via(
+                    transport,
+                    **_create_kwargs(product, {"schemes": ["HMAC-SHA256"], "credentials": SHORT_CREDENTIAL}),
+                )
+
+                assert result.is_error, (
+                    f"{transport.value}: a shared secret shorter than the pinned minimum must be refused "
+                    "at ingest — accepting it stores a registration this seller has already decided it "
+                    f"will never sign. Got: {getattr(result, 'wire_response', None) or result.payload!r}"
+                )
+                verdicts[transport.value] = self._verdict(result)
+                _assert_no_push_config_persisted(env._tenant_id, env._principal_id)
+
+        distinct = set(verdicts.values())
+        assert len(distinct) == 1, (
+            "the same buyer mistake must not depend on which wire it arrived on; per-transport "
+            f"(code, recovery, field) were {verdicts}"
+        )
+        code, recovery, field = distinct.pop()
+        assert (code, recovery) == self._EXPECTED, f"(code, recovery)=({code!r}, {recovery!r})"
+        assert field.endswith("authentication.credentials"), (
+            f"error.field is {field!r}; the buyer must be pointed at the secret, not at a URL that is fine"
+        )
+
+    def test_the_admin_form_reaches_the_same_verdict(self, integration_db, authenticated_admin_client, monkeypatch):
+        """The fourth surface, and the one the carve-out's own justification never covered.
+
+        ``accept_push_notification_primitives`` is called from
+        ``src/admin/blueprints/principals.py`` with ``field_prefix="webhook"`` —
+        an Admin HTML form, no A2A anywhere — so the "the A2A ``configuration``
+        envelope is a transport-layer parameter" premise never applied to it.
+        RED before salesagent-pldmk.8 for the same reason as the A2A leg above.
+
+        The admin surface answers in flashes, not envelopes, so the shapes cannot
+        be compared byte-for-byte. What must match is the VERDICT: refused,
+        nothing stored, and the operator pointed at the credential.
+        """
+        from tests.helpers.webhook_credential_refusal import assert_admin_flash_refuses_the_credential
+        from tests.integration.test_admin_ingest_url_policy import flashes, post_register_hmac_webhook
+        from tests.integration.test_outbound_http import set_flags
+
+        set_flags(monkeypatch, private=True)
+
+        with MediaBuyCreateEnv() as env:
+            env.setup_media_buy_data()
+
+            response = post_register_hmac_webhook(
+                authenticated_admin_client,
+                _ADMIN_SAFE_URL,
+                SHORT_CREDENTIAL,
+                tenant_id=env._tenant_id,
+                principal_id=env._principal_id,
+            )
+
+            assert response.status_code == 302
+            assert_admin_flash_refuses_the_credential(flashes(authenticated_admin_client), secret=SHORT_CREDENTIAL)
+            _assert_no_push_config_persisted(env._tenant_id, env._principal_id)
 
 
 class TestSchemaTypedTransportsRefuseTheSameDocument:

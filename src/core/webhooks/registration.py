@@ -49,7 +49,7 @@ from adcp.types.generated_poc.core.push_notification_config import (
 from pydantic import ValidationError
 
 from src.core.exceptions import AdCPValidationError
-from src.core.schema_helpers import to_push_notification_config
+from src.core.schema_helpers import require_push_notification_config, to_push_notification_config
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 
 logger = logging.getLogger(__name__)
@@ -441,74 +441,19 @@ def _coerce_primitives_to_config(
     """Build the library model from the A2A protobuf primitives.
 
     Uses the same funnel the transport wrappers use, so this path cannot drift
-    into its own validation dialect, and a refusal names the same field path --
-    with ONE rule deliberately not applied, below.
+    into its own validation dialect, and a refusal names the same field path.
+
+    EVERY rule applies, including ``credentials`` ``minLength: 32``. An arm here
+    used to exempt exactly that one, on the premise that an A2A
+    ``params.configuration`` value is a transport-layer parameter outside
+    request-body validation. The pinned schema draws no such distinction --
+    ``core/push-notification-config.json`` states the constraint unconditionally,
+    and the spec's own prose says the A2A envelope differs while "the object's
+    contents are identical". The exemption also reached an Admin HTML form,
+    a surface its own justification never covered.
     """
     payload = {key: value for key, value in document.items() if value is not None}
-    try:
-        coerced = to_push_notification_config(payload, field_prefix=field_prefix)
-    except AdCPValidationError as exc:
-        if not _only_complaint_is_credential_length(exc):
-            raise
-        # gh-#1299: on the A2A path the push config rides in ``params.configuration``
-        # (SendMessageConfiguration) -- a TRANSPORT-layer parameter, never folded
-        # into request-body validation -- so the pinned ``credentials`` minLength 32
-        # must not divert the CREATE. Lane 3 routed this path through full model
-        # validation and broke that; this restores the recorded decision.
-        #
-        # Narrow on purpose, and nothing is waved through. Only a credential that is
-        # PRESENT but short takes this branch: a missing or blank one still fails
-        # above, so an HMAC registration with no secret is still refused here naming
-        # its field. The short credential is then STORED and refused at the egress
-        # seam as ``credentials_too_short`` -- the buyer's create succeeds while the
-        # webhook does not deliver until its owner re-registers. Accepting the create
-        # and refusing the delivery are the same answer, given at the two different
-        # moments each surface owns.
-        # Validate EVERYTHING ELSE rather than skipping validation wholesale: the
-        # document is re-validated with the credential padded to the minimum, so
-        # the url still becomes a real ``AnyUrl``, the scheme is still checked
-        # against the pinned enum, and ``maxItems`` still applies. Only the length
-        # rule is then undone, by putting the buyer's actual credential back with
-        # ``model_copy(update=...)``. Constructing the whole model unvalidated
-        # would have exempted every rule at once, and left ``authentication`` a
-        # raw dict for every reader downstream.
-        auth_block = payload["authentication"]
-        padded = {**payload, "authentication": {**auth_block, "credentials": "0" * _PINNED_CREDENTIAL_MIN}}
-        validated = to_push_notification_config(padded, field_prefix=field_prefix)
-        assert validated is not None and validated.authentication is not None
-        coerced = validated.model_copy(
-            update={
-                "authentication": validated.authentication.model_copy(update={"credentials": auth_block["credentials"]})
-            }
-        )
-    assert coerced is not None  # a non-empty dict always coerces or raises
-    return coerced
-
-
-# The pinned ``Authentication.credentials`` minLength, read off the schema rather
-# than retyped, so it follows the pin.
-_PINNED_CREDENTIAL_MIN: int = Authentication.model_json_schema()["properties"]["credentials"].get("minLength") or 32
-
-
-def _only_complaint_is_credential_length(exc: AdCPValidationError) -> bool:
-    """True when the ONLY thing pydantic objected to is a short ``credentials``.
-
-    Read off the original ``ValidationError``, which the boundary preserves as
-    ``__cause__`` (``raise ... from e``), rather than off the rendered message:
-    matching prose would re-decide the taxonomy in a second place and break the
-    day the wording changes.
-
-    ``all`` over a non-empty list, so a document with a short credential AND any
-    other defect still refuses -- the exemption covers exactly one rule.
-    """
-    cause = exc.__cause__
-    if not isinstance(cause, ValidationError):
-        return False
-    errors = cause.errors()
-    return bool(errors) and all(
-        error.get("type") == "string_too_short" and tuple(error.get("loc") or ())[-1] == "credentials"
-        for error in errors
-    )
+    return require_push_notification_config(payload, field_prefix=field_prefix)
 
 
 def accept_push_notification_config(

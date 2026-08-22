@@ -634,19 +634,23 @@ def manage_webhooks(tenant_id, principal_id):
 def register_webhook(tenant_id, principal_id):
     """Register a new webhook for a principal."""
     try:
-        from src.admin.utils.url_policy import redirect_if_url_blocked
-
         url = request.form.get("url")
         auth_type = request.form.get("auth_type", "none")
 
-        # Stored now, posted to later — graded by ingest-time egress policy.
-        if blocked := redirect_if_url_blocked(
-            url,
-            "Webhook URL",
-            url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id),
-        ):
-            return blocked
-
+        # ONE gate, not two. This route used to run redirect_if_url_blocked here
+        # AND accept_push_notification_primitives below, so a webhook URL was
+        # judged twice by two different verdicts -- and the two did not agree:
+        # the first resolves DNS (via resolve_for_dial), the second does not.
+        #
+        # DELIBERATE TRADE, and it is a real one: a hostname that RESOLVES into a
+        # private range but is not a literal IP was refused here and is now
+        # accepted at registration. It is still refused before any bytes leave --
+        # the egress seam resolves again and IP-pins at DIAL time, which is the
+        # resolution that actually governs the connection, and the one a
+        # registration-time check cannot make binding anyway (DNS can change
+        # between the two moments). What this removes is a second, weaker,
+        # non-binding answer that made the admin form disagree with every
+        # protocol surface about the same URL.
         # The scheme is whatever the form posted, and the form's option values are
         # rendered from AuthenticationScheme itself (webhook_management.html), so it
         # is already the pinned spelling. Nothing is translated here on purpose: a

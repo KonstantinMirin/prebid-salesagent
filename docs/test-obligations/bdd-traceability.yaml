@@ -16184,3 +16184,15 @@ mappings:
       upstream_refs: []
       business_rules: []
       status: new
+    # salesagent-pldmk.8: the same pinned minimum on the PRIMITIVES path — the A2A
+    # protocol envelope, where src/core/webhooks/registration.py currently exempts
+    # a present-but-short credential. Same standing as its siblings above:
+    # grounded on core/push-notification-config.json (credentials.minLength 32,
+    # unconditional), ungraded by dist/compliance/3.1.1/ — the runner emits only
+    # schema-valid negative payloads — so obligation_id null / status new.
+    - adcp_scenario_id: "T-EGRESS-CREDS-short-a2a-message-send"
+      adcp_feature: "local-egress-ssrf-refusal.feature"
+      obligation_id: null
+      upstream_refs: []
+      business_rules: []
+      status: new

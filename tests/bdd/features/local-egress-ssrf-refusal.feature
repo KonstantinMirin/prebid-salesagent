@@ -376,3 +376,44 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   Scenario: a shared secret shorter than the pinned minimum is refused at sync ingest
     When the buyer syncs a creative registering HMAC-SHA256 with a 31-character secret
     Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.credentials"
+
+  # The PRIMITIVES twin of the scenario above.
+  #
+  # This surface once exempted the pinned minimum: the coercion funnel's refusal
+  # was caught and, when the only complaint was a short `credentials`, the
+  # document was re-validated with a padded secret and the buyer's short one put
+  # back — so the registration was ACCEPTED, STORED, and refused later inside the
+  # sender, where no request was left to carry the answer and the buyer was not
+  # on the call. The exemption was reachable from exactly TWO surfaces: this one
+  # and the admin registration form (`src/admin/blueprints/principals.py`, graded
+  # at tests/integration/test_admin_ingest_url_policy.py). Both now refuse at
+  # ingest, which is what this scenario and its admin sibling hold in place.
+  #
+  # The pin is unconditional and admits no transport discriminator:
+  #   git -C ~/projects/adcp show v3.1.1:dist/schemas/3.1.1/core/push-notification-config.json
+  #     authentication.credentials: {"type": "string", "minLength": 32}
+  #   git -C ~/projects/adcp show v3.1.1:dist/docs/3.1.1/building/by-layer/L3/webhooks.mdx
+  #     :62 "For A2A, the A2A protocol wraps it in a `configuration` envelope
+  #          using camelCase — but the object's contents are identical."
+  # UNGRADED BY STORYBOARD, same standing as every other scenario in this file:
+  # nothing in dist/compliance/3.1.1/ sends a short credential (the runner emits
+  # only schema-valid negative payloads — universal/webhook-emission.yaml:487).
+  # Full ruling: .claude/notes/pldmk8-spec-grounding.md.
+  #
+  # WHY THIS SURFACE AND NOT ALL FOUR: MCP and REST reach the credential rule
+  # through the TYPED request model, which already refuses 31 characters today,
+  # so a grader written there would be green before the carve-out is deleted and
+  # its green would camouflage the two surfaces that actually change. The
+  # four-surface equivalence, once they agree, is pinned at
+  # tests/integration/test_webhook_hmac_credentials_ingest_refusal.py.
+  #
+  # The URL is the same public host every credential scenario above uses, so a
+  # green here can never be the SSRF gate firing by luck, and the exact-field
+  # assertion is what rules out the A2A `_invalid_params_from_ssrf_error` funnel
+  # re-enveloping this as a URL refusal.
+  @T-EGRESS-CREDS-short-a2a-message-send @egress @a2a_untyped_ingest @invariant
+  Scenario: a shared secret shorter than the pinned minimum is refused at A2A message/send
+    Given a tenant is configured for product discovery
+    When the buyer sends a request registering HMAC-SHA256 with a 31-character secret in the protocol envelope
+    Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.credentials"
+    And the refusal names the too-short shared secret and not the URL

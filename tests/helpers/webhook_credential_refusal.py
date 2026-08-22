@@ -37,6 +37,49 @@ CREDENTIALS_FIELD = "push_notification_config.authentication.credentials"
 # Present here only as the WRONG answer — see the module docstring.
 _URL_FIELD = "push_notification_config.url"
 
+# The tail of that path, for the surfaces that do not (yet) qualify it with the
+# same prefix: the admin registration form calls the same gate with
+# ``field_prefix="webhook"``. Unifying the absolute prefixes is gh-#1895 and is
+# deliberately not done here, so surfaces are compared on the part that says
+# WHICH INPUT the caller must fix.
+CREDENTIALS_FIELD_SUFFIX = "authentication.credentials"
+
+# One character under the pinned ``credentials`` ``minLength: 32``
+# (AdCP 3.1.1, ``dist/schemas/3.1.1/core/push-notification-config.json``). A
+# BOUNDARY value, spelled once: a 5-character secret would also be refused by a
+# hand-written "looks too short" rule that has nothing to do with the pin, so
+# only 31 proves the pinned minimum is what refused it.
+SHORT_CREDENTIAL = "s" * 31
+
+
+def assert_admin_flash_refuses_the_credential(queued: list[tuple[str, str]], *, secret: str) -> None:
+    """The ADMIN surface's half of the same contract, asserted from the same place.
+
+    ``src/admin/blueprints/principals.py`` answers an operator in flashes, not in
+    AdCP envelopes, so the two shapes cannot be compared byte-for-byte — but the
+    VERDICT is one contract, and it is stated here so the admin grader and the
+    cross-surface equivalence pin cannot drift on what "refused the credential"
+    means.
+
+    Three halves, none decoration:
+
+    * refused at all, because accepting a registration the seller has already
+      decided it will never sign is the accept-then-never-deliver defect;
+    * naming the credential, because the sibling gate one field over refuses
+      URLs and an operator sent to fix a URL that is fine has been misdirected;
+    * not echoing the secret, because the flash is rendered back into the page.
+    """
+    assert len(queued) == 1, f"expected exactly one flash, got {queued}"
+    category, message = queued[0]
+    assert category == "error", (
+        f"a shared secret shorter than the pinned minimum must be refused at ingest, not stored; flash was {queued[0]}"
+    )
+    assert CREDENTIALS_FIELD_SUFFIX in message, (
+        f"the refusal must name {CREDENTIALS_FIELD_SUFFIX!r} so the operator fixes the secret and not "
+        f"the URL; got {message!r}"
+    )
+    assert secret not in message, f"the flash echoed the operator's shared secret back: {message!r}"
+
 
 def assert_credentials_refusal_envelope(envelope: dict, *, surface: str) -> None:
     """Assert the wire envelope refuses the CREDENTIAL, correctably, by name.

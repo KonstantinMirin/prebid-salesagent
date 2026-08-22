@@ -56,6 +56,7 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import _require, payload_or_none, require_payload
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.helpers.webhook_credential_refusal import SHORT_CREDENTIAL
 
 # The list_id is irrelevant to a refusal — the seam refuses before a connection
 # is opened, so the path is never built. Fixed so the request is well-formed.
@@ -91,11 +92,10 @@ _HMAC_WITHOUT_CREDENTIALS = {"schemes": [_HMAC_SCHEME]}
 # reported before the missing secret. The scenario states that field exactly.
 _TWO_SCHEMES = {"schemes": ["Bearer", _HMAC_SCHEME]}
 
-# One character short of the pinned ``credentials`` ``minLength: 32``. A boundary
-# value rather than a token: a 5-character secret would also be refused by a
-# hand-written "looks too short" rule that has nothing to do with the pin, while
-# 31 is refused only by the pinned minimum itself.
-_SHORT_SECRET = "a" * 31
+# One character short of the pinned ``credentials`` ``minLength: 32``, imported
+# from the module that already holds the credential-refusal contract for the
+# integration graders — the boundary value is one fact and it is spelled once.
+_SHORT_SECRET = SHORT_CREDENTIAL
 _HMAC_WITH_SHORT_CREDENTIALS = {"schemes": [_HMAC_SCHEME], "credentials": _SHORT_SECRET}
 
 # Anything that could spell an IP address. Deliberately over-broad: the tokens it
@@ -379,6 +379,30 @@ def when_a2a_message_send_hmac_without_credentials(ctx: dict) -> None:
     )
 
 
+@when("the buyer sends a request registering HMAC-SHA256 with a 31-character secret in the protocol envelope")
+def when_a2a_message_send_short_credentials(ctx: dict) -> None:
+    """Dispatch an A2A message/send whose protocol envelope registers a SHORT secret.
+
+    The same surface as the step above, one character under the pinned
+    ``credentials`` ``minLength: 32``. This document used to be waved through --
+    re-validated with a padded secret, then the buyer's short one restored -- so
+    the registration was stored and refused only later, inside the sender. It is
+    refused at ingest now, and this step is what keeps it that way.
+
+    31 rather than a token like ``"x"``: a boundary value is refused by the
+    pinned minimum itself, where a 5-character secret would also satisfy a
+    hand-written "looks too short" rule that has nothing to do with the pin.
+    """
+    dispatch_request(
+        ctx,
+        brief="credential refusal test",
+        a2a_push_notification_config={
+            "url": _SAFE_WEBHOOK_URL,
+            "authentication": {"scheme": _HMAC_SCHEME, "credentials": _SHORT_SECRET},
+        },
+    )
+
+
 # ── Then steps ──────────────────────────────────────────────────────
 
 
@@ -479,8 +503,14 @@ def then_creative_rejected_per_item(ctx: dict, field: str) -> None:
 
 
 @then("the refusal names the missing shared secret and not the URL")
+@then("the refusal names the too-short shared secret and not the URL")
 def then_refusal_is_the_credential_contract(ctx: dict) -> None:
     """Assert the ONE credential-refusal contract, from its single definition.
+
+    Bound to TWO sentences over ONE body, because a secret that is absent and a
+    secret that is one character short are the same buyer mistake against the same
+    pinned rule (``credentials``: ``required`` AND ``minLength: 32``) and owe the
+    same answer. Two step functions would be two places for that answer to drift.
 
     Delegates to ``tests.helpers.webhook_credential_refusal`` — the module that
     already holds this contract for the integration graders on the create and

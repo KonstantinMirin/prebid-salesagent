@@ -41,6 +41,7 @@ from sqlalchemy import select
 
 from src.core.database.models import CreativeAgent, PushNotificationConfig, SignalsAgent, Tenant
 from tests.factories import PrincipalFactory
+from tests.helpers.webhook_credential_refusal import SHORT_CREDENTIAL, assert_admin_flash_refuses_the_credential
 from tests.integration.test_outbound_http import set_flags
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -409,6 +410,29 @@ def post_register_webhook(client, url: str):
     )
 
 
+def post_register_hmac_webhook(
+    client, url: str, secret: str, *, tenant_id: str = TENANT_ID, principal_id: str = PRINCIPAL_ID
+):
+    """POST the principal-webhook registration form as an HMAC-SHA256 registration.
+
+    ``auth_type`` is the enum member rather than a literal: the form's option
+    values are rendered from ``AuthenticationScheme`` (webhook_management.html),
+    so this posts what a browser posts, and the non-canonical ``"hmac_sha256"``
+    spelling the gate refuses cannot creep back in through a test.
+
+    ``tenant_id`` / ``principal_id`` default to this module's fixtures and are
+    parameters only so the cross-surface equivalence pin in
+    ``test_webhook_hmac_credentials_ingest_refusal.py`` can drive this same form
+    against the tenant its own harness seeded, instead of spelling the route a
+    second time.
+    """
+    return client.post(
+        f"/tenant/{tenant_id}/principals/{principal_id}/webhooks/register",
+        data={"url": url, "auth_type": AuthenticationScheme.HMAC_SHA256, "hmac_secret": secret},
+        follow_redirects=False,
+    )
+
+
 def push_notification_configs_for(env) -> list[PushNotificationConfig]:
     """Every registered webhook for the test principal, read fresh."""
     session = env.get_session()
@@ -418,17 +442,44 @@ def push_notification_configs_for(env) -> list[PushNotificationConfig]:
     )
 
 
-@pytest.mark.parametrize("url", [METADATA_URL, INSECURE_PUBLIC_URL])
-def test_register_webhook_refuses_and_stores_nothing(url, authenticated_admin_client, seeded_principal, monkeypatch):
-    """principals.py:625 — a principal's push-notification webhook is stored now,
+@pytest.mark.parametrize(
+    ("url", "expected_flash"),
+    [
+        (
+            METADATA_URL,
+            "Error registering webhook: Invalid webhook.url: "
+            "URL hostname '169.254.169.254' is blocked (internal/private)",
+        ),
+        (
+            INSECURE_PUBLIC_URL,
+            "Error registering webhook: Invalid webhook.url: URL must use HTTPS scheme, got 'http'",
+        ),
+    ],
+)
+def test_register_webhook_refuses_and_stores_nothing(
+    url, expected_flash, authenticated_admin_client, seeded_principal, monkeypatch
+):
+    """principals.py — a principal's push-notification webhook is stored now,
     posted to later, and is graded the same as every other ingest site.
+
+    The refusal WORDING changed with salesagent-pldmk.8, deliberately. This route
+    used to run two gates: a generic ``redirect_if_url_blocked`` that answered
+    "Webhook URL is not allowed by outbound egress policy." and, below it, the
+    registration funnel. The generic gate is gone, so the funnel's own refusal is
+    what the operator now reads -- and it NAMES THE FIELD and the reason
+    ("Invalid webhook.url: URL must use HTTPS scheme, got 'http'") instead of
+    saying only that something was disallowed. Both URLs are still refused and
+    nothing is still stored; what improved is what the operator is told.
     """
     set_flags(monkeypatch)
 
     response = post_register_webhook(authenticated_admin_client, url)
 
     assert response.status_code == 302
-    assert flashes(authenticated_admin_client) == [("error", "Webhook URL is not allowed by outbound egress policy.")]
+    # Exact, and exactly one: the REASON is parametrized alongside the URL rather
+    # than matched by prefix, so a metadata URL refused for the wrong reason (say,
+    # "could not be parsed") does not pass as a metadata refusal.
+    assert flashes(authenticated_admin_client) == [("error", expected_flash)]
     assert push_notification_configs_for(seeded_principal) == []
 
 
@@ -464,6 +515,143 @@ def test_register_webhook_stores_a_row_when_the_url_is_admitted(
     assert stored[0].url == ADMITTED_URL
 
 
+# ---------------------------------------------------------------------------
+# salesagent-pldmk.8 — the two behaviour deltas this lane introduces at the
+# ADMIN registration surface. Both are RED-or-pinned deliberately; neither is
+# graded anywhere else in the tree.
+# ---------------------------------------------------------------------------
+
+# One character under the pinned minimum. A boundary value, not a token: a
+# 5-character secret would also be refused by a hand-written "looks too short"
+# rule that has nothing to do with the pin, while 31 is refused only by
+# ``credentials.minLength: 32`` itself.
+#
+#   git -C ~/projects/adcp show v3.1.1:dist/schemas/3.1.1/core/push-notification-config.json
+#     properties.authentication.properties.credentials: {"type": "string", "minLength": 32}
+#     authentication.required: ["schemes", "credentials"], additionalProperties: false
+#
+# Unconditional in the pin — no transport discriminator, no if/then, no
+# per-surface relaxation (dist/docs/3.1.1/building/by-layer/L3/webhooks.mdx:62,
+# "the object's contents are identical"). UNGRADED by the conformance
+# storyboard: nothing in dist/compliance/3.1.1/ sends a short credential, so
+# grading cannot be cited either way and the schema is the only authority in
+# play. Full ruling: .claude/notes/pldmk8-spec-grounding.md.
+# The boundary value and the contract that grades it both live in
+# ``tests.helpers.webhook_credential_refusal`` — the module that already holds
+# "what a credential refusal looks like" for the protocol surfaces — so this
+# surface and those cannot drift on the same question.
+
+
+def test_register_webhook_refuses_a_secret_shorter_than_the_pinned_minimum(
+    authenticated_admin_client, seeded_principal, monkeypatch
+):
+    """A 31-character HMAC secret is refused at ingest, naming the credential.
+
+    Before salesagent-pldmk.8 this POST stored the row and flashed success: the
+    coercion funnel's ``string_too_short`` refusal was caught, the document
+    re-validated with a padded secret, and the buyer's short one put back — so
+    the registration was refused much later inside the sender as
+    ``credentials_too_short`` (``src/core/security/webhook_egress.py``), where no
+    operator is on the call.
+
+    That exemption was reachable from exactly two surfaces —
+    ``src/a2a_server/adcp_a2a_server.py`` and ``principals.py`` — and this is the
+    one its own justification never covered: the comment argues the A2A
+    ``params.configuration`` envelope is a transport-layer parameter, and then
+    the same helper is called from an Admin HTML form with no A2A anywhere.
+
+    Asserted here, and why each half:
+
+    * the ROW, because a flash-only assertion passes against a handler that
+      flashes and then stores anyway — accept-then-never-deliver is the exact
+      defect being removed;
+    * the FIELD SUFFIX, because "it refused" is not enough: the sibling gate one
+      field over refuses URLs, and an operator sent to fix a URL that is fine has
+      been told the wrong thing;
+    * that the SECRET is not echoed, because the flash is rendered back into the
+      page and a credential belongs in no operator-facing surface (the reason
+      this route stopped rendering stored credentials at all).
+    """
+    set_flags(monkeypatch, private=True)
+
+    response = post_register_hmac_webhook(authenticated_admin_client, ADMITTED_URL, SHORT_CREDENTIAL)
+
+    assert response.status_code == 302
+    assert_admin_flash_refuses_the_credential(flashes(authenticated_admin_client), secret=SHORT_CREDENTIAL)
+    assert push_notification_configs_for(seeded_principal) == []
+
+
+# A hostname — deliberately NOT a literal IP — whose ONE resolution lands on an
+# RFC 1918 address. The resolver is stubbed at the single seam that performs it
+# (``egress.policy.resolve_and_validate_host``, the same target and the same
+# reason as tests/unit/test_webhook_security.py's scheme-parity case): the
+# obligation under test is WHICH GATE RUNS, not what DNS answers, and a real
+# name whose A record is private would make the case depend on a third party's
+# zone file. Everything downstream of the stub — the address predicate, the
+# refusal class, the flash, the write — is the real production path.
+PRIVATE_RESOLVING_URL = "https://webhook.corp.example.com/hook"
+PRIVATE_RESOLVED_IP = "10.0.0.7"
+
+
+def test_register_webhook_refuses_a_hostname_that_resolves_into_a_private_range(
+    authenticated_admin_client, seeded_principal, monkeypatch
+):
+    """The deliberate security trade salesagent-pldmk.8 made, kept visible.
+
+    BEFORE pldmk.8 this route ran TWO gates: ``redirect_if_url_blocked``
+    (``principals.py`` → ``url_policy._is_allowed`` → ``outbound_http.validate_url``
+    → ``EgressPolicy.resolve_for_dial``), which RESOLVES DNS, and then
+    ``accept_push_notification_primitives`` → ``EgressPolicy.check_registration``,
+    which is DNS-FREE by design. A hostname that is not a literal IP but resolves
+    into a reserved range was therefore refused by the FIRST gate only.
+
+    pldmk.8 deleted gate 1 at this call site (and ONLY at this call site —
+    ``url_policy.redirect_if_url_blocked`` has eight other callers, all
+    untouched). So this registration is now ACCEPTED and STORED. This test was
+    INVERTED rather than deleted, so the trade stays visible in the tree.
+
+    The trade is defensible and is why the inversion is the right fix, not a
+    regression: the destination is re-resolved and IP-pinned at DIAL time by the
+    one egress seam (``EgressPolicy.resolve_for_dial`` via
+    ``adcp.signing.IpPinnedTransport``), so no byte leaves for a private address
+    either way — and a registration-time resolution is a TOCTOU answer anyway,
+    valid only until the zone changes. What is lost is early operator feedback;
+    what is gained is that the admin form and the protocol surfaces reach the
+    same verdict for the same URL. A trade nobody can see in the tree is a trade
+    nobody chose.
+    """
+    set_flags(monkeypatch)
+    resolved: list[str] = []
+
+    def _resolves_into_rfc1918(url: str, **_kwargs) -> tuple[str, str, int]:
+        resolved.append(url)
+        return ("webhook.corp.example.com", PRIVATE_RESOLVED_IP, 443)
+
+    monkeypatch.setattr("src.core.security.egress.policy.resolve_and_validate_host", _resolves_into_rfc1918)
+
+    response = post_register_webhook(authenticated_admin_client, PRIVATE_RESOLVING_URL)
+
+    assert response.status_code == 302
+
+    # The ABSENCE of the resolution is the point, not just the acceptance: this is
+    # the half of the trade that is easy to lose. If a future change reinstates a
+    # registration-time resolve on this route, this assertion fails and whoever
+    # did it has to say so, rather than the admin form quietly disagreeing with
+    # the protocol surfaces again.
+    assert resolved == [], (
+        f"the admin registration route must NOT resolve DNS at ingest after pldmk.8; resolver calls were {resolved}"
+    )
+    assert flashes(authenticated_admin_client) == [("success", "Webhook registered successfully")]
+
+    # Accepted AND persisted — the row is the obligation, not the redirect.
+    stored = push_notification_configs_for(seeded_principal)
+    assert len(stored) == 1, f"the admitted registration must be stored; rows were {stored}"
+
+    # And still refused where it actually matters: the egress seam re-resolves and
+    # IP-pins at DIAL time, so no byte reaches the private address either way.
+    # That is what makes losing the ingest-time answer a trade rather than a hole.
+
+
 def test_the_registration_form_offers_only_pinned_scheme_spellings(authenticated_admin_client, seeded_principal):
     """The rendered form must POST a spelling the gate accepts.
 
@@ -497,14 +685,7 @@ def test_register_webhook_stores_the_hmac_secret_where_senders_read_it(
     set_flags(monkeypatch, private=True)
     secret = "s" * 40
 
-    response = authenticated_admin_client.post(
-        f"/tenant/{TENANT_ID}/principals/{PRINCIPAL_ID}/webhooks/register",
-        # The form's option values are rendered from AuthenticationScheme, so this
-        # posts what a browser posts. The old non-canonical "hmac_sha256" is now
-        # refused by the gate, which is the point.
-        data={"url": ADMITTED_URL, "auth_type": AuthenticationScheme.HMAC_SHA256, "hmac_secret": secret},
-        follow_redirects=False,
-    )
+    response = post_register_hmac_webhook(authenticated_admin_client, ADMITTED_URL, secret)
 
     assert response.status_code == 302
     stored = push_notification_configs_for(seeded_principal)

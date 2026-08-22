@@ -376,19 +376,28 @@ class TestA2ASkillInvocation:
             assert isinstance(artifact_data["packages"], list)
 
     @pytest.mark.asyncio
-    async def test_create_with_a2a_push_config_short_credentials_still_creates(
+    async def test_create_with_a2a_push_config_short_credentials_is_refused(
         self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator, monkeypatch
     ):
-        """A short webhook credential on the A2A protocol-layer config must not divert create.
+        """A short webhook credential on the A2A protocol-layer config REFUSES the create.
 
-        The push config rides in ``params.configuration`` (SendMessageConfiguration) —
-        a TRANSPORT-layer parameter, never folded into request-body validation, so the
-        adcp ``Authentication.credentials`` MinLen(32) does not gate the create
-        (gh-#1299; the create skill's comment documents the decision). The webhook-URL
-        ingest verdict (src/core/webhook_validator.py, reject_unsafe_webhook_registration_url) grades ONLY the url, so this exact
-        shape — a policy-passing url plus an 18-char credential, the shape the a2a e2e
-        webhook tests send — creates the buy. A regression here surfaced only in e2e
-        when the ingest helper briefly model-validated the whole config.
+        INVERTED by salesagent-pldmk.8, deliberately. This test previously asserted
+        the opposite -- that an 18-character credential still created the buy --
+        on the premise that ``params.configuration`` is a TRANSPORT-layer parameter
+        outside request-body validation, citing gh-#1299.
+
+        Both halves of that premise failed checking. The pinned AdCP 3.1.1 schema
+        (``core/push-notification-config.json``,
+        ``properties.authentication.properties.credentials.minLength: 32``) states
+        the constraint UNCONDITIONALLY -- no transport discriminator, no if/then --
+        and the spec's own prose says the A2A envelope differs while "the object's
+        contents are identical". And PR #1299 is "test: restore green main -- BDD
+        strict-marker cleanup"; it decided nothing about credential length.
+
+        What the create used to do instead was accept the registration and refuse
+        it much later inside the sender as ``credentials_too_short``, where the
+        buyer is not on the call and the only signal is a webhook that never
+        fires. The refusal now happens at ingest, correctably, naming the field.
         """
         import google.protobuf.json_format as jf
 
@@ -434,14 +443,16 @@ class TestA2ASkillInvocation:
                 params.configuration,
             )
 
-            result = await handler.on_message_send(params, context=ctx)
+            with pytest.raises(Exception) as exc_info:  # noqa: B017 - the A2A layer's own error type
+                await handler.on_message_send(params, context=ctx)
 
-            assert isinstance(result, Task)
-            assert result.status.state == TaskState.TASK_STATE_COMPLETED, (
-                f"create diverted by the protocol-layer push config: task ended {result.status.state}"
+            # The refusal must name the credential, not the url: the url here is
+            # policy-passing, so a refusal blaming it would mean the wrong gate fired.
+            message = str(exc_info.value)
+            assert "credentials" in message, f"the refusal must name the credential field; got {message!r}"
+            assert "127.0.0.1:9/webhook" not in message, (
+                f"the refusal named the url, so the wrong gate refused; got {message!r}"
             )
-            artifact_data = validator.extract_adcp_payload_from_a2a_artifact(result.artifacts[0])
-            assert "media_buy_id" in artifact_data
 
     @pytest.mark.asyncio
     async def test_explicit_skill_create_media_buy_manual_approval(

@@ -99,6 +99,35 @@ def to_push_notification_config(
     )
 
 
+def require_push_notification_config(
+    config: dict[str, Any] | PushNotificationConfig,
+    *,
+    field_prefix: str = "push_notification_config",
+) -> PushNotificationConfig:
+    """:func:`to_push_notification_config` for a caller that HAS a config.
+
+    Same funnel, same refusals, same field paths -- the only difference is that
+    ``None`` is not in the domain, so the result is not ``| None`` and a caller
+    has nothing to narrow.
+
+    The optional version exists because some callers legitimately hold "maybe a
+    config"; the trouble was that callers who did NOT then had to prove the
+    absence away, and two of them did it with a bare ``assert``. Under
+    ``python -O`` an assert is deleted, so a function annotated as never
+    returning ``None`` returned it. Stating the requirement in the SIGNATURE is
+    what removes the narrowing rather than making it survive an interpreter
+    flag.
+    """
+    coerced = to_push_notification_config(config, field_prefix=field_prefix)
+    if coerced is None:
+        # Unreachable via the annotated domain; a runtime guard rather than an
+        # assert so it cannot be optimised away, and so a caller that passed
+        # ``None`` through an ``Any`` gets a named failure instead of one
+        # deferred to whatever first dereferences the result.
+        raise ValueError(f"{field_prefix} is required but resolved to None")
+    return coerced
+
+
 def is_url_shorthand(value: str) -> bool:
     """Return True when a string looks like a URL (scheme or protocol-relative)."""
     return "://" in value or value.startswith("//")
@@ -295,6 +324,7 @@ __all__ = [
     "to_brand_reference",
     "to_context_object",
     "to_property_list_reference",
+    "require_push_notification_config",
     "to_push_notification_config",
     "to_reporting_webhook",
     "coerce_creative_filters",
