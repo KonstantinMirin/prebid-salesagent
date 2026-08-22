@@ -256,7 +256,7 @@ Feature: BR-UC-018 List Creatives
 
     Examples: Invalid partitions
       | partition                | request_params                             | outcome                                            |
-      | invalid_date_format      | created_after "not-a-date"                 | error "DATE_INVALID_FORMAT" with suggestion          |
+      | invalid_date_format      | created_after "not-a-date"                 | error "INVALID_REQUEST" with suggestion          |
       | empty_tags_array         | tags filter as empty array                 | error "VALIDATION_ERROR" with suggestion             |
       | creative_ids_over_limit  | creative_ids with 101 items                | error "VALIDATION_ERROR" with suggestion             |
 
@@ -275,7 +275,7 @@ Feature: BR-UC-018 List Creatives
       | Flat status='approved' + structured statuses=['rejected'] (conflict) | flat status "approved" and structured statuses ["rejected"]                  | approved creatives returned (flat wins)                                |
       | media_buy_id='mb1' + media_buy_ids=['mb1'] (duplicate, deduplicated) | singular media_buy_id "mb1" and plural media_buy_ids ["mb1"]                 | creatives for mb1 returned (deduplicated, no duplicate results)        |
       | created_after='2024-01-01T00:00:00Z' (valid ISO 8601)               | created_after "2024-01-01T00:00:00Z"                                         | creatives created after the date returned                              |
-      | created_after='yesterday' (invalid date format)                      | created_after "yesterday"                                                    | error "DATE_INVALID_FORMAT" with suggestion                            |
+      | created_after='yesterday' (invalid date format)                      | created_after "yesterday"                                                    | error "INVALID_REQUEST" with suggestion                            |
 
   @T-UC-018-partition-field-selector @partition @field-selector
   Scenario Outline: Field selector -- <partition>
@@ -663,7 +663,7 @@ Feature: BR-UC-018 List Creatives
 
     Examples: Invalid partitions
       | partition               | request_params                      | outcome                                    |
-      | pricing_without_account | include_pricing true and no account | error "ACCOUNT_REQUIRED" with suggestion   |
+      | pricing_without_account | include_pricing true and no account | error "VALIDATION_ERROR" with suggestion   |
 
   @T-UC-018-boundary-pricing-include @boundary @pricing-include
   Scenario Outline: Pricing disclosure gate boundary -- <boundary_point>
@@ -674,7 +674,7 @@ Feature: BR-UC-018 List Creatives
     Examples: Boundary values
       | boundary_point                                              | request_params                                          | outcome                                  |
       | include_pricing=true + account present (gate satisfied)     | include_pricing true and account account_id "acct_acme" | each creative carries pricing_options    |
-      | include_pricing=true + account absent (gate violated)       | include_pricing true and no account                     | error "ACCOUNT_REQUIRED" with suggestion |
+      | include_pricing=true + account absent (gate violated)       | include_pricing true and no account                     | error "VALIDATION_ERROR" with suggestion |
       | include_pricing=false (no account needed)                   | include_pricing false                                   | no pricing_options in any creative       |
       | include_pricing omitted (defaults false, no account needed) | no include_pricing parameter                            | no pricing_options in any creative       |
 

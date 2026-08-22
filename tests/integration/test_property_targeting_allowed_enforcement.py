@@ -119,7 +119,11 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
 
     exc = excinfo.value
     assert exc.error_code == "VALIDATION_ERROR"
-    assert exc.field == "packages[].targeting_overlay.property_list"
+    # The ARRAY parameter: violations are gathered across every package before the
+    # raise, so no single element is at fault and details carry which ones were
+    # (salesagent-rfxfu). The old "packages[]" prefix named neither the array nor an
+    # element.
+    assert exc.field == "packages"
     assert exc.details is not None
     assert "violations" in exc.details
 
@@ -245,7 +249,11 @@ def test_update_rejects_property_list_when_product_disallows(property_targeting_
 
     exc = excinfo.value
     assert exc.error_code == "VALIDATION_ERROR"
-    assert exc.field == "packages[].targeting_overlay.property_list"
+    # The ARRAY parameter: violations are gathered across every package before the
+    # raise, so no single element is at fault and details carry which ones were
+    # (salesagent-rfxfu). The old "packages[]" prefix named neither the array nor an
+    # element.
+    assert exc.field == "packages"
     assert exc.details is not None and "violations" in exc.details
 
 

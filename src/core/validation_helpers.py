@@ -145,16 +145,26 @@ def safe_parse_json_field(field_value, field_name="field", default=None):
         return default if default is not None else {}
 
 
-def package_field_path(attr: str) -> str:
-    """Bracket-notation field path for a per-package field in an _impl-layer error.
+#: The array parameter itself, for a failure that is about the COLLECTION rather
+#: than one entry (e.g. a total-budget check across all packages). Naming the array
+#: is what the spec asks for when no single element is at fault.
+PACKAGES_FIELD = "packages"
 
-    Mirrors the list notation of :func:`first_validation_error_field` but without a
-    concrete index: the _impl layer validates the package collection as a whole and
-    raises ``packages[].budget`` / ``packages[].package_id`` / ``packages[].product_id``,
-    while the boundary-derived path carries the offending index (``packages[0].budget``).
-    Centralizing the prefix here stops the hand-rolled literals from drifting apart.
+
+def package_field_path(attr: str, index: int) -> str:
+    """Indexed JSON pointer for a per-package field in an _impl-layer error.
+
+    ``packages[0].budget``, not ``packages[].budget``. The empty-bracket form this
+    replaces could not tell a buyer WHICH package was refused, which is the entire
+    purpose of the pointer on a multi-package request -- and it matched neither
+    shape the pinned contract uses: notification-config-event-scope.yaml grades
+    ``field == 'notification_configs[0].event_types[0]'``, an INDEXED pointer, and
+    the collection-level form is the bare array name (see :data:`PACKAGES_FIELD`).
+
+    Use this where one entry is at fault and its position is known; use
+    ``PACKAGES_FIELD`` where the collection as a whole failed (salesagent-rfxfu).
     """
-    return f"packages[].{attr}"
+    return f"packages[{index}].{attr}"
 
 
 def format_validation_error(validation_error: ValidationError, context: str = "request") -> str:

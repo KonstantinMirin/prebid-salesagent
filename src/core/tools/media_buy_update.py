@@ -728,7 +728,10 @@ def _update_media_buy_impl(
 
             # Handle package-level updates
             if req.packages:
-                for pkg_update in req.packages:
+                # enumerate so a per-package rejection can name WHICH package failed:
+                # the pointer is packages[N].package_id, never packages[].package_id,
+                # which named neither the array nor an element (salesagent-rfxfu).
+                for pkg_index, pkg_update in enumerate(req.packages):
                     # Handle paused state
                     if pkg_update.paused is not None:
                         # adcp 2.12.0+: paused=True means pause, paused=False means resume
@@ -761,7 +764,7 @@ def _update_media_buy_impl(
                         # Validate package_id is provided (required for budget updates)
                         if not pkg_update.package_id:
                             raise AdCPValidationError(
-                                field=package_field_path("package_id"),
+                                field=package_field_path("package_id", pkg_index),
                                 context=req.context,
                             )
                         # Extract budget amount - handle both float and Budget object
@@ -841,7 +844,7 @@ def _update_media_buy_impl(
                         # Validate package_id is provided
                         if not pkg_update.package_id:
                             raise AdCPValidationError(
-                                field=package_field_path("package_id"),
+                                field=package_field_path("package_id", pkg_index),
                                 context=req.context,
                             )
 
@@ -941,7 +944,7 @@ def _update_media_buy_impl(
                         # Validate package_id is provided
                         if not pkg_update.package_id:
                             raise AdCPValidationError(
-                                field=package_field_path("package_id"),
+                                field=package_field_path("package_id", pkg_index),
                                 context=req.context,
                             )
 
@@ -988,7 +991,7 @@ def _update_media_buy_impl(
                         # Validate package_id is provided
                         if not pkg_update.package_id:
                             raise AdCPValidationError(
-                                field=package_field_path("package_id"),
+                                field=package_field_path("package_id", pkg_index),
                                 context=req.context,
                             )
 
@@ -1157,7 +1160,7 @@ def _update_media_buy_impl(
                         # Validate package_id is provided
                         if not pkg_update.package_id:
                             raise AdCPValidationError(
-                                field=package_field_path("package_id"),
+                                field=package_field_path("package_id", pkg_index),
                                 context=req.context,
                             )
 

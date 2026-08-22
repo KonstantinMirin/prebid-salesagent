@@ -122,8 +122,13 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Empty array provided - schema rejects request
     When the Buyer Agent requests delivery metrics with media_buy_ids []
     Then the operation should fail
-    And the error code should be "validation_error"
-    And the error message should contain "minItems"
+    And the error code should be "INVALID_REQUEST"
+    And the error field should contain "media_buy_ids"
+    # An empty array violates minItems -- a SCHEMA CONSTRAINT, which the pin maps to
+    # INVALID_REQUEST, not VALIDATION_ERROR ("beyond schema validation"). The
+    # lowercase "validation_error" was not an emittable code at all. The
+    # message-contains-"minItems" assertion is gone with it: the sentence is derived
+    # from the code (ADR-010) and cannot name a JSON-Schema keyword.
     And the error should include "suggestion" field
     And the suggestion should contain "at least one identifier"
     # Traces to BR-RULE-030 INV-1/INV-2 (schema minItems constraint on identification arrays)
@@ -164,8 +169,10 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001"
     When the Buyer Agent requests delivery metrics with status_filter "nonexistent_status"
     Then the operation should fail
-    And the error code should be "validation_error"
-    And the error message should contain "status_filter"
+    And the error code should be "INVALID_REQUEST"
+    And the error field should contain "status_filter"
+    # Out-of-enum value -> schema constraint -> INVALID_REQUEST. WHICH parameter
+    # failed travels on error.field, not in the sentence.
     And the error should include "suggestion" field
     And the suggestion should contain "valid status values"
     # PRE-BIZ5: status_filter must be a valid value
@@ -455,8 +462,10 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the ad server adapter is unavailable
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
     Then the operation should fail
-    And the error code should be "adapter_error"
-    And the error message should contain "delivery data"
+    And the error code should be "SERVICE_UNAVAILABLE"
+    # What AdCPAdapterError actually emits. "adapter_error" was the internal class
+    # taxonomy leaking into a scenario as if it were a wire code. The
+    # message-contains assertion is gone: the sentence is a function of the code.
     And the error should include "suggestion" field
     And the suggestion should contain "retry later"
     # POST-F1: System state unchanged

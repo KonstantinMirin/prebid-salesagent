@@ -20,7 +20,13 @@ quality-ci:
 	uv run python .pre-commit-hooks/check-gam-auth-support.py
 	uv run python scripts/hooks/check_response_attribute_access.py $$(find src -name '*.py')
 	uv run python .pre-commit-hooks/check_roundtrip_tests.py
-	uv run python scripts/verify_feature_error_codes.py --uc UC-002 UC-003
+	# Every use case whose feature file is BOUND to a test module. Widened from
+	# UC-002/UC-003 by salesagent-3dawm.17 once all 16 bound files reported zero.
+	# The 20 UNBOUND files stay out deliberately: their scenarios never execute,
+	# so gating them would pin ~855 accepted occurrences into the repo as a
+	# baseline. They are salesagent-yz8mo's subject -- bind them, then gate them.
+	uv run python scripts/verify_feature_error_codes.py --uc \
+		UC-002 UC-003 UC-004 UC-005 UC-006 UC-010 UC-011 UC-018 UC-019 UC-026
 	uv run python .pre-commit-hooks/check_route_conflicts.py
 	uv run python .pre-commit-hooks/check_type_ignore_count.py
 	uv run python .pre-commit-hooks/check_ruff_complexity_count.py

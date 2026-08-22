@@ -18,7 +18,7 @@ from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas import Error, Targeting, TargetingCapability
-from src.core.validation_helpers import package_field_path
+from src.core.validation_helpers import PACKAGES_FIELD
 
 if TYPE_CHECKING:
     from src.core.database.models import Product
@@ -309,8 +309,12 @@ def raise_if_property_targeting_violations(violations: list[str]) -> None:
     site; only the raise shape is shared.
     """
     if violations:
+        # The COLLECTION: violations are gathered across every package before this
+        # raises, so no single element is at fault and the array parameter is what
+        # the pointer names. Which packages violated travels in details
+        # (salesagent-rfxfu).
         raise AdCPValidationError(
-            field=package_field_path("targeting_overlay.property_list"),
+            field=PACKAGES_FIELD,
             details={"violations": violations},
         )
 

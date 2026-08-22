@@ -161,7 +161,12 @@ from src.core.tools.financial_validation import (
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 
 # Import get_product_catalog from main (after refactor)
-from src.core.validation_helpers import adcp_validation_boundary, format_validation_error, package_field_path
+from src.core.validation_helpers import (
+    PACKAGES_FIELD,
+    adcp_validation_boundary,
+    format_validation_error,
+    package_field_path,
+)
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
@@ -2163,10 +2168,12 @@ async def _create_media_buy_impl(
         # Validate input parameters
         # 1. Budget validation (shared validator)
         total_budget = req.get_total_budget()
-        budget_err = validate_budget_positive(total_budget, field=package_field_path("budget"))
+        # req.get_total_budget() sums EVERY package, so no single element is at
+        # fault -- the pointer names the array (salesagent-rfxfu).
+        budget_err = validate_budget_positive(total_budget, field=PACKAGES_FIELD)
         if budget_err:
             raise AdCPBudgetTooLowError(
-                field=package_field_path("budget"),
+                field=PACKAGES_FIELD,
                 context=req.context,
             )
 
@@ -2247,10 +2254,10 @@ async def _create_media_buy_impl(
             raise AdCPValidationError(field="packages")
 
         if req.packages:
-            for package in req.packages:
+            for pkg_index, package in enumerate(req.packages):
                 # Check product_id field per AdCP spec
                 if not package.product_id:
-                    raise AdCPValidationError(field=package_field_path("product_id"))
+                    raise AdCPValidationError(field=package_field_path("product_id", pkg_index))
 
             # Check for duplicate product_ids across packages
             product_id_counts: dict[str, int] = {}
@@ -2287,9 +2294,12 @@ async def _create_media_buy_impl(
             # Validate all requested product_ids exist
             missing_product_ids = set(product_ids) - set(product_map.keys())
             if missing_product_ids:
+                # Gathered ACROSS every package (a set difference over all
+                # product_ids), so the pointer names the array and details enumerate
+                # which ids were missing (salesagent-rfxfu).
                 raise AdCPProductNotFoundError(
                     details={"missing_product_ids": sorted(missing_product_ids)},
-                    field=package_field_path("product_id"),
+                    field=PACKAGES_FIELD,
                 )
 
             # AdCP spec (core/targeting.json): "Sellers SHOULD return a validation
@@ -3197,7 +3207,9 @@ async def _create_media_buy_impl(
         # Example: 2 packages with same product_id but different targeting (US vs CA) must create 2 MediaPackages
         packages: list[MediaPackage] = []
         assert req.packages is not None, "packages required - validated earlier"
-        for idx, pkg in enumerate(req.packages, 1):  # Iterate over request packages
+        # 0-based for the JSON pointer; details keep the human 1-based position.
+        for pkg_index, pkg in enumerate(req.packages):  # Iterate over request packages
+            idx = pkg_index + 1
             # Find the product for this package (from schema catalog, not database model)
             # Package has product_id field per AdCP spec
             pkg_product_id = pkg.product_id
@@ -3205,7 +3217,7 @@ async def _create_media_buy_impl(
             if not pkg_product_id:
                 raise AdCPValidationError(
                     details={"package_index": idx},
-                    field=package_field_path("product_id"),
+                    field=package_field_path("product_id", pkg_index),
                 )
 
             pkg_product: Product | None = None
@@ -3220,7 +3232,7 @@ async def _create_media_buy_impl(
                 # per-package branch is suite-invisible — typed for guard parity.
                 raise AdCPProductNotFoundError(
                     details={"package_index": idx, "product_id": pkg_product_id},
-                    field=package_field_path("product_id"),
+                    field=package_field_path("product_id", pkg_index),
                 )
 
             # Determine format_ids to use

@@ -150,7 +150,10 @@ Feature: BR-UC-002 Create Media Buy
     And the error code should be "BUDGET_TOO_LOW"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
-    And the error should include "field" field with value "packages[].budget"
+    And the error should include "field" field with value "packages"
+    # The ARRAY, not an element: this rejection comes from req.get_total_budget(),
+    # which sums EVERY package, so no single entry is at fault. The old
+    # "packages[].budget" named neither the array nor an element (salesagent-rfxfu).
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue

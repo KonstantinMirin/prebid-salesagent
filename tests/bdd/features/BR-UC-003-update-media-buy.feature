@@ -644,7 +644,15 @@ Feature: BR-UC-003 Update Media Buy
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
-    And the error should include "field" field with value "packages[].package_id"
+    And the error should include "field" field with value "package_id"
+    # ENTRY-RELATIVE, and measured rather than assumed: the rejection comes from the
+    # PackageUpdate model validator (schemas/_base.py), which sees one entry and
+    # cannot know its position in the request's list -- so it names the field within
+    # the entry and the index comes from the boundary's own loc. Same rooting rule
+    # GateFailure documents ("never request-rooted with an accounts[i]. prefix").
+    # The indexed form packages[N].package_id belongs to the _impl-layer loop in
+    # media_buy_update.py, which this input never reaches. The old
+    # "packages[].package_id" was neither (salesagent-rfxfu).
     # POST-F1: System state unchanged
     # POST-F2: Error explains missing package identifier
     # POST-F3: Suggestion for recovery

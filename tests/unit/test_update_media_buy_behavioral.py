@@ -1786,7 +1786,10 @@ class TestUC003UpdateTargetingOverlay:
             # Error mirrors create's shape exactly: same code, same field, same details.
             exc = excinfo.value
             assert exc.error_code == "VALIDATION_ERROR"
-            assert exc.field == "packages[].targeting_overlay.property_list"
+            # The ARRAY: violations are collected across every package before the
+            # raise, so no single element is at fault and the pointer names the array
+            # parameter. Which packages violated travels in details (salesagent-rfxfu).
+            assert exc.field == "packages"
             assert exc.details is not None
             assert "violations" in exc.details
 

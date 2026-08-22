@@ -2099,17 +2099,20 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
           a generic VALIDATION_ERROR / silent drop.
         """
         if isinstance(data, dict):
-            from src.core.validation_helpers import package_field_path
-
+            # ENTRY-RELATIVE, with no array prefix: this validator sees ONE package
+            # entry and cannot know its position in the request's list -- the index
+            # belongs to the enclosing collection, and the boundary-derived path
+            # supplies it from pydantic's own loc. Emitting "packages[].package_id"
+            # here invented a prefix that named neither the array nor an element
+            # (salesagent-rfxfu). Same rooting rule GateFailure documents: entry-
+            # relative, never request-rooted.
             if not data.get("package_id"):
-                raise AdCPInvalidRequestError(
-                    field=package_field_path("package_id"),
-                )
+                raise AdCPInvalidRequestError(field="package_id")
             present = sorted(f for f in cls._IMMUTABLE_PACKAGE_FIELDS if f in data)
             if present:
                 raise AdCPInvalidRequestError(
                     details={"immutable_fields": present},
-                    field=package_field_path(present[0]),
+                    field=present[0],
                 )
         return data
 
