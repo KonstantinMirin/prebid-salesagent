@@ -19,6 +19,7 @@ from pydantic import Field as PydanticField
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
+from src.core.errors.codes import ErrorCode
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value, log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
@@ -390,8 +391,8 @@ def _list_creatives_impl(
                     # it for the operator. The buyer gets the code (whose sentence and
                     # recovery come from CODE_TABLE) plus the one specific they can act
                     # on: which creative is affected.
-                    Error(  # structural-guard: advisory per-creative result in ListCreativesResponse.errors[]
-                        code="CONFIGURATION_ERROR",
+                    Error.of(  # structural-guard: advisory per-creative result in ListCreativesResponse.errors[]
+                        ErrorCode.CONFIGURATION_ERROR,
                         details={"creative_id": db_creative.creative_id},
                     )
                 )

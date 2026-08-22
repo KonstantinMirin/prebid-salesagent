@@ -62,19 +62,27 @@ class TestCheckBillingPolicy:
         assert failures[0].failure_class == "billing_not_supported"
         assert _FAILURE_CLASS_TO_CODE[failures[0].failure_class] == "BILLING_NOT_SUPPORTED"
 
-    def test_error_message_includes_supported_list(self):
+    def test_failure_carries_the_supported_list_in_details(self):
+        """The supported models travel STRUCTURALLY, not in a sentence.
+
+        billing-not-supported.json puts them at details.supported_billing, and
+        after salesagent-3dawm.13 GateFailure has no message to interpolate them
+        into -- the buyer-facing sentence is derived from the code.
+        """
         identity = _identity_with(supported_billing=["agent", "operator"])
         errors = _check_billing_policy("prepaid", identity)
         assert errors is not None
-        assert "agent" in errors[0].message
-        assert "operator" in errors[0].message
+        assert errors[0].details == {"scope": "capability", "supported_billing": ["agent", "operator"]}
 
-    def test_error_includes_suggestion_field(self):
+    def test_failure_names_the_code_and_the_one_supported_model(self):
+        """The suggestion is a function of the code (ADR-010), so it is asserted
+        on the wire Error the gate produces, not on GateFailure -- which no longer
+        carries prose at all."""
         identity = _identity_with(supported_billing=["agent"])
         errors = _check_billing_policy("operator", identity)
         assert errors is not None
-        assert errors[0].suggestion is not None
-        assert "agent" in errors[0].suggestion
+        assert _FAILURE_CLASS_TO_CODE[errors[0].failure_class] == "BILLING_NOT_SUPPORTED"
+        assert errors[0].details["supported_billing"] == ["agent"]
 
     def test_empty_supported_list_rejects_all(self):
         identity = _identity_with(supported_billing=[])

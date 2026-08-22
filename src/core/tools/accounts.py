@@ -45,6 +45,7 @@ from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.account import AccountRepository, NaturalKey, NaturalKeyConflict
 from src.core.database.repositories.account_serialization import as_json_dict
 from src.core.database.repositories.uow import AccountUoW
+from src.core.errors.codes import ErrorCode, ErrorCodeT
 from src.core.exceptions import AdCPConfigurationError, AdCPValidationError
 from src.core.helpers import enum_value
 from src.core.helpers.brand_key import brand_key_parts
@@ -583,12 +584,16 @@ FailureClass = Literal[
 ]
 
 #: The ONE mapping from refusal class to pinned wire code.
-_FAILURE_CLASS_TO_CODE: dict[FailureClass, str] = {
-    "unsupported_field": "UNSUPPORTED_FEATURE",
-    "invalid_domain": "VALIDATION_ERROR",
-    "billing_not_supported": "BILLING_NOT_SUPPORTED",
-    "sandbox_not_supported": "UNSUPPORTED_FEATURE",
-    "notification_config_invalid": "VALIDATION_ERROR",
+#:
+#: Typed ``ErrorCodeT``, not ``str``: the values ARE vocabulary members, so a
+#: typo or a retired code is a mypy error here rather than a ValidationError
+#: discovered when some gate happens to fire at runtime.
+_FAILURE_CLASS_TO_CODE: dict[FailureClass, ErrorCodeT] = {
+    "unsupported_field": ErrorCode.UNSUPPORTED_FEATURE,
+    "invalid_domain": ErrorCode.VALIDATION_ERROR,
+    "billing_not_supported": ErrorCode.BILLING_NOT_SUPPORTED,
+    "sandbox_not_supported": ErrorCode.UNSUPPORTED_FEATURE,
+    "notification_config_invalid": ErrorCode.VALIDATION_ERROR,
 }
 
 
@@ -603,11 +608,18 @@ class GateFailure:
     ``field == 'notification_configs[0].event_types[0]'``), and it is what makes
     a pointer meaningful to the entry it describes rather than to its accidental
     position in a batch.
+
+    There is deliberately NO ``message``/``suggestion`` here. Both used to be
+    REQUIRED, so all eight construction sites had to invent buyer-facing prose --
+    prose that reached no channel once the advisory started deriving its text from
+    the code (salesagent-3dawm.14). Requiring a site to author a sentence nobody
+    reads is the defect this epic removes, so the fields are gone rather than
+    defaulted: a gate decides the CLASS (which maps to the code via
+    ``_FAILURE_CLASS_TO_CODE``) and the SPECIFICS (``field``, ``details``), and
+    the sentence follows from the code.
     """
 
     failure_class: FailureClass
-    message: str
-    suggestion: str
     field: str | None = None
     details: dict[str, object] | None = None
 
@@ -624,13 +636,11 @@ def _gate_failures_to_errors(failures: list[GateFailure]) -> list["Error"]:
     return [
         # message, suggestion and recovery are NOT passed: Error derives all three
         # from CODE_TABLE at validation, so the sentence a buyer reads on a gate
-        # refusal comes from the same authority as every other advisory. Passing
-        # f.message/f.suggestion here would be silently discarded, which is why
-        # GateFailure's now-unread prose fields are deleted next
-        # (salesagent-3dawm.13). What the gate still decides is the CODE and the
-        # specifics: field and details.
-        Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
-            code=_FAILURE_CLASS_TO_CODE[f.failure_class],
+        # refusal comes from the same authority as every other advisory. GateFailure
+        # no longer even carries prose to pass (salesagent-3dawm.13). What the gate
+        # decides is the CODE and the specifics: field and details.
+        Error.of(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
+            _FAILURE_CLASS_TO_CODE[f.failure_class],
             field=f.field,
             details=f.details,
         )
@@ -799,11 +809,6 @@ def _rejected_field_errors(entry: SyncEntry, *, mode: EntryMode) -> list[GateFai
         failures.append(
             GateFailure(
                 failure_class="unsupported_field",
-                message=f"'{field}' cannot be changed on a settings-update entry: it is part of the "
-                "account's natural key, so changing it would re-key the account and orphan it from "
-                "subsequent syncs.",
-                suggestion="Remove the field from the entry; provision a separate account if you need "
-                "the other sandbox value.",
                 field=field,
             )
         )
@@ -987,9 +992,6 @@ def _check_domain_validity(brand_domain: str) -> list[GateFailure] | None:
             return [
                 GateFailure(
                     failure_class="invalid_domain",
-                    message=f"Domain '{brand_domain}' uses reserved TLD '{tld}' "
-                    f"and cannot be used for account provisioning.",
-                    suggestion="Use a real domain name for production accounts.",
                     field="brand.domain",
                 )
             ]
@@ -1022,17 +1024,11 @@ def _check_billing_policy(
         # omit this field" -- an empty resolved policy must omit the key entirely,
         # never emit a schema-invalid empty array (salesagent-hh1f review MEDIUM #1).
         details: dict[str, object] = {"scope": "capability"}
-        supported_suffix = ""
         if supported:
             details["supported_billing"] = supported
-            supported_suffix = f" Supported models: {', '.join(supported)}."
         return [
             GateFailure(
                 failure_class="billing_not_supported",
-                message=f"Billing model '{billing_val}' is not supported by this seller.{supported_suffix}",
-                suggestion=f"Use one of the supported billing models: {', '.join(supported)}."
-                if supported
-                else "Contact the seller to enable a supported billing model.",
                 details=details,
             )
         ]
@@ -1091,11 +1087,7 @@ def _check_sandbox_capability(
     return [
         GateFailure(
             failure_class="sandbox_not_supported",
-            message="Sandbox account provisioning was requested, but this seller does not "
-            "declare account.sandbox support.",
             field="sandbox",
-            suggestion="Check get_adcp_capabilities and remove the unsupported sandbox field, "
-            "or provision a production account instead.",
         )
     ]
 
@@ -1134,11 +1126,7 @@ def _check_notification_configs(configs: Iterable[NotificationConfig] | None) ->
             return [
                 GateFailure(
                     failure_class="notification_config_invalid",
-                    message=f"Duplicate subscriber_id '{subscriber_id}' in the submitted "
-                    "notification_configs array; each subscriber_id may appear at most once.",
                     field=f"notification_configs[{index}].subscriber_id",
-                    suggestion="Send one entry per subscriber_id -- the array declares the full "
-                    "desired set, so a repeated id is ambiguous rather than an update.",
                 )
             ]
         if subscriber_id is not None:
@@ -1149,11 +1137,7 @@ def _check_notification_configs(configs: Iterable[NotificationConfig] | None) ->
                 return [
                     GateFailure(
                         failure_class="notification_config_invalid",
-                        message=f"Event type '{enum_value(event_type)}' is media-buy-anchored and "
-                        "cannot be subscribed to on the account surface.",
                         field=f"notification_configs[{index}].event_types[{event_index}]",
-                        suggestion="Subscribe to media-buy delivery events on the media buy itself; "
-                        "account-level subscriptions carry creative and account-scoped events only.",
                     )
                 ]
 
@@ -1167,9 +1151,7 @@ def _check_notification_configs(configs: Iterable[NotificationConfig] | None) ->
             return [
                 GateFailure(
                     failure_class="notification_config_invalid",
-                    message=f"notification_configs url is not acceptable: {url_error}",
                     field=f"notification_configs[{index}].url",
-                    suggestion="Provide an absolute https:// URL on a publicly routable host.",
                 )
             ]
     return None
@@ -1219,12 +1201,9 @@ def _unmatched_settings_update_result(ref: AccountRef) -> SyncResponseAccount:
         billing=None,
         sandbox=None,
         errors=[
-            Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
-                code="UNSUPPORTED_PROVISIONING",
-                message="No existing account matches the provided account reference; "
-                "a settings-update entry never provisions a new account.",
-                suggestion="Provide 'brand', 'operator', and 'billing' to provision a new account instead.",
-                recovery="correctable",
+            Error.of(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
+                ErrorCode.UNSUPPORTED_PROVISIONING,
+                details={"reason": "settings_update_never_provisions"},
             )
         ],
     )
@@ -1361,17 +1340,18 @@ def _collect_activating_entries(entries: list[SyncEntry]) -> list[tuple[int, Syn
     return activating
 
 
-def _proof_error(entry: SyncEntry, config: NotificationConfig, message: str, suggestion: str) -> GateFailure:
+def _proof_error(entry: SyncEntry, config: NotificationConfig) -> GateFailure:
     """The per-account refusal a failed/skipped activation produces.
 
-    One builder for both the dry_run and challenge-failure paths -- they carry the
-    same class and field pointer, and only the explanation differs.
+    One builder for both the dry_run and challenge-failure paths. They used to be
+    told apart by a ``message``/``suggestion`` pair the caller wrote; those reached
+    no channel once the advisory derived its text from the code, so the parameters
+    are gone (salesagent-3dawm.13). Both paths carry the same class and the same
+    field pointer, which is the whole of what the buyer can act on.
     """
     return GateFailure(
         failure_class="notification_config_invalid",
-        message=message,
         field=f"notification_configs[{_config_index(entry, config)}].url",
-        suggestion=suggestion,
     )
 
 
@@ -1414,19 +1394,7 @@ async def _resolve_activation_proofs(
         return {}
 
     if dry_run:
-        return {
-            index: [
-                _proof_error(
-                    entry,
-                    config,
-                    "Activating a notification subscriber requires a proof-of-control challenge, "
-                    "which dry_run does not perform; this preview cannot confirm the subscriber "
-                    "would be activated.",
-                    "Re-send without dry_run to perform the challenge.",
-                )
-            ]
-            for index, entry, config in activating
-        }
+        return {index: [_proof_error(entry, config)] for index, entry, config in activating}
 
     already_proven = _already_proven_tuples(activating, tenant_id)
     prover = get_notification_proof_service()
@@ -1440,16 +1408,7 @@ async def _resolve_activation_proofs(
             continue
         proven, budget = await _prove_within_budget(prover, entry, config, budget)
         if not proven:
-            failures.setdefault(index, []).append(
-                _proof_error(
-                    entry,
-                    config,
-                    "Proof-of-control challenge failed for the notification endpoint; the "
-                    "subscriber was not activated and the account's previous notification_configs "
-                    "are unchanged.",
-                    "Ensure the endpoint answers the challenge POST with 2xx, then re-send.",
-                )
-            )
+            failures.setdefault(index, []).append(_proof_error(entry, config))
     return failures
 
 

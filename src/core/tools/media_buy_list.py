@@ -18,6 +18,7 @@ from pydantic import Field, RootModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.core.errors.codes import ErrorCode
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
@@ -114,8 +115,8 @@ def _get_media_buys_impl(
         return GetMediaBuysResponse(
             media_buys=[],
             errors=[
-                Error(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
-                    code="AUTH_MISSING"
+                Error.of(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
+                    ErrorCode.AUTH_MISSING
                 )
             ],
         )
@@ -127,8 +128,8 @@ def _get_media_buys_impl(
         return GetMediaBuysResponse(
             media_buys=[],
             errors=[
-                Error(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
-                    code="AUTH_INVALID", details={"principal_id": principal_id}
+                Error.of(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
+                    ErrorCode.AUTH_INVALID, details={"principal_id": principal_id}
                 )
             ],
         )
@@ -245,15 +246,14 @@ def _get_media_buys_impl(
                     # ``TARGETING_REHYDRATION_FAILED`` shape in the message so
                     # callers can grep/route on it.
                     hydration_errors.append(
-                        Error(  # structural-guard: advisory per-package result in GetMediaBuysResponse.errors[]
-                            code="SERVICE_UNAVAILABLE",
-                            message=(
-                                f"TARGETING_REHYDRATION_FAILED: targeting overlay for "
-                                f"package '{pkg_id}' on media buy '{buy.media_buy_id}' "
-                                f"could not be rehydrated; returning "
-                                f"targeting_overlay=None for this package."
-                            ),
+                        Error.of(  # structural-guard: advisory per-package result in GetMediaBuysResponse.errors[]
+                            ErrorCode.SERVICE_UNAVAILABLE,
                             field=f"media_buys[].packages[{pkg_id}].targeting_overlay",
+                            details={
+                                "reason": "targeting_rehydration_failed",
+                                "package_id": pkg_id,
+                                "media_buy_id": buy.media_buy_id,
+                            },
                         )
                     )
                     targeting_overlay = None

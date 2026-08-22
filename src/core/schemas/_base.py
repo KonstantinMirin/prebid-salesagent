@@ -183,13 +183,6 @@ class Error(_LibraryError):
     model_config = ConfigDict(extra=get_pydantic_extra_mode(), frozen=True)
 
     code: ErrorCodeT
-    #: Declared with a default purely to drop the SDK's required-ness. It is
-    #: DERIVED from ``code`` below, so forcing every construction site to pass a
-    #: string it does not get to choose would be the authoring surface this whole
-    #: step removes. The empty default is never observed: the validator replaces
-    #: it whenever the code resolves, and an unresolvable code fails on
-    #: ``code: ErrorCodeT`` first.
-    message: str = ""
 
     @model_validator(mode="before")
     @classmethod
@@ -213,6 +206,39 @@ class Error(_LibraryError):
             "suggestion": entry.suggestion,
             "recovery": entry.recovery.value,
         }
+
+    @classmethod
+    def of(
+        cls,
+        code: ErrorCodeT,
+        *,
+        field: str | None = None,
+        details: dict[str, Any] | None = None,
+        retry_after: int | None = None,
+    ) -> "Error":
+        """Build an advisory. THE construction surface for one.
+
+        There is no ``message``/``suggestion``/``recovery`` parameter, so a call site
+        cannot author one -- not "should not", cannot: the name does not exist to pass.
+        Those three are resolved from ``code`` by the validator below.
+
+        This exists instead of giving ``message`` a default on this subclass. A default
+        would have worked at runtime (the before-validator injects the field anyway) and
+        was only needed to stop mypy demanding the argument -- but redeclaring an
+        inherited field to make it optional is exactly what
+        ``test_architecture_schema_inheritance`` forbids, and it is right to: "widening a
+        type, making a required field optional, or substituting an unrelated model are
+        all retypes that this guard must keep flagging." A narrower constructor removes
+        the parameter without touching the inherited declaration.
+        """
+        payload: dict[str, Any] = {"code": code}
+        if field is not None:
+            payload["field"] = field
+        if details is not None:
+            payload["details"] = details
+        if retry_after is not None:
+            payload["retry_after"] = retry_after
+        return cls.model_validate(payload)
 
     def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> "Error":
         """A copy is a RE-VALIDATION: ``update=`` cannot outrank the table."""

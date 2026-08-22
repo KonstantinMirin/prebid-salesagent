@@ -52,6 +52,7 @@ from src.adapters.base import TargetingCapabilities
 from src.core.auth import require_identity
 from src.core.billing_policy import BillingParty, resolve_account_sandbox, resolve_supported_billing
 from src.core.database.repositories.uow import TenantConfigUoW
+from src.core.errors.codes import ErrorCode
 from src.core.exceptions import AdCPConfigurationError
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
@@ -137,9 +138,9 @@ def _record_degradation(advisories: list[Error], what: str, exc: Exception) -> N
     """
     logger.warning("Could not get %s: %s", what, exc)
     advisories.append(
-        Error(  # structural-guard: advisory degradation in GetAdcpCapabilitiesResponse.errors[]
-            code="SERVICE_UNAVAILABLE",
-            message=f"Could not resolve {what}; the response omits or defaults this section.",
+        Error.of(  # structural-guard: advisory degradation in GetAdcpCapabilitiesResponse.errors[]
+            ErrorCode.SERVICE_UNAVAILABLE,
+            details={"unresolved_section": what},
         )
     )
 

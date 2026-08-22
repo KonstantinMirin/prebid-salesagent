@@ -15,6 +15,7 @@ for upstream inclusion in AdCP.
 from typing import TYPE_CHECKING, Any
 
 from src.core.enum_helpers import enum_value
+from src.core.errors.codes import ErrorCode
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas import Error, Targeting, TargetingCapability
 from src.core.validation_helpers import package_field_path
@@ -243,8 +244,8 @@ def build_property_list_unsupported_advisories(
             # code. What is specific to THIS advisory -- which package, and which
             # capability is off -- travels structurally: field names the rejected
             # path, details names the feature.
-            Error(
-                code="UNSUPPORTED_FEATURE",
+            Error.of(
+                ErrorCode.UNSUPPORTED_FEATURE,
                 field=f"packages[{index}].targeting_overlay.property_list",
                 details={"feature": "property_list_filtering"},
             )

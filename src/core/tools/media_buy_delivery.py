@@ -17,6 +17,7 @@ from fastmcp.server.context import Context
 from pydantic import Field, RootModel
 from rich.console import Console
 
+from src.core.errors.codes import ErrorCode
 from src.core.exceptions import (
     AdCPError,
     AdCPValidationError,
@@ -227,8 +228,8 @@ def _get_media_buy_delivery_impl(
             for requested_id in req.media_buy_ids:
                 if requested_id not in found_ids:
                     not_found_errors.append(
-                        Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
-                            code="MEDIA_BUY_NOT_FOUND",
+                        Error.of(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
+                            ErrorCode.MEDIA_BUY_NOT_FOUND,
                             details={"media_buy_id": requested_id},
                         )
                     )
@@ -358,8 +359,8 @@ def _get_media_buy_delivery_impl(
                         except Exception as audit_err:
                             logger.error("Failed to write adapter failure audit log: %s", audit_err)
                         adapter_errors.append(
-                            Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
-                                code="SERVICE_UNAVAILABLE",
+                            Error.of(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
+                                ErrorCode.SERVICE_UNAVAILABLE,
                                 details={"media_buy_id": media_buy_id},
                             )
                         )
@@ -549,14 +550,14 @@ def _get_media_buy_delivery_impl(
                 # response — the caller sees an errors[] entry, not a shorter list.
                 logger.error("Error processing delivery for %s: %s", media_buy_id, e)
                 adapter_errors.append(
-                    Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
+                    Error.of(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
                         # SERVICE_UNAVAILABLE names what actually happened here: the
                         # ADAPTER was unreachable. Codes now reach the buyer verbatim, so
                         # this is a deliberate choice of code, not a stand-in for one that
                         # would have been rewritten. Matches the sibling adapter handler
                         # above. WHICH buy failed travels in details, not in the
                         # sentence: message is derived from the code.
-                        code="SERVICE_UNAVAILABLE",
+                        ErrorCode.SERVICE_UNAVAILABLE,
                         details={"media_buy_id": media_buy_id},
                     )
                 )
