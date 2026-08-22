@@ -24,7 +24,6 @@ from src.core.exceptions import (
     AdCPCreativeRejectedError,
     AdCPError,
     AdCPServiceUnavailableError,
-    build_error_object,
 )
 from src.core.helpers import _extract_format_info, _validate_creative_assets
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
@@ -134,10 +133,11 @@ def build_update_sync_result(
 def _failed_sync_result(creative_id: str, source: AdCPError) -> SyncCreativeResult:
     """Build a SyncCreativeResult for a failed creative sync operation.
 
-    Takes the TYPED error and nothing else. The advisory's code, sentence, recovery,
-    suggestion, field and details all come from ``build_error_object`` — the same
-    derivation the transport envelope uses — so a per-creative advisory and the
-    request-level envelope cannot disagree about the same failure.
+    Takes the TYPED error and nothing else. The advisory carries the exception's CODE
+    plus its structured specifics; the sentence, recovery and suggestion are resolved
+    from ``CODE_TABLE`` by ``Error.of`` — the same single derivation the transport
+    envelope uses — so a per-creative advisory and the request-level envelope cannot
+    disagree about the same failure.
 
     Provenance-bearing text belongs on ``internal_detail`` at the RAISE site (server log
     only), never in ``details``: a diagnostic in ``details`` is on the buyer's wire, which
@@ -147,7 +147,7 @@ def _failed_sync_result(creative_id: str, source: AdCPError) -> SyncCreativeResu
         creative_id=creative_id,
         action="failed",
         # structural-guard: advisory per-creative result in SyncCreativeResult.errors[]
-        errors=[AdCPErrorDetail(**build_error_object(source))],
+        errors=[AdCPErrorDetail.of(source.error_code, field=source.field, details=source.details)],
         review_feedback=None,
         assigned_to=None,
         assignment_errors=None,
