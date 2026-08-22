@@ -1570,14 +1570,15 @@ def then_fail_with_code(ctx: dict, code: str) -> None:
             f"errors[0].code={payload_error.get('code')!r}"
         )
         return
-    error = ctx.get("error")
-    assert error is not None, "Expected an error but none found"
-    from src.core.exceptions import AdCPError
-
-    if isinstance(error, AdCPError):
-        assert error.error_code == code, f"Expected error code '{code}', got '{error.error_code}'"
-    else:
-        raise AssertionError(f"Expected AdCPError with code '{code}', got {type(error).__name__}: {error}")
+    result = ctx.get("result")
+    raise AssertionError(
+        f"Expected the wire to carry error code {code!r}, but no wire error envelope was captured. "
+        "This used to fall through to a reconstructed exception, which meant a scenario that "
+        "produced NO wire bytes still passed (salesagent-3dawm.18). "
+        f"transport={ctx.get('transport')!r} "
+        f"dispatch_error={type(ctx.get('error')).__name__}:{ctx.get('error')!r} "
+        f"result.error={type(getattr(result, 'error', None)).__name__}:{getattr(result, 'error', None)!r}"
+    )
 
 
 @then("the error message should indicate that identity is required")
@@ -1604,12 +1605,10 @@ def _assert_error_recovery(ctx: dict, expected: str) -> None:
             f"Expected wire recovery='{expected}', got {wire.get('recovery')!r} on wire code {wire.get('code')!r}"
         )
         return
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    from src.core.exceptions import AdCPError
-
-    assert isinstance(error, AdCPError), f"Expected AdCPError with recovery field, got {type(error).__name__}: {error}"
-    assert error.recovery == expected, f"Expected {expected} recovery, got '{error.recovery}'"
+    raise AssertionError(
+        f"Expected the wire to carry recovery={expected!r}, but no wire error envelope was captured "
+        "(salesagent-3dawm.18: the reconstructed fallback is gone -- recovery is a graded wire field)."
+    )
 
 
 @then(parsers.parse('the error should include a "recovery" field indicating terminal failure'))
@@ -1628,16 +1627,9 @@ def _current_suggestion(ctx: dict) -> str:
     missing or empty — never a silent escape.
     """
     suggestion = _wire_suggestion(ctx)
-    if suggestion is None:
-        error = ctx.get("error")
-        assert error is not None, "Expected an error"
-        from src.core.exceptions import AdCPError
-
-        assert isinstance(error, AdCPError), (
-            f"Expected AdCPError with suggestion field, got {type(error).__name__}: {error}"
-        )
-        # STRICT error.json conformance: top-level attribute only (#1417).
-        suggestion = error.suggestion
+    assert suggestion is not None, (
+        "Expected a top-level suggestion on the wire, but no wire error envelope was captured (salesagent-3dawm.18)."
+    )
     assert isinstance(suggestion, str) and suggestion.strip(), (
         f"Expected non-empty top-level suggestion string, got {suggestion!r}"
     )
@@ -2219,13 +2211,10 @@ def then_real_validation_error(ctx: dict) -> None:
         result.assert_wire_error("VALIDATION_ERROR")
         return
 
-    error = ctx.get("error")
-    assert error is not None, "Expected a real validation error but no error was raised"
-    from src.core.exceptions import AdCPError
-
-    # A "real" validation error is an actual exception (not a response-embedded simulated one)
-    assert isinstance(error, (AdCPError, ValueError, TypeError)), (
-        f"Expected a real validation error (AdCPError/ValueError/TypeError), got {type(error).__name__}: {error}"
+    raise AssertionError(
+        "Expected a real wire REJECTION carrying VALIDATION_ERROR, but no wire error envelope was "
+        "captured. The old fallback accepted any AdCPError/ValueError/TypeError, so a scenario that "
+        "never reached the wire passed on the strength of an exception type (salesagent-3dawm.18)."
     )
 
 
@@ -2350,18 +2339,13 @@ def then_error_code_with_suggestion(ctx: dict, code: str) -> None:
     Step text: 'error "{code}" with suggestion'. Asserts both error code AND
     presence of suggestion in details dict.
     """
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    from src.core.exceptions import AdCPError
-
-    assert isinstance(error, AdCPError), f"Expected AdCPError with code '{code}', got {type(error).__name__}: {error}"
-    assert error.error_code == code, f"Expected error code '{code}', got '{error.error_code}'"
-    # STRICT error.json conformance: suggestion is a top-level error attribute,
-    # never read from the free-form details dict (#1417).
-    suggestion = error.suggestion
-    assert isinstance(suggestion, str) and suggestion.strip(), (
-        f"Expected non-empty top-level suggestion string for error code '{code}', got {suggestion!r}"
-    )
+    # One call on the sanctioned surface. require_suggestion enforces the STRICT
+    # error.json position -- a suggestion buried in the free-form details dict does
+    # not satisfy it (#1417). This step had NO wire path at all before
+    # salesagent-3dawm.18: it read code and suggestion straight off a reconstructed
+    # exception, which re-derives both from the code and so could only agree with
+    # itself.
+    ctx["result"].assert_wire_error(code, require_suggestion=True)
 
 
 @then(parsers.parse("no snapshot or snapshot_unavailable_reason on any package"))
