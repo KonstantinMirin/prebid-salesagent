@@ -312,7 +312,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And the error should include a "suggestion" field
     And the suggestion should contain "media buys"
     # POST-F2, POST-F3
-    # --- ext-k: VALIDATION_ERROR (strict) ---
+    # --- ext-k: CREATIVE_REJECTED (strict) ---
 
   @T-UC-006-ext-k @extension @ext-k @error
   Scenario: Format mismatch — creative format incompatible with product
@@ -322,11 +322,16 @@ Feature: BR-UC-006 Sync Creative Assets
     And validation_mode is "strict"
     When the Buyer Agent syncs the creative
     Then the operation should fail with an assignment error
-    And the error code should be "VALIDATION_ERROR"
-    And the error message should contain "not supported by product"
+    And the error code should be "CREATIVE_REJECTED"
     And the error should include a "suggestion" field
-    And the suggestion should contain "list_creative_formats"
-    # POST-F2, POST-F3
+    # POST-F2, POST-F3: WHICH format and product are incompatible travels
+    #   structurally, not in the sentence -- message and suggestion are functions
+    #   of the code (ADR-010), so "should contain 'not supported by product'" and
+    #   "'list_creative_formats'" graded a copy of CODE_TABLE's own text.
+    #   The code is CREATIVE_REJECTED because that is what production raises
+    #   (_assignments.py:236, AdCPCreativeRejectedError, converging with
+    #   media_buy_update.py:233 per #1417) -- an earlier pass here mapped it to
+    #   VALIDATION_ERROR from the code NAME alone, without reading the raise site.
 
   @T-UC-006-rule-033-inv1 @invariant @BR-RULE-033
   Scenario: INV-1 — per-creative failure does not abort other creatives

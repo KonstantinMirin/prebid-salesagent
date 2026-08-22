@@ -1514,7 +1514,6 @@ def _assert_per_creative_failure(ctx: dict, expected_code: str) -> None:
     code is present and does not need to be inferred from the message — inferring it was
     the defect: a keyword ladder over prose, whose verdict then drove an xfail.
     """
-    from src.core.exceptions import AdCPError
 
     resp = ctx.get("response")
     error = ctx.get("error")
@@ -1532,12 +1531,20 @@ def _assert_per_creative_failure(ctx: dict, expected_code: str) -> None:
                         f"SPEC-PRODUCTION GAP: expected {expected_code}, wire code {actual!r} "
                         f"on the per-creative entry: {errs[0]!r}"
                     )
-    if error is not None:
-        if isinstance(error, AdCPError) and error.error_code == expected_code:
+    # Request-level rejection: read the WIRE code, not the class of a rebuilt
+    # exception (salesagent-3dawm.18). The per-creative branch above already reads
+    # the payload's errors[] entry, which is the correct layer for a per-record
+    # outcome; this is the correct layer for a whole-request failure.
+    result = ctx.get("result")
+    wire_code = result.wire_error_code() if result is not None else None
+    if wire_code is not None:
+        if wire_code == expected_code:
             return
+        pytest.xfail(f"SPEC-PRODUCTION GAP: expected {expected_code}, wire code {wire_code!r}")
+    if error is not None:
         pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected {expected_code}, got "
-            f"{type(error).__name__}(code={getattr(error, 'error_code', '?')}): {error}"
+            f"SPEC-PRODUCTION GAP: expected {expected_code} on the wire, but the request failed "
+            f"before reaching it: {type(error).__name__}: {error}"
         )
     pytest.xfail(f"SPEC-PRODUCTION GAP: expected {expected_code} but no error occurred. Response: {resp}")
 
@@ -1559,8 +1566,6 @@ def then_uc006_result_should_be(ctx: dict, outcome: str) -> None:
     """
     import pytest
     from sqlalchemy.exc import IntegrityError
-
-    from src.core.exceptions import AdCPError
 
     # Common pre-check: spec format ids with '/' cannot round-trip through
     # production's FormatId pattern. Surface as SPEC-PRODUCTION GAP.
@@ -1588,11 +1593,12 @@ def then_uc006_result_should_be(ctx: dict, outcome: str) -> None:
         assert err is not None, (
             f"Expected FORMAT_MISMATCH error but production succeeded. Response: {ctx.get('response')}"
         )
-        assert isinstance(err, AdCPError), f"Expected AdCPError for FORMAT_MISMATCH, got {type(err).__name__}: {err}"
-        msg = str(err).lower()
-        assert "format" in msg and ("not supported" in msg or "mismatch" in msg), (
-            f"Expected format-mismatch indication in error, got: {err}"
-        )
+        # Graded on the wire code. The old form searched str(err) for "format" plus
+        # "not supported"/"mismatch"; after salesagent-3dawm.14 the message is the
+        # CODE_TABLE sentence, so no such substring can appear and the assertion
+        # could never hold. Production raises AdCPCreativeRejectedError
+        # (_assignments.py:236) for a format the package's product does not accept.
+        ctx["result"].assert_wire_error("CREATIVE_REJECTED")
     elif outcome in ("success", "success (no agent validation)"):
         assert err is None, f"Expected '{outcome}' but production raised {type(err).__name__}: {err}"
         assert ctx.get("response") is not None, f"Expected a response for '{outcome}'"
@@ -2254,7 +2260,7 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
     """
     from sqlalchemy.exc import IntegrityError
 
-    from src.core.exceptions import AdCPError, AdCPNotFoundError, AdCPValidationError
+    from src.core.exceptions import AdCPError
 
     error = ctx.get("error")
     if error is None:
@@ -2306,34 +2312,43 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
             f"Error: {type(error).__name__}: {error.message if hasattr(error, 'message') else error}"
         )
 
-    assert isinstance(error, AdCPError), (
-        f"Expected an AdCPError from assignment processing, got {type(error).__name__}: {error}"
+    # The two SPEC-PRODUCTION GAP xfails that used to live here are DELETED, because
+    # both the gap and the mechanism that detected it are gone (salesagent-3dawm.18):
+    #
+    #   THE GAP CLOSED. They said production emitted generic codes -- "production:
+    #   'NOT_FOUND'" and "production: 'VALIDATION_ERROR'" -- where the spec demanded
+    #   specific ones. Production now raises AdCPPackageNotFoundError
+    #   (PACKAGE_NOT_FOUND, _assignments.py:163) and AdCPCreativeRejectedError
+    #   (CREATIVE_REJECTED, :236). Both are published members and both are what the
+    #   scenarios ask for.
+    #
+    #   THE DETECTOR WAS DEAD ANYWAY. They routed on PROSE --
+    #   "package not found" in error.message.lower() -- and message is now derived
+    #   from the code via CODE_TABLE (salesagent-3dawm.14), so neither substring
+    #   can appear and neither branch could ever fire. An xfail route that silently
+    #   stopped working is worse than none: it reads as tracked work while grading
+    #   nothing.
+    #
+    # What remains is the real assertion, on the wire the buyer received rather than
+    # on the class of a rebuilt exception.
+    result = ctx.get("result")
+    wire_code = result.wire_error_code() if result is not None else None
+    assert wire_code is not None, (
+        f"Expected an assignment rejection on the WIRE, but no wire error envelope was captured. "
+        f"dispatch_error={type(error).__name__}: {error}"
+    )
+    assert wire_code in _ASSIGNMENT_REJECTION_CODES, (
+        f"Expected an assignment-processing rejection, got wire code {wire_code!r}. "
+        f"Expected one of {sorted(_ASSIGNMENT_REJECTION_CODES)}"
     )
 
-    # SPEC-PRODUCTION GAP: production exception classes have generic codes
-    # ("REFERENCE_NOT_FOUND", "VALIDATION_ERROR") while the spec defines specific codes
-    # ("PACKAGE_NOT_FOUND", "FORMAT_MISMATCH"). Production also does not
-    # populate a "suggestion" detail. Both the next ``the error code should
-    # be "<SPEC_CODE>"`` and ``the suggestion should contain ...`` Gherkin
-    # steps therefore cannot be satisfied without weakening assertions or
-    # mutating production state. Surface the gap here, post-validating that
-    # the failure indeed came from the right assignment-processing branch.
-    is_pkg_not_found = isinstance(error, AdCPNotFoundError) and "package not found" in error.message.lower()
-    is_format_mismatch = isinstance(error, AdCPValidationError) and "not supported by product" in error.message.lower()
-    if is_pkg_not_found:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: assignment failed correctly with AdCPNotFoundError(message='Package "
-            "not found: ...') but the spec demands error_code='PACKAGE_NOT_FOUND' (production: 'NOT_FOUND') "
-            "and a structured 'suggestion' field that production does not populate. "
-            "See _assignments.py:62-69."
-        )
-    if is_format_mismatch:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: assignment failed correctly with AdCPValidationError(message='... "
-            "is not supported by product ...') but the spec demands error_code='FORMAT_MISMATCH' "
-            "(production: 'VALIDATION_ERROR') and a structured 'suggestion' field referencing "
-            "list_creative_formats. See _assignments.py:120-141."
-        )
+
+#: The codes strict-mode assignment processing can reject with, all published.
+#: PACKAGE_NOT_FOUND when the named package does not resolve
+#: (_assignments.py:163), CREATIVE_NOT_FOUND when the creative does not
+#: (:139), CREATIVE_REJECTED when the creative's format is incompatible with the
+#: package's product (:236, converging with media_buy_update.py:233 per #1417).
+_ASSIGNMENT_REJECTION_CODES = frozenset({"PACKAGE_NOT_FOUND", "CREATIVE_NOT_FOUND", "CREATIVE_REJECTED"})
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2367,7 +2382,6 @@ def then_assignment_result_should_be(ctx: dict, outcome: str) -> None:
 
     Hard assertions for all outcomes. No xfail escape hatches.
     """
-    from src.core.exceptions import AdCPError
 
     error = ctx.get("error")
     resp = ctx.get("response")
@@ -2376,8 +2390,14 @@ def then_assignment_result_should_be(ctx: dict, outcome: str) -> None:
         assert error is not None, (
             f"Strict mode with non-existent package should abort with error, but production succeeded. Response: {resp}"
         )
-        assert isinstance(error, (AdCPError, Exception)), (
-            f"Expected an AdCPError for strict mode abort, got {type(error).__name__}: {error}"
+        # Was isinstance(error, (AdCPError, Exception)) -- VACUOUS, since every
+        # exception satisfies the second arm. Graded on the wire code instead
+        # (salesagent-3dawm.18).
+        result = ctx.get("result")
+        wire_code = result.wire_error_code() if result is not None else None
+        assert wire_code in _ASSIGNMENT_REJECTION_CODES, (
+            f"Expected a strict-mode abort on the wire, got {wire_code!r}. "
+            f"Expected one of {sorted(_ASSIGNMENT_REJECTION_CODES)}"
         )
     elif outcome == "warning logged, processing continues":
         assert error is None, (
@@ -2409,27 +2429,25 @@ def then_assignment_processing_should_abort(ctx: dict) -> None:
     Error code is wire-first (real wire envelope preferred over the lossy
     reconstructed exception), same strategy as then_error_code.
     """
-    from src.core.exceptions import AdCPError, AdCPNotFoundError
-    from tests.bdd.steps.generic.then_error import _wire_code
 
     error = ctx.get("error")
     assert error is not None, (
         "Strict mode with non-existent package should abort with an error, "
         f"but production succeeded. Response: {ctx.get('response')}"
     )
-    assert isinstance(error, AdCPError), (
-        f"Expected AdCPError for strict mode abort, got {type(error).__name__}: {error}"
-    )
-    error_code = _wire_code(ctx) or getattr(error, "error_code", "") or ""
-    # Verify the error is specifically a not-found error, not an incidental failure
-    assert (
-        isinstance(error, AdCPNotFoundError) or "not_found" in error_code.lower() or "not found" in str(error).lower()
-    ), f"Expected not-found error for missing package, got error_code={error_code!r}: {error}"
-    # Verify the error references the bad package from the Given step
+    # Graded on the WIRE: the code says WHICH failure, details say which package.
+    # The old form accepted three different things -- an AdCPNotFoundError instance,
+    # "not_found" appearing in the code string, or "not found" appearing anywhere in
+    # str(error) -- so a stringified incidental failure could satisfy it. And the
+    # "references the bad package" check searched str(error), which after
+    # salesagent-3dawm.14 is the table sentence and can never contain an id.
+    result = ctx["result"]
+    result.assert_wire_error("PACKAGE_NOT_FOUND")
     bad_package = ctx.get("bad_package_id") or ctx.get("nonexistent_package_id", "")
     if bad_package:
-        assert bad_package in str(error), (
-            f"Error should reference the missing package '{bad_package}', but message is: {error}"
+        details = result.wire_error_details("PACKAGE_NOT_FOUND")
+        assert bad_package in str(details.values()), (
+            f"Expected the rejection to name the missing package {bad_package!r} in its details, got {dict(details)!r}"
         )
 
 
@@ -2441,22 +2459,18 @@ def then_behavior_matches_strict_mode(ctx: dict) -> None:
     means the same abort-on-error behavior as explicit strict mode. We verify
     an error was raised (same assertion as the abort step).
     """
-    from src.core.exceptions import AdCPError
 
     error = ctx.get("error")
     assert error is not None, (
         "Default validation_mode should be 'strict' (abort on error), "
         f"but production succeeded without raising. Response: {ctx.get('response')}"
     )
-    assert isinstance(error, AdCPError), (
-        f"Strict mode abort should raise AdCPError, got {type(error).__name__}: {error}"
-    )
-    # Assert the error code is a known strict-mode abort code
-    actual_code = error.error_code
-    assert actual_code is not None, f"Strict mode AdCPError should have a non-None error_code, got: {error}"
-    strict_codes = {"REFERENCE_NOT_FOUND", "VALIDATION_ERROR", "PACKAGE_NOT_FOUND"}
-    assert actual_code in strict_codes, (
-        f"Strict mode abort should produce error_code in {strict_codes}, got '{actual_code}' ({error.message})"
+    # Graded on the wire, and on the codes strict-mode abort actually emits.
+    result = ctx["result"]
+    actual_code = result.wire_error_code()
+    assert actual_code is not None, f"Strict-mode abort should reach the wire, but no envelope was captured: {error}"
+    assert actual_code in _ASSIGNMENT_REJECTION_CODES, (
+        f"Strict mode abort should produce one of {sorted(_ASSIGNMENT_REJECTION_CODES)}, got {actual_code!r}"
     )
 
 
@@ -4520,19 +4534,21 @@ def then_assignment_should_fail_with(ctx: dict, error_code: str) -> None:
     code. For AdCPError, checks error_code directly. For FORMAT_MISMATCH,
     also accepts 'not supported' in the error message (production's phrasing).
     """
-    from src.core.exceptions import AdCPError
 
     error = ctx.get("error")
     assert error is not None, (
         f"Expected assignment failure with {error_code}, but production succeeded. Response: {ctx.get('response')}"
     )
-    if isinstance(error, AdCPError):
-        # Production may use different code names; accept message-based matching for FORMAT_MISMATCH
-        if error_code == "FORMAT_MISMATCH" and "not supported" in error.message.lower():
-            return
-        assert error.error_code == error_code, (
-            f"Expected error_code '{error_code}', got '{error.error_code}': {error.message}"
-        )
+    # The message-based escape hatch for FORMAT_MISMATCH is gone. It existed because
+    # "production may use different code names", and it matched on
+    # "not supported" in error.message -- a substring the derived sentence can no
+    # longer contain (salesagent-3dawm.14), so it had become a dead branch that
+    # merely looked lenient. Production now emits a published code for this outcome
+    # (CREATIVE_REJECTED, _assignments.py:236), so the scenario names it directly.
+    result = ctx.get("result")
+    wire_code = result.wire_error_code() if result is not None else None
+    if wire_code is not None:
+        assert wire_code == error_code, f"Expected wire error code {error_code!r}, got {wire_code!r}"
     else:
         # Non-AdCPError: assert the error string contains the expected code
         assert error_code.lower() in str(error).lower(), (
@@ -6523,7 +6539,6 @@ def then_operation_should_abort_package_not_found(ctx: dict) -> None:
     spec-required "PACKAGE_NOT_FOUND"). We assert the error was raised and
     xfail on the error_code mismatch.
     """
-    from src.core.exceptions import AdCPError
 
     error = ctx.get("error")
     if error is None:
@@ -6533,16 +6548,19 @@ def then_operation_should_abort_package_not_found(ctx: dict) -> None:
             f"Response: {ctx.get('response')!r}"
         )
 
-    assert isinstance(error, AdCPError), f"Expected AdCPError, got {type(error).__name__}: {error}"
-
-    actual_code = error.error_code
-    if actual_code != "PACKAGE_NOT_FOUND":
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: error_code is '{actual_code}', "
-            f"spec expects 'PACKAGE_NOT_FOUND'. AdCPNotFoundError.error_code "
-            f"is 'NOT_FOUND' — needs a domain-specific subclass. "
-            f"See _assignments.py:62-69."
-        )
+    # The xfail that used to sit here said "AdCPNotFoundError.error_code is
+    # 'NOT_FOUND' -- needs a domain-specific subclass". That subclass now exists and
+    # is used: _assignments.py:163 raises AdCPPackageNotFoundError, which emits the
+    # published PACKAGE_NOT_FOUND. The gap is closed, so the scenario asserts it
+    # rather than excusing it (salesagent-3dawm.18).
+    result = ctx.get("result")
+    wire_code = result.wire_error_code() if result is not None else None
+    assert wire_code is not None, (
+        f"Expected PACKAGE_NOT_FOUND on the wire, but no envelope was captured: {type(error).__name__}: {error}"
+    )
+    assert wire_code == "PACKAGE_NOT_FOUND", (
+        f"Strict mode with a non-existent package must reject with PACKAGE_NOT_FOUND, got {wire_code!r}"
+    )
 
 
 @then("the assignment_errors should contain the package_id")
