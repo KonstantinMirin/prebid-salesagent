@@ -801,19 +801,22 @@ def _ensure_tenant_principal(ctx: dict, env: object) -> None:
 
 @then(parsers.parse('the error should include "details" with setup instructions'))
 def then_error_has_setup_details(ctx: dict) -> None:
-    """Assert error details include setup instructions."""
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    from src.core.exceptions import AdCPError
+    """Assert the WIRE error object carries setup instructions in details.
 
-    if isinstance(error, AdCPError):
-        assert error.details, f"Expected details on error: {error}"
-        details_str = str(error.details).lower()
-        assert "setup" in details_str or "billing" in details_str or "configure" in details_str, (
-            f"Expected setup instructions in details: {error.details}"
-        )
-    else:
-        raise AssertionError(f"Cannot check details on non-AdCPError: {type(error).__name__}")
+    Reads errors[0].details from the envelope the buyer received rather than a
+    reconstructed exception (salesagent-3dawm.18).
+    """
+    result = ctx["result"]
+    error_object = result.wire_error_object()
+    assert error_object is not None, (
+        "expected a wire rejection carrying setup details, but no wire error envelope was captured"
+    )
+    details = error_object.get("details")
+    assert details, f"Expected details on the wire error object: {error_object}"
+    details_str = str(details).lower()
+    assert "setup" in details_str or "billing" in details_str or "configure" in details_str, (
+        f"Expected setup instructions in details: {details}"
+    )
 
 
 @then(parsers.parse('the error message should contain "{count} accounts"'))
@@ -1291,7 +1294,6 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
     real wire envelope via ``result.assert_wire_error`` — the AdCP two-layer error
     contract the buyer sees — instead of a reconstructed exception.
     """
-    from src.core.exceptions import AdCPError
     from tests.harness.transport import extract_wire_suggestion
 
     assert "error" in ctx, f"Expected an error for outcome: {outcome}"
@@ -1321,13 +1323,12 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
                 f"{result.wire_error_envelope}"
             )
             return
-        assert isinstance(error, AdCPError), (
-            f"Expected AdCPError for suggestion check, got {type(error).__name__}: {error}"
+        raise AssertionError(
+            "Expected a top-level suggestion on the WIRE error, but no wire error envelope was "
+            "captured. The reconstructed fallback that used to answer here is gone "
+            "(salesagent-3dawm.18): it read a suggestion the harness had re-derived from the "
+            "code, so it could only ever agree with the table."
         )
-        # STRICT error.json conformance: suggestion is a top-level error
-        # attribute; a copy buried in details does not count (#1417).
-        assert error.suggestion, f"Expected top-level suggestion on the error, got: {error.suggestion!r}"
-        return
 
     # Check if first word is a structured error code (UPPER_CASE with _).
     # Strip surrounding quotes: the partition/boundary outlines write the code
@@ -1346,15 +1347,11 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
             result.assert_wire_error(expected_code, recovery=recovery, require_suggestion=require_suggestion)
             return
 
-        assert isinstance(error, AdCPError), (
-            f"Expected AdCPError with code '{expected_code}', got {type(error).__name__}: {error}"
+        raise AssertionError(
+            f"Expected the wire to carry error code {expected_code!r}, but no wire error envelope "
+            "was captured. This used to fall through to a reconstructed exception, so a scenario "
+            "that produced NO wire bytes still passed (salesagent-3dawm.18)."
         )
-        assert error.error_code == expected_code, f"Expected error code '{expected_code}', got '{error.error_code}'"
-        if recovery is not None:
-            assert error.recovery == recovery, f"Expected recovery '{recovery}', got '{error.recovery}'"
-        if require_suggestion:
-            # STRICT error.json conformance: top-level attribute only (#1417).
-            assert error.suggestion, f"Expected top-level suggestion on the error, got: {error.suggestion!r}"
     else:
         # Descriptive: "error unknown sort field"
         description = remainder
@@ -1882,21 +1879,33 @@ def then_error_references_missing_field(ctx: dict, field: str) -> None:
         )
         return
 
-    message = _get_error_message_for_step(error)
+    message = _get_error_message_for_step(error, ctx)
     assert field in message, f"Validation error does not reference the missing '{field}' field. Message: {message!r}"
 
 
-def _get_error_message_for_step(error: object) -> str:
-    """Best-effort human-readable text from an AdCPError / Error model / exception."""
-    from src.core.exceptions import AdCPError
+def _get_error_message_for_step(error: object, ctx: dict | None = None) -> str:
+    """Buyer-facing text for a step that searches it for a field name.
 
-    if isinstance(error, AdCPError):
-        parts = [error.message or ""]
-        if error.details:
-            parts.append(str(error.details))
-        return " ".join(parts)
+    Prefers the WIRE error object -- message plus details, since after
+    salesagent-3dawm.14 the message is derived from the code and the specifics
+    (which field, which id) live in details. Falls back to the in-process
+    exception only when there is no wire, which is the genuine no-dispatch path.
+    """
+    if ctx is not None:
+        result = ctx.get("result")
+        error_object = result.wire_error_object() if result is not None else None
+        if error_object is not None:
+            parts = [str(error_object.get("message") or "")]
+            if error_object.get("details"):
+                parts.append(str(error_object["details"]))
+            if error_object.get("field"):
+                parts.append(str(error_object["field"]))
+            return " ".join(parts)
     message = getattr(error, "message", None)
-    return message if isinstance(message, str) and message else str(error)
+    if isinstance(message, str) and message:
+        details = getattr(error, "details", None)
+        return f"{message} {details}" if details else message
+    return str(error)
 
 
 # ── Order naming steps (hand-authored, adcp 3.12 / PR #1217) ──

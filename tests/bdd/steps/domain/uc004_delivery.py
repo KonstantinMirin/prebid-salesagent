@@ -2723,14 +2723,23 @@ def _delivery_boundary_handler(ctx: dict, field: str, expected: str) -> bool:
         return False
 
     if expected.strip().lower() in ("invalid", "error", "rejected"):
+        # The rejection is graded on the WIRE: a code the buyer actually received,
+        # not the class of a reconstructed exception (salesagent-3dawm.18). The
+        # in-process branch survives only for a request that never reached the wire
+        # -- a pydantic failure while BUILDING it -- which is a genuinely different
+        # outcome, not a lenient fallback for the same one.
         from pydantic import ValidationError as PydanticValidationError
 
-        from src.core.exceptions import AdCPError
-
+        result = ctx.get("result")
+        wire_code = result.wire_error_code() if result is not None else None
+        if wire_code is not None:
+            result.assert_wire_error(wire_code)
+            return True
         error = ctx.get("error")
         assert error is not None, f"Expected '{field}' boundary to be rejected as invalid, but no error in ctx"
-        assert isinstance(error, (AdCPError, PydanticValidationError)), (
-            f"Expected AdCPError or ValidationError for invalid '{field}' boundary, got {type(error).__name__}: {error}"
+        assert isinstance(error, PydanticValidationError), (
+            f"no wire error envelope was captured for the '{field}' boundary, so the only remaining "
+            f"acceptable outcome is a request that failed to build — got {type(error).__name__}: {error}"
         )
     else:
         assert "error" not in ctx, f"Expected valid '{field}' boundary but got error: {ctx.get('error')}"
@@ -2897,25 +2906,25 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
         )
         return
 
-    # Legacy fallback — no wire envelope captured (bare in-process exception).
-    from pydantic import ValidationError
+    # No wire envelope. Exactly ONE outcome is still acceptable: the request never
+    # reached the wire because it FAILED TO BUILD. That is a real, different outcome,
+    # not a lenient fallback -- _validate_reporting_webhook_credentials (:3113) drives
+    # the reporting-webhook Authentication rules through CreateMediaBuyRequest PARSING
+    # on purpose, so those scenarios have no dispatch by construction.
+    #
+    # What is NOT accepted any more is the old `isinstance(error, (AdCPError,
+    # ValidationError))`: admitting AdCPError there let a scenario that DID dispatch,
+    # and produced no wire bytes, pass on the strength of a reconstructed exception
+    # (salesagent-3dawm.18).
+    from pydantic import ValidationError as PydanticValidationError
 
-    from src.core.exceptions import AdCPError
-
-    assert "error" in ctx, f"Expected invalid {field} result but operation succeeded"
-    error = ctx["error"]
-    assert isinstance(error, (AdCPError, ValidationError)), (
-        f"Expected AdCPError/ValidationError for invalid {field}, got {type(error).__name__}: {error}"
+    error = ctx.get("error")
+    assert error is not None, f"Expected invalid {field} result but operation succeeded"
+    assert isinstance(error, PydanticValidationError), (
+        f"Invalid {field}: no wire error envelope was captured, so the only remaining "
+        f"acceptable outcome is a request that failed to build — got "
+        f"{type(error).__name__}: {error}"
     )
-    if isinstance(error, AdCPError):
-        assert error.error_code and error.error_code != "INTERNAL_ERROR", (
-            f"Invalid {field}: expected a validation rejection, got {error.error_code}: {error}"
-        )
-
-
-# Fields migrated to the clean reference path (scenario names the exact error code,
-# step asserts it on the harness wire envelope). attribution_window is the first.
-_WIRE_ASSERTED_FIELDS = {"attribution_window"}
 
 
 def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknown") -> None:
@@ -2936,21 +2945,14 @@ def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknow
     if m:
         code = m.group("code")
         require_suggestion = bool(m.group("sug"))
-        if field in _WIRE_ASSERTED_FIELDS:
-            _assert_error_outcome(ctx, code, field, require_suggestion=require_suggestion)
-            return
-        # Legacy reconstructed path (other fields, pending migration to the wire path).
-        from src.core.exceptions import AdCPError
-
-        assert "error" in ctx, f"Expected error '{code}' for {field} but operation succeeded"
-        error = ctx["error"]
-        assert isinstance(error, AdCPError), f"Expected AdCPError for {field}, got {type(error).__name__}: {error}"
-        assert error.error_code == code, f"Expected error code '{code}' for {field}, got '{error.error_code}'"
-        if require_suggestion:
-            # STRICT error.json conformance: suggestion is a top-level error
-            # attribute; a copy buried in the free-form details dict does not
-            # count (#1417).
-            assert error.suggestion, f"Expected top-level suggestion in error for {field}, got: {error.suggestion!r}"
+        # EVERY field goes through the wire path. _WIRE_ASSERTED_FIELDS used to name
+        # the one field ("attribution_window") that had been migrated, sending all the
+        # others down a reconstructed-exception branch -- a ratcheting allowlist living
+        # inside a test, where the unmigrated majority graded a rebuilt object instead
+        # of the buyer's envelope. Deleted rather than shrunk: measured first that no
+        # BR-UC-004 scenario names a code absent from CODE_TABLE, so nothing here
+        # depended on the lenient branch (salesagent-3dawm.18).
+        _assert_error_outcome(ctx, code, field, require_suggestion=require_suggestion)
         return
 
     raise AssertionError(f"Unexpected expected value '{expected}' for {field}")

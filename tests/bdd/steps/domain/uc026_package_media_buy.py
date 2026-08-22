@@ -13,7 +13,6 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_error
 from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1909,10 +1908,6 @@ def then_outcome(ctx: dict, outcome: str) -> None:
     """
     import re
 
-    from adcp.types import Error as AdCPError
-
-    from tests.harness.transport import is_pinned_error_code
-
     outcome = outcome.strip()
     if outcome.startswith("success"):
         assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
@@ -1925,40 +1920,18 @@ def then_outcome(ctx: dict, outcome: str) -> None:
     expected_code = code_match.group(1) if code_match else None
     require_suggestion = "with suggestion" in outcome
 
-    result = ctx.get("result")
-    # No `and result.wire_error_envelope is not None` conjunct: with it, a pinned-code
-    # scenario that captured NO wire bytes silently fell through to the reconstructed
-    # branch and passed. Routing on the code alone means assert_wire_error hard-fails
-    # when the wire is empty — which is the acceptance criterion for this lane.
-    if is_pinned_error_code(expected_code) and result is not None:
-        result.assert_wire_error(expected_code, require_suggestion=require_suggestion)
-        return
-
-    # Reconstructed fallback: non-pinned scenario code, or no wire envelope.
-    error = _require_error(ctx)
-    is_adcp_error = isinstance(error, AdCPError) or (isinstance(error, dict) and "code" in error)
-    actual_code: str | None = None
-
-    if expected_code and is_adcp_error:
-        actual_code = getattr(error, "code", None)
-        if actual_code is None and isinstance(error, dict):
-            actual_code = error.get("code")
-        assert actual_code, f"Expected error with code but got empty code. Error: {error}"
-        assert actual_code == expected_code, (
-            f"Expected error code '{expected_code}', got '{actual_code}'. Error: {error}"
-        )
-
-    # Verify suggestion only when the error code matches the scenario expectation.
-    codes_match = actual_code is not None and actual_code == expected_code
-    if require_suggestion and is_adcp_error and codes_match:
-        # `suggestion` only — never falling back to `recovery`. They are distinct
-        # error.json fields (recovery is the enum-tied retry classification, carried by
-        # EVERY error), so accepting recovery here made "with suggestion" satisfiable by
-        # any error at all.
-        suggestion = getattr(error, "suggestion", None)
-        if suggestion is None and isinstance(error, dict):
-            suggestion = error.get("suggestion")
-        assert suggestion is not None, f"Expected error with suggestion but none found. Error: {error}"
+    # ONE path: the wire. The reconstructed fallback that used to sit below is gone
+    # (salesagent-3dawm.18). It existed for outcomes naming a code CODE_TABLE does not
+    # carry -- i.e. a code no raise site can emit -- and it let exactly those scenarios
+    # pass by inspecting a rebuilt exception instead of the buyer's envelope. Measured
+    # before removing it: BR-UC-026 names no such code, so nothing here relied on it.
+    #
+    # A scenario that does name one now fails loudly inside assert_wire_error with
+    # "not an emittable error code ... Reconcile the feature", which is the correct
+    # outcome and the subject of salesagent-qzub9.
+    result = ctx["result"]
+    assert expected_code, f"Outcome names no error code: {outcome!r}"
+    result.assert_wire_error(expected_code, require_suggestion=require_suggestion)
 
 
 # --- Update-specific Then steps ---
