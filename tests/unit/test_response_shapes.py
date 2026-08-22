@@ -305,8 +305,8 @@ class TestSyncCreativesResponseShape:
             creative_id="creative_003",
             action=CreativeAction.failed,
             errors=[
-                AdCPErrorDetail(code="FORMAT_NOT_FOUND", message="Format not supported"),
-                AdCPErrorDetail(code="FORMAT_NOT_FOUND", message="Missing required asset"),
+                AdCPErrorDetail(code="REFERENCE_NOT_FOUND", message="Format not supported"),
+                AdCPErrorDetail(code="REFERENCE_NOT_FOUND", message="Missing required asset"),
             ],
         )
         resp = SyncCreativesResponse(creatives=[result], dry_run=False)  # type: ignore[call-arg]
@@ -911,7 +911,7 @@ class TestSerializationConsistency:
                 SyncCreativeResult(
                     creative_id="c2",
                     action=CreativeAction.failed,
-                    errors=[AdCPErrorDetail(code="FORMAT_NOT_FOUND", message="Bad format")],
+                    errors=[AdCPErrorDetail(code="REFERENCE_NOT_FOUND", message="Bad format")],
                 ),
             ],
             dry_run=False,

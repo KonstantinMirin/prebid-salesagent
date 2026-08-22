@@ -154,14 +154,6 @@ class AppErrorCode(StrEnum):
             message="A configured creative agent is unreachable; its formats were not included",
         ),
     )
-    FORMAT_NOT_FOUND = (
-        "FORMAT_NOT_FOUND",
-        CodeEntry(
-            recovery=Recovery.CORRECTABLE,
-            suggestion="Call list_creative_formats and request a format this seller offers",
-            message="Requested creative format is not offered",
-        ),
-    )
     INTERNAL_ERROR = (
         "INTERNAL_ERROR",
         CodeEntry(
@@ -186,28 +178,12 @@ class AppErrorCode(StrEnum):
             message="The media buy was declined",
         ),
     )
-    NOT_FOUND = (
-        "NOT_FOUND",
-        CodeEntry(
-            recovery=Recovery.CORRECTABLE,
-            suggestion="Check the identifier and resend",
-            message="Requested resource does not exist",
-        ),
-    )
     PARTIAL_FAILURE = (
         "PARTIAL_FAILURE",
         CodeEntry(
             recovery=Recovery.CORRECTABLE,
             suggestion="Read the per-item errors and resend only the items that failed",
             message="Some items in the request succeeded and others failed",
-        ),
-    )
-    TASK_NOT_FOUND = (
-        "TASK_NOT_FOUND",
-        CodeEntry(
-            recovery=Recovery.CORRECTABLE,
-            suggestion="Check the task identifier and resend",
-            message="Referenced task does not exist",
         ),
     )
     WORKFLOW_CREATION_FAILED = (

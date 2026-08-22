@@ -79,4 +79,4 @@ class TestWorkflowOrRaise:
         repo = _repo_with_first(WorkflowRepository, None)
         with pytest.raises(AdCPTaskNotFoundError) as exc:
             repo.get_by_step_id_or_raise("step-missing")
-        assert exc.value.error_code == "TASK_NOT_FOUND"
+        assert exc.value.error_code == "REFERENCE_NOT_FOUND"

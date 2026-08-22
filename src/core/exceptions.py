@@ -562,15 +562,25 @@ class AdCPPolicyViolationError(AdCPAuthorizationError):
 
 
 class AdCPNotFoundError(AdCPError):
-    """Requested resource does not exist (404).
+    """Requested resource does not exist (404, REFERENCE_NOT_FOUND).
 
-    Recovery=correctable: the wire code is INVALID_REQUEST (via
-    the published enum), whose pinned enumMetadata classification is
-    correctable — recovery follows the wire code (#1430 review).
+    Emits the PUBLISHED ``REFERENCE_NOT_FOUND`` rather than a minted generic
+    ``NOT_FOUND``. error-handling.mdx: "Fall back to ``REFERENCE_NOT_FOUND`` for
+    resource types without a dedicated code" and "Typed parameters that lack a
+    dedicated standard code MUST use ``REFERENCE_NOT_FOUND`` rather than minting a
+    custom ``*_NOT_FOUND`` code." A bare ``NOT_FOUND`` is exactly such a mint.
+
+    Recovery=correctable, unchanged: ``REFERENCE_NOT_FOUND``'s pinned enumMetadata
+    classifies it correctable, the same class the retired code carried.
+
+    Subclasses that DO have a dedicated standard code (account, media buy,
+    package, ...) override ``_code`` and are unaffected — the spec's not-found
+    precedence prefers the resource-specific code when the resolved type is known
+    from the request, and this base is only the fallback.
     """
 
     _default_status_code: ClassVar[int] = 404
-    _code: ClassVar[ErrorCodeT] = AppErrorCode.NOT_FOUND
+    _code: ClassVar[ErrorCodeT] = ErrorCode.REFERENCE_NOT_FOUND
 
 
 class AdCPAccountNotFoundError(AdCPNotFoundError):
@@ -841,31 +851,47 @@ class AdCPCreativeNotFoundError(AdCPNotFoundError):
 
 
 class AdCPFormatNotFoundError(AdCPNotFoundError):
-    """Requested creative format does not exist on the agent (404, wire → INVALID_REQUEST).
+    """Requested creative format does not exist on the agent (404, REFERENCE_NOT_FOUND).
 
-    No standard ``FORMAT_NOT_FOUND`` SDK code exists, so the raw code is internal
-    and translated to ``INVALID_REQUEST`` at the wire boundary. The gain over the
-    bare ``AdCPNotFoundError`` is recovery=correctable + a typed identity.
+    Emits the PUBLISHED ``REFERENCE_NOT_FOUND``, not a minted ``FORMAT_NOT_FOUND``.
+    The pinned spec forbids the latter by name: release-notes.mdx (#2704) lists
+    ``FORMAT_NOT_FOUND`` among eleven custom codes that "collapse to
+    ``REFERENCE_NOT_FOUND`` with ``error.field`` naming the failed parameter" and
+    closes "Sellers returning any of the 11 collapsed codes today MUST switch to
+    ``REFERENCE_NOT_FOUND``". error-handling.mdx restates it generally: "Typed
+    parameters that lack a dedicated standard code MUST use ``REFERENCE_NOT_FOUND``
+    rather than minting a custom ``*_NOT_FOUND`` code".
 
-    Recovery=correctable: the buyer can correct by supplying a valid format_id
-    (discoverable via list_creative_formats).
+    This is NOT the open-vocabulary allowance. An open vocabulary permits a code
+    the spec has not defined; it does not permit one the spec explicitly REMOVED
+    and replaced under a MUST.
+
+    ``field="format_id"`` is retained deliberately. The uniform-response rule
+    requires a type-NEUTRAL field when naming it would leak a polymorphic
+    parameter's resolved type, but creative/specification.mdx names this exact
+    case the other way: "``REFERENCE_NOT_FOUND``: Requested format does not exist
+    or is not accessible (``error.field`` identifies the ``format_id``)".
     """
 
-    _code: ClassVar[ErrorCodeT] = AppErrorCode.FORMAT_NOT_FOUND
+    _code: ClassVar[ErrorCodeT] = ErrorCode.REFERENCE_NOT_FOUND
 
 
 class AdCPTaskNotFoundError(AdCPNotFoundError):
-    """Requested workflow task/step does not exist (404, wire → INVALID_REQUEST).
+    """Requested workflow task/step does not exist (404, REFERENCE_NOT_FOUND).
 
-    No standard ``TASK_NOT_FOUND`` SDK code exists, so the raw code is internal
-    and translated to ``INVALID_REQUEST`` at the wire boundary. The gain over the
-    bare ``AdCPNotFoundError`` is recovery=correctable + a typed identity.
+    ``TASK_NOT_FOUND`` is not among the eight resource-specific not-found codes
+    the pinned spec enumerates (PRODUCT/PACKAGE/MEDIA_BUY/CREATIVE/SIGNAL/SESSION/
+    ACCOUNT/PLAN), so error-handling.mdx's general MUST applies: "Typed parameters
+    that lack a dedicated standard code MUST use ``REFERENCE_NOT_FOUND`` rather
+    than minting a custom ``*_NOT_FOUND`` code -- the vocabulary grows by upstream
+    spec change, not by per-seller inflation."
 
-    Recovery=correctable: the buyer can correct by supplying a valid task_id
-    (discoverable via list_tasks).
+    Positively graded upstream: the get_products_async storyboard step
+    ``get_products_task_status_wrong_account`` expects ``REFERENCE_NOT_FOUND``, and
+    ``get_task`` is a registered MCP tool, so this envelope is buyer-facing.
     """
 
-    _code: ClassVar[ErrorCodeT] = AppErrorCode.TASK_NOT_FOUND
+    _code: ClassVar[ErrorCodeT] = ErrorCode.REFERENCE_NOT_FOUND
 
 
 class AdCPBudgetTooLowError(AdCPError):

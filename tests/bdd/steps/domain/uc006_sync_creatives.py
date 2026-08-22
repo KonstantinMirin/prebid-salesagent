@@ -2247,7 +2247,7 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
         and assignment processing then raises an SQLAlchemy ForeignKeyViolation
         (creative_assignments FK on creatives). Same root-cause gap as
         the MCP case — surface as the same SPEC-PRODUCTION GAP xfail.
-      * AdCPNotFoundError.error_code == "NOT_FOUND" but the spec demands
+      * AdCPNotFoundError.error_code == "REFERENCE_NOT_FOUND" but the spec demands
         "PACKAGE_NOT_FOUND" — the next Gherkin step asserts the spec code
         and would fail strict equality. We pre-empt by mapping the error
         for downstream Then steps via details["error_code"].
@@ -2311,7 +2311,7 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
     )
 
     # SPEC-PRODUCTION GAP: production exception classes have generic codes
-    # ("NOT_FOUND", "VALIDATION_ERROR") while the spec defines specific codes
+    # ("REFERENCE_NOT_FOUND", "VALIDATION_ERROR") while the spec defines specific codes
     # ("PACKAGE_NOT_FOUND", "FORMAT_MISMATCH"). Production also does not
     # populate a "suggestion" detail. Both the next ``the error code should
     # be "<SPEC_CODE>"`` and ``the suggestion should contain ...`` Gherkin
@@ -2454,7 +2454,7 @@ def then_behavior_matches_strict_mode(ctx: dict) -> None:
     # Assert the error code is a known strict-mode abort code
     actual_code = error.error_code
     assert actual_code is not None, f"Strict mode AdCPError should have a non-None error_code, got: {error}"
-    strict_codes = {"NOT_FOUND", "VALIDATION_ERROR", "PACKAGE_NOT_FOUND"}
+    strict_codes = {"REFERENCE_NOT_FOUND", "VALIDATION_ERROR", "PACKAGE_NOT_FOUND"}
     assert actual_code in strict_codes, (
         f"Strict mode abort should produce error_code in {strict_codes}, got '{actual_code}' ({error.message})"
     )
@@ -6519,7 +6519,7 @@ def then_assignment_created_with_specified_weight(ctx: dict) -> None:
 def then_operation_should_abort_package_not_found(ctx: dict) -> None:
     """Assert strict-mode abort with PACKAGE_NOT_FOUND for non-existent package.
 
-    Production raises AdCPNotFoundError with error_code="NOT_FOUND" (not the
+    Production raises AdCPNotFoundError with error_code="REFERENCE_NOT_FOUND" (not the
     spec-required "PACKAGE_NOT_FOUND"). We assert the error was raised and
     xfail on the error_code mismatch.
     """

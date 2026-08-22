@@ -317,7 +317,7 @@ class TestGetFormat:
             with pytest.raises(AdCPFormatNotFoundError) as exc_info:
                 get_format("display_300x250", agent_url="https://agent.example.com", tenant_id="t1")
 
-            assert exc_info.value.error_code == "FORMAT_NOT_FOUND"
+            assert exc_info.value.error_code == "REFERENCE_NOT_FOUND"
 
     def test_not_found_error_no_agent_url_no_tenant(self):
         """AdCPNotFoundError message is minimal without agent_url and tenant_id."""
