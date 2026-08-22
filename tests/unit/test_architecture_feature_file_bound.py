@@ -27,6 +27,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit._architecture_helpers import assert_violations_match_allowlist
+
 BDD_DIR = Path(__file__).resolve().parent.parent / "bdd"
 FEATURES_DIR = BDD_DIR / "features"
 
@@ -69,23 +71,23 @@ def _bound_feature_names() -> set[str]:
 
 class TestEveryFeatureFileIsBound:
     @pytest.mark.arch_guard
-    def test_no_new_unbound_feature_file(self) -> None:
-        """A new feature file must be bound to a module, not silently added."""
-        all_features = {p.name for p in FEATURES_DIR.glob("BR-UC-*.feature")}
-        unbound = all_features - _bound_feature_names()
-        newly_unbound = sorted(unbound - UNBOUND_ALLOWLIST)
-        assert not newly_unbound, (
-            "Feature file(s) not named by any BDD test module, so their scenarios "
-            "never execute — not run, not xfailed, not ledgered:\n  "
-            + "\n  ".join(newly_unbound)
-            + '\n\nBind each by adding scenarios("features/<name>") to a test module. '
-            "Do NOT add them to UNBOUND_ALLOWLIST — that set may only shrink."
-        )
+    def test_unbound_feature_files_match_allowlist(self) -> None:
+        """No NEW unbound feature file, and no stale entry once one is bound.
 
-    @pytest.mark.arch_guard
-    def test_allowlist_has_no_stale_entries(self) -> None:
-        """An allowlisted file that is now bound (or gone) must be removed."""
+        Uses the shared helper so both directions are one assertion: a new
+        unbound file and a now-bound allowlist entry are distinct error modes
+        with distinct fixes, and hand-rolling the set-diff is itself a guarded
+        anti-pattern here (test_architecture_no_handrolled_allowlist_diff).
+        """
         all_features = {p.name for p in FEATURES_DIR.glob("BR-UC-*.feature")}
-        unbound = all_features - _bound_feature_names()
-        stale = sorted(UNBOUND_ALLOWLIST - unbound)
-        assert not stale, "UNBOUND_ALLOWLIST entries that are no longer unbound — delete them:\n  " + "\n  ".join(stale)
+        unbound = {(name,) for name in all_features - _bound_feature_names()}
+        assert_violations_match_allowlist(
+            unbound,
+            {(name,) for name in UNBOUND_ALLOWLIST},
+            fix_hint=(
+                'Bind a feature file by adding scenarios("features/<name>") to a BDD test '
+                "module. Do NOT add a new entry to UNBOUND_ALLOWLIST -- that set may only "
+                "shrink. An unbound file's scenarios never execute: not run, not xfailed, "
+                "not skipped, not in any ledger."
+            ),
+        )

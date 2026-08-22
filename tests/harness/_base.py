@@ -836,46 +836,6 @@ class BaseTestEnv:
                 raise WireError(envelope) from exc
             raise
 
-    def _run_mcp_wrapper(
-        self,
-        wrapper_fn: Any,
-        response_cls: type,
-        **kwargs: Any,
-    ) -> Any:
-        """Legacy MCP dispatch: mock Context → async wrapper → parse response.
-
-        .. deprecated::
-            Use ``_run_mcp_client`` instead for full-pipeline dispatch.
-            This method bypasses FastMCP middleware and TypeAdapter validation.
-            Kept for unit-mode envs that cannot use the in-memory Client.
-        """
-        import asyncio
-        from unittest.mock import AsyncMock, MagicMock
-
-        from fastmcp.server.context import Context
-
-        from tests.harness.transport import Transport
-
-        self._commit_factory_data()
-
-        _NO_OVERRIDE = object()
-        identity = kwargs.pop("identity", _NO_OVERRIDE)
-        mcp_identity = self.identity_for(Transport.MCP) if identity is _NO_OVERRIDE else identity
-
-        # Unpack req object into flat kwargs — MCP wrappers accept individual
-        # parameters, not a request model.
-        req = kwargs.pop("req", None)
-        if req is not None and hasattr(req, "model_dump"):
-            req_fields = req.model_dump(exclude_none=True)
-            # kwargs override req fields (explicit > implicit)
-            kwargs = {**req_fields, **kwargs}
-
-        mock_ctx = MagicMock(spec=Context)
-        mock_ctx.get_state = AsyncMock(return_value=mcp_identity)
-
-        tool_result = asyncio.run(wrapper_fn(ctx=mock_ctx, **kwargs))
-        return response_cls(**tool_result.structured_content)
-
     def _pop_rest_identity(self, kwargs: dict[str, Any]) -> Any:
         """Pop ``identity`` from REST kwargs, defaulting to the REST identity.
 
@@ -933,7 +893,7 @@ class BaseTestEnv:
     def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
         """Shared REST dispatch: configure auth → build body → POST → return Response.
 
-        Symmetric with ``_run_mcp_wrapper``. Handles the full REST lifecycle:
+        Symmetric with ``_run_mcp_client``. Handles the full REST lifecycle:
         1. Pop ``identity`` from kwargs and configure dep override for this request
         2. Commit factory data
         3. Build request body from remaining kwargs

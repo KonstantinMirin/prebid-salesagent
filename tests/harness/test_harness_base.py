@@ -315,12 +315,27 @@ class TestEnvMethodNamingConsistency:
             "IntegrationEnv should have setup_default_data() to reduce boilerplate"
         )
 
-    def test_base_env_has_run_mcp_wrapper(self):
-        """BaseTestEnv exposes _run_mcp_wrapper for DRY MCP dispatch."""
+    def test_base_env_has_no_run_mcp_wrapper(self):
+        """BaseTestEnv must NOT expose a wrapper-bypass dispatch path.
+
+        Inverted from a test that asserted ``_run_mcp_wrapper`` EXISTS -- a test
+        demanding the bypass stay alive was the only thing keeping it alive.
+
+        The method invoked a tool wrapper directly, skipping the FastMCP
+        middleware chain and TypeAdapter validation. On an error path a raised
+        AdCPError therefore never became a ToolError, so the dispatcher captured
+        ``wire_error_envelope=None`` and every mcp error assertion in such an env
+        silently graded a reconstructed exception instead of the wire -- the exact
+        false-green salesagent-3dawm exists to remove. Deleting it makes the
+        bypass unexpressible rather than merely deprecated, which is also why no
+        guard forbidding its use is needed. Use ``_run_mcp_client``.
+        """
         from tests.harness._base import BaseTestEnv
 
-        assert hasattr(BaseTestEnv, "_run_mcp_wrapper"), (
-            "BaseTestEnv should have _run_mcp_wrapper to reduce call_mcp duplication"
+        assert not hasattr(BaseTestEnv, "_run_mcp_wrapper"), (
+            "BaseTestEnv._run_mcp_wrapper is back. It bypasses the FastMCP pipeline, "
+            "so mcp error scenarios capture no wire envelope and grade a reconstructed "
+            "exception instead. Dispatch by tool name through _run_mcp_client."
         )
 
     def test_creative_sync_env_has_set_run_async_result(self):

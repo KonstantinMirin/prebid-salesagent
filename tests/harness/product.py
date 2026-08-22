@@ -29,7 +29,7 @@ Available mocks via env.mock:
 Transport support:
     call_impl(**kw)          -- direct _get_products_impl (sync wrapper around async)
     call_a2a(**kw)           -- get_products_raw A2A wrapper
-    call_mcp(**kw)           -- get_products MCP wrapper via _run_mcp_wrapper
+    call_mcp(**kw)           -- get_products via _run_mcp_client (real FastMCP dispatch)
     build_rest_body(**kw)    -- POST /api/v1/products body
     parse_rest_response(d)   -- JSON -> GetProductsResponse
 """

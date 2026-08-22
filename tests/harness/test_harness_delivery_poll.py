@@ -55,10 +55,16 @@ class TestDeliveryPollEnvContract:
 
             response = env.call_impl(media_buy_ids=["mb_err"])
 
-            # When adapter fails, _impl returns a valid response with an error entry
+            # When adapter fails, _impl returns a valid response with an error entry.
+            # WHICH buy failed travels in details, never in the message: message is
+            # derived from the code via CODE_TABLE (salesagent-3dawm), so it reads
+            # "Seller service is temporarily unavailable" for every failing buy.
             assert isinstance(response, GetMediaBuyDeliveryResponse)
             assert len(response.errors) >= 1
-            assert any("mb_err" in e.message for e in response.errors)
+            assert any(
+                e.code == "SERVICE_UNAVAILABLE" and (e.details or {}).get("media_buy_id") == "mb_err"
+                for e in response.errors
+            ), f"expected a SERVICE_UNAVAILABLE entry naming mb_err in details, got {response.errors!r}"
 
     def test_custom_identity_flows_through(self):
         """principal_id override reaches the mock principal lookup."""
@@ -118,9 +124,18 @@ class TestDeliveryPollEnvContract:
             env.add_buy(media_buy_id="mb_unregistered")
             response = env.call_impl(media_buy_ids=["mb_unregistered"])
 
-            # The unregistered ID should produce an error, not a delivery
+            # The unregistered ID should produce an error, not a delivery. The id is
+            # in details, not the message — see the note above.
+            #
+            # SERVICE_UNAVAILABLE, not MEDIA_BUY_NOT_FOUND: add_buy() DID persist
+            # this buy, so it is not missing from the DB. What is unregistered is the
+            # harness's ADAPTER RESPONSE, so the mock adapter raises and production
+            # takes its adapter-failure path (media_buy_delivery.py:362).
             assert len(response.errors) >= 1
-            assert any("mb_unregistered" in e.message for e in response.errors)
+            assert any(
+                e.code == "SERVICE_UNAVAILABLE" and (e.details or {}).get("media_buy_id") == "mb_unregistered"
+                for e in response.errors
+            ), f"expected a SERVICE_UNAVAILABLE entry naming mb_unregistered in details, got {response.errors!r}"
 
     def test_multi_package_adapter_response(self):
         """set_adapter_response with packages= builds multi-package response."""
