@@ -68,16 +68,43 @@ BLOCK_RE = re.compile(r"^\s*(Feature|Rule|Background|Scenario|Scenario Outline):
 
 
 def load_enum() -> set[str]:
+    """Every code a raise site can actually emit -- CODE_TABLE, not the published enum.
+
+    EMITTABILITY, not spec membership. This used to return ``adcp.ErrorCode``, the
+    pinned spec's 92 published members, which made every legitimate PLATFORM code a
+    finding. That is the wrong question twice over:
+
+    * The AdCP error vocabulary is OPEN (core/error.json types ``error.code`` as a
+      wire-typed string; published codes are documentary; senders MAY emit codes
+      outside the set and receivers MUST decode an unknown one by reading
+      ``recovery``). A platform code on the wire is conformant, not a violation.
+    * It disagreed with the assertion helper it is supposed to back.
+      ``TransportResult.assert_wire_error`` and ``is_pinned_error_code`` both resolve
+      through CODE_TABLE, whose own comment states the rule: "EMITTABILITY, not spec
+      membership. The question is CODE_TABLE membership -- can production put this
+      code on the wire at all". A gate that answers a different question than the
+      assertion it guards is drift, and it fired on AGENT_UNREACHABLE, a code
+      salesagent-3dawm.16 deliberately KEPT after checking the pin.
+
+    What the gate still catches -- and what it exists for -- is a scenario naming a
+    code NO raise site can emit, which is what salesagent-qzub9 is about.
+    """
+    # The repo root, so `src.` resolves however this script is invoked (make
+    # quality-ci runs it as `uv run python scripts/...`, which puts scripts/ on
+    # sys.path, not the root).
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
     try:
-        import adcp
+        from src.core.errors.codes import CODE_TABLE
     except ModuleNotFoundError as e:
         # An instrument failure, not "findings exist" -- must exit 2 (this
         # script's diagnostic code) rather than fall through to an uncaught
         # traceback, which exits 1, the SAME code this script uses for
         # "findings exist" and which gates make quality.
-        print(f"ERROR: pinned enum not found: {e}", file=sys.stderr)
+        print(f"ERROR: emittable code table not found: {e}", file=sys.stderr)
         sys.exit(2)
-    return {code.value for code in adcp.ErrorCode}
+    return {str(code) for code in CODE_TABLE}
 
 
 def _iter_blocks(lines: list[str]):

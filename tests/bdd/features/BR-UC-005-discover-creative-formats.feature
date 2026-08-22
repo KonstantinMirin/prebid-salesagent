@@ -353,13 +353,20 @@ Feature: BR-UC-005 Discover Creative Formats
     And no hostname-based tenant resolution is possible
     When the Buyer Agent requests the format catalog
     Then the operation should fail
-    And the error code should be "TENANT_REQUIRED"
-    And the error message should indicate tenant context could not be determined
+    And the error code should be "AUTH_MISSING"
+    And the error recovery classification should be "correctable"
     And the error should include a "suggestion" field
-    And the suggestion should advise providing authentication credentials
     # POST-F1: Buyer knows the operation failed
-    # POST-F2: Error explains tenant context is missing
-    # POST-F3: Suggestion advises providing auth or tenant identification
+    # POST-F2: The buyer is told WHICH condition failed by the CODE. TENANT_REQUIRED
+    #   was a minted code no raise site can emit; production's require_tenant
+    #   (auth.py:362) raises on the credential-presented axis, so "no credentials
+    #   at all" is AUTH_MISSING -- a published member with the same correctable
+    #   recovery. The old "message should indicate tenant context could not be
+    #   determined" assertion cannot hold once the sentence is derived from the
+    #   code, and it graded a copy of CODE_TABLE's own text anyway
+    #   (salesagent-qzub9).
+    # POST-F3: Suggestion advises providing auth -- AUTH_MISSING's table entry is
+    #   "provide credentials via the auth header and retry".
     # --- ext-b: Invalid Request Parameters ---
 
   @T-UC-005-ext-b @extension @ext-b @error @post-f1 @post-f2 @post-f3
@@ -381,7 +388,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with disclosure_positions filter ["sidebar"]
     Then the operation should fail
-    And the error code should be "DISCLOSURE_POSITIONS_INVALID_VALUE"
+    And the error code should be "INVALID_REQUEST"
     And the error message should indicate "sidebar" is not a valid disclosure position
     And the error should include a "suggestion" field
     And the suggestion should advise using valid DisclosurePosition enum values
@@ -394,7 +401,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with disclosure_positions filter []
     Then the operation should fail
-    And the error code should be "DISCLOSURE_POSITIONS_EMPTY"
+    And the error code should be "INVALID_REQUEST"
     And the error message should indicate at least 1 item is required
     And the error should include a "suggestion" field
     And the suggestion should advise providing at least one position or omitting the filter
@@ -407,7 +414,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with disclosure_positions filter ["prominent", "prominent"]
     Then the operation should fail
-    And the error code should be "DISCLOSURE_POSITIONS_DUPLICATES"
+    And the error code should be "INVALID_REQUEST"
     And the error message should indicate duplicate values are not allowed
     And the error should include a "suggestion" field
     And the suggestion should advise removing duplicate positions
@@ -464,7 +471,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with output_format_ids filter []
     Then the operation should fail
-    And the error code should be "OUTPUT_FORMAT_IDS_EMPTY"
+    And the error code should be "INVALID_REQUEST"
     And the error message should indicate at least 1 item is required
     And the error should include a "suggestion" field
     And the suggestion should advise providing at least one FormatId or omitting the filter
@@ -477,7 +484,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with output_format_ids filter [{"id": "display_static"}]
     Then the operation should fail
-    And the error code should be "OUTPUT_FORMAT_IDS_INVALID_STRUCTURE"
+    And the error code should be "INVALID_REQUEST"
     And the error message should indicate FormatId must include agent_url and id
     And the error should include a "suggestion" field
     And the suggestion should advise including agent_url (URI) and id fields
@@ -490,7 +497,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with output_format_ids filter [{"agent_url": "https://example.com"}]
     Then the operation should fail
-    And the error code should be "OUTPUT_FORMAT_IDS_INVALID_STRUCTURE"
+    And the error code should be "INVALID_REQUEST"
     And the error message should indicate FormatId must include agent_url and id
     And the error should include a "suggestion" field
     And the suggestion should advise including agent_url (URI) and id fields
@@ -504,7 +511,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with input_format_ids filter []
     Then the operation should fail
-    And the error code should be "INPUT_FORMAT_IDS_EMPTY"
+    And the error code should be "INVALID_REQUEST"
     And the error message should indicate at least 1 item is required
     And the error should include a "suggestion" field
     And the suggestion should advise providing at least one FormatId or omitting the filter
@@ -517,7 +524,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with input_format_ids filter [{"id": "display_static"}]
     Then the operation should fail
-    And the error code should be "INPUT_FORMAT_IDS_INVALID_STRUCTURE"
+    And the error code should be "INVALID_REQUEST"
     And the error message should indicate FormatId must include agent_url and id
     And the error should include a "suggestion" field
     And the suggestion should advise including agent_url (URI) and id fields
@@ -530,7 +537,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Given the Buyer has tenant context
     When the Buyer Agent requests formats with input_format_ids filter [{"agent_url": "https://example.com"}]
     Then the operation should fail
-    And the error code should be "INPUT_FORMAT_IDS_INVALID_STRUCTURE"
+    And the error code should be "INVALID_REQUEST"
     And the error message should indicate FormatId must include agent_url and id
     And the error should include a "suggestion" field
     And the suggestion should advise including agent_url (URI) and id fields

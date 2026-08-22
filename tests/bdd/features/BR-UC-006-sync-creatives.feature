@@ -179,7 +179,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # AdCP VALIDATION_ERROR envelope in data= — unit-pinned, not this scenario.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json (recovery via enumMetadata)
     # POST-F1, POST-F2, POST-F3
-    # --- ext-b: TENANT_NOT_FOUND ---
+    # --- ext-b: AUTH_INVALID ---
 
   @T-UC-006-ext-b @extension @ext-b @error
   Scenario: Tenant not found — principal has no tenant
@@ -188,12 +188,12 @@ Feature: BR-UC-006 Sync Creative Assets
     And a creative with a known format_id
     When the Buyer Agent syncs the creative
     Then the operation should fail
-    And the error code should be "TENANT_NOT_FOUND"
+    And the error code should be "AUTH_INVALID"
     And the error message should contain "tenant"
     And the error should include a "suggestion" field
     And the suggestion should contain "tenant"
     # POST-F1, POST-F2, POST-F3
-    # --- ext-c: CREATIVE_VALIDATION_FAILED ---
+    # --- ext-c: INVALID_REQUEST ---
 
   @T-UC-006-ext-c @extension @ext-c @error
   Scenario: Creative validation failed — schema violation
@@ -201,13 +201,13 @@ Feature: BR-UC-006 Sync Creative Assets
     And a creative with invalid schema structure
     When the Buyer Agent syncs the creative
     Then the creative should have action "failed"
-    And the error code should be "CREATIVE_VALIDATION_FAILED"
+    And the error code should be "INVALID_REQUEST"
     And the error message should contain "validation"
     And the error should include a "suggestion" field
     And the suggestion should contain "CreativeAsset schema"
     # POST-F2: Error explains validation failure
     # POST-F3: Suggestion for corrective action
-    # --- ext-d: CREATIVE_NAME_EMPTY ---
+    # --- ext-d: INVALID_REQUEST ---
 
   @T-UC-006-ext-d @extension @ext-d @error
   Scenario: Creative name empty
@@ -215,7 +215,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And a creative with name "" and a known format_id
     When the Buyer Agent syncs the creative
     Then the creative should have action "failed"
-    And the error code should be "CREATIVE_NAME_EMPTY"
+    And the error code should be "INVALID_REQUEST"
     And the error message should contain "name"
     And the error should include a "suggestion" field
     And the suggestion should contain "non-empty name"
@@ -227,10 +227,10 @@ Feature: BR-UC-006 Sync Creative Assets
     And a creative with name "   " and a known format_id
     When the Buyer Agent syncs the creative
     Then the creative should have action "failed"
-    And the error code should be "CREATIVE_NAME_EMPTY"
+    And the error code should be "INVALID_REQUEST"
     And the error should include a "suggestion" field
     # POST-F2, POST-F3
-    # --- ext-e: CREATIVE_FORMAT_REQUIRED ---
+    # --- ext-e: INVALID_REQUEST ---
 
   @T-UC-006-ext-e @extension @ext-e @error
   Scenario: Creative format required — missing format_id
@@ -238,12 +238,12 @@ Feature: BR-UC-006 Sync Creative Assets
     And a creative with name "Banner" but no format_id
     When the Buyer Agent syncs the creative
     Then the creative should have action "failed"
-    And the error code should be "CREATIVE_FORMAT_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the error message should contain "format"
     And the error should include a "suggestion" field
     And the suggestion should contain "format_id"
     # POST-F2, POST-F3
-    # --- ext-f: CREATIVE_FORMAT_UNKNOWN ---
+    # --- ext-f: REFERENCE_NOT_FOUND ---
 
   @T-UC-006-ext-f @extension @ext-f @error
   Scenario: Creative format unknown — not in agent registry
@@ -251,12 +251,12 @@ Feature: BR-UC-006 Sync Creative Assets
     And a creative with a format_id that does not exist in any agent registry
     When the Buyer Agent syncs the creative
     Then the creative should have action "failed"
-    And the error code should be "CREATIVE_FORMAT_UNKNOWN"
+    And the error code should be "REFERENCE_NOT_FOUND"
     And the error message should contain "unknown format"
     And the error should include a "suggestion" field
     And the suggestion should contain "list_creative_formats"
     # POST-F2, POST-F3
-    # --- ext-g: CREATIVE_AGENT_UNREACHABLE ---
+    # --- ext-g: AGENT_UNREACHABLE ---
 
   @T-UC-006-ext-g @extension @ext-g @error
   Scenario: Creative agent unreachable
@@ -264,12 +264,12 @@ Feature: BR-UC-006 Sync Creative Assets
     And a creative with a format_id whose agent_url is unreachable
     When the Buyer Agent syncs the creative
     Then the creative should have action "failed"
-    And the error code should be "CREATIVE_AGENT_UNREACHABLE"
+    And the error code should be "AGENT_UNREACHABLE"
     And the error message should contain "unreachable"
     And the error should include a "suggestion" field
     And the suggestion should contain "try again"
     # POST-F2, POST-F3
-    # --- ext-h: CREATIVE_PREVIEW_FAILED ---
+    # --- ext-h: INVALID_REQUEST ---
 
   @T-UC-006-ext-h @extension @ext-h @error
   Scenario: Creative preview failed — no previews generated
@@ -278,12 +278,12 @@ Feature: BR-UC-006 Sync Creative Assets
     And the creative agent returns no preview URLs
     When the Buyer Agent syncs the creative
     Then the creative should have action "failed"
-    And the error code should be "CREATIVE_PREVIEW_FAILED"
+    And the error code should be "INVALID_REQUEST"
     And the error message should contain "preview"
     And the error should include a "suggestion" field
     And the suggestion should contain "media_url"
     # POST-F2, POST-F3
-    # --- ext-i: CREATIVE_GEMINI_KEY_MISSING ---
+    # --- ext-i: CONFIGURATION_ERROR ---
 
   @T-UC-006-ext-i @extension @ext-i @error
   Scenario: Gemini key missing — generative creative without config
@@ -292,7 +292,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And the Seller Agent does not have GEMINI_API_KEY configured
     When the Buyer Agent syncs the creative
     Then the creative should have action "failed"
-    And the error code should be "CREATIVE_GEMINI_KEY_MISSING"
+    And the error code should be "CONFIGURATION_ERROR"
     And the error message should contain "GEMINI_API_KEY"
     And the error should include a "suggestion" field
     And the suggestion should contain "seller"
@@ -312,7 +312,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And the error should include a "suggestion" field
     And the suggestion should contain "media buys"
     # POST-F2, POST-F3
-    # --- ext-k: FORMAT_MISMATCH (strict) ---
+    # --- ext-k: VALIDATION_ERROR (strict) ---
 
   @T-UC-006-ext-k @extension @ext-k @error
   Scenario: Format mismatch — creative format incompatible with product
@@ -322,7 +322,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And validation_mode is "strict"
     When the Buyer Agent syncs the creative
     Then the operation should fail with an assignment error
-    And the error code should be "FORMAT_MISMATCH"
+    And the error code should be "VALIDATION_ERROR"
     And the error message should contain "not supported by product"
     And the error should include a "suggestion" field
     And the suggestion should contain "list_creative_formats"
@@ -600,7 +600,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And a product with format agent_url "https://agent.example.com" and format_id "video-pre-roll"
     And validation_mode is "strict"
     When the Buyer Agent syncs the creative with assignments
-    Then the assignment should fail with "FORMAT_MISMATCH"
+    Then the assignment should fail with "VALIDATION_ERROR"
     And the error should include a "suggestion" field
     # Agent URL matches but format_id differs — partial match is not sufficient
 
@@ -812,10 +812,10 @@ Feature: BR-UC-006 Sync Creative Assets
       | partition          | format_setup                             | outcome                      |
       | known_http_format  | a known HTTP-based format_id             | success                      |
       | adapter_format     | a non-HTTP adapter format_id             | success (no agent validation)|
-      | missing_format_id  | no format_id                             | CREATIVE_FORMAT_REQUIRED     |
-      | unknown_format     | a format_id unknown to all agents        | CREATIVE_FORMAT_UNKNOWN      |
-      | agent_unreachable  | a format_id whose agent is unreachable   | CREATIVE_AGENT_UNREACHABLE   |
-      | empty_name         | an empty name and a known format_id      | CREATIVE_NAME_EMPTY          |
+      | missing_format_id  | no format_id                             | INVALID_REQUEST     |
+      | unknown_format     | a format_id unknown to all agents        | REFERENCE_NOT_FOUND      |
+      | agent_unreachable  | a format_id whose agent is unreachable   | AGENT_UNREACHABLE   |
+      | empty_name         | an empty name and a known format_id      | INVALID_REQUEST          |
 
   @T-UC-006-partition-generative @partition @generative
   Scenario Outline: Generative build detection — <partition>
@@ -831,7 +831,7 @@ Feature: BR-UC-006 Sync Creative Assets
       | static_creative                 | no output_format_ids               | any assets                             | standard processing          |
       | generative_with_prompt          | output_format_ids present          | message asset with prompt text         | generative build with prompt |
       | generative_create_name_fallback | output_format_ids present (create) | no prompt assets or inputs             | generative build with name   |
-      | generative_no_gemini_key        | output_format_ids present          | message asset but no GEMINI_API_KEY    | CREATIVE_GEMINI_KEY_MISSING  |
+      | generative_no_gemini_key        | output_format_ids present          | message asset but no GEMINI_API_KEY    | CONFIGURATION_ERROR  |
 
   @T-UC-006-partition-assignment-pkg @partition @assignment-package
   Scenario Outline: Assignment package validation — <partition>
@@ -864,7 +864,7 @@ Feature: BR-UC-006 Sync Creative Assets
       | format_matches  | agent/banner-300x250  | product accepting agent/banner-300x250   | assignment created |
       | no_restrictions | agent/banner-300x250  | product with empty format_ids            | assignment created |
       | no_product_id   | agent/banner-300x250  | package with no product_id               | assignment created |
-      | format_mismatch | agent/banner-300x250  | product accepting only agent/video-30s   | FORMAT_MISMATCH    |
+      | format_mismatch | agent/banner-300x250  | product accepting only agent/video-30s   | VALIDATION_ERROR    |
 
   @T-UC-006-partition-mb-status @partition @media-buy-status
   Scenario Outline: Media buy status transition on assignment — <partition>

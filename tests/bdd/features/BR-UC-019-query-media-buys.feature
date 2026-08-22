@@ -121,7 +121,7 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: Account filter not supported - account_id provided but not implemented
     Given an authenticated Buyer with principal_id "buyer-001"
     When the Buyer Agent sends a get_media_buys request with account_id "acc-001"
-    Then the operation should fail with error code "ACCOUNT_FILTER_NOT_SUPPORTED"
+    Then the operation should fail with error code "UNSUPPORTED_FEATURE"
     And the error message should contain "account_id filtering is not yet supported"
     And the error should include a "recovery" field indicating correctable failure
     And the error should include a "suggestion" field
@@ -216,13 +216,21 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request with <invalid_filter>
     Then the operation should fail with error code "<error_code>"
     And the error should include a "suggestion" field
-    And the suggestion should contain "<suggestion_fragment>"
-    # BR-RULE-151: Invalid status filter rejected
+    And the error field should contain "status_filter"
+    # BR-RULE-151: Invalid status filter rejected.
+    # Both partitions violate a SCHEMA CONSTRAINT rather than a business rule:
+    # get-media-buys-request.json types status_filter as oneOf [MediaBuyStatus,
+    # array of MediaBuyStatus with minItems 1], so an out-of-enum value and an
+    # empty array both fail the schema. The pin maps that to INVALID_REQUEST
+    # ("malformed, missing required fields, or violates schema constraints"),
+    # not VALIDATION_ERROR (which is scoped to rules BEYOND schema validation).
+    # WHICH parameter failed travels on error.field; the suggestion is derived
+    # from the code and cannot name the offending value (salesagent-qzub9).
 
     Examples: Invalid partitions
-      | partition              | invalid_filter                      | error_code                   | suggestion_fragment                    |
-      | unknown_status_value   | status_filter "expired"             | STATUS_FILTER_INVALID_VALUE  | pending_activation, active             |
-      | empty_array            | status_filter as empty array []     | STATUS_FILTER_EMPTY          | at least one status value              |
+      | partition              | invalid_filter                      | error_code       |
+      | unknown_status_value   | status_filter "expired"             | INVALID_REQUEST  |
+      | empty_array            | status_filter as empty array []     | INVALID_REQUEST  |
 
   @T-UC-019-boundary-status-filter @boundary @status_filter
   Scenario Outline: Status filter boundary - <boundary_point>
@@ -241,9 +249,9 @@ Feature: BR-UC-019 Query Media Buys
       | single valid enum value                     | status_filter "active"                                 | only media buys with status "active" are returned               |
       | array with one valid value                  | status_filter ["completed"]                            | only media buys with status "completed" are returned            |
       | array with all seven enum values            | all seven v3.1 status values in status_filter          | media buys in any status are returned                           |
-      | empty array                                 | status_filter as empty array []                        | error "STATUS_FILTER_EMPTY" with suggestion                     |
-      | removed enum value `pending_activation`     | status_filter "pending_activation"                     | error "STATUS_FILTER_INVALID_VALUE" with suggestion             |
-      | array with mix of valid and unknown values  | status_filter ["active", "expired"]                    | error "STATUS_FILTER_INVALID_VALUE" with suggestion             |
+      | empty array                                 | status_filter as empty array []                        | error "INVALID_REQUEST" with suggestion                     |
+      | removed enum value `pending_activation`     | status_filter "pending_activation"                     | error "INVALID_REQUEST" with suggestion             |
+      | array with mix of valid and unknown values  | status_filter ["active", "expired"]                    | error "INVALID_REQUEST" with suggestion             |
 
   @T-UC-019-partition-approval @partition @approval_status
   Scenario Outline: Creative approval status mapping - <partition>
@@ -426,10 +434,9 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: INV-4 violated - unknown status value rejected
     Given an authenticated Buyer with principal_id "buyer-001"
     When the Buyer Agent sends a get_media_buys request with status_filter "expired"
-    Then the operation should fail with error code "STATUS_FILTER_INVALID_VALUE"
-    And the error message should indicate "expired" is not a valid MediaBuyStatus
+    Then the operation should fail with error code "INVALID_REQUEST"
+    And the error field should contain "status_filter"
     And the error should include a "suggestion" field
-    And the suggestion should contain "pending_activation, active"
     # BR-RULE-151 INV-4: Unknown status value rejected with suggestion
 
   @T-UC-019-inv-152-1 @invariant @BR-RULE-152
@@ -910,16 +917,21 @@ Feature: BR-UC-019 Query Media Buys
     # BR-RULE-292 INV-7: additionalProperties:false on cancellation; ride-along metadata belongs in ext
 
   @T-UC-019-inv-293-2 @invariant @BR-RULE-293 @error @ext-e @schema-v3.1
-  Scenario: INV-2 holds - v3.x account (AccountReference) triggers ACCOUNT_FILTER_NOT_SUPPORTED before any DB read
+  Scenario: INV-2 holds - v3.x account (AccountReference) triggers UNSUPPORTED_FEATURE before any DB read
     Given an authenticated Buyer with principal_id "buyer-001"
     When the Buyer Agent sends a get_media_buys request with account {brand:"brand-x", operator:"op-y"}
-    Then the operation should fail with error code "ACCOUNT_FILTER_NOT_SUPPORTED"
-    And the error code should be "ACCOUNT_FILTER_NOT_SUPPORTED"
+    Then the operation should fail with error code "UNSUPPORTED_FEATURE"
+    And the error code should be "UNSUPPORTED_FEATURE"
     And the error recovery classification should be "correctable"
     And no database query should have been executed
     And the error should include a "suggestion" field
     And the suggestion should contain "remove" or "omit" or "without the `account` filter"
-    # BR-RULE-293 INV-2: v3.x AccountReference -> AdCPValidationError before DB read
+    # BR-RULE-293 INV-2: v3.x AccountReference -> AdCPCapabilityNotSupportedError
+    # (UNSUPPORTED_FEATURE, correctable) before any DB read. The annotation used to say
+    # AdCPValidationError while the step demanded ACCOUNT_FILTER_NOT_SUPPORTED and
+    # production raised a third thing -- scenario, annotation and production were three
+    # different answers (salesagent-qzub9). UNSUPPORTED_FEATURE is the published member
+    # for "a requested feature or field is not supported by this seller".
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
 
   @T-UC-019-inv-293-5 @invariant @BR-RULE-293 @error @schema-v3.1
