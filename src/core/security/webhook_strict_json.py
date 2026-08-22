@@ -99,7 +99,7 @@ class DuplicateKeyInput(Exception):
     match a refactor. It is a plain class attribute, deliberately never
     surfaced as ``AdCPError.error_code``: ``duplicate_key_input`` is a
     lowercase spec-fixture discriminator, absent from the pinned
-    ``WIRE_STANDARD_CODES`` table (40 entries, all SCREAMING_SNAKE), and
+    ``WIRE_STANDARD_CODES`` table (all SCREAMING_SNAKE), and
     ``translate_error_code`` passes unknown codes to the buyer unchanged --
     setting it as ``error_code`` would emit a non-conformant wire code.
 

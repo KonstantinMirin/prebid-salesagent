@@ -86,9 +86,25 @@ def _load_pinned_recovery() -> dict[str, RecoveryHint]:
     major, minor = adcp.get_adcp_spec_version().split(".")[:2]
     schema_path = Path(adcp.__file__).parent / "_schemas" / f"{major}.{minor}" / "enums" / "error-code.json"
     metadata = json.loads(schema_path.read_text())["enumMetadata"]
-    return {
+    table = {
         code: entry["recovery"] for code, entry in metadata.items() if isinstance(entry, dict) and "recovery" in entry
     }
+
+    # The file-shape invariants live HERE, in the seam that reads the file, so a
+    # partial table can never be RETURNED. Checked at module scope they would be
+    # checked on a partial table that already exists and has already been handed
+    # to every caller. `raise`, not `assert`: -O deletes an assert, and a pin
+    # whose enforcement vanishes under an interpreter flag is not enforcement.
+    if len(table) < 90:
+        raise RuntimeError(
+            f"RECOVERY_BY_WIRE_CODE loaded only {len(table)} codes from the pinned enumMetadata; "
+            f"the 3.1 pin defines 92. The loader is reading the wrong file or shape."
+        )
+    bad_values = {v for v in table.values() if v not in get_args(RecoveryHint)}
+    if bad_values:
+        raise RuntimeError(f"Pinned enumMetadata carries recovery value(s) outside RecoveryHint: {bad_values}")
+
+    return table
 
 
 # The recovery classification for every code the pinned spec defines (92 at the
@@ -108,6 +124,21 @@ RECOVERY_BY_WIRE_CODE: dict[str, RecoveryHint] = _load_pinned_recovery()
 # the same treatment in #1602.
 _SPEC_SUPPLEMENT_CODES: frozenset[str] = frozenset({"CREATIVE_NOT_FOUND", "CONFIGURATION_ERROR"})
 
+# Codes the SDK helper ships that the PINNED spec does not define. The pin is the
+# authority and the helper is a cross-check (CLAUDE.md spec-grounding gate), so a
+# helper-only code is not a wire code -- it has no normative recovery
+# classification, and admitting it would leave the recovery table partial and
+# every lookup falling back to an authored default, which is exactly what
+# invariant I6 ("recovery is derived, never authored") forbids.
+#
+# NOT_SUPPORTED is the single code by which adcp.server.helpers.STANDARD_ERROR_CODES
+# (38 entries) exceeds the pinned 3.1 enum (92 entries): absent from `enum` and
+# from `enumMetadata`, and absent from the whole of dist/ at v3.1.1. The SDK even
+# assigns it recovery="terminal", which _load_pinned_recovery's docstring above
+# already explains is not a value to trust. UNSUPPORTED_FEATURE, which IS pinned,
+# is the code this seller emits instead; nothing in src/ produces the bare one.
+_SPEC_DEMOTED_CODES: frozenset[str] = frozenset({"NOT_SUPPORTED"})
+
 # The authoritative wire-code table: SDK code-name baseline + pinned-spec
 # supplement. Values are empty on purpose and every consumer is a membership
 # check — carrying the SDK's own recovery values here would leave 7 codes
@@ -116,8 +147,25 @@ _SPEC_SUPPLEMENT_CODES: frozenset[str] = frozenset({"CREATIVE_NOT_FOUND", "CONFI
 # every code instead of a silently wrong classification for some. Look a
 # classification up in RECOVERY_BY_WIRE_CODE, never here.
 WIRE_STANDARD_CODES: dict[str, dict[str, str]] = {
-    code: {} for code in (*STANDARD_ERROR_CODES, *sorted(_SPEC_SUPPLEMENT_CODES))
+    code: {} for code in (*STANDARD_ERROR_CODES, *sorted(_SPEC_SUPPLEMENT_CODES)) if code not in _SPEC_DEMOTED_CODES
 }
+
+# The wire set is TOTAL over the recovery table, by construction rather than by
+# inspection. Deleting one helper-only code would only remove today's instance:
+# the set is DERIVED from the SDK helper, so the next helper code the SDK ships
+# ahead of the pin would re-create the partial table verbatim and silently. This
+# raise turns that drift into an import failure that NAMES the offending code and
+# states the two ways to resolve it, so nobody has to rediscover which is right.
+_UNPINNED_WIRE_CODES = set(WIRE_STANDARD_CODES) - set(RECOVERY_BY_WIRE_CODE)
+if _UNPINNED_WIRE_CODES:
+    raise RuntimeError(
+        f"Wire code(s) with no pinned recovery classification: {sorted(_UNPINNED_WIRE_CODES)}. "
+        f"The SDK helper ships a code the pinned enumMetadata does not classify. Either the pin "
+        f"moved and _SPEC_SUPPLEMENT_CODES should carry it, or the helper is ahead of the spec and "
+        f"_SPEC_DEMOTED_CODES should -- with a reason. It may not simply enter the wire set: an "
+        f"unclassified code makes RECOVERY_BY_WIRE_CODE partial and sends every lookup to an "
+        f"authored default."
+    )
 
 ERROR_CODE_MAPPING: dict[str, str] = {
     # Internal-only codes that occasionally leak to the wire when a raise site
@@ -204,34 +252,32 @@ INTERNAL_CODES: frozenset[str] = frozenset(
     }
 )
 
-# Sanity check: every mapping target must be a standard code.
+# Every mapping target must be a standard code. A `raise`, not an `assert`:
+# `python -O` deletes an assert, and an invariant with an off switch is not one.
+# It stays at module scope rather than moving into the loader because it reads
+# ERROR_CODE_MAPPING, which is defined below the loader's own return.
 _NON_STANDARD_TARGETS = set(ERROR_CODE_MAPPING.values()) - set(WIRE_STANDARD_CODES)
-assert not _NON_STANDARD_TARGETS, f"ERROR_CODE_MAPPING contains non-standard targets: {_NON_STANDARD_TARGETS}"
+if _NON_STANDARD_TARGETS:
+    raise RuntimeError(f"ERROR_CODE_MAPPING contains non-standard targets: {_NON_STANDARD_TARGETS}")
 
-# Sanity checks on the machine-read recovery table. A loader that reads the wrong
-# schema directory, or a pin whose enumMetadata changed shape, must fail the import
-# rather than hand every caller a plausible-looking partial table.
-assert len(RECOVERY_BY_WIRE_CODE) >= 90, (
-    f"RECOVERY_BY_WIRE_CODE loaded only {len(RECOVERY_BY_WIRE_CODE)} codes from the pinned "
-    f"enumMetadata; the 3.1 pin defines 92. The loader is reading the wrong file or shape."
-)
+# `ERROR_CODE_MAPPING` targets must also be CLASSIFIED, not merely standard. This
+# used to be a separate check against RECOVERY_BY_WIRE_CODE; it is now implied by
+# the drift raise above (wire <= recovery, by construction) plus
+# _NON_STANDARD_TARGETS (targets <= wire), so keeping it would be a detector for a
+# state two other invariants already make unreachable.
 
-_BAD_RECOVERY_VALUES = {v for v in RECOVERY_BY_WIRE_CODE.values() if v not in get_args(RecoveryHint)}
-assert not _BAD_RECOVERY_VALUES, (
-    f"Pinned enumMetadata carries recovery value(s) outside RecoveryHint: {_BAD_RECOVERY_VALUES}"
-)
-
-_UNCLASSIFIED_TARGETS = set(ERROR_CODE_MAPPING.values()) - set(RECOVERY_BY_WIRE_CODE)
-assert not _UNCLASSIFIED_TARGETS, (
-    f"ERROR_CODE_MAPPING translates to wire code(s) the pin does not classify: {_UNCLASSIFIED_TARGETS}"
-)
-
+# Nothing may enter the spec supplement that the PIN does not classify. Distinct
+# from the drift raise: that one asks whether the wire set is total, this one asks
+# whether the supplement was populated from the pin rather than from wishful
+# thinking. Stays at module scope — it reads _SPEC_SUPPLEMENT_CODES, defined below
+# the loader.
 _UNCLASSIFIED_SUPPLEMENT = _SPEC_SUPPLEMENT_CODES - set(RECOVERY_BY_WIRE_CODE)
-assert not _UNCLASSIFIED_SUPPLEMENT, (
-    f"Spec-supplement code(s) absent from the pinned enumMetadata: {_UNCLASSIFIED_SUPPLEMENT}. "
-    f"The supplement exists because the SDK helper lags the pin — a code the PIN lacks does not "
-    f"belong in it."
-)
+if _UNCLASSIFIED_SUPPLEMENT:
+    raise RuntimeError(
+        f"Spec-supplement code(s) absent from the pinned enumMetadata: {_UNCLASSIFIED_SUPPLEMENT}. "
+        f"The supplement exists because the SDK helper lags the pin — a code the PIN lacks does not "
+        f"belong in it."
+    )
 
 
 def translate_error_code(code: str) -> str:
@@ -297,9 +343,12 @@ def wire_advisory(
     return LibraryError(
         code=wire_code,
         message=message,
-        # ``.get`` with the base fallback covers the single WIRE_STANDARD code the
-        # pin does not classify (NOT_SUPPORTED); every other code is in the table.
-        recovery=RECOVERY_BY_WIRE_CODE.get(wire_code, AdCPError._default_recovery),
+        # A subscript, not ``.get``: ``to_wire_error_code`` guarantees membership in
+        # WIRE_STANDARD_CODES, and the drift raise above guarantees
+        # WIRE_STANDARD_CODES <= RECOVERY_BY_WIRE_CODE. There is no unclassified
+        # wire code left for a fallback to answer, so an authored default here
+        # would be unreachable code asserting the opposite.
+        recovery=RECOVERY_BY_WIRE_CODE[wire_code],
         field=field,
         suggestion=suggestion,
     )
@@ -448,9 +497,18 @@ class AdCPError(Exception):
 
         Derivation follows ``wire_error_code``, NOT ``error_code``: the buyer reads
         the translated code, so the classification must be the one the pin assigns
-        to what they actually receive. ``_default_recovery`` survives only as the
-        fallback for a wire code the pin does not define (the enumerated non-spec
-        set — NOT_SUPPORTED, plus internal codes reachable only via ``synthesize``).
+        to what they actually receive.
+
+        This one keeps its ``.get``, unlike :func:`wire_advisory`'s subscript, and
+        the difference is the DOMAIN. ``wire_advisory`` reads
+        ``to_wire_error_code``'s output, which is guaranteed to be in
+        WIRE_STANDARD_CODES. This reads ``ERROR_CODE_MAPPING.get(code, code)`` --
+        a pass-through -- so its domain is whatever any raise site put in
+        ``error_code``, which is literally unbounded: ``synthesize`` accepts an
+        arbitrary string, and ``tool_error_logging`` passes
+        ``type(error).__name__``, so ``"ValueError"`` can arrive here. Making this
+        a subscript would turn the boundary error handler into a ``KeyError``
+        raised while already handling a failure.
         """
         return RECOVERY_BY_WIRE_CODE.get(self.wire_error_code, type(self)._default_recovery)
 

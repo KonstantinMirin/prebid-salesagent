@@ -56,6 +56,7 @@ import pytest
 from adcp.server.helpers import STANDARD_ERROR_CODES
 
 from src.core.exceptions import (
+    _SPEC_DEMOTED_CODES,
     ERROR_CODE_MAPPING,
     WIRE_STANDARD_CODES,
     AdCPAdapterError,
@@ -296,15 +297,33 @@ def test_wire_standard_codes_carry_no_classification() -> None:
         f"only; recovery comes from RECOVERY_BY_WIRE_CODE, machine-read from the pin."
     )
 
-    assert set(WIRE_STANDARD_CODES) == set(STANDARD_ERROR_CODES) | set(_SUPPLEMENT_WIRE_CODES), (
+    assert set(WIRE_STANDARD_CODES) == (set(STANDARD_ERROR_CODES) | set(_SUPPLEMENT_WIRE_CODES)) - set(
+        _SPEC_DEMOTED_CODES
+    ), (
         "WIRE_STANDARD_CODES must stay the SDK helper's code-NAME baseline plus the "
-        "pinned-spec supplement names — emptying the values must not change which "
-        "codes are members."
+        "pinned-spec supplement names, MINUS the demoted set — emptying the values "
+        "must not change which codes are members. A helper code the pin does not "
+        "define belongs in _SPEC_DEMOTED_CODES with a reason, not in the wire set."
     )
-    assert len(WIRE_STANDARD_CODES) == 40, (
-        f"WIRE_STANDARD_CODES has {len(WIRE_STANDARD_CODES)} entries, not 40 (38 SDK "
-        f"+ 2 supplement). src/core/security/webhook_strict_json.py:102 documents the "
-        f"40-entry count; update it together with this assertion if the SDK pin moves."
+
+    # The invariant the whole of salesagent-pldmk.4 exists to make definitional:
+    # every code that can reach the wire has a pinned recovery classification, so
+    # no lookup falls back to an authored default (invariant I6, "recovery is
+    # derived, never authored"). src enforces this at import with a raise; this
+    # asserts the same property from the test side against _pinned_recovery_by_code(),
+    # which reads the installed SDK's pinned tree and never imports
+    # src.core.exceptions — so src and this oracle cannot agree by sharing a bug.
+    pinned = _pinned_recovery_by_code()
+    assert set(WIRE_STANDARD_CODES) <= set(pinned), (
+        f"Wire code(s) with no pinned recovery classification: "
+        f"{sorted(set(WIRE_STANDARD_CODES) - set(pinned))}. "
+        f"The recovery table must be TOTAL over the wire set."
+    )
+
+    assert len(WIRE_STANDARD_CODES) == 39, (
+        f"WIRE_STANDARD_CODES has {len(WIRE_STANDARD_CODES)} entries, not 39 (38 SDK "
+        f"+ 2 supplement - 1 demoted). If the SDK pin moves, the demoted-set comment "
+        f"in src/core/exceptions.py is where the reason lives; update it there."
     )
 
 
@@ -429,10 +448,17 @@ def test_assert_envelope_shape_keeps_the_caller_literal_for_unclassified_codes()
     """A code the pin does not classify keeps the caller's literal as its only
     expectation — the derivation adds a check, it does not replace the caller's.
 
-    ``NOT_SUPPORTED`` is the one code on the current wire surface the pinned
-    enumMetadata carries no ``recovery`` for (``src.core.exceptions.wire_advisory``
-    documents the same single exception). Turning "the pin is silent" into a
-    failure would make an emittable code ungradeable.
+    ``NOT_SUPPORTED`` is used here as a code the pin is SILENT on — which is
+    exactly why salesagent-pldmk.4 removed it from the wire surface, via
+    ``_SPEC_DEMOTED_CODES``. It is no longer emittable, and
+    ``wire_advisory`` now subscripts rather than falling back, because the wire
+    set is total over the recovery table by construction. What survives, and what
+    this test still grades, is the OTHER unclassified path: ``AdCPError.recovery``
+    keeps its ``.get`` because its domain is ``translate_error_code``'s output,
+    which is unbounded (``tool_error_logging`` passes ``type(error).__name__``, so
+    ``"ValueError"`` can arrive). ``TOOL_ERROR`` is the live representative of
+    that path. Turning "the pin is silent" into a failure would make a genuinely
+    reachable code ungradeable.
     """
     from tests.helpers import assert_envelope_shape
 
