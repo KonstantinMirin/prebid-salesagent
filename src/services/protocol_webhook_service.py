@@ -357,7 +357,7 @@ class ProtocolWebhookService:
                 ctx=ctx,
                 log_id=log_id,
                 url=url,
-                outcome=WebhookDeliveryOutcome(kind="exhausted", attempts=0, detail=str(e)),
+                outcome=WebhookDeliveryOutcome.unexpected(type(e).__name__),
                 start_time=start_time,
                 audit_logger=audit_logger,
             )

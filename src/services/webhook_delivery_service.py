@@ -603,7 +603,7 @@ class WebhookDeliveryService:
             # the one it means. It no longer feeds the breaker itself — every kind
             # reaches the caller's single conclusion, so no arm can be the one that
             # forgets.
-            return WebhookDeliveryOutcome(kind="exhausted", attempts=0, detail=str(e))
+            return WebhookDeliveryOutcome.unexpected(type(e).__name__)
 
         if outcome.kind != "delivered":
             if outcome.kind == "refused_auth":

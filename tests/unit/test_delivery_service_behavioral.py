@@ -615,8 +615,21 @@ class TestDeliverWithBackoffGenericException:
         # It is injected at the seam instead of at a transport this module no
         # longer touches — and the seam's own exception TYPES are real now, rather
         # than the placeholder classes the old httpx-module stub had to invent.
+        #
+        # salesagent-pldmk.6: the STIMULUS changed, and it had to. This test used to
+        # raise RuntimeError("unexpected") and pin detail == "unexpected", which
+        # positively graded the ``detail=str(e)`` behaviour Move 2 removes. It could
+        # not simply be re-pinned in place: the replacement detail is a sentence
+        # webhook_egress.py authors about an UNEXPECTED failure, so it contains the
+        # word "unexpected" itself — making "the exception's own text is absent"
+        # unwritable against the old stimulus. So the stimulus is now the realistic
+        # case the arm's own comment names: the pinned transport's wrong-host guard,
+        # whose message interpolates TWO hostnames (verbatim shape from
+        # adcp/signing/ip_pinned_transport.py:150-154) into a field contracted
+        # "never a URL, never a credential" and then persisted to
+        # webhook_delivery_log.error_message.
         def _unexpected(*args, **kwargs):
-            raise RuntimeError("unexpected")
+            raise RuntimeError("IpPinnedTransport is pinned to 'a.example'; refusing connect to 'b.example'")
 
         # Patched at ``deliver_webhook`` since Epic D lane C4: the sender no longer
         # calls the signing helper directly — it calls the seam, which owns the auth
@@ -626,12 +639,24 @@ class TestDeliverWithBackoffGenericException:
         with patch("src.services.webhook_delivery_service.deliver_webhook", _unexpected):
             result = svc._deliver_with_backoff("test_endpoint", queue)
 
+        # The foreign exception's text never reaches ``detail``. Asserted FIRST
+        # because it is the disclosure: ``detail`` is written verbatim to
+        # webhook_delivery_log.error_message (repositories/delivery.py:327) and
+        # emitted as an audit warning (protocol_webhook_service.py:280), so a
+        # hostname landing here lands in storage and in an operator record.
+        detail = result.detail or ""
+        assert "a.example" not in detail, f"outcome.detail carries the pinned hostname: {detail!r}"
+        assert "b.example" not in detail, f"outcome.detail carries the attempted hostname: {detail!r}"
+        assert "pinned to" not in detail, f"outcome.detail carries the foreign exception's phrasing: {detail!r}"
+
         # The function concludes in an OUTCOME, not a bool: "it did not deliver"
         # and "why" used to collapse into False, which is how a refusal became
         # indistinguishable from three failed attempts. No kind covers a
         # NON-transport failure, so the arm builds ``exhausted`` with the honest
-        # attempt count — zero — and carries the cause.
-        assert result == WebhookDeliveryOutcome(kind="exhausted", attempts=0, detail="unexpected")
+        # attempt count — zero. Whole-object equality against the named
+        # constructor keeps kind/attempts/http_status/reason/scheme pinned exactly
+        # as they were, so fixing ``detail`` cannot quietly change anything else.
+        assert result == WebhookDeliveryOutcome.unexpected("RuntimeError")
 
         # The circuit breaker is NOT fed here any more, and that is the change,
         # not an oversight: _send_webhook_enhanced now feeds it from the outcome,

@@ -50,7 +50,7 @@ from pydantic import ValidationError
 
 from src.core.exceptions import AdCPValidationError
 from src.core.schema_helpers import to_push_notification_config
-from src.core.webhook_validator import reject_unsafe_webhook_registration_url
+from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,7 @@ def _construct_stored_config(document: dict[str, Any]) -> PushNotificationConfig
     return PushNotificationConfig.model_construct(**fields)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class ValidatedWebhookRegistration:
     """A push-notification registration that passed BOTH ingest preconditions.
 
@@ -131,6 +131,36 @@ class ValidatedWebhookRegistration:
     """
 
     config: PushNotificationConfig
+
+    def __repr__(self) -> str:
+        """Name the registration without rendering what authenticates it.
+
+        The generated dataclass repr walked straight into
+        ``config.authentication.credentials`` and printed the buyer's secret
+        verbatim -- into any f-string, any ``str()``, and any log line that
+        carried the object. ``repr=False`` plus this body is why that is no
+        longer reachable through the carrier.
+
+        Not ``field(repr=False)`` on ``config``: ``config`` is the only field, so
+        that spelling yields ``ValidatedWebhookRegistration()`` -- an empty repr
+        an operator cannot diagnose anything from. The URL goes through
+        :func:`webhook_url_for_log`, which drops userinfo and the query string
+        (a token can ride in either), and the authentication SCHEME is named
+        because which scheme is configured is the diagnostic question; what the
+        credential IS never is.
+
+        KNOWN AND ACCEPTED LIMITATION: this protects the CARRIER only.
+        ``repr(reg.config)`` still renders the credential, because
+        ``PushNotificationConfig`` is a generated SDK model -- annotating it
+        ``SecretStr`` would not survive a pin bump, would need Pattern #4 nested
+        re-annotation, and ``SecretStr.model_dump()`` writes ``**********`` into
+        a persistence path that is read back FOR SIGNING. The escalation is
+        deferred deliberately, not overlooked.
+        """
+        return (
+            f"ValidatedWebhookRegistration(url={webhook_url_for_log(self.url)!r}, "
+            f"authentication={self.authentication_type!r})"
+        )
 
     @property
     def url(self) -> str:

@@ -95,6 +95,31 @@ class WebhookDeliveryOutcome:
     reason: RefusalReason | None = None
     scheme: str | None = None
 
+    @classmethod
+    def unexpected(cls, exception_type: str) -> WebhookDeliveryOutcome:
+        """A non-transport failure, named by its EXCEPTION TYPE and nothing else.
+
+        The two senders that conclude on a generic exception used to build this
+        outcome inline with ``detail=str(e)``. That let a foreign exception's
+        text ride into ``detail`` -- and ``detail`` is not an in-memory
+        convenience: it is written verbatim to
+        ``webhook_delivery_log.error_message`` and emitted as an audit warning.
+        ``IpPinnedTransport``'s RuntimeError names the pinned host and the host
+        it refused to connect to, so ``str(e)`` disclosed a destination into
+        durable storage.
+
+        The type name is diagnostic and carries nothing the buyer supplied. The
+        exception's own message stays in the log line beside the call, where an
+        operator can read it, and never enters the outcome.
+
+        This does NOT make ``detail=str(e)`` unwritable -- this is a public
+        frozen dataclass and a caller can still construct one by hand. It makes
+        the sanitized form the named and convenient one. A future third
+        out-of-module site could reconstruct the defect, and would be invisible
+        to the seam-scoped outcome tests; that residual is accepted knowingly.
+        """
+        return cls(kind="exhausted", attempts=0, detail=f"delivery failed with an unexpected {exception_type}")
+
 
 @dataclass(frozen=True, slots=True)
 class WebhookTaskContext:

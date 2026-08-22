@@ -277,8 +277,15 @@ class EgressPolicy:
             error = _registration_error(url)
         except AdCPError:
             raise
-        except Exception as exc:
-            raise AdCPBlockedUrlError(f"Invalid URL: {exc}") from exc
+        except ValueError as exc:
+            # ValueError, not Exception, and a FIXED sentence rather than the
+            # exception's text. urlsplit raises ValueError for a malformed URL
+            # ("Invalid IPv6 URL" for "https://[oops/hook"), and interpolating
+            # that put stdlib phrasing this module did not author into a
+            # buyer-facing refusal. Anything that is NOT a ValueError is not a
+            # malformed URL and has no business being reported as one -- it now
+            # escapes loudly instead of being relabelled.
+            raise AdCPBlockedUrlError("URL could not be parsed") from exc
         if error is None:
             return
         if allow_loopback and _is_rescuable_loopback(url):

@@ -112,10 +112,21 @@ def webhook_ssrf_suggestion() -> str:
 
 
 def sanitize_webhook_url_for_log(url: str | None) -> str | None:
-    """Return ``scheme://host/path`` for logs — never credentials or query."""
+    """Return ``scheme://host/path`` for logs — never credentials or query.
+
+    Returns ``None`` rather than raising on a URL ``urlparse`` cannot read (an
+    unterminated IPv6 bracket raises ``ValueError``). :func:`webhook_url_for_log`
+    documents itself as TOTAL, and a stored row written before the ingest gate
+    can still carry such a URL — so a caller rendering one for a log line, or
+    inside a ``__repr__``, must get the placeholder rather than an exception
+    thrown from a debugger frame or a pytest diff.
+    """
     if not url:
         return None
-    parsed = urlparse(str(url))
+    try:
+        parsed = urlparse(str(url))
+    except ValueError:
+        return None
     if parsed.scheme and parsed.hostname:
         return f"{parsed.scheme}://{parsed.hostname}{parsed.path or ''}"
     return None

@@ -131,14 +131,6 @@ async def _deliver_sync_creatives_webhook(
     """
     service = get_protocol_webhook_service()
     try:
-        logger.info(f"tool name: {step_tool_name}")
-        logger.info(f"task id: {step_step_id}")
-        logger.info(f"task type: {step_tool_name}")
-        logger.info("status: completed")
-        logger.info(f"result: {complete_result}")
-        logger.info("error: None")
-        logger.info(f"push_notification_config: {push_notification_config}")
-
         # Determine protocol type from workflow step request_data
         protocol = step_request_data.get("protocol", "mcp")  # Default to MCP for backward compatibility
 
