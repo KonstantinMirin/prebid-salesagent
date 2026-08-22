@@ -409,8 +409,13 @@ _XFAIL_TAGS: dict[str, str] = {
     # because no Creative rows exist after creation. Gap was previously masked by
     # inline pytest.xfail() in the step body — moved to scenario-level here.
     "T-UC-002-alt-creatives": "inline creative upload not persisted in create_media_buy — spec-production gap",
-    # RESOLVED: T-UC-004-webhook-hmac — DB setup fix exposed that Then steps are pending (no-op).
-    # Test passes trivially; real HMAC assertion gap tracked separately.
+    # RESOLVED: T-UC-004-webhook-hmac — no longer xfailed on any transport as of
+    # salesagent-n78j0.13. The sentence that stood here ("Then steps are pending (no-op),
+    # test passes trivially") was TRUE WHEN WRITTEN and has been false since #1291 C1 /
+    # salesagent-n78j0.1.4: all three Thens assert, through `env.last_delivery()`, and the
+    # last recomputes the HMAC over the received bytes. Corrected rather than deleted
+    # because it was read as current during the e2e_rest graduation and pointed the
+    # opposite way from the tree.
     # RESOLVED: T-UC-004-webhook-creds-short — DB setup fix exposed that Then steps are pending (no-op).
     # Test passes trivially; real credential assertion gap tracked separately.
     # FIXME(salesagent-n3y): UC-002 account field absent — production doesn't require account field
@@ -1224,7 +1229,36 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # asserts is one the live delivery path actually has.
         _UC004_E2E_WEBHOOK_INTERNAL_TAGS: set[str] = {
             "T-UC-004-webhook-bearer",
-            "T-UC-004-webhook-hmac",
+            # Graduated e2e_rest (salesagent-n78j0.13): T-UC-004-webhook-hmac. Traced
+            # independently of its 9421 sibling rather than carried by it, because "the
+            # neighbour was fixed" is inference and not evidence. What the inspection
+            # found, end to end: the When routes through `env.deliver_webhook()`, whose
+            # e2e realization drives the live server's own
+            # /admin/.../trigger-delivery-webhook route; the server's
+            # `_send_report_for_media_buy` looks up DBPushNotificationConfig by
+            # (principal, tenant, url, is_active) and that row — NOT the auth-less
+            # `raw_request["reporting_webhook"]` that `_attach_reporting_webhook` writes —
+            # is what carries the HMAC registration, so `build_webhook_sender` takes the
+            # LEGACY_HMAC arm (`legacy_auth_mode` :463) and signs with
+            # `from_adcp_legacy_hmac`. All three Thens read `env.last_delivery()`, i.e.
+            # the TLS capture receiver, and the last one RECOMPUTES the digest over
+            # `captured.content` — the bytes the receiver actually got — so it fails when
+            # the bytes signed are not the bytes sent. None of them touches
+            # `env.mock["post"]`, which is what made the rest of this set unobservable
+            # over Docker HTTP.
+            #
+            # STALE COMMENT CORRECTED: this file's :412 still says of this same tag
+            # "DB setup fix exposed that Then steps are pending (no-op) — test passes
+            # trivially". That has not been true since #1291 C1 / salesagent-n78j0.1.4
+            # routed the Thens; it described the tree at the time it was written and was
+            # never revisited. It is the exact claim this graduation had to disprove, and
+            # a reader who trusted it would have concluded the opposite of the truth.
+            #
+            # Verified by mutation, not by the green mark: blanking the legacy-HMAC arm in
+            # `build_webhook_sender` turns this e2e_rest leg RED. Run ids for the pair are
+            # in the COMMIT BODY, for the reason the sibling note below records — any edit
+            # to this file voids the pair, so a citation kept here could never stay valid.
+            #
             # Graduated e2e_rest (salesagent-n78j0.1.4): T-UC-004-webhook-9421. The
             # bypass this set records is now GONE for that scenario — the delivery
             # ACTION moved out of the step layer into `env.deliver_webhook()`, which

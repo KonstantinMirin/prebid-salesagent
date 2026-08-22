@@ -163,10 +163,17 @@ _WEBHOOK_TAGS_NAME = "_UC004_E2E_WEBHOOK_INTERNAL_TAGS"
 # Graduated on the way here: T-UC-004-webhook-9421 (salesagent-n78j0.1.4 — the
 # delivery ACTION moved into env.deliver_webhook(), which drives the live server's
 # own trigger route over e2e; see the conftest comment for the mutation evidence).
+# Graduated on the way here: T-UC-004-webhook-hmac (salesagent-n78j0.13 — traced
+# independently of the 9421 sibling rather than assumed to ride along with it. Its
+# three Thens read env.last_delivery() and the last RECOMPUTES the digest over the
+# received bytes; production reaches the HMAC arm because _send_report_for_media_buy
+# looks the registration up in DBPushNotificationConfig, which overrides the
+# auth-less raw_request the harness writes. Mutation evidence in the conftest
+# comment; this lock is what caught the removal before the pin was updated, which
+# is the review step it exists to force).
 EXPECTED_WEBHOOK_INTERNAL_TAGS: frozenset[str] = frozenset(
     {
         "T-UC-004-webhook-bearer",
-        "T-UC-004-webhook-hmac",
         # Server-side gap, not a harness bypass: the live delivery path emits
         # NotificationType.scheduled unconditionally (delivery_webhook_scheduler.py),
         # so the final/delayed/adjusted Examples rows cannot pass over e2e_rest.
