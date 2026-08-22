@@ -224,9 +224,6 @@ class McpDispatcher:
                 has_wire=False,  # catch-all: may fire before anything was sent
                 error=error,
                 wire_error_envelope=wire,
-                # What production WOULD emit for the same exception — see the
-                # ImplDispatcher caveat; never a substitute for the wire field.
-                synthesized_error_envelope=_envelope_from_adcp_error(exc),
             )
         # Real MCP wire: the structured_content dict stashed by _run_mcp_client
         # (declared on BaseTestEnv, reset per call_via — read directly).
