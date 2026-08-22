@@ -23,8 +23,10 @@ quality-ci:
 	# Every use case whose feature file is BOUND to a test module. Widened from
 	# UC-002/UC-003 by salesagent-3dawm.17 once all 16 bound files reported zero.
 	# The 20 UNBOUND files stay out deliberately: their scenarios never execute,
-	# so gating them would pin ~855 accepted occurrences into the repo as a
-	# baseline. They are salesagent-yz8mo's subject -- bind them, then gate them.
+	# so gating them would pin 529 accepted occurrences (148 distinct invented
+	# codes) into the repo as a baseline. Measured -- an earlier estimate of ~855
+	# here was high. They are salesagent-yz8mo's subject: correct the vocabulary,
+	# then drop the --uc filter so the gate covers all 38 files at zero.
 	uv run python scripts/verify_feature_error_codes.py --uc \
 		UC-002 UC-003 UC-004 UC-005 UC-006 UC-010 UC-011 UC-018 UC-019 UC-026
 	uv run python .pre-commit-hooks/check_route_conflicts.py
