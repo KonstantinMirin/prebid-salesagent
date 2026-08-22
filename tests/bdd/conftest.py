@@ -1367,6 +1367,54 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # proves nothing about production — so it is recorded, not patched, here.
             "T-UC-004-webhook-no-aggregated",
             "T-UC-004-webhook-circuit-open",
+            # PARKED, NOT GRADUABLE (salesagent-n78j0.13): T-UC-004-webhook-circuit-recovery.
+            # Inspected in full against .claude/rules/workflows/xpass-graduation.md. The
+            # reason recorded in the xfail above — "CircuitBreaker state not observable
+            # through Docker HTTP" — is TRUE of this scenario but FALSE of the behaviour,
+            # and the difference is the whole finding. Do not un-route on the strength of
+            # the second half.
+            #
+            # (a) THE SCENARIO NEVER DELIVERS ANYTHING. Its When —
+            # `when_deliver_probe_reports` (steps/domain/uc004_delivery.py:1063) — does not
+            # send a webhook. It reaches into the breaker and increments the counter:
+            #     cb = service._circuit_breakers.get(endpoint_key)
+            #     for _ in range(n): cb.record_success()
+            # The Given `the webhook endpoint has recovered and returns 200` sets a mock
+            # HTTP status that is never read, because no HTTP call is made. So "the system
+            # delivers 2 successful probe reports" is not what is executed.
+            #
+            # (b) THE BREAKER IT POKES IS NOT PRODUCTION'S. `CircuitBreakerMixin.get_service`
+            # (tests/harness/_mixins.py:1005) constructs a FRESH WebhookDeliveryService().
+            # Production's consumer reads the module singleton (webhook_delivery_service,
+            # src/services/webhook_delivery_service.py:647) via `_is_circuit_breaker_open`.
+            # Different objects — so even in-process, the state this scenario sets is state
+            # production would never consult. `e2e_config` does not change this; it only
+            # scopes the DB.
+            #
+            # MEASURED, NOT INFERRED. Two mutations, restored by content copy (md5
+            # cbbda5965914e9d163e70faa17bfd6e9, empty diff):
+            #   M1  break the HALF_OPEN->CLOSED transition inside record_success  -> RED (3/3)
+            #   M2  break the DELIVERY path's record_success() call (:558, the 2xx
+            #       branch of _deliver_with_backoff)                              -> GREEN
+            # M1 going red proves only that the Then reads a real CircuitBreaker object by
+            # direct in-process attribute access — NOT that any transport observed it. M2 is
+            # the one that decides the row: production can stop recording delivery success
+            # entirely and this scenario, the whole UC-004 module (516 passed) and the
+            # unit/harness circuit tests (141 passed) all stay green.
+            #
+            # THE BEHAVIOUR IS OBSERVABLE OVER THE WIRE — the parked reason is too strong.
+            # An open breaker is buyer-visible: _get_media_buy_delivery_impl consults it per
+            # request (src/core/tools/media_buy_delivery.py:257) and rewrites the reported
+            # status (:297) `if status == "active" and reporting_circuit_open: status =
+            # "reporting_delayed"`. A scenario that drives REAL failing deliveries until the
+            # status flips to reporting_delayed, then REAL succeeding ones until it returns
+            # to active, grades open->recover->close through production's own singleton on
+            # every transport including e2e_rest.
+            #
+            # Un-routing now would be a false green precisely because the scenario passes on
+            # e2e_rest WITHOUT contacting the live server. Stays until rewritten against the
+            # reporting_delayed seam, and any rewrite must show M2 RED before graduating.
+            # Production coverage gap tracked as GH #2060.
             "T-UC-004-webhook-circuit-recovery",
             "T-UC-004-webhook-retry-success",
             # jdy1-M4: retry/sequence observability — assert on env.mock['post']
