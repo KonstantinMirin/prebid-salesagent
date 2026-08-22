@@ -171,9 +171,16 @@ _WEBHOOK_TAGS_NAME = "_UC004_E2E_WEBHOOK_INTERNAL_TAGS"
 # auth-less raw_request the harness writes. Mutation evidence in the conftest
 # comment; this lock is what caught the removal before the pin was updated, which
 # is the review step it exists to force).
+# Graduated on the way here: T-UC-004-webhook-bearer (salesagent-n78j0.13 — traced
+# independently of the hmac row again, not carried by it. This one is structurally
+# weaker than hmac (ONE Then, no recompute-over-received-bytes), so the inspection
+# turned on a single question: does that Then grade the token's VALUE or merely the
+# header's PRESENCE? It grades the value — expected comes from the test's own ctx,
+# actual off the wire via env.last_delivery() — and the mutation that proves it is a
+# WRONG-BUT-PRESENT token, deliberately not a removed header, since a removed header
+# would only re-prove presence. Mutation evidence in the conftest comment).
 EXPECTED_WEBHOOK_INTERNAL_TAGS: frozenset[str] = frozenset(
     {
-        "T-UC-004-webhook-bearer",
         # Server-side gap, not a harness bypass: the live delivery path emits
         # NotificationType.scheduled unconditionally (delivery_webhook_scheduler.py),
         # so the final/delayed/adjusted Examples rows cannot pass over e2e_rest.

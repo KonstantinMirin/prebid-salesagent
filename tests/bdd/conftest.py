@@ -1228,7 +1228,51 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # that; a tag graduates when its Thens read through them AND the behaviour it
         # asserts is one the live delivery path actually has.
         _UC004_E2E_WEBHOOK_INTERNAL_TAGS: set[str] = {
-            "T-UC-004-webhook-bearer",
+            # Graduated e2e_rest (salesagent-n78j0.13): T-UC-004-webhook-bearer. Traced
+            # independently of the hmac row graduated below it — the two share a tag set, a
+            # step layer and a harness, and this epic has twice had such neighbours be wrong
+            # about each other, so "the sibling graduated" was treated as a hypothesis to
+            # test rather than a reason.
+            #
+            # This row is STRUCTURALLY WEAKER than its hmac sibling and the inspection was
+            # aimed at that: hmac has three Thens, one of which RECOMPUTES the digest over
+            # the received bytes; bearer has ONE Then and no recompute of any kind. So the
+            # question that decided it was not "does the delivery happen" but "does the lone
+            # Then grade the token's VALUE, or merely the header's PRESENCE?" A presence-only
+            # assertion is the vacuity signature: it passes for any Authorization header
+            # anything happens to attach.
+            #
+            # It grades the VALUE. The chain, verified end to end rather than assumed:
+            # `given_bearer_token_valid` sets ctx['webhook_bearer_token'] = 'b'*32;
+            # `_auth_scheme_to_db_fields` maps scheme 'bearer' onto authentication_type +
+            # authentication_token; `_persist_webhook_config_if_needed` writes that row; the
+            # live server's `_send_report_for_media_buy` finds it by
+            # (principal, tenant, url, is_active) — NOT the auth-less
+            # `raw_request["reporting_webhook"]` — so `legacy_auth_mode` returns LEGACY_BEARER
+            # (scheme not in _HMAC_SCHEMES, token non-empty) and `build_webhook_sender` takes
+            # the `from_bearer_token` arm. `then_bearer_header` reads
+            # `env.last_delivery()` — the TLS capture receiver, never `env.mock["post"]` —
+            # and asserts token == ctx's token, so expected is TEST-owned and actual is
+            # off the wire. Not circular.
+            #
+            # Verified by mutation, and the mutation shape was chosen to separate the two
+            # questions: a WRONG-BUT-PRESENT token (sign with a different 32-char value),
+            # NOT a removed header. Removing the header would only re-prove presence, the
+            # half that was never in doubt. The leg goes RED on the wrong value, which is
+            # what "grades the VALUE" means. Run ids for the pair are in the COMMIT BODY,
+            # for the reason the sibling note below records.
+            #
+            # ONE LATENT WEAKNESS, RECORDED NOT FIXED (it does not affect this graduation,
+            # and widening scope mid-graduation is how a row gets strengthened into passing):
+            # the value assertion is CONDITIONAL — `if expected_token:` — so it silently
+            # degrades to presence-only if a future Given ever stops setting
+            # ctx['webhook_bearer_token']. Today the Given sets it unconditionally and the
+            # only step that pops it (`given_webhook_no_authentication`, :569) belongs to
+            # the 9421 scenario, so the branch is live here. Also, unlike its 9421 twin this
+            # scenario asserts no NEGATIVE: :1425 forbids signing the same webhook both
+            # ways, and nothing here would catch a delivery that carried Authorization AND
+            # a 9421 Signature.
+            #
             # Graduated e2e_rest (salesagent-n78j0.13): T-UC-004-webhook-hmac. Traced
             # independently of its 9421 sibling rather than carried by it, because "the
             # neighbour was fixed" is inference and not evidence. What the inspection
