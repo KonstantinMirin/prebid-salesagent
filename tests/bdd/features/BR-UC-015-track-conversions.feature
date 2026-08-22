@@ -155,7 +155,7 @@ Feature: BR-UC-015 Track Conversions
     Then the response contains events_received 3
     And the response contains events_processed 2
     And the response contains partial_failures with 1 entry
-    And the partial failure entry includes event_id, code "INVALID_EVENT_TYPE", and message
+    And the partial failure entry includes event_id, code "INVALID_REQUEST", and message
     # BR-RULE-112 INV-3: Partial failures are per-event within success branch
     # BR-RULE-112 INV-5: events_received = events_processed + partial_failures count
     # POST-S5: Buyer informed of partial failures
@@ -280,7 +280,7 @@ Feature: BR-UC-015 Track Conversions
     And the Buyer Agent has an authenticated connection via <transport>
     When the Buyer Agent logs events to event_source_id "nonexistent_src"
     Then the operation should fail
-    And the error code should be "EVENT_SOURCE_NOT_FOUND"
+    And the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
     And the suggestion should contain "sync_event_sources"
     And the request context is echoed in the response
@@ -321,7 +321,7 @@ Feature: BR-UC-015 Track Conversions
     Given an account "acc_1" exists
     When the Buyer Agent syncs event_sources with an event_types entry "nonstandard_type"
     Then the operation should fail
-    And the error code should be "INVALID_EVENT_TYPE"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "supported_event_types"
     # INVALID_EVENT_TYPE at sync level (operation-level error)
@@ -330,7 +330,7 @@ Feature: BR-UC-015 Track Conversions
   Scenario: Log events -- invalid event_type in event is partial failure
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with event_type "nonstandard_type"
-    Then the event appears in partial_failures with code "INVALID_EVENT_TYPE"
+    Then the event appears in partial_failures with code "INVALID_REQUEST"
     And the partial failure includes a message
     And the error should include "suggestion" field
     And the suggestion should contain "supported_event_types"
@@ -362,7 +362,7 @@ Feature: BR-UC-015 Track Conversions
     And the Buyer Agent has an authenticated connection via <transport>
     When the Buyer Agent logs 10001 events to "src_web"
     Then the operation should fail
-    And the error code should be "BATCH_TOO_LARGE"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "split"
     And no events are processed
@@ -396,7 +396,7 @@ Feature: BR-UC-015 Track Conversions
     And the Buyer Agent has an authenticated connection via <transport>
     When the Buyer Agent syncs event_sources via <transport> with two entries both having event_source_id "src_dup"
     Then the operation should fail
-    And the error code should be "DUPLICATE_EVENT_SOURCE_ID"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     And the suggestion should contain "unique"
     And no sources are modified
@@ -446,9 +446,9 @@ Feature: BR-UC-015 Track Conversions
 
     Examples: Invalid partitions
       | partition             | account_value                                              | outcome                                                  |
-      | account_missing       | (absent)                                                   | error "ACCOUNT_REQUIRED" with suggestion                 |
+      | account_missing       | (absent)                                                   | error "ACCOUNT_AMBIGUOUS" with suggestion                 |
       | account_not_found     | {"account_id": "nonexistent_123"}                          | error "ACCOUNT_NOT_FOUND" with suggestion                |
-      | account_invalid_ref   | {"account_id": "acc_1", "brand": {"domain": "x.com"}, "operator": "x.com"} | error "ACCOUNT_INVALID_FORMAT" with suggestion |
+      | account_invalid_ref   | {"account_id": "acc_1", "brand": {"domain": "x.com"}, "operator": "x.com"} | error "INVALID_REQUEST" with suggestion |
 
   @T-UC-015-031 @boundary @event_source_scoping @br-rule-105
   Scenario Outline: Account reference boundary validation - <boundary_point>
@@ -459,11 +459,11 @@ Feature: BR-UC-015 Track Conversions
       | boundary_point                               | account_value                                             | outcome                                                  |
       | account_id present alone                     | {"account_id": "acc_acme_001"}                            | the response contains event_sources                      |
       | brand+operator present alone                 | {"brand": {"domain": "acme-corp.com"}, "operator": "acme-corp.com"} | the response contains event_sources            |
-      | account field omitted entirely               | (absent)                                                  | error "ACCOUNT_REQUIRED" with suggestion                 |
+      | account field omitted entirely               | (absent)                                                  | error "ACCOUNT_AMBIGUOUS" with suggestion                 |
       | account_id references nonexistent account    | {"account_id": "nonexistent_123"}                         | error "ACCOUNT_NOT_FOUND" with suggestion                |
       | brand+operator pair with no matching account | {"brand": {"domain": "unknown.com"}, "operator": "unknown.com"} | error "ACCOUNT_NOT_FOUND" with suggestion          |
-      | both account_id and brand+operator supplied  | {"account_id": "acc_1", "brand": {"domain": "x.com"}, "operator": "x.com"} | error "ACCOUNT_INVALID_FORMAT" with suggestion |
-      | empty object for account                     | {}                                                        | error "ACCOUNT_INVALID_FORMAT" with suggestion           |
+      | both account_id and brand+operator supplied  | {"account_id": "acc_1", "brand": {"domain": "x.com"}, "operator": "x.com"} | error "INVALID_REQUEST" with suggestion |
+      | empty object for account                     | {}                                                        | error "INVALID_REQUEST" with suggestion           |
 
   @T-UC-015-032 @partition @event_source_sync @br-rule-106
   Scenario Outline: Event source sync mode partition validation - <partition>
@@ -479,9 +479,9 @@ Feature: BR-UC-015 Track Conversions
 
     Examples: Invalid partitions
       | partition                          | sync_config                                                     | outcome                                           |
-      | empty_event_sources_array          | account and event_sources []                                    | error "EVENT_SOURCES_REQUIRED" with suggestion     |
-      | missing_event_source_id            | account and event_sources [{"name": "Pixel"}]                   | error "EVENT_SOURCE_ID_REQUIRED" with suggestion   |
-      | duplicate_event_source_id_in_request | account and event_sources with two "src_1" entries             | error "EVENT_SOURCE_ID_EXISTS" with suggestion     |
+      | empty_event_sources_array          | account and event_sources []                                    | error "INVALID_REQUEST" with suggestion     |
+      | missing_event_source_id            | account and event_sources [{"name": "Pixel"}]                   | error "INVALID_REQUEST" with suggestion   |
+      | duplicate_event_source_id_in_request | account and event_sources with two "src_1" entries             | error "CONFLICT" with suggestion     |
 
   @T-UC-015-033 @boundary @event_source_sync @br-rule-106
   Scenario Outline: Event source sync boundary validation - <boundary_point>
@@ -495,9 +495,9 @@ Feature: BR-UC-015 Track Conversions
       | event_sources with 1 item, delete_missing omitted                         | account and event_sources [{"event_source_id": "src_1"}]                     | source created or updated                         |
       | event_sources with 1 item, delete_missing=true                            | account and event_sources [{"event_source_id": "src_1"}], delete_missing true | unlisted buyer sources deleted                   |
       | event_sources with 1 item, delete_missing=false                           | account and event_sources [{"event_source_id": "src_1"}], delete_missing false | source created or updated, nothing deleted       |
-      | event_sources is empty array []                                           | account and event_sources []                                                 | error "EVENT_SOURCES_REQUIRED" with suggestion    |
-      | event source item missing event_source_id                                 | account and event_sources [{"name": "Pixel"}]                                | error "EVENT_SOURCE_ID_REQUIRED" with suggestion  |
-      | two items with same event_source_id                                       | account and event_sources with two "src_dup" entries                         | error "EVENT_SOURCE_ID_EXISTS" with suggestion    |
+      | event_sources is empty array []                                           | account and event_sources []                                                 | error "INVALID_REQUEST" with suggestion    |
+      | event source item missing event_source_id                                 | account and event_sources [{"name": "Pixel"}]                                | error "INVALID_REQUEST" with suggestion  |
+      | two items with same event_source_id                                       | account and event_sources with two "src_dup" entries                         | error "CONFLICT" with suggestion    |
       | delete_missing=true but event_sources omitted (discovery-only; delete_missing ignored) | account only, delete_missing true, no event_sources                 | response lists all sources (discovery-only)       |
 
   @T-UC-015-034 @partition @event_dedup @br-rule-107
@@ -515,9 +515,9 @@ Feature: BR-UC-015 Track Conversions
 
     Examples: Invalid partitions
       | partition         | event_config                                              | outcome                                          |
-      | missing_event_id  | event without event_id field                              | error "EVENT_ID_REQUIRED" with suggestion         |
-      | empty_event_id    | event with event_id ""                                    | error "EVENT_ID_TOO_SHORT" with suggestion        |
-      | event_id_too_long | event with event_id of 257 characters                     | error "EVENT_ID_TOO_LONG" with suggestion         |
+      | missing_event_id  | event without event_id field                              | error "INVALID_REQUEST" with suggestion         |
+      | empty_event_id    | event with event_id ""                                    | error "INVALID_REQUEST" with suggestion        |
+      | event_id_too_long | event with event_id of 257 characters                     | error "INVALID_REQUEST" with suggestion         |
 
   @T-UC-015-035 @boundary @event_dedup @br-rule-107
   Scenario Outline: Event dedup boundary validation - <boundary_point>
@@ -529,9 +529,9 @@ Feature: BR-UC-015 Track Conversions
       | boundary_point                                               | event_config                                                               | outcome                                      |
       | event_id length = 1 (minimum)                                | event with event_id "a"                                                    | event processed successfully                  |
       | event_id length = 256 (maximum)                              | event with event_id of exactly 256 characters                              | event processed successfully                  |
-      | event_id length = 0 (empty string)                           | event with event_id ""                                                     | error "EVENT_ID_TOO_SHORT" with suggestion    |
-      | event_id length = 257 (over max)                             | event with event_id of 257 characters                                      | error "EVENT_ID_TOO_LONG" with suggestion     |
-      | event_id omitted                                             | event without event_id field                                               | error "EVENT_ID_REQUIRED" with suggestion     |
+      | event_id length = 0 (empty string)                           | event with event_id ""                                                     | error "INVALID_REQUEST" with suggestion    |
+      | event_id length = 257 (over max)                             | event with event_id of 257 characters                                      | error "INVALID_REQUEST" with suggestion     |
+      | event_id omitted                                             | event without event_id field                                               | error "INVALID_REQUEST" with suggestion     |
       | same event_id + same event_type + same event_source_id (duplicate) | event_id "evt_001" type "purchase" to "src_web" sent twice            | second event silently deduplicated            |
       | same event_id + different event_type + same event_source_id  | event_id "evt_001" with types "add_to_cart" and "purchase"                 | both events processed as distinct             |
       | same event_id + same event_type + different event_source_id  | event_id "evt_001" type "purchase" to "src_web" and "src_app"              | both events processed as distinct             |
@@ -551,12 +551,12 @@ Feature: BR-UC-015 Track Conversions
 
     Examples: Invalid partitions
       | partition                  | event_config                                                                                                    | outcome                                              |
-      | missing_event_type         | event_id "evt_1", event_time "2026-01-15T14:30:00Z", no event_type                                              | error "EVENT_TYPE_REQUIRED" with suggestion           |
-      | missing_event_time         | event_id "evt_1", event_type "purchase", no event_time                                                           | error "EVENT_TIME_REQUIRED" with suggestion           |
-      | invalid_event_type         | event_id "evt_1", event_type "conversion", event_time "2026-01-15T14:30:00Z"                                     | error "EVENT_TYPE_INVALID_FORMAT" with suggestion     |
-      | invalid_event_time_format  | event_id "evt_1", event_type "purchase", event_time "yesterday"                                                  | error "EVENT_TIME_INVALID_FORMAT" with suggestion     |
-      | custom_type_no_name        | event_id "evt_1", event_type "custom", event_time "2026-01-15T14:30:00Z", no custom_event_name                   | error "CUSTOM_EVENT_NAME_REQUIRED" with suggestion    |
-      | website_source_no_url      | event_id "evt_1", event_type "purchase", event_time "2026-01-15T14:30:00Z", action_source "website", no URL      | error "EVENT_SOURCE_URL_REQUIRED" with suggestion     |
+      | missing_event_type         | event_id "evt_1", event_time "2026-01-15T14:30:00Z", no event_type                                              | error "INVALID_REQUEST" with suggestion           |
+      | missing_event_time         | event_id "evt_1", event_type "purchase", no event_time                                                           | error "INVALID_REQUEST" with suggestion           |
+      | invalid_event_type         | event_id "evt_1", event_type "conversion", event_time "2026-01-15T14:30:00Z"                                     | error "INVALID_REQUEST" with suggestion     |
+      | invalid_event_time_format  | event_id "evt_1", event_type "purchase", event_time "yesterday"                                                  | error "INVALID_REQUEST" with suggestion     |
+      | custom_type_no_name        | event_id "evt_1", event_type "custom", event_time "2026-01-15T14:30:00Z", no custom_event_name                   | error "INVALID_REQUEST" with suggestion    |
+      | website_source_no_url      | event_id "evt_1", event_type "purchase", event_time "2026-01-15T14:30:00Z", action_source "website", no URL      | error "INVALID_REQUEST" with suggestion     |
 
   @T-UC-015-037 @boundary @event_structure @br-rule-108
   Scenario Outline: Event structure boundary validation - <boundary_point>
@@ -569,14 +569,14 @@ Feature: BR-UC-015 Track Conversions
       | event with only required fields (event_id, event_type, event_time) | event_id "evt_1", event_type "purchase", event_time "2026-01-15T14:30:00Z"                          | event processed                                       |
       | event_type = 'purchase' (standard type)                | event_id "evt_1", event_type "purchase", event_time "2026-01-15T14:30:00Z"                                      | event processed                                       |
       | event_type = 'custom' with custom_event_name           | event_id "evt_1", event_type "custom", event_time "2026-01-15T14:30:00Z", custom_event_name "demo"              | event processed                                       |
-      | event_type = 'custom' without custom_event_name        | event_id "evt_1", event_type "custom", event_time "2026-01-15T14:30:00Z", no custom_event_name                  | error "CUSTOM_EVENT_NAME_REQUIRED" with suggestion    |
+      | event_type = 'custom' without custom_event_name        | event_id "evt_1", event_type "custom", event_time "2026-01-15T14:30:00Z", no custom_event_name                  | error "INVALID_REQUEST" with suggestion    |
       | action_source = 'website' with event_source_url        | event_id "evt_1", event_type "purchase", event_time "2026-01-15T14:30:00Z", action_source "website", event_source_url "https://shop.example.com" | event processed |
-      | action_source = 'website' without event_source_url     | event_id "evt_1", event_type "purchase", event_time "2026-01-15T14:30:00Z", action_source "website", no URL     | error "EVENT_SOURCE_URL_REQUIRED" with suggestion     |
+      | action_source = 'website' without event_source_url     | event_id "evt_1", event_type "purchase", event_time "2026-01-15T14:30:00Z", action_source "website", no URL     | error "INVALID_REQUEST" with suggestion     |
       | action_source = 'app' without event_source_url         | event_id "evt_1", event_type "purchase", event_time "2026-01-15T14:30:00Z", action_source "app"                 | event processed                                       |
-      | event_type not in enum (e.g. 'conversion')             | event_id "evt_1", event_type "conversion", event_time "2026-01-15T14:30:00Z"                                    | error "EVENT_TYPE_INVALID_FORMAT" with suggestion     |
-      | event_time is not ISO 8601                             | event_id "evt_1", event_type "purchase", event_time "yesterday"                                                 | error "EVENT_TIME_INVALID_FORMAT" with suggestion     |
-      | event_type omitted                                     | event_id "evt_1", event_time "2026-01-15T14:30:00Z"                                                             | error "EVENT_TYPE_REQUIRED" with suggestion           |
-      | event_time omitted                                     | event_id "evt_1", event_type "purchase"                                                                          | error "EVENT_TIME_REQUIRED" with suggestion           |
+      | event_type not in enum (e.g. 'conversion')             | event_id "evt_1", event_type "conversion", event_time "2026-01-15T14:30:00Z"                                    | error "INVALID_REQUEST" with suggestion     |
+      | event_time is not ISO 8601                             | event_id "evt_1", event_type "purchase", event_time "yesterday"                                                 | error "INVALID_REQUEST" with suggestion     |
+      | event_type omitted                                     | event_id "evt_1", event_time "2026-01-15T14:30:00Z"                                                             | error "INVALID_REQUEST" with suggestion           |
+      | event_time omitted                                     | event_id "evt_1", event_type "purchase"                                                                          | error "INVALID_REQUEST" with suggestion           |
 
   @T-UC-015-037b @boundary @event_type @br-rule-108
   Scenario Outline: Event type enum boundary validation - <boundary_point>
@@ -588,7 +588,7 @@ Feature: BR-UC-015 Track Conversions
       | boundary_point                    | event_type_value | outcome                                            |
       | page_view (first enum value)      | page_view        | event processed                                     |
       | custom (last enum value)          | custom           | event processed (with custom_event_name provided)   |
-      | Pre-v3.1 string removed from enum | click            | error "EVENT_TYPE_INVALID_FORMAT" with suggestion   |
+      | Pre-v3.1 string removed from enum | click            | error "INVALID_REQUEST" with suggestion   |
 
   @T-UC-015-038 @partition @user_match_id @br-rule-109
   Scenario Outline: User match identifier partition validation - <partition>
@@ -607,12 +607,12 @@ Feature: BR-UC-015 Track Conversions
 
     Examples: Invalid partitions
       | partition                       | user_match_value                    | outcome                                                  |
-      | empty_user_match                | {}                                  | error "USER_MATCH_REQUIRED" with suggestion               |
-      | invalid_hashed_email_format     | {"hashed_email": "user@example.com"} | error "HASHED_EMAIL_INVALID_FORMAT" with suggestion      |
-      | invalid_hashed_phone_format     | {"hashed_phone": "+12065551234"}     | error "HASHED_PHONE_INVALID_FORMAT" with suggestion      |
-      | ip_without_ua                   | {"client_ip": "203.0.113.50"}        | error "USER_MATCH_REQUIRED" with suggestion               |
-      | ua_without_ip                   | {"client_user_agent": "Mozilla/5.0..."} | error "USER_MATCH_REQUIRED" with suggestion            |
-      | uids_empty_array                | {"uids": []}                         | error "USER_MATCH_REQUIRED" with suggestion               |
+      | empty_user_match                | {}                                  | error "INVALID_REQUEST" with suggestion               |
+      | invalid_hashed_email_format     | {"hashed_email": "user@example.com"} | error "INVALID_REQUEST" with suggestion      |
+      | invalid_hashed_phone_format     | {"hashed_phone": "+12065551234"}     | error "INVALID_REQUEST" with suggestion      |
+      | ip_without_ua                   | {"client_ip": "203.0.113.50"}        | error "INVALID_REQUEST" with suggestion               |
+      | ua_without_ip                   | {"client_user_agent": "Mozilla/5.0..."} | error "INVALID_REQUEST" with suggestion            |
+      | uids_empty_array                | {"uids": []}                         | error "INVALID_REQUEST" with suggestion               |
 
   @T-UC-015-039 @boundary @user_match_id @br-rule-109
   Scenario Outline: User match identifier boundary validation - <boundary_point>
@@ -627,14 +627,14 @@ Feature: BR-UC-015 Track Conversions
       | user_match with click_id only                           | {"click_id": "CjwKCAjw..."}                                                              | event processed                                           |
       | user_match with uids containing 1 item                  | {"uids": [{"type": "rampid", "value": "abc"}]}                                           | event processed                                           |
       | user_match with client_ip + client_user_agent           | {"client_ip": "203.0.113.50", "client_user_agent": "Mozilla/5.0..."}                     | event processed                                           |
-      | user_match with client_ip only (no client_user_agent)   | {"client_ip": "203.0.113.50"}                                                             | error "USER_MATCH_REQUIRED" with suggestion               |
-      | user_match with client_user_agent only (no client_ip)   | {"client_user_agent": "Mozilla/5.0..."}                                                   | error "USER_MATCH_REQUIRED" with suggestion               |
-      | user_match empty object (no identifiers)                | {}                                                                                        | error "USER_MATCH_REQUIRED" with suggestion               |
-      | hashed_email with uppercase hex (e.g. 'A1B2...')        | {"hashed_email": "A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2"}    | error "HASHED_EMAIL_INVALID_FORMAT" with suggestion       |
-      | hashed_email with 63 characters (too short)             | {"hashed_email": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b"}     | error "HASHED_EMAIL_INVALID_FORMAT" with suggestion       |
-      | hashed_email with 65 characters (too long)              | {"hashed_email": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c"}   | error "HASHED_EMAIL_INVALID_FORMAT" with suggestion       |
-      | hashed_email with non-hex characters                    | {"hashed_email": "g1h2i3j4k5l6g1h2i3j4k5l6g1h2i3j4k5l6g1h2i3j4k5l6g1h2i3j4k5l6g1h2"}   | error "HASHED_EMAIL_INVALID_FORMAT" with suggestion       |
-      | uids array empty                                        | {"uids": []}                                                                              | error "USER_MATCH_REQUIRED" with suggestion               |
+      | user_match with client_ip only (no client_user_agent)   | {"client_ip": "203.0.113.50"}                                                             | error "INVALID_REQUEST" with suggestion               |
+      | user_match with client_user_agent only (no client_ip)   | {"client_user_agent": "Mozilla/5.0..."}                                                   | error "INVALID_REQUEST" with suggestion               |
+      | user_match empty object (no identifiers)                | {}                                                                                        | error "INVALID_REQUEST" with suggestion               |
+      | hashed_email with uppercase hex (e.g. 'A1B2...')        | {"hashed_email": "A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2"}    | error "INVALID_REQUEST" with suggestion       |
+      | hashed_email with 63 characters (too short)             | {"hashed_email": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b"}     | error "INVALID_REQUEST" with suggestion       |
+      | hashed_email with 65 characters (too long)              | {"hashed_email": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c"}   | error "INVALID_REQUEST" with suggestion       |
+      | hashed_email with non-hex characters                    | {"hashed_email": "g1h2i3j4k5l6g1h2i3j4k5l6g1h2i3j4k5l6g1h2i3j4k5l6g1h2i3j4k5l6g1h2"}   | error "INVALID_REQUEST" with suggestion       |
+      | uids array empty                                        | {"uids": []}                                                                              | error "INVALID_REQUEST" with suggestion               |
       | user_match omitted from event                           | (omitted)                                                                                 | event processed (no attribution)                          |
 
   @T-UC-015-040 @partition @batch_size @br-rule-110
@@ -651,9 +651,9 @@ Feature: BR-UC-015 Track Conversions
 
     Examples: Invalid partitions
       | partition       | batch_config                | outcome                                       |
-      | empty_events    | a batch with 0 events       | error "EVENTS_REQUIRED" with suggestion        |
-      | missing_events  | a request with events omitted | error "EVENTS_REQUIRED" with suggestion      |
-      | batch_too_large | a batch with 10001 events   | error "BATCH_TOO_LARGE" with suggestion        |
+      | empty_events    | a batch with 0 events       | error "INVALID_REQUEST" with suggestion        |
+      | missing_events  | a request with events omitted | error "INVALID_REQUEST" with suggestion      |
+      | batch_too_large | a batch with 10001 events   | error "INVALID_REQUEST" with suggestion        |
 
   @T-UC-015-041 @boundary @batch_size @br-rule-110
   Scenario Outline: Batch size boundary validation - <boundary_point>
@@ -665,9 +665,9 @@ Feature: BR-UC-015 Track Conversions
       | boundary_point                          | batch_config                  | outcome                                       |
       | events array with 1 item (minimum)      | a batch with 1 event          | events processed                               |
       | events array with 10,000 items (maximum) | a batch with 10000 events    | events processed                               |
-      | events array with 0 items (empty)       | a batch with 0 events         | error "EVENTS_REQUIRED" with suggestion        |
-      | events array with 10,001 items (over max) | a batch with 10001 events  | error "BATCH_TOO_LARGE" with suggestion        |
-      | events field omitted                    | a request with events omitted | error "EVENTS_REQUIRED" with suggestion        |
+      | events array with 0 items (empty)       | a batch with 0 events         | error "INVALID_REQUEST" with suggestion        |
+      | events array with 10,001 items (over max) | a batch with 10001 events  | error "INVALID_REQUEST" with suggestion        |
+      | events field omitted                    | a request with events omitted | error "INVALID_REQUEST" with suggestion        |
 
   @T-UC-015-042 @partition @test_isolation @br-rule-111
   Scenario Outline: Test event isolation partition validation - <partition>
@@ -758,7 +758,7 @@ Feature: BR-UC-015 Track Conversions
   @T-UC-015-051 @invariant @br-rule-105 @error
   Scenario: BR-RULE-105 INV-1 violated -- account omitted
     When the Buyer Agent sends sync_event_sources without account field
-    Then the error code should be "ACCOUNT_REQUIRED"
+    Then the error code should be "ACCOUNT_AMBIGUOUS"
     And the error should include "suggestion" field
 
   @T-UC-015-052 @invariant @br-rule-105 @error
@@ -792,20 +792,20 @@ Feature: BR-UC-015 Track Conversions
   @T-UC-015-056 @invariant @br-rule-106 @error
   Scenario: BR-RULE-106 INV-5 violated -- empty event_sources array
     When the Buyer Agent syncs event_sources with account "acc_1" and event_sources []
-    Then the error code should be "EVENT_SOURCES_REQUIRED"
+    Then the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
 
   @T-UC-015-057 @invariant @br-rule-106 @error
   Scenario: BR-RULE-106 INV-6 violated -- duplicate event_source_id
     When the Buyer Agent syncs event_sources with two entries having event_source_id "src_dup"
-    Then the error code should be "DUPLICATE_EVENT_SOURCE_ID"
+    Then the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
 
   @T-UC-015-058 @invariant @br-rule-107 @error
   Scenario: BR-RULE-107 INV-4 violated -- event_id missing
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event without event_id
-    Then the event appears in partial_failures with code "EVENT_ID_REQUIRED"
+    Then the event appears in partial_failures with code "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "event_id"
 
@@ -813,7 +813,7 @@ Feature: BR-UC-015 Track Conversions
   Scenario: BR-RULE-107 INV-5 violated -- event_id outside length bounds
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with event_id of 257 characters
-    Then the event appears in partial_failures with code "EVENT_ID_TOO_LONG"
+    Then the event appears in partial_failures with code "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "256 characters"
 
@@ -821,7 +821,7 @@ Feature: BR-UC-015 Track Conversions
   Scenario: BR-RULE-108 INV-1 violated -- missing required event fields
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event missing event_type
-    Then the event appears in partial_failures with code "EVENT_TYPE_REQUIRED"
+    Then the event appears in partial_failures with code "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "event_type"
 
@@ -829,7 +829,7 @@ Feature: BR-UC-015 Track Conversions
   Scenario: BR-RULE-108 INV-2 violated -- invalid event_type
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with event_type "nonstandard"
-    Then the event appears in partial_failures with code "EVENT_TYPE_INVALID_FORMAT"
+    Then the event appears in partial_failures with code "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "standard types"
 
@@ -837,7 +837,7 @@ Feature: BR-UC-015 Track Conversions
   Scenario: BR-RULE-108 INV-3 violated -- invalid event_time format
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with event_time "not-a-date"
-    Then the event appears in partial_failures with code "EVENT_TIME_INVALID_FORMAT"
+    Then the event appears in partial_failures with code "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "ISO 8601"
 
@@ -845,7 +845,7 @@ Feature: BR-UC-015 Track Conversions
   Scenario: BR-RULE-108 INV-4 violated -- custom type without custom_event_name
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with event_type "custom" and no custom_event_name
-    Then the event appears in partial_failures with code "CUSTOM_EVENT_NAME_REQUIRED"
+    Then the event appears in partial_failures with code "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "custom_event_name"
 
@@ -853,7 +853,7 @@ Feature: BR-UC-015 Track Conversions
   Scenario: BR-RULE-108 INV-5 violated -- website source without URL
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with action_source "website" and no event_source_url
-    Then the event appears in partial_failures with code "EVENT_SOURCE_URL_REQUIRED"
+    Then the event appears in partial_failures with code "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "event_source_url"
 
@@ -873,7 +873,7 @@ Feature: BR-UC-015 Track Conversions
   Scenario: BR-RULE-109 INV-2 violated -- invalid hashed_email format
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with hashed_email "not-a-sha256-hash"
-    Then the event appears in partial_failures with code "HASHED_EMAIL_INVALID_FORMAT"
+    Then the event appears in partial_failures with code "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "SHA-256"
 
@@ -881,7 +881,7 @@ Feature: BR-UC-015 Track Conversions
   Scenario: BR-RULE-109 INV-3 violated -- invalid hashed_phone format
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with hashed_phone "not-a-sha256-hash"
-    Then the event appears in partial_failures with code "HASHED_PHONE_INVALID_FORMAT"
+    Then the event appears in partial_failures with code "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "E.164"
 
@@ -889,7 +889,7 @@ Feature: BR-UC-015 Track Conversions
   Scenario: BR-RULE-109 INV-4 violated -- client_ip without client_user_agent
     Given an event source "src_web" is configured
     When the Buyer Agent logs an event with user_match {"client_ip": "203.0.113.50"}
-    Then the event appears in partial_failures with code "USER_MATCH_REQUIRED"
+    Then the event appears in partial_failures with code "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "client_ip"
 
@@ -917,21 +917,21 @@ Feature: BR-UC-015 Track Conversions
   Scenario: BR-RULE-110 INV-2 violated -- empty or omitted events
     Given an event source "src_web" is configured
     When the Buyer Agent sends a log_event request with empty events array
-    Then the error code should be "EVENTS_REQUIRED"
+    Then the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
 
   @T-UC-015-074 @invariant @br-rule-110 @error
   Scenario: BR-RULE-110 INV-3 violated -- batch exceeds 10000
     Given an event source "src_web" is configured
     When the Buyer Agent logs a batch of 10001 events
-    Then the error code should be "BATCH_TOO_LARGE"
+    Then the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
 
   @T-UC-015-075 @invariant @br-rule-111
   Scenario: BR-RULE-111 INV-2 holds -- test events validated identically
     Given an event source "src_web" is configured
     When the Buyer Agent logs a test event with invalid event_type and test_event_code "TEST_001"
-    Then the event appears in partial_failures with code "INVALID_EVENT_TYPE"
+    Then the event appears in partial_failures with code "INVALID_REQUEST"
     And the validation is identical to production events
 
   @T-UC-015-076 @invariant @br-rule-111

@@ -143,7 +143,7 @@ Feature: BR-UC-007 Discover Publisher Properties
     Given a tenant is resolvable from the request context
     When the Buyer Agent sends a list_authorized_properties task via A2A with publisher_domains filter containing "INVALID DOMAIN!"
     Then the operation should fail
-    And the error code should be "DOMAIN_INVALID_FORMAT"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error code DOMAIN_INVALID_FORMAT explains what failed
@@ -153,7 +153,7 @@ Feature: BR-UC-007 Discover Publisher Properties
     Given a tenant is resolvable from the request context
     When the Buyer Agent calls list_authorized_properties MCP tool with publisher_domains filter containing "INVALID DOMAIN!"
     Then the operation should fail
-    And the error code should be "DOMAIN_INVALID_FORMAT"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error code DOMAIN_INVALID_FORMAT explains what failed
@@ -164,7 +164,7 @@ Feature: BR-UC-007 Discover Publisher Properties
     And the request includes context {"trace_id": "err-trace-001"}
     When the Buyer Agent requests list_authorized_properties
     Then the operation should fail
-    And the error code should be "TENANT_ERROR"
+    And the error code should be "CONFIGURATION_ERROR"
     And the error should include "suggestion" field
     And the response should include context with trace_id "err-trace-001"
     # POST-F3: Application context echoed even on error
@@ -400,19 +400,19 @@ Feature: BR-UC-007 Discover Publisher Properties
 
     Examples: Invalid - uppercase domain
       | partition         | domain           | expected                      |
-      | uppercase_domain  | Example.COM      | error "DOMAIN_INVALID_FORMAT"  |
+      | uppercase_domain  | Example.COM      | error "INVALID_REQUEST"  |
 
     Examples: Invalid - domain with spaces
       | partition           | domain           | expected                      |
-      | domain_with_spaces  | my domain.com    | error "DOMAIN_INVALID_FORMAT"  |
+      | domain_with_spaces  | my domain.com    | error "INVALID_REQUEST"  |
 
     Examples: Invalid - domain starts hyphen
       | partition              | domain           | expected                      |
-      | domain_starts_hyphen   | -example.com     | error "DOMAIN_INVALID_FORMAT"  |
+      | domain_starts_hyphen   | -example.com     | error "INVALID_REQUEST"  |
 
     Examples: Invalid - domain starts hyphen (trailing variant)
       | partition              | domain           | expected                      |
-      | domain_starts_hyphen   | example-.com     | error "DOMAIN_INVALID_FORMAT"  |
+      | domain_starts_hyphen   | example-.com     | error "INVALID_REQUEST"  |
 
   @T-UC-007-partition-context @partition @context-echo
   Scenario Outline: Context echo partition - <partition>
@@ -617,13 +617,13 @@ Feature: BR-UC-007 Discover Publisher Properties
   @T-UC-007-boundary-domain-filter-uppercase @boundary @domain-filter
   Scenario: Publisher domain filter boundary - domain 'A'
     When the Buyer Agent requests list_authorized_properties with publisher_domains filter ["A"]
-    Then the request should be rejected with error "DOMAIN_INVALID_FORMAT"
+    Then the request should be rejected with error "INVALID_REQUEST"
     # Boundary: domain 'A' -> uppercase rejected by pattern
 
   @T-UC-007-boundary-domain-filter-hyphen @boundary @domain-filter
   Scenario: Publisher domain filter boundary - domain '-abc.com'
     When the Buyer Agent requests list_authorized_properties with publisher_domains filter ["-abc.com"]
-    Then the request should be rejected with error "DOMAIN_INVALID_FORMAT"
+    Then the request should be rejected with error "INVALID_REQUEST"
     # Boundary: domain '-abc.com' -> leading hyphen rejected by pattern
 
   @T-UC-007-boundary-auth @boundary @authentication

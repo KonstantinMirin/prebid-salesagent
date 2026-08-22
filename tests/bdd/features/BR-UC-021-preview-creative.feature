@@ -177,7 +177,7 @@ Feature: BR-UC-021 Preview Creative
     Given request_type is "single" but creative_manifest is absent
     When the Buyer Agent invokes preview_creative
     Then the operation should fail
-    And the error code should be "CREATIVE_MANIFEST_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the error field should be "creative_manifest"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
@@ -193,7 +193,7 @@ Feature: BR-UC-021 Preview Creative
     When the Buyer Agent invokes preview_creative with request_type "batch"
     Then results[0] has success true
     And results[1] has success false
-    And results[1] errors include code "CREATIVE_MANIFEST_REQUIRED"
+    And results[1] errors include code "INVALID_REQUEST"
     And results[1] errors include field "requests[1].creative_manifest"
     And the error should include "suggestion" field
     And the suggestion should contain "creative_manifest"
@@ -224,7 +224,7 @@ Feature: BR-UC-021 Preview Creative
     Given a creative manifest without a format_id field
     When the Buyer Agent invokes preview_creative with request_type "single"
     Then the operation should fail
-    And the error code should be "MANIFEST_VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error field should contain "creative_manifest.format_id"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
@@ -239,7 +239,7 @@ Feature: BR-UC-021 Preview Creative
     Given a creative manifest with format_id but without assets
     When the Buyer Agent invokes preview_creative with request_type "single"
     Then the operation should fail
-    And the error code should be "MANIFEST_VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error field should contain "creative_manifest.assets"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
@@ -254,7 +254,7 @@ Feature: BR-UC-021 Preview Creative
     Given a creative manifest with format_id containing id but no agent_url
     When the Buyer Agent invokes preview_creative with request_type "single"
     Then the operation should fail
-    And the error code should be "MANIFEST_VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error field should contain "creative_manifest.format_id.agent_url"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
@@ -267,7 +267,7 @@ Feature: BR-UC-021 Preview Creative
     Given a creative manifest with format_id containing width 300 but no height
     When the Buyer Agent invokes preview_creative with request_type "single"
     Then the operation should fail
-    And the error code should be "MANIFEST_VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "both width and height"
@@ -279,7 +279,7 @@ Feature: BR-UC-021 Preview Creative
     Given a creative manifest with asset key "Banner-Image" containing uppercase and hyphen
     When the Buyer Agent invokes preview_creative with request_type "single"
     Then the operation should fail
-    And the error code should be "MANIFEST_VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "lowercase"
@@ -291,7 +291,7 @@ Feature: BR-UC-021 Preview Creative
     Given a batch preview request with 51 items in the requests array
     When the Buyer Agent invokes preview_creative with request_type "batch"
     Then the operation should fail
-    And the error code should be "BATCH_LIMIT_EXCEEDED"
+    And the error code should be "INVALID_REQUEST"
     And the error field should be "requests"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
@@ -333,7 +333,7 @@ Feature: BR-UC-021 Preview Creative
     Given a valid creative manifest and output_format "pdf"
     When the Buyer Agent invokes preview_creative with request_type "single"
     Then the operation should fail
-    And the error code should be "OUTPUT_FORMAT_INVALID"
+    And the error code should be "INVALID_REQUEST"
     And the error field should be "output_format"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
@@ -625,7 +625,7 @@ Feature: BR-UC-021 Preview Creative
     Given a preview request with context {"trace": "err-test"} but missing creative_manifest
     When the Buyer Agent invokes preview_creative with request_type "single"
     Then the operation should fail
-    And the error code should be "CREATIVE_MANIFEST_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the response context is {"trace": "err-test"} when possible
     And the error should include "suggestion" field
     And the suggestion should contain "creative_manifest"
@@ -649,9 +649,9 @@ Feature: BR-UC-021 Preview Creative
 
     Examples: Invalid partitions
       | partition          | outcome                                                              |
-      | empty_batch        | error "BATCH_EMPTY" with suggestion "Add at least one"               |
-      | over_limit         | error "BATCH_LIMIT_EXCEEDED" with suggestion "split"                 |
-      | missing_requests   | error "BATCH_REQUESTS_REQUIRED" with suggestion "Include a requests" |
+      | empty_batch        | error "INVALID_REQUEST" with suggestion "Add at least one"               |
+      | over_limit         | error "INVALID_REQUEST" with suggestion "split"                 |
+      | missing_requests   | error "INVALID_REQUEST" with suggestion "Include a requests" |
 
   @T-UC-021-boundary-batch @boundary @batch_constraints
   Scenario Outline: Batch constraints boundary validation -- <boundary_point>
@@ -664,9 +664,9 @@ Feature: BR-UC-021 Preview Creative
       | boundary_point                                         | outcome                                                              |
       | requests array with 1 item (minItems)                  | response contains a results array with 1 item                       |
       | requests array with 50 items (maxItems)                | response contains a results array with 50 items                      |
-      | requests array with 0 items                            | error "BATCH_EMPTY" with suggestion "Add at least one"               |
-      | requests array with 51 items                           | error "BATCH_LIMIT_EXCEEDED" with suggestion "split"                 |
-      | requests array absent in batch mode                    | error "BATCH_REQUESTS_REQUIRED" with suggestion "Include a requests" |
+      | requests array with 0 items                            | error "INVALID_REQUEST" with suggestion "Add at least one"               |
+      | requests array with 51 items                           | error "INVALID_REQUEST" with suggestion "split"                 |
+      | requests array absent in batch mode                    | error "INVALID_REQUEST" with suggestion "Include a requests" |
       | results[0] maps to requests[0] (positional check)      | results maintain positional correspondence                           |
       | result with success=true and response present          | result contains response with previews and expires_at                |
       | result with success=false and errors present           | result contains errors array with at least one error                 |
@@ -685,11 +685,11 @@ Feature: BR-UC-021 Preview Creative
 
     Examples: Invalid partitions
       | partition            | outcome                                                                    |
-      | missing_format_id    | error "MANIFEST_VALIDATION_ERROR" with suggestion "format_id"              |
-      | missing_assets       | error "MANIFEST_VALIDATION_ERROR" with suggestion "assets"                 |
-      | invalid_asset_key    | error "MANIFEST_VALIDATION_ERROR" with suggestion "lowercase"              |
-      | missing_agent_url    | error "MANIFEST_VALIDATION_ERROR" with suggestion "agent_url"              |
-      | width_without_height | error "MANIFEST_VALIDATION_ERROR" with suggestion "both width and height"  |
+      | missing_format_id    | error "INVALID_REQUEST" with suggestion "format_id"              |
+      | missing_assets       | error "INVALID_REQUEST" with suggestion "assets"                 |
+      | invalid_asset_key    | error "INVALID_REQUEST" with suggestion "lowercase"              |
+      | missing_agent_url    | error "INVALID_REQUEST" with suggestion "agent_url"              |
+      | width_without_height | error "INVALID_REQUEST" with suggestion "both width and height"  |
 
   @T-UC-021-boundary-manifest @boundary @manifest_validity
   Scenario Outline: Manifest validity boundary validation -- <boundary_point>
@@ -700,14 +700,14 @@ Feature: BR-UC-021 Preview Creative
     Examples: Boundary values
       | boundary_point                                    | outcome                                                                    |
       | manifest with format_id + assets (minimal valid)  | preview renders are returned successfully                                  |
-      | manifest missing format_id                        | error "MANIFEST_VALIDATION_ERROR" with suggestion "format_id"              |
-      | manifest missing assets                           | error "MANIFEST_VALIDATION_ERROR" with suggestion "assets"                 |
+      | manifest missing format_id                        | error "INVALID_REQUEST" with suggestion "format_id"              |
+      | manifest missing assets                           | error "INVALID_REQUEST" with suggestion "assets"                 |
       | manifest with empty assets object {}              | preview renders are returned (empty assets is valid)                       |
       | asset key 'a' (minimal valid pattern)             | preview renders are returned successfully                                  |
-      | asset key 'Banner-Image' (uppercase + hyphen)     | error "MANIFEST_VALIDATION_ERROR" with suggestion "lowercase"              |
+      | asset key 'Banner-Image' (uppercase + hyphen)     | error "INVALID_REQUEST" with suggestion "lowercase"              |
       | format_id with width=1, height=1 (minimum dimensions) | preview renders are returned with dimensions                           |
-      | format_id with width=0 (below minimum)            | error "MANIFEST_VALIDATION_ERROR" with suggestion                          |
-      | format_id with width but no height                | error "MANIFEST_VALIDATION_ERROR" with suggestion "both width and height"  |
+      | format_id with width=0 (below minimum)            | error "INVALID_REQUEST" with suggestion                          |
+      | format_id with width but no height                | error "INVALID_REQUEST" with suggestion "both width and height"  |
 
   @T-UC-021-partition-output @partition @output_format
   Scenario Outline: Output format partition validation -- <partition>
@@ -724,8 +724,8 @@ Feature: BR-UC-021 Preview Creative
 
     Examples: Invalid partitions
       | partition       | outcome                                                                  |
-      | unknown_format  | error "OUTPUT_FORMAT_INVALID" with suggestion "url"                      |
-      | empty_format    | error "OUTPUT_FORMAT_INVALID" with suggestion "url"                      |
+      | unknown_format  | error "INVALID_REQUEST" with suggestion "url"                      |
+      | empty_format    | error "INVALID_REQUEST" with suggestion "url"                      |
 
   @T-UC-021-boundary-output @boundary @output_format
   Scenario Outline: Output format boundary validation -- <boundary_point>
@@ -738,8 +738,8 @@ Feature: BR-UC-021 Preview Creative
       | output_format = 'url'                                             | renders include preview_url                      |
       | output_format = 'html'                                            | renders include preview_html                     |
       | output_format omitted                                             | renders include preview_url (default)            |
-      | output_format = 'pdf' (unknown)                                   | error "OUTPUT_FORMAT_INVALID" with suggestion    |
-      | output_format = '' (empty string)                                 | error "OUTPUT_FORMAT_INVALID" with suggestion    |
+      | output_format = 'pdf' (unknown)                                   | error "INVALID_REQUEST" with suggestion    |
+      | output_format = '' (empty string)                                 | error "INVALID_REQUEST" with suggestion    |
       | batch output_format = 'url', item output_format = 'html' (override) | item renders include preview_html             |
       | render output_format = 'both' (render-level)                      | render includes both preview_url and preview_html |
 
@@ -758,8 +758,8 @@ Feature: BR-UC-021 Preview Creative
 
     Examples: Invalid partitions
       | partition     | outcome                                                                  |
-      | empty_inputs  | error "INPUTS_EMPTY" with suggestion "at least one"                      |
-      | missing_name  | error "INPUT_NAME_REQUIRED" with suggestion "name"                       |
+      | empty_inputs  | error "INVALID_REQUEST" with suggestion "at least one"                      |
+      | missing_name  | error "INVALID_REQUEST" with suggestion "name"                       |
 
   @T-UC-021-boundary-input @boundary @input_variant
   Scenario Outline: Input variant boundary validation -- <boundary_point>
@@ -770,10 +770,10 @@ Feature: BR-UC-021 Preview Creative
     Examples: Boundary values
       | boundary_point                              | outcome                                                      |
       | inputs array with 1 item (minItems)         | response contains exactly 1 preview                          |
-      | inputs array with 0 items                   | error "INPUTS_EMPTY" with suggestion "at least one"          |
+      | inputs array with 0 items                   | error "INVALID_REQUEST" with suggestion "at least one"          |
       | inputs omitted entirely                     | response contains 1 default preview                          |
       | input with name only (minimal)              | response contains preview with echoed input name             |
-      | input without name                          | error "INPUT_NAME_REQUIRED" with suggestion "name"           |
+      | input without name                          | error "INVALID_REQUEST" with suggestion "name"           |
       | response input echoes request input name    | preview input object contains the original name              |
       | response input echoes request macros        | preview input object contains the original macros            |
 
@@ -790,7 +790,7 @@ Feature: BR-UC-021 Preview Creative
 
     Examples: Invalid partitions
       | partition          | outcome                                                                      |
-      | missing_variant_id | error "VARIANT_ID_REQUIRED" with suggestion "variant_id"                     |
+      | missing_variant_id | error "INVALID_REQUEST" with suggestion "variant_id"                     |
       | variant_not_found  | error "REFERENCE_NOT_FOUND" with suggestion "get_creative_delivery"            |
 
   @T-UC-021-boundary-variant @boundary @variant_constraints
@@ -803,7 +803,7 @@ Feature: BR-UC-021 Preview Creative
       | boundary_point                              | outcome                                                                  |
       | variant_id present and valid                | response includes variant_id, previews, and manifest                     |
       | variant_id present, creative_id omitted     | response includes variant_id and manifest without creative_id            |
-      | variant_id missing in variant mode          | error "VARIANT_ID_REQUIRED" with suggestion "variant_id"                 |
+      | variant_id missing in variant mode          | error "INVALID_REQUEST" with suggestion "variant_id"                 |
       | variant_id references non-existent variant  | error "REFERENCE_NOT_FOUND" with suggestion "get_creative_delivery"        |
       | variant_id references expired variant       | error "REFERENCE_NOT_FOUND" with suggestion "get_creative_delivery"        |
 
@@ -821,8 +821,8 @@ Feature: BR-UC-021 Preview Creative
 
     Examples: Invalid partitions
       | partition              | outcome                                                              |
-      | missing_discriminator  | error "REQUEST_TYPE_REQUIRED" with suggestion "request_type"         |
-      | unknown_value          | error "REQUEST_TYPE_INVALID" with suggestion "single"                |
+      | missing_discriminator  | error "INVALID_REQUEST" with suggestion "request_type"         |
+      | unknown_value          | error "INVALID_REQUEST" with suggestion "single"                |
 
   @T-UC-021-boundary-discriminator @boundary @type_discriminator
   Scenario Outline: Type discriminator boundary validation -- <boundary_point>
@@ -835,8 +835,8 @@ Feature: BR-UC-021 Preview Creative
       | request_type = 'single'                                | response has response_type "single"                                  |
       | request_type = 'batch'                                 | response has response_type "batch"                                   |
       | request_type = 'variant'                               | response has response_type "variant"                                 |
-      | request_type missing                                   | error "REQUEST_TYPE_REQUIRED" with suggestion "request_type"         |
-      | request_type = 'unknown_value'                         | error "REQUEST_TYPE_INVALID" with suggestion "single"                |
+      | request_type missing                                   | error "INVALID_REQUEST" with suggestion "request_type"         |
+      | request_type = 'unknown_value'                         | error "INVALID_REQUEST" with suggestion "single"                |
       | response_type matches request_type (single->single)    | response_type equals request_type                                    |
       | response_type mismatches request_type                  | protocol violation -- response_type must mirror request_type         |
 

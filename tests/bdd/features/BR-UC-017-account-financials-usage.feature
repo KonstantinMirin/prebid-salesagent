@@ -193,7 +193,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     When the Buyer Agent submits a usage record missing vendor_cost field
     Then the response contains accepted count of 0
     And the response contains an errors array
-    And the error code should be "INVALID_USAGE_DATA"
+    And the error code should be "INVALID_REQUEST"
     And the error field path should reference "usage[0].vendor_cost"
     And the error should include "suggestion" field
     And the suggestion should contain "required fields"
@@ -207,7 +207,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     When the Buyer Agent submits a usage record with vendor_cost of -50
     Then the response contains accepted count of 0
     And the response contains an errors array
-    And the error code should be "INVALID_USAGE_DATA"
+    And the error code should be "INVALID_REQUEST"
     And the error field path should reference "usage[0].vendor_cost"
     And the error should include "suggestion" field
     And the suggestion should contain "vendor_cost must be >= 0"
@@ -221,7 +221,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     When the Buyer Agent submits a usage record with currency "usd" (lowercase)
     Then the response contains accepted count of 0
     And the response contains an errors array
-    And the error code should be "INVALID_USAGE_DATA"
+    And the error code should be "INVALID_REQUEST"
     And the error field path should reference "usage[0].currency"
     And the error should include "suggestion" field
     And the suggestion should contain "ISO 4217"
@@ -235,7 +235,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And no pricing option "po_unknown" exists for account "acct_001"
     When the Buyer Agent submits a usage record with pricing_option_id "po_unknown"
     Then the response contains an errors array
-    And the error code should be "INVALID_PRICING_OPTION"
+    And the error code should be "REFERENCE_NOT_FOUND"
     And the error field path should reference "usage[0].pricing_option_id"
     And the error should include "suggestion" field
     And the suggestion should contain "verify pricing_option_id from vendor discovery"
@@ -316,7 +316,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     When the Buyer Agent submits 3 usage records where record 0 and 2 are valid and record 1 has invalid pricing_option_id "po_bad"
     Then the response contains accepted count of 2
     And the response contains an errors array with 1 entry
-    And the error for record 1 has code "INVALID_PRICING_OPTION"
+    And the error for record 1 has code "REFERENCE_NOT_FOUND"
     And the error field path references "usage[1].pricing_option_id"
     And the error should include "suggestion" field
     And the suggestion should contain "verify pricing_option_id"
@@ -330,7 +330,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     When the Buyer Agent submits 2 usage records both with missing vendor_cost
     Then the response contains accepted count of 0
     And the response contains an errors array with 2 entries
-    And each error has code "INVALID_USAGE_DATA"
+    And each error has code "INVALID_REQUEST"
     And each error should include "suggestion" field
     # POST-S12: Buyer knows accepted count is 0
     # POST-S13: Buyer knows each record failed and why
@@ -612,7 +612,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And a valid reporting period
     When the Buyer Agent submits a usage record missing the currency field
     Then the response contains an errors array
-    And the error code should be "INVALID_USAGE_DATA"
+    And the error code should be "INVALID_REQUEST"
     And the error field path should reference the missing field
     And the error should include "suggestion" field
     And the suggestion should contain "required fields"
@@ -632,7 +632,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
     When the Buyer Agent submits a usage record with pricing_option_id "po_does_not_exist"
-    Then the error code should be "INVALID_PRICING_OPTION"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
     # INV-2: Unknown pricing_option_id -> INVALID_PRICING_OPTION
 
@@ -659,7 +659,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And a valid reporting period
     And a pricing option "po_pct_media" with percent_of_media pricing model
     When the Buyer Agent submits a usage record with pricing_option_id "po_pct_media" but no media_spend
-    Then the error code should be "INVALID_USAGE_DATA"
+    Then the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "media_spend required for percent_of_media"
     # INV-1 violated: percent_of_media without media_spend
@@ -753,7 +753,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
     When the Buyer Agent submits a usage record with vendor_cost -0.01 and currency "USD"
-    Then the error code should be "INVALID_USAGE_DATA"
+    Then the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # INV-2 violated: vendor_cost < 0 -> rejected
 
@@ -770,7 +770,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
     When the Buyer Agent submits a usage record with vendor_cost 100 and currency "Us1"
-    Then the error code should be "INVALID_USAGE_DATA"
+    Then the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "ISO 4217"
     # INV-3 violated: Currency doesn't match ^[A-Z]{3}$ -> rejected
@@ -788,7 +788,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     Given an operator-billed account "acct_001" exists
     And a valid reporting period
     When the Buyer Agent submits a usage record with media_spend -100 and vendor_cost 100
-    Then the error code should be "INVALID_USAGE_DATA"
+    Then the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "media_spend must be >= 0"
     # INV-3 violated: media_spend < 0 -> rejected
@@ -799,7 +799,7 @@ Feature: BR-UC-017 Account Financials & Usage Reporting
     And a valid reporting period
     When the Buyer Agent submits a usage record with impressions of -1
     Then the response contains an errors array
-    And the error code should be "INVALID_USAGE_DATA"
+    And the error code should be "INVALID_REQUEST"
     And the error field path should reference "usage[0].impressions"
     And the error should include "suggestion" field
     And the suggestion should contain "impressions must be >= 0"

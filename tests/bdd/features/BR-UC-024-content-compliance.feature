@@ -215,7 +215,7 @@ Feature: BR-UC-024 Content Compliance
     And a valid artifact with required fields
     When the Seller invokes calibrate_content with standards_id "nonexistent-std" and the artifact
     Then the operation should fail
-    And the error code should be "STANDARDS_NOT_FOUND"
+    And the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
     And the suggestion should contain "content standard"
     # POST-F1: System state unchanged
@@ -228,7 +228,7 @@ Feature: BR-UC-024 Content Compliance
     And 5 valid delivery records
     When the Buyer Agent invokes validate_content_delivery with standards_id "missing-std" and records
     Then the operation should fail
-    And the error code should be "STANDARDS_NOT_FOUND"
+    And the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
     And the suggestion should contain "content standard"
     # POST-F1: System state unchanged
@@ -264,7 +264,7 @@ Feature: BR-UC-024 Content Compliance
     Given a content standard "std-020" exists
     When the Buyer Agent invokes validate_content_delivery with standards_id "std-020" and an empty records array
     Then the operation should fail
-    And the error code should be "RECORDS_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "at least 1 delivery record"
     # POST-F1: System state unchanged
@@ -276,7 +276,7 @@ Feature: BR-UC-024 Content Compliance
     Given a content standard "std-021" exists
     When the Buyer Agent invokes validate_content_delivery with standards_id "std-021" and no records field
     Then the operation should fail
-    And the error code should be "RECORDS_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "at least 1 delivery record"
     # POST-F1: System state unchanged
@@ -288,7 +288,7 @@ Feature: BR-UC-024 Content Compliance
     Given a content standard "std-030" exists
     When the Buyer Agent invokes validate_content_delivery with standards_id "std-030" and 10001 records
     Then the operation should fail
-    And the error code should be "RECORDS_LIMIT_EXCEEDED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "split the batch"
     # POST-F1: System state unchanged
@@ -301,7 +301,7 @@ Feature: BR-UC-024 Content Compliance
     And an artifact missing property_rid but with artifact_id and assets
     When the Seller invokes calibrate_content with standards_id "std-040" and the incomplete artifact
     Then the operation should fail
-    And the error code should be "ARTIFACT_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "property_rid"
     # POST-F1: System state unchanged
@@ -315,7 +315,7 @@ Feature: BR-UC-024 Content Compliance
     And a delivery record where the artifact is missing the assets array
     When the Buyer Agent invokes validate_content_delivery with standards_id "std-041" and the record
     Then the operation should fail
-    And the error code should be "ARTIFACT_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "property_rid, artifact_id, and at least one asset"
     # POST-F1: System state unchanged
@@ -327,7 +327,7 @@ Feature: BR-UC-024 Content Compliance
     Given a media buy "mb-060" exists for the authenticated buyer
     When the Buyer Agent invokes get_media_buy_artifacts with media_buy_id "mb-060" and pagination max_results 0
     Then the operation should fail
-    And the error code should be "PAGINATION_INVALID"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "between 1 and 10,000"
     # POST-F1: System state unchanged
@@ -339,7 +339,7 @@ Feature: BR-UC-024 Content Compliance
     Given a media buy "mb-061" exists for the authenticated buyer
     When the Buyer Agent invokes get_media_buy_artifacts with media_buy_id "mb-061" and pagination max_results 10001
     Then the operation should fail
-    And the error code should be "PAGINATION_INVALID"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "between 1 and 10,000"
     # POST-F1: System state unchanged
@@ -351,7 +351,7 @@ Feature: BR-UC-024 Content Compliance
     Given a media buy "mb-062" exists for the authenticated buyer
     When the Buyer Agent invokes get_media_buy_artifacts with media_buy_id "mb-062" and pagination max_results -1
     Then the operation should fail
-    And the error code should be "PAGINATION_INVALID"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "between 1 and 10,000"
     # POST-F1: System state unchanged
@@ -363,7 +363,7 @@ Feature: BR-UC-024 Content Compliance
     Given a media buy "mb-063" exists for the authenticated buyer
     When the Buyer Agent invokes get_media_buy_artifacts with media_buy_id "mb-063" and pagination cursor "expired_xyz"
     Then the operation should fail
-    And the error code should be "PAGINATION_CURSOR_INVALID"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "omit cursor to start from the beginning"
     # POST-F1: System state unchanged
@@ -398,7 +398,7 @@ Feature: BR-UC-024 Content Compliance
     And an artifact without property_rid
     When the Seller invokes calibrate_content with standards_id "std-103" and the artifact
     Then the operation should fail
-    And the error code should be "ARTIFACT_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "property_rid, artifact_id, and at least one asset"
     # POST-F3: Recovery suggestion provided
@@ -410,7 +410,7 @@ Feature: BR-UC-024 Content Compliance
     And an artifact without artifact_id
     When the Seller invokes calibrate_content with standards_id "std-104" and the artifact
     Then the operation should fail
-    And the error code should be "ARTIFACT_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "property_rid, artifact_id, and at least one asset"
     # POST-F3: Recovery suggestion provided
@@ -422,7 +422,7 @@ Feature: BR-UC-024 Content Compliance
     And an artifact with property_rid and artifact_id but empty assets array
     When the Seller invokes calibrate_content with standards_id "std-105" and the artifact
     Then the operation should fail
-    And the error code should be "ARTIFACT_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "at least one asset"
     # POST-F3: Recovery suggestion provided
@@ -434,7 +434,7 @@ Feature: BR-UC-024 Content Compliance
     And an artifact with a text asset that has type "text" but no content field
     When the Seller invokes calibrate_content with standards_id "std-106" and the artifact
     Then the operation should fail
-    And the error code should be "ARTIFACT_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "required fields"
     # POST-F3: Recovery suggestion provided
@@ -445,7 +445,7 @@ Feature: BR-UC-024 Content Compliance
     And an artifact with an image asset that has type "image" but no url field
     When the Seller invokes calibrate_content with standards_id "std-107" and the artifact
     Then the operation should fail
-    And the error code should be "ARTIFACT_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "required fields"
     # POST-F3: Recovery suggestion provided
@@ -462,7 +462,7 @@ Feature: BR-UC-024 Content Compliance
     Given a content standard "std-111" exists
     When the Buyer Agent invokes validate_content_delivery with standards_id "std-111" and 0 records
     Then the operation should fail
-    And the error code should be "RECORDS_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "at least 1"
     # POST-F3: Recovery suggestion provided
@@ -472,7 +472,7 @@ Feature: BR-UC-024 Content Compliance
     Given a content standard "std-112" exists
     When the Buyer Agent invokes validate_content_delivery with standards_id "std-112" and 10001 records
     Then the operation should fail
-    And the error code should be "RECORDS_LIMIT_EXCEEDED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "split the batch"
     # POST-F3: Recovery suggestion provided
@@ -483,7 +483,7 @@ Feature: BR-UC-024 Content Compliance
     And a delivery record without record_id but with valid artifact
     When the Buyer Agent invokes validate_content_delivery with standards_id "std-113" and the record
     Then the operation should fail
-    And the error code should be "ARTIFACT_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "record_id"
     # POST-F3: Recovery suggestion provided
@@ -494,7 +494,7 @@ Feature: BR-UC-024 Content Compliance
     And a delivery record with record_id but without artifact
     When the Buyer Agent invokes validate_content_delivery with standards_id "std-114" and the record
     Then the operation should fail
-    And the error code should be "ARTIFACT_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "artifact"
     # POST-F3: Recovery suggestion provided
@@ -564,7 +564,7 @@ Feature: BR-UC-024 Content Compliance
     Given a content standard "std-132" exists
     When the Seller submits a calibration follow-up using contextId "nonexistent-conv"
     Then the operation should fail
-    And the error code should be "CONTEXT_NOT_FOUND"
+    And the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
     And the suggestion should contain "new calibration conversation"
     # POST-F3: Recovery suggestion provided
@@ -610,7 +610,7 @@ Feature: BR-UC-024 Content Compliance
     Given a media buy "mb-142" exists for the authenticated buyer
     When the Buyer Agent invokes get_media_buy_artifacts with pagination max_results 0
     Then the operation should fail
-    And the error code should be "PAGINATION_INVALID"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "between 1 and 10,000"
     # POST-F3: Recovery suggestion provided
@@ -620,7 +620,7 @@ Feature: BR-UC-024 Content Compliance
     Given a media buy "mb-143" exists for the authenticated buyer
     When the Buyer Agent invokes get_media_buy_artifacts with pagination cursor "invalid_state_abc"
     Then the operation should fail
-    And the error code should be "PAGINATION_CURSOR_INVALID"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "omit cursor"
     # POST-F3: Recovery suggestion provided
@@ -666,7 +666,7 @@ Feature: BR-UC-024 Content Compliance
     And 5 delivery records with valid artifacts
     When the Buyer Agent invokes validate_content_delivery with feature_ids as an empty array
     Then the operation should fail
-    And the error code should be "FEATURE_IDS_EMPTY"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "one or more feature IDs"
     # POST-F3: Recovery suggestion provided
@@ -733,12 +733,12 @@ Feature: BR-UC-024 Content Compliance
 
     Examples: Invalid partitions
       | partition                  | outcome                                                  |
-      | missing_property_rid        | error "ARTIFACT_REQUIRED" with suggestion                |
-      | missing_artifact_id        | error "ARTIFACT_REQUIRED" with suggestion                |
-      | missing_assets             | error "ARTIFACT_REQUIRED" with suggestion                |
-      | empty_assets               | error "ARTIFACT_REQUIRED" with suggestion                |
-      | asset_missing_type         | error "ARTIFACT_REQUIRED" with suggestion                |
-      | text_asset_missing_content | error "ARTIFACT_REQUIRED" with suggestion                |
+      | missing_property_rid        | error "INVALID_REQUEST" with suggestion                |
+      | missing_artifact_id        | error "INVALID_REQUEST" with suggestion                |
+      | missing_assets             | error "INVALID_REQUEST" with suggestion                |
+      | empty_assets               | error "INVALID_REQUEST" with suggestion                |
+      | asset_missing_type         | error "INVALID_REQUEST" with suggestion                |
+      | text_asset_missing_content | error "INVALID_REQUEST" with suggestion                |
 
   @T-UC-024-partition-records @partition @records
   Scenario Outline: Delivery records batch partition validation - <partition>
@@ -756,11 +756,11 @@ Feature: BR-UC-024 Content Compliance
 
     Examples: Invalid partitions
       | partition                | outcome                                                    |
-      | empty_records            | error "RECORDS_REQUIRED" with suggestion                   |
-      | missing_records          | error "RECORDS_REQUIRED" with suggestion                   |
-      | exceeds_limit            | error "RECORDS_LIMIT_EXCEEDED" with suggestion             |
-      | record_missing_record_id | error "ARTIFACT_REQUIRED" with suggestion                  |
-      | record_missing_artifact  | error "ARTIFACT_REQUIRED" with suggestion                  |
+      | empty_records            | error "INVALID_REQUEST" with suggestion                   |
+      | missing_records          | error "INVALID_REQUEST" with suggestion                   |
+      | exceeds_limit            | error "INVALID_REQUEST" with suggestion             |
+      | record_missing_record_id | error "INVALID_REQUEST" with suggestion                  |
+      | record_missing_artifact  | error "INVALID_REQUEST" with suggestion                  |
 
   @T-UC-024-partition-sampling @partition @sampling
   Scenario Outline: Artifact request narrowing partition validation - <partition>
@@ -792,10 +792,10 @@ Feature: BR-UC-024 Content Compliance
 
     Examples: Invalid partitions
       | partition             | outcome                                                    |
-      | max_results_zero      | error "PAGINATION_INVALID" with suggestion                 |
-      | max_results_negative  | error "PAGINATION_INVALID" with suggestion                 |
-      | max_results_exceeds   | error "PAGINATION_INVALID" with suggestion                 |
-      | invalid_cursor        | error "PAGINATION_CURSOR_INVALID" with suggestion          |
+      | max_results_zero      | error "INVALID_REQUEST" with suggestion                 |
+      | max_results_negative  | error "INVALID_REQUEST" with suggestion                 |
+      | max_results_exceeds   | error "INVALID_REQUEST" with suggestion                 |
+      | invalid_cursor        | error "INVALID_REQUEST" with suggestion          |
 
   @T-UC-024-partition-verdict @partition @verdict
   Scenario Outline: Verdict model partition validation - <partition>
@@ -815,11 +815,11 @@ Feature: BR-UC-024 Content Compliance
 
     Examples: Invalid partitions
       | partition                | outcome                                                    |
-      | missing_verdict          | error "VERDICT_REQUIRED" with suggestion                   |
-      | invalid_verdict_value    | error "VERDICT_INVALID" with suggestion                    |
-      | confidence_below_zero    | error "CONFIDENCE_OUT_OF_RANGE" with suggestion            |
-      | confidence_above_one     | error "CONFIDENCE_OUT_OF_RANGE" with suggestion            |
-      | invalid_feature_status   | error "FEATURE_STATUS_INVALID" with suggestion             |
+      | missing_verdict          | error "INVALID_REQUEST" with suggestion                   |
+      | invalid_verdict_value    | error "INVALID_REQUEST" with suggestion                    |
+      | confidence_below_zero    | error "INVALID_REQUEST" with suggestion            |
+      | confidence_above_one     | error "INVALID_REQUEST" with suggestion            |
+      | invalid_feature_status   | error "INVALID_REQUEST" with suggestion             |
 
   @T-UC-024-partition-local-verdict @partition @local_verdict
   Scenario Outline: Local verdict partition validation - <partition>
@@ -839,7 +839,7 @@ Feature: BR-UC-024 Content Compliance
 
     Examples: Invalid partitions
       | partition               | outcome                                                    |
-      | invalid_local_verdict   | error "LOCAL_VERDICT_INVALID" with suggestion              |
+      | invalid_local_verdict   | error "INVALID_REQUEST" with suggestion              |
 
   @T-UC-024-partition-feature-ids @partition @feature_ids
   Scenario Outline: Feature filtering partition validation - <partition>
@@ -856,7 +856,7 @@ Feature: BR-UC-024 Content Compliance
 
     Examples: Invalid partitions
       | partition           | outcome                                                   |
-      | empty_feature_ids   | error "FEATURE_IDS_EMPTY" with suggestion                 |
+      | empty_feature_ids   | error "INVALID_REQUEST" with suggestion                 |
 
   @T-UC-024-partition-include-passed @partition @include_passed
   Scenario Outline: Result filtering partition validation - <partition>
@@ -873,7 +873,7 @@ Feature: BR-UC-024 Content Compliance
 
     Examples: Invalid partitions
       | partition     | outcome                                                        |
-      | non_boolean   | error "INCLUDE_PASSED_INVALID_TYPE" with suggestion            |
+      | non_boolean   | error "INVALID_REQUEST" with suggestion            |
 
   @T-UC-024-partition-summary @partition @summary
   Scenario Outline: Summary counts partition validation - <partition>
@@ -891,10 +891,10 @@ Feature: BR-UC-024 Content Compliance
 
     Examples: Invalid partitions
       | partition          | outcome                                                    |
-      | missing_total      | error "SUMMARY_INCOMPLETE" with suggestion                 |
-      | missing_passed     | error "SUMMARY_INCOMPLETE" with suggestion                 |
-      | missing_failed     | error "SUMMARY_INCOMPLETE" with suggestion                 |
-      | counts_mismatch    | error "SUMMARY_COUNTS_MISMATCH" with suggestion            |
+      | missing_total      | error "VALIDATION_ERROR" with suggestion                 |
+      | missing_passed     | error "VALIDATION_ERROR" with suggestion                 |
+      | missing_failed     | error "VALIDATION_ERROR" with suggestion                 |
+      | counts_mismatch    | error "VALIDATION_ERROR" with suggestion            |
 
   @T-UC-024-partition-dialogue @partition @dialogue
   Scenario Outline: Calibration dialogue partition validation - <partition>
@@ -912,8 +912,8 @@ Feature: BR-UC-024 Content Compliance
 
     Examples: Invalid partitions
       | partition              | outcome                                                  |
-      | invalid_context_id     | error "CONTEXT_NOT_FOUND" with suggestion                |
-      | missing_standards_id   | error "STANDARDS_NOT_FOUND" with suggestion              |
+      | invalid_context_id     | error "REFERENCE_NOT_FOUND" with suggestion                |
+      | missing_standards_id   | error "REFERENCE_NOT_FOUND" with suggestion              |
 
   @T-UC-024-boundary-artifact @boundary @artifact
   Scenario Outline: Artifact structure boundary validation - <boundary_point>
@@ -925,12 +925,12 @@ Feature: BR-UC-024 Content Compliance
     Examples: Boundary values
       | boundary_point                                  | outcome                                              |
       | artifact with exactly one asset (minimum valid) | the operation succeeds                               |
-      | artifact missing property_rid                    | error "ARTIFACT_REQUIRED" with suggestion            |
-      | artifact missing artifact_id                    | error "ARTIFACT_REQUIRED" with suggestion            |
-      | artifact missing assets                         | error "ARTIFACT_REQUIRED" with suggestion            |
-      | artifact with empty assets array (0 items)      | error "ARTIFACT_REQUIRED" with suggestion            |
-      | text asset missing content                      | error "ARTIFACT_REQUIRED" with suggestion            |
-      | image asset missing url                         | error "ARTIFACT_REQUIRED" with suggestion            |
+      | artifact missing property_rid                    | error "INVALID_REQUEST" with suggestion            |
+      | artifact missing artifact_id                    | error "INVALID_REQUEST" with suggestion            |
+      | artifact missing assets                         | error "INVALID_REQUEST" with suggestion            |
+      | artifact with empty assets array (0 items)      | error "INVALID_REQUEST" with suggestion            |
+      | text asset missing content                      | error "INVALID_REQUEST" with suggestion            |
+      | image asset missing url                         | error "INVALID_REQUEST" with suggestion            |
       | artifact with all four asset types              | the operation succeeds                               |
 
   @T-UC-024-boundary-records @boundary @records
@@ -942,13 +942,13 @@ Feature: BR-UC-024 Content Compliance
 
     Examples: Boundary values
       | boundary_point                | outcome                                                    |
-      | 0 records (empty array)       | error "RECORDS_REQUIRED" with suggestion                   |
+      | 0 records (empty array)       | error "INVALID_REQUEST" with suggestion                   |
       | 1 record (minimum valid)      | the operation succeeds                                     |
       | 10,000 records (maximum valid) | the operation succeeds                                    |
-      | 10,001 records (exceeds limit) | error "RECORDS_LIMIT_EXCEEDED" with suggestion            |
-      | records field absent          | error "RECORDS_REQUIRED" with suggestion                   |
-      | record without record_id      | error "ARTIFACT_REQUIRED" with suggestion                  |
-      | record without artifact       | error "ARTIFACT_REQUIRED" with suggestion                  |
+      | 10,001 records (exceeds limit) | error "INVALID_REQUEST" with suggestion            |
+      | records field absent          | error "INVALID_REQUEST" with suggestion                   |
+      | record without record_id      | error "INVALID_REQUEST" with suggestion                  |
+      | record without artifact       | error "INVALID_REQUEST" with suggestion                  |
 
   @T-UC-024-boundary-sampling @boundary @sampling
   Scenario Outline: Artifact request narrowing boundary validation - <boundary_point>
@@ -974,11 +974,11 @@ Feature: BR-UC-024 Content Compliance
       | boundary_point                                | outcome                                                    |
       | pagination omitted (default max_results=1000) | the operation succeeds                                     |
       | max_results = 1 (minimum)                     | the operation succeeds                                     |
-      | max_results = 0 (below minimum)               | error "PAGINATION_INVALID" with suggestion                 |
+      | max_results = 0 (below minimum)               | error "INVALID_REQUEST" with suggestion                 |
       | max_results = 10000 (maximum)                 | the operation succeeds                                     |
-      | max_results = 10001 (above maximum)           | error "PAGINATION_INVALID" with suggestion                 |
+      | max_results = 10001 (above maximum)           | error "INVALID_REQUEST" with suggestion                 |
       | cursor from valid previous response           | the operation succeeds                                     |
-      | cursor with unknown/expired value             | error "PAGINATION_CURSOR_INVALID" with suggestion          |
+      | cursor with unknown/expired value             | error "INVALID_REQUEST" with suggestion          |
 
   @T-UC-024-boundary-verdict @boundary @verdict
   Scenario Outline: Verdict model boundary validation - <boundary_point>
@@ -991,17 +991,17 @@ Feature: BR-UC-024 Content Compliance
       | boundary_point                     | outcome                                                    |
       | verdict = pass                     | the operation succeeds                                     |
       | verdict = fail                     | the operation succeeds                                     |
-      | verdict absent                     | error "VERDICT_REQUIRED" with suggestion                   |
-      | verdict = unknown string           | error "VERDICT_INVALID" with suggestion                    |
+      | verdict absent                     | error "INVALID_REQUEST" with suggestion                   |
+      | verdict = unknown string           | error "INVALID_REQUEST" with suggestion                    |
       | confidence = 0 (minimum)           | the operation succeeds                                     |
       | confidence = 1 (maximum)           | the operation succeeds                                     |
-      | confidence = -0.001 (below minimum) | error "CONFIDENCE_OUT_OF_RANGE" with suggestion           |
-      | confidence = 1.001 (above maximum) | error "CONFIDENCE_OUT_OF_RANGE" with suggestion            |
+      | confidence = -0.001 (below minimum) | error "INVALID_REQUEST" with suggestion           |
+      | confidence = 1.001 (above maximum) | error "INVALID_REQUEST" with suggestion            |
       | feature status = passed            | the operation succeeds                                     |
       | feature status = failed            | the operation succeeds                                     |
       | feature status = warning           | the operation succeeds                                     |
       | feature status = unevaluated       | the operation succeeds                                     |
-      | feature status = unknown value     | error "FEATURE_STATUS_INVALID" with suggestion             |
+      | feature status = unknown value     | error "INVALID_REQUEST" with suggestion             |
 
   @T-UC-024-boundary-local-verdict @boundary @local_verdict
   Scenario Outline: Local verdict boundary validation - <boundary_point>
@@ -1016,7 +1016,7 @@ Feature: BR-UC-024 Content Compliance
       | local_verdict = fail          | artifact includes valid local_verdict                      |
       | local_verdict = unevaluated   | artifact includes valid local_verdict                      |
       | local_verdict absent          | artifact valid without local_verdict                       |
-      | local_verdict = unknown value | error "LOCAL_VERDICT_INVALID" with suggestion              |
+      | local_verdict = unknown value | error "INVALID_REQUEST" with suggestion              |
 
   @T-UC-024-boundary-feature-ids @boundary @feature_ids
   Scenario Outline: Feature filtering boundary validation - <boundary_point>
@@ -1029,7 +1029,7 @@ Feature: BR-UC-024 Content Compliance
       | boundary_point                          | outcome                                                   |
       | feature_ids omitted (evaluate all)      | all features evaluated                                    |
       | feature_ids with 1 element (minimum valid) | only that feature evaluated                            |
-      | feature_ids with 0 elements (empty array) | error "FEATURE_IDS_EMPTY" with suggestion               |
+      | feature_ids with 0 elements (empty array) | error "INVALID_REQUEST" with suggestion               |
       | feature_ids with unknown feature        | feature evaluated (may produce unevaluated)               |
 
   @T-UC-024-boundary-include-passed @boundary @include_passed
@@ -1059,9 +1059,9 @@ Feature: BR-UC-024 Content Compliance
       | all records fail (passed_records = 0)         | summary valid with zero passes                             |
       | single record batch (total = 1)               | summary valid with total 1                                 |
       | maximum batch (total = 10000)                 | summary valid with total 10000                             |
-      | total_records missing                         | error "SUMMARY_INCOMPLETE" with suggestion                 |
-      | passed + failed != total                      | error "SUMMARY_COUNTS_MISMATCH" with suggestion            |
-      | summary object absent from success response   | error "SUMMARY_INCOMPLETE" with suggestion                 |
+      | total_records missing                         | error "VALIDATION_ERROR" with suggestion                 |
+      | passed + failed != total                      | error "VALIDATION_ERROR" with suggestion            |
+      | summary object absent from success response   | error "VALIDATION_ERROR" with suggestion                 |
 
   @T-UC-024-boundary-dialogue @boundary @dialogue
   Scenario Outline: Calibration dialogue boundary validation - <boundary_point>
@@ -1074,7 +1074,7 @@ Feature: BR-UC-024 Content Compliance
       | boundary_point                                       | outcome                                                  |
       | first turn (no contextId)                            | verdict returned successfully                            |
       | second turn in same conversation (with contextId)    | response within accumulated context                      |
-      | second turn with invalid contextId                   | error "CONTEXT_NOT_FOUND" with suggestion                |
+      | second turn with invalid contextId                   | error "REFERENCE_NOT_FOUND" with suggestion                |
       | follow-up with different artifact in same conversation | artifact evaluated in accumulated context              |
       | text-only follow-up question (no new artifact)       | question answered in conversation context                |
 

@@ -147,7 +147,7 @@ Feature: BR-UC-012 Manage Content Standards
     When the Buyer Agent updates "std_001" scope to {"languages_any": ["de"]}
     Then the response success field is false
     And the response contains errors array with at least 1 item
-    And the errors array includes error code "SCOPE_CONFLICT"
+    And the errors array includes error code "CONFLICT"
     And the response includes conflicting_standards_id "std_002"
     And the error should include "suggestion"
     # BR-RULE-065 INV-2: Update scope overlap → SCOPE_CONFLICT via oneOf error branch
@@ -161,14 +161,14 @@ Feature: BR-UC-012 Manage Content Standards
     When the Buyer Agent updates the scope to {"languages_any": []}
     Then the response success field is false
     And the response contains errors array with at least 1 item
-    And the errors array includes error code "LANGUAGES_REQUIRED"
+    And the errors array includes error code "INVALID_REQUEST"
     And the error should include "suggestion"
     # BR-RULE-064 INV-5: Update languages_any must satisfy minItems:1
 
   @T-UC-012-update-not-found @update @error @post-f2 @post-f3
   Scenario: Update content standard - standards_id not found
     When the Buyer Agent sends an update for non-existent standards_id "nonexistent_id"
-    Then the error code should be "STANDARDS_NOT_FOUND"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion"
     # POST-F2: Buyer knows what failed
     # POST-F3: Suggestion present
@@ -231,7 +231,7 @@ Feature: BR-UC-012 Manage Content Standards
   Scenario: Delete content standard - blocked when referenced by active media buy
     Given an existing content standard "std_active" referenced by 2 active media buys
     When the Buyer Agent attempts to delete "std_active"
-    Then the error code should be "STANDARDS_IN_USE"
+    Then the error code should be "CONFLICT"
     And the error should include "suggestion"
     And the content standard "std_active" still exists
     # BR-RULE-067 INV-1: Active media buy references → STANDARDS_IN_USE
@@ -249,14 +249,14 @@ Feature: BR-UC-012 Manage Content Standards
   @T-UC-012-delete-not-found @delete @error @post-f2 @post-f3
   Scenario: Delete content standard - standards_id not found
     When the Buyer Agent attempts to delete non-existent standards_id "nonexistent_id"
-    Then the error code should be "STANDARDS_NOT_FOUND"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion"
 
   @T-UC-012-delete-unchanged @delete @error @post-f1
   Scenario: Failed delete does not modify system state
     Given an existing content standard "std_active" referenced by active media buys
     When the Buyer Agent attempts to delete "std_active"
-    Then the error code should be "STANDARDS_IN_USE"
+    Then the error code should be "CONFLICT"
     And the error should include "suggestion"
     And the content standard "std_active" still exists with unchanged data
     # POST-F1: System state unchanged on failure
@@ -264,7 +264,7 @@ Feature: BR-UC-012 Manage Content Standards
   @T-UC-012-not-found-operations @not-found @error @ext-e @post-f1 @post-f2 @post-f3
   Scenario Outline: STANDARDS_NOT_FOUND on <operation> with non-existent ID
     When the Buyer Agent sends a <operation> request for standards_id "nonexistent_id"
-    Then the error code should be "STANDARDS_NOT_FOUND"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion"
     And the system state is unchanged
     # POST-F1: Unchanged
@@ -281,7 +281,7 @@ Feature: BR-UC-012 Manage Content Standards
   Scenario: STANDARDS_NOT_FOUND when standards_id belongs to different tenant
     Given a content standard "std_other" exists in tenant "other_tenant"
     When the Buyer Agent in tenant "my_tenant" requests get_content_standards for "std_other"
-    Then the error code should be "STANDARDS_NOT_FOUND"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     # Tenant isolation: cannot see other tenant's standards
 
   @T-UC-012-scope-no-conflict @scope-conflict @create @partition
@@ -298,7 +298,7 @@ Feature: BR-UC-012 Manage Content Standards
     When the Buyer Agent updates "std_a" scope to {"languages_any": ["de"]}
     Then the response success field is false
     And the response contains errors array with at least 1 item
-    And the errors array includes error code "SCOPE_CONFLICT"
+    And the errors array includes error code "CONFLICT"
     And the response includes conflicting_standards_id "std_b"
     And the error should include "suggestion"
     # BR-RULE-065 INV-2: Update scope overlap → error branch

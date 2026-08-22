@@ -159,7 +159,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given no scoping filters are included in the delivery request
     When the Buyer Agent invokes get_creative_delivery without media_buy_ids or creative_ids
     Then the operation should fail
-    And the error code should be "SCOPING_FILTER_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "media_buy_ids"
@@ -173,7 +173,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given the delivery request includes media_buy_ids as an empty array []
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids []
     Then the operation should fail
-    And the error code should be "SCOPING_FILTER_EMPTY"
+    And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "Add at least one identifier"
@@ -212,7 +212,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given media buy "mb-010" exists
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-010"] and start_date "2026-03-15" and end_date "2026-03-01"
     Then the operation should fail
-    And the error code should be "DATE_RANGE_INVALID"
+    And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "start_date is before end_date"
@@ -225,7 +225,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given media buy "mb-011" exists
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-011"] and start_date "2026-03-10" and end_date "2026-03-10"
     Then the operation should fail
-    And the error code should be "DATE_RANGE_INVALID"
+    And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "before end_date"
@@ -238,7 +238,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given media buy "mb-012" exists
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-012"] and start_date "03/15/2026"
     Then the operation should fail
-    And the error code should be "DATE_INVALID_FORMAT"
+    And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "YYYY-MM-DD"
@@ -251,7 +251,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given media buy "mb-013" exists
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-013"] and start_date "2026-03-01" and end_date "2026/03/31"
     Then the operation should fail
-    And the error code should be "DATE_INVALID_FORMAT"
+    And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "YYYY-MM-DD"
@@ -264,7 +264,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given the seller declares creative_features capability as true
     When the Buyer Agent invokes get_creative_features without creative_manifest
     Then the operation should fail
-    And the error code should be "CREATIVE_MANIFEST_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "format_id and assets"
@@ -277,7 +277,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given the seller declares creative_features capability as true
     When the Buyer Agent invokes get_creative_features with a manifest missing format_id
     Then the operation should fail
-    And the error code should be "MANIFEST_VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "format_id with agent_url and id"
@@ -290,7 +290,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given the seller declares creative_features capability as true
     When the Buyer Agent invokes get_creative_features with a manifest that has format_id but no assets
     Then the operation should fail
-    And the error code should be "MANIFEST_VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "assets map"
@@ -303,7 +303,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given the seller declares creative_features capability as true
     When the Buyer Agent invokes get_creative_features with a manifest where format_id has id but no agent_url
     Then the operation should fail
-    And the error code should be "MANIFEST_VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "agent_url"
@@ -316,7 +316,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given the seller declares creative_features capability as true
     When the Buyer Agent invokes get_creative_features with a manifest where format_id has agent_url but no id
     Then the operation should fail
-    And the error code should be "MANIFEST_VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the suggestion should contain "format_id"
@@ -420,7 +420,7 @@ Feature: BR-UC-022 Creative Delivery & Features
   Scenario: INV-2 violated -- none of three scoping fields present
     When the Buyer Agent invokes get_creative_delivery with only optional params start_date "2026-01-01"
     Then the operation should fail
-    And the error code should be "SCOPING_FILTER_REQUIRED"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "media_buy_ids"
 
@@ -428,7 +428,7 @@ Feature: BR-UC-022 Creative Delivery & Features
   Scenario: INV-3 violated -- scoping field present with empty array
     When the Buyer Agent invokes get_creative_delivery with creative_ids []
     Then the operation should fail
-    And the error code should be "SCOPING_FILTER_EMPTY"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "at least one identifier"
 
@@ -450,7 +450,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given the seller declares creative_features capability as true
     When the Buyer Agent invokes get_creative_features with a manifest containing only assets (no format_id)
     Then the operation should fail
-    And the error code should be "MANIFEST_VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "format_id"
 
@@ -465,7 +465,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given the seller declares creative_features capability as true
     When the Buyer Agent invokes get_creative_features with a manifest where format_id has id but no agent_url
     Then the operation should fail
-    And the error code should be "MANIFEST_VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "agent_url"
 
@@ -480,7 +480,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given the seller declares creative_features capability as true
     When the Buyer Agent invokes get_creative_features with a manifest where format_id has width 300 but no height
     Then the operation should fail
-    And the error code should be "MANIFEST_VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "width and height"
 
@@ -495,7 +495,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given the seller declares creative_features capability as true
     When the Buyer Agent invokes get_creative_features with a manifest having asset key "Hero-Image!"
     Then the operation should fail
-    And the error code should be "MANIFEST_VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "lowercase alphanumeric"
 
@@ -531,7 +531,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given media buy "mb-033" exists
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-033"] and max_variants 0
     Then the operation should fail
-    And the error code should be "MAX_VARIANTS_INVALID"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "at least 1"
 
@@ -548,7 +548,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     And the governance agent returns a result with confidence 1.5
     When the system processes the feature result
     Then the confidence value is rejected as out of range
-    And the error code should be "CONFIDENCE_OUT_OF_RANGE"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "0..1 range"
 
@@ -614,8 +614,8 @@ Feature: BR-UC-022 Creative Delivery & Features
 
     Examples: Invalid partitions
       | partition     | filter_config                  | outcome                                                            |
-      | no_filter     | {"start_date": "2026-01-01"}   | error "SCOPING_FILTER_REQUIRED" with suggestion                    |
-      | empty_array   | {"media_buy_ids": []}          | error "SCOPING_FILTER_EMPTY" with suggestion                       |
+      | no_filter     | {"start_date": "2026-01-01"}   | error "INVALID_REQUEST" with suggestion                    |
+      | empty_array   | {"media_buy_ids": []}          | error "INVALID_REQUEST" with suggestion                       |
 
   @T-UC-022-boundary-scoping @boundary @scoping_filter
   Scenario Outline: Scoping filter boundary validation - <boundary_point>
@@ -625,9 +625,9 @@ Feature: BR-UC-022 Creative Delivery & Features
 
     Examples: Boundary values
       | boundary_point                                    | filter_config                                                                                            | outcome                                                            |
-      | zero filters present                              | {"start_date": "2026-01-01"}                                                                             | error "SCOPING_FILTER_REQUIRED" with suggestion                    |
+      | zero filters present                              | {"start_date": "2026-01-01"}                                                                             | error "INVALID_REQUEST" with suggestion                    |
       | one filter with exactly one element               | {"media_buy_ids": ["mb-001"]}                                                                            | success with delivery data                                         |
-      | one filter with empty array []                    | {"media_buy_ids": []}                                                                                    | error "SCOPING_FILTER_EMPTY" with suggestion                       |
+      | one filter with empty array []                    | {"media_buy_ids": []}                                                                                    | error "INVALID_REQUEST" with suggestion                       |
       | both scoping filters present                      | {"media_buy_ids": ["mb-001"], "creative_ids": ["cr-001"]}                                                | success with delivery data                                         |
 
   @T-UC-022-partition-truncation @partition @variant_truncation
@@ -646,8 +646,8 @@ Feature: BR-UC-022 Creative Delivery & Features
 
     Examples: Invalid partitions
       | partition              | actual_variants | max_variants_param | outcome                                                    |
-      | max_variants_zero      | 5               | 0                  | error "MAX_VARIANTS_INVALID" with suggestion               |
-      | max_variants_negative  | 5               | -1                 | error "MAX_VARIANTS_INVALID" with suggestion               |
+      | max_variants_zero      | 5               | 0                  | error "INVALID_REQUEST" with suggestion               |
+      | max_variants_negative  | 5               | -1                 | error "INVALID_REQUEST" with suggestion               |
 
   @T-UC-022-boundary-truncation @boundary @variant_truncation
   Scenario Outline: Variant truncation boundary validation - <boundary_point>
@@ -657,7 +657,7 @@ Feature: BR-UC-022 Creative Delivery & Features
 
     Examples: Boundary values
       | boundary_point                                              | actual_variants | max_variants_param | outcome                                                    |
-      | max_variants = 0 (below minimum)                            | 5               | 0                  | error "MAX_VARIANTS_INVALID" with suggestion               |
+      | max_variants = 0 (below minimum)                            | 5               | 0                  | error "INVALID_REQUEST" with suggestion               |
       | max_variants = 1 (boundary minimum)                         | 50              | 1                  | success with 1 variant and variant_count 50                |
       | max_variants omitted (no truncation)                        | 5               | omitted            | success with 5 variants and variant_count 5                |
       | variant_count == max_variants exactly (no truncation needed) | 5               | 5                  | success with 5 variants and variant_count 5                |
@@ -683,8 +683,8 @@ Feature: BR-UC-022 Creative Delivery & Features
 
     Examples: Invalid partitions
       | partition                | metadata                  | outcome                                                   |
-      | confidence_below_range   | {"confidence": -0.01}     | error "CONFIDENCE_OUT_OF_RANGE" with suggestion            |
-      | confidence_above_range   | {"confidence": 1.01}      | error "CONFIDENCE_OUT_OF_RANGE" with suggestion            |
+      | confidence_below_range   | {"confidence": -0.01}     | error "INVALID_REQUEST" with suggestion            |
+      | confidence_above_range   | {"confidence": 1.01}      | error "INVALID_REQUEST" with suggestion            |
 
   @T-UC-022-boundary-expiry @boundary @evaluation_expiry
   Scenario Outline: Evaluation expiry boundary validation - <boundary_point>
@@ -697,8 +697,8 @@ Feature: BR-UC-022 Creative Delivery & Features
       | boundary_point                                          | metadata                                                                                                         | outcome                                                      |
       | confidence = 0 (boundary minimum: complete uncertainty) | {"confidence": 0}                                                                                                | success with confidence 0                                    |
       | confidence = 1 (boundary maximum: full certainty)       | {"confidence": 1}                                                                                                | success with confidence 1                                    |
-      | confidence = -0.01 (below minimum)                      | {"confidence": -0.01}                                                                                            | error "CONFIDENCE_OUT_OF_RANGE" with suggestion              |
-      | confidence = 1.01 (above maximum)                       | {"confidence": 1.01}                                                                                             | error "CONFIDENCE_OUT_OF_RANGE" with suggestion              |
+      | confidence = -0.01 (below minimum)                      | {"confidence": -0.01}                                                                                            | error "INVALID_REQUEST" with suggestion              |
+      | confidence = 1.01 (above maximum)                       | {"confidence": 1.01}                                                                                             | error "INVALID_REQUEST" with suggestion              |
       | expires_at == measured_at (zero-length validity window)  | {"confidence": 0.5, "measured_at": "2026-03-10T10:00:00Z", "expires_at": "2026-03-10T10:00:00Z"}                | success with zero-length validity window                     |
       | expires_at absent (no expiry signal)                    | {"confidence": 0.8}                                                                                              | success with no expiry signal                                |
       | all quality fields absent (minimal result)              | {}                                                                                                               | success with only feature_id and value                       |
@@ -708,7 +708,7 @@ Feature: BR-UC-022 Creative Delivery & Features
     Given media buy "mb-040" exists
     When the Buyer Agent invokes get_creative_delivery with media_buy_ids ["mb-040"] and start_date "2026-06-15" and end_date "2026-06-10"
     Then the operation should fail
-    And the error code should be "DATE_RANGE_INVALID"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "start_date is before end_date"
 
@@ -827,11 +827,11 @@ Feature: BR-UC-022 Creative Delivery & Features
 
     Examples: Invalid partitions
       | partition              | config                                                                                                            | outcome                                                        |
-      | missing_format_id      | {"assets": {"banner": {}}}                                                                                        | error "MANIFEST_VALIDATION_ERROR" with suggestion              |
-      | missing_assets         | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1"}}                                          | error "MANIFEST_VALIDATION_ERROR" with suggestion              |
-      | invalid_asset_key      | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1"}, "assets": {"Banner Image": {}}}          | error "MANIFEST_VALIDATION_ERROR" with suggestion              |
-      | missing_agent_url      | {"format_id": {"id": "fmt1"}, "assets": {"banner": {}}}                                                          | error "MANIFEST_VALIDATION_ERROR" with suggestion              |
-      | width_without_height   | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1", "width": 300}, "assets": {"banner": {}}}  | error "MANIFEST_VALIDATION_ERROR" with suggestion              |
+      | missing_format_id      | {"assets": {"banner": {}}}                                                                                        | error "INVALID_REQUEST" with suggestion              |
+      | missing_assets         | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1"}}                                          | error "INVALID_REQUEST" with suggestion              |
+      | invalid_asset_key      | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1"}, "assets": {"Banner Image": {}}}          | error "INVALID_REQUEST" with suggestion              |
+      | missing_agent_url      | {"format_id": {"id": "fmt1"}, "assets": {"banner": {}}}                                                          | error "INVALID_REQUEST" with suggestion              |
+      | width_without_height   | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1", "width": 300}, "assets": {"banner": {}}}  | error "INVALID_REQUEST" with suggestion              |
 
   @T-UC-022-boundary-manifest @boundary @manifest_validity
   Scenario Outline: Manifest validity boundary validation - <boundary_point>
@@ -842,14 +842,14 @@ Feature: BR-UC-022 Creative Delivery & Features
     Examples: Boundary values
       | boundary_point                                      | config                                                                                                                                  | outcome                                                         |
       | manifest with format_id + assets (minimal valid)    | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1"}, "assets": {"img": {}}}                                        | success                                                         |
-      | manifest missing format_id                          | {"assets": {"banner": {}}}                                                                                                             | error "MANIFEST_VALIDATION_ERROR" with suggestion               |
-      | manifest missing assets                             | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1"}}                                                               | error "MANIFEST_VALIDATION_ERROR" with suggestion               |
+      | manifest missing format_id                          | {"assets": {"banner": {}}}                                                                                                             | error "INVALID_REQUEST" with suggestion               |
+      | manifest missing assets                             | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1"}}                                                               | error "INVALID_REQUEST" with suggestion               |
       | manifest with empty assets object {}                | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1"}, "assets": {}}                                                 | success (empty assets accepted structurally)                    |
       | asset key 'a' (minimal valid pattern)               | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1"}, "assets": {"a": {}}}                                          | success                                                         |
-      | asset key 'Banner-Image' (uppercase + hyphen)       | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1"}, "assets": {"Banner-Image": {}}}                               | error "MANIFEST_VALIDATION_ERROR" with suggestion               |
+      | asset key 'Banner-Image' (uppercase + hyphen)       | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1"}, "assets": {"Banner-Image": {}}}                               | error "INVALID_REQUEST" with suggestion               |
       | format_id with width=1, height=1 (minimum dimensions) | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1", "width": 1, "height": 1}, "assets": {"img": {}}}             | success                                                         |
-      | format_id with width=0 (below minimum)              | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1", "width": 0, "height": 0}, "assets": {"img": {}}}               | error "MANIFEST_VALIDATION_ERROR" with suggestion               |
-      | format_id with width but no height                  | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1", "width": 300}, "assets": {"img": {}}}                          | error "MANIFEST_VALIDATION_ERROR" with suggestion               |
+      | format_id with width=0 (below minimum)              | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1", "width": 0, "height": 0}, "assets": {"img": {}}}               | error "INVALID_REQUEST" with suggestion               |
+      | format_id with width but no height                  | {"format_id": {"agent_url": "https://agent.example.com", "id": "fmt1", "width": 300}, "assets": {"img": {}}}                          | error "INVALID_REQUEST" with suggestion               |
 
   @T-UC-022-creative-rejected-details @v3-1 @error-details @creative-rejected
   Scenario: get_creative_features error branch carries CREATIVE_REJECTED details

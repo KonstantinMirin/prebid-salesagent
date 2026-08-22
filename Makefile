@@ -20,15 +20,15 @@ quality-ci:
 	uv run python .pre-commit-hooks/check-gam-auth-support.py
 	uv run python scripts/hooks/check_response_attribute_access.py $$(find src -name '*.py')
 	uv run python .pre-commit-hooks/check_roundtrip_tests.py
-	# Every use case whose feature file is BOUND to a test module. Widened from
-	# UC-002/UC-003 by salesagent-3dawm.17 once all 16 bound files reported zero.
-	# The 20 UNBOUND files stay out deliberately: their scenarios never execute,
-	# so gating them would pin 529 accepted occurrences (148 distinct invented
-	# codes) into the repo as a baseline. Measured -- an earlier estimate of ~855
-	# here was high. They are salesagent-yz8mo's subject: correct the vocabulary,
-	# then drop the --uc filter so the gate covers all 38 files at zero.
-	uv run python scripts/verify_feature_error_codes.py --uc \
-		UC-002 UC-003 UC-004 UC-005 UC-006 UC-010 UC-011 UC-018 UC-019 UC-026
+	# ALL 38 feature files, bound and unbound, at ZERO -- no --uc filter and no
+	# baseline. Widened in three steps: UC-002/UC-003 -> the 16 bound files
+	# (salesagent-3dawm.17) -> everything (salesagent-yz8mo), once the 529
+	# non-canonical occurrences across 148 invented codes in the 20 unbound files
+	# were corrected rather than allowlisted. An invented error code is now
+	# unaddable ANYWHERE, including in a file no test module runs -- which is
+	# where they were hiding, since an unbound file grades nothing and so never
+	# failed on them.
+	uv run python scripts/verify_feature_error_codes.py
 	uv run python .pre-commit-hooks/check_route_conflicts.py
 	uv run python .pre-commit-hooks/check_type_ignore_count.py
 	uv run python .pre-commit-hooks/check_ruff_complexity_count.py

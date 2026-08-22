@@ -348,8 +348,8 @@ Feature: BR-UC-001 Discover Available Inventory
     | field        | value        |
     | buying_mode  | brief        |
     | brief        | Display ads  |
-    Then the operation should fail with error code "authentication_error"
-    And the error code should be "authentication_error"
+    Then the operation should fail with error code "AUTH_MISSING"
+    And the error code should be "AUTH_MISSING"
     And the error should include "suggestion" field
     And the suggestion should contain "credentials" or "authenticate"
     # POST-F1: System state is unchanged
@@ -364,8 +364,8 @@ Feature: BR-UC-001 Discover Available Inventory
     | field        | value                               |
     | buying_mode  | brief                               |
     | brief        | Display ads for tech audience        |
-    Then the operation should fail with error code "validation_error"
-    And the error code should be "validation_error"
+    Then the operation should fail with error code "VALIDATION_ERROR"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     And the suggestion should contain "brand" or "domain"
     # POST-F1: System state is unchanged
@@ -376,8 +376,8 @@ Feature: BR-UC-001 Discover Available Inventory
   Scenario Outline: Extension *d - buying mode constraint violation - <violation>
     Given the Buyer is authenticated with a valid principal_id
     When the Buyer Agent sends a get_products request with <invalid_fields>
-    Then the operation should fail with error code "validation_error"
-    And the error code should be "validation_error"
+    Then the operation should fail with error code "VALIDATION_ERROR"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged
     # POST-F2: Buyer knows which constraint was violated
@@ -408,7 +408,7 @@ Feature: BR-UC-001 Discover Available Inventory
     And the Buyer has no authentication credentials
     When the Buyer Agent sends a get_products request
     Then the operation should fail
-    And the error code should be "authentication_error"
+    And the error code should be "AUTH_MISSING"
     And the error should indicate authentication is required
     And the error should include "suggestion" field
     # INV-1 violated: policy is require_auth and request is unauthenticated
@@ -431,7 +431,7 @@ Feature: BR-UC-001 Discover Available Inventory
     And the request does NOT include a brand field
     When the Buyer Agent sends a get_products request
     Then the operation should fail
-    And the error code should be "validation_error"
+    And the error code should be "VALIDATION_ERROR"
     And the error should indicate brand is required
     And the error should include "suggestion" field
     # INV-2 violated: policy is require_brand and no brand provided
