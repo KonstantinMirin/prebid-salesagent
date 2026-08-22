@@ -336,7 +336,7 @@ def _mark_approval_failed(
 def _approval_webhook_headers(validation_token: str | None) -> dict[str, str]:
     """Build HTTP headers for an order-approval webhook POST.
 
-    Takes the already-resolved :class:`WebhookAuth` rather than the config row,
+    Takes the already-resolved authentication rather than the config row,
     so the auth decision is made exactly once per delivery (in
     :func:`_send_approval_webhook`) and this function cannot reach a different
     answer than the signing branch did.

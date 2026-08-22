@@ -10,16 +10,20 @@ The contract, stated once, is the one ``order_approval_service`` already keeps
 (salesagent-47n9.20, graded in ``tests/integration/test_order_approval_webhook.py``):
 
 1. The stored ``(authentication_type, authentication_token)`` pair becomes an
-   auth decision in exactly ONE place — ``webhook_auth_for``.
+   auth decision in exactly ONE place — ``deliver_webhook``/``adeliver_webhook``.
 2. A row that asked for ``HMAC-SHA256`` and has no usable secret DELIVERS
    NOTHING. Never unsigned. A buyer who asked for a signature will reject an
    unsigned POST, so sending one is strictly worse than sending none.
 3. Signing is gated by the SCHEME, not by "is some credential lying around".
-4. Scheme comparison is case-insensitive, because both spellings are rows a
-   real buyer can produce (the A2A ``setTaskPushNotificationConfig`` handler
-   stores ``params.authentication.scheme`` verbatim from a free-form protobuf
-   string; ``media_buy_create`` stores the pinned enum spelling
-   ``AuthenticationScheme = ["Bearer", "HMAC-SHA256"]`` @ AdCP 3.1.1).
+4. Only the CANONICAL spelling authenticates. A non-canonical one is refused,
+   not folded -- probed: ``"bearer"`` returns ``refused_auth`` /
+   ``scheme_not_in_spec`` at the seam, and ingest rejects it outright. Both
+   spellings are nonetheless rows a real buyer can produce (the A2A
+   ``setTaskPushNotificationConfig`` handler stores
+   ``params.authentication.scheme`` verbatim from a free-form protobuf string;
+   ``media_buy_create`` stores the pinned enum spelling
+   ``AuthenticationScheme = ["Bearer", "HMAC-SHA256"]`` @ AdCP 3.1.1), which is
+   why the refusal is graded rather than assumed impossible.
 
 Every case here was RED until each sender routed its decision through
 ``webhook_auth_for`` (salesagent-47n9.24). They went green by CONVERGING on that
@@ -70,19 +74,19 @@ STRONG_SECRET = "buyer-shared-secret-padded-to-the-pinned-32-char-min"
 class TestProtocolWebhookServiceRefusesUnsignedHmac:
     """``protocol_webhook_service`` refuses rather than delivering unsigned (GH #1893).
 
-    ``send_notification`` always resolved through ``webhook_auth_for``, but an
-    ``HmacSecretMissing`` decision used to fall through to an unsigned delivery:
+    ``send_notification`` always resolved through the seam, but a
+    missing-secret decision used to fall through to an unsigned delivery:
     the buyer asked for a signature and received none, with no error on any
     surface. That is the failure mode the sibling structural guard cannot see —
     calling the resolver and then dropping one of its answers — which is why
-    ``test_architecture_resolved_webhook_auth_is_fully_handled`` exists and why
+    ``test_architecture_no_inline_webhook_auth_resolution`` exists and why
     these two cases are the behavioural half of it.
     """
 
     async def test_hmac_without_credentials_delivers_nothing(self, integration_db):
         """An HMAC-SHA256 row with no credential stored sends NOTHING.
 
-        Before the fix this resolved ``HmacSecretMissing`` and then proceeded to
+        Before the fix this resolved a missing-secret decision and then proceeded to
         ``prepare_signed_request(payload, None, headers)``, which serializes
         without signing and delivers — one hit, unsigned.
         """
@@ -151,15 +155,18 @@ class TestWebhookDeliveryServiceResolvesAuthThroughTheResolver:
 
         This sender used to discard the secret and proceed UNSIGNED at WARNING
         level — the same quiet failure salesagent-47n9.20 refused to commit one
-        file over, and the reason ``HmacSecretMissing`` is a distinct variant
+        file over, and the reason a missing secret is a distinct refusal
         rather than a ``None``.
 
-        ABSENT, specifically — not "short". The 32-character strength check that
-        used to sit here is gone, and a short credential now SIGNS (graded at
-        ``test_delivery_service_behavioral.py::TestShortSecretStillSigns``,
-        which carries the full reasoning). Refusing on length would have taken
-        the A2A-registered rows that legitimately hold short credentials from
-        "delivered" to "not delivered at all".
+        ABSENT is one of two refusals, not the only one: a credential SHORTER
+        than the pinned 32 characters is refused too. Probed directly, a 31-character
+        credential returns ``refused_auth`` / ``credentials_too_short`` while a
+        32-character one resolves to a signed ``Authentication``.
+
+        An earlier version of this docstring claimed the length check "is gone,
+        and a short credential now SIGNS", citing a test that exists nowhere. It
+        stated the opposite of what the seam does, and the citation could not be
+        followed to find that out.
         """
         with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
             env.setup_default_data()

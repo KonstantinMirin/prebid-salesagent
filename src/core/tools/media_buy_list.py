@@ -207,7 +207,7 @@ def _get_media_buys_impl(
 
             # Materialize targeting_overlay from package_config so callers can verify
             # what was persisted. Tolerates the legacy "targeting" key for data written
-            # before the targeting_overlay rename (see media_buy_create.py:638-642).
+            # before the targeting_overlay rename.
             # A single corrupted package_config row must not crash the whole tenant's
             # get_media_buys response — log the bad row, surface a non-fatal
             # TARGETING_REHYDRATION_FAILED on the response's errors channel, and

@@ -33,12 +33,12 @@ A grader that covered seat 1 alone would miss half the behaviour: the shapes tha
 stop delivering are reachable from both, and the seat-2 half is the one where
 "stopped delivering" is invisible to every other observation the suite makes.
 
-RED, and for which reason:
-  * seat 1 — every case DELIVERS today. ``webhook_auth_for`` resolves an
-    unrecognised scheme to ``Unauthenticated`` and delivers it PLAIN, and it
-    resolves a sub-32 credential to a perfectly ordinary
-    ``BearerToken``/``SignWithSecret`` because there is no length gate at send
-    time at all (``webhook_delivery_service.py``'s "No secret-strength gate"
+RED when authored, and for which reason (the resolver named here has since
+been deleted; the seam now refuses both cases, which is what turned these green):
+  * seat 1 — every case DELIVERED. The old resolver mapped an unrecognised
+    scheme to an unauthenticated delivery and sent it PLAIN, and mapped a
+    sub-32 credential to an ordinary bearer/signed variant, because there was
+    no length gate at send time at all (``webhook_delivery_service.py``'s "No secret-strength gate"
     comment argues for exactly the tolerance ruling #2 removes).
   * seat 2 — ``from_stash`` deliberately tolerates both shapes today
     (``registration.py``'s "Rows written through the untyped A2A path carry any
@@ -70,12 +70,16 @@ BEARER_SCHEME = "Bearer"
 CONFORMING_SECRET = "s" * 32
 ONE_SHORT_OF_CONFORMING = "s" * 31
 
-# Not a member of the enum the salesagent subclass declares. ``Digest`` and NOT
-# ``Basic``: owner ruling #5 keeps ``Basic`` supported through one
-# ``Literal["Basic"]`` on ``LibraryAuthentication``, so a stored ``Basic`` row
-# still delivers (graded below, and at the seam in
-# ``test_webhook_delivery_outcome_contract.py``). ``Digest`` is the shape that
-# genuinely has no member to fold onto.
+# Neither is a member of the pinned scheme enum, and BOTH are refused at the
+# seam — probed directly: an unrecognised scheme returns
+# ``WebhookDeliveryOutcome(kind='refused_auth', reason='scheme_not_in_spec')``.
+#
+# An earlier comment here claimed ruling #5 kept ``Basic`` deliverable through a
+# ``Literal["Basic"]`` widening on the pinned type. No such widening exists —
+# ``webhook_egress.py`` imports the library ``Authentication`` unmodified — and
+# this file's own ``test_a_legacy_basic_row_refuses_at_the_seam_too`` grades the
+# refusal sixty lines below. The two are kept as separate constants because they
+# reach the refusal by different routes, not because one of them delivers.
 UNRECOGNISED_SCHEME = "Digest"
 LEGACY_SCHEME = "Basic"
 

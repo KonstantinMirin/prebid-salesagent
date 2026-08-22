@@ -407,19 +407,20 @@ def accept_push_notification_primitives(
     refusing it here keeps the buyer's answer ``AdCPBlockedUrlError`` naming
     ``{prefix}.url`` rather than a generic parse failure.
 
-    The scheme is normalized to its canonical enum spelling when it matches
-    case-insensitively. That preserves what this path accepts today — the A2A
-    push-config endpoint stores a free-form protobuf string, so lowercase rows
-    exist in production and the scheme comparison has always been
-    case-insensitively — while still producing a schema-valid library model. It
-    also improves what gets STORED, since the row now carries the pinned spelling.
+    The scheme must be the canonical enum spelling. A non-canonical one is
+    REJECTED here rather than normalized -- probed: ``"bearer"`` raises
+    ``AdCPValidationError`` at this gate. The A2A push-config endpoint stores a
+    free-form protobuf string, so lowercase rows can reach the database by other
+    routes; this path refuses to create more of them, and the seam refuses to
+    deliver the ones that exist.
     """
     reject_unsafe_webhook_registration_url(url, field=f"{field_prefix}.url", context=context)
 
     authentication: dict[str, Any] | None = None
     if scheme is not None or credentials is not None:
-        # No folding here. LibraryAuthentication's before-validator canonicalises the
-        # spelling, and a second folder in this module would be a competing authority
+        # No folding here, and none downstream either: the pinned type has no
+        # canonicalising validator, so a folder in this module would be inventing
+        # a tolerance the spec does not grant
         # answering the same question — the divergence this package exists to delete.
         authentication = {"schemes": [scheme], "credentials": credentials}
 

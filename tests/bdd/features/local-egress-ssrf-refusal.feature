@@ -283,7 +283,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # (1) the per-surface mutation check cannot bind at this surface with this
   # document — no document that survives the typed request model can reach the
   # credential gate here, because `credentials` is required AND `minLength: 32`,
-  # so `webhook_auth_for` can never resolve a missing secret from it; the update
+  # so the egress seam can never resolve a missing secret from it; the update
   # surface's stake in the lane is structural (no URL-only path remains), not a
   # new refusal. (2) the scenario is still worth its keep as an OUTCOME guard: it
   # asserts the buyer is refused at this surface by SOME layer, and reddens exactly

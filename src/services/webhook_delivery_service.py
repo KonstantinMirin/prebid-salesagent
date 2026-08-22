@@ -548,13 +548,14 @@ class WebhookDeliveryService:
         # serialization as two independent things to keep in sync.
         #
         # The auth DECISION above that transport is owned entirely by
-        # webhook_auth_for (salesagent-47n9.24, GH #1894). This sender used to make
+        # deliver_webhook/adeliver_webhook (salesagent-47n9.24, GH #1894). This
+        # sender used to make
         # it inline and made it wrong four ways at once: it read webhook_secret (a
         # column with zero writers in src/, so the signing branch was unreachable
         # for any row a buyer can create), signed on a truthy secret rather than on
         # the scheme, silently downgraded a weak secret to an UNSIGNED delivery, and
         # compared "bearer" against an enum every writer stores as "Bearer". One
-        # resolver call replaces all four, and the closed WebhookAuth set is what
+        # seam call replaces all four, and the pinned Authentication type is what
         # makes "what if it is none of these" un-writable.
         headers = {
             "Content-Type": "application/json",

@@ -204,12 +204,14 @@ def _authentication_or_refusal(
     which is what the pinned schema's "absence selects 9421" means for a seller
     that has not implemented the 9421 profile yet.
 
-    Constructing :class:`~src.core.schemas.LibraryAuthentication` IS the
-    validation — it inherits ``credentials`` required with ``minLength: 32`` and
-    ``schemes`` ``maxItems: 1`` from the pinned type, widens the enum by exactly
-    the legacy schemes salesagent still honours, and folds casing before the enum
-    sees it. So there is no supported-set to keep in step with the spec and no
-    per-sender branching: a caller either gets a validated block or an outcome.
+    Constructing the pinned ``Authentication`` (imported here as
+    ``LibraryAuthentication``, an alias -- there is no subclass) IS the
+    validation: ``credentials`` is required with ``minLength: 32`` and ``schemes``
+    has ``maxItems: 1``, and the enum is the pin's own, unwidened. A scheme
+    outside it is REFUSED rather than folded, and casing is not folded either --
+    ``"bearer"`` refuses exactly as ``"Digest"`` does. So there is no
+    supported-set to keep in step with the spec and no per-sender branching: a
+    caller either gets a validated block or an outcome.
 
     The blank-scheme pair is TWO different documents and must not be conflated:
     no scheme and no credential means there was no ``authentication`` block at

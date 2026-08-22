@@ -1169,7 +1169,7 @@ class AdCPRequestHandler(RequestHandler):
                 response_url = config.url
                 response_validation_token = config.validation_token or ""
                 # Read-BACK, not sender-side auth resolution: this echoes the
-                # buyer's own registration to them. webhook_auth_for has nothing
+                # buyer's own registration to them. The egress seam has nothing
                 # to offer here — there is no outbound request being
                 # authenticated — so this file is a justified false positive in
                 # test_architecture_no_inline_webhook_auth_resolution's allowlist,

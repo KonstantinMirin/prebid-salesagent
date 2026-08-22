@@ -121,7 +121,8 @@ class PushNotificationConfigRepository:
 
         Takes the VALUE, not three loose strings. ``ValidatedWebhookRegistration``
         is the receipt that both ingest preconditions ran — the registration SSRF
-        gate on the URL half and ``webhook_auth_for`` on the credential half — so
+        gate on the URL half and the pinned ``Authentication`` model built inside ``_accept`` on the
+        credential half — so
         persisting a config that skipped a gate no longer type-checks.
 
         That is why this module no longer re-validates the URL. The former

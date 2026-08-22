@@ -12,8 +12,10 @@ five-variant hand-rolled union it returned. Owner ruling #4 deleted both:
 
 The union existed to stop three senders each answering "how is this
 authenticated?" their own way. That goal is unchanged and is now met by a
-different carrier: `WebhookAuthentication` (src/core/schemas/) extends the
-pinned AdCP `Authentication`, so constructing it enforces the scheme enum,
+different carrier: the pinned AdCP `Authentication` itself, imported as
+`LibraryAuthentication` in `src/core/security/webhook_egress.py` and matched
+once inside `deliver_webhook`/`adeliver_webhook`, so constructing it enforces
+the scheme enum,
 `maxItems: 1`, and `credentials` minLength 32 in one call — and the egress seam
 matches on that once, returning a `WebhookDeliveryOutcome`. No sender sees an
 auth decision at all, so none can get it wrong.
@@ -31,7 +33,7 @@ Every case it graded has a successor, so nothing was dropped:
 | scheme absent → unauthenticated | `test_webhook_delivery_outcome_contract.py` — the plain-delivery row of the match table |
 | scheme present, credential missing → refuse | same file, `no_credentials` row |
 | unknown scheme → unauthenticated | same file, `scheme_not_in_spec` row — **reversed by owner ruling #2**: it now refuses rather than silently delivering plain |
-| lowercase spelling still resolves | same file, the canonicalisation row; and `WebhookAuthentication`'s before-validator |
+| lowercase spelling still resolves | same file, the canonicalisation row; and the pinned `Authentication`'s before-validator |
 | HMAC + credential → sign | same file, the signed-delivery row, asserted over the exact wire bytes |
 
 The seam-contract test is stronger than what it replaces: it asserts the

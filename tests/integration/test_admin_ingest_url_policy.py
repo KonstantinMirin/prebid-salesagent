@@ -677,7 +677,7 @@ def test_register_webhook_stores_the_hmac_secret_where_senders_read_it(
     """An HMAC registration must land in the columns the senders actually read.
 
     ``authentication_type`` must be the pinned spelling and the credential must
-    be in ``authentication_token`` — the pair ``webhook_auth_for`` resolves and
+    be in ``authentication_token`` — the pair the egress seam resolves and
     ``deliver_webhook`` signs with. A row spelled any other way is a row that
     accepts and then never delivers, which is the defect Epic D exists to make
     unconstructible.

@@ -417,8 +417,9 @@ def _update_media_buy_impl(
     # (property_targeting, geo, budget, …) leaves the workflow step
     # orphaned in ``in_progress`` forever, which suppresses the
     # buyer-facing ``status="failed"`` push notification fired from
-    # ``context_manager.update_workflow_step:330-332``.
-    # Mirrors ``media_buy_create.py:3688-3697`` exactly.
+    # ``context_manager.update_workflow_step``, which fires it through
+    # ``_send_push_notifications``.
+    # Mirrors ``media_buy_create``'s own workflow-step construction exactly.
     ctx_manager = get_context_manager()
     step = None
 

@@ -20,7 +20,7 @@ What is deliberately NOT graded here: the retry *spacing*. BR-RULE-029's
 exactly the duplication the seam exists to delete.
 
 One case is RED before the migration, on purpose:
-``TestTerminalStatusIsNotRetried`` requires a 404 to cost exactly one request.
+the terminal-status retry case requires a 404 to cost exactly one request.
 Today's hand-rolled loop retries every non-2xx, so it costs three. The seam
 classifies retryable as ``{429, 500, 502, 503, 504}`` and treats everything else
 — every other 4xx, every 3xx — as terminal, so adopting it is what turns that
@@ -74,8 +74,10 @@ def _bearer_config(env: OrderApprovalWebhookEnv, token: str = "test_token", *, s
     what ``order_approval_service`` compares against, so it graded the sender's
     private spelling instead of the rows the sender really receives
     (salesagent-47n9.20). It is a PARAMETER rather than a constant because both
-    spellings are rows a real buyer can produce and both must authenticate —
-    see ``test_a_lowercase_scheme_still_authenticates``.
+    spellings are rows a real buyer can produce — not because both authenticate.
+    Only the canonical spelling does: a lowercase scheme is REFUSED rather than
+    folded, graded by
+    ``test_webhook_sender_auth_contract.py::test_a_lowercase_scheme_refuses_instead_of_being_folded``.
     """
     tenant, principal = env.setup_default_data()
     PushNotificationConfigFactory(
@@ -234,7 +236,7 @@ class TestHmacSigning:
     ``webhook_secret`` because that is the column the sender reads, so it
     graded a row no buyer can create -- while every row a buyer CAN create took
     the sender's "no secret stored" refusal branch. Since 47n9.20 the sender
-    takes its secret from ``authentication_token`` through ``webhook_auth_for``.
+    takes its secret from ``authentication_token`` through the egress seam.
 
     Both halves of the invariant are graded here (salesagent-47n9.21): a
     HMAC-SHA256 row either goes out carrying a signature that verifies over the

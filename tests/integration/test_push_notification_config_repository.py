@@ -2,7 +2,8 @@
 
 Epic D lane C2 (salesagent-fo99.2). ``ValidatedWebhookRegistration`` is the
 receipt that BOTH ingest preconditions ran — the registration SSRF gate on the
-URL half and ``webhook_auth_for`` on the credential half. Before this lane the
+URL half and the pinned ``Authentication`` model built inside ``_accept`` on the credential
+half. Before this lane the
 receipt evaporated at the persistence boundary: ``upsert`` took ``url`` /
 ``authentication_type`` / ``authentication_token`` as three unrelated strings,
 so a caller that had never run either gate type-checked exactly like a caller

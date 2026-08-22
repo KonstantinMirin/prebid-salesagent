@@ -1,10 +1,10 @@
 """The seam returns ONE outcome record, decided by ONE match on the pinned scheme enum.
 
-Epic D lane C4 (salesagent-fo99.4). The lane deletes the hand-rolled
-``WebhookAuth`` union — ``webhook_auth_for`` and its five variants, both aliases,
-and all fifteen ``isinstance`` sites — and replaces the decision with ONE
-construction of ``LibraryAuthentication`` (the ``src/core/schemas/`` subclass of
-the pinned library ``Authentication``) inside
+Epic D lane C4 (salesagent-fo99.4). The lane deletes the hand-rolled union — its
+resolver and five variants, both aliases, and all fifteen ``isinstance`` sites —
+and replaces the decision with ONE construction of the pinned library
+``Authentication`` (imported as ``LibraryAuthentication``, an import alias rather
+than a subclass) inside
 ``deliver_webhook``/``adeliver_webhook``, which hand every caller back a
 :class:`WebhookDeliveryOutcome` instead of a decision object the caller could get
 wrong. This file is that seam's contract, graded against a real origin and the

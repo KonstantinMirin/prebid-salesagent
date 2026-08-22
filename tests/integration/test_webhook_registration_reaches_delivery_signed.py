@@ -73,8 +73,8 @@ def _a2a_auth_block() -> dict[str, Any]:
 
     Not the same object as the tool shape and deliberately not derived from it —
     ``AuthenticationInfo`` is a protobuf message with no enum behind it, and a
-    helper that papered over the difference would hide the very divergence
-    ``webhook_auth_for``'s case-insensitive comparison exists to absorb.
+    helper that papered over the difference would hide the very divergence that
+    makes a non-canonical spelling REFUSE at the seam rather than authenticate.
     """
     return {"scheme": HMAC_SCHEME, "credentials": STRONG_SECRET}
 

@@ -12,7 +12,7 @@ from pathlib import Path
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "alembic" / "versions"
 
 # Pre-existing violations — allowlists shrink as violations are fixed.
-# FIXME(salesagent-t735): These legacy migrations have incomplete downgrades.
+# FIXME(#1802): These legacy migrations have incomplete downgrades.
 #
 # Lives HERE, not in the guard test, because the completeness policy has two
 # enforcement paths — the pre-push hook (.pre-commit-hooks/check_migration_

@@ -350,7 +350,7 @@ kept recurring here (#1589) — one call site always forgets one of them. One se
 # CORRECT: the seam decides address, TLS, redirect and retry policy
 from src.core.security.outbound_http import asend
 
-result = await asend("POST", url, json=payload)
+result = await asend(url, json=payload)
 ```
 
 ```python
