@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import PushNotificationConfig
@@ -42,6 +42,23 @@ class PushNotificationConfigRepository:
     # Lookups
     # ------------------------------------------------------------------
 
+    def _scoped(self, principal_id: str, *, active_only: bool) -> Select[tuple[PushNotificationConfig]]:
+        """The (tenant, principal) scope every lookup here shares, in ONE place.
+
+        This module's core invariant -- every query is scoped by tenant AND
+        principal -- was previously enforced by prose repeated per method and by
+        each method retyping the same two predicates. A third lookup would have
+        made it a third copy, and the pair is exactly the thing that must not be
+        forgotten once. Callers append their own single predicate.
+        """
+        stmt = select(PushNotificationConfig).where(
+            PushNotificationConfig.tenant_id == self._tenant_id,
+            PushNotificationConfig.principal_id == principal_id,
+        )
+        if active_only:
+            stmt = stmt.where(PushNotificationConfig.is_active.is_(True))
+        return stmt
+
     def get_by_id(
         self,
         config_id: str,
@@ -58,26 +75,34 @@ class PushNotificationConfigRepository:
                 ``is_active`` is True. Pass False to include soft-deleted rows
                 (e.g. for an upsert that needs to re-activate them).
         """
-        stmt = select(PushNotificationConfig).where(
-            PushNotificationConfig.tenant_id == self._tenant_id,
-            PushNotificationConfig.principal_id == principal_id,
-            PushNotificationConfig.id == config_id,
-        )
-        if active_only:
-            stmt = stmt.where(PushNotificationConfig.is_active.is_(True))
+        stmt = self._scoped(principal_id, active_only=active_only).where(PushNotificationConfig.id == config_id)
+        return self._session.scalars(stmt).first()
+
+    def find_by_url(
+        self,
+        principal_id: str,
+        url: str,
+        *,
+        active_only: bool = True,
+    ) -> PushNotificationConfig | None:
+        """Find a config by its URL within the (tenant, principal) scope.
+
+        The duplicate check at registration used to hand-write this query in the
+        admin route and omit ``is_active``, so a URL that had been deactivated
+        still read as "already registered" -- the operator could not re-register
+        it, and (before the same change) could not delete or re-enable it either.
+
+        ``active_only=False`` is what the registration path passes: it needs to
+        SEE the soft-deleted row so it can reuse that row's id and let
+        :meth:`upsert` reactivate it, rather than inserting a second row for the
+        same (principal, url) and leaving the first as debris.
+        """
+        stmt = self._scoped(principal_id, active_only=active_only).where(PushNotificationConfig.url == url)
         return self._session.scalars(stmt).first()
 
     def list_active_by_principal(self, principal_id: str) -> list[PushNotificationConfig]:
         """Return all active configs for a principal within this tenant."""
-        return list(
-            self._session.scalars(
-                select(PushNotificationConfig).where(
-                    PushNotificationConfig.tenant_id == self._tenant_id,
-                    PushNotificationConfig.principal_id == principal_id,
-                    PushNotificationConfig.is_active.is_(True),
-                )
-            ).all()
-        )
+        return list(self._session.scalars(self._scoped(principal_id, active_only=True)).all())
 
     # ------------------------------------------------------------------
     # Writes

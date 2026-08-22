@@ -675,14 +675,40 @@ def register_webhook(tenant_id, principal_id):
 
         with get_db_session() as db_session:
             repository = PushNotificationConfigRepository(db_session, tenant_id)
-            stmt = select(PushNotificationConfig).filter_by(tenant_id=tenant_id, principal_id=principal_id, url=url)
-            if db_session.scalars(stmt).first():
+
+            # active_only=False on purpose: the duplicate check used to run a
+            # hand-written select here that omitted is_active, so a DEACTIVATED
+            # registration still read as "already registered" and the operator
+            # could not re-register the URL at all.
+            #
+            # registration.url, NOT the raw form value: what gets STORED is
+            # str(config.url) off a pydantic AnyUrl, which normalizes -- host
+            # lowercased, trailing slash added, default port stripped. Keyed on
+            # the raw string, this lookup misses the row it just wrote for any
+            # non-canonical spelling, both branches below collapse into "not
+            # found", and a second active row is inserted for the same URL. The
+            # sender then delivers twice, one copy signed with a secret the
+            # receiver cannot verify. The lookup must use the same key the write
+            # uses.
+            existing = repository.find_by_url(principal_id, registration.url, active_only=False)
+
+            if existing is not None and existing.is_active:
+                # A LIVE registration. Refuse, and refuse without touching it:
+                # reusing this row's id below would silently overwrite the stored
+                # HMAC secret with whatever this form posted, rotating a working
+                # credential on what the operator was told was a no-op.
                 flash("Webhook URL already registered for this principal", "warning")
                 return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
 
+            # Reuse the soft-deleted row's id so upsert takes its reactivation
+            # branch. Inserting under a fresh id would leave two rows for one
+            # (principal, url) -- the sender would deliver twice, and the operator
+            # would have to clear the debris one row at a time.
+            config_id = existing.id if existing is not None else str(uuid.uuid4())
+
             repository.upsert(
                 registration,
-                config_id=str(uuid.uuid4()),
+                config_id=config_id,
                 principal_id=principal_id,
             )
             db_session.commit()
@@ -706,59 +732,61 @@ def register_webhook(tenant_id, principal_id):
 @log_admin_action("delete_webhook")
 @require_tenant_access()
 def delete_webhook(tenant_id, principal_id, config_id):
-    """Delete a webhook configuration."""
-    try:
-        with get_db_session() as db_session:
-            stmt = select(PushNotificationConfig).filter_by(
-                tenant_id=tenant_id, principal_id=principal_id, config_id=config_id
-            )
-            webhook = db_session.scalars(stmt).first()
+    """Delete a webhook configuration.
 
-            if not webhook:
-                flash("Webhook not found", "error")
-                return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
+    This route never worked. It filtered on ``config_id``, which is not a column
+    on ``PushNotificationConfig`` -- the primary key is ``id`` -- so every call
+    raised ``InvalidRequestError``, and the broad ``except`` below rendered that
+    programming error as an operator flash. The template passes ``webhook.id``,
+    so it was dead for every row, not only soft-deleted ones.
 
-            db_session.delete(webhook)
-            db_session.commit()
+    The lookup goes through the repository, which is what removes the
+    opportunity to hand-write a filter against a column that does not exist.
+    """
+    with get_db_session() as db_session:
+        repository = PushNotificationConfigRepository(db_session, tenant_id)
+        webhook = repository.get_by_id(config_id, principal_id, active_only=False)
 
-            logger.info(f"Deleted webhook {config_id} for principal {principal_id} in tenant {tenant_id}")
-            flash("Webhook deleted successfully", "success")
+        if not webhook:
+            flash("Webhook not found", "error")
+            return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
 
-        return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
+        db_session.delete(webhook)
+        db_session.commit()
 
-    except Exception as e:
-        logger.error(f"Error deleting webhook: {e}", exc_info=True)
-        flash(f"Error deleting webhook: {str(e)}", "error")
-        return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
+        logger.info(f"Deleted webhook {config_id} for principal {principal_id} in tenant {tenant_id}")
+        flash("Webhook deleted successfully", "success")
+
+    return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
 
 
 @principals_bp.route("/principals/<principal_id>/webhooks/<config_id>/toggle", methods=["POST"])
 @log_admin_action("toggle_webhook")
 @require_tenant_access()
 def toggle_webhook(tenant_id, principal_id, config_id):
-    """Toggle webhook active status."""
-    try:
-        with get_db_session() as db_session:
-            stmt = select(PushNotificationConfig).filter_by(
-                tenant_id=tenant_id, principal_id=principal_id, config_id=config_id
-            )
-            webhook = db_session.scalars(stmt).first()
+    """Toggle webhook active status.
 
-            if not webhook:
-                return jsonify({"error": "Webhook not found"}), 404
+    Carried the same never-working ``config_id`` filter as :func:`delete_webhook`
+    and the same broad ``except`` that turned the resulting programming error
+    into a JSON 500. Both are gone: the lookup is the repository's, and a defect
+    in this handler now reaches the logs as a real 500 instead of being reported
+    to the operator as though it were a condition of their request.
+    """
+    with get_db_session() as db_session:
+        repository = PushNotificationConfigRepository(db_session, tenant_id)
+        webhook = repository.get_by_id(config_id, principal_id, active_only=False)
 
-            webhook.is_active = not webhook.is_active
-            db_session.commit()
+        if not webhook:
+            return jsonify({"error": "Webhook not found"}), 404
 
-            logger.info(
-                f"Toggled webhook {config_id} to {'active' if webhook.is_active else 'inactive'} for principal {principal_id}"
-            )
+        webhook.is_active = not webhook.is_active
+        db_session.commit()
 
-            return jsonify({"success": True, "is_active": webhook.is_active})
+        logger.info(
+            f"Toggled webhook {config_id} to {'active' if webhook.is_active else 'inactive'} for principal {principal_id}"
+        )
 
-    except Exception as e:
-        logger.error(f"Error toggling webhook: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"success": True, "is_active": webhook.is_active})
 
 
 @principals_bp.route("/principals/<principal_id>/delete", methods=["DELETE", "POST"])

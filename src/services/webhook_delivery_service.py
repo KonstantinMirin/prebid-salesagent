@@ -475,16 +475,14 @@ class WebhookDeliveryService:
         """
         try:
             # Get webhook configurations
-            from sqlalchemy import select
 
             from src.core.database.database_session import get_db_session
-            from src.core.database.models import PushNotificationConfig
+            from src.core.database.repositories.push_notification_config import (
+                PushNotificationConfigRepository,
+            )
 
             with get_db_session() as db:
-                stmt = select(PushNotificationConfig).filter_by(
-                    tenant_id=tenant_id, principal_id=principal_id, is_active=True
-                )
-                configs = db.scalars(stmt).all()
+                configs = PushNotificationConfigRepository(db, tenant_id).list_active_by_principal(principal_id)
 
                 if not configs:
                     logger.debug(f"⚠️ No webhooks configured for {tenant_id}/{principal_id}")
