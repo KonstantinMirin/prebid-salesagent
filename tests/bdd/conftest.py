@@ -1975,10 +1975,33 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
         # Graduated: T-UC-004-dim-sortby-fallback — all transports pass.
         # A2A previously dropped by_placement; that serialization gap is fixed.
-        # Verified: the scenario passes with by_placement present and sorted by
-        # spend (then_placement_sorted_fallback asserts values == sorted(values,
-        # reverse=True); inline pytest.xfail guards the vacuous case), so the
-        # pass is real, not a weakened assertion.
+        #
+        # CORRECTION (salesagent-n78j0.13). TWO SEPARATE FAILURES HERE — the second is
+        # the serious one.
+        #
+        # (a) The assertion is vacuous. Descending-ness is not the obligation; INV-6 is
+        #     about WHICH metric is sorted on. Production synthesizes every placement
+        #     metric from one weight vector, so the rows are descending by all metrics
+        #     at once and `values == sorted(values, reverse=True)` holds for any sort
+        #     key — including none. Mutation-proved: deleting the spend-fallback (M1)
+        #     and falling back to the wrong metric (M2) each left all 6 tests GREEN.
+        #
+        # (b) THE CERTIFICATE THAT STOOD HERE WAS WRONG. It read: "Verified: ... so the
+        #     pass is real, not a weakened assertion" — and it cited, AS ITS EVIDENCE OF
+        #     RIGOUR, the two things that hid the vacuity: the sorted(...) assert (which
+        #     cannot fail on this data) and the inline pytest.xfail (called a "guard",
+        #     but it is a SILENT ESCAPE — it converts "no data to grade" into xfail
+        #     rather than failure). A graduation therefore shipped on a pass that could
+        #     not fail, carrying a note telling the next reader it had been checked.
+        #     A weak assertion is a gap; a false certificate PROPAGATES, because it is
+        #     precisely what stops the next reader from looking. Do not restore any
+        #     "verified" claim here without a mutation that goes RED.
+        #
+        # NOT re-routed: the rows do pass, so a strict xfail would fail the suite, and
+        # xfail sets only ever shrink. Correcting the claim in place is the only move
+        # that does not trade one false state for another. The fix is to make the
+        # scenario discriminating (see the sortby-fallback e2e_rest note below) —
+        # tracked in GH #2059.
 
         # UC-004 status filter: "active" works, other values may not
         # NOTE: the T-UC-004-filter / -empty / -array shadow entries were removed
@@ -2628,12 +2651,42 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # e2e_rest: sort_by_metric_not_available — the spend-fallback needs injected
-        # by_placement data, but the injector (_inject_placement_data) is in-process
-        # mock state invisible to the live server, so the fallback is untestable over
-        # e2e_rest (the buyer-facing assertions pass without exercising it). strict=False
-        # tolerates the hollow pass; wiring the injector so a2a/mcp/rest genuinely test
-        # it is the follow-up. (salesagent-04im)
+        # STAYS — inspected salesagent-n78j0.13, and the previous reason here was WRONG
+        # in every particular. It claimed the spend-fallback needs injected by_placement
+        # data that is "in-process mock state invisible to the live server", with
+        # salesagent-04im as the follow-up. In fact:
+        #   • _inject_placement_data is DEAD CODE — zero callers anywhere in tests/
+        #     (its only other mention was that comment). It never runs on ANY transport,
+        #     so it cannot be the reason e2e_rest differs.
+        #   • salesagent-04im does not exist (`bd show` finds no such issue).
+        #   • by_placement is NOT injected at all — production SYNTHESIZES it server-side
+        #     (media_buy_delivery.py:1040-1058) whenever the adapter reports no
+        #     per-placement data, so e2e_rest receives the same rows as in-process.
+        #
+        # The real defect is that the scenario cannot grade its own obligation, on any
+        # transport. _build_placement_breakdown derives every metric from ONE weight
+        # vector (0.5, 0.3, 0.2): impressions=imp*w, spend=spd*w, clicks=imp*w*0.01.
+        # All metrics are therefore rank-identical by construction AND already emitted
+        # in descending order, so `values == sorted(values, reverse=True)` holds for
+        # every sort key regardless of what production does. Probe (in-process, all 3
+        # transports): n_placements=3, spend=[125.0, 75.0, 50.0], clicks=[25.0, 15.0,
+        # 10.0] — plc_a > plc_b > plc_c on every metric.
+        #
+        # Mutation-proved (salesagent-n78j0.13, local slice, 6 tests = 3 transports x
+        # {fallback, counter-example}):
+        #   M1 delete the spend-fallback branch entirely  -> 6 passed (GREEN)
+        #   M2 fall back to "clicks" instead of "spend"   -> 6 passed (GREEN)
+        # Deleting the exact behaviour the scenario exists to grade does not turn it
+        # red. The obligation is real and correctly stated — AdCP 3.1.1
+        # media-buy/task-reference/get_media_buy_delivery.mdx:869 "falls back to `spend`
+        # if the seller does not report the requested metric" — it is simply ungraded.
+        #
+        # NOTE the discriminating fixture already exists and is the dead one:
+        # _DEFAULT_PLACEMENT_DATA (spend 150/200/50, clicks 30/10/50) is NOT
+        # rank-correlated and WOULD separate the orderings. Fixing this row means
+        # wiring that data in (and asserting the ORDER of placement_ids, not just
+        # descending-ness), then re-checking whether it still passes. GH #2059.
+        # Do not graduate this route until a replacement assertion is mutation-proved.
         if "T-UC-004-dim-sortby-fallback" in marker_names and is_e2e_rest:
             item.add_marker(
                 pytest.mark.xfail(
