@@ -54,10 +54,23 @@ class MediaBuyListEnv(IntegrationEnv):
         return self._run_a2a_handler("get_media_buys", GetMediaBuysResponse, **kwargs)
 
     def call_mcp(self, **kwargs: Any) -> Any:
-        """Call get_media_buys MCP wrapper."""
-        from src.core.tools.media_buy_list import get_media_buys
+        """Dispatch get_media_buys through the REAL FastMCP pipeline.
 
-        return self._run_mcp_wrapper(get_media_buys, GetMediaBuysResponse, **kwargs)
+        Was ``_run_mcp_wrapper``, whose own docstring deprecates it: it calls the
+        tool wrapper directly and so bypasses the FastMCP middleware chain and
+        TypeAdapter validation. The consequence on the ERROR path is that a raised
+        ``AdCPError`` propagated raw out of ``asyncio.run(wrapper_fn(...))`` and
+        was never serialized into a ``ToolError``, so ``McpDispatcher`` captured
+        ``wire_error_envelope=None``. Every mcp error assertion in UC-019 was
+        therefore graded against a reconstructed exception rather than the wire,
+        and could not have failed if production stopped emitting an envelope at
+        all (salesagent-3dawm.18/.19).
+
+        ``_run_mcp_client`` is the same path the conformant envs already use
+        (list_accounts, list_creative_formats, sync_accounts,
+        list_authorized_properties).
+        """
+        return self._run_mcp_client("get_media_buys", GetMediaBuysResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to GetMediaBuysBody shape for REST POST."""
