@@ -512,9 +512,10 @@ class TestDeliveryIdentificationModes:
         # Missing IDs reported as errors
         assert response.errors is not None
         assert len(response.errors) == 2
-        error_messages = " ".join(e.message for e in response.errors)
-        assert "mb_missing_1" in error_messages
-        assert "mb_missing_2" in error_messages
+        # WHICH buys were missing travels in details, not in the sentence: message is
+        # derived from the code, so every MEDIA_BUY_NOT_FOUND advisory reads identically.
+        reported = {e.details["media_buy_id"] for e in response.errors if e.details}
+        assert reported == {"mb_missing_1", "mb_missing_2"}
         for err in response.errors:
             assert err.code == "MEDIA_BUY_NOT_FOUND"
 
@@ -548,9 +549,9 @@ class TestDeliveryIdentificationModes:
         assert len(response.errors) == 2
         error_codes = {e.code for e in response.errors}
         assert error_codes == {"MEDIA_BUY_NOT_FOUND"}
-        error_messages = " ".join(e.message for e in response.errors)
-        assert "mb_ghost_1" in error_messages
-        assert "mb_ghost_2" in error_messages
+        # WHICH buys were missing travels in details, not in the sentence.
+        reported = {e.details["media_buy_id"] for e in response.errors if e.details}
+        assert reported == {"mb_ghost_1", "mb_ghost_2"}
 
 
 # ===========================================================================
@@ -1380,7 +1381,7 @@ class TestDeliveryMediaBuyNotFound:
         assert response.errors is not None
         assert len(response.errors) == 1
         assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
-        assert "mb_nonexistent" in response.errors[0].message
+        assert response.errors[0].details == {"media_buy_id": "mb_nonexistent"}
 
     def test_partial_ids_returns_found_and_errors(self):
         """UC-004-EXT-C2: partial failure returns found buys + errors for missing.
@@ -1422,7 +1423,7 @@ class TestDeliveryMediaBuyNotFound:
         assert response.errors is not None
         assert len(response.errors) == 1
         assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
-        assert "mb_gone" in response.errors[0].message
+        assert response.errors[0].details == {"media_buy_id": "mb_gone"}
 
 
 # ===========================================================================
@@ -1458,7 +1459,7 @@ class TestDeliveryOwnership:
         assert response.errors is not None
         assert len(response.errors) == 1
         assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
-        assert "mb_other_principal" in response.errors[0].message
+        assert response.errors[0].details == {"media_buy_id": "mb_other_principal"}
 
     def test_no_info_leakage_on_ownership_error(self):
         """UC-004-EXT-D2: SECURITY: error is media_buy_not_found not ownership_mismatch (no info leakage).
@@ -1479,7 +1480,7 @@ class TestDeliveryOwnership:
         assert response.errors is not None
         # Must NOT reveal ownership: code is "MEDIA_BUY_NOT_FOUND", not "ownership_mismatch"
         assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
-        assert "ownership" not in response.errors[0].message.lower()
+        assert "ownership" not in response.errors[0].message.lower()  # table sentence, never ownership-revealing
 
     def test_mixed_ownership_behavior(self):
         """UC-004-EXT-D3: mixed ownership: some owned, some not.
@@ -1516,7 +1517,7 @@ class TestDeliveryOwnership:
         assert response.errors is not None
         assert len(response.errors) == 1
         assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
-        assert "mb_theirs" in response.errors[0].message
+        assert response.errors[0].details == {"media_buy_id": "mb_theirs"}
 
 
 # ===========================================================================
@@ -1682,36 +1683,37 @@ class TestDeliveryAdapterError:
         assert result.errors is not None
         advisory_errors = [e for e in result.errors if e.code == "SERVICE_UNAVAILABLE"]
         assert len(advisory_errors) == 1
-        assert "mb_bad" in advisory_errors[0].message
+        assert advisory_errors[0].details == {"media_buy_id": "mb_bad"}
 
     def test_advisory_normalization_carries_the_declared_code_verbatim(self):
         """A hand-built advisory reaches the buyer carrying the code its author declared.
 
-        EXPECTATION REVERSED by salesagent-3dawm.6. This test previously asserted that
-        INTERNAL_ERROR was re-coded to SERVICE_UNAVAILABLE, and its docstring said it would
-        redden "if normalize_advisory_errors stops normalizing (e.g. returns code=e.code)" —
-        which is exactly what that step did, deliberately.
+        EXPECTATION REVERSED TWICE. salesagent-3dawm.6 stopped the normalizer re-coding
+        INTERNAL_ERROR to SERVICE_UNAVAILABLE, because AdCP 3.1.1 core/error.json makes the
+        vocabulary OPEN: error.code is a wire-typed string, the published codes are
+        documentary, senders MAY emit codes outside that set, and receivers MUST decode an
+        unknown code by reading error.recovery. Collapsing a code DISCARDED information the
+        spec asks senders to keep.
 
-        AdCP 3.1.1 core/error.json makes the error-code vocabulary OPEN: error.code is a
-        wire-typed string, the published codes are documentary, senders MAY emit codes
-        outside that set, and receivers MUST decode an unknown code by reading
-        error.recovery. Collapsing a code onto a published one therefore DISCARDED
-        information the spec asks senders to keep, and the recovery hint — filled in below
-        from CODE_TABLE — is what makes the un-collapsed code decodable.
+        salesagent-3dawm.14 then deleted the normalizer outright. Derivation moved INTO the
+        Error model, so an advisory is correct at construction rather than corrected on the
+        way out — there is no longer a window in which a wrong one exists. This test now
+        grades that: the code survives verbatim, and message/suggestion/recovery are
+        FUNCTIONS of it (ADR-010), so an authored message is discarded rather than carried.
         """
-        from src.core.exceptions import normalize_advisory_errors
+        from src.core.errors.codes import CODE_TABLE
         from src.core.schemas import Error
 
-        out = normalize_advisory_errors(
-            [
-                Error(code="SERVICE_UNAVAILABLE", message="internal adapter detail for mb_x"),
-                Error(code="INTERNAL_ERROR", message="platform code for mb_y"),
-                Error(code="MEDIA_BUY_NOT_FOUND", message="already standard for mb_z"),
-            ]
-        )
+        out = [
+            Error(code="SERVICE_UNAVAILABLE", message="internal adapter detail for mb_x"),
+            Error(code="INTERNAL_ERROR", message="platform code for mb_y"),
+            Error(code="MEDIA_BUY_NOT_FOUND", message="already standard for mb_z"),
+        ]
+        # The declared code reaches the buyer verbatim -- no collapse onto a published one.
         assert [e.code for e in out] == ["SERVICE_UNAVAILABLE", "INTERNAL_ERROR", "MEDIA_BUY_NOT_FOUND"]
-        # Messages are preserved verbatim.
-        assert out[0].message == "internal adapter detail for mb_x"
+        # The authored sentence is DISCARDED: message is a function of the code.
+        assert out[0].message == CODE_TABLE["SERVICE_UNAVAILABLE"].message
+        assert "internal adapter detail" not in out[0].message
         # And every entry carries the recovery its code means, so an unknown code stays decodable.
         assert [e.recovery for e in out] == ["transient", "transient", "correctable"]
 

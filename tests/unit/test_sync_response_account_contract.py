@@ -13,6 +13,7 @@ from adcp.types import Setup as LibrarySetup
 from adcp.types.generated_poc.core.brand_ref import BrandReference
 from adcp.types.generated_poc.core.business_entity import BusinessEntity as LibraryBusinessEntity
 
+from src.core.errors.codes import CODE_TABLE
 from src.core.schemas import Error as LibraryError
 from src.core.schemas import SyncResponseAccount
 
@@ -176,4 +177,8 @@ class TestSyncResponseAccountSerialization:
         data = account.model_dump(exclude_none=True)
         assert len(data["errors"]) == 1
         assert data["errors"][0]["code"] == "CONFLICT"
-        assert data["errors"][0]["message"] == "duplicate account"
+        # The authored "duplicate account" is DISCARDED: the account model types this
+        # field as our Error, so pydantic re-validates the SDK instance through the
+        # CODE_TABLE derivation and the buyer reads the sentence the code defines
+        # (ADR-010). What is specific to the account travels in details/field.
+        assert data["errors"][0]["message"] == CODE_TABLE["CONFLICT"].message

@@ -20,7 +20,6 @@ from rich.console import Console
 from src.core.exceptions import (
     AdCPError,
     AdCPValidationError,
-    normalize_advisory_errors,
 )
 from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
@@ -230,7 +229,7 @@ def _get_media_buy_delivery_impl(
                     not_found_errors.append(
                         Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
                             code="MEDIA_BUY_NOT_FOUND",
-                            message=f"Media buy {requested_id} not found",
+                            details={"media_buy_id": requested_id},
                         )
                     )
 
@@ -361,7 +360,7 @@ def _get_media_buy_delivery_impl(
                         adapter_errors.append(
                             Error(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
                                 code="SERVICE_UNAVAILABLE",
-                                message=f"Error getting delivery for {media_buy_id}",
+                                details={"media_buy_id": media_buy_id},
                             )
                         )
                         continue
@@ -555,10 +554,10 @@ def _get_media_buy_delivery_impl(
                         # ADAPTER was unreachable. Codes now reach the buyer verbatim, so
                         # this is a deliberate choice of code, not a stand-in for one that
                         # would have been rewritten. Matches the sibling adapter handler
-                        # above. The assembly-time normalization below is the
-                        # backstop that keeps any hand-built code on the wire.
+                        # above. WHICH buy failed travels in details, not in the
+                        # sentence: message is derived from the code.
                         code="SERVICE_UNAVAILABLE",
-                        message=f"Error processing delivery for {media_buy_id}",
+                        details={"media_buy_id": media_buy_id},
                     )
                 )
                 # Skip this media buy and continue with others
@@ -644,7 +643,7 @@ def _get_media_buy_delivery_impl(
         )
 
         # Normalize advisory error codes to guaranteed-standard wire codes.
-        advisory_errors = normalize_advisory_errors(not_found_errors + adapter_errors)
+        advisory_errors = not_found_errors + adapter_errors
 
         # Create AdCP-compliant response
         context_val = req.context

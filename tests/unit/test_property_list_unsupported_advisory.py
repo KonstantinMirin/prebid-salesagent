@@ -137,15 +137,24 @@ class TestBuildPropertyListUnsupportedAdvisories:
             "packages[2].targeting_overlay.property_list",
         ]
 
-    def test_advisory_carries_message_and_suggestion(self):
-        """Buyers need to know WHY (silent-drop window) and WHAT TO DO
-        (keep sending). Message + suggestion satisfy both."""
+    def test_advisory_carries_the_code_table_text_and_names_the_feature(self):
+        """Buyers need to know WHY and WHAT TO DO, and WHICH feature is off.
+
+        The first two come from the CODE_TABLE entry for the code (ADR-010: a
+        graded wire field is a function of the code, never authored at the site).
+        The third is site-specific, so it travels structurally in ``details`` --
+        asserting it appeared in the SENTENCE only ever checked the table against
+        a copy of itself.
+        """
+        from src.core.errors.codes import CODE_TABLE
+
         pkgs = [_make_pkg_with_property_list()]
         advisory = build_property_list_unsupported_advisories(pkgs, False)[0]
-        assert "property_list_filtering" in advisory.message
-        assert "persisted" in advisory.message
-        assert advisory.suggestion is not None
-        assert "Continue to send property_list" in advisory.suggestion
+        entry = CODE_TABLE["UNSUPPORTED_FEATURE"]
+        assert advisory.message == entry.message
+        assert advisory.suggestion == entry.suggestion
+        assert advisory.details == {"feature": "property_list_filtering"}
+        assert advisory.field == "packages[0].targeting_overlay.property_list"
 
 
 # ---------------------------------------------------------------------------

@@ -336,7 +336,8 @@ class TestPartialMediaBuyIdsNotFound:
             assert len(response.errors) == 1
             not_found_error = response.errors[0]
             assert not_found_error.code == "MEDIA_BUY_NOT_FOUND"
-            assert "mb_999" in not_found_error.message
+            # WHICH buy travels in details: message is derived from the code (ADR-010).
+            assert not_found_error.details == {"media_buy_id": "mb_999"}
 
 
 # ---------------------------------------------------------------------------
@@ -1533,8 +1534,8 @@ class TestPartialResolutionMissingIds:
 
             # Errors array reports mb_999 as not found
             assert response.errors is not None
-            error_messages = [e.message for e in response.errors]
-            assert any("mb_999" in msg for msg in error_messages)
+            reported = {e.details["media_buy_id"] for e in response.errors if e.details}
+            assert "mb_999" in reported
 
             # Aggregated totals reflect only the 2 found buys
             assert response.aggregated_totals.media_buy_count == 2

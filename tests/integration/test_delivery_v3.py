@@ -740,7 +740,8 @@ class TestDeliveryOwnershipIntegration:
         assert response.errors is not None
         assert len(response.errors) == 1
         assert response.errors[0].code == "MEDIA_BUY_NOT_FOUND"
-        assert "mb_not_owned" in response.errors[0].message
+        # WHICH buy travels in details: message is derived from the code (ADR-010).
+        assert response.errors[0].details == {"media_buy_id": "mb_not_owned"}
 
 
 @pytest.mark.requires_db

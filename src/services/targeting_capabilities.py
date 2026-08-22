@@ -239,18 +239,14 @@ def build_property_list_unsupported_advisories(
         if overlay is None or getattr(overlay, "property_list", None) is None:
             continue
         advisories.append(
+            # message, suggestion and recovery all come from CODE_TABLE via the
+            # code. What is specific to THIS advisory -- which package, and which
+            # capability is off -- travels structurally: field names the rejected
+            # path, details names the feature.
             Error(
                 code="UNSUPPORTED_FEATURE",
-                message=(
-                    "property_list_filtering is declared off for this seller. "
-                    "The list_id is persisted on the package but will not affect "
-                    "targeting until adapter compilation lands."
-                ),
                 field=f"packages[{index}].targeting_overlay.property_list",
-                suggestion=(
-                    "Continue to send property_list; the seller will activate it "
-                    "once the adapter compiles list_ids into native targeting."
-                ),
+                details={"feature": "property_list_filtering"},
             )
         )
     return advisories

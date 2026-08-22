@@ -10,6 +10,7 @@ BR-RULE-061 (delete_missing), BR-RULE-062 (dry_run)
 
 import pytest
 
+from src.core.errors.codes import CODE_TABLE
 from src.core.schemas.account import SyncAccountsRequest
 from tests.harness import Transport
 from tests.harness.account_sync import AccountSyncEnv
@@ -803,8 +804,10 @@ class TestSyncAccountsBillingPolicyTransport:
 
         assert result.is_success
         err = result.payload.accounts[0].errors[0]
-        assert err.suggestion is not None
-        assert "agent" in err.suggestion
+        # The suggestion is the CODE_TABLE entry for the code, not a sentence the
+        # gate authored (ADR-010), so it is asserted by identity rather than by
+        # substring-matching a phrase the table never promised.
+        assert err.suggestion == CODE_TABLE[err.code].suggestion
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_unconfigured_billing_policy_accepts_all(self, integration_db, transport):

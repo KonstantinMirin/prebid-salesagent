@@ -24,6 +24,7 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+from src.core.errors.codes import CODE_TABLE
 from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthorizationError,
@@ -3188,8 +3189,14 @@ class TestUpdateMediaBuyAdapterFailure:
         cl.max_daily_package_spend = Decimal("5000")
         cl.min_package_budget = None
 
+        # The advisory carries the CODE; the sentence is derived from CODE_TABLE
+        # (ADR-010), so authoring message="GAM API timeout" here would be silently
+        # discarded. That is test-only fiction anyway: no adapter in src/adapters/
+        # constructs UpdateMediaBuyError or Error(code=...) at all -- they RAISE,
+        # and the adapter's own diagnostic reaches the operator through the
+        # exception and the logs, not through a hand-built buyer-facing advisory.
         adapter_error = UpdateMediaBuyError(
-            errors=[Error(code="SERVICE_UNAVAILABLE", message="GAM API timeout")],
+            errors=[Error(code="SERVICE_UNAVAILABLE", details={"adapter": "gam"})],
         )
 
         with (
@@ -3235,7 +3242,7 @@ class TestUpdateMediaBuyAdapterFailure:
 
         assert isinstance(result.response, UpdateMediaBuyError)
         ctx_mgr.audit_workflow_step_result.assert_called_once_with(
-            "step_1", ANY, status="failed", error_message="GAM API timeout"
+            "step_1", ANY, status="failed", error_message=CODE_TABLE["SERVICE_UNAVAILABLE"].message
         )
 
     def test_unknown_context_id_raises_context_not_found(self):

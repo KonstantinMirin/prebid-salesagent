@@ -52,7 +52,7 @@ from src.adapters.base import TargetingCapabilities
 from src.core.auth import require_identity
 from src.core.billing_policy import BillingParty, resolve_account_sandbox, resolve_supported_billing
 from src.core.database.repositories.uow import TenantConfigUoW
-from src.core.exceptions import AdCPConfigurationError, normalize_advisory_errors
+from src.core.exceptions import AdCPConfigurationError
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import (
@@ -601,7 +601,7 @@ def _get_adcp_capabilities_impl(
         account=_build_account_block(tenant),
         webhook_signing=_WEBHOOK_SIGNING_UNSUPPORTED,
         request_signing=_REQUEST_SIGNING_UNSUPPORTED,
-        errors=normalize_advisory_errors(advisories) or None,
+        errors=advisories or None,
         last_updated=datetime.now(UTC),
         context=req.context if req else None,
     )

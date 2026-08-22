@@ -22,7 +22,7 @@ from src.core.errors.codes import CODE_TABLE, AppErrorCode, CodeEntry, ErrorCode
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
 
-    from adcp.types import ContextObject, Error
+    from adcp.types import ContextObject
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def _advisory_entry_for(code: str) -> CodeEntry:
     """The table entry an advisory code resolves to, or KeyError naming the code.
 
     ONE lookup and ONE raise, shared by the recovery and suggestion fills in
-    :func:`normalize_advisory_errors`. Two independent lookups would duplicate both.
+    the advisory recovery lookup. Two independent lookups would duplicate both.
     """
     # CODE_TABLE is keyed by the ErrorCode/AppErrorCode StrEnums; both compare equal to
     # their string values at runtime, but the Mapping's declared key type is the union, so
@@ -83,57 +83,6 @@ def _advisory_entry_for(code: str) -> CodeEntry:
             "so no raise site can emit it. Name a code the table classifies."
         )
     return entry
-
-
-def normalize_advisory_errors[ErrorT: "Error"](errors: Sequence[ErrorT]) -> list[ErrorT]:
-    """Re-code hand-built ``errors[]`` advisories to guaranteed-standard wire codes
-    and populate ``recovery``, preserving every other caller-set field verbatim.
-
-    The ``code`` is carried VERBATIM. There is nothing left to re-code: the AdCP
-    error vocabulary is OPEN (core/error.json), so a platform code is a legitimate
-    wire code and the raise site's declaration is what the buyer receives. What used
-    to happen here -- translate through a table, then collapse anything still
-    non-standard to ``SERVICE_UNAVAILABLE`` -- discarded information the spec asks
-    senders to keep.
-
-    ``field``/``suggestion``/``details``/``retry_after``/``issues``/``source``/
-    ``sdk_id`` pass through untouched, and so now does ``code``. ``recovery``
-    is FILLED via ``advisory_recovery_for`` only when the caller left it unset;
-    an explicit ``recovery`` the caller pinned (e.g. because the code's default
-    classification doesn't fit the specific advisory) is never clobbered.
-
-    ``recovery`` is populated even though ``core/error.json`` lists only
-    ``[code, message]`` as required: the ``recovery`` property description is
-    normative in the other direction — "Senders SHOULD populate ``recovery`` on
-    every error from 3.1 onward — it is the normative carrier of recovery
-    semantics across version skew".
-
-    Lives here, beside :func:`advisory_recovery_for`, rather than in a tool module: it is
-    shared by every ``_impl`` that emits advisories, and a tool importing an
-    advisory normalizer from a sibling tool module is a layering inversion.
-    """
-    normalized: list[ErrorT] = []
-    for e in errors:
-        wire_code = e.code
-        # ONE entry per advisory serves BOTH fills, and it is looked up only when a fill is
-        # actually needed. An advisory carrying a code the table classifies now resolves the
-        # SAME recovery and suggestion a RAISED error with that code would -- without this,
-        # one code meant two things depending on which lane it travelled.
-        needs_fill = e.recovery is None or e.suggestion is None
-        entry = _advisory_entry_for(wire_code) if needs_fill else None
-        # model_copy over a 10-field re-list: this changes at most THREE fields, and naming
-        # the other seven to preserve them meant every future Error field had to be added
-        # here too or it would be silently dropped from every advisory.
-        normalized.append(
-            e.model_copy(
-                update={
-                    "code": wire_code,
-                    "recovery": e.recovery if e.recovery is not None else cast(CodeEntry, entry).recovery.value,
-                    "suggestion": e.suggestion if e.suggestion is not None else cast(CodeEntry, entry).suggestion,
-                }
-            )
-        )
-    return normalized
 
 
 def _serialize_context(

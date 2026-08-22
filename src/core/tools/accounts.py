@@ -622,22 +622,16 @@ def _gate_failures_to_errors(failures: list[GateFailure]) -> list["Error"]:
     from src.core.schemas import Error
 
     return [
+        # message, suggestion and recovery are NOT passed: Error derives all three
+        # from CODE_TABLE at validation, so the sentence a buyer reads on a gate
+        # refusal comes from the same authority as every other advisory. Passing
+        # f.message/f.suggestion here would be silently discarded, which is why
+        # GateFailure's now-unread prose fields are deleted next
+        # (salesagent-3dawm.13). What the gate still decides is the CODE and the
+        # specifics: field and details.
         Error(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
             code=_FAILURE_CLASS_TO_CODE[f.failure_class],
-            message=f.message,
-            suggestion=f.suggestion,
             field=f.field,
-            # recovery is deliberately NOT set here. normalize_advisory_errors
-            # (called by _build_failed_result) fills it from CODE_TABLE,
-            # the pin-corrected table, so the recovery a buyer sees on a gate
-            # refusal comes from the SAME authority as every other advisory.
-            # Hard-coding "correctable" here re-created the second classification
-            # the fold exists to delete: it also meant advisory_recovery_for was
-            # never consulted on any graded path, so the table could be wrong in
-            # any direction and no scenario would notice (measured).
-            # All three codes this family emits resolve to "correctable" in the
-            # table, so the emitted wire is unchanged -- what changes is WHERE
-            # the value comes from.
             details=f.details,
         )
         for f in failures
@@ -893,13 +887,14 @@ def _build_failed_result(
     across call sites (salesagent-5g8e disease scan).
 
     The single choke point where every accounts.py advisory ``errors[]`` list
-    is routed through ``normalize_advisory_errors`` before reaching the wire
-    (#1721 M1) -- one call here covers all six gate-check sites
+    reaches the wire (#1721 M1) -- one path here covers all six gate-check sites
     plus the settings-update-not-found and activation-proof advisories, since
     they all build their result through this function.
-    """
-    from src.core.exceptions import normalize_advisory_errors
 
+    No normalization step remains: ``Error`` derives ``message``/``suggestion``/
+    ``recovery`` from ``CODE_TABLE`` at validation, so an advisory is already
+    correct by the time it is constructed.
+    """
     return _build_sync_result(
         brand=brand,
         operator=operator,
@@ -907,7 +902,7 @@ def _build_failed_result(
         status="rejected",
         billing=billing,
         sandbox=sandbox,
-        errors=normalize_advisory_errors(errors),
+        errors=errors,
     )
 
 

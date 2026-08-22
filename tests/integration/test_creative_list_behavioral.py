@@ -871,8 +871,17 @@ class TestListCreativeObjectConstruction:
         assert len(advisories) == 1, f"expected one advisory for the unreadable row; got {advisories!r}"
         assert advisories[0].code == "CONFIGURATION_ERROR"
         assert advisories[0].recovery == "terminal"
-        assert "c_bad_status" in advisories[0].message
-        assert "completely_bogus_status" in advisories[0].message
+        # WHICH creative travels in details. The unparseable stored status is INTERNAL
+        # state and is deliberately kept OFF the buyer wire (salesagent-3dawm.14);
+        # the operator gets it from the log line the same branch emits.
+        assert advisories[0].details == {"creative_id": "c_bad_status"}
+        # ...and the unparseable stored value does NOT reach the buyer. Asserting its
+        # ABSENCE is the stronger claim and the one that matches the decision: it is
+        # seller-side state that is, by definition, not in the AdCP vocabulary (that
+        # is why this branch fired at all), so putting it on the wire would leak
+        # internal data to answer a question the buyer cannot act on.
+        assert "completely_bogus_status" not in advisories[0].message
+        assert "completely_bogus_status" not in str(advisories[0].details)
 
     def test_creative_with_tags(self, integration_db):
         """Spec: creative tags from data dict are included in response."""

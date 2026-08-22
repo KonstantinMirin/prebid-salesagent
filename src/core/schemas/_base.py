@@ -4,15 +4,17 @@
 # - [assignment] on lines ~1449, ~1450, ~1637, ~1638: account/idempotency_key
 #   overrides (required -> optional). Architectural; permanent.
 
+import copy
 import re
 import warnings
+from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeAlias, cast
 
 from src.core.enum_helpers import enum_value
 
@@ -66,7 +68,7 @@ from adcp.types.generated_poc.enums.media_buy_valid_action import (
 )  # TODO: no stable alias in adcp.types
 
 from src.core.config import get_pydantic_extra_mode
-from src.core.errors.codes import ErrorCodeT
+from src.core.errors.codes import CODE_TABLE, ErrorCodeT
 from src.core.exceptions import AdCPInvalidRequestError, AdCPNotFoundError, AdCPValidationError
 
 # For backward compatibility, alias AdCPPackage as LibraryPackage
@@ -139,7 +141,7 @@ AdCPPricingOption = (
 
 
 class Error(_LibraryError):
-    """Advisory error whose ``code`` IS the vocabulary, not a string.
+    """Advisory error whose graded fields are FUNCTIONS OF ``code``, not inputs.
 
     The SDK types ``code`` as ``str`` — correctly, because AdCP 3.1.1 makes the
     error-code vocabulary open. That openness is a wire contract, not a licence
@@ -147,9 +149,89 @@ class Error(_LibraryError):
     makes an out-of-vocabulary advisory unconstructible, at every site, whatever
     local name the type is imported under — which an AST guard cannot do, because
     an import alias defeats it.
+
+    ``message``, ``suggestion`` and ``recovery`` are DERIVED from ``CODE_TABLE``
+    at validation (ADR-010: a graded wire field is a function of the code, never
+    authored at a raise site). Anything a caller passes for those three is
+    discarded, so the advisory lane and the raised lane resolve one code to one
+    sentence — they previously did not, because the normalizer this replaces
+    filled ``recovery``/``suggestion`` only when the caller left them unset and
+    never touched ``message`` at all.
+
+    Every other field — ``field``, ``details``, ``retry_after``, ``issues``,
+    ``source``, ``sdk_id`` — passes through untouched: they carry the specifics,
+    which is exactly where specifics belong.
+
+    The four overrides below exist because ``frozen=True`` alone does NOT close
+    this. Measured against pydantic 2.12.5, five separate routes overwrite a
+    derived field, and ``frozen`` stops only direct assignment:
+
+        model_copy(update=...)   __replace__(...)   model_construct(...)
+        setattr                  __dict__ poke
+
+    ``validate_assignment`` does not help either — it re-runs FIELD validators,
+    not this ``mode="before"`` MODEL validator. So each mutating entry point is
+    redefined as a RE-VALIDATION: a copy re-derives from the table rather than
+    poking a field, which also means ``model_copy(update={"code": X})`` correctly
+    yields X's message rather than carrying the old one. This is what makes the
+    defect unconstructible instead of merely detectable; the alternative
+    considered was an AST guard banning ``model_copy``, which would have covered
+    one of the five routes and could never have fired on ``AdCPError`` at all
+    (it is not a pydantic model).
     """
 
+    model_config = ConfigDict(extra=get_pydantic_extra_mode(), frozen=True)
+
     code: ErrorCodeT
+    #: Declared with a default purely to drop the SDK's required-ness. It is
+    #: DERIVED from ``code`` below, so forcing every construction site to pass a
+    #: string it does not get to choose would be the authoring surface this whole
+    #: step removes. The empty default is never observed: the validator replaces
+    #: it whenever the code resolves, and an unresolvable code fails on
+    #: ``code: ErrorCodeT`` first.
+    message: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _derive_graded_fields(cls, data: Any) -> Any:
+        """Resolve ``message``/``suggestion``/``recovery`` from the code table.
+
+        Returns a NEW mapping rather than mutating ``data`` in place: pydantic
+        hands this validator the caller's own dict by reference (and, for a list
+        field, each item dict), so mutating it would edit the caller's object.
+        """
+        if not isinstance(data, dict):
+            return data
+        entry = CODE_TABLE.get(cast("ErrorCodeT", data.get("code")))
+        if entry is None:
+            # Unknown code: leave it alone and let ``code: ErrorCodeT`` produce
+            # the validation error. Deriving here would mask it with a KeyError.
+            return data
+        return {
+            **data,
+            "message": entry.message,
+            "suggestion": entry.suggestion,
+            "recovery": entry.recovery.value,
+        }
+
+    def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> "Error":
+        """A copy is a RE-VALIDATION: ``update=`` cannot outrank the table."""
+        data: dict[str, Any] = {**self.__dict__, **(dict(update) if update else {})}
+        return type(self).model_validate(copy.deepcopy(data) if deep else data)
+
+    def __replace__(self, **changes: Any) -> "Error":
+        """``copy.replace()`` support (3.13) — same re-validation as model_copy."""
+        return self.model_copy(update=changes)
+
+    # ``model_construct`` is pydantic's documented validation BYPASS. A graded model
+    # cannot have one: it is route 3 of the five that would otherwise let a caller set
+    # message/suggestion/recovery directly. Narrowed to a re-validation. mypy flags the
+    # override as a redefinition of the inherited classmethod, which is exactly what it
+    # is and what it must be.
+    @classmethod  # type: ignore[no-redef]
+    def model_construct(cls, _fields_set: set[str] | None = None, **values: Any) -> "Error":  # type: ignore[override]
+        """Validation-skipping construction is not available for a graded model."""
+        return cls.model_validate(values)
 
 
 def url(value: str) -> AnyUrl:

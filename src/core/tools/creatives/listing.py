@@ -19,7 +19,7 @@ from pydantic import Field as PydanticField
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.exceptions import AdCPValidationError, normalize_advisory_errors
+from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value, log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_context_object
@@ -384,14 +384,15 @@ def _list_creatives_impl(
                     db_creative.status,
                 )
                 unreadable_status_advisories.append(
+                    # The stored status is INTERNAL state -- by definition not in the
+                    # AdCP creative vocabulary, which is why this branch fired -- so it
+                    # does not go on the buyer's wire. The logger above already records
+                    # it for the operator. The buyer gets the code (whose sentence and
+                    # recovery come from CODE_TABLE) plus the one specific they can act
+                    # on: which creative is affected.
                     Error(  # structural-guard: advisory per-creative result in ListCreativesResponse.errors[]
                         code="CONFIGURATION_ERROR",
-                        message=(
-                            f"Creative {db_creative.creative_id} has stored status "
-                            f"{db_creative.status!r}, which is not an AdCP creative status; it is "
-                            f"reported as 'processing' as a placeholder. Seller-side data defect — "
-                            f"retrying will not change it."
-                        ),
+                        details={"creative_id": db_creative.creative_id},
                     )
                 )
                 status_enum = CreativeStatus.processing
@@ -503,7 +504,7 @@ def _list_creatives_impl(
         creatives=creatives,
         format_summary=None,
         status_summary=None,
-        errors=normalize_advisory_errors(unreadable_status_advisories) or None,
+        errors=unreadable_status_advisories or None,
         context=req.context,
     )
 
