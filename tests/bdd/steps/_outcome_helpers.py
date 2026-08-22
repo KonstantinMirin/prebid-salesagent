@@ -15,6 +15,23 @@ from typing import Any
 from tests.harness.transport import TransportResult
 
 
+def error_envelope_or_none(ctx: dict) -> dict | None:
+    """The error envelope for this dispatch, or ``None`` when there is none.
+
+    The ctx-side adapter for :meth:`TransportResult.error_envelope_or_none` —
+    the same relationship :func:`_wire_or_none` has to the success path. Steps
+    hold a ctx and the reader lives on the result, so without this the four
+    ctx-holding call sites each re-spell the ``ctx.get("result")`` dance, which
+    is three copies of the decision this lane exists to make once.
+
+    Returns ``None`` rather than raising, because every ctx-side caller branches
+    on envelope-presence as control flow: an MCP dispatch can fail with a
+    ``ToolError`` that is genuinely not an AdCP envelope.
+    """
+    result = ctx.get("result")
+    return result.error_envelope_or_none() if result is not None else None
+
+
 def _wire_or_none(ctx: dict) -> dict | None:
     """The real wire body for this dispatch, or ``None`` when there is no wire.
 
@@ -106,8 +123,7 @@ def assert_wire_rejection(ctx: dict, code: str, *, recovery: str, field: str) ->
     """
     from tests.helpers import assert_envelope_shape
 
-    envelope = ctx.get("wire_error_envelope")
-    assert envelope is not None, f"No wire error envelope (error={ctx.get('error')!r})"
+    envelope = _require(ctx, "result", hint="no dispatch was recorded").error_envelope()
     assert_envelope_shape(envelope, code, recovery=recovery, field=field)
 
 

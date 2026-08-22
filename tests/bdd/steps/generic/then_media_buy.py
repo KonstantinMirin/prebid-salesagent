@@ -786,15 +786,17 @@ def then_error_has_retry_after(ctx: dict) -> None:
     reconstructed exception is the last resort for IMPL / no-wire scenarios
     (which have no envelope by definition).
     """
-    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
+    from tests.bdd.steps._outcome_helpers import error_envelope_or_none
+
+    envelope = error_envelope_or_none(ctx)
     found = _retry_after_from_envelope(envelope) if envelope else None
 
     if found is None:
         # Check both error keys to match the dispatch contract used by other error steps
         error = ctx.get("error") or ctx.get("error_response")
         assert error is not None or envelope is not None, (
-            "No error recorded in ctx (checked 'wire_error_envelope', "
-            "'synthesized_error_envelope', 'error' and 'error_response') — "
+            "No error recorded in ctx (checked the result's error envelope, "
+            "'error' and 'error_response') — "
             "step claims error should include retry_after but no error was captured"
         )
         found = _retry_after_from_exception(error) if error is not None else None

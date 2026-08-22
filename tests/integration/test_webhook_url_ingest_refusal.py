@@ -155,10 +155,10 @@ _REFUSED_REPORTING_WEBHOOK = {
 def _assert_refused_at_ingest(result, field: str, surface: str, *, code: str) -> None:
     """The one refusal contract, graded on the wire envelope.
 
-    ``wire_error_envelope`` is the primary authority (tests/CLAUDE.md Error
-    Verification Policy); ``synthesized_error_envelope`` is the documented
-    fallback for dispatch paths with no wire (IMPL, the raw-wrapper A2A sync
-    path) — same precedent as test_creative_sync_transport.py:756.
+    ``result.error_envelope()`` is the one reader (tests/CLAUDE.md Error
+    Verification Policy). It returns the real wire wherever one exists and the
+    builder's envelope only on IMPL, which has no wire by definition — so the
+    call site no longer chooses between them, and cannot choose wrongly.
 
     ``code`` is the emitting gate's wire code (``_REGISTRATION_GATE_CODE``) —
     passed explicitly at every call site so a surface that starts refusing
@@ -169,7 +169,7 @@ def _assert_refused_at_ingest(result, field: str, surface: str, *, code: str) ->
         f"correctable error — not be accepted into storage for a silent delivery "
         f"failure later. Got: {getattr(result, 'wire_response', None) or result.payload!r}"
     )
-    envelope = result.wire_error_envelope or result.synthesized_error_envelope
+    envelope = result.error_envelope()
     assert_envelope_shape(
         envelope,
         code,

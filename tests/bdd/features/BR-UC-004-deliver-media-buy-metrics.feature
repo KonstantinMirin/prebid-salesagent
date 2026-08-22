@@ -644,7 +644,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: Campaign unit with interval != 1 - rejected
     # HAND-EDITED (salesagent-rlgl.2): Then asserts the buyer-facing WIRE envelope
     # via the existing wire-assertion path (attribution_window in _WIRE_ASSERTED_FIELDS
-    # -> _assert_error_outcome -> assert_envelope_shape on ctx["wire_error_envelope"]),
+    # -> _assert_error_outcome -> assert_envelope_shape on ctx["result"].error_envelope()),
     # not the lossy reconstructed ctx["error"] generic then_error.py steps.
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     When the Buyer Agent requests delivery metrics for "mb-001" with attribution_window {"post_click": {"interval": 2, "unit": "campaign"}}

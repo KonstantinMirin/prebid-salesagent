@@ -16,7 +16,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import payload_or_none
+from tests.bdd.steps._outcome_helpers import error_envelope_or_none, payload_or_none
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.helpers import assert_envelope_shape
@@ -2820,7 +2820,7 @@ def then_brandless_rejected_validation_error(ctx: dict) -> None:
     error = ctx.get("error")
     assert error is not None, "expected the brandless entry to be rejected with an error"
 
-    envelope = ctx.get("wire_error_envelope") or ctx.get("synthesized_error_envelope")
+    envelope = error_envelope_or_none(ctx)
     if envelope is not None:
         # Seller's own validation (IMPL/A2A/REST) → assert the two-layer AdCP envelope.
         assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")

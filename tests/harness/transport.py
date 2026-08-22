@@ -167,14 +167,17 @@ class TransportResult:
             wire-presence needs its own per-site declaration; that is not this
             lane's, and inventing one here would be the same identity-inference
             mistake in a new spelling.
-        synthesized_error_envelope: Two-layer envelope produced by
+        _synthesized_error_envelope: Two-layer envelope produced by
             ``build_two_layer_error_envelope`` against the IMPL-caught
             ``AdCPError`` — what production WOULD emit at the boundary.
             ``None`` on success and on REST/MCP/A2A (those expose the real
-            wire envelope above instead). Tests asserting on this field
-            verify the envelope-builder contract, NOT the wire shape — a
-            regression in the production boundary translator would not be
-            caught here. Use REST/MCP/A2A for wire-shape regressions.
+            wire envelope above instead). PRIVATE: read it through
+            :meth:`error_envelope`, which is the only place allowed to decide
+            that this value may stand in for a wire. A test that reads it
+            directly verifies the envelope-builder contract against itself —
+            production and the harness compute it from the same in-memory
+            exception — so a regression in the boundary translator cannot be
+            caught that way. Use REST/MCP/A2A for wire-shape regressions.
     """
 
     payload: BaseModel | None = None
@@ -183,7 +186,7 @@ class TransportResult:
     raw_response: Any = None
     wire_response: dict[str, Any] | None = None
     wire_error_envelope: dict[str, Any] | None = None
-    synthesized_error_envelope: dict[str, Any] | None = None
+    _synthesized_error_envelope: dict[str, Any] | None = None
     has_wire: bool = field(kw_only=True)
 
     @property
@@ -193,6 +196,56 @@ class TransportResult:
     @property
     def is_error(self) -> bool:
         return self.error is not None
+
+    def error_envelope(self) -> dict[str, Any]:
+        """The two-layer error envelope this dispatch produced. Raises if there is none.
+
+        Three branches, spelled out because getting them wrong is this lane's
+        whole subject:
+
+        1. a captured wire envelope is present -> return it;
+        2. no wire was captured AND the dispatcher declared no wire AND a
+           synthesized envelope exists -> return the synthesized one;
+        3. otherwise -> RAISE.
+
+        Branch 2 is reachable only on IMPL, and NOT because ``has_wire`` says
+        so. ``has_wire`` is ``False`` on every A2A, MCP and IMPL error — a
+        catch-all may fire before anything was sent — so keying on it alone
+        would hand back a rebuilt envelope on transports that HAVE a wire, and
+        on A2A and MCP it would discard a real captured one. What actually
+        isolates IMPL is that IMPL is the only dispatcher that populates the
+        synthesized field at all. That single-producer invariant is the load
+        bearing one, and it is pinned by
+        ``tests/unit/test_harness_mcp_never_synthesizes.py``.
+
+        Branch 3 covers the case every operand is ``None`` — an A2A catch-all
+        that derived nothing. Falling back to re-serializing the typed payload
+        there would assert nothing about the wire while looking green, which is
+        the tautology this reader exists to prevent.
+        """
+        envelope = self.error_envelope_or_none()
+        assert envelope is not None, (
+            "Expected an error envelope, but none was captured "
+            f"(is_error={self.is_error}, payload={self.payload!r}). The operation either "
+            "succeeded or errored before reaching a transport."
+        )
+        return envelope
+
+    def error_envelope_or_none(self) -> dict[str, Any] | None:
+        """:meth:`error_envelope`, returning ``None`` instead of raising.
+
+        For the callers that branch on envelope-presence as CONTROL FLOW rather
+        than reading it — an MCP dispatch can fail with a ``ToolError`` that is
+        genuinely not an AdCP envelope, and collapsing that branch would turn a
+        correct assertion into an error. The success path already ships this
+        same pair: ``_wire_or_none`` returns ``None`` for a declared no-wire
+        while ``wire_field``/``wire_dict`` raise. Prefer the raising one.
+        """
+        if isinstance(self.wire_error_envelope, dict):
+            return self.wire_error_envelope
+        if not self.has_wire and isinstance(self._synthesized_error_envelope, dict):
+            return self._synthesized_error_envelope
+        return None
 
     def assert_wire_error(
         self,

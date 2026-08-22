@@ -31,7 +31,7 @@ def _envelope_from_adcp_error(exc: Exception) -> dict[str, Any] | None:
     """Build a SYNTHESIZED envelope from an AdCPError instance.
 
     Used by ImplDispatcher to populate the separate
-    ``synthesized_error_envelope`` field — IMPL has no wire by definition
+    private ``_synthesized_error_envelope`` field — IMPL has no wire by definition
     and ``wire_error_envelope`` is reserved for real wire bytes captured
     by REST/MCP/A2A. Production code uses the same
     ``build_two_layer_error_envelope`` helper at the boundary, so the
@@ -91,7 +91,7 @@ class ImplDispatcher:
     IMPL is the in-process direct call — there is no wire by definition.
     ``wire_error_envelope`` is left ``None`` on this transport; the envelope
     that production WOULD emit at the boundary is exposed on the separate
-    ``synthesized_error_envelope`` field so tests cannot accidentally lean
+    private ``_synthesized_error_envelope`` field so tests cannot accidentally lean
     on IMPL to catch real-wire regressions (a regression in the production
     boundary translator would not change what this dispatcher computes,
     because both call ``build_two_layer_error_envelope`` on the same
@@ -105,7 +105,7 @@ class ImplDispatcher:
             return TransportResult(
                 has_wire=False,  # in-process call, no wire exists
                 error=exc,
-                synthesized_error_envelope=_envelope_from_adcp_error(exc),
+                _synthesized_error_envelope=_envelope_from_adcp_error(exc),
             )
         return TransportResult(
             payload=payload, envelope={"transport": "impl"}, has_wire=False

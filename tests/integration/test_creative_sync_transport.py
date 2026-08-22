@@ -753,7 +753,7 @@ class TestFormatValidationUnreachable:
             )
 
             assert result.is_error, f"[{transport.value}] transient agent failure must fail the request"
-            envelope = result.wire_error_envelope or result.synthesized_error_envelope
+            envelope = result.error_envelope()
             assert_envelope_shape(
                 envelope,
                 "SERVICE_UNAVAILABLE",

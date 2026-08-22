@@ -46,6 +46,11 @@ _WIRE_REFERENCES = (
     "_wire_error_object",
     "assert_wire_error",
     "wire_error_envelope",
+    # The reader pair that replaced the hand-rolled `wire or synthesized`
+    # fallback. A step migrated onto it still references the wire — without
+    # these names it would lose the marker and trip Check B.
+    "error_envelope",
+    "error_envelope_or_none",
 )
 
 # -- Check A: test-side error construction ------------------------------------

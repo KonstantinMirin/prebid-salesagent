@@ -291,5 +291,5 @@ class TestAdapterProvidedFormatIsNotRefused:
 
             assert not result.is_error, (
                 "an adapter-provided agent_url is served in-process and must not be judged as an "
-                f"egress destination. Got: {result.wire_error_envelope or result.synthesized_error_envelope!r}"
+                f"egress destination. Got: {result.error_envelope_or_none()!r}"
             )

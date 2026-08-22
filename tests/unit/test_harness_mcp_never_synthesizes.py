@@ -65,7 +65,7 @@ class TestMcpDoesNotSynthesize:
         """
         result = McpDispatcher().dispatch(_raising_env(_an_error()))
 
-        assert result.synthesized_error_envelope is None
+        assert result._synthesized_error_envelope is None
         assert result.wire_error_envelope is None
 
     def test_a_tool_error_carrying_wire_json_is_read_as_the_wire(self):
@@ -81,7 +81,7 @@ class TestMcpDoesNotSynthesize:
         result = McpDispatcher().dispatch(_raising_env(ToolError(json.dumps(envelope))))
 
         assert result.wire_error_envelope == envelope
-        assert result.synthesized_error_envelope is None
+        assert result._synthesized_error_envelope is None
 
     def test_a_stashed_wire_envelope_is_read_as_the_wire(self):
         """The second capture path: an AdCPError carrying the harness stash."""
@@ -92,7 +92,7 @@ class TestMcpDoesNotSynthesize:
         result = McpDispatcher().dispatch(_raising_env(exc))
 
         assert result.wire_error_envelope == envelope
-        assert result.synthesized_error_envelope is None
+        assert result._synthesized_error_envelope is None
 
 
 class TestOnlyTheTransportWithNoWireMaySynthesize:
@@ -116,11 +116,11 @@ class TestOnlyTheTransportWithNoWireMaySynthesize:
         """
         result = ImplDispatcher().dispatch(_raising_env(_an_error()))
 
-        assert result.synthesized_error_envelope is not None
+        assert result._synthesized_error_envelope is not None
         assert result.wire_error_envelope is None
 
     @pytest.mark.parametrize("dispatcher", [A2ADispatcher, McpDispatcher, RestDispatcher])
     def test_a_transport_that_has_a_wire_never_synthesizes(self, dispatcher):
         result = dispatcher().dispatch(_raising_env(_an_error()))
 
-        assert result.synthesized_error_envelope is None
+        assert result._synthesized_error_envelope is None

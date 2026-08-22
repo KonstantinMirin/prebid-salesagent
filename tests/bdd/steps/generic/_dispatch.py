@@ -62,12 +62,12 @@ def dispatch_request(ctx: dict, *, identity: Any = _SENTINEL, **kwargs: Any) -> 
         ctx["result"] = result
         if result.is_error:
             ctx["error"] = result.error
-            # Capture the real wire envelope (A2A/REST/MCP) and the
-            # synthesized envelope (IMPL has no wire) so Then steps can
-            # assert the two-layer AdCP shape per the Error Verification
-            # Policy. Both are None-safe; absent keys mean "no envelope".
-            ctx["wire_error_envelope"] = result.wire_error_envelope
-            ctx["synthesized_error_envelope"] = result.synthesized_error_envelope
+            # NO ctx envelope copies. Then steps read ctx["result"].error_envelope(),
+            # which is the one place allowed to decide whether a synthesized value
+            # may stand in for a wire. Copying the two fields into ctx created a
+            # second spelling of that decision — and only this seam ever wrote the
+            # keys, so a scenario dispatched through _call_via saw None even when
+            # the envelope HAD been captured on the result.
         else:
             # NO ctx["response"]. A provenance-stripped copy of the payload cannot
             # tell a Then whether it is reading a wire fact or an in-process

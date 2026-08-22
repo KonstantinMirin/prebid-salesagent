@@ -54,7 +54,7 @@ from urllib.parse import urlparse
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require, payload_or_none, require_payload
+from tests.bdd.steps._outcome_helpers import _require, error_envelope_or_none, payload_or_none, require_payload
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.helpers.webhook_credential_refusal import SHORT_CREDENTIAL
 
@@ -106,10 +106,10 @@ _ADDRESS_CANDIDATE_RE = re.compile(r"[0-9A-Fa-f:.]{3,}")
 
 def _wire_error_envelope(ctx: dict) -> dict:
     """Return the wire error envelope, failing loudly if the request did not fail."""
-    envelope = ctx.get("wire_error_envelope")
-    assert isinstance(envelope, dict), (
+    envelope = error_envelope_or_none(ctx)
+    assert envelope is not None, (
         "Expected a wire error envelope — the request was supposed to be refused. "
-        f"Got {envelope!r}; recorded error={ctx.get('error')!r}, response={payload_or_none(ctx)!r}"
+        f"Got none; recorded error={ctx.get('error')!r}, response={payload_or_none(ctx)!r}"
     )
     return envelope
 

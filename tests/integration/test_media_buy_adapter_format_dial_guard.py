@@ -88,7 +88,7 @@ class TestAdapterFormatCreativeSurvivesTheReDial:
             assert not result.is_error, (
                 "a creative whose agent_url is an adapter-served pseudo-URL must be served "
                 "in-process, not judged as a fetchable creative-agent format. Got: "
-                f"{result.wire_error_envelope or result.synthesized_error_envelope!r}"
+                f"{result.error_envelope_or_none()!r}"
             )
 
 
@@ -154,7 +154,7 @@ class TestReDialOfBuyerProvenanceUrlIsNotOperatorMisclassified:
             assert result.is_error, (
                 f"a refused third-party creative-agent url must fail create_media_buy: {result.payload!r}"
             )
-            envelope = result.wire_error_envelope or result.synthesized_error_envelope
+            envelope = result.error_envelope()
             assert envelope is not None, f"expected an error envelope, got {result!r}"
             code = envelope.get("adcp_error", envelope).get("code")
             recovery = envelope.get("adcp_error", envelope).get("recovery")

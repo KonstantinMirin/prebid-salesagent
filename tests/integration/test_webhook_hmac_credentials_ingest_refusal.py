@@ -165,7 +165,7 @@ class TestCreateMediaBuyRefusesHmacRegistrationWithoutCredentials:
                 f"{getattr(result, 'wire_response', None) or result.payload!r}"
             )
             assert_credentials_refusal_envelope(
-                result.wire_error_envelope or result.synthesized_error_envelope,
+                result.error_envelope(),
                 surface="create_media_buy",
             )
             _assert_no_push_config_persisted(env._tenant_id, env._principal_id)
@@ -194,7 +194,7 @@ class TestCreateMediaBuyRefusesHmacRegistrationWithoutCredentials:
                 "a scheme outside the pinned AuthenticationScheme enum must fail create_media_buy "
                 f"at ingest. Got: {getattr(result, 'wire_response', None) or result.payload!r}"
             )
-            envelope = result.wire_error_envelope or result.synthesized_error_envelope
+            envelope = result.error_envelope()
             assert_envelope_shape(
                 envelope,
                 "VALIDATION_ERROR",
@@ -220,7 +220,7 @@ class TestCreateMediaBuyRefusesHmacRegistrationWithoutCredentials:
 
             assert not result.is_error, (
                 "A complete HMAC-SHA256 registration is servable and must be accepted; "
-                f"got {result.wire_error_envelope or result.synthesized_error_envelope!r}"
+                f"got {result.error_envelope_or_none()!r}"
             )
 
 
@@ -263,7 +263,7 @@ class TestShortCredentialReachesOneVerdictOnEverySurface:
     @staticmethod
     def _verdict(result) -> tuple[str, str, str]:
         """The (code, recovery, field) triple the buyer reads, from the wire envelope."""
-        envelope = result.wire_error_envelope or result.synthesized_error_envelope
+        envelope = result.error_envelope()
         body = envelope["errors"][0]
         return (body["code"], body["recovery"], body.get("field") or "")
 
@@ -405,7 +405,7 @@ class TestSchemaTypedTransportsRefuseTheSameDocument:
                 "credentials. Accepting it means the request model stopped validating the config "
                 f"against the AdCP spec. Got: {getattr(result, 'wire_response', None) or result.payload!r}"
             )
-            envelope = result.wire_error_envelope or result.synthesized_error_envelope
+            envelope = result.error_envelope()
             assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
             for layer, body in (("adcp_error", envelope["adcp_error"]), ("errors[0]", envelope["errors"][0])):
                 field = body.get("field") or ""

@@ -9,7 +9,7 @@ Then steps: publisher_properties assertions (selection_type, field presence)
 Steps store results in ctx:
     ctx["response"] — GetProductsResponse on success
     ctx["error"] — Exception on failure
-    ctx["wire_error_envelope"] — transport wire envelope on tool error
+    ctx["result"].error_envelope() — the error envelope on tool error
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ def _call_get_products(ctx: dict, **kwargs: Any) -> None:
     Delegates to the universal ``dispatch_request`` helper (#1417): it
     routes through ``env.call_via`` for the parametrized transport, stores the
     normalized ``ctx['result']`` plus ``ctx['response']`` / ``ctx['error']`` /
-    ``ctx['wire_error_envelope']``, and fails loudly if no transport is set
+    ``ctx['result'].error_envelope()``, and fails loudly if no transport is set
     (the IMPL ``call_impl`` fallback was removed — a missing transport is a
     wiring bug, not an IMPL bypass).
     """

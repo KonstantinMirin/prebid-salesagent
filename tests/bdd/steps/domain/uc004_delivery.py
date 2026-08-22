@@ -19,7 +19,7 @@ import pytest
 from adcp.types import AuthenticationScheme
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload
+from tests.bdd.steps._outcome_helpers import error_envelope_or_none, payload_or_none, require_payload
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
@@ -2934,7 +2934,7 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
     wire: not a server fault (INTERNAL_ERROR / transient) and not an auth failure. The
     precise code/recovery is asserted only once the scenario carries it.
     """
-    envelope = ctx.get("wire_error_envelope")
+    envelope = error_envelope_or_none(ctx)
     if isinstance(envelope, dict) and "adcp_error" in envelope:
         layer = envelope["adcp_error"]
         code = layer.get("code")
