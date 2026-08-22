@@ -3,14 +3,21 @@
 Before salesagent-4n88, both registries built an ``adcp.AgentConfig`` (via the
 deleted ``build_agent_config``/``_build_adcp_client``) and asserted on its
 ``auth_token``/``auth_header``/``auth_type`` fields. The OPERATOR agent path no
-longer builds that config at all — it calls ``call_mcp_tool(auth=...,
-auth_header=...)`` directly, whose own ``_build_auth_headers`` (already unit-
-tested in ``tests/integration/test_mcp_client_util.py::TestBuildAuthHeaders``,
-including the exact Optable-shaped bearer/custom-header case) does the header
+longer builds that config at all — it goes through
+``src.core.utils.operator_mcp.call_operator_mcp_tool``, which dials
+``call_mcp_tool(auth=..., auth_header=...)``; that function's own
+``_build_auth_headers`` (already unit-tested in
+``tests/integration/test_mcp_client_util.py::TestBuildAuthHeaders``, including
+the exact Optable-shaped bearer/custom-header case) does the header
 construction. What is left to prove here is narrower and different: that
 ``_fetch_formats_operator``/``_fetch_signals_operator`` actually FORWARD the
 agent's ``auth``/``auth_header``/``timeout`` through unchanged, rather than
 dropping or renaming them — the boundary contract, not the header algebra.
+
+The patch lands on ``call_mcp_tool`` as ``operator_mcp`` imports it, one frame
+BELOW the registries: that keeps the whole forwarding chain (registry ->
+``call_operator_mcp_tool`` -> ``call_mcp_tool``) under test, so a parameter
+dropped at either hop still fails these assertions.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -19,6 +26,8 @@ import pytest
 
 from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
 from src.core.signals_agent_registry import SignalsAgent, SignalsAgentRegistry
+
+_SEAM_DIAL = "src.core.utils.operator_mcp.call_mcp_tool"
 
 
 def _mock_call_mcp_tool(payload: dict) -> AsyncMock:
@@ -41,7 +50,7 @@ class TestAuthConfigForwardedToGuardedSeam:
         )
 
         with patch(
-            "src.core.creative_agent_registry.call_mcp_tool",
+            _SEAM_DIAL,
             _mock_call_mcp_tool({"formats": []}),
         ) as cmc:
             await registry._fetch_formats_operator(agent)
@@ -62,7 +71,7 @@ class TestAuthConfigForwardedToGuardedSeam:
         )
 
         with patch(
-            "src.core.creative_agent_registry.call_mcp_tool",
+            _SEAM_DIAL,
             _mock_call_mcp_tool({"formats": []}),
         ) as cmc:
             await registry._fetch_formats_operator(agent)
@@ -83,7 +92,7 @@ class TestAuthConfigForwardedToGuardedSeam:
         )
 
         with patch(
-            "src.core.signals_agent_registry.call_mcp_tool",
+            _SEAM_DIAL,
             _mock_call_mcp_tool({"signals": []}),
         ) as cmc:
             await registry._fetch_signals_operator(agent, brief="test")
@@ -103,7 +112,7 @@ class TestAuthConfigForwardedToGuardedSeam:
         )
 
         with patch(
-            "src.core.signals_agent_registry.call_mcp_tool",
+            _SEAM_DIAL,
             _mock_call_mcp_tool({"signals": []}),
         ) as cmc:
             await registry._fetch_signals_operator(agent, brief="test")

@@ -34,12 +34,10 @@ from typing import Any
 from adcp.types import GetSignalsResponse as LibraryGetSignalsResponse
 from pydantic import ValidationError
 
+from src.core.database.models import SignalsAgent as DBSignalsAgent
 from src.core.exceptions import AdCPConfigurationError
-from src.core.helpers.mcp_tool_payload import extract_tool_payload
-from src.core.helpers.outbound_error_mapping import raise_mapped_mcp_error, raise_mapped_outbound_error
 from src.core.schemas import GetSignalsRequest
-from src.core.security.outbound_http import OperatorEndpoint, OutboundError
-from src.core.utils.mcp_client import MCPCompatibilityError, MCPConnectionError, call_mcp_tool
+from src.core.utils.operator_mcp import ProbeResult, call_operator_mcp_tool, probe_failure
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +123,7 @@ class SignalsAgentRegistry:
     async def _fetch_signals_operator(self, agent: SignalsAgent, brief: str) -> list[dict[str, Any]]:
         """Fetch signals from an OPERATOR-configured signals agent, through the guarded MCP seam.
 
-        Routes through ``call_mcp_tool`` — a real MCP handshake, IP-pinned,
+        Routes through ``call_operator_mcp_tool`` — a real MCP handshake, IP-pinned,
         redirect-refusing — rather than ``adcp.ADCPMultiAgentClient``, whose own
         httpx stack no egress policy of ours could reach (adcp 6.6.0 exposes no
         transport injection point; upstream adcp-client-python#1004). Closes the
@@ -153,20 +151,15 @@ class SignalsAgentRegistry:
         args = request.model_dump(mode="json", exclude_none=True)
 
         logger.info(f"[TIMING] Calling agent {agent.name}, brief: {brief[:50]}...")
-        try:
-            result = await call_mcp_tool(
-                agent_url=agent.agent_url,
-                tool="get_signals",
-                arguments=args,
-                auth=agent.auth,
-                auth_header=agent.auth_header,
-                timeout=agent.timeout,
-            )
-            payload = extract_tool_payload(result)
-        except OutboundError as exc:
-            raise_mapped_outbound_error(exc, provenance=OperatorEndpoint(f"signals agent {agent.name}"), logger=logger)
-        except (MCPConnectionError, MCPCompatibilityError) as exc:
-            raise_mapped_mcp_error(exc, provenance=OperatorEndpoint(f"signals agent {agent.name}"), logger=logger)
+        payload = await call_operator_mcp_tool(
+            agent.agent_url,
+            "get_signals",
+            args,
+            label=f"signals agent {agent.name}",
+            auth=agent.auth,
+            auth_header=agent.auth_header,
+            timeout=agent.timeout,
+        )
 
         if not payload:
             # An empty payload means neither structured_content nor a TextContent
@@ -227,65 +220,46 @@ class SignalsAgentRegistry:
         logger.info(f"get_signals: Returning {len(all_signals)} total signals")
         return all_signals
 
-    async def test_connection(
-        self, agent_url: str, auth: dict[str, Any] | None = None, auth_header: str | None = None
-    ) -> dict[str, Any]:
-        """Test connection to a signals agent.
+    @staticmethod
+    def config_for(db_agent: DBSignalsAgent) -> SignalsAgent:
+        """The ONE place a stored signals-agent row becomes a dial config.
 
-        Args:
-            agent_url: URL of the signals agent
-            auth: Optional authentication configuration
-            auth_header: Optional custom auth header name
-
-        Returns:
-            dict with success status and message/error
+        Mirrors :meth:`CreativeAgentRegistry.config_for` for the same reason: a
+        probe that rebuilds this mapping by hand dials with a different config
+        than production, so a passing probe proves nothing about the path that
+        runs. The stored ``timeout`` is read here rather than hard-coded to 30,
+        which is what the hand-built version discarded.
         """
+        auth = None
+        if db_agent.auth_type and db_agent.auth_credentials:
+            auth = {"type": db_agent.auth_type, "credentials": db_agent.auth_credentials}
+        return SignalsAgent(
+            agent_url=db_agent.agent_url,
+            name=db_agent.name,
+            enabled=db_agent.enabled,
+            auth=auth,
+            auth_header=db_agent.auth_header,
+            timeout=db_agent.timeout,
+        )
+
+    async def probe_agent(self, db_agent: DBSignalsAgent) -> ProbeResult:
+        """Dial a stored signals agent exactly as production dials it.
+
+        The public entry point for the operator's test-connection button, with
+        the same shape as the creative registry's: the route holds a row, and
+        everything between that row and the dial belongs to this class.
+        """
+        agent = self.config_for(db_agent)
         try:
-            # Create test agent config
-            test_agent = SignalsAgent(
-                agent_url=agent_url,
-                name="Test Agent",
-                enabled=True,
-                auth=auth,
-                auth_header=auth_header,
-                timeout=30,
-            )
+            signals = await self._fetch_signals_operator(agent, brief="test")
+        except Exception as exc:  # noqa: BLE001 - an operator probe reports every failure, it never 500s
+            return probe_failure(exc, logger=logger)
 
-            signals = await self._fetch_signals_operator(test_agent, brief="test")
-
-            return {
-                "success": True,
-                "message": "Successfully connected to signals agent",
-                "signal_count": len(signals),
-            }
-
-        except AdCPConfigurationError as e:
-            # Everything the operator can fix by repointing or re-crediting this
-            # deployment. CONFIGURATION_ERROR now covers THREE causes that used to
-            # arrive as different classes: the guarded MCP seam rejecting us
-            # (HTTP 401/403/404 during the handshake), egress policy REFUSING the
-            # configured endpoint before we dial it, and an endpoint that answers
-            # with nothing parseable. The seam's failure surface does not
-            # distinguish "bad auth" from "bad request" the way the deleted SDK
-            # client's ADCPAuthenticationError/ADCPConnectionError did, so the
-            # advice below names every lever rather than presuming credentials —
-            # an egress refusal has nothing to do with them. ``e.message`` already
-            # says which cause it was.
-            logger.error(f"Connection test failed (configuration): {e.message}")
-            return {
-                "success": False,
-                "error": (
-                    f"Connection failed: {e.message.rstrip('.')}. Check the agent URL, its credentials "
-                    f"and auth header, and whether this deployment's egress policy allows the address."
-                ),
-            }
-
-        except Exception as e:
-            logger.error(f"Connection test failed: {e}", exc_info=True)
-            return {
-                "success": False,
-                "error": f"Connection failed: {str(e)}",
-            }
+        return ProbeResult(
+            ok=True,
+            message="Successfully connected to signals agent",
+            count=len(signals),
+        )
 
 
 # Global registry instance

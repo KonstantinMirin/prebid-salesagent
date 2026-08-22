@@ -369,23 +369,42 @@ def wrapped_failure(exc: BaseException) -> WrappedFailure | None:
     importing ``httpx`` itself — this module is the one sanctioned importer
     (GH #1589) — and now without RECEIVING an httpx object either.
     """
-    seen: set[int] = set()
-    found = _find_wrapped_http_status_error(exc, seen)
+    found = find_wrapped(exc, httpx.HTTPStatusError)
     if found is None:
         return None
     return WrappedFailure(status=found.response.status_code, retry_after=_retry_after_seconds(found.response))
 
 
-def _find_wrapped_http_status_error(exc: BaseException, seen: set[int]) -> httpx.HTTPStatusError | None:
+def find_wrapped[Wrapped: BaseException](exc: BaseException, exc_type: type[Wrapped]) -> Wrapped | None:
+    """The first *exc_type* on *exc*'s cause/context chain, or in an ``ExceptionGroup``.
+
+    A library between us and our own exception re-raises it wrapped in a type of
+    its own — fastmcp turns a dial-time ``OutboundRequestBlocked`` into a bare
+    ``RuntimeError``, which is why ``except OutboundError`` at such a call site
+    catches nothing while LOOKING like it closes the case. Recovering the typed
+    exception from the chain is what lets a caller act on what actually
+    happened rather than on what the wrapper called it.
+
+    The walk is deliberately type-parameterised rather than duplicated per
+    exception type: it is one traversal (cause, then context, then any
+    ``ExceptionGroup`` member, with a seen-set so a cycle terminates), and the
+    only thing that ever varied between copies was the ``isinstance`` target.
+    """
+    return _find_wrapped(exc, exc_type, set())
+
+
+def _find_wrapped[Wrapped: BaseException](
+    exc: BaseException, exc_type: type[Wrapped], seen: set[int]
+) -> Wrapped | None:
     current: BaseException | None = exc
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if isinstance(current, httpx.HTTPStatusError):
+        if isinstance(current, exc_type):
             return current
         sub_exceptions = getattr(current, "exceptions", None)
         if sub_exceptions is not None:
             for sub in sub_exceptions:
-                found = _find_wrapped_http_status_error(sub, seen)
+                found = _find_wrapped(sub, exc_type, seen)
                 if found is not None:
                     return found
         current = current.__cause__ or current.__context__

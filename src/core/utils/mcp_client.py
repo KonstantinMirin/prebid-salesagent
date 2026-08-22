@@ -37,7 +37,13 @@ from fastmcp.client.transports import (
 )
 
 from src.core.security.egress.attempts import Attempts
-from src.core.security.outbound_http import guarded_client_factory, sleep_backoff, validate_url
+from src.core.security.outbound_http import (
+    OutboundError,
+    find_wrapped,
+    guarded_client_factory,
+    sleep_backoff,
+    validate_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +157,10 @@ async def call_mcp_tool(
         The tool call's result
 
     Raises:
+        OutboundError: If egress policy refuses the destination — either at the
+            pre-check below or during the dial itself. Propagates UNRETRIED and
+            with its own classification; the attempt budget does not apply to a
+            destination the policy already refused.
         MCPConnectionError: If connection or the tool call fails after all retries
         MCPCompatibilityError: If MCP SDK version incompatibility detected
 
@@ -169,12 +179,11 @@ async def call_mcp_tool(
 
     # Egress policy, once, BEFORE the candidate loop and outside every try.
     #
-    # Position is load-bearing. Inside the loop this sits under a bare
-    # ``except Exception``, so a refusal would be logged as a connection failure,
-    # slept on, retried against the same blocked URL and then against the
-    # synthesised ``/mcp`` candidate, and finally re-raised as MCPConnectionError
-    # — a policy decision laundered into a transport failure. Here the refusal
-    # propagates as OutboundRequestBlocked, unretried and correctly classified.
+    # Position is what makes the refusal CHEAP: refused here, nothing is built and
+    # no candidate is tried. It is no longer what makes it CORRECT — the in-loop
+    # handler below recovers a refusal raised during the dial itself and re-raises
+    # it unretried, because this pre-check and the pinned transport's own
+    # resolution are two separate resolutions that can disagree.
     #
     # Validating the primary also covers the ``/mcp`` fallback below: it differs
     # only by path, and the seam's policy is about scheme and address.
@@ -206,7 +215,7 @@ async def call_mcp_tool(
                 # without it fastmcp falls back to mcp.shared._httpx_utils's
                 # create_mcp_http_client, which follows redirects with no pin, so a
                 # counterparty answering `302 -> http://169.254.169.254/` reaches an
-                # address the :157 pre-check never saw. Pinning current_url — the URL
+                # address validate_url's pre-check never saw. Pinning current_url — the URL
                 # actually dialed — also means validate-and-dial cannot diverge.
                 transport = StreamableHttpTransport(
                     url=current_url,
@@ -225,6 +234,25 @@ async def call_mcp_tool(
                 return result
 
             except Exception as e:
+                # A dial-time egress refusal is TERMINAL: the attempt budget does
+                # not apply to a destination the policy already refused. Let it
+                # out with its own type, before any retry bookkeeping.
+                #
+                # It has to be recovered from the chain rather than caught by
+                # type, because fastmcp re-raises it as a bare RuntimeError
+                # ("Client failed to connect: ..."). An `except OutboundError`
+                # arm here reads like it closes the case and catches nothing --
+                # the shape this epic exists to delete -- so the unwrap is the
+                # one mechanism, not a decoration in front of one.
+                #
+                # validate_url above the loop does NOT make this unreachable: it
+                # resolves separately from guarded_client_factory's resolution
+                # inside `async with client`, and the two can disagree under DNS
+                # rebind, which is precisely when retrying a refusal is worst.
+                refusal = find_wrapped(e, OutboundError)
+                if refusal is not None:
+                    raise refusal from e
+
                 last_exception = e
                 error_msg = str(e)
 

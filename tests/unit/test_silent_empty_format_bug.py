@@ -46,6 +46,11 @@ class TestListAllFormatsErrorPropagation:
         graded elsewhere): what's graded here is that list_all_formats_with_errors
         turns a raised exception into a recorded error rather than an empty
         format list — a failed fetch must never look like "agent up, no formats".
+
+        The failure is injected at the dial as ``call_operator_mcp_tool``
+        imports it, so it travels the full production path — through that
+        function's except arms (which do NOT catch a bare ``RuntimeError``) and
+        out of ``_fetch_formats_operator`` — before the recording under test.
         """
         monkeypatch.delenv("ADCP_TESTING", raising=False)
 
@@ -54,7 +59,7 @@ class TestListAllFormatsErrorPropagation:
         agent = CreativeAgent(agent_url="https://creative.example.com", name="test-agent")
         monkeypatch.setattr(registry, "_get_tenant_agents", lambda tenant_id=None: [agent])
 
-        with patch("src.core.creative_agent_registry.call_mcp_tool", AsyncMock(side_effect=RuntimeError("boom"))):
+        with patch("src.core.utils.operator_mcp.call_mcp_tool", AsyncMock(side_effect=RuntimeError("boom"))):
             result = await registry.list_all_formats_with_errors(tenant_id="test")
 
         assert len(result.errors) > 0, (

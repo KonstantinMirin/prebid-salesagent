@@ -15,6 +15,9 @@ Fixed by routing the operator dial through
 ``src.core.utils.mcp_client.call_mcp_tool`` — the same guarded fastmcp seam
 already used in this file for ``preview_creative``/``build_creative``, and
 already proven redirect-refusing by ``tests/integration/test_mcp_client_egress.py``.
+All four operator call sites reach it through one shared function,
+``src.core.utils.operator_mcp.call_operator_mcp_tool``, which owns the dial,
+the payload extraction and both seam-error mappings.
 ``_fetch_formats_operator``/``_fetch_signals_operator`` are now the only
 operator-agent fetch paths; ``ADCPMultiAgentClient`` is gone from both
 registries (confirmed by ``tests/unit/test_ruff_egress_bans.py``'s closed
@@ -96,13 +99,15 @@ def _assert_transient_by_code(exc: AdCPServiceUnavailableError) -> None:
     _assert_wire_pair(exc, "SERVICE_UNAVAILABLE", pinned_recovery="transient")
 
 
+_SEAM_DIAL = "src.core.utils.operator_mcp.call_mcp_tool"
+
+
 @contextlib.contextmanager
 def _stub_mcp_tool_result(
     monkeypatch: pytest.MonkeyPatch,
     *,
     payload: Any = None,
     text: str | None = None,
-    registry_module: str = "src.core.signals_agent_registry",
 ):
     """Make the guarded seam hand a registry a successful tool result it must interpret.
 
@@ -111,25 +116,30 @@ def _stub_mcp_tool_result(
     fastmcp — a fixture that would grade the protocol library, not the
     classification. The seam itself is graded over real sockets by the sibling
     classes in this file; here it is stubbed at exactly one point
-    (``call_mcp_tool``) so the assertion is about what the registry does with
-    an answer it cannot use.
+    (``call_mcp_tool``, as ``call_operator_mcp_tool`` imports it) so the
+    assertion is about what the registry does with an answer it cannot use.
+
+    Stubbing the dial rather than ``call_operator_mcp_tool`` itself is what
+    makes these tests grade anything: ``extract_tool_payload`` and BOTH error
+    mappings live inside that function, and they are precisely the code under
+    test here. One patch point now serves every operator path — creative and
+    signals alike funnel through this single seam function, so the caller no
+    longer picks a registry module.
 
     *payload* becomes ``structured_content``; *text* instead becomes a legacy
     ``TextContent`` block, which is the only way to reach the ``json.loads``
-    branch of ``extract_tool_payload``. *registry_module* selects which
-    registry's ``call_mcp_tool`` name is patched — both import it at module
-    level, so both are patchable by the identical technique.
+    branch of ``extract_tool_payload``.
     """
     content = [MagicMock(text=text)] if text is not None else []
     result = MagicMock(structured_content=payload, content=content)
-    monkeypatch.setattr(f"{registry_module}.call_mcp_tool", AsyncMock(return_value=result))
+    monkeypatch.setattr(_SEAM_DIAL, AsyncMock(return_value=result))
     yield
 
 
 @contextlib.contextmanager
 def _stub_mcp_client_raising(monkeypatch: pytest.MonkeyPatch, exc: Exception):
     """Make the guarded seam fail the way it reports a status-bearing failure."""
-    monkeypatch.setattr("src.core.signals_agent_registry.call_mcp_tool", AsyncMock(side_effect=exc))
+    monkeypatch.setattr(_SEAM_DIAL, AsyncMock(side_effect=exc))
     yield
 
 
@@ -142,7 +152,8 @@ class TestOperatorCreativeAgentRedirectIsRefused:
 
         ``local_origin_tls`` stands in for a tenant-configured creative agent (an
         operator agent, not a buyer-supplied URL). ``_fetch_formats_operator``
-        dials through ``call_mcp_tool``, which pins the connection and sets
+        dials through ``call_operator_mcp_tool`` onto ``call_mcp_tool``, which
+        pins the connection and sets
         ``follow_redirects=False`` — the redirect is never followed
         (``metadata_standin.hits == 0``), matching the fixed MCP-seam behavior
         in ``test_mcp_client_egress.py``.
@@ -277,19 +288,13 @@ class TestOperatorAgentFailureIsClassifiedTerminalByCode:
         _assert_terminal_by_code(excinfo.value)
 
 
-_OPERATOR_FETCHES: dict[str, tuple[str, Any]] = {
-    "creative-format-fetch": (
-        "src.core.creative_agent_registry",
-        lambda: CreativeAgentRegistry()._fetch_formats_operator(
-            CreativeAgent(agent_url="https://creative.operator.test", name="operator-creative-agent")
-        ),
+_OPERATOR_FETCHES: dict[str, Any] = {
+    "creative-format-fetch": lambda: CreativeAgentRegistry()._fetch_formats_operator(
+        CreativeAgent(agent_url="https://creative.operator.test", name="operator-creative-agent")
     ),
-    "signals-fetch": (
-        "src.core.signals_agent_registry",
-        lambda: SignalsAgentRegistry()._fetch_signals_operator(
-            SignalsAgent(agent_url="https://signals.operator.test", name="operator-signals-agent"),
-            brief="test brief",
-        ),
+    "signals-fetch": lambda: SignalsAgentRegistry()._fetch_signals_operator(
+        SignalsAgent(agent_url="https://signals.operator.test", name="operator-signals-agent"),
+        brief="test brief",
     ),
 }
 
@@ -315,13 +320,9 @@ class TestAPayloadThatIsNotAJSONObjectIsClassified:
     @pytest.mark.parametrize("path", list(_OPERATOR_FETCHES), ids=list(_OPERATOR_FETCHES))
     async def test_a_json_array_payload_is_service_unavailable(self, monkeypatch, path):
         """``structured_content`` is a list, not an object -> SERVICE_UNAVAILABLE / transient."""
-        registry_module, call = _OPERATOR_FETCHES[path]
+        call = _OPERATOR_FETCHES[path]
 
-        with _stub_mcp_tool_result(
-            monkeypatch,
-            payload=[{"format_id": "display_300x250"}],
-            registry_module=registry_module,
-        ):
+        with _stub_mcp_tool_result(monkeypatch, payload=[{"format_id": "display_300x250"}]):
             with pytest.raises(AdCPServiceUnavailableError) as excinfo:
                 await call()
 
@@ -336,9 +337,9 @@ class TestAPayloadThatIsNotAJSONObjectIsClassified:
         annotation is untrue on this return path too, and the raise is equally
         unclassified.
         """
-        registry_module, call = _OPERATOR_FETCHES[path]
+        call = _OPERATOR_FETCHES[path]
 
-        with _stub_mcp_tool_result(monkeypatch, text="not json{", registry_module=registry_module):
+        with _stub_mcp_tool_result(monkeypatch, text="not json{"):
             with pytest.raises(AdCPServiceUnavailableError) as excinfo:
                 await call()
 
@@ -380,11 +381,7 @@ class TestPreviewAndBuildDoNotLeakAnUnclassifiedSeamFailure:
         """A JSON array from the creative agent -> SERVICE_UNAVAILABLE / transient, not a raw builtin."""
         call = _CREATIVE_AGENT_TOOLS[tool]
 
-        with _stub_mcp_tool_result(
-            monkeypatch,
-            payload=["not", "an", "object"],
-            registry_module="src.core.creative_agent_registry",
-        ):
+        with _stub_mcp_tool_result(monkeypatch, payload=["not", "an", "object"]):
             with pytest.raises(AdCPServiceUnavailableError) as excinfo:
                 await call(CreativeAgentRegistry())
 
@@ -395,11 +392,7 @@ class TestPreviewAndBuildDoNotLeakAnUnclassifiedSeamFailure:
         """A ``TextContent`` block that will not parse -> SERVICE_UNAVAILABLE / transient."""
         call = _CREATIVE_AGENT_TOOLS[tool]
 
-        with _stub_mcp_tool_result(
-            monkeypatch,
-            text="not json{",
-            registry_module="src.core.creative_agent_registry",
-        ):
+        with _stub_mcp_tool_result(monkeypatch, text="not json{"):
             with pytest.raises(AdCPServiceUnavailableError) as excinfo:
                 await call(CreativeAgentRegistry())
 

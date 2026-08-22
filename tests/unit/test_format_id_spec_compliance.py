@@ -75,7 +75,10 @@ async def test_build_creative_sends_format_id_as_object():
     mock_result.structured_content = {"message": "ok", "context_id": "ctx1", "status": "draft"}
     mock_call_mcp_tool = AsyncMock(return_value=mock_result)
 
-    with patch("src.core.creative_agent_registry.call_mcp_tool", mock_call_mcp_tool):
+    # Patched one frame below the registry: ``build_creative`` reaches the dial
+    # through ``call_operator_mcp_tool``, so this keeps the real argument
+    # forwarding (and ``extract_tool_payload``) in the path being graded.
+    with patch("src.core.utils.operator_mcp.call_mcp_tool", mock_call_mcp_tool):
         await registry.build_creative(
             agent_url="https://creative.test.example.com/api/creative-agent",
             format_id="display_300x250_generative",

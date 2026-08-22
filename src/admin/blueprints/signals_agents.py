@@ -276,14 +276,6 @@ def test_signals_agent(tenant_id, agent_id):
 
             registry = SignalsAgentRegistry()
 
-            # Build agent config
-            auth = None
-            if agent.auth_type and agent.auth_credentials:
-                auth = {
-                    "type": agent.auth_type,
-                    "credentials": agent.auth_credentials,
-                }
-
             # Re-validate the stored URL at send time: a row written while the
             # egress-policy escape hatches were open must not become an outbound
             # request once they are closed. This is NOT the validate-then-dial
@@ -296,14 +288,21 @@ def test_signals_agent(tenant_id, agent_id):
 
             # Test connection
             # Use asyncio.run() instead of new_event_loop() for better compatibility with adcp library
-            result = asyncio.run(registry.test_connection(agent.agent_url, auth=auth, auth_header=agent.auth_header))
+            # The registry owns the row -> dial-config mapping, so the probe uses
+            # the stored timeout rather than a hard-coded one and dials exactly as
+            # production does.
+            result = asyncio.run(registry.probe_agent(agent))
 
-            if result.get("success"):
+            # The JSON keys are the template's contract (templates/signals_agents.html
+            # reads data.signal_count / data.message / data.error), so they stay put.
+            # What changed is that they are now projected from a typed result instead
+            # of read out of a dict with a default standing in for a missing key.
+            if result.ok:
                 return jsonify(
                     {
                         "success": True,
-                        "message": result.get("message", "Successfully connected"),
-                        "signal_count": result.get("signal_count", 0),
+                        "message": result.message,
+                        "signal_count": result.count,
                     }
                 )
             else:
@@ -311,7 +310,7 @@ def test_signals_agent(tenant_id, agent_id):
                     jsonify(
                         {
                             "success": False,
-                            "error": result.get("error", "Connection failed"),
+                            "error": result.message,
                         }
                     ),
                     400,

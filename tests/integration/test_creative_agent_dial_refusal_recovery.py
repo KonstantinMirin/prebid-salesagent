@@ -9,10 +9,11 @@ preview (``src/core/tools/creatives/_processing.py``). The dialled
 ``agent_url`` is ``format_obj.agent_url``: an entry out of the TENANT's own
 registered formats, not a buyer-supplied address. Provenance = operator.
 
-``call_mcp_tool`` (``src/core/utils/mcp_client.py:181``) runs the seam's
-``validate_url`` before ever opening a connection and lets a refusal propagate
-as ``OutboundRequestBlocked`` "unretried and correctly classified" (its own
-comment). ``src/core/helpers/outbound_error_mapping.py`` names the operator
+Both dials go through ``src.core.utils.operator_mcp.call_operator_mcp_tool``,
+which reaches ``call_mcp_tool`` (``src/core/utils/mcp_client.py``); that
+function runs the seam's ``validate_url`` before ever opening a connection and
+lets a refusal propagate as ``OutboundRequestBlocked`` "unretried and correctly
+classified" (its own comment). ``src/core/helpers/outbound_error_mapping.py`` names the operator
 classification for that seam failure explicitly:
 ``CONFIGURATION_ERROR``/terminal, "surface to a human at the seller — the
 buyer cannot resolve a seller-side deployment misconfiguration and MUST NOT

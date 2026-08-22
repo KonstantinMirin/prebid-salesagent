@@ -16,10 +16,12 @@ from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.factories.core import (
     AdapterConfigFactory,
     AuthorizedPropertyFactory,
+    CreativeAgentFactory,
     CurrencyLimitFactory,
     GAMInventoryFactory,
     PropertyTagFactory,
     PublisherPartnerFactory,
+    SignalsAgentFactory,
     TenantFactory,
 )
 from tests.factories.creative import CreativeAssignmentFactory, CreativeFactory
@@ -49,6 +51,8 @@ ALL_FACTORIES = [
     PropertyTagFactory,
     PublisherPartnerFactory,
     AuthorizedPropertyFactory,
+    CreativeAgentFactory,
+    SignalsAgentFactory,
     PrincipalFactory,
     InventoryProfileFactory,
     ProductFactory,
@@ -71,6 +75,7 @@ __all__ = [
     "AuthorizedPropertyFactory",
     "AgentAccountAccessFactory",
     "CollectionListReferenceFactory",
+    "CreativeAgentFactory",
     "CreativeAssetFactory",
     "CreativeAssignmentFactory",
     "CreativeFactory",
@@ -90,6 +95,7 @@ __all__ = [
     "PropertyTagFactory",
     "PublisherPartnerFactory",
     "PushNotificationConfigFactory",
+    "SignalsAgentFactory",
     "TargetingFactory",
     "TenantAuthConfigFactory",
     "TenantFactory",

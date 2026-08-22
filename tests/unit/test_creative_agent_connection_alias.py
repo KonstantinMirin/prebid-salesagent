@@ -12,8 +12,12 @@ wire-level federation identity (format_id.agent_url) is unchanged; only the
 transport connection reroutes.
 
 salesagent-4n88 moved the OPERATOR agent path off ``adcp.ADCPMultiAgentClient``
-onto the guarded MCP seam (``call_mcp_tool``) — the routing/aliasing tests
-below mock that seam instead of the deleted SDK client.
+onto the guarded MCP seam (``call_mcp_tool``, reached through
+``src.core.utils.operator_mcp.call_operator_mcp_tool``) — the routing/aliasing
+tests below mock that seam instead of the deleted SDK client. They patch the
+dial as ``operator_mcp`` imports it, one frame below the registry, so the
+alias resolution AND its handoff to the shared seam function both stay under
+test.
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ from src.core.creative_agent_registry import (
 from tests.factories.format import FormatFactory
 
 _PINNED = "http://creative-agent:8080/api/creative-agent"
+_SEAM_DIAL = "src.core.utils.operator_mcp.call_mcp_tool"
 
 
 class TestConnectionAgentUrl:
@@ -70,7 +75,7 @@ class TestRegistryConnectionRouting:
         registry = CreativeAgentRegistry()
 
         call_tool = _mock_call_mcp_tool({"formats": []})
-        with patch("src.core.creative_agent_registry.call_mcp_tool", call_tool) as cmc:
+        with patch(_SEAM_DIAL, call_tool) as cmc:
             await registry._fetch_formats_operator(CreativeAgent(agent_url=PUBLIC_DEFAULT_AGENT_URL, name="x"))
 
         assert cmc.call_args.kwargs["agent_url"] == _PINNED
@@ -82,7 +87,7 @@ class TestRegistryConnectionRouting:
 
         mock_call_mcp_tool = AsyncMock(return_value=MagicMock(content=[]))
 
-        with patch("src.core.creative_agent_registry.call_mcp_tool", mock_call_mcp_tool) as cmc:
+        with patch(_SEAM_DIAL, mock_call_mcp_tool) as cmc:
             try:
                 await registry.preview_creative(PUBLIC_DEFAULT_AGENT_URL, "display_300x250", {"assets": {}})
             except Exception:
@@ -115,7 +120,7 @@ async def _fetch_formats_with_mocked_seam(registry, agent):
     """
     formats_payload = {"formats": [FormatFactory.build().model_dump(mode="json")]}
     call_tool = _mock_call_mcp_tool(formats_payload)
-    with patch("src.core.creative_agent_registry.call_mcp_tool", call_tool) as constructor:
+    with patch(_SEAM_DIAL, call_tool) as constructor:
         first = await registry.get_formats_for_agent(agent)
         second = await registry.get_formats_for_agent(agent)
     return constructor, call_tool, first, second

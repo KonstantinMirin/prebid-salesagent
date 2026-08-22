@@ -65,6 +65,7 @@ from typing import NoReturn
 
 from src.core.exceptions import (
     AdCPConfigurationError,
+    AdCPError,
     AdCPRateLimitError,
     AdCPServiceUnavailableError,
     clamp_retry_after,
@@ -80,7 +81,7 @@ from src.core.security.outbound_http import (
 )
 
 
-def adcp_error_for_status(status: int | None, *, retry_after: float | None, provenance: UrlProvenance) -> NoReturn:
+def adcp_error_for_status(status: int | None, *, retry_after: float | None, provenance: UrlProvenance) -> AdCPError:
     """The one status -> AdCP-error-class table both seams' mappers consume.
 
     429 -> ``RATE_LIMITED`` carrying the clamped ``retry_after``; any other 4xx
@@ -101,27 +102,30 @@ def adcp_error_for_status(status: int | None, *, retry_after: float | None, prov
     avoids inventing a CounterpartyUrl status taxonomy neither caller nor any
     RED grader exercises.
 
-    Always raises; the ``NoReturn`` annotation lets a caller delegate from a
-    single ``except`` arm without a trailing ``raise``. Deliberately takes no
-    ``logger``/original exception: it is only ever invoked from inside an
-    active exception-handling frame in both mappers, so the raised AdCP error's
-    ``__context__`` is set implicitly; logging is each mapper's own concern
-    (the wording differs per seam) and stays at the call site.
+    BUILDS the error and returns it; it does not raise. A classifier that
+    raised could only be consulted by CATCHING it, which is why both mappers
+    used to wrap the call in a ``try`` and re-``raise`` from three ``except``
+    arms apiece just to attach one log line. Returning the value lets each
+    mapper branch on it directly and decide what to log and what to raise.
+
+    Deliberately takes no ``logger``/original exception: logging is each
+    mapper's own concern (the wording differs per seam) and stays at the call
+    site, which is also where the chaining decision belongs.
     """
     if not isinstance(provenance, OperatorEndpoint):
         raise AssertionError(f"adcp_error_for_status classifies operator-endpoint failures only; got {provenance!r}")
     label = provenance.name
 
     if status == 429:
-        raise AdCPRateLimitError(
+        return AdCPRateLimitError(
             f"{label} is rate-limited.",
             retry_after=clamp_retry_after(retry_after) if retry_after is not None else None,
         )
     if status is not None and 400 <= status < 500:
-        raise AdCPConfigurationError(f"{label} rejected the request.")
+        return AdCPConfigurationError(f"{label} rejected the request.")
     if status is None:
-        raise AdCPServiceUnavailableError(f"{label} is unreachable.")
-    raise AdCPServiceUnavailableError(f"{label} is unavailable.")
+        return AdCPServiceUnavailableError(f"{label} is unreachable.")
+    return AdCPServiceUnavailableError(f"{label} is unavailable.")
 
 
 def raise_mapped_outbound_error(exc: OutboundError, *, provenance: UrlProvenance, logger: logging.Logger) -> NoReturn:
@@ -167,16 +171,19 @@ def raise_mapped_outbound_error(exc: OutboundError, *, provenance: UrlProvenance
     # not a value comparison (AC1's ast-grep is about status VALUES).
     assert isinstance(exc, OutboundDeliveryFailed)
 
-    try:
-        adcp_error_for_status(exc.http_status, retry_after=exc.retry_after, provenance=provenance)
-    except AdCPRateLimitError:
+    error = adcp_error_for_status(exc.http_status, retry_after=exc.retry_after, provenance=provenance)
+
+    if isinstance(error, AdCPRateLimitError):
         logger.warning("%s rate-limited after %s attempts", provenance.name, exc.attempts)
-        raise
-    except AdCPConfigurationError:
+        raise error from exc
+    if isinstance(error, AdCPConfigurationError):
         logger.error("%s rejected the request (HTTP %s)", provenance.name, exc.http_status)
-        raise
-    except AdCPServiceUnavailableError:
-        raise exc from None
+        raise error from exc
+
+    # The 5xx/no-status case re-raises the ORIGINAL rather than the classifier's
+    # fresh instance: ``exc`` already IS an AdCPServiceUnavailableError, and it
+    # carries ``attempts``/``http_status``, which a fresh one would not.
+    raise exc from None
 
 
 def raise_mapped_mcp_error(exc: Exception, *, provenance: UrlProvenance, logger: logging.Logger) -> NoReturn:
@@ -203,17 +210,15 @@ def raise_mapped_mcp_error(exc: Exception, *, provenance: UrlProvenance, logger:
         status = wrapped.status
         retry_after = wrapped.retry_after
 
-    try:
-        adcp_error_for_status(status, retry_after=retry_after, provenance=provenance)
-    except AdCPRateLimitError:
+    error = adcp_error_for_status(status, retry_after=retry_after, provenance=provenance)
+
+    if isinstance(error, AdCPRateLimitError):
         logger.warning("%s rate-limited (HTTP 429)", provenance.name)
-        raise
-    except AdCPConfigurationError:
+    elif isinstance(error, AdCPConfigurationError):
         logger.error("%s rejected the request (HTTP %s)", provenance.name, status)
-        raise
-    except AdCPServiceUnavailableError:
-        if status is None:
-            logger.error("%s is unreachable: %s", provenance.name, exc)
-        else:
-            logger.error("%s returned HTTP %s", provenance.name, status)
-        raise
+    elif status is None:
+        logger.error("%s is unreachable: %s", provenance.name, exc)
+    else:
+        logger.error("%s returned HTTP %s", provenance.name, status)
+
+    raise error from exc

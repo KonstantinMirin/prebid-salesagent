@@ -545,3 +545,133 @@ class TestExhaustedFailureReachesTheRegistryClassified:
             assert origin.invocations == ["get_signals"] * 3, (
                 f"the failing tool was not re-issued on every attempt: {origin.invocations}"
             )
+
+
+def _unreached_get_signals(signal_spec: str, discovery_mode: str = "brief") -> dict:
+    """A ``get_signals`` tool that must never run.
+
+    Takes the parameters ``GetSignalsRequest.model_dump(exclude_none=True)``
+    actually sends, so a call that DID reach the origin would be served rather
+    than rejected during schema validation — the failure then names the fact
+    under test ("the refused destination was dialled") instead of a schema
+    mismatch at a different layer.
+    """
+    raise AssertionError("the refused destination was dialled and served a tool call")
+
+
+@pytest.fixture
+def hatch_closes_between_precheck_and_dial(monkeypatch):
+    """Make the seam's TWO resolutions of the same URL genuinely disagree.
+
+    ``call_mcp_tool`` resolves the destination twice: once through
+    ``validate_url`` above the candidate loop, and once more inside the loop,
+    when ``guarded_client_factory(current_url)``'s client is built and
+    ``EgressPolicy.resolve_for_dial`` runs again on the dial. In production the
+    two verdicts differ only when the DNS answer changes between them — a
+    rebind, which is exactly the case where retrying a refused destination is
+    worst. That window cannot be opened from a test by waiting for DNS, so it is
+    opened through the OTHER input both resolutions read at CALL time
+    (``_env_flag(ADCP_OUTBOUND_ALLOW_PRIVATE)``): the hatch is open when the
+    pre-check reads it and closed when the dial reads it.
+
+    Nothing here fabricates the refusal. The wrapper delegates to the real
+    ``guarded_client_factory``, so the ``OutboundRequestBlocked`` the client
+    meets is raised by the real ``EgressPolicy`` against the real loopback
+    address of a real listening origin. Faking it — stubbing the factory to
+    raise, or patching ``call_mcp_tool`` — would grade the test's own stub
+    instead of the seam.
+
+    Returns:
+        The list of URLs the client actually built a dialling client for, one
+        entry per attempt: the attempt counter for a destination policy refused.
+    """
+    dialled: list[str] = []
+    build_real_factory = mcp_client_module.guarded_client_factory
+
+    def building(url: str):
+        real_factory = build_real_factory(url)
+
+        def factory(*args, **kwargs):
+            dialled.append(url)
+            return real_factory(*args, **kwargs)
+
+        # Closed HERE — after ``validate_url`` has already returned its verdict
+        # above the loop, and before the factory resolves the same URL again.
+        monkeypatch.setenv(ALLOW_PRIVATE_ENV, "false")
+        return factory
+
+    monkeypatch.setattr(mcp_client_module, "guarded_client_factory", building)
+    return dialled
+
+
+@pytest.mark.asyncio
+class TestDialTimeRefusalIsNotRetriedOrLaundered:
+    """An egress refusal raised INSIDE the dialling client keeps its own classification.
+
+    ``TestRefusedAgentUrlIsNotDialled`` above grades the PRE-CHECK path, where
+    ``validate_url`` refuses before the candidate loop is even built. This class
+    grades the other half, and the half that is currently wrong: the pre-check
+    PASSES and the in-loop ``guarded_client_factory`` resolution REFUSES. That
+    refusal is raised inside ``async with client``, i.e. inside the per-attempt
+    ``try`` whose arm is a bare ``except Exception`` — so today it is caught,
+    logged as "MCP connection attempt N/M failed", slept on, retried against the
+    destination egress policy has already refused, and finally re-raised as
+    ``MCPConnectionError``. The registry then classifies that as
+    ``SERVICE_UNAVAILABLE``/``transient``: a policy decision laundered into a
+    transport failure, which is precisely what the comment above ``validate_url``
+    claims its placement prevents.
+
+    Two facts are graded together because either alone is satisfiable by the
+    wrong design. The attempt count alone would pass if the refusal were raised
+    unretried but still rewrapped as a transport failure; the wire envelope alone
+    would pass if the refusal were retried three times and only then reported
+    with the right code. The obligation is BOTH: one attempt, and the refusal's
+    own code and recovery.
+    """
+
+    @pytest.mark.timeout(60)
+    async def test_a_dial_time_refusal_reaches_the_buyer_unretried_and_unlaundered(
+        self, mcp_origin_tls, monkeypatch, recorded_retry_sleeps, hatch_closes_between_precheck_and_dial
+    ):
+        """One attempt, no sleeps, and CONFIGURATION_ERROR/terminal on the wire."""
+        # The pre-check's posture: loopback is allowed, so ``validate_url`` passes
+        # and the candidate loop is entered — the precondition that separates this
+        # test from the pre-check case, which never reaches the loop at all.
+        set_flags(monkeypatch, private=True)
+
+        # A real MCP origin that is genuinely listening and would answer. That is
+        # what makes "nothing was served" a statement about the client's refusal
+        # rather than about an address nothing could have reached anyway.
+        origin = mcp_origin_tls(get_signals=_unreached_get_signals)
+        agent = SignalsAgent(agent_url=origin.base_url, name="stub-signals-agent", enabled=True, timeout=10)
+
+        with pytest.raises(AdCPError) as exc_info:
+            await SignalsAgentRegistry()._fetch_signals_operator(agent, brief="a brief")
+
+        assert hatch_closes_between_precheck_and_dial == [origin.base_url], (
+            "a destination the egress policy refused at dial time was dialled more than once: "
+            f"{hatch_closes_between_precheck_and_dial}"
+        )
+        assert recorded_retry_sleeps == [], (
+            f"a dial-time policy refusal was retried (slept {recorded_retry_sleeps}) — it was caught by the "
+            "connection retry loop instead of being re-raised out of it"
+        )
+        assert origin.invocations == [], f"the refused destination served a tool call: {origin.invocations}"
+
+        # Read from the pinned enumMetadata rather than written as a literal, then
+        # pinned once here so the derivation cannot silently return something else.
+        expected_recovery = RECOVERY_BY_WIRE_CODE["CONFIGURATION_ERROR"]
+        assert expected_recovery == "terminal", (
+            f"the pinned enumMetadata classifies CONFIGURATION_ERROR as {expected_recovery!r}, not 'terminal' — "
+            "the premise this assertion is built on no longer holds"
+        )
+        # The refusal's OWN pair, which ``raise_mapped_outbound_error`` produces for
+        # an ``OutboundRequestBlocked`` against an ``OperatorEndpoint``. Reaching
+        # SERVICE_UNAVAILABLE/transient here means the refusal arrived at the
+        # registry as ``MCPConnectionError`` — swallowed and relabelled by the seam.
+        assert_envelope_shape(
+            build_two_layer_error_envelope(exc_info.value),
+            "CONFIGURATION_ERROR",
+            recovery=expected_recovery,
+            message_substr="is not reachable under this deployment's egress policy",
+        )

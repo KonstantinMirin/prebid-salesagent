@@ -3,8 +3,8 @@
 ``CreativeAgentRegistry._fetch_formats_raw_mcp`` is the COUNTERPARTY-agent_url
 fetch path (a buyer-supplied ``format_id.agent_url``) — the operator-agent path
 moved onto the guarded fastmcp seam (``call_mcp_tool``, via
-``_fetch_formats_operator``) in salesagent-4n88, so this raw-JSON-RPC-over-asend
-method now has exactly the one caller. It issues its own outbound HTTP: once it
+``call_operator_mcp_tool`` from ``_fetch_formats_operator``) in salesagent-4n88,
+so this raw-JSON-RPC-over-asend method now has exactly the one caller. It issues its own outbound HTTP: once it
 fetches through ``src/core/security/outbound_http.py``, scheme policy, address
 validation, IP pinning, redirect refusal, the response-size cap, the retry
 count and the backoff schedule all belong to the seam and are graded once, in
