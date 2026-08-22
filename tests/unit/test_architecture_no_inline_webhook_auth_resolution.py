@@ -55,10 +55,7 @@ from tests.unit._architecture_helpers import (
     assert_detector_catches_ast_snippets,
     assert_violations_match_allowlist,
     iter_call_expressions,
-    parse_module,
-    rel,
-    repo_root,
-    src_python_files,
+    scan_src,
 )
 
 # The scheme spellings a sender may not compare against inline. Both cases are
@@ -98,7 +95,6 @@ _CREDENTIAL_ATTRS = frozenset({"webhook_secret"})
 # The resolver's own module — "outside the resolver" is the rule, so the
 # resolver is not scanned. Not an allowlist entry: an allowlist records debt,
 # and this records the one legitimate home for the logic.
-_RESOLVER_MODULE = "src/core/security/webhook_egress.py"
 
 # The one function allowed to be handed the raw columns (see
 # ``_resolver_argument_nodes``).
@@ -227,16 +223,16 @@ def find_inline_webhook_auth_violations(tree: ast.Module) -> list[int]:
 
 
 def _violating_src_files() -> dict[str, list[int]]:
-    repo = repo_root()
-    found: dict[str, list[int]] = {}
-    for path in src_python_files(repo):
-        relpath = rel(path)
-        if relpath == _RESOLVER_MODULE:
-            continue
-        lines = find_inline_webhook_auth_violations(parse_module(path))
-        if lines:
-            found[relpath] = lines
-    return found
+    """Modules that resolve webhook auth inline instead of through the resolver.
+
+    The resolver module itself carried a blanket skip until the shared scanner
+    started raising on suppressions that suppress nothing: measured, the detector
+    finds NO violation in it, so the skip excluded nothing while silently
+    pre-authorizing one if the module ever grew an inline resolution. Nothing is
+    skipped now, and if the resolver ever does trip its own detector that will
+    be a finding to look at rather than a hole.
+    """
+    return scan_src(find_inline_webhook_auth_violations)
 
 
 class TestNoInlineWebhookAuthResolution:

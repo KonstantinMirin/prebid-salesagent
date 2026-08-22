@@ -26,7 +26,11 @@ import ast
 
 import pytest
 
-from tests.unit._architecture_helpers import iter_call_expressions, repo_root, src_python_files
+from tests.unit._architecture_helpers import (
+    iter_call_expressions,
+    repo_root,
+    scan_src,
+)
 
 # Repointed twice. Epic D lane C4: the two payload-taking helpers went module-private
 # and the seam gained two public entry points. salesagent-pldmk.3 then deleted the
@@ -83,13 +87,9 @@ class TestNoHardcodedUnsignedWebhookSecret:
     """(a) Real src/ has zero violations -- the fixed bug plus every sibling sender."""
 
     def test_no_violations_in_src(self) -> None:
-        repo = repo_root()
-        all_violations: dict[str, list[int]] = {}
-        for path in src_python_files(repo):
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            lines = find_hardcoded_unsigned_secret_violations(tree)
-            if lines:
-                all_violations[str(path.relative_to(repo))] = lines
+        # Through the shared scanner: the hand-rolled walk here also called
+        # ast.parse directly, bypassing the mtime cache every other guard shares.
+        all_violations = scan_src(find_hardcoded_unsigned_secret_violations)
 
         assert not all_violations, (
             "Signing-seam call(s) hardcode an unsigned secret (a literal None) "

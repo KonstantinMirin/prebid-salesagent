@@ -18,7 +18,7 @@ from tests.unit._architecture_helpers import (
     assert_detector_catches_ast_snippets,
     parse_module,
     repo_root,
-    src_python_files,
+    scan_src,
 )
 
 # Two of the real blocklist's members (egress/policy.py's _BLOCKED_HOSTNAMES)
@@ -58,16 +58,13 @@ def find_hostname_blocklist_violations(tree: ast.Module) -> list[int]:
 
 
 def _scan_src_outside_egress() -> dict[str, list[int]]:
-    repo = repo_root()
-    violations: dict[str, list[int]] = {}
-    for path in src_python_files(repo):
-        rel = path.relative_to(repo).as_posix()
-        if rel.startswith(_EGRESS_PACKAGE_PREFIX):
-            continue
-        lines = find_hostname_blocklist_violations(parse_module(path))
-        if lines:
-            violations[rel] = lines
-    return violations
+    """Violations outside the egress package, which legitimately owns this logic.
+
+    ``scan_src`` raises if NO file under the prefix is flagged — a scope boundary
+    that excludes nothing is a boundary that would silently permit the first
+    violation to appear there.
+    """
+    return scan_src(find_hostname_blocklist_violations, skip_prefixes=(_EGRESS_PACKAGE_PREFIX,))
 
 
 class TestNoHostnameBlocklistDuplication:

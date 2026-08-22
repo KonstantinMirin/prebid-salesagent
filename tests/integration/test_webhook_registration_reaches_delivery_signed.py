@@ -44,7 +44,7 @@ import pytest
 
 from src.core.exceptions import AdCPValidationError
 from tests.harness import A2APushRegistrationEnv, MediaBuyPushRegistrationEnv
-from tests.helpers import SIGNATURE_HEADER, assert_signature_verifies_over_wire_body
+from tests.helpers import assert_delivered_unsigned, assert_signature_verifies_over_wire_body
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -86,23 +86,6 @@ def _assert_delivered_signed(env: Any) -> None:
         f"a registration that never reached the sender cannot be graded for signing"
     )
     assert_signature_verifies_over_wire_body(env.last_delivery, STRONG_SECRET)
-
-
-def _assert_delivered_unsigned(env: Any) -> None:
-    """The delivery arrived, and carries no signature at all.
-
-    Named against ``SIGNATURE_HEADER`` — the same constant the positive
-    assertion verifies through — so a header rename cannot leave this absence
-    check passing vacuously against a name nothing emits any more.
-    """
-    assert env.delivery_attempts == 1, (
-        f"the control saw {env.delivery_attempts} deliveries — it must observe the "
-        f"SAME single send as the case it controls, differing only in its signing"
-    )
-    assert SIGNATURE_HEADER not in env.last_delivery.headers, (
-        f"the mutated stash still produced {SIGNATURE_HEADER} — dropping the credential "
-        f"half changed nothing, so the case this controls is not actually graded by it"
-    )
 
 
 def _pricing_option_id(pricing_option: Any) -> str:
@@ -200,7 +183,7 @@ class TestA2AProtocolRegistrationDeliversSigned:
                     brief="a registration made in the protocol envelope",
                 )
 
-            _assert_delivered_unsigned(env)
+            assert_delivered_unsigned(env)
 
 
 class TestCreateMediaBuyRegistrationDeliversSigned:
@@ -225,7 +208,7 @@ class TestCreateMediaBuyRegistrationDeliversSigned:
             env.drop_stashed_credential_half(step)
             env.complete_step(step)
 
-            _assert_delivered_unsigned(env)
+            assert_delivered_unsigned(env)
 
 
 class TestUpdateMediaBuyRegistrationDeliversSigned:
@@ -288,7 +271,7 @@ class TestUpdateMediaBuyRegistrationDeliversSigned:
             env.drop_stashed_credential_half(step)
             env.complete_step(step)
 
-            _assert_delivered_unsigned(env)
+            assert_delivered_unsigned(env)
 
 
 class TestRefusedStashCostsTheWebhookNotTheTransition:

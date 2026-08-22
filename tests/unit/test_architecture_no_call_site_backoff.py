@@ -51,9 +51,8 @@ from tests.unit._architecture_helpers import (
     assert_violations_match_allowlist,
     iter_call_expressions,
     parse_module,
-    rel,
     repo_root,
-    src_python_files,
+    scan_src,
 )
 
 # The one module allowed to compute a retry schedule.
@@ -201,17 +200,14 @@ def find_call_site_backoff_violations(tree: ast.Module) -> list[int]:
     return violations
 
 
-def _scan_src(exempt: frozenset[str] = EXEMPT_FILES) -> dict[str, int]:
-    """Every module in src/ with a geometric sleep, and how many it has."""
-    found: dict[str, int] = {}
-    for path in src_python_files(repo_root()):
-        key = rel(path)
-        if key in exempt:
-            continue
-        count = len(find_call_site_backoff_violations(parse_module(path)))
-        if count:
-            found[key] = count
-    return found
+def _scan_src(exempt: frozenset[str] = EXEMPT_FILES) -> dict[str, list[int]]:
+    """Every module in src/ with a geometric sleep, and which lines carry it.
+
+    ``scan_src`` raises on an exemption that suppresses nothing, so ``exempt``
+    is a live sanctioned set by construction. Callers wanting a count take
+    ``len()``; the line list is strictly more than the count it replaced.
+    """
+    return scan_src(find_call_site_backoff_violations, exempt=exempt)
 
 
 class TestNoCallSiteBackoff:
@@ -225,7 +221,7 @@ class TestNoCallSiteBackoff:
         be removed from the list rather than left to rot.
         """
         assert_violations_match_allowlist(
-            {(path, count) for path, count in _scan_src().items()},
+            {(path, len(lines)) for path, lines in _scan_src().items()},
             NON_HTTP_BACKOFF,
             fix_hint=FIX_HINT,
         )

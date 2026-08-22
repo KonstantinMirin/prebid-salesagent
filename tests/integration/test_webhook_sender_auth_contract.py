@@ -48,7 +48,7 @@ from __future__ import annotations
 import pytest
 
 from tests.harness import CircuitBreakerEnv, ProtocolWebhookEnv
-from tests.helpers import SIGNATURE_HEADER, assert_signature_verifies_over_wire_body
+from tests.helpers import assert_delivered_unsigned, assert_signature_verifies_over_wire_body
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -65,21 +65,6 @@ BEARER_SCHEME = "Bearer"
 # never once fired, and re-pointing it at authentication_token would have taken
 # short-credential buyers from "delivered" to "not delivered at all".
 STRONG_SECRET = "buyer-shared-secret-padded-to-the-pinned-32-char-min"
-
-
-def _assert_delivered_without_a_signature(env: CircuitBreakerEnv | ProtocolWebhookEnv) -> None:
-    """Assert exactly one request arrived and it carries no HMAC signature header.
-
-    Named against ``SIGNATURE_HEADER`` — the same constant
-    ``assert_signature_verifies_over_wire_body`` verifies against — so a header
-    rename cannot leave this absence assertion passing vacuously against a name
-    nothing emits any more.
-    """
-    assert env.delivery_attempts == 1
-    assert SIGNATURE_HEADER not in env.last_delivery.headers, (
-        f"a delivery that did not ask for HMAC-SHA256 carries {SIGNATURE_HEADER} — "
-        f"signing is gated by the scheme, not by whether a credential exists"
-    )
 
 
 class TestProtocolWebhookServiceRefusesUnsignedHmac:
@@ -208,7 +193,7 @@ class TestWebhookDeliveryServiceResolvesAuthThroughTheResolver:
 
             env.call_send(tenant_id="t1", principal_id="p1")
 
-            _assert_delivered_without_a_signature(env)
+            assert_delivered_unsigned(env)
 
     def test_a_spec_cased_bearer_row_carries_the_authorization_header(self, integration_db):
         """Defect 4: the bearer branch compares a case no writer produces.

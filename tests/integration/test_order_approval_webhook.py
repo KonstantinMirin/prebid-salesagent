@@ -49,7 +49,7 @@ import pytest
 
 from tests.factories import PushNotificationConfigFactory
 from tests.harness.order_approval_webhook import OrderApprovalWebhookEnv
-from tests.helpers import SIGNATURE_HEADER, assert_signature_verifies_over_wire_body
+from tests.helpers import assert_delivered_unsigned, assert_signature_verifies_over_wire_body
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -114,23 +114,6 @@ def _hmac_config(env: OrderApprovalWebhookEnv, *, secret: str | None = None) -> 
         authentication_token=secret,
         is_active=True,
     )
-
-
-def _assert_delivered_without_a_signature(env: OrderApprovalWebhookEnv) -> None:
-    """Assert one request arrived and it carries no HMAC signature header.
-
-    The header NAME is ``SIGNATURE_HEADER`` — the same constant
-    ``assert_signature_verifies_over_wire_body`` verifies against — rather than
-    a second string literal. A rename that moved the positive case to a new
-    header would otherwise leave every absence assertion here trivially true,
-    which is the one way an absence assertion silently stops grading.
-
-    The ``delivery_attempts == 1`` half is not decoration: "no signature header"
-    is vacuously true of a request that never happened, so the count is what
-    makes the header claim a claim about a real delivery.
-    """
-    assert env.delivery_attempts == 1
-    assert SIGNATURE_HEADER not in env.last_delivery.headers
 
 
 class TestDeliveredPayload:
@@ -327,7 +310,7 @@ class TestSigningIsGatedByTheScheme:
 
             env.call_send_approval_webhook(status="approved")
 
-            _assert_delivered_without_a_signature(env)
+            assert_delivered_unsigned(env)
 
     def test_a_row_less_delivery_is_unsigned(self, integration_db):
         """With no config row at all there is no scheme, so there is nothing to sign with.
@@ -342,7 +325,7 @@ class TestSigningIsGatedByTheScheme:
 
             env.call_send_approval_webhook(status="approved")
 
-            _assert_delivered_without_a_signature(env)
+            assert_delivered_unsigned(env)
 
 
 class TestRetryClassification:

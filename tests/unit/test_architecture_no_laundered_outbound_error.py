@@ -1,5 +1,12 @@
 """Guard: a creative-agent registry dial must not let ``OutboundError`` fall into a bare catch-all.
 
+KEPT DELIBERATELY, with the measurement that decided it. A proposal retired this
+guard, or narrowed it to one function, on the grounds that its subject "became a
+type error". It did not: handler ORDERING is not expressible in the type system
+at all — mypy accepts a generic ``except`` placed ahead of the specific one —
+and the four subject sites in ``src/core/tools/creatives/_processing.py`` are
+live. Neither deleting nor narrowing this guard is safe.
+
 ``CreativeAgentRegistry.preview_creative``/``build_creative`` dial the egress
 seam (``call_mcp_tool`` -> ``validate_url``), which raises
 ``OutboundRequestBlocked``/``OutboundDeliveryFailed`` (``src/core/security/
@@ -28,7 +35,7 @@ from tests.unit._architecture_helpers import (
     iter_call_expressions,
     parse_module,
     repo_root,
-    src_python_files,
+    scan_src,
 )
 
 # The two CreativeAgentRegistry methods that dial the egress seam and can
@@ -103,13 +110,7 @@ def find_laundered_outbound_error_violations(tree: ast.Module) -> list[int]:
 
 def _scan_src() -> dict[str, list[int]]:
     """Map every offending module under src/ to its violation line numbers. No exemptions."""
-    repo = repo_root()
-    offenders: dict[str, list[int]] = {}
-    for path in src_python_files(repo):
-        violations = find_laundered_outbound_error_violations(parse_module(path))
-        if violations:
-            offenders[path.relative_to(repo).as_posix()] = violations
-    return offenders
+    return scan_src(find_laundered_outbound_error_violations)
 
 
 class TestNoLaunderedOutboundError:

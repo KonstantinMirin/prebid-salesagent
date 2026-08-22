@@ -45,7 +45,7 @@ from tests.unit._architecture_helpers import (
     iter_call_expressions,
     parse_module,
     repo_root,
-    src_python_files,
+    scan_src,
 )
 
 # The egress seam — scanned like everything else (see module docstring).
@@ -90,15 +90,9 @@ def find_destination_rewrite_violations(tree: ast.Module) -> list[int]:
     return sorted(call.lineno for call in iter_call_expressions(tree) if _call_is_destination_rewrite(call))
 
 
-def _scan_src() -> dict[str, int]:
-    """Map every offending module under src/ to its violation count. No exemptions."""
-    repo = repo_root()
-    counts: dict[str, int] = {}
-    for path in src_python_files(repo):
-        violations = find_destination_rewrite_violations(parse_module(path))
-        if violations:
-            counts[path.relative_to(repo).as_posix()] = len(violations)
-    return counts
+def _scan_src() -> dict[str, list[int]]:
+    """Map every offending module under src/ to its violation lines. No exemptions."""
+    return scan_src(find_destination_rewrite_violations)
 
 
 class TestNoDestinationRewrite:
@@ -116,7 +110,7 @@ class TestNoDestinationRewrite:
 
         if offenders:
             lines = ["URL destination rewrite found under src/:", ""]
-            lines.extend(f"  {module} ({count} call site(s))" for module, count in sorted(offenders.items()))
+            lines.extend(f"  {module} ({len(count)} call site(s))" for module, count in sorted(offenders.items()))
             lines += [
                 "",
                 "The URL a caller supplies must reach the egress seam byte-for-byte; nothing may",
@@ -287,26 +281,21 @@ def find_env_sourced_destination_violations(tree: ast.Module) -> list[int]:
 #   (``send``/``asend``) at all -- CORS configuration is a different subsystem
 #   than "where a URL this application DIALS comes from" (salesagent-tbrk.6
 #   design correction, found by this atom's own detector run).
-_ENV_SOURCED_DESTINATION_EXEMPT_FILES = frozenset(
-    {
-        "src/core/creative_agent_registry.py",
-        "src/app.py",
-    }
-)
+# Only ``app.py`` remains. ``creative_agent_registry.py`` was carried here too
+# until the shared scanner started raising on exemptions that suppress nothing:
+# the detector found no violation in it at all, so the entry read as a
+# considered decision while doing nothing — and would have silently
+# pre-authorized a violation the file ever acquired.
+_ENV_SOURCED_DESTINATION_EXEMPT_FILES = frozenset({"src/app.py"})
 
 
 def _scan_env_sourced_destinations() -> dict[str, list[int]]:
-    """Map every offending module under src/ to its violation line numbers, minus the one file exemption."""
-    repo = repo_root()
-    violations: dict[str, list[int]] = {}
-    for path in src_python_files(repo):
-        rel = path.relative_to(repo).as_posix()
-        if rel in _ENV_SOURCED_DESTINATION_EXEMPT_FILES:
-            continue
-        lines = find_env_sourced_destination_violations(parse_module(path))
-        if lines:
-            violations[rel] = lines
-    return violations
+    """Offending modules under src/, minus the sanctioned per-file exemptions.
+
+    ``scan_src`` raises on an exemption that suppresses nothing, so an entry here
+    is a live sanctioned violation by construction rather than by review.
+    """
+    return scan_src(find_env_sourced_destination_violations, exempt=_ENV_SOURCED_DESTINATION_EXEMPT_FILES)
 
 
 class TestNoEnvSourcedDestination:
@@ -410,10 +399,19 @@ class TestEnvSourcedDestinationDetector:
         assert find_env_sourced_destination_violations(ast.parse(snippet)) != []
 
     @pytest.mark.arch_guard
-    def test_exempted_file_is_skipped_by_the_full_scan(self):
-        """``creative_agent_registry.py`` never appears among the full scan's offenders."""
-        offenders = _scan_env_sourced_destinations()
-        assert "src/core/creative_agent_registry.py" not in offenders
+    def test_a_dead_exemption_cannot_be_written(self):
+        """An entry the detector never flags RAISES rather than sitting there inert.
+
+        This replaces a meta-test that asserted ``creative_agent_registry.py``
+        stayed out of the offenders — which it did, by being exempt, whether or
+        not it had anything to exempt. That assertion passed identically on a
+        live exemption and a dead one, so it could not tell them apart.
+        """
+        with pytest.raises(AssertionError, match="dead exemption"):
+            scan_src(
+                find_env_sourced_destination_violations,
+                exempt=_ENV_SOURCED_DESTINATION_EXEMPT_FILES | {"src/core/creative_agent_registry.py"},
+            )
 
     @pytest.mark.arch_guard
     def test_raw_detector_still_catches_the_cors_shape(self):
@@ -430,6 +428,14 @@ class TestEnvSourcedDestinationDetector:
 
     @pytest.mark.arch_guard
     def test_cors_exempted_file_is_skipped_by_the_full_scan(self):
-        """``app.py`` never appears among the full scan's offenders."""
+        """``app.py`` is exempt AND still flagged — a live exemption, not a dead one.
+
+        The absence half alone would pass on an exemption that suppresses
+        nothing. ``scan_src`` raising on a dead entry is what makes this
+        assertion mean "suppressed", rather than merely "not present".
+        """
         offenders = _scan_env_sourced_destinations()
         assert "src/app.py" not in offenders
+        assert find_env_sourced_destination_violations(parse_module(repo_root() / "src" / "app.py")), (
+            "app.py no longer trips the detector, so its exemption is dead — delete it"
+        )

@@ -75,3 +75,31 @@ def assert_signature_verifies_over_wire_body(
         f"computed over bytes other than the {len(request.body)} that crossed the "
         f"socket ({request.body[:120]!r}...)"
     )
+
+
+def assert_delivered_unsigned(env: Any, *, signature_header: str = SIGNATURE_HEADER) -> None:
+    """Assert exactly one delivery arrived and it carries NO signature header.
+
+    The absence half is named against ``SIGNATURE_HEADER`` -- the same constant
+    :func:`assert_signature_verifies_over_wire_body` verifies through -- so a
+    header rename cannot leave this passing vacuously against a name nothing
+    emits any more. That is the one way an absence assertion silently stops
+    grading.
+
+    The count half is not decoration either: "no signature header" is vacuously
+    true of a request that never happened, so ``delivery_attempts == 1`` is what
+    makes the header claim a claim about a real delivery -- and, where this is
+    used as the CONTROL for a signed case, what makes it the same single send,
+    differing only in its signing.
+
+    This module's docstring already said the signed half lives here "instead of
+    six near-identical copies drifting apart". Its negative twin had three.
+    """
+    assert env.delivery_attempts == 1, (
+        f"expected exactly one delivery to grade, saw {env.delivery_attempts} — "
+        f"an absence-of-signature claim about zero deliveries is vacuous"
+    )
+    assert signature_header not in env.last_delivery.headers, (
+        f"a delivery that did not ask for HMAC-SHA256 carries {signature_header} — "
+        f"signing is gated by the scheme, not by whether a credential exists"
+    )

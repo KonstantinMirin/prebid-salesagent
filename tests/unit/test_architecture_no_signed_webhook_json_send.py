@@ -1,5 +1,12 @@
 """Guard: no module holding a webhook signature header may send it via json=.
 
+KEPT DELIBERATELY, with the measurement that decided it. A proposal retired this
+guard on the grounds that its subject "became a type error" when the seam was
+typed. Measured instead of assumed: write the violation into ``src/`` and run
+mypy, and mypy ACCEPTS it — ``json=`` survives on both ``send`` and ``asend``
+alongside ``content: bytes | None``, so a third signer in this shape is still
+perfectly representable. This guard is live protection, not residue.
+
 salesagent-47n9.1 deleted the two signers (``WebhookAuthenticator.sign_payload``,
 ``WebhookDeliveryService._generate_hmac_signature``) that recreated the
 signed-bytes-vs-wire-bytes divergence bug: each computed an HMAC over one
@@ -42,9 +49,8 @@ from tests.unit._architecture_helpers import (
     assert_detector_catches_ast_snippets,
     iter_call_expressions,
     parse_module,
-    rel,
     repo_root,
-    src_python_files,
+    scan_src,
 )
 
 # Matches "X-AdCP-Signature", "X-ADCP-Signature", "X-Webhook-Signature",
@@ -108,13 +114,14 @@ def find_signed_webhook_json_send_violations(tree: ast.Module) -> list[int]:
 
 
 def _scan_src() -> dict[str, list[int]]:
-    """Every module in src/ where the disease pattern appears."""
-    found: dict[str, list[int]] = {}
-    for path in src_python_files(repo_root()):
-        violations = find_signed_webhook_json_send_violations(parse_module(path))
-        if violations:
-            found[rel(path)] = violations
-    return found
+    """Every module in src/ where the disease pattern appears, minus the allowlist.
+
+    ``exempt=`` rather than a post-filter on the result: the same suppression
+    written downstream escapes ``scan_src``'s liveness rule entirely, so a future
+    entry could sit here suppressing nothing. That is exactly the shape the
+    scanner exists to make unwritable.
+    """
+    return scan_src(find_signed_webhook_json_send_violations, exempt=ALLOWLIST)
 
 
 class TestNoSignedWebhookJsonSend:
@@ -122,8 +129,7 @@ class TestNoSignedWebhookJsonSend:
 
     @pytest.mark.arch_guard
     def test_no_signed_webhook_json_send_in_src(self):
-        found = _scan_src()
-        unexpected = {path: lines for path, lines in found.items() if path not in ALLOWLIST}
+        unexpected = _scan_src()
         assert not unexpected, (
             "modules computing a webhook signature header but sending via json= "
             f"(re-serialization divergence risk): {unexpected}\n{FIX_HINT}"

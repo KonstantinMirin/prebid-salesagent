@@ -44,8 +44,18 @@ SCAN_DIRS = [REPO_ROOT / "src/core/tools", REPO_ROOT / "src/adapters"]
 
 
 def rel(path: Path) -> str:
-    """Return path relative to repo root for stable allowlist keys."""
-    return str(path.relative_to(REPO_ROOT))
+    """Return path relative to repo root for stable allowlist keys.
+
+    A path outside the repo root has no stable key to give, so it returns its
+    own absolute form rather than raising: every real caller scans repo paths,
+    and the only out-of-root callers are tests driving a scanner over a tmp
+    tree, where crashing on the key would mean the rule cannot be tested
+    independently of whatever the repo happens to contain.
+    """
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
 
 
 def safe_parse(filepath: Path) -> ast.Module | None:
@@ -59,16 +69,24 @@ def safe_parse(filepath: Path) -> ast.Module | None:
 
 
 def iter_module_trees(scan_dirs: list[Path]) -> Iterator[tuple[ast.Module, str]]:
-    """Yield ``(parsed_tree, repo_relative_path)`` for parseable ``.py`` under ``scan_dirs``."""
+    """Yield ``(parsed_tree, repo_relative_path)`` for every ``.py`` under ``scan_dirs``.
+
+    Parses through :func:`parse_module`, so the mtime-keyed cache is shared with
+    every other guard rather than re-parsing the tree per guard, and so an
+    UNPARSEABLE file raises instead of being silently skipped. The previous
+    ``safe_parse`` form swallowed ``SyntaxError`` and dropped the file, which
+    means a guard would have reported "no violations" on a source tree it could
+    not read — a quiet failure, and the one kind of green this corpus must never
+    produce. Measured when this changed: 297 ``.py`` under ``src/``, none
+    unparseable, so the scan set moved for no existing caller.
+    """
     for scan_dir in scan_dirs:
         if not scan_dir.exists():
             continue
         for py_file in sorted(scan_dir.rglob("*.py")):
             if "__pycache__" in str(py_file):
                 continue
-            tree = safe_parse(py_file)
-            if tree is not None:
-                yield tree, rel(py_file)
+            yield parse_module(py_file), rel(py_file)
 
 
 def walk_with_enclosing_function(tree: ast.AST) -> Iterator[tuple[ast.AST, str]]:
@@ -981,3 +999,73 @@ def collect_bdd_node_ids_with_e2e_enabled(target: str, *, timeout: int = 300) ->
     )
     assert proc.returncode == 0, f"{target} collection failed (rc={proc.returncode}):\n{proc.stderr[-2000:]}"
     return [line.strip() for line in proc.stdout.splitlines() if "::" in line]
+
+
+def scan_src(
+    detector: Callable[[ast.Module], list[int]],
+    *,
+    exempt: frozenset[str] = frozenset(),
+    skip_prefixes: tuple[str, ...] = (),
+    scan_dirs: list[Path] | None = None,
+) -> dict[str, list[int]]:
+    """Run *detector* over ``src/``, returning ``{repo_relative_path: [line, ...]}``.
+
+    The one walk every src-scanning guard needs, so a guard supplies only what
+    it detects. Files with no findings are omitted; keys are :func:`rel` spelling
+    (``str(path.relative_to(REPO_ROOT))``), and every suppression constant must
+    be written in that same spelling.
+
+    Suppression has two axes, and they are NOT the same rule:
+
+    ``exempt`` is a per-file SANCTIONED VIOLATION — "this file does the thing,
+    and that is allowed". Every entry must actually be flagged by the detector,
+    or it is a dead exemption and this function RAISES. A dead entry is worse
+    than no entry: it reads as a considered decision while suppressing nothing,
+    and it silently pre-authorizes the violation if the file ever acquires one.
+
+    ``skip_prefixes`` is a SCOPE BOUNDARY — "this subtree is out of scope". Most
+    files under a boundary are legitimately clean, so requiring each to be
+    flagged would red the build on innocent files. The rule is weaker and
+    matches the intent: at least ONE file under the prefix must be flagged, or
+    the prefix is dead scope, and this function RAISES.
+
+    Both are raises rather than a sibling meta-test on purpose. A separate test
+    would DETECT a dead suppression; raising here makes one unwritable, which is
+    the difference between adding another check and removing the ability to make
+    the mistake.
+    """
+    root = REPO_ROOT / "src"
+    findings: dict[str, list[int]] = {}
+    suppressed_exempt: dict[str, list[int]] = {}
+    suppressed_prefix: dict[str, list[int]] = {}
+
+    for tree, rel_path in iter_module_trees(scan_dirs if scan_dirs is not None else [root]):
+        lines = detector(tree)
+        if not lines:
+            continue
+        if rel_path in exempt:
+            suppressed_exempt[rel_path] = lines
+        elif any(rel_path.startswith(prefix) for prefix in skip_prefixes):
+            suppressed_prefix[rel_path] = lines
+        else:
+            findings[rel_path] = lines
+
+    dead_exempt = sorted(exempt - set(suppressed_exempt))
+    if dead_exempt:
+        raise AssertionError(
+            f"dead exemption(s) {dead_exempt}: the detector finds nothing in these files, so the "
+            "entry suppresses nothing while reading as a sanctioned violation — and it would "
+            "silently pre-authorize one if the file ever acquired it. Delete the entry."
+        )
+
+    dead_prefixes = sorted(
+        prefix for prefix in skip_prefixes if not any(p.startswith(prefix) for p in suppressed_prefix)
+    )
+    if dead_prefixes:
+        raise AssertionError(
+            f"dead scope boundary/boundaries {dead_prefixes}: no file under this prefix is flagged "
+            "by the detector, so the skip excludes nothing today and would silently permit a "
+            "violation the moment one appears there. Delete the prefix."
+        )
+
+    return findings
