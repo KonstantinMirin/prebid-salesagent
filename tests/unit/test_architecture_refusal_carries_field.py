@@ -123,7 +123,7 @@ class TestGuardDetector:
                 "returned with field",
                 "def _blocked(exc, field):\n    return OutboundRequestBlocked(_BLOCKED_MESSAGE, field=field)\n",
             ),
-            ("a different exception", "raise OutboundDeliveryFailed(attempts=3, last_status=None)\n"),
+            ("a different exception", "raise OutboundDeliveryFailed(attempts=3, http_status=None)\n"),
             ("catching, not raising", "try:\n    pass\nexcept OutboundRequestBlocked:\n    pass\n"),
         ],
     )

@@ -137,7 +137,7 @@ class TestLocalOriginTLSFront:
                 max_attempts=1,
             )
 
-        assert result.status_code == 200
+        assert result.http_status == 200
         assert origin.hits == 1, "the origin must have actually been dialed over the real TLS handshake"
         assert origin.last_request.json() == {"hello": "world"}, (
             "the exact bytes sent through the seam must be what the origin received"
@@ -201,7 +201,7 @@ class TestLocalOriginTLSFront:
             assert origin.hits == 0, "no request may reach the origin before the handshake completes"
 
         assert excinfo.value.attempts == 1
-        assert excinfo.value.last_status is None
+        assert excinfo.value.http_status is None
 
 
 class TestListenBacklog:

@@ -227,7 +227,7 @@ class TestOperatorAgentFailureIsClassifiedTerminalByCode:
         status-bearing arm at all (verified — it lands in the unreachable arm and
         raises SERVICE_UNAVAILABLE). What the mapper actually keys on is a
         ``httpx.HTTPStatusError`` chained beneath the seam's exception, which is
-        what ``find_wrapped_http_status_error`` exists to recover; that chain is
+        what ``wrapped_failure`` exists to recover; that chain is
         what is built here.
         """
         import httpx

@@ -49,7 +49,7 @@ migration artefact:
     ``http_status_code`` is ``None`` on every failed delivery-log row (an
     operator cannot tell a 404 from a 503), and the ``400 <= status_code < 500``
     terminal branch is dead code, so a 404 is retried three times. Through the
-    seam the status comes off ``OutboundDeliveryFailed.last_status`` and 404 is
+    seam the status comes off ``OutboundDeliveryFailed.http_status`` and 404 is
     terminal, so both cases turn green. The 404-costs-one-request change is
     buyer-visible and belongs in the PR body beside the 429 and redirect ones.
 

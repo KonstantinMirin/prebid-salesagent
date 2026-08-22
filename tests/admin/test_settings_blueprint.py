@@ -333,7 +333,7 @@ class TestApproximatedToken:
 
         with patch(
             "src.admin.blueprints.settings.get_dns_token",
-            side_effect=OutboundDeliveryFailed(attempts=1, last_status=401),
+            side_effect=OutboundDeliveryFailed(attempts=1, http_status=401),
         ):
             response = client.post(f"/tenant/{tenant.tenant_id}/settings/approximated-token")
 

@@ -1018,7 +1018,7 @@ def gam_callback():
             # be an `if not token_response.ok` branch is this handler. Google's error
             # body is not readable here by design — the seam discards a failed
             # response — so the specific-cause messages below now key off the status.
-            status = exc.last_status
+            status = exc.http_status
             logger.error("Token exchange failed: status=%s, error=%s", status, exc)
 
             # A 400 from this endpoint is one of redirect_uri_mismatch / invalid_grant

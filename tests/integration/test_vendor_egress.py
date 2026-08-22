@@ -518,7 +518,7 @@ def test_google_token_exchange_does_not_retry_a_rejecting_origin(local_origin_tl
 
     The failure is asserted to PROPAGATE out of the service uncaught, carrying
     the status. Interpreting a vendor status is the caller's job — the
-    blueprint's flash wording keys off ``exc.last_status`` — and it is only
+    blueprint's flash wording keys off ``exc.http_status`` — and it is only
     reachable if the service refuses to swallow or re-shape the error, the same
     split ``approximated_client.get_dns_token`` documents.
 
@@ -536,7 +536,7 @@ def test_google_token_exchange_does_not_retry_a_rejecting_origin(local_origin_tl
     with pytest.raises(OutboundError) as exc_info:
         _exchange_at(local_origin_tls, monkeypatch)
 
-    assert exc_info.value.last_status == 400
+    assert exc_info.value.http_status == 400
     assert local_origin_tls.hits == 1
 
 
@@ -558,7 +558,7 @@ def test_google_token_exchange_does_not_retry_a_retryable_failure(local_origin_t
     with pytest.raises(OutboundError) as exc_info:
         _exchange_at(local_origin_tls, monkeypatch)
 
-    assert exc_info.value.last_status == 503
+    assert exc_info.value.http_status == 503
     assert local_origin_tls.hits == 1
 
 
@@ -576,7 +576,7 @@ def test_gam_callback_flashes_googles_rejection_on_a_400(local_origin_tls, monke
     Driven at a real origin rather than by patching the exchange out: a mocked
     exception proves the ``except`` arm can be entered, not that a real 400
     from a real socket arrives there as an ``OutboundError`` whose
-    ``last_status`` is 400. Only the second claim survives the extraction.
+    ``http_status`` is 400. Only the second claim survives the extraction.
     """
     from src.core import config
     from src.core.config import GAMOAuthConfig

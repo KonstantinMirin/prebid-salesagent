@@ -1405,7 +1405,7 @@ def get_approximated_token(tenant_id):
                 dns = get_dns_token(approximated_api_key)
             except OutboundError as exc:
                 logger.error("Approximated API error requesting a DNS token: %s", exc)
-                return jsonify({"success": False, "error": "Approximated API error"}), exc.last_status or 502
+                return jsonify({"success": False, "error": "Approximated API error"}), exc.http_status or 502
 
             logger.info("Approximated API response: %s", dns)
             return jsonify({"success": True, "token": dns.token, "proxy_ip": approximated_proxy_ip})

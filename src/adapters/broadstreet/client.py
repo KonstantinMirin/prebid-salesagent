@@ -129,7 +129,7 @@ class BroadstreetClient:
             # response_body is now None: a counterparty's error body is exactly what
             # the seam declines to carry back. Operators keep the status; they lose
             # the vendor's message text.
-            raise _broadstreet_error_for_status(e.last_status) from e
+            raise _broadstreet_error_for_status(e.http_status) from e
         except OutboundError as e:
             raise BroadstreetAPIError(f"Request failed: {e}") from e
 

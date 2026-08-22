@@ -972,7 +972,7 @@ class ContextManager(DatabaseManager):
                         # this used to catch — including the separate Timeout arm,
                         # which was a property of requests' taxonomy and has no
                         # counterpart here (a timeout arrives as
-                        # OutboundDeliveryFailed with last_status=None, and its
+                        # OutboundDeliveryFailed with http_status=None, and its
                         # str() carries the attempt count). The send_notification
                         # path cannot raise these any more — it catches them and
                         # returns False, which is exactly why

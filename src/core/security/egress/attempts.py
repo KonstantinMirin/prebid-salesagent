@@ -54,8 +54,13 @@ _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 _DELIVERY_FAILED_MESSAGE = "Outbound request to the supplied URL could not be delivered."
 
 
-def _env_float(name: str, default: float) -> float:
+def env_float(name: str, default: float) -> float:
     """Read a positive float env knob, falling back loudly.
+
+    Public because it is the ONE reader of this shape. A verbatim copy lived in
+    ``src/services/webhook_delivery_service.py`` with the env name and default
+    closed over as module constants; the two had already drifted apart by one
+    word of warning text, which is what a second copy is for.
 
     Read at CALL time: tests flip these with ``monkeypatch.setenv`` and an
     import-time read would freeze the first value.
@@ -102,7 +107,7 @@ def _backoff_seconds(attempt: int) -> float:
     attribute, pin the SAME object this function reads — a ``from``-import
     would bind a separate name the patch never touches.
     """
-    base = _env_float(_BACKOFF_BASE_ENV, _BACKOFF_BASE_SECONDS)
+    base = env_float(_BACKOFF_BASE_ENV, _BACKOFF_BASE_SECONDS)
     return base * (2 ** (attempt - 1)) + random.uniform(0, 1)
 
 
@@ -127,7 +132,7 @@ def _wait_seconds(attempt: int, retry_after: float | None) -> float:
 class OutboundDeliveryFailed(OutboundError, AdCPServiceUnavailableError):
     """The destination was reachable but the request was not delivered.
 
-    ``attempts`` is how many times it was tried; ``last_status`` is the last
+    ``attempts`` is how many times it was tried; ``http_status`` is the last
     HTTP status observed, or ``None`` when the failure was a transport
     exception and there was never a response to read a status from.
     """
@@ -135,7 +140,7 @@ class OutboundDeliveryFailed(OutboundError, AdCPServiceUnavailableError):
     # Narrower than the base's ``int | None``: a delivery that reaches this
     # class was tried at least once (``__init__`` requires ``attempts: int``,
     # no default), so callers that have already caught this concrete type
-    # read a plain ``int``, not ``int | None``. ``last_status`` stays inherited
+    # read a plain ``int``, not ``int | None``. ``http_status`` stays inherited
     # — it is genuinely optional even here (a transport exception vs a
     # response).
     attempts: int
@@ -144,23 +149,31 @@ class OutboundDeliveryFailed(OutboundError, AdCPServiceUnavailableError):
     # build_two_layer_error_envelope passes it straight into the adcp_error
     # payload — so nothing derived from the origin's response or from the httpx
     # error string may be added here (spec point 6).
+    #
+    # The KEY stays ``last_status`` while the ATTRIBUTE is ``http_status``. That
+    # is not drift: the wire payload is a pre-existing buyer-facing contract, of
+    # exactly the same character as the ``WebhookDeliveryLog.http_status_code``
+    # column, and renaming it would be a behaviour change this step is not
+    # allowed to make. So the seam carries ONE internal name and maps it to each
+    # external name exactly once, at the boundary that owns that name — here for
+    # the wire, and at the delivery repository for the column.
     _DETAIL_KEYS: ClassVar[tuple[str, str]] = ("attempts", "last_status")
 
-    def __init__(self, *, attempts: int, last_status: int | None, retry_after: int | None = None) -> None:
+    def __init__(self, *, attempts: int, http_status: int | None, retry_after: int | None = None) -> None:
         super().__init__(
             _DELIVERY_FAILED_MESSAGE,
-            details={"attempts": attempts, "last_status": last_status},
+            details={"attempts": attempts, "last_status": http_status},
             retry_after=retry_after,
         )
         self.attempts = attempts
-        self.last_status = last_status
+        self.http_status = http_status
         self.retry_after = retry_after
 
 
-def _fail(attempts: int, last_status: int | None, retry_after: float | None = None) -> OutboundDeliveryFailed:
+def _fail(attempts: int, http_status: int | None, retry_after: float | None = None) -> OutboundDeliveryFailed:
     return OutboundDeliveryFailed(
         attempts=attempts,
-        last_status=last_status,
+        http_status=http_status,
         retry_after=clamp_retry_after(retry_after) if retry_after is not None else None,
     )
 

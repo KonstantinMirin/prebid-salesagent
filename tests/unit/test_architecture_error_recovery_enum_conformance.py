@@ -605,7 +605,7 @@ def _instance_of(cls: type[AdCPError]) -> AdCPError:
     """An instance of *cls*, built through its own constructor wherever that is possible.
 
     A few subclasses take required domain keywords instead of a message — the
-    egress seam's ``OutboundDeliveryFailed(attempts=..., last_status=...)`` is the
+    egress seam's ``OutboundDeliveryFailed(attempts=..., http_status=...)`` is the
     live example — and cannot be built from a bare string. Their own ``__init__``
     delegates to ``AdCPError.__init__`` with a fixed message and never touches
     recovery, so the base initializer reaches the same object state this mirror

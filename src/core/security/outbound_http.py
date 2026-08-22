@@ -150,12 +150,14 @@ import asyncio
 import logging
 import os
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol, TypeGuard
+from typing import Any, Protocol
 
 import httpx  # noqa: TID251 - the seam itself; the one sanctioned httpx importer (GH #1589)
 from adcp.signing import AsyncIpPinnedTransport, IpPinnedTransport
+from pydantic import JsonValue
+from typing_extensions import TypeIs
 
 from src.core.security.egress.attempts import (
     _MAX_HONOURED_RETRY_AFTER_SECONDS,  # noqa: F401 - re-exported; test-facing facade, no remaining src consumer
@@ -178,6 +180,13 @@ logger = logging.getLogger(__name__)
 # that used to need one are all TLS-fronted now (salesagent-40qh).
 _ALLOW_PRIVATE_ENV = "ADCP_OUTBOUND_ALLOW_PRIVATE"
 
+#: A query string, as the seam accepts it. Scalars only: httpx would also take a
+#: sequence value or its own ``httpx.QueryParams``, and admitting either would
+#: put an httpx type back in this module's public signatures — the exact
+#: crossing this seam exists to close. A caller with a repeated key builds the
+#: string itself.
+QueryParams = Mapping[str, str | int | float | bool]
+
 
 class SignAttempt(Protocol):
     """Signs ONE attempt: ``(method, url, body) -> headers to merge``.
@@ -198,6 +207,27 @@ class SignAttempt(Protocol):
     """
 
     def __call__(self, *, method: str, url: str, body: bytes) -> Mapping[str, str]: ...
+
+
+class McpClientFactory(Protocol):
+    """The client-factory shape fastmcp and the MCP SDK both call.
+
+    Structurally identical to ``mcp.shared._httpx_utils.McpHttpClientFactory``,
+    restated here so the seam does not import the MCP SDK to describe its own
+    return type. Its three parameters are POSITIONAL-OR-KEYWORD on purpose:
+    written keyword-only, this would not be a structural subtype of the SDK's
+    Protocol and the annotation on :func:`guarded_client_factory` would not
+    check. ``follow_redirects`` is the fourth because fastmcp passes it
+    unconditionally; it is accepted and discarded, never honoured.
+    """
+
+    def __call__(
+        self,
+        headers: Mapping[str, str] | None = None,
+        timeout: httpx.Timeout | float | None = None,
+        auth: httpx.Auth | None = None,
+        follow_redirects: bool | None = None,
+    ) -> httpx.AsyncClient: ...
 
 
 #: Headers a signer may not set, because they describe the FRAMING of the body
@@ -298,18 +328,35 @@ def terminal_client_error_status(exc: OutboundError) -> int | None:
     also cannot drift from the set as it changes.
 
     Returns ``None`` for a refusal (no status to be terminal about) and for a
-    transport failure (``last_status is None`` — the input a bare comparison
+    transport failure (``http_status is None`` — the input a bare comparison
     raises ``TypeError`` on).
     """
     if not isinstance(exc, OutboundDeliveryFailed):
         return None
-    status = exc.last_status
+    status = exc.http_status
     if status is None or not (400 <= status < 500) or status in _RETRYABLE_STATUSES:
         return None
     return status
 
 
-def find_wrapped_http_status_error(exc: BaseException) -> httpx.HTTPStatusError | None:
+@dataclass(frozen=True, slots=True)
+class WrappedFailure:
+    """The two numbers a wrapped HTTP failure carries, and nothing else.
+
+    The seam's projection of an ``httpx.HTTPStatusError`` found on an exception
+    chain. It exists so a caller can recover the status-code-aware
+    classification without receiving the httpx object that carries it: an
+    import ban sees IMPORTS, so an httpx type crossing this boundary through a
+    RETURN TYPE was invisible to ``ruff-egress.toml`` by construction, and
+    ``src/core/helpers/outbound_error_mapping.py`` consequently dereferenced
+    ``.response.status_code`` while importing nothing from httpx at all.
+    """
+
+    status: int
+    retry_after: float | None
+
+
+def wrapped_failure(exc: BaseException) -> WrappedFailure | None:
     """Walk *exc*'s cause/context chain (and any ``ExceptionGroup`` members) for a wrapped ``httpx.HTTPStatusError``.
 
     For a transport that does NOT go through ``send``/``asend`` — the guarded
@@ -320,10 +367,13 @@ def find_wrapped_http_status_error(exc: BaseException) -> httpx.HTTPStatusError 
     lets a caller of that seam recover the same status-code-aware
     classification (429/4xx/5xx) this module's own retry loop uses, without
     importing ``httpx`` itself — this module is the one sanctioned importer
-    (GH #1589).
+    (GH #1589) — and now without RECEIVING an httpx object either.
     """
     seen: set[int] = set()
-    return _find_wrapped_http_status_error(exc, seen)
+    found = _find_wrapped_http_status_error(exc, seen)
+    if found is None:
+        return None
+    return WrappedFailure(status=found.response.status_code, retry_after=_retry_after_seconds(found.response))
 
 
 def _find_wrapped_http_status_error(exc: BaseException, seen: set[int]) -> httpx.HTTPStatusError | None:
@@ -368,7 +418,7 @@ def wire_field(provenance: UrlProvenance | None) -> str | None:
     return None
 
 
-def is_counterparty(provenance: UrlProvenance | None) -> TypeGuard[CounterpartyUrl]:
+def is_counterparty(provenance: UrlProvenance | None) -> TypeIs[CounterpartyUrl]:
     """Whether *provenance* names a URL the counterparty (buyer) supplied.
 
     The counterpart to :func:`wire_field`, for call sites that need the
@@ -376,9 +426,13 @@ def is_counterparty(provenance: UrlProvenance | None) -> TypeGuard[CounterpartyU
     carries — e.g. deciding whether a URL is eligible for a testing
     short-circuit that must never apply to a buyer-controlled destination. Kept
     here, the ONE place either derivation lives, so no caller re-implements the
-    union's meaning with its own ``isinstance``. A ``TypeGuard`` so a caller that
-    branches on it gets ``CounterpartyUrl`` narrowing for free, the same as an
-    inline ``isinstance`` would.
+    union's meaning with its own ``isinstance``. A ``TypeIs`` rather than a
+    ``TypeGuard``: ``TypeGuard`` narrows only the TRUE branch, so swapping a raw
+    ``isinstance`` for it silently lost ``OperatorEndpoint`` narrowing in the
+    ELSE branch and the call site stopped type-checking. ``TypeIs`` narrows both
+    branches, which is what makes this function a drop-in for the ``isinstance``
+    it exists to replace — and a predicate that is only half a replacement is a
+    predicate call sites will keep declining to use.
     """
     return isinstance(provenance, CounterpartyUrl)
 
@@ -418,16 +472,16 @@ def _sync_transport(url: str, *, field: str | None, allow_private: bool) -> IpPi
     A thin builder, not a policy decision: :meth:`EgressPolicy.resolve_for_dial`
     owns the scheme check, the single resolution and the address-policy verdict
     (including OutboundRequestBlocked's raise); this function only turns the
-    resolved triple into the transport the caller asked for.
+    resolved :class:`PinnedHost` into the transport the caller asked for.
     """
-    hostname, resolved_ip, _port = EgressPolicy.resolve_for_dial(url, field=field, allow_private=allow_private)
-    return IpPinnedTransport(hostname=hostname, resolved_ip=resolved_ip, verify=True)
+    pinned = EgressPolicy.resolve_for_dial(url, field=field, allow_private=allow_private)
+    return IpPinnedTransport(hostname=pinned.hostname, resolved_ip=pinned.resolved_ip, verify=True)
 
 
 def _async_transport(url: str, *, field: str | None, allow_private: bool) -> AsyncIpPinnedTransport:
     """The async twin of :func:`_sync_transport` — see its docstring."""
-    hostname, resolved_ip, _port = EgressPolicy.resolve_for_dial(url, field=field, allow_private=allow_private)
-    return AsyncIpPinnedTransport(hostname=hostname, resolved_ip=resolved_ip, verify=True)
+    pinned = EgressPolicy.resolve_for_dial(url, field=field, allow_private=allow_private)
+    return AsyncIpPinnedTransport(hostname=pinned.hostname, resolved_ip=pinned.resolved_ip, verify=True)
 
 
 async def sleep_backoff(attempts: Attempts) -> None:
@@ -454,7 +508,7 @@ async def sleep_backoff(attempts: Attempts) -> None:
     await asyncio.sleep(attempts.wait_seconds())
 
 
-def retry_after_seconds(response: httpx.Response) -> float | None:
+def _retry_after_seconds(response: httpx.Response) -> float | None:
     """The origin's Retry-After in seconds, or ``None`` if it did not usably say.
 
     Delta-seconds only. RFC 9110 also permits an HTTP-date, but honouring one
@@ -467,11 +521,11 @@ def retry_after_seconds(response: httpx.Response) -> float | None:
     two would floor every wait at one second, so an origin could not answer
     ``Retry-After: 0`` — and a test suite could not avoid sleeping for real.
 
-    Public (not module-private): reused by
-    ``src.core.helpers.outbound_error_mapping.raise_mapped_mcp_error`` to parse
-    the same header off the ``httpx.HTTPStatusError`` a guarded MCP-seam dial
-    surfaces, so the 429/Retry-After parsing rule has one home regardless of
-    which transport the seam used underneath.
+    Module-private, and reached from outside only through
+    :func:`wrapped_failure`, which projects the parsed value onto
+    :class:`WrappedFailure`. That is what keeps the 429/Retry-After parsing rule
+    in one home regardless of which transport the seam used underneath WITHOUT
+    handing an ``httpx.Response`` to a module that is forbidden to import httpx.
     """
     raw = response.headers.get("Retry-After")
     if raw is None:
@@ -488,10 +542,10 @@ def _build_request(
     *,
     method: str,
     url: str,
-    json_body: Any,
-    params: Any,
-    headers: Any,
-    content: Any,
+    json_body: JsonValue | None,
+    params: QueryParams | None,
+    headers: Mapping[str, str] | None,
+    content: bytes | None,
     sign: SignAttempt | None = None,
 ) -> httpx.Request:
     request = client.build_request(
@@ -534,7 +588,7 @@ def _result(response: httpx.Response, body: bytes, attempt: int, started: float)
     consumer's existing ``.get("content-type", ...)`` lookup.
     """
     return OutboundResult(
-        status_code=response.status_code,
+        http_status=response.status_code,
         headers=dict(response.headers),
         content=body,
         attempts=attempt,
@@ -581,10 +635,10 @@ def validate_url(url: str, *, provenance: UrlProvenance | None = None) -> None:
 def guarded_async_client(
     url: str,
     *,
-    headers: Any = None,
-    timeout: Any = None,
-    auth: Any = None,
-    **client_kwargs: Any,
+    headers: Mapping[str, str] | None = None,
+    timeout: httpx.Timeout | float | None = None,
+    auth: httpx.Auth | None = None,
+    follow_redirects: bool | None = None,
 ) -> httpx.AsyncClient:
     """An ``httpx.AsyncClient`` pinned to ``url``'s validated IP, redirects refused.
 
@@ -606,23 +660,27 @@ def guarded_async_client(
     through the same policy method.
     """
     transport = _async_transport(url, field=None, allow_private=_env_flag(_ALLOW_PRIVATE_ENV))
-    kwargs: dict[str, Any] = {**client_kwargs}
+    kwargs: dict[str, Any] = {}
     if headers is not None:
         kwargs["headers"] = headers
     if timeout is not None:
         kwargs["timeout"] = timeout
     if auth is not None:
         kwargs["auth"] = auth
-    # The pin, the redirect refusal and the proxy bypass are the reason this
-    # function exists, so they are applied LAST and are not negotiable — a caller
-    # cannot pass them away. fastmcp does exactly that: it invokes the factory
-    # with a hard-coded ``follow_redirects=True`` (mcp/client/streamable_http.py),
-    # which would otherwise land in ``client_kwargs`` and re-open the bypass.
+    # ``follow_redirects`` is ACCEPTED AND DISCARDED, not absent: fastmcp invokes
+    # the factory with a hard-coded ``follow_redirects=True``
+    # (fastmcp/client/transports/http.py), so removing the parameter would turn a
+    # working call into a TypeError. Naming it is what closes the hole — the
+    # ``**client_kwargs`` catch-all it replaces also absorbed ``transport=``,
+    # ``trust_env=`` and ``verify=``, so the pin, the redirect refusal and the
+    # proxy bypass were passable and merely overwritten afterwards. Now they are
+    # not passable at all.
+    del follow_redirects
     kwargs.update(transport=transport, follow_redirects=False, trust_env=False)
     return httpx.AsyncClient(**kwargs)
 
 
-def guarded_client_factory(url: str) -> Callable[..., httpx.AsyncClient]:
+def guarded_client_factory(url: str) -> McpClientFactory:
     """A ``(headers, timeout, auth) -> AsyncClient`` factory pinned to ``url``.
 
     The shape fastmcp's ``StreamableHttpTransport(httpx_client_factory=...)`` and
@@ -633,8 +691,13 @@ def guarded_client_factory(url: str) -> Callable[..., httpx.AsyncClient]:
     by construction: there is no validate-one/dial-another gap to reopen.
     """
 
-    def factory(headers: Any = None, timeout: Any = None, auth: Any = None, **extra: Any) -> httpx.AsyncClient:
-        return guarded_async_client(url, headers=headers, timeout=timeout, auth=auth, **extra)
+    def factory(
+        headers: Mapping[str, str] | None = None,
+        timeout: httpx.Timeout | float | None = None,
+        auth: httpx.Auth | None = None,
+        follow_redirects: bool | None = None,
+    ) -> httpx.AsyncClient:
+        return guarded_async_client(url, headers=headers, timeout=timeout, auth=auth, follow_redirects=follow_redirects)
 
     return factory
 
@@ -643,10 +706,10 @@ def send(
     url: str,
     *,
     method: str = "POST",
-    json: Any = None,
-    params: Any = None,
-    headers: Any = None,
-    content: Any = None,
+    json: JsonValue | None = None,
+    params: QueryParams | None = None,
+    headers: Mapping[str, str] | None = None,
+    content: bytes | None = None,
     timeout: float = 10.0,
     max_attempts: int = 3,
     provenance: UrlProvenance | None = None,
@@ -725,7 +788,7 @@ def send(
                 logger.warning("Outbound attempt %d failed at the transport level: %s", attempt, exc)
                 attempts.record_transport_failure(exc)
             else:
-                outcome = attempts.record_response(response.status_code, retry_after_seconds(response))
+                outcome = attempts.record_response(response.status_code, _retry_after_seconds(response))
                 if outcome is Attempts.Outcome.SUCCESS:
                     return _result(response, bytes(body), attempt, started)
                 if outcome is Attempts.Outcome.TERMINAL:
@@ -741,10 +804,10 @@ async def asend(
     url: str,
     *,
     method: str = "POST",
-    json: Any = None,
-    params: Any = None,
-    headers: Any = None,
-    content: Any = None,
+    json: JsonValue | None = None,
+    params: QueryParams | None = None,
+    headers: Mapping[str, str] | None = None,
+    content: bytes | None = None,
     timeout: float = 10.0,
     max_attempts: int = 3,
     provenance: UrlProvenance | None = None,
@@ -791,7 +854,7 @@ async def asend(
                 logger.warning("Outbound attempt %d failed at the transport level: %s", attempt, exc)
                 attempts.record_transport_failure(exc)
             else:
-                outcome = attempts.record_response(response.status_code, retry_after_seconds(response))
+                outcome = attempts.record_response(response.status_code, _retry_after_seconds(response))
                 if outcome is Attempts.Outcome.SUCCESS:
                     return _result(response, bytes(body), attempt, started)
                 if outcome is Attempts.Outcome.TERMINAL:

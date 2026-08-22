@@ -8,7 +8,7 @@ directly against ``httpx.Response`` (triage F8/R5). The seam had to poke
 ``response._content = body`` (``_attach_body``, a private-attribute write on
 a third-party object) purely to keep that reach-through's ``.text``/``.json()``
 working on a streamed-then-closed body. Closing the type over
-``status_code``/``headers``/``content``/``attempts``/``duration_seconds`` is
+``http_status``/``headers``/``content``/``attempts``/``duration_seconds`` is
 what makes "a caller holding an httpx type" unconstructible; nothing here
 imports httpx at all.
 
@@ -61,9 +61,23 @@ def _text_encoding(headers: Mapping[str, str]) -> str:
 
 @dataclass(frozen=True)
 class OutboundResult:
-    """A delivered response, plus what it cost to get it. No httpx type anywhere."""
+    """A delivered response, plus what it cost to get it. No httpx type anywhere.
 
-    status_code: int
+    ``http_status`` is the ONE name this seam gives an HTTP status. It used to
+    carry a different one on each of the three types that pass it along, with a
+    rename hop at every junction; the field is spelled identically on
+    :class:`~src.core.security.egress.policy.OutboundError` and on
+    ``WebhookDeliveryOutcome`` so nothing has to be renamed in transit. It is
+    deliberately NOT httpx's own spelling: the seam adopting its own vocabulary
+    is the same move as not returning httpx's types.
+
+    Two hops survive, both at a boundary that owns a pre-existing external name
+    and maps to it exactly once — the buyer-visible ``details`` key, in
+    ``OutboundDeliveryFailed.__init__``, and the
+    ``WebhookDeliveryLog.http_status_code`` column, at the delivery repository.
+    """
+
+    http_status: int
     headers: Mapping[str, str]
     content: bytes
     attempts: int

@@ -200,14 +200,14 @@ def _authentication_or_refusal(
             # Reported as scheme=None, not as the blank string: a whitespace-only
             # value is the ABSENCE of a scheme, and echoing "   " back at an
             # operator tells them nothing they can search a row by.
-            return _refusal(None, "no_scheme", "an authentication block was stored with no scheme")
+            return _refusal(None, "no_scheme")
         return _NO_AUTHENTICATION
 
     try:
         return LibraryAuthentication(schemes=[scheme], credentials=credentials)
     except ValidationError as exc:
         reason = _reason(exc)
-        return _refusal(scheme, reason, _REFUSAL_DETAIL[reason])
+        return _refusal(scheme, reason)
 
 
 def _reason(
@@ -245,8 +245,15 @@ _REFUSAL_DETAIL: dict[RefusalReason, str] = {
 }
 
 
-def _refusal(scheme: str | None, reason: RefusalReason, detail: str) -> WebhookDeliveryOutcome:
-    """A refusal outcome. Nothing is dialled, so ``attempts`` is zero by construction."""
+def _refusal(scheme: str | None, reason: RefusalReason) -> WebhookDeliveryOutcome:
+    """A refusal outcome. Nothing is dialled, so ``attempts`` is zero by construction.
+
+    The sentence is looked up here rather than passed in. Handed in, a caller
+    could — and one did — spell a literal that duplicated the table's own entry,
+    so an edit to the table reached nothing and ``"no_scheme"`` sat in it unread.
+    With no parameter to pass, the table is the only way to say it.
+    """
+    detail = _REFUSAL_DETAIL[reason]
     # The log names BOTH the human sentence and the machine-readable reason. The
     # reason is what an operator greps for to enumerate every affected registration;
     # the sentence is what tells them what to do about it. With no outcome record on
@@ -394,8 +401,8 @@ def _outcome_for_outbound_error(exc: OutboundError, *, payload_size_bytes: int |
     happened to catch, which is how three senders reported the same failure three
     ways.
     """
-    attempts = getattr(exc, "attempts", 0) or 0
-    status = getattr(exc, "last_status", None)
+    attempts = exc.attempts or 0
+    status = exc.http_status
     if isinstance(exc, OutboundRequestBlocked):
         return WebhookDeliveryOutcome(
             kind="refused_destination",
@@ -424,8 +431,8 @@ def _outcome_for_outbound_error(exc: OutboundError, *, payload_size_bytes: int |
 def _delivered(result: OutboundResult, *, payload_size_bytes: int) -> WebhookDeliveryOutcome:
     return WebhookDeliveryOutcome(
         kind="delivered",
-        attempts=getattr(result, "attempts", 1) or 1,
-        http_status=getattr(result, "status_code", None),
+        attempts=result.attempts,
+        http_status=result.http_status,
         detail=None,
         payload_size_bytes=payload_size_bytes,
     )

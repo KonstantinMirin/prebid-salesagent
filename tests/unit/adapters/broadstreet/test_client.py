@@ -138,7 +138,7 @@ class TestBroadstreetClient:
         # response — so the client rebuilds its status-specific error from the typed
         # failure. response_body is None now: a counterparty's error body is exactly
         # what the seam declines to carry back.
-        mock_send.side_effect = OutboundDeliveryFailed(attempts=1, last_status=403)
+        mock_send.side_effect = OutboundDeliveryFailed(attempts=1, http_status=403)
 
         client = BroadstreetClient(
             access_token="invalid_token",
@@ -158,7 +158,7 @@ class TestBroadstreetClient:
         # response — so the client rebuilds its status-specific error from the typed
         # failure. response_body is None now: a counterparty's error body is exactly
         # what the seam declines to carry back.
-        mock_send.side_effect = OutboundDeliveryFailed(attempts=1, last_status=404)
+        mock_send.side_effect = OutboundDeliveryFailed(attempts=1, http_status=404)
 
         client = BroadstreetClient(
             access_token="test_token",
@@ -177,7 +177,7 @@ class TestBroadstreetClient:
         # response — so the client rebuilds its status-specific error from the typed
         # failure. response_body is None now: a counterparty's error body is exactly
         # what the seam declines to carry back.
-        mock_send.side_effect = OutboundDeliveryFailed(attempts=1, last_status=500)
+        mock_send.side_effect = OutboundDeliveryFailed(attempts=1, http_status=500)
 
         client = BroadstreetClient(
             access_token="test_token",

@@ -12,7 +12,6 @@ This service implements the AdCP webhook specification from PR #86:
 
 import atexit
 import logging
-import os
 import threading
 import time
 from collections import deque
@@ -24,6 +23,7 @@ from uuid import uuid4
 from adcp import get_adcp_spec_version
 
 from src.core.database.repositories.delivery import DeliveryRepository
+from src.core.security.egress.attempts import env_float
 from src.core.security.webhook_egress import (
     WebhookDeliveryOutcome,
     WebhookTaskContext,
@@ -47,26 +47,6 @@ DELIVERY_REPORT_TASK_TYPE = "delivery_report"
 # clock. Production's value is unchanged.
 _DELIVERY_TIMEOUT_ENV = "ADCP_WEBHOOK_DELIVERY_TIMEOUT_SECONDS"
 _DEFAULT_DELIVERY_TIMEOUT_SECONDS = 10.0
-
-
-def _delivery_timeout_seconds() -> float:
-    """Seconds a single webhook delivery attempt may take before it is abandoned."""
-    raw = os.environ.get(_DELIVERY_TIMEOUT_ENV)
-    if not raw:
-        return _DEFAULT_DELIVERY_TIMEOUT_SECONDS
-    try:
-        value = float(raw)
-    except ValueError:
-        logger.warning(
-            "%s=%r is not a number — using %ss", _DELIVERY_TIMEOUT_ENV, raw, _DEFAULT_DELIVERY_TIMEOUT_SECONDS
-        )
-        return _DEFAULT_DELIVERY_TIMEOUT_SECONDS
-    if value <= 0:
-        logger.warning(
-            "%s=%r is not positive — using %ss", _DELIVERY_TIMEOUT_ENV, raw, _DEFAULT_DELIVERY_TIMEOUT_SECONDS
-        )
-        return _DEFAULT_DELIVERY_TIMEOUT_SECONDS
-    return value
 
 
 class CircuitState(Enum):
@@ -609,7 +589,7 @@ class WebhookDeliveryService:
                 scheme=config.authentication_type,
                 credentials=config.authentication_token,
                 headers=headers,
-                timeout=_delivery_timeout_seconds(),
+                timeout=env_float(_DELIVERY_TIMEOUT_ENV, _DEFAULT_DELIVERY_TIMEOUT_SECONDS),
                 max_attempts=3,
             )
         except Exception as e:

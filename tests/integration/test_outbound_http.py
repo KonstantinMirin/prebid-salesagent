@@ -67,7 +67,7 @@ BACKOFF_BASE_ENV = "ADCP_OUTBOUND_BACKOFF_BASE_SECONDS"
 # The seam's logger, for grading the fallback warning on a malformed knob value.
 SEAM_LOGGER = "src.core.security.outbound_http"
 
-# The retry SCHEDULE's own logger — _env_float's fallback warning for the
+# The retry SCHEDULE's own logger — env_float's fallback warning for the
 # backoff-base knob logs from here now that egress.attempts owns the schedule
 # (salesagent-tbrk.2), not from SEAM_LOGGER.
 SCHEDULE_LOGGER = "src.core.security.egress.attempts"
@@ -359,7 +359,7 @@ def test_redirect_to_metadata_address_is_not_followed(seam_call, monkeypatch, lo
 
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=3)
 
-    assert error.last_status == 302
+    assert error.http_status == 302
     assert local_origin_tls.hits == 1, f"seam followed the redirect: {local_origin_tls.requests}"
 
 
@@ -378,7 +378,7 @@ def test_server_error_is_retried_to_max_attempts(seam_call, monkeypatch, local_o
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=3)
 
     assert error.attempts == 3
-    assert error.last_status == 503
+    assert error.http_status == 503
     assert local_origin_tls.hits == 3
 
 
@@ -391,7 +391,7 @@ def test_client_error_is_terminal_and_not_retried(seam_call, monkeypatch, local_
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=3)
 
     assert error.attempts == 1
-    assert error.last_status == 404
+    assert error.http_status == 404
     assert local_origin_tls.hits == 1
 
 
@@ -430,7 +430,7 @@ def test_retry_recovers_when_the_origin_recovers(seam_call, monkeypatch, local_o
 
     result = call_seam(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=3)
 
-    assert result.status_code == 200
+    assert result.http_status == 200
     assert result.json() == {"ok": True}
     assert result.attempts == 3
     assert local_origin_tls.hits == 3
@@ -453,7 +453,7 @@ def test_response_sequence_repeats_its_last_entry_past_the_end(seam_call, monkey
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=4)
 
     assert error.attempts == 4
-    assert error.last_status == 503
+    assert error.http_status == 503
     assert local_origin_tls.hits == 4
 
 
@@ -616,7 +616,7 @@ def test_unusable_backoff_base_falls_back_to_the_rule_and_warns(
 def test_timeout_is_retried_and_surfaces_as_delivery_failure(seam_call, monkeypatch, local_origin_tls):
     """A stalled origin trips the per-request timeout, is retried, then fails typed.
 
-    ``last_status`` is None because there was never a response to read a status
+    ``http_status`` is None because there was never a response to read a status
     from. If this leaked a raw ``httpx.ReadTimeout`` instead, every migrated
     call site would have to keep its own ``except httpx...`` — which is the
     duplication the seam exists to delete.
@@ -633,7 +633,7 @@ def test_timeout_is_retried_and_surfaces_as_delivery_failure(seam_call, monkeypa
     )
 
     assert error.attempts == 2
-    assert error.last_status is None
+    assert error.http_status is None
     assert local_origin_tls.hits == 2
 
 
@@ -648,7 +648,7 @@ def test_origin_closing_without_responding_is_retried_then_fails_typed(seam_call
     class reaching the same classification, from a real protocol violation on
     the wire rather than a stalled read.
 
-    ``last_status`` is None for the same reason as a timeout — there was never a
+    ``http_status`` is None for the same reason as a timeout — there was never a
     response to read a status from — and the raw httpx error must not escape,
     or every migrated call site keeps its own ``except httpx...``.
     """
@@ -659,7 +659,7 @@ def test_origin_closing_without_responding_is_retried_then_fails_typed(seam_call
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
 
     assert error.attempts == 2
-    assert error.last_status is None
+    assert error.http_status is None
     assert local_origin_tls.hits == 2
 
 
@@ -1657,7 +1657,7 @@ def test_a_transport_failure_after_a_rate_limit_carries_no_stale_retry_after(sea
 
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
 
-    assert error.last_status is None
+    assert error.http_status is None
     assert error.retry_after is None, (
         f"the 429's Retry-After survived into a transport-level failure: {error.retry_after!r}"
     )
@@ -1768,7 +1768,7 @@ def test_a_rate_limited_4xx_is_never_reported_as_terminal(seam_call, monkeypatch
 
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=3)
 
-    assert error.last_status == 429
+    assert error.http_status == 429
     assert error.attempts == 3
     assert local_origin_tls.hits == 3, "the seam did not actually retry the 429"
     assert _terminal_client_error_status()(error) is None, (
@@ -1788,7 +1788,7 @@ def test_every_status_the_seam_retries_is_reported_as_not_terminal():
     predicate = _terminal_client_error_status()
 
     for status in sorted(seam._RETRYABLE_STATUSES):
-        error = seam.OutboundDeliveryFailed(attempts=3, last_status=status)
+        error = seam.OutboundDeliveryFailed(attempts=3, http_status=status)
         assert predicate(error) is None, f"status {status} is retried by the seam but was reported as terminal"
 
 
@@ -1806,7 +1806,7 @@ def test_a_refusal_is_not_a_client_error(seam_call, monkeypatch):
 def test_a_transport_failure_carries_no_client_error_status(seam_call, monkeypatch, local_origin_tls):
     """A failure with no response at all reports no client error, rather than crashing.
 
-    ``last_status`` is ``None`` here, which is the input a predicate written as
+    ``http_status`` is ``None`` here, which is the input a predicate written as
     a bare comparison raises ``TypeError`` on.
     """
     set_flags(monkeypatch, private=True)
@@ -1815,7 +1815,7 @@ def test_a_transport_failure_carries_no_client_error_status(seam_call, monkeypat
 
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
 
-    assert error.last_status is None
+    assert error.http_status is None
     assert _terminal_client_error_status()(error) is None
 
 
@@ -1974,7 +1974,7 @@ def test_a_size_cap_abort_after_a_rate_limit_carries_no_stale_retry_after(seam_c
     to the spec's [1, 3600] and emitted).
 
     ``retry_after`` is asserted for exactly that reason: ``attempts`` and
-    ``last_status`` are identical whether or not the stale value leaks, so a case
+    ``http_status`` are identical whether or not the stale value leaks, so a case
     that graded only those two would let it ship.
 
     The empty decision record is the other half: an aborted read is not a status
@@ -1993,7 +1993,7 @@ def test_a_size_cap_abort_after_a_rate_limit_carries_no_stale_retry_after(seam_c
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=3)
 
     assert error.attempts == 2
-    assert error.last_status == 200
+    assert error.http_status == 200
     assert error.retry_after is None, (
         f"the first attempt's Retry-After: {_STALE_RETRY_AFTER} survived into a size-cap abort as "
         f"{error.retry_after!r} — the buyer would be told to wait for a 429 that is not this failure"
@@ -2039,7 +2039,7 @@ def test_both_paths_walk_retry_retry_terminal_through_the_same_machine(seam_call
         f"expected the shared machine to decide retry, retry, terminal for 503/429/404, got {decisions}"
     )
     assert error.attempts == 3
-    assert error.last_status == 404
+    assert error.http_status == 404
     assert error.retry_after is None, (
         f"the 429's Retry-After: {_STALE_RETRY_AFTER} survived into the 404 that actually failed: {error.retry_after!r}"
     )
@@ -2072,7 +2072,7 @@ def test_both_paths_walk_retry_retry_success_through_the_same_machine(seam_call,
     assert decisions == [outcome.RETRY, outcome.RETRY, outcome.SUCCESS], (
         f"expected the shared machine to decide retry, retry, success for 503/429/200, got {decisions}"
     )
-    assert result.status_code == 200
+    assert result.http_status == 200
     assert result.json() == {"ok": True}
     assert result.attempts == 3
     assert local_origin_tls.hits == 3, f"the recovered request was sent {local_origin_tls.hits} times"

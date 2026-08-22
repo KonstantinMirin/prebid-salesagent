@@ -13,7 +13,7 @@ This guard has three legs, all against the CURRENT tree (before the lane's
 implement atom lands):
 
 1. ``OutboundResult`` still declares a ``response`` field (RED) -- once the
-   type closes over ``status_code``/``headers``/``content``/``attempts``/
+   type closes over ``http_status``/``headers``/``content``/``attempts``/
    ``duration_seconds`` only, a caller cannot hold or reach through an httpx
    object at all, which is what makes leg 3 permanently true rather than
    true-until-the-next-caller.
@@ -107,7 +107,7 @@ class TestOutboundResultHasNoResponseField:
         assert "response" not in field_names, (
             f"OutboundResult still declares a 'response' field ({sorted(field_names)}) -- "
             "a caller holding this field can reach through to any httpx.Response attribute, "
-            "which is the exact leak salesagent-tbrk.5 closes. The field must delete; status_code/"
+            "which is the exact leak salesagent-tbrk.5 closes. The field must delete; http_status/"
             "headers/content/attempts/duration_seconds must be constructed directly, not derived "
             "from a held httpx.Response."
         )
@@ -193,18 +193,27 @@ class TestDetectorCorrectness:
     def test_unrelated_response_attribute_sites_are_out_of_scope_by_file(self) -> None:
         """media_buy_create.py / schemas/_base.py / outbound_error_mapping.py are NOT scanned.
 
-        These files use the same attribute name (``response``) on unrelated types
-        (``CreateMediaBuyResult.response``, ``httpx.HTTPStatusError.response``) --
-        proof that scoping this guard to the four consumer files (not a repo-wide
-        ``.response`` sweep) is a deliberate precision choice, not an oversight.
-        Each file DOES contain ``.response`` attribute reads (asserted below, so
-        this isn't vacuous); they are simply outside ``_CONSUMER_FILES``.
+        These files use the same attribute name (``response``) on an unrelated type
+        (``CreateMediaBuyResult.response``) -- proof that scoping this guard to the
+        four consumer files (not a repo-wide ``.response`` sweep) is a deliberate
+        precision choice, not an oversight. Each file DOES contain ``.response``
+        attribute reads (asserted below, so this isn't vacuous); they are simply
+        outside ``_CONSUMER_FILES``.
+
+        ``src/core/helpers/outbound_error_mapping.py`` used to be the third example
+        here, because it dereferenced an httpx response it had received from the
+        seam. It no longer dereferences one at all -- the seam stopped handing httpx
+        objects across its own boundary -- so it can no longer serve as a
+        non-vacuity example and asserting that it still contains such a read would
+        fail for the right reason. Its out-of-scope-ness is still covered, by the
+        membership half of this check having nothing left to find, and by
+        :meth:`test_definition_file_itself_is_out_of_scope` below, which pins the
+        one file that legitimately DOES read an httpx response.
         """
         repo = repo_root()
         unrelated_files = (
             "src/core/tools/media_buy_create.py",
             "src/core/schemas/_base.py",
-            "src/core/helpers/outbound_error_mapping.py",
         )
         for rel_path in unrelated_files:
             assert rel_path not in _CONSUMER_FILES
@@ -214,17 +223,25 @@ class TestDetectorCorrectness:
     def test_definition_file_itself_is_out_of_scope(self) -> None:
         """outbound_http.py is excluded from the consumer scan on principle, not because it happens to be clean.
 
-        Before salesagent-tbrk.5 landed, this file legitimately contained a
-        ``.response`` read of its own (``OutboundResult.status_code``'s
-        ``self.response.status_code``) -- proof the exclusion from
-        ``_CONSUMER_FILES`` was deliberate (it is the type's definition, not
-        a consumer reaching through it), not an accidental miss. That
-        property has since moved to ``egress/response.py`` with no
-        ``response`` field at all, so the file is now clean on its own
-        merits too -- the exclusion no longer needs a non-vacuity proof to
-        stay honest, only the membership check below.
+        This file is the seam itself: the ONE sanctioned importer of httpx, and
+        therefore the one place an ``httpx.Response`` may legitimately be
+        dereferenced. It does so when it projects a wrapped HTTP failure onto the
+        seam's own value type, so that the modules above it receive two numbers
+        instead of an httpx object.
+
+        That read is what keeps this meta-test non-vacuous. The exclusion from
+        ``_CONSUMER_FILES`` is a decision about ROLE -- this file defines the type
+        others must not reach through, it is not a consumer reaching through it --
+        and a decision about role is only provably deliberate while the file
+        contains reads the scan would otherwise flag. Asserting the file is CLEAN
+        would make the exclusion indistinguishable from an accidental miss the day
+        the file stops being clean, which is exactly what happened here.
         """
         repo = repo_root()
         assert "src/core/security/outbound_http.py" not in _CONSUMER_FILES
         hits = find_response_attribute_reads(parse_module(repo / "src/core/security/outbound_http.py"))
-        assert hits == [], f"outbound_http.py unexpectedly reads .response at line(s) {hits}"
+        assert hits, (
+            "outbound_http.py no longer reads .response, so its exclusion from "
+            "_CONSUMER_FILES is no longer provably deliberate -- re-anchor this "
+            "meta-test on whatever the seam now does with an httpx response"
+        )

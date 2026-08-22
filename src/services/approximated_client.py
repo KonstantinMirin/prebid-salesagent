@@ -65,7 +65,7 @@ def get_domain_status(domain: str, api_key: str) -> DomainStatus:
     try:
         response = _api("GET", f"/api/vhosts/by/incoming/{domain}", api_key)
     except OutboundError as exc:
-        if exc.last_status == 404:
+        if exc.http_status == 404:
             return DomainStatus(registered=False)
         raise
 
@@ -103,7 +103,7 @@ def register_domain(domain: str, backend_url: str, api_key: str) -> RegisterResu
             json_body={"incoming_address": domain, "target_address": backend_url},
         )
     except OutboundError as exc:
-        if exc.last_status == 409:
+        if exc.http_status == 409:
             return RegisterResult(already_registered=True)
         raise
     return RegisterResult(already_registered=False)
@@ -125,7 +125,7 @@ def unregister_domain(domain: str, api_key: str) -> UnregisterResult:
     try:
         _api("DELETE", f"/api/vhosts/by/incoming/{domain}", api_key)
     except OutboundError as exc:
-        if exc.last_status == 404:
+        if exc.http_status == 404:
             return UnregisterResult(already_unregistered=True)
         raise
     return UnregisterResult(already_unregistered=False)
@@ -150,7 +150,7 @@ def get_dns_token(api_key: str) -> DnsToken:
 
     Every status this operation can receive is a genuine failure -- there is
     no vendor-status outcome to translate, so callers read ``OutboundError``
-    directly (e.g. ``exc.last_status`` to propagate an upstream 401/403).
+    directly (e.g. ``exc.http_status`` to propagate an upstream 401/403).
     """
     response = _api("GET", "/api/dns/token", api_key)
     return DnsToken(token=response.json().get("token"))

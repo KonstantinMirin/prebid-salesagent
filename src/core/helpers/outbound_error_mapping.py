@@ -70,14 +70,13 @@ from src.core.exceptions import (
     clamp_retry_after,
 )
 from src.core.security.outbound_http import (
-    CounterpartyUrl,
     OperatorEndpoint,
     OutboundDeliveryFailed,
     OutboundError,
     OutboundRequestBlocked,
     UrlProvenance,
-    find_wrapped_http_status_error,
-    retry_after_seconds,
+    is_counterparty,
+    wrapped_failure,
 )
 
 
@@ -154,7 +153,7 @@ def raise_mapped_outbound_error(exc: OutboundError, *, provenance: UrlProvenance
     ``AdCPServiceUnavailableError`` and carries ``attempts``/``last_status`` the
     classifier's freshly-built instance would not.
     """
-    if isinstance(provenance, CounterpartyUrl):
+    if is_counterparty(provenance):
         raise exc
 
     if isinstance(exc, OutboundRequestBlocked):
@@ -169,12 +168,12 @@ def raise_mapped_outbound_error(exc: OutboundError, *, provenance: UrlProvenance
     assert isinstance(exc, OutboundDeliveryFailed)
 
     try:
-        adcp_error_for_status(exc.last_status, retry_after=exc.retry_after, provenance=provenance)
+        adcp_error_for_status(exc.http_status, retry_after=exc.retry_after, provenance=provenance)
     except AdCPRateLimitError:
         logger.warning("%s rate-limited after %s attempts", provenance.name, exc.attempts)
         raise
     except AdCPConfigurationError:
-        logger.error("%s rejected the request (HTTP %s)", provenance.name, exc.last_status)
+        logger.error("%s rejected the request (HTTP %s)", provenance.name, exc.http_status)
         raise
     except AdCPServiceUnavailableError:
         raise exc from None
@@ -199,10 +198,10 @@ def raise_mapped_mcp_error(exc: Exception, *, provenance: UrlProvenance, logger:
 
     status: int | None = None
     retry_after: float | None = None
-    http_error = find_wrapped_http_status_error(exc)
-    if http_error is not None:
-        status = http_error.response.status_code
-        retry_after = retry_after_seconds(http_error.response)
+    wrapped = wrapped_failure(exc)
+    if wrapped is not None:
+        status = wrapped.status
+        retry_after = wrapped.retry_after
 
     try:
         adcp_error_for_status(status, retry_after=retry_after, provenance=provenance)

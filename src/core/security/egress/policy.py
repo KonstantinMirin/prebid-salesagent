@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import ipaddress  # noqa: TID251 - the egress package's own address classification; the one sanctioned site (GH #1589)
 import logging
+from typing import NamedTuple
 from urllib.parse import ParseResult, urlparse
 
 from adcp.signing import SSRFValidationError, resolve_and_validate_host
@@ -88,6 +89,20 @@ _RESTRICTED_RANGE_MESSAGE = "URL resolves to a restricted range."
 _BLOCKED_MESSAGE = "Outbound request to the supplied URL was refused by egress policy."
 
 
+class PinnedHost(NamedTuple):
+    """The resolved identity a pinned transport is built from.
+
+    A ``tuple[str, str, int]`` return made ``ip, hostname, port = ...`` type-check
+    inside the function that decides what gets dialled, because hostname and IP
+    are both ``str``. Naming the fields is only half the fix — a NamedTuple still
+    unpacks positionally — so the two transport builders read it by ATTRIBUTE.
+    """
+
+    hostname: str
+    resolved_ip: str
+    port: int
+
+
 class OutboundError(Exception):
     """Marker base for every failure the outbound egress seam raises — NEVER
     raised directly.
@@ -111,14 +126,14 @@ class OutboundError(Exception):
     It defines no ``__init__`` on purpose — one would shadow ``AdCPError``'s
     through the MRO of ``OutboundRequestBlocked``. Class attributes are safe:
     they do not touch ``__init__``, and declaring them here is what makes
-    ``exc.last_status`` a typed read on ``OutboundError`` instead of a
-    ``getattr(exc, "last_status", None)`` at every call site that only has
+    ``exc.http_status`` a typed read on ``OutboundError`` instead of a
+    ``getattr(exc, "http_status", None)`` at every call site that only has
     the base type. ``OutboundRequestBlocked`` never overrides either, so both
     read as ``None`` on a refusal — the honest value: nothing was attempted,
     so there is no status or count.
     """
 
-    last_status: int | None = None
+    http_status: int | None = None
     attempts: int | None = None
 
 
@@ -271,7 +286,7 @@ class EgressPolicy:
         raise AdCPBlockedUrlError(error)
 
     @staticmethod
-    def resolve_for_dial(url: str, *, field: str | None = None, allow_private: bool = False) -> tuple[str, str, int]:
+    def resolve_for_dial(url: str, *, field: str | None = None, allow_private: bool = False) -> PinnedHost:
         """Dial-time verdict: DNS-full, single resolution, refusal-checked.
 
         Runs the scheme check, then ONE ``resolve_and_validate_host`` call —
@@ -282,9 +297,10 @@ class EgressPolicy:
         closes salesagent-634hc: the SDK call alone does not know about the
         six supplement ranges.
 
-        Returns ``(hostname, resolved_ip, port)`` so a caller building a
-        pinned transport does not resolve a second time; :func:`validate_url`
-        (which sends nothing) discards the triple.
+        Returns a :class:`PinnedHost` so a caller building a pinned transport
+        does not resolve a second time, and reads the two same-typed strings by
+        name rather than by position; :func:`validate_url` (which sends nothing)
+        discards it.
 
         Raises :class:`OutboundRequestBlocked` — never lets
         ``SSRFValidationError`` out, because its message names the resolved
@@ -306,4 +322,4 @@ class EgressPolicy:
             logger.warning("Outbound request refused by address policy: matched the supplement range set")
             raise OutboundRequestBlocked(_BLOCKED_MESSAGE, field=field)
 
-        return hostname, ip, port
+        return PinnedHost(hostname=hostname, resolved_ip=ip, port=port)

@@ -16,7 +16,7 @@ What does NOT move to the seam, and is therefore graded here:
 
 * **The error taxonomy.** The seam reports one class of failure
   (``OutboundDeliveryFailed`` / SERVICE_UNAVAILABLE / transient) with a typed
-  ``last_status``. Only this application knows that a 429 from a creative agent
+  ``http_status``. Only this application knows that a 429 from a creative agent
   is RATE_LIMITED, that a 4xx is terminal rather than transient, and that a
   REFUSED agent URL is a seller-side misconfiguration the buyer cannot fix.
 * **The attempt count the buyer pays for.** A 5xx creative agent used to cost

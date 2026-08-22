@@ -47,7 +47,7 @@ def exchange_authorization_code(
     """Exchange an OAuth authorization code for tokens.
 
     Raises ``OutboundError`` for anything other than success — the caller
-    reads ``exc.last_status`` to distinguish a rejected code (400) from an
+    reads ``exc.http_status`` to distinguish a rejected code (400) from an
     upstream failure, the same split ``approximated_client.get_dns_token``
     documents.
     """
