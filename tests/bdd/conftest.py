@@ -1328,6 +1328,43 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # does. Unparks when production selects the notification type; grading that
             # is not this atom's scope (salesagent-n78j0.1.4).
             "T-UC-004-webhook-notification-type",
+            # STAYS (salesagent-n78j0.13) — FAILED INSPECTION STEP 5 (Then assertions), and
+            # it fails it in a shape neither graduated neighbour had, which is why "hmac and
+            # bearer graduated" was not allowed to carry it.
+            #
+            # The seam is RIGHT here: the Then reads `env.last_delivery()` (the TLS capture
+            # receiver), parses `captured.content`, and both `_get_last_webhook_payload` :77
+            # and `last_delivery()` (_mixins.py :859) fail loudly on an empty payload / absent
+            # delivery. So the usual vacuity routes — empty box, failed delivery, never read —
+            # are all closed. It is still vacuous, structurally:
+            #
+            # `assert "aggregated_totals" not in payload` inspects ONLY TOP-LEVEL keys, and the
+            # two production webhook builders emit different body SHAPES:
+            #   in-process (WebhookDeliveryService.send_delivery_webhook :302) -> FLAT body, so
+            #     top level is where the field would sit and the assertion is meaningful;
+            #   live server / e2e_rest (admin trigger -> _send_report_for_media_buy ->
+            #     create_mcp_webhook_payload :332) -> McpWebhookPayload ENVELOPE, whose
+            #     top-level field set is FIXED. `aggregated_totals` is structurally impossible
+            #     there, so this leg cannot fail for any behaviour of the delivery path.
+            #
+            # And the obligation is not merely ungraded, it is VIOLATED. Pinned 3.1.1,
+            # building/by-layer/L3/webhooks.mdx :253 — "aggregated_totals ... must not be
+            # emitted in reporting webhook RESULT PAYLOADS" — names `result`, which is exactly
+            # where production puts it. Observed on the wire, run innet_220826_0718 (probe over
+            # a strict e2e_rest leg, tag temporarily lifted, then restored by content copy):
+            #   top_level=[idempotency_key, protocol, result, status, task_id, task_type,
+            #              timestamp]
+            #   result.aggregated_totals={'impressions': 11111.0, 'spend': 111.11,
+            #                             'media_buy_count': 1}
+            # with result also carrying currency / media_buy_deliveries / reporting_period /
+            # sequence_number — i.e. the delivery ARRIVED intact, so the top-level absence was
+            # observed against a populated payload, not an empty one. The real Then was GREEN
+            # in that same run. No mutation was needed to "add aggregated totals": production
+            # already ships them and this assertion does not see them. GH #2058.
+            #
+            # Unparks when the Then grades the RESULT payload (and production stops emitting
+            # the field). Strengthening it now would strengthen a row into passing, which
+            # proves nothing about production — so it is recorded, not patched, here.
             "T-UC-004-webhook-no-aggregated",
             "T-UC-004-webhook-circuit-open",
             "T-UC-004-webhook-circuit-recovery",
