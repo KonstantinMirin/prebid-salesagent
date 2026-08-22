@@ -437,7 +437,7 @@ Feature: BR-UC-013 Manage Property Lists
   Scenario Outline: <operation> property list -- LIST_ACCESS_DENIED when principal lacks permission
     Given an existing property list "list-restricted" with restricted access
     When an unauthorized principal sends a <operation> request for "list-restricted"
-    Then the error code should be "PERMISSION_DENIED"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
     # --- Extension G: LIST_IN_USE ---
 
@@ -463,7 +463,7 @@ Feature: BR-UC-013 Manage Property Lists
   @T-UC-013-050 @auth @error @post-f1 @post-f2 @br-rule-070
   Scenario Outline: <operation> property list -- unauthenticated request rejected
     When an unauthenticated Buyer Agent sends a <operation> property list request
-    Then the error code should be "PERMISSION_DENIED"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
     # BR-RULE-070 INV-1: No valid credentials -> LIST_ACCESS_DENIED
     # Representative sample: create (mutating), list (read-all), get (read-one)

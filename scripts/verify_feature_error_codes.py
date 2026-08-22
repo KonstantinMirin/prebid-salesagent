@@ -47,11 +47,25 @@ FEATURES_DIR = PROJECT_ROOT / "tests" / "bdd" / "features"
 CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]*$|^[a-z][a-z0-9_]*_error$")
 
 # `Then the error code should be "X"` — X may be a literal code or an Examples
-# placeholder like "<error_code>".
-SHOULD_RE = re.compile(r'error code should be "([^"]+)"')
+# placeholder like "<error_code>". `is` is accepted alongside `should be`: both
+# forms are live in the corpus, and matching only `should be` let 8 assertions in
+# BR-UC-008 (`And the error code is "APPROVAL_REQUIRED"`) sit in a file this
+# script reported CLEAN.
+SHOULD_RE = re.compile(r'error code (?:should be|is) "([^"]+)"')
 
 # Quoted Examples cell form: `| error "X" with suggestion |`.
-CELL_RE = re.compile(r'\berror "([^"]+)"')
+#
+# NEGATIVE LOOKBEHIND ON `response has`, because `the response has error "X"` is
+# NOT the wire error code — it is a PAYLOAD FIELD with its own enum. BR-UC-032's
+# comply_test_controller declares
+# comply-test-controller-response.json oneOf[7].properties.error.enum =
+# [INVALID_TRANSITION, INVALID_STATE, NOT_FOUND, UNKNOWN_SCENARIO, INVALID_PARAMS,
+#  FORBIDDEN, JCS_NON_FINITE_NUMBER, INTERNAL_ERROR].
+# Grading those against the wire vocabulary is a category error, and it did real
+# damage: this script flagged NOT_FOUND, and "fixing" it to REFERENCE_NOT_FOUND
+# (b47c5dae7) put a value outside the payload enum on the wire — breaking the
+# conformance the scenario exists to check. Two namespaces, one regex.
+CELL_RE = re.compile(r'(?<!response has )\berror "([^"]+)"')
 
 # Prose form `... error code "X"` (and any `or "Y"` continuation on the same
 # line), distinct from the `should be` assertion above. Catches descriptive

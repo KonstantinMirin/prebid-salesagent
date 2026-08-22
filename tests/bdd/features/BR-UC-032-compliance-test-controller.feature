@@ -270,7 +270,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Given the Runner targets a sandbox-flagged account
     When the Runner invokes comply_test_controller with scenario "force_creative_status" params creative_id "cr-unknown" status "approved"
     Then the response has success false
-    And the response has error "REFERENCE_NOT_FOUND"
+    And the response has error "NOT_FOUND"
     And the response has current_state null
     And the response error_detail mentions "cr-unknown"
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/compliance/comply-test-controller-request.json
@@ -318,7 +318,7 @@ Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
     Given the Runner targets a sandbox-flagged account
     When the Runner invokes comply_test_controller with scenario "force_creative_status" params creative_id "cr-unknown" status "approved" and request context "{request_id: req-001}"
     Then the response has success false
-    And the response has error "REFERENCE_NOT_FOUND"
+    And the response has error "NOT_FOUND"
     And the response context echoes "{request_id: req-001}"
     # POST-F3: Context echoed on failure when possible
 

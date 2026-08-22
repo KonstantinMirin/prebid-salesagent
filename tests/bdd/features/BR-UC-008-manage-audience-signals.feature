@@ -258,7 +258,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent sends an activate_signal A2A task request
     Then the response contains errors array (error variant)
     And the response does not contain deployments
-    And the error code is "APPROVAL_REQUIRED"
+    And the error code is "PERMISSION_DENIED"
     And the error should include "suggestion" field
     And the suggestion should contain "contact the Seller for approval"
     And the response context equals {"trace_id": "premium-trace"}
@@ -274,7 +274,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent calls the activate_signal MCP tool
     Then the response contains errors array (error variant)
     And the response does not contain deployments
-    And the error code is "APPROVAL_REQUIRED"
+    And the error code is "PERMISSION_DENIED"
     And the error should include "suggestion" field
     And the suggestion should contain "contact the Seller for approval"
     # POST-F1: No activation occurred
@@ -291,7 +291,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent sends an activate_signal A2A task request
     Then the response contains errors array (error variant)
     And the response does not contain deployments
-    And the error code is "ACTIVATION_FAILED"
+    And the error code is "SERVICE_UNAVAILABLE"
     And the error should include "suggestion" field
     And the suggestion should contain "retry later or contact support"
     And the response context equals {"trace_id": "fail-trace"}
@@ -307,7 +307,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And destinations include "dv360"
     When the Buyer Agent calls the activate_signal MCP tool
     Then the response contains errors array (error variant)
-    And the error code is "ACTIVATION_FAILED"
+    And the error code is "SERVICE_UNAVAILABLE"
     And the error should include "suggestion" field
     And the suggestion should contain "retry later or contact support"
     # POST-F1, POST-F2
@@ -321,7 +321,7 @@ Feature: BR-UC-008 Manage Audience Signals
     When the Buyer Agent sends an activate_signal A2A task request
     Then the response contains errors array (error variant)
     And the response does not contain deployments
-    And the error code is "ACTIVATION_ERROR"
+    And the error code is "INTERNAL_ERROR"
     And the error should include "suggestion" field
     And the suggestion should contain "retry or contact support"
     # POST-F1, POST-F2
@@ -334,7 +334,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And destinations include "dv360"
     When the Buyer Agent calls the activate_signal MCP tool
     Then the response contains errors array (error variant)
-    And the error code is "ACTIVATION_ERROR"
+    And the error code is "INTERNAL_ERROR"
     And the error should include "suggestion" field
     And the suggestion should contain "retry or contact support"
     # POST-F1, POST-F2
@@ -347,7 +347,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the request includes context {"trace_id": "fail-context"}
     When the Buyer Agent sends an activate_signal request
     Then the response context equals {"trace_id": "fail-context"}
-    And the error code is "APPROVAL_REQUIRED"
+    And the error code is "PERMISSION_DENIED"
     And the error should include "suggestion" field
     And the suggestion should contain "contact the Seller for approval"
     # POST-F3: Context echoed
@@ -401,7 +401,7 @@ Feature: BR-UC-008 Manage Audience Signals
     And the Buyer Agent provides signal_agent_segment_id "premium_luxury_auto"
     And destinations include "dv360"
     When the Buyer Agent sends an activate_signal request
-    Then the error code is "APPROVAL_REQUIRED"
+    Then the error code is "PERMISSION_DENIED"
     And the error should include "suggestion" field
     And the suggestion should contain "contact the Seller for approval"
 

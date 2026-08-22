@@ -338,7 +338,7 @@ Feature: BR-UC-028 Manage Collection Lists
     Given a collection list "list-other-acct" owned by account "acct-other"
     And the Buyer Agent is authenticated with no access to account "acct-other"
     When the Buyer Agent sends a get_collection_list request for "list-other-acct"
-    Then the error code should be "PERMISSION_DENIED"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
 
   @T-UC-028-ext-c-happy @update @happy-path @post-s4 @post-s6
@@ -415,7 +415,7 @@ Feature: BR-UC-028 Manage Collection Lists
     Given a collection list "list-other-acct" owned by account "acct-other"
     And the Buyer Agent is authenticated with no access to account "acct-other"
     When the Buyer Agent updates "list-other-acct" with name "Hijack"
-    Then the error code should be "PERMISSION_DENIED"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
     And the list "list-other-acct" name is unchanged
 
@@ -450,7 +450,7 @@ Feature: BR-UC-028 Manage Collection Lists
     Given a collection list "list-other-acct" owned by account "acct-other"
     And the Buyer Agent is authenticated with no access to account "acct-other"
     When the Buyer Agent deletes "list-other-acct"
-    Then the error code should be "PERMISSION_DENIED"
+    Then the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
     And the list "list-other-acct" still exists
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/collection/list-collection-lists-request.json

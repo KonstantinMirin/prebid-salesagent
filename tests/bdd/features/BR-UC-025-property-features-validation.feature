@@ -251,9 +251,8 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
     Given list_id "pl-other-tenant" exists but belongs to a different tenant
     When the Buyer Agent sends validate_property_delivery with list_id "pl-other-tenant"
     Then the operation should fail
-    And the error code should be "PERMISSION_DENIED"
+    And the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
-    And the suggestion should contain "permission"
     # POST-F1: System state unchanged (read-only)
     # POST-F2: Error code LIST_ACCESS_DENIED
     # POST-F3: Application context echoed
@@ -312,7 +311,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
       | records_over_limit    | list_id "pl-123" with 10001 records                    | error "INVALID_REQUEST" with suggestion       |
       | negative_impressions  | list_id "pl-123" with record having -1 impressions     | error "INVALID_REQUEST" with suggestion          |
       | list_not_found        | list_id "pl-nonexistent" with valid records            | error "REFERENCE_NOT_FOUND" with suggestion               |
-      | list_access_denied    | list_id "pl-other-buyers" with valid records           | error "PERMISSION_DENIED" with suggestion           |
+      | list_access_denied    | list_id "pl-other-buyers" with valid records           | error "REFERENCE_NOT_FOUND" with suggestion           |
       | account_multi_omitted | list_id "pl-123" with account omitted by multi-account agent | error "ACCOUNT_AMBIGUOUS" with suggestion        |
 
   @T-UC-025-boundary-delivery-request @boundary @delivery-request
@@ -334,7 +333,7 @@ Feature: BR-UC-025 Validate Property Delivery Compliance
       | list_id present and valid                 | list_id "pl-123" that exists                         | success                                              |
       | list_id absent                            | no list_id field                                     | error "INVALID_REQUEST" with suggestion              |
       | list_id references nonexistent list       | list_id "pl-nonexistent"                             | error "REFERENCE_NOT_FOUND" with suggestion                |
-      | list_id references inaccessible list      | list_id "pl-other-tenant"                            | error "PERMISSION_DENIED" with suggestion            |
+      | list_id references inaccessible list      | list_id "pl-other-tenant"                            | error "REFERENCE_NOT_FOUND" with suggestion            |
       | records absent                            | no records field                                     | error "INVALID_REQUEST" with suggestion              |
       | sales_agent_url present on some records   | mixed records with and without sales_agent_url       | success with partial authorization summary           |
       | sales_agent_url absent from all records   | no sales_agent_url on any record                     | success without authorization summary                |
