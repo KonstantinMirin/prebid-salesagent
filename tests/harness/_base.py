@@ -44,294 +44,146 @@ if TYPE_CHECKING:
     from tests.harness.transport import E2EConfig, Transport, TransportResult
 
 
-def _adcp_error_from_code(
-    error_code: str,
-    details: dict | None = None,
-    field: str | None = None,
-) -> Exception:
-    """Reconstruct the exact AdCPError subclass from an error_code string.
+class WireError(Exception):
+    """A transport failure carrying the envelope the buyer received, VERBATIM.
 
-    Shared by MCP and A2A unwrappers. Maps error codes like 'NOT_FOUND'
-    to AdCPNotFoundError, 'VALIDATION_ERROR' to AdCPValidationError, etc.
-    Falls back to base AdCPError for unknown codes.
+    Deliberately NOT an ``AdCPError`` subclass. The harness used to rebuild the
+    matching production exception from wire bytes so a test could write
+    ``pytest.raises(AdCPNotFoundError)`` through a transport; that map covered 20 of
+    43 classes, was silent about the other 23, and its own docstring conceded the
+    reconstruction was lossy. Grading OUR class hierarchy through a lossy copy of
+    production's constructor is not the same as grading the buyer's contract
+    (salesagent-3dawm.15).
+
+    This type carries no code-to-class knowledge at all. It exists so a failed wire
+    dispatch can still raise -- callers up the stack expect an exception -- while the
+    thing being asserted stays the envelope, reachable as ``.envelope`` and published
+    by the dispatchers as ``TransportResult.wire_error_envelope``.
     """
-    from src.core.exceptions import (
-        AdCPAccountAmbiguousError,
-        AdCPAccountNotFoundError,
-        AdCPAccountPaymentRequiredError,
-        AdCPAccountSetupRequiredError,
-        AdCPAccountSuspendedError,
-        AdCPAdapterError,
-        AdCPAuthenticationError,
-        AdCPAuthRequiredError,
-        AdCPBudgetExhaustedError,
-        AdCPBudgetTooLowError,
-        AdCPCapabilityNotSupportedError,
-        AdCPConflictError,
-        AdCPError,
-        AdCPIdempotencyConflictError,
-        AdCPIdempotencyExpiredError,
-        AdCPMediaBuyNotFoundError,
-        AdCPNotFoundError,
-        AdCPPackageNotFoundError,
-        AdCPRateLimitError,
-        AdCPServiceUnavailableError,
-        AdCPValidationError,
-    )
 
-    # Read class-level identity from the _code ClassVar slot
-    # (option-A refactor per salesagent-fnk9). error_code is an instance
-    # attribute set in __init__; reading it off the class would return the
-    # descriptor, not the wire code string.
-    _CODE_TO_CLASS: dict[str, type[AdCPError]] = {
-        cls._code: cls
-        for cls in (
-            AdCPValidationError,
-            AdCPAuthenticationError,
-            AdCPAuthRequiredError,
-            AdCPNotFoundError,
-            AdCPAccountNotFoundError,
-            AdCPAccountSetupRequiredError,
-            AdCPAccountSuspendedError,
-            AdCPAccountPaymentRequiredError,
-            AdCPConflictError,
-            AdCPAccountAmbiguousError,
-            AdCPBudgetExhaustedError,
-            AdCPRateLimitError,
-            AdCPAdapterError,
-            AdCPServiceUnavailableError,
-            # Substrate subclasses with production raise sites — the harness
-            # reconstructs the specific subclass after a roundtrip (preserves
-            # type for isinstance() checks in tests). Codes with only
-            # advisory-on-success Pattern A construction (BUDGET_EXCEEDED,
-            # CREATIVE_REJECTED, PRODUCT_UNAVAILABLE) round-trip via the
-            # base AdCPError fallback below and don't need a dedicated class.
-            AdCPMediaBuyNotFoundError,
-            AdCPPackageNotFoundError,
-            AdCPBudgetTooLowError,
-            AdCPCapabilityNotSupportedError,
-            AdCPIdempotencyConflictError,
-            AdCPIdempotencyExpiredError,
-        )
-    }
-    # AUTH_MISSING -> AdCPAuthRequiredError and AUTH_INVALID -> AdCPAuthenticationError
-    # are unambiguous per v3.1.1 error-code.json (salesagent-mkso) — each class's
-    # own _code disambiguates them via the dict comprehension above.
-    # AUTH_REQUIRED (deprecated alias) is no longer emitted by any subclass
-    # (salesagent-otc5 migrated AdCPAuthorizationError to PERMISSION_DENIED and
-    # split the former tenant-axis raises across AUTH_MISSING/AUTH_INVALID).
-    # PERMISSION_DENIED is not in the class list above, so it still falls
-    # through to the base AdCPError below — matching prior behavior for
-    # AdCPAuthorizationError (no test currently needs isinstance() on it via
-    # wire reconstruction).
-    from src.core.errors.codes import CODE_TABLE
-
-    # EMITTABILITY, not the old internal/external split. This assertion used to read
-    # `error_code not in INTERNAL_CODES` — the belief that some codes are server-only and
-    # must never reach a buyer. That belief is what this step overturns: the AdCP error
-    # vocabulary is OPEN, so a platform code on the wire is correct, not a leak. The gate
-    # stays because it gates every BDD transport; only the QUESTION changes, from "was this
-    # code allowed past the rewriter" to "can any raise site emit this code at all".
-    assert error_code in CODE_TABLE, (
-        f"code {error_code!r} reached harness reconstruction but is absent from CODE_TABLE — "
-        "no raise site can emit it, so the wire produced a code nothing defines"
-    )
-
-    # A reconstructed exception can no longer carry the wire's SENTENCE: ``message`` AND
-    # ``suggestion`` are both derived from the code (salesagent-3dawm.11/.12 deleted the
-    # parameters), so the only faithful source for text is the envelope itself. Passing
-    # either here was a TypeError, which the dispatchers swallowed into
-    # ``wire_error_envelope=None`` -- 44 integration tests failed with "no wire error
-    # envelope captured" rather than naming the real cause.
-    # Assertions on message text therefore belong on ``wire_error_envelope`` (see
-    # tests/CLAUDE.md § Error Verification Policy), which is where they should always
-    # have been -- this reconstruction is lossy by construction.
-    # Construction is wrapped so that HARNESS DRIFT reports itself. The dispatchers
-    # catch Exception broadly to capture a production error as a transport outcome
-    # (dispatchers.py:104/:126/:180/:194), which means a TypeError raised HERE -- this
-    # function handing production a parameter production no longer accepts -- became
-    # ``wire_error_envelope=None``. That is how salesagent-3dawm.12 shipped: 44
-    # integration tests failed reporting "no wire error envelope captured" while the
-    # real cause was ``AdCPError.__init__() got an unexpected keyword argument
-    # 'suggestion'``, four call sites away. A signature change in production must be
-    # loud here, not silently indistinguishable from an operation that never errored.
-    def _build(cls_or_none: type | None) -> Exception:
-        try:
-            if cls_or_none is None:
-                return AdCPError(error_code=error_code, details=details, field=field)
-            return cls_or_none(details=details, field=field)
-        except TypeError as drift:
-            raise AssertionError(
-                f"harness/production drift reconstructing {error_code!r}: {drift}. "
-                "This function passes a parameter the exception class no longer accepts. "
-                "Fix the harness to match the production signature -- do NOT re-add the "
-                "parameter."
-            ) from drift
-
-    exc_cls = _CODE_TO_CLASS.get(error_code)
-    if exc_cls is None:
-        # No typed class owns this code: name it on the base rather than routing through
-        # a stand-in class whose identity would contradict the code it carries.
-        return _build(None)
-    return _build(exc_cls)
+    def __init__(self, envelope: dict) -> None:
+        self.envelope = envelope
+        errors = envelope.get("errors") or [{}]
+        code = errors[0].get("code") if isinstance(errors[0], dict) else None
+        super().__init__(f"wire error {code or '(no code)'}")
 
 
-def _unwrap_mcp_tool_error(exc: Exception) -> Exception:
-    """Translate FastMCP ToolError back to the corresponding AdCPError.
+def _mcp_wire_envelope(exc: Exception) -> dict | None:
+    """The two-layer envelope inside a FastMCP ``ToolError``, or ``None``.
 
-    The MCP boundary translator raises ``AdCPToolError`` (single-arg JSON
-    envelope) so FastMCP serializes ``str(exc)`` as the JSON-encoded two-layer
-    error envelope. This unwrapper parses that JSON and reconstructs the
-    matching AdCPError subclass.
+    The MCP boundary translator raises ``AdCPToolError`` (single-arg JSON envelope)
+    so FastMCP serializes ``str(exc)`` as the JSON-encoded envelope. This parses that
+    JSON and RETURNS IT. It does not rebuild an exception: the envelope is what the
+    buyer received, and it already carries code, message, recovery, suggestion, field
+    and details (salesagent-3dawm.15).
 
-    Falls back to legacy tuple-string parsing for any plain ``ToolError`` that
-    might be raised by code paths outside the MCP boundary translator (these
-    are rare and shrink over time per the architecture cleanup).
-
-    If the exception is not a ToolError or can't be parsed, returns it unchanged.
+    Falls back to the legacy tuple-string shape for any plain ``ToolError`` raised
+    outside the boundary translator, and finally to ``extract_error_info`` for the
+    single-arg ``ToolError("message")`` form.
     """
-    import ast
+    import ast as _ast
     import json
 
     from fastmcp.exceptions import ToolError
 
     if not isinstance(exc, ToolError):
-        return exc
+        return None
 
     error_str = str(exc)
 
-    # New shape: single-arg JSON envelope — delegate to shared helper.
     try:
-        envelope = json.loads(error_str)
-        if isinstance(envelope, dict):
-            reconstructed = _envelope_to_adcp_error(envelope)
-            if reconstructed is not None:
-                return reconstructed
+        parsed = json.loads(error_str)
+        if isinstance(parsed, dict):
+            envelope = _wire_envelope(parsed)
+            if envelope is not None:
+                return envelope
     except (json.JSONDecodeError, TypeError):
         pass
 
     # Legacy shape (test fixtures that mock ToolError directly):
     # tuple-stringified `('CODE', 'message', 'recovery', '{"details": ...}')`.
-    # Deprecated: legacy ToolError tuple-string parsing — remove when no test fixtures depend on raw ToolError raises.
     try:
-        parsed = ast.literal_eval(error_str)
-        if isinstance(parsed, tuple) and len(parsed) >= 2:
-            error_code = str(parsed[0])
-
-            # 4th element is a JSON-serialized extra blob that may contain
-            # "details" and "field" as separate top-level keys (packed by
-            # tool_error_logging._translate_to_tool_error). The blob's
-            # "suggestion", like parsed[1]'s message and parsed[2]'s recovery,
-            # is not read: the code owns all three, so reconstructing from the
-            # wire's copy could only disagree with the table.
-            details = None
-            field = None
-            if len(parsed) > 3 and parsed[3] is not None:
+        tup = _ast.literal_eval(error_str)
+        if isinstance(tup, tuple) and len(tup) >= 2:
+            entry: dict = {"code": str(tup[0])}
+            if len(tup) > 3 and tup[3] is not None:
                 try:
-                    extra = json.loads(str(parsed[3]))
+                    extra = json.loads(str(tup[3]))
                     if isinstance(extra, dict):
-                        details = extra.get("details")
-                        field = extra.get("field")
+                        if extra.get("details") is not None:
+                            entry["details"] = extra["details"]
+                        if extra.get("field") is not None:
+                            entry["field"] = extra["field"]
                 except (json.JSONDecodeError, TypeError):
                     pass
-
-            return _adcp_error_from_code(error_code, details, field)
+            return {"adcp_error": dict(entry), "errors": [entry]}
     except (ValueError, SyntaxError):
         pass
 
-    # Fallback: try extract_error_info (handles ToolError("message") single-arg form)
     from src.core.tool_error_logging import extract_error_info
 
     error_code, _message, _recovery = extract_error_info(exc)
     if error_code != "TOOL_ERROR":
-        return _adcp_error_from_code(error_code)
+        entry = {"code": error_code}
+        return {"adcp_error": dict(entry), "errors": [entry]}
 
-    return exc
+    return None
 
 
-def _envelope_to_adcp_error(envelope: dict) -> Exception | None:
-    """Reconstruct an AdCPError subclass from a two-layer envelope dict.
+def _wire_envelope(envelope: dict) -> dict | None:
+    """Normalise a captured error body into the two-layer envelope shape, or ``None``.
 
-    Accepts the envelope shape produced by ``build_two_layer_error_envelope``:
-    ``{"adcp_error": {code, message, recovery, details, ...}, "errors": [...], ...}``.
-    Also accepts the legacy flat shape ``{"error_code": ..., "recovery": ...}``
-    for tests that predate the envelope.
+    Accepts what ``build_two_layer_error_envelope`` produces
+    (``{"adcp_error": {...}, "errors": [...]}``) and the legacy flat shape
+    (``{"error_code": ..., "recovery": ...}``), and RETURNS THE ENVELOPE.
 
-    Single source of truth for envelope→exception reconstruction — called by
-    ``_unwrap_a2a_server_error`` (A2AError.data path) and
-    ``BaseTestEnv.parse_rest_error`` (REST response body path). Returns the
-    reconstructed ``AdCPError`` subclass, or ``None`` if no ``error_code`` can
-    be extracted (caller picks a fallback).
+    It used to return a reconstructed ``AdCPError`` built from those bytes, with a
+    hand-maintained code-to-class map. That map covered 20 of 43 classes and was
+    silent about the rest, so type identity was already lost for most codes; its own
+    docstring conceded the reconstruction was "lossy by construction"; and it was the
+    only place outside production that called an ``AdCPError`` constructor, which made
+    it the only place that could drift from a signature change -- and it did, twice,
+    the second time costing 469 tests (salesagent-3dawm.15).
+
+    Arming a fault still needs a real typed exception; the adapter genuinely raises
+    one. ASSERTING an outcome never does: the envelope IS what the buyer received.
     """
     if not isinstance(envelope, dict):
         return None
-    error_code: str | None = None
-    details: dict | None = None
-    field: str | None = None
-    adcp_err = envelope.get("adcp_error")
-    if isinstance(adcp_err, dict):
-        error_code = adcp_err.get("code")
-        details = adcp_err.get("details")
-        field = adcp_err.get("field")
-    errors = envelope.get("errors")
-    if isinstance(errors, list) and errors and isinstance(errors[0], dict):
-        first = errors[0]
-        error_code = error_code or first.get("code")
-        details = details or first.get("details")
-        field = field or first.get("field")
-    if not error_code:
+    if isinstance(envelope.get("errors"), list) and envelope["errors"]:
+        return envelope
+    if isinstance(envelope.get("adcp_error"), dict):
+        entry = dict(envelope["adcp_error"])
+        return {**envelope, "errors": [entry]}
+    # Legacy flat shape from tests that predate the envelope.
+    code = envelope.get("error_code") or envelope.get("code")
+    if not code:
         return None
-    # ``recovery`` and ``suggestion`` are deliberately NOT read off the envelope:
-    # the reconstructed exception derives both from the code, and the envelope
-    # itself stays attached below for assertions that need the wire's own text.
-    reconstructed = _adcp_error_from_code(error_code, details, field)
-    if reconstructed is not None:
-        # Stash the REAL wire envelope on the reconstructed exception so the
-        # A2A/REST dispatchers can capture the actual wire bytes (artifact
-        # DataPart for A2A, HTTP body for REST) rather than re-synthesizing
-        # via build_two_layer_error_envelope — re-synthesis would just
-        # regenerate from the lossy reconstructed exception. Read by
-        # ``A2ADispatcher.dispatch`` via ``getattr(exc, '_wire_error_envelope', None)``.
-        reconstructed._wire_error_envelope = envelope  # type: ignore[attr-defined]
-    return reconstructed
+    entry = {"code": code}
+    for key in ("message", "recovery", "suggestion", "field", "details"):
+        if envelope.get(key) is not None:
+            entry[key] = envelope[key]
+    return {"adcp_error": dict(entry), "errors": [entry]}
 
 
-def _unwrap_a2a_server_error(exc: Exception) -> Exception:
-    """Translate a2a A2AError back to the corresponding AdCPError.
+def _a2a_wire_envelope(exc: Exception) -> dict | None:
+    """The two-layer envelope inside an a2a ``A2AError``'s ``data``, or ``None``.
 
-    The A2A dispatcher wraps AdCPError into a failed Task whose artifact
-    carries the two-layer envelope. If the exception is a JSON-RPC-level
-    A2AError (e.g., from the dispatcher's own catch-all), the ``data``
-    field carries the envelope.
+    The A2A dispatcher wraps an ``AdCPError`` into a failed Task whose artifact
+    carries the envelope; a JSON-RPC-level ``A2AError`` carries it in ``data``.
 
-    If the exception is not an A2AError or lacks enough info, returns it unchanged.
+    Returns the ENVELOPE. The three-way fallback ladder that used to sit here --
+    ``InvalidRequestError`` -> AdCPAuthenticationError, ``InvalidParamsError`` ->
+    AdCPValidationError, ``InternalError`` -> RuntimeError -- is gone with it: those
+    were hand-maintained guesses at what the wire meant, and a guess is not evidence
+    of what the buyer received (salesagent-3dawm.15).
     """
-    from a2a.types import InternalError, InvalidParamsError, InvalidRequestError
     from a2a.utils.errors import A2AError
 
     if not isinstance(exc, A2AError):
-        return exc
-
-    # a2a-sdk 1.0: the exception itself carries message/data (no .error wrapper)
-    message = getattr(exc, "message", str(exc))
-    data = getattr(exc, "data", None) or {}
-
-    reconstructed = _envelope_to_adcp_error(data) if isinstance(data, dict) else None
-    if reconstructed is not None:
-        return reconstructed
-
-    from src.core.exceptions import (
-        AdCPAuthenticationError,
-        AdCPValidationError,
-    )
-
-    if isinstance(exc, InvalidRequestError):
-        return AdCPAuthenticationError()
-    if isinstance(exc, InvalidParamsError):
-        return AdCPValidationError()
-    if isinstance(exc, InternalError):
-        return RuntimeError(message)
-    return exc
+        return None
+    data = getattr(exc, "data", None)
+    return _wire_envelope(data) if isinstance(data, dict) else None
 
 
 class _TestClock:
@@ -821,9 +673,15 @@ class BaseTestEnv:
         try:
             task_result = asyncio.run(_call())
         except Exception as exc:
-            # Translate A2AError back to AdCPError for callers that catch
-            # domain exceptions (e.g., pytest.raises(AdCPAuthenticationError)).
-            raise _unwrap_a2a_server_error(exc) from exc
+            # The ORIGINAL exception propagates. It used to be translated into a
+            # reconstructed AdCPError so callers could catch domain exceptions; the
+            # dispatcher now reads the envelope off the A2AError instead
+            # (salesagent-3dawm.15), and a genuine in-process production error --
+            # which is what the IMPL path raises -- is unaffected either way.
+            envelope = _a2a_wire_envelope(exc)
+            if envelope is not None:
+                raise WireError(envelope) from exc
+            raise
 
         # Parse Task.artifacts[0] into response_cls
         if not isinstance(task_result, Task):
@@ -844,10 +702,9 @@ class BaseTestEnv:
 
         if task_result.status.state == TaskState.TASK_STATE_FAILED:
             if task_result.artifacts:
-                envelope = extract_data_from_artifact(task_result.artifacts[0])
-                reconstructed = _envelope_to_adcp_error(envelope)
-                if reconstructed is not None:
-                    raise reconstructed
+                envelope = _wire_envelope(extract_data_from_artifact(task_result.artifacts[0]))
+                if envelope is not None:
+                    raise WireError(envelope)
             raise AdCPError(
                 error_code=AppErrorCode.INTERNAL_ERROR,
                 internal_detail=f"A2A task failed: {task_result.status}",
@@ -974,7 +831,10 @@ class BaseTestEnv:
         try:
             return asyncio.run(_call())
         except Exception as exc:
-            raise _unwrap_mcp_tool_error(exc) from exc
+            envelope = _mcp_wire_envelope(exc)
+            if envelope is not None:
+                raise WireError(envelope) from exc
+            raise
 
     def _run_mcp_wrapper(
         self,
@@ -1099,7 +959,13 @@ class BaseTestEnv:
         response = self._run_rest_request(endpoint, **kwargs)
 
         if response.status_code >= 400:
-            raise self.parse_rest_error(response.status_code, response.json())
+            envelope = self.parse_rest_error_envelope(response.status_code, response.json())
+            if envelope is not None:
+                raise WireError(envelope)
+            raise AssertionError(
+                f"REST returned HTTP {response.status_code} with a body carrying no AdCP error code: "
+                f"{response.text[:400]}"
+            )
 
         return self.parse_rest_response(response.json())
 
@@ -1139,52 +1005,20 @@ class BaseTestEnv:
             "Override to enable Transport.REST dispatch."
         )
 
-    def parse_rest_error(self, status_code: int, data: dict[str, Any]) -> Exception:
-        """Reconstruct an AdCPError from REST error response.
+    def parse_rest_error_envelope(self, status_code: int, data: dict[str, Any]) -> dict[str, Any] | None:
+        """The two-layer envelope from a REST error body, or ``None``.
 
-        Delegates envelope and legacy-flat parsing to the shared
-        ``_envelope_to_adcp_error`` helper (same path used by the A2A
-        unwrapper) so REST and A2A reconstruction stay byte-identical.
-        Falls back to HTTP status mapping only when no ``error_code`` is
-        recoverable from the body.
+        Shares ``_wire_envelope`` with the A2A and MCP paths so all three agree on
+        what an error body means.
+
+        The ``STATUS_TO_ERROR`` map that used to sit here -- 400 -> AdCPValidationError,
+        404 -> AdCPNotFoundError, and five more -- is DELETED. It was the same design
+        mistake as the code-to-class map in a second spelling: an HTTP status guessed
+        back into an AdCP class. A status is not a code, and a guess is not evidence of
+        what the buyer received (salesagent-3dawm.15). A body with no recoverable code
+        yields ``None``, and the dispatcher reports the raw HTTP failure instead.
         """
-        message = data.get("message", data.get("error", str(data)))
-        # FastAPI request-validation failures use a {"detail": [...]} envelope
-        # with no error_code; surface a readable message from the first detail.
-        if "message" not in data and "error" not in data and isinstance(data.get("detail"), list) and data["detail"]:
-            first = data["detail"][0]
-            if isinstance(first, dict) and first.get("msg"):
-                message = first["msg"]
-
-        reconstructed = _envelope_to_adcp_error(data)
-        if reconstructed is not None:
-            return reconstructed
-
-        # Fallback: map HTTP status to exception class
-        from src.core.exceptions import (
-            AdCPAdapterError,
-            AdCPAuthenticationError,
-            AdCPAuthorizationError,
-            AdCPNotFoundError,
-            AdCPRateLimitError,
-            AdCPValidationError,
-        )
-
-        STATUS_TO_ERROR: dict[int, type[Exception]] = {
-            400: AdCPValidationError,
-            401: AdCPAuthenticationError,
-            403: AdCPAuthorizationError,
-            404: AdCPNotFoundError,
-            422: AdCPValidationError,  # FastAPI request-validation envelope ({"detail": [...]})
-            429: AdCPRateLimitError,
-            502: AdCPAdapterError,
-        }
-        # A typed AdCPError derives its text from its code, so only the untyped
-        # fallback can carry the message. The wire envelope is the authority for text.
-        error_cls = STATUS_TO_ERROR.get(status_code)
-        if error_cls is None:
-            return Exception(message)
-        return error_cls()
+        return _wire_envelope(data)
 
     def get_rest_client(self) -> Any:
         """Return FastAPI TestClient with auth dependency overridden.

@@ -27,6 +27,26 @@ if TYPE_CHECKING:
     from tests.harness._base import BaseTestEnv
 
 
+def _wire_error_from_body(env: Any, status_code: int, body: dict[str, Any]) -> tuple[Exception, dict | None]:
+    """(exception, envelope) for a REST error body.
+
+    Returns the ENVELOPE as the graded artefact and a carrier exception that holds
+    it verbatim. Neither is rebuilt into a production error class: the harness used
+    to map an HTTP status back to an AdCPError subclass (400 -> AdCPValidationError,
+    404 -> AdCPNotFoundError, ...), which is the code-to-class mistake in a second
+    spelling -- a status is not a code (salesagent-3dawm.15).
+    """
+    from tests.harness._base import WireError
+
+    envelope = env.parse_rest_error_envelope(status_code, body)
+    if envelope is not None:
+        return WireError(envelope), envelope
+    return (
+        AssertionError(f"REST returned HTTP {status_code} with a body carrying no AdCP error code: {body!r}"),
+        None,
+    )
+
+
 def _envelope_from_adcp_error(exc: Exception) -> dict[str, Any] | None:
     """Build a SYNTHESIZED envelope from an AdCPError instance.
 
@@ -64,7 +84,7 @@ def _wire_envelope_from_exception(exc: Exception) -> dict[str, Any] | None:
     if present; otherwise falls back to ``_envelope_from_adcp_error``
     (synthesized — same helper production calls).
     """
-    real_wire = getattr(exc, "_wire_error_envelope", None)
+    real_wire = getattr(exc, "envelope", None)
     if isinstance(real_wire, dict):
         return real_wire
     return _envelope_from_adcp_error(exc)
@@ -161,12 +181,12 @@ class RestDispatcher:
 
             if response.status_code >= 400:
                 body = response.json()
-                error = env.parse_rest_error(response.status_code, body)
+                error, wire = _wire_error_from_body(env, response.status_code, body)
                 return TransportResult(
                     error=error,
                     envelope=envelope,
                     raw_response=response,
-                    wire_error_envelope=body,
+                    wire_error_envelope=wire,
                 )
 
             body = response.json()
@@ -198,7 +218,7 @@ class McpDispatcher:
             # synthesized fallback — a dead MCP wire path must yield None here
             # (failing assert_envelope_shape), not an envelope regenerated
             # from the lossy reconstructed exception.
-            wire = _envelope_from_mcp_error(exc) or getattr(exc, "_wire_error_envelope", None)
+            wire = _envelope_from_mcp_error(exc) or getattr(exc, "envelope", None)
             # When a wire envelope came from the raw ToolError JSON, exc is an
             # AdCPToolError carrying that envelope (an env that dispatched through
             # the production with_error_logging boundary). Unwrap it so
@@ -207,11 +227,11 @@ class McpDispatcher:
             # absent, the path taken by every _run_mcp_client-based env, which
             # unwraps internally) pass through unchanged, so this is a no-op for
             # them.
+            # ``error`` stays the RAW exception the transport produced. It used to be
+            # replaced with a reconstructed AdCPError so error-code assertions would
+            # resolve to the wire code; they now read ``wire_error_envelope``, which is
+            # the wire code rather than a re-derivation of it (salesagent-3dawm.15).
             error = exc
-            if _envelope_from_mcp_error(exc) is not None:
-                from tests.harness._base import _unwrap_mcp_tool_error
-
-                error = _unwrap_mcp_tool_error(exc)
             return TransportResult(
                 error=error,
                 wire_error_envelope=wire,
@@ -314,7 +334,7 @@ class RestE2EDispatcher:
             # the raw two-layer body as wire_error_envelope so error Then-steps assert
             # on the buyer-visible envelope (e.g. uc004 _assert_wire_rejection, or
             # assert_envelope_shape) instead of a lossy reconstructed exception. (#1420)
-            error = env.parse_rest_error(response.status_code, body)
+            error, _wire = _wire_error_from_body(env, response.status_code, body)
             return TransportResult(
                 payload=None,
                 envelope=envelope,

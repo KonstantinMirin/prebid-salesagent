@@ -431,17 +431,27 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
     )
 
 
-def _extract_error_code_and_suggestion(error: object) -> tuple[str | None, str | None]:
-    """Return (error_code, suggestion) for either AdCPError or adcp.types.Error.
+def _extract_error_code_and_suggestion(ctx: dict, error: object) -> tuple[str | None, str | None]:
+    """(error_code, suggestion) — from the WIRE first, then the payload's own Error.
 
-    STRICT error.json conformance: ``suggestion`` is a top-level attribute on
-    both shapes — a copy buried in the free-form ``details`` dict is a
-    conformance bug and deliberately does not count (#1417).
+    STRICT error.json conformance: ``suggestion`` is a top-level attribute, never a
+    copy buried in the free-form ``details`` dict (#1417).
+
+    Two populations reach this, and only one of them is a wire rejection:
+
+    * a request-level rejection -> read ``errors[0]`` off the captured envelope.
+      This used to read ``error.error_code`` off an exception the harness rebuilt
+      from those same bytes; with the reconstruction gone (salesagent-3dawm.15) that
+      object is a ``WireError`` carrying the envelope, and reading it by attribute
+      returns None.
+    * a per-creative outcome from a PARTIAL SUCCESS -> an ``adcp.types.Error`` in
+      ``response.errors``. That is not a reconstruction and stays supported: the spec
+      puts per-record failures on the payload layer.
     """
-    from src.core.exceptions import AdCPError
-
-    if isinstance(error, AdCPError):
-        return error.error_code, error.suggestion
+    result = ctx.get("result")
+    wire = result.wire_error_object() if result is not None else None
+    if wire:
+        return wire.get("code"), wire.get("suggestion")
     code = getattr(error, "error_code", None) or getattr(error, "code", None)
     return code, getattr(error, "suggestion", None)
 
@@ -474,7 +484,7 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
         )
     assert error is not None, f"Expected error {error_code} but none was recorded"
 
-    actual_code, suggestion = _extract_error_code_and_suggestion(error)
+    actual_code, suggestion = _extract_error_code_and_suggestion(ctx, error)
     if actual_code != error_code and error_code in _SPEC_PRODUCTION_GAP_CODES:
         pytest.xfail(
             f"SPEC-PRODUCTION GAP: expected {error_code}, production raised "
@@ -1965,7 +1975,7 @@ def _assert_auth_rejection(ctx: dict, expected_code: str) -> None:
     if actual_code is None:
         error = ctx.get("error")
         assert error is not None, f"Expected {expected_code} error but got response: {ctx.get('response')}"
-        actual_code, _ = _extract_error_code_and_suggestion(error)
+        actual_code, _ = _extract_error_code_and_suggestion(ctx, error)
     assert actual_code == expected_code, f"Expected error code '{expected_code}', got '{actual_code}'"
 
 
@@ -2409,7 +2419,7 @@ def then_assignment_result_should_be(ctx: dict, outcome: str) -> None:
             "Invalid validation_mode 'partial' should be rejected with VALIDATION_ERROR, "
             f"but production accepted it. Response: {resp}"
         )
-        actual_code, _ = _extract_error_code_and_suggestion(error)
+        actual_code, _ = _extract_error_code_and_suggestion(ctx, error)
         assert actual_code == "VALIDATION_ERROR", (
             f"Expected error_code 'VALIDATION_ERROR' for invalid validation_mode, "
             f"got '{actual_code}' ({type(error).__name__}: {error})"
@@ -5676,7 +5686,7 @@ def then_error_assignment_creative_id_required(ctx: dict) -> None:
             "ASSIGNMENT_CREATIVE_ID_REQUIRED — the dict[creative_id -> "
             "list[package_id]] shape cannot express a missing creative_id"
         )
-    actual_code, _ = _extract_error_code_and_suggestion(error)
+    actual_code, _ = _extract_error_code_and_suggestion(ctx, error)
     assert actual_code == "ASSIGNMENT_CREATIVE_ID_REQUIRED", (
         f"Expected error code 'ASSIGNMENT_CREATIVE_ID_REQUIRED', got '{actual_code}' ({type(error).__name__}: {error})"
     )
@@ -5697,7 +5707,7 @@ def then_error_assignment_package_id_required(ctx: dict) -> None:
             "ASSIGNMENT_PACKAGE_ID_REQUIRED — the dict[creative_id -> "
             "list[package_id]] shape uses empty list for no packages"
         )
-    actual_code, _ = _extract_error_code_and_suggestion(error)
+    actual_code, _ = _extract_error_code_and_suggestion(ctx, error)
     assert actual_code == "ASSIGNMENT_PACKAGE_ID_REQUIRED", (
         f"Expected error code 'ASSIGNMENT_PACKAGE_ID_REQUIRED', got '{actual_code}' ({type(error).__name__}: {error})"
     )

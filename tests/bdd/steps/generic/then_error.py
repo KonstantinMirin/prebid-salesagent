@@ -73,6 +73,31 @@ def _wire_error_object(ctx: dict) -> dict | None:
     return result.wire_error_object() if result is not None else None
 
 
+def _wire_of(error: object) -> dict | None:
+    """``errors[0]`` from a WireError's envelope, or ``None`` if this is not one.
+
+    A failed wire dispatch now raises ``tests.harness._base.WireError``, which carries
+    the envelope the buyer received VERBATIM instead of a production error class
+    rebuilt from those bytes (salesagent-3dawm.15). So the wire is reachable straight
+    off the error object, and the extractors below read it without needing ``ctx``
+    threaded through their forty call sites.
+
+    Returns ``None`` for anything else, which is how the extractors keep serving their
+    OTHER, legitimate population: an ``adcp.types.Error`` from a partial-success
+    ``response.errors``, and genuine in-process exceptions (a pydantic ValidationError
+    from a request that failed to build). Those are not reconstructions.
+    """
+    from tests.helpers import locate_envelope_error
+
+    envelope = getattr(error, "envelope", None)
+    if not isinstance(envelope, dict):
+        return None
+    # Resolved through THE locator, never by indexing errors[0] here: that function
+    # is where "the payload-layer error object lives at errors[0]" is decided, and a
+    # second place that knows it is how a reader and its assertion drift apart.
+    return locate_envelope_error(envelope) or {}
+
+
 def _get_error_code(error: object) -> str:
     """Extract error code from an exception or Error model.
 
@@ -80,6 +105,9 @@ def _get_error_code(error: object) -> str:
     1. Exception-based: AdCPError with .error_code
     2. Partial success: adcp.types.Error model with .code (from response.errors)
     """
+    wire = _wire_of(error)
+    if wire is not None:
+        return str(wire.get("code") or "")
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
@@ -100,6 +128,9 @@ def _get_error_code(error: object) -> str:
 
 def _get_error_message(error: object) -> str:
     """Extract human-readable message from an exception or Error model."""
+    wire = _wire_of(error)
+    if wire is not None:
+        return str(wire.get("message") or "")
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
@@ -112,6 +143,9 @@ def _get_error_message(error: object) -> str:
 
 def _get_error_dict(error: object) -> dict:
     """Convert exception or Error model to dict for field-presence checks."""
+    wire = _wire_of(error)
+    if wire is not None:
+        return dict(wire)
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
@@ -154,6 +188,11 @@ def _assert_meaningful_error(error: object) -> None:
     This rejects empty/placeholder errors that would make any
     "operation should fail" assertion tautological.
     """
+    wire = _wire_of(error)
+    if wire is not None:
+        code = wire.get("code")
+        assert isinstance(code, str) and code, f"wire error object has empty or non-string code: {code!r}"
+        return
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
@@ -1148,6 +1187,9 @@ def _available_error_fields(error: object) -> list[str]:
 
 def _get_error_details(error: object) -> dict:
     """Extract the details dict from an error object."""
+    wire = _wire_of(error)
+    if wire is not None:
+        return dict(wire.get("details") or {})
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):

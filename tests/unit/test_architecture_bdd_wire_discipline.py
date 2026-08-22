@@ -98,14 +98,13 @@ _RECONSTRUCTED_ASSERTION_ALLOWLIST: set[str] = set()
 # origin/main and was invisible to the older scan, not newly introduced. Measured
 # AFTER this PR's own hand-rolls were deleted, so nothing this PR added is parked
 # here. Shrink-only from this seed — it may never grow.
-_HAND_ROLLED_PARSING_ALLOWLIST: set[str] = {
-    # FIXME(#1880): pre-existing typed/hand-rolled error reads in the step layer.
-    # Each digs errors[]/adcp_error out of a payload by hand instead of calling the
-    # harness readers (TransportResult.wire_error_object/_code/_message) or, for the
-    # per-entry arrays, wire_entry_errors(). Retire with the #1880 typed-Then cluster.
-    "bdd/steps/domain/uc006_sync_creatives.py _assert_per_creative_failure",
-    "bdd/steps/domain/uc006_sync_creatives.py _extract_error_code_and_suggestion",
-}
+# NOW EMPTY. The two remaining entries (uc006_sync_creatives'
+# _assert_per_creative_failure and _extract_error_code_and_suggestion) were retired by
+# salesagent-3dawm.18/.15: both dug errors[]/adcp_error out of a payload by hand, and
+# both now go through the harness readers. `set()` rather than `{}` because a
+# brace literal with no elements is a DICT, which makes the guard's set difference
+# raise TypeError instead of passing.
+_HAND_ROLLED_PARSING_ALLOWLIST: set[str] = set()
 
 
 def _iter_step_modules() -> list[tuple[str, ast.Module]]:

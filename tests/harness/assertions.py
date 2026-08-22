@@ -85,16 +85,29 @@ def assert_rejected(
     """
     assert result.is_error, f"Expected rejection but got success: {result.payload}"
 
+    # Read the WIRE error object, falling back to the exception only when there is no
+    # envelope -- i.e. a request that failed before reaching a transport. This used to
+    # read getattr(error, "error_code"/"field"/"details") off result.error, which
+    # worked only because the harness rebuilt a production exception from wire bytes;
+    # with that gone (salesagent-3dawm.15) result.error is the raw transport failure
+    # and those attributes do not exist on it.
     error = result.error
-    details = getattr(error, "details", None) or {}
+    wire = result.wire_error_object()
+    if wire is not None:
+        details = wire.get("details") or {}
+        error_code = wire.get("code")
+        field_pointer = wire.get("field") or ""
+    else:
+        details = getattr(error, "details", None) or {}
+        error_code = getattr(error, "error_code", None) or getattr(error, "code", None)
+        field_pointer = getattr(error, "field", "") or ""
     entries = details.get("validation_errors") or [] if isinstance(details, dict) else []
 
     if code is not None:
-        error_code = getattr(error, "error_code", None) or getattr(error, "code", None)
         assert error_code == code, f"Expected error code {code!r}, got {error_code!r}"
 
     if field is not None:
-        carriers = [str(getattr(error, "field", "") or "")]
+        carriers = [str(field_pointer)]
         for entry in entries:
             carriers.extend(str(part) for part in (entry.get("loc") or []))
         assert any(field == carrier or field in carrier for carrier in carriers), (

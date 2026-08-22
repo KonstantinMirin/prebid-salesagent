@@ -1943,25 +1943,47 @@ def then_error_message_auth(ctx: dict) -> None:
 
 @then(parsers.parse('the error should include "suggestion" field with remediation guidance'))
 def then_error_has_suggestion(ctx: dict) -> None:
-    """Assert the error includes a suggestion field.
+    """Assert the error carries a suggestion.
 
-    Checks two sources:
-    1. Per-account errors (last_account.errors[].suggestion)
-    2. Operation-level exception (AdCPError.recovery)
+    Two legitimate sources, in order:
+    1. per-account entries (last_account.errors[].suggestion) -- a PARTIAL SUCCESS,
+       where the spec puts per-record failures on the payload layer;
+    2. a request-level rejection -- read errors[0].suggestion off the WIRE envelope.
+
+    The second used to be ``getattr(error, "suggestion") or getattr(error,
+    "recovery")`` on the exception the harness rebuilt from those bytes. Two problems,
+    both now gone: the rebuild no longer exists (salesagent-3dawm.15), and falling
+    back to ``recovery`` made "includes a suggestion" satisfiable by ANY error, since
+    every error carries a recovery.
     """
-    # Check per-account error suggestion first
     acct = ctx.get("last_account")
     if acct is not None and acct.errors:
-        has_suggestion = any(getattr(e, "suggestion", None) for e in acct.errors)
-        if has_suggestion:
+        if any(getattr(e, "suggestion", None) for e in acct.errors):
             return
-    # Fall back to operation-level exception
-    error = ctx.get("error")
-    if error is not None:
-        suggestion = getattr(error, "suggestion", None) or getattr(error, "recovery", None)
-        assert suggestion, f"Expected non-empty suggestion/recovery in error: {error}"
+
+    result = ctx.get("result")
+    wire = result.wire_error_object() if result is not None else None
+    if wire is not None:
+        suggestion = wire.get("suggestion")
+        assert suggestion, f"Expected a non-empty top-level suggestion on the wire error, got {wire!r}"
         return
-    raise AssertionError("No error found — expected suggestion field on per-account or operation error")
+
+    # Third legitimate source: a GENUINE in-process AdCPError, i.e. one production
+    # actually raised rather than one rebuilt from wire bytes. Its suggestion is
+    # derived from its code by CODE_TABLE, so reading it is reading the table, not a
+    # reconstruction. Service-level failure scenarios take this path: the env drives
+    # the failure without a transport round-trip, so there is no envelope to read.
+    from src.core.exceptions import AdCPError
+
+    error = ctx.get("error")
+    if isinstance(error, AdCPError):
+        assert error.suggestion, f"Expected a non-empty suggestion on {error.error_code}, got {error.suggestion!r}"
+        return
+
+    raise AssertionError(
+        "Nothing that can carry a suggestion: no per-account error, no wire envelope, and "
+        f"the recorded error is not a production AdCPError. ctx error: {error!r}"
+    )
 
 
 @then(parsers.parse("the response contains an errors array with at least {count:d} error"))

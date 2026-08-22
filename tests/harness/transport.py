@@ -194,6 +194,26 @@ class TransportResult:
 
         return locate_envelope_error(self.wire_error_envelope)
 
+    def error_code(self) -> str | None:
+        """The error code for THIS result, whatever transport produced it.
+
+        The wire envelope when there is one; otherwise the in-process exception's own
+        ``error_code``. Both are legitimate: on a wire transport the envelope is what
+        the buyer received, and on IMPL there is no wire at all -- the raised
+        ``AdCPError`` IS the product, and its code comes from CODE_TABLE.
+
+        What this deliberately does NOT do is rebuild a production error class from
+        wire bytes to make the two look alike; that reconstruction is gone
+        (salesagent-3dawm.15). Use this where a test is parametrized ACROSS
+        transports including IMPL; use ``assert_wire_error`` where the scenario is
+        specifically about the buyer-facing envelope.
+        """
+        wire = self.wire_error_code()
+        if wire is not None:
+            return wire
+        code = getattr(self.error, "error_code", None)
+        return str(code) if code is not None else None
+
     def wire_error_code(self) -> str | None:
         """``errors[0].code`` from the captured wire, or ``None`` with no wire."""
         error = self.wire_error_object()

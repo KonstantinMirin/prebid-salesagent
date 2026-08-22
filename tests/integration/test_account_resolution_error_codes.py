@@ -235,13 +235,14 @@ class TestAccountNotFoundViaTransports:
         """ACCOUNT_NOT_FOUND surfaces through MCP transport (not stripped by harness).
 
         call_mcp calls the tool function directly (not through FastMCP server),
-        so the error surfaces as a raw AdCPError on result.error.
+        so the rejection surfaces as an ACCOUNT_NOT_FOUND envelope on the wire.
 
         Covers: #1417 regression test
         """
         result = env_with_data.call_via(Transport.MCP, req=self._nonexistent_account_req())
         assert result.is_error, f"Expected ACCOUNT_NOT_FOUND error, got success: {result.payload}"
-        assert hasattr(result.error, "error_code"), f"Expected AdCPError, got: {type(result.error)}"
-        assert result.error.error_code == "ACCOUNT_NOT_FOUND", (
-            f"Expected ACCOUNT_NOT_FOUND, got: {result.error.error_code}"
-        )
+        # Graded on the WIRE. This used to assert result.error was an AdCPError with an
+        # .error_code, which held only because the harness rebuilt one from wire bytes;
+        # that reconstruction is gone (salesagent-3dawm.15) and result.error is now the
+        # carrier holding the envelope.
+        result.assert_wire_error("ACCOUNT_NOT_FOUND")

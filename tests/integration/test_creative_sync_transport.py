@@ -23,7 +23,6 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
-from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError
 from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope, make_identity
 from tests.helpers.creative_test_helpers import assert_stored_creative_assets, creative_payload
@@ -252,7 +251,11 @@ class TestSyncStrictModeAbortTransport:
             )
 
         assert result.is_error, "Strict mode should error on missing package"
-        assert isinstance(result.error, AdCPNotFoundError)
+        # Graded on the CODE the buyer received, not on the class of an exception the
+        # harness used to rebuild from wire bytes (salesagent-3dawm.15). Production
+        # raises AdCPPackageNotFoundError here (_assignments.py:163), which is more
+        # specific than the AdCPNotFoundError this used to accept.
+        assert result.error_code() == "PACKAGE_NOT_FOUND", f"Expected PACKAGE_NOT_FOUND, got {result.error_code()!r}"
 
 
 @pytest.mark.requires_db
@@ -951,7 +954,9 @@ class TestAuthPrincipalRequired:
             )
 
         assert result.is_error
-        assert isinstance(result.error, AdCPAuthenticationError)
+        assert result.error_code() in {"AUTH_MISSING", "AUTH_INVALID"}, (
+            f"Expected an authentication rejection, got {result.error_code()!r}"
+        )
 
 
 @pytest.mark.requires_db
@@ -979,7 +984,9 @@ class TestAuthTenantRequired:
             )
 
         assert result.is_error
-        assert isinstance(result.error, AdCPAuthenticationError)
+        assert result.error_code() in {"AUTH_MISSING", "AUTH_INVALID"}, (
+            f"Expected an authentication rejection, got {result.error_code()!r}"
+        )
 
 
 @pytest.mark.requires_db
