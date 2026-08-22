@@ -589,12 +589,6 @@ class CircuitBreakerMixin(LocalOriginMixin):
         """
         self._breaker_for(endpoint_key).last_failure_time = datetime.now(UTC) - timedelta(seconds=seconds)
 
-    def record_breaker_successes(self, endpoint_key: str, n: int) -> None:
-        """Record *n* successful deliveries, as production's own arithmetic would."""
-        breaker = self._breaker_for(endpoint_key)
-        for _ in range(n):
-            breaker.record_success()
-
     def drive_breaker_transition(self, endpoint_key: str) -> bool:
         """Ask the breaker whether an attempt is allowed, driving OPEN -> HALF_OPEN.
 

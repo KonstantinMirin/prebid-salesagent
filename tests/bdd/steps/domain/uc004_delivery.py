@@ -1014,10 +1014,27 @@ def when_evaluate_circuit_breaker(ctx: dict) -> None:
 
 @when(parsers.parse("the system delivers {n:d} successful probe reports"))
 def when_deliver_probe_reports(ctx: dict, n: int) -> None:
-    """Record n successful deliveries on the circuit breaker (simulates probe recovery)."""
+    """Deliver n probe reports for real, so the CLOSED transition is production's.
+
+    This used to call production's ``record_success()`` directly, n times. That
+    was not a tautology — the Then still graded the breaker's threshold
+    arithmetic, and mutating ``success_threshold`` reddens it — but it skipped
+    the delivery layer this step's own text names, so the scenario could not see
+    production forget to record a success at all. Deleting
+    ``record_success()`` from ``_deliver_to_config`` left it green.
+
+    The Given has already stood up a real origin returning 200 and left the
+    breaker HALF_OPEN, where ``can_attempt()`` allows the probe through.
+    """
     env = ctx["env"]
-    endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
-    env.record_breaker_successes(endpoint_key, n)
+    origin_hits_before = env.origin.hits
+
+    for _ in range(n):
+        assert env.call_send(), "a probe report against a 200 origin must be delivered"
+
+    assert env.origin.hits - origin_hits_before == n, (
+        f"the scenario says {n} reports were delivered; the origin saw {env.origin.hits - origin_hits_before}"
+    )
     ctx["probe_count"] = n
 
 

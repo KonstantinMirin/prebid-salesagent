@@ -388,3 +388,68 @@ class TestNoProvenanceStrippedResponseCopy:
                 "ctx['self_dispatched_response'], which those accessors know by name."
             ),
         )
+
+
+# ---------------------------------------------------------------------------
+# The harness's own write seam, pinned.
+#
+# The circuit-breaker mixin declares that the write side of the breaker "lives
+# here, in the harness, and NOWHERE else". The check above enforces the "nowhere
+# else" half over tests/bdd/steps/. Nothing enforced the "here" half: the mixin
+# could grow a sixth affordance for faking breaker state and no test would
+# notice — which is how `record_breaker_successes` came to let a scenario claim
+# it had delivered N reports while the system delivered nothing. The scan covers
+# the whole harness because `env` in a step is a subclass: pinning only the mixin
+# catches a rename and misses the shape moving one file over.
+#
+# This is an exact-match pin, so ADDING a writer fails and so does REMOVING one
+# without updating the set. Each name below is a deliberate seam, not debt: the
+# set may only shrink as scenarios migrate onto real deliveries.
+# ---------------------------------------------------------------------------
+
+_BREAKER_SEAM_METHODS: set[str] = {
+    "_mixins.py::seed_breaker_failures",
+    "_mixins.py::set_breaker_state",
+    "_mixins.py::elapse_breaker_timeout",
+    "_mixins.py::drive_breaker_transition",
+}
+
+
+def _methods_touching_the_breaker_seam() -> set[str]:
+    """``file::function`` for everything under tests/harness/ that reaches the private breaker.
+
+    The whole harness, not just the mixin, and every function, not just class
+    bodies: ``env`` in a step IS a ``CircuitBreakerEnv``, so the natural home for
+    a new faking affordance is the subclass one file over — and a module-level
+    helper needs no class at all. Both ``_breaker_for`` and the ``_circuit_breakers``
+    dict it wraps are matched, because the historical spelling of this defect
+    poked the dict directly.
+    """
+    harness = _TESTS_ROOT / "harness"
+    found: set[str] = set()
+    for py_file in sorted(harness.rglob("*.py")):
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if fn.name == "_breaker_for":
+                continue
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Attribute) and node.attr in {"_breaker_for", "_circuit_breakers"}:
+                    found.add(f"{py_file.name}::{fn.name}")
+    return found
+
+
+def test_the_harness_breaker_write_seam_does_not_grow() -> None:
+    """The mixin's breaker affordances are exactly the pinned set."""
+    assert_violations_match_allowlist(
+        _methods_touching_the_breaker_seam(),
+        _BREAKER_SEAM_METHODS,
+        fix_hint=(
+            "A new method in the circuit-breaker mixin reaches the private breaker. Before adding "
+            "one, check whether the scenario should DELIVER instead of seeding: a helper that fakes "
+            "N successes lets a Then grade arithmetic the delivery layer never ran, so production "
+            "can stop recording successes and the scenario stays green. Seeding is legitimate only "
+            "for reaching a STARTING state a test cannot afford to spend real failures on."
+        ),
+    )
