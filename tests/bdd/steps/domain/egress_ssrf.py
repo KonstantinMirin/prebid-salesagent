@@ -34,11 +34,13 @@ The CREDENTIAL half of a registration is graded by the second group of When
 steps below. A registration has two halves and both are refusable at ingest,
 but they differ in where they are REACHABLE: the URL half travels every
 transport (``url`` alone is a schema-valid config), while a config naming
-HMAC-SHA256 with no ``credentials`` is schema-INVALID against the pin, so MCP
-and REST refuse it above the ingest gate and only A2A carries it to ``_impl``.
-That is why those scenarios are tagged ``@a2a_untyped_ingest`` — the full
-rationale, and where the schema-typed transports' own refusal is graded, is in
-the feature file's header for that group.
+HMAC-SHA256 with no ``credentials`` is schema-INVALID against the pin, so every
+tool surface refuses it ABOVE ``_impl`` — create and sync through the same
+``to_push_notification_config`` funnel REST uses, update through the typed
+``UpdateMediaBuyRequest``, MCP through FastMCP's TypeAdapter. That shared funnel
+is why they all report one absolute field path, which is why the tool-surface
+scenarios grade on every transport; the feature file's header for that group
+carries the measurement.
 
 Steps store in ctx (on top of what ``dispatch_request`` stores):
     ctx["supplied_agent_url"] — the URL the buyer sent, so the non-disclosure

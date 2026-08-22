@@ -242,21 +242,23 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # worker, where no request is left to refuse into and the buyer's only signal
   # is a log line nobody reads.
   #
-  # Why ONE transport, and why it is A2A: this document is schema-INVALID, so
-  # every transport that types `push_notification_config` against the pinned
-  # model refuses it one layer ABOVE the ingest gate — MCP through FastMCP's
-  # TypeAdapter on the tool parameter, REST through `to_push_notification_config`
-  # in src/routes/api_v1.py — and reports a field path relative to the sub-model
-  # it validated rather than the absolute one the gate emits. Grading those two
-  # here would grade the request model, not the gate. A2A is the ONE transport
-  # that hands the buyer's document to `_impl` untouched, which is exactly the
-  # hole the gate exists to close; and the fourth scenario's surface (the A2A
-  # protocol-level message/send configuration) has no counterpart on MCP or REST
-  # at all. The schema-typed transports' own refusal of the same document is
-  # graded, per transport, at
-  # tests/integration/test_webhook_hmac_credentials_ingest_refusal.py. The
-  # @a2a_untyped_ingest tag PARAMETRIZES on a2a rather than dropping
-  # parametrization, so `--collect-only` still shows which transport grades these.
+  # Why EVERY transport: this document is schema-INVALID, and all three tool
+  # surfaces refuse it ABOVE `_impl` — create and sync through the very
+  # `to_push_notification_config` funnel REST uses (src/core/tools/
+  # media_buy_create.py, sync_wrappers.py), update through the typed
+  # `UpdateMediaBuyRequest` built inside `_build_update_request`, MCP through
+  # FastMCP's TypeAdapter on the tool parameter. That shared funnel is WHY they
+  # all report one ABSOLUTE path, `push_notification_config.authentication.
+  # credentials`, which is the literal these scenarios assert.
+  #
+  # They were once believed to disagree — MCP and REST reporting a path relative
+  # to the sub-model they validated — and the tool-surface scenarios below were
+  # graded on A2A alone for that reason. Measured, they do not. Grading all four
+  # proves the agreement instead of asserting it here: if any transport re-forks
+  # the field path, a scenario reddens.
+  #
+  # The message/send scenarios below keep @a2a_untyped_ingest: their surface is
+  # the A2A protocol envelope, which has no counterpart on MCP or REST at all.
   #
   # Every URL below is public and passes the registration SSRF gate that runs
   # immediately before this one, so the ONLY thing that can refuse these requests
@@ -266,7 +268,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # after the URL gate. Kept as the characterization guard the per-surface
   # mutation check binds to at this surface — comment that call out and this
   # scenario must redden.
-  @T-EGRESS-CREDS-create-media-buy @egress_create @a2a_untyped_ingest @invariant
+  @T-EGRESS-CREDS-create-media-buy @egress_create @invariant
   Scenario: a credential-less HMAC-SHA256 registration is refused at create ingest
     When the buyer creates a media buy registering HMAC-SHA256 with no credentials
     Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.credentials"
@@ -290,14 +292,14 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # catches the document; removing the gate alone leaves it GREEN, because the typed
   # model still refuses. It reddens only when BOTH stop refusing — which is the
   # property worth pinning, and is stronger than guarding either layer alone.
-  @T-EGRESS-CREDS-update-media-buy @egress_update @a2a_untyped_ingest @invariant
+  @T-EGRESS-CREDS-update-media-buy @egress_update @invariant
   Scenario: a credential-less HMAC-SHA256 registration is refused at update ingest
     Given the Buyer owns an existing media buy
     When the buyer updates the media buy registering HMAC-SHA256 with no credentials
     Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.credentials"
     And the refusal names the missing shared secret and not the URL
 
-  @T-EGRESS-CREDS-sync-creatives @egress_sync_creds @a2a_untyped_ingest @invariant
+  @T-EGRESS-CREDS-sync-creatives @egress_sync_creds @invariant
   Scenario: a credential-less HMAC-SHA256 registration is refused at sync ingest
     When the buyer syncs a creative registering HMAC-SHA256 with no credentials
     Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.authentication.credentials"
@@ -349,12 +351,11 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # field over — VALIDATION_ERROR / correctable / field — which is also what the
   # coercion funnel already emits on the transports that DO type this parameter.
   #
-  # WHY EVERY WIRED TRANSPORT, unlike the @a2a_untyped_ingest group above: those
-  # scenarios grade a gate only A2A can reach, because the typed transports refuse
-  # the document one layer higher with a field path relative to the sub-model they
-  # validated. These two are the lane that makes those two answers ONE answer, so
-  # "every transport names the same field" IS the obligation — parametrizing on a
-  # single transport would grade exactly the half that already works.
+  # WHY EVERY WIRED TRANSPORT: "every transport names the same field" IS the
+  # obligation here, so parametrizing on a single transport would grade exactly
+  # the half that already works. The credential-less group above is graded the
+  # same way and for the same reason — it was single-transport only while the
+  # relative-field-path claim was believed, and that claim is measured false.
   #
   # THE EXPECTED FIELD IS PER-SCENARIO, NOT ONE STRING (measured against the
   # pinned model, 2026-08-18): a >1 array fails `too_long` at

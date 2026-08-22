@@ -2798,16 +2798,21 @@ _TRANSPORT_SPECIFIC_TAGS = {"rest", "mcp", "a2a"}
 
 # Scenarios whose graded production is reachable on ONE wire transport only.
 #
-# @a2a_untyped_ingest: the buyer's document is schema-INVALID against the pinned
-# push-notification-config model, so MCP (FastMCP TypeAdapter on the tool
-# parameter) and REST (``to_push_notification_config`` coercion in
-# src/routes/api_v1.py) both refuse it ABOVE the ingest gate, with a field path
-# relative to the sub-model they validated. A2A is the one transport that hands
-# the document to ``_impl`` untouched, which is the whole reason the gate exists
-# — and the A2A protocol-level ``message/send`` push config has no counterpart
-# on MCP/REST at all. The schema-typed transports' own refusal of the same
-# document is graded per transport in
-# tests/integration/test_webhook_hmac_credentials_ingest_refusal.py.
+# @a2a_untyped_ingest: the two surviving scenarios are A2A PROTOCOL-ENVELOPE
+# surfaces — the ``message/send`` push config — which has no counterpart on MCP
+# or REST at all. That, and only that, is what makes them single-transport.
+#
+# It used to carry three tool-surface scenarios as well, on the stated grounds
+# that MCP and REST refuse the invalid document above the ingest gate "with a
+# field path relative to the sub-model they validated", so grading them would
+# grade the request model rather than the gate. MEASURED, that was false: every
+# transport reports the ABSOLUTE path
+# ``push_notification_config.authentication.credentials``, which is the literal
+# the scenarios assert. The three now run on all four transports, so the
+# agreement is a standing executable proof rather than a claim in a comment.
+#
+# The tag NAME is now a misnomer — neither survivor is an untyped ingest. It is
+# left for the rename that owns the registry.
 #
 # PARAMETRIZED on that one transport rather than dropped from parametrization:
 # an excluded transport is exactly as ungraded as an xfail but invisible to both

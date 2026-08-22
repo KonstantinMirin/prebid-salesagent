@@ -167,13 +167,14 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         return _update_media_buy_impl(req=req, identity=identity)
 
     def _flatten_update_request(self, kwargs: dict[str, Any]) -> dict[str, Any]:
-        """Flatten an ``UpdateMediaBuyRequest`` into flat A2A/MCP skill parameters.
+        """Flatten an ``UpdateMediaBuyRequest`` into flat wire parameters.
 
         The A2A skill and MCP tool accept a flat param dict, not a request model,
         and reject the wrapper-unsupported fields — so pop ``req``, expand it
         (dropping those fields), then overlay any explicit kwargs. ``identity``
         (if present) is passed through; the real handlers pop and apply it.
-        Shared by the A2A and MCP update paths (DRY).
+        Shared by the A2A, MCP and REST update paths (DRY) — REST adapts the
+        result in :meth:`_build_update_rest_body` rather than re-spelling it.
         """
         req = kwargs.pop("req", None)
         if req is None:
@@ -216,14 +217,28 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         )
 
     def _build_update_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """The REST body, built by the SAME flatten the A2A and MCP paths use.
+
+        Three REST-specific differences, and only three: ``identity`` is resolved
+        by ``_prepare_rest_request`` rather than travelling in the body,
+        ``media_buy_id`` rides the URL, and the response is parsed from HTTP.
+
+        The wrapper-unsupported pop is NOT a fourth: ``UpdateMediaBuyBody``
+        forbids the same field set for the same reason the flat A2A/MCP params
+        do — both mirror ``update_media_buy_raw``'s signature — so dropping them
+        here is equivalent, not a REST-specific liberty.
+
+        This used to be a second, non-overlaying spelling of the same flatten:
+        with a ``req`` present it returned early and silently discarded every
+        remaining kwarg, so a step passing ``req=`` plus an explicit field sent
+        an EMPTY body and graded production's answer to the empty request. The
+        When step's own docstring already named ``_flatten_update_request`` as
+        the one owner of that overlay; now it is.
+        """
         kwargs.pop("identity", None)
-        req = kwargs.pop("req", None)
-        if req is not None:
-            body = req.model_dump(mode="json", exclude_none=True)
-            body.pop("media_buy_id", None)
-            return body
-        kwargs.pop("media_buy_id", None)
-        return kwargs
+        body = self._flatten_update_request(kwargs)
+        body.pop("media_buy_id", None)
+        return body
 
     def _run_update_rest_request(self, **kwargs: Any) -> Any:
         # Shared preamble (identity resolution + commit + client + auth-dep
