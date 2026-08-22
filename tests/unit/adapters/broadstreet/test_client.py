@@ -48,31 +48,7 @@ class TestBroadstreetClient:
         # Should strip trailing slash
         assert client.base_url == "https://custom.api.com/v1"
 
-    def test_build_url_includes_access_token(self):
-        """Test URL building includes access token."""
-        client = BroadstreetClient(
-            access_token="test_token",
-            network_id="12345",
-        )
-
-        url = client._build_url("/networks/12345")
-
-        assert "access_token=test_token" in url
-        assert url.startswith("https://api.broadstreetads.com/api/0/networks/12345")
-
-    def test_build_url_with_query_params(self):
-        """Test URL building with additional query parameters."""
-        client = BroadstreetClient(
-            access_token="test_token",
-            network_id="12345",
-        )
-
-        url = client._build_url("/test", query_params={"start_date": "2024-01-01"})
-
-        assert "access_token=test_token" in url
-        assert "start_date=2024-01-01" in url
-
-    @patch("src.adapters.broadstreet.client.send")
+    @patch("src.adapters.vendor_http.send")
     def test_get_network(self, mock_send):
         """Test getting network details."""
         mock_send.return_value = _seam_result(
@@ -89,9 +65,20 @@ class TestBroadstreetClient:
 
         # Client unwraps the "network" key
         assert result == {"id": "12345", "name": "Test Network"}
-        mock_send.assert_called_once()
+        # The credential rides the query string, so it is a kwarg of the seam call,
+        # not part of the URL the client assembles. A bare assert_called_once() here
+        # graded the hit count and nothing about what was sent.
+        mock_send.assert_called_once_with(
+            "https://api.broadstreetads.com/api/0/networks/12345",
+            method="GET",
+            headers={},
+            json=None,
+            params={"access_token": "test_token"},
+            timeout=30.0,
+            max_attempts=1,
+        )
 
-    @patch("src.adapters.broadstreet.client.send")
+    @patch("src.adapters.vendor_http.send")
     def test_get_zones(self, mock_send):
         """Test getting zones for network."""
         mock_send.return_value = _seam_result(
@@ -108,7 +95,7 @@ class TestBroadstreetClient:
         assert len(result) == 1
         assert result[0]["name"] == "Banner"
 
-    @patch("src.adapters.broadstreet.client.send")
+    @patch("src.adapters.vendor_http.send")
     def test_create_campaign(self, mock_send):
         """Test creating a campaign."""
         mock_send.return_value = _seam_result(
@@ -131,7 +118,7 @@ class TestBroadstreetClient:
         assert result["id"] == "999"
         assert result["name"] == "Test Campaign"
 
-    @patch("src.adapters.broadstreet.client.send")
+    @patch("src.adapters.vendor_http.send")
     def test_handle_403_error(self, mock_send):
         """Test handling 403 authentication error."""
         # The seam raises on a non-2xx rather than returning it, and discards the
@@ -151,7 +138,7 @@ class TestBroadstreetClient:
         assert exc_info.value.status_code == 403
         assert "Auth Denied" in str(exc_info.value)
 
-    @patch("src.adapters.broadstreet.client.send")
+    @patch("src.adapters.vendor_http.send")
     def test_handle_404_error(self, mock_send):
         """Test handling 404 not found error."""
         # The seam raises on a non-2xx rather than returning it, and discards the
@@ -170,7 +157,7 @@ class TestBroadstreetClient:
 
         assert exc_info.value.status_code == 404
 
-    @patch("src.adapters.broadstreet.client.send")
+    @patch("src.adapters.vendor_http.send")
     def test_handle_500_error(self, mock_send):
         """Test handling 500 server error."""
         # The seam raises on a non-2xx rather than returning it, and discards the

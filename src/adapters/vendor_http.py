@@ -18,25 +18,34 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from src.core.exceptions import AdCPConfigurationError
-from src.core.security.outbound_http import OutboundResult, send
+from src.core.security.outbound_http import OutboundResult, QueryParams, send
 
 
 @dataclass(frozen=True, slots=True)
 class VendorHttpClient:
     """A vendor API endpoint, dialled through the egress seam.
 
-    ``base_url`` and ``headers`` (credentials included) are set together at
+    ``base_url``, ``headers``, ``params`` and ``timeout`` are set together at
     construction and never after — the same invariant :class:`OperatorEndpoint`
     enforces for a label, applied here to a vendor's dial coordinates.
+
+    ``params`` is how a vendor that authenticates by QUERY STRING holds its
+    credential, exactly as ``headers`` holds one for a vendor that
+    authenticates by header. Without it such a client had to rebuild its URL at
+    every call site, which is both a second place to state the destination and
+    a place the no-destination-rewrite guard cannot see.
     """
 
     base_url: str
     headers: Mapping[str, str]
+    params: QueryParams = MappingProxyType({})
+    timeout: float = 30.0
 
-    def call(self, method: str, path: str, *, json: Any = None, params: Any = None) -> OutboundResult:
+    def call(self, method: str, path: str, *, json: Any = None, params: QueryParams | None = None) -> OutboundResult:
         """One vendor call through the egress seam. Returns the OutboundResult.
 
         Deliberately does NOT parse and does NOT map errors — callers whose
@@ -45,6 +54,10 @@ class VendorHttpClient:
         places outside its ``OutboundError`` contract; and call sites vary in
         error policy (raise, degrade to a failed status, degrade to unknown),
         so mapping here would flatten them.
+
+        ``params`` merges the client's own mapping with *params*; overlapping
+        keys raise rather than resolving to a winner — see
+        :meth:`_merged_params`.
 
         ``max_attempts=1``: a single request, not a retry policy this method
         decides — vendor mutations (campaign/flight/creative creation) are not
@@ -58,10 +71,36 @@ class VendorHttpClient:
             method=method,
             headers=dict(self.headers),
             json=json,
-            params=params,
-            timeout=30.0,
+            params=self._merged_params(params),
+            timeout=self.timeout,
             max_attempts=1,
         )
+
+    def _merged_params(self, per_call: QueryParams | None) -> QueryParams:
+        """This client's own params, plus *per_call*. Overlapping keys are an error.
+
+        The client-level mapping is where a vendor that authenticates by query
+        string holds its credential, so a caller passing the same key is either
+        forging a credential or shadowing a dial coordinate — a defect either
+        way, and never something to resolve silently by picking a winner.
+
+        Raises ``AdCPConfigurationError`` — the same class :func:`require_vendor`
+        raises one function below, for the same reason: the deployment's own
+        wiring is wrong and no buyer can act on it. It is a 500, NOT a
+        validation error, because nothing about the buyer's request is invalid.
+        It is deliberately not an ``OutboundError``: every adapter catches that
+        family and translates it into a vendor failure status, which would
+        report a defect in our own code as the vendor being down.
+        """
+        if not per_call:
+            return dict(self.params)
+        clash = sorted(self.params.keys() & per_call.keys())
+        if clash:
+            raise AdCPConfigurationError(
+                f"query parameter(s) {clash} are set on this VendorHttpClient and passed again "
+                "per call; the client-level value is a dial coordinate and must not be shadowed."
+            )
+        return {**self.params, **per_call}
 
 
 def require_vendor(client: VendorHttpClient | None, *, vendor: str) -> VendorHttpClient:

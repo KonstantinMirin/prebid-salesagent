@@ -6,9 +6,11 @@ Auth: Access token passed as query parameter.
 """
 
 import logging
+from types import MappingProxyType
 from typing import Any
 
-from src.core.security.outbound_http import OutboundDeliveryFailed, OutboundError, send
+from src.adapters.vendor_http import VendorHttpClient
+from src.core.security.outbound_http import OutboundDeliveryFailed, OutboundError, QueryParams
 
 logger = logging.getLogger(__name__)
 
@@ -67,34 +69,21 @@ class BroadstreetClient:
         self.network_id = network_id
         self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
         self.timeout = timeout
-
-    def _build_url(self, path: str, query_params: dict[str, Any] | None = None) -> str:
-        """Build full URL with access token.
-
-        Args:
-            path: API endpoint path (e.g., "/networks/123/advertisers")
-            query_params: Optional additional query parameters
-
-        Returns:
-            Full URL with access token
-        """
-        from urllib.parse import urlencode
-
-        url = f"{self.base_url}{path}"
-        params = {"access_token": self.access_token}
-        if query_params:
-            params.update(query_params)
-
-        # Filter None values and properly URL-encode all parameters
-        query_string = urlencode({k: v for k, v in params.items() if v is not None})
-        return f"{url}?{query_string}"
+        # Broadstreet authenticates by query parameter, so the token is a
+        # client-level dial coordinate — fixed here, never reassembled per call.
+        self._vendor = VendorHttpClient(
+            base_url=self.base_url,
+            headers={},
+            params=MappingProxyType({"access_token": access_token}),
+            timeout=float(timeout),
+        )
 
     def _request(
         self,
         method: str,
         path: str,
         data: dict[str, Any] | None = None,
-        query_params: dict[str, Any] | None = None,
+        query_params: QueryParams | None = None,
     ) -> Any:
         """Make an API request.
 
@@ -110,19 +99,8 @@ class BroadstreetClient:
         Raises:
             BroadstreetAPIError: If request fails
         """
-        url = self._build_url(path, query_params)
-
         try:
-            # max_attempts=1: these are ad-server mutations and reads that did not
-            # retry before; turning one failed create into three is the drift this
-            # migration must not introduce.
-            result = send(
-                url,
-                method=method,
-                json=data if data else None,
-                timeout=float(self.timeout),
-                max_attempts=1,
-            )
+            result = self._vendor.call(method, path, json=data if data else None, params=query_params)
         except OutboundDeliveryFailed as e:
             # The seam raises on a non-2xx and discards the response, so the
             # status-specific errors below are rebuilt from the typed failure.
@@ -136,7 +114,7 @@ class BroadstreetClient:
         body = result.json() if result.content else None
         return body
 
-    def get(self, path: str, query_params: dict[str, Any] | None = None) -> Any:
+    def get(self, path: str, query_params: QueryParams | None = None) -> Any:
         """Make a GET request."""
         return self._request("GET", path, query_params=query_params)
 
@@ -322,7 +300,7 @@ class BroadstreetClient:
         Returns:
             List of report records
         """
-        query_params: dict[str, Any] = {}
+        query_params: dict[str, str | int | float | bool] = {}
         if start_date:
             query_params["start_date"] = start_date
         if end_date:

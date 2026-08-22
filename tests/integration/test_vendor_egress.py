@@ -624,6 +624,49 @@ def test_broadstreet_get_returns_the_parsed_body(local_origin_tls, monkeypatch):
     assert local_origin_tls.hits == 1
 
 
+def test_broadstreet_sends_its_credential_in_the_query_string(local_origin_tls, monkeypatch):
+    """Broadstreet authenticates by QUERY PARAMETER, so the credential is graded on the socket.
+
+    The client's only other credential coverage asserted on a URL-builder's return
+    string. A builder can be correct and the request still ship without the token —
+    nothing downstream would notice, because this origin does not check auth, the hit
+    count is 1 either way, and the body still parses. This reads the path the origin
+    actually received.
+    """
+    allow_local_origin(monkeypatch)
+    local_origin_tls.respond_with(200, body=b'{"networks": []}')
+
+    client = _broadstreet(local_origin_tls)
+    client.get("/networks")
+
+    assert "access_token=test-token" in local_origin_tls.requests[0].path
+
+
+def test_broadstreet_report_sends_credential_and_caller_params_in_one_path(local_origin_tls, monkeypatch):
+    """The per-call query params and the client's credential arrive TOGETHER.
+
+    Two ways to pass this test wrongly: send the credential and drop the caller's
+    dates, or send the dates and drop the credential. Both are single-key checks
+    passing while the request is unusable, so this asserts all three keys on the one
+    path the origin saw.
+    """
+    allow_local_origin(monkeypatch)
+    local_origin_tls.respond_with(200, body=b'{"records": []}')
+
+    client = _broadstreet(local_origin_tls)
+    client.get_advertisement_report(
+        advertiser_id="adv-1",
+        advertisement_id="ad-1",
+        start_date="2026-01-01",
+        end_date="2026-01-31",
+    )
+
+    path = local_origin_tls.requests[0].path
+    assert "access_token=test-token" in path
+    assert "start_date=2026-01-01" in path
+    assert "end_date=2026-01-31" in path
+
+
 def test_triton_status_check_reads_an_active_campaign(local_origin_tls, monkeypatch):
     allow_local_origin(monkeypatch)
     local_origin_tls.respond_with(200, body=b'{"active": true, "endDate": "2030-01-01T00:00:00+00:00"}')

@@ -213,7 +213,6 @@ class TestNoWeakMockAssertions:
 # assert_called_once_with() or explicitly kept if only call count matters.
 # FIXME(#1370): each entry below should be reviewed and upgraded
 BARE_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
-    ("tests/unit/adapters/broadstreet/test_client.py", "test_get_network"),
     ("tests/unit/test_a2a_auth_optional.py", "test_get_products_with_auth"),
     ("tests/unit/test_a2a_auth_optional.py", "test_get_products_without_auth"),
     ("tests/unit/test_a2a_auth_optional.py", "test_list_authorized_properties_with_auth"),
