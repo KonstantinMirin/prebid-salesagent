@@ -1069,3 +1069,73 @@ def scan_src(
         )
 
     return findings
+
+
+def assert_guard_subject_resolves(module_path: str, *names: str, why: str) -> None:
+    """Assert every one of *names* still exists in *module_path*.
+
+    A guard that scans for a symbol BY STRING keeps passing after that symbol is
+    renamed: it finds nothing, which is indistinguishable from finding nothing
+    wrong. Resolving the name here makes the rename fail loudly instead. Use
+    ``importlib`` rather than a module-level import so a heavy subject does not
+    abort collection for the whole unit run.
+
+    *why* states what goes unguarded if the name is gone, so the failure explains
+    the consequence rather than only the fact.
+    """
+    import importlib
+
+    module = importlib.import_module(module_path)
+    missing = sorted(n for n in names if not hasattr(module, n))
+    assert not missing, f"{missing} no longer exist(s) in {module_path}. {why}"
+
+
+def assert_guard_vocabulary_contains(mine: set[str], theirs: set[str], *, why: str) -> None:
+    """Assert the guard's own vocabulary (*mine*) is still covered by *theirs*.
+
+    Containment, deliberately not derivation: deriving the guard's vocabulary
+    FROM production would make it track whatever production says, which grades
+    nothing. Asserting containment catches production dropping a member the
+    guard was written to watch.
+    """
+    missing = sorted(mine - theirs)
+    assert not missing, f"{missing} no longer covered. {why}"
+
+
+# Every casing of a pinned auth scheme that a hand-written comparison might use.
+#
+# ONE copy, because two diverged. Each guard that cares about scheme literals had
+# its own set, and measured at the point of extraction the inline-resolution copy
+# was missing "BEARER" and "HMAC_SHA256" -- so an inline comparison against those
+# two spellings was invisible to it while the sibling guard recognised them. That
+# is CLAUDE.md's stated reason for the DRY invariant having already happened: the
+# next person fixing one copy missed the other.
+#
+# Deliberately NOT derived from the enum. The whole point is catching a WRONG
+# casing, so the variants are hand-held; a containment test asserts the pin's own
+# values are present, which is what catches a pin bump adding a scheme.
+SCHEME_LITERAL_CASINGS: frozenset[str] = frozenset(
+    {
+        "Bearer",
+        "bearer",
+        "BEARER",
+        "HMAC-SHA256",
+        "hmac-sha256",
+        "hmac_sha256",
+        "HMAC_SHA256",
+        "Basic",
+        "basic",
+    }
+)
+
+
+def assert_scanned_paths_exist(paths: Iterable[str], *, why: str) -> None:
+    """Assert every path a guard scans still exists.
+
+    A guard whose scan set names a file by path drains silently when that file is
+    renamed or deleted: it reads nothing, finds nothing, and reports clean. The
+    scan set is the guard's subject as much as any symbol is, and it has the same
+    failure mode -- absence is indistinguishable from compliance.
+    """
+    missing = sorted(p for p in paths if not (REPO_ROOT / p).exists())
+    assert not missing, f"scanned path(s) {missing} no longer exist. {why}"

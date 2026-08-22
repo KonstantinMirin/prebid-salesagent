@@ -16,6 +16,7 @@ import pytest
 
 from tests.unit._architecture_helpers import (
     assert_detector_catches_ast_snippets,
+    assert_guard_vocabulary_contains,
     parse_module,
     repo_root,
     scan_src,
@@ -25,6 +26,35 @@ from tests.unit._architecture_helpers import (
 # -- named directly in the plan text -- are the sentinels: a set/frozenset
 # literal containing either is presumptively a SECOND hostname blocklist.
 _SENTINEL_HOSTNAMES = frozenset({"metadata.google.internal", "host.docker.internal"})
+
+
+def test_the_sentinels_are_still_members_of_the_real_blocklist() -> None:
+    """The sentinels are a SUBSET of production's blocklist, not a copy of it.
+
+    Without this the guard is silent about the thing it exists to protect. Its
+    detector matches two hostname strings; if production's ``_BLOCKED_HOSTNAMES``
+    quietly stopped containing ``metadata.google.internal``, every scan here
+    would keep passing while the address the whole #1589 lane is about became
+    dialable. The constant above pins the guard's own vocabulary; this pins it
+    to production's.
+
+    Containment, deliberately not derivation: computing the sentinels FROM the
+    blocklist would make the detector track whatever production happens to say,
+    which is the opposite of a guard.
+    """
+    from src.core.security.egress.policy import _BLOCKED_HOSTNAMES
+
+    assert_guard_vocabulary_contains(
+        set(_SENTINEL_HOSTNAMES),
+        set(_BLOCKED_HOSTNAMES),
+        why=(
+            "Sentinel hostname(s) are no longer in the production blocklist "
+            "(src/core/security/egress/policy.py::_BLOCKED_HOSTNAMES). Either the blocklist lost "
+            "an address it must refuse, or the sentinels are stale -- the first is a security "
+            "regression, the second makes this guard scan for strings production no longer uses."
+        ),
+    )
+
 
 _EGRESS_PACKAGE_PREFIX = "src/core/security/egress/"
 

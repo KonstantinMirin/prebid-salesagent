@@ -28,7 +28,9 @@ import ast
 import pytest
 
 from tests.unit._architecture_helpers import (
+    SCHEME_LITERAL_CASINGS,
     assert_detector_catches_ast_snippets,
+    assert_guard_vocabulary_contains,
     assert_violations_match_allowlist,
     parse_module,
     rel,
@@ -38,9 +40,34 @@ from tests.unit._architecture_helpers import (
 
 # Scheme spellings, in the casings that have actually appeared in this codebase.
 # The point of the guard is precisely that these disagree with each other.
-_SCHEME_LITERALS = frozenset(
-    {"Bearer", "bearer", "BEARER", "HMAC-SHA256", "hmac-sha256", "hmac_sha256", "HMAC_SHA256", "Basic", "basic"}
-)
+_SCHEME_LITERALS = SCHEME_LITERAL_CASINGS
+
+
+def test_every_pinned_scheme_is_covered_by_the_literals_this_guard_matches() -> None:
+    """Every value of the pinned enum appears here, in at least its own casing.
+
+    The point of the guard is that a scheme must be compared as an enum, not as
+    a string -- so the set of strings it recognises has to track the enum. A pin
+    bump adding a third scheme would otherwise leave that scheme quietly
+    uncovered: comparisons against it would be exactly the defect this guard
+    exists to catch, and the guard would not see them.
+
+    Containment, not derivation: the casing VARIANTS are deliberately hand-held
+    (the whole point is catching a wrong casing), so this asserts the canonical
+    value is present rather than regenerating the set from the enum.
+    """
+    from adcp.types import AuthenticationScheme
+
+    assert_guard_vocabulary_contains(
+        {member.value for member in AuthenticationScheme},
+        set(_SCHEME_LITERALS),
+        why=(
+            "A pinned AuthenticationScheme value is not in _SCHEME_LITERALS, so a comparison "
+            "against it is invisible to this guard. Add the value and its plausible casings -- "
+            "the pin moved and the guard did not."
+        ),
+    )
+
 
 # Files permitted to still compare a scheme literal. Shrink-only.
 #

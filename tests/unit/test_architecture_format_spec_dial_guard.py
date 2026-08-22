@@ -32,6 +32,7 @@ import pytest
 
 from tests.unit._architecture_helpers import (
     assert_detector_catches_ast_snippets,
+    assert_guard_subject_resolves,
     parse_module,
     repo_root,
 )
@@ -39,6 +40,43 @@ from tests.unit._architecture_helpers import (
 TARGET_FILE = "src/core/tools/media_buy_create.py"
 DIAL_FUNCTION = "_get_format_spec_sync"
 GUARD_FUNCTION = "is_dialled_agent_url"
+
+
+def test_the_dial_and_guard_functions_this_module_names_still_exist() -> None:
+    """Both subjects resolved by import, so a rename fails here rather than going quiet.
+
+    ``media_buy_create`` is heavy -- importing it at module scope would abort the
+    whole unit run at collection and mask every other result -- so it is imported
+    inside the test. A rename still reddens ``make quality``, as a failure rather
+    than a collection error.
+    """
+    assert_guard_subject_resolves(
+        "src.core.tools.media_buy_create",
+        DIAL_FUNCTION,
+        why=f"This guard scans {TARGET_FILE} for it by name, so its absence makes every assertion here vacuous.",
+    )
+    # The guard function is DEFINED elsewhere and CALLED in the target -- the scan
+    # looks for the call. Binding it to its real home is the point: asserting it
+    # against the target file is the mistake this test exists to prevent, and is
+    # the mistake it caught when first written.
+    assert_guard_subject_resolves(
+        "src.core.format_resolver",
+        GUARD_FUNCTION,
+        why="The guard looks for calls to it inside the target, so a rename leaves every dial site reported as unguarded.",
+    )
+
+    # The guard function is DEFINED elsewhere and CALLED in the target -- the
+    # scan looks for the call. Binding it to its real home is the point: writing
+    # the assertion against the target file is the mistake this test exists to
+    # make impossible, and it is the mistake this test caught when first written.
+    assert_guard_subject_resolves(
+        "src.core.format_resolver",
+        GUARD_FUNCTION,
+        why=(
+            "The guard looks for CALLS to it inside the target, so a rename leaves every dial "
+            "site reported as unguarded."
+        ),
+    )
 
 
 def _call_matches(call: ast.Call, name: str) -> bool:

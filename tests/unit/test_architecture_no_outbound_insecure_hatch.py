@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.unit._architecture_helpers import assert_scanned_paths_exist
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _FLAG = "ADCP_OUTBOUND_ALLOW_INSECURE"
@@ -36,6 +38,23 @@ _MUST_NOT_CONTAIN = (
     "run_all_tests_host.sh",
     ".github/workflows/ci.yml",
 )
+
+
+def test_every_file_this_guard_scans_still_exists() -> None:
+    """The scan set is a subject too, and it fails the same silent way.
+
+    These are file PATHS, not symbols. Rename any of them and this guard keeps
+    passing -- it reads nothing, so it finds nothing, which is exactly what
+    compliance looks like. Measured before this was added: mutating the tuple to
+    garbage changed no result anywhere.
+    """
+    assert_scanned_paths_exist(
+        _MUST_NOT_CONTAIN,
+        why=(
+            "This guard asserts the insecure-egress flag never returns to these files. A path it "
+            "cannot read is a file it cannot check, and the flag could come back there unnoticed."
+        ),
+    )
 
 
 def find_flag_reintroductions(repo_root: Path, must_not_contain: tuple[str, ...]) -> list[str]:

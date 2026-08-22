@@ -61,6 +61,30 @@ _SIGNING_SEAM_FUNCTIONS = frozenset({"prepare_signed_request"})
 _POSITIONAL_SECRET_INDEX = {"prepare_signed_request": 1}
 
 
+def test_the_signing_seam_signature_still_matches_what_this_guard_assumes() -> None:
+    """The seam's name AND the secret's position, resolved rather than assumed.
+
+    ``_POSITIONAL_SECRET_INDEX`` hardcodes a SIGNATURE fact: that the secret is
+    argument 1. A reorder of ``prepare_signed_request``'s parameters would leave
+    every scan here passing while the guard checked the wrong argument -- worse
+    than a rename, because a rename at least stops matching.
+    """
+    import inspect
+
+    from src.core.security.webhook_egress import prepare_signed_request
+
+    params = list(inspect.signature(prepare_signed_request).parameters)
+    for name, index in _POSITIONAL_SECRET_INDEX.items():
+        assert name == prepare_signed_request.__name__, (
+            f"this guard scans for {name!r}, but the seam is now "
+            f"{prepare_signed_request.__name__!r} -- the scan matches nothing"
+        )
+        assert "secret" in params[index], (
+            f"{name}'s parameter {index} is {params[index]!r}, not the secret. The positional "
+            f"index this guard checks is stale, so it is inspecting the wrong argument: {params}"
+        )
+
+
 def _is_none_constant(node: ast.expr) -> bool:
     return isinstance(node, ast.Constant) and node.value is None
 

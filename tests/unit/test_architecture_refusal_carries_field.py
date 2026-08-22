@@ -47,6 +47,7 @@ from tests.unit._architecture_helpers import (
 SEAM_FILE = "src/core/security/egress/policy.py"
 REFUSAL_CLASS = "OutboundRequestBlocked"
 
+
 FIX_HINT = (
     f"Every {REFUSAL_CLASS} must be raised with field=<the caller's field>. The refusal message is "
     "deliberately opaque, so field is the only thing that tells a buyer which input to fix; a path "

@@ -23,7 +23,11 @@ from __future__ import annotations
 
 import ast
 
-from tests.unit._architecture_helpers import repo_root, src_python_files
+from tests.unit._architecture_helpers import (
+    assert_guard_subject_resolves,
+    repo_root,
+    src_python_files,
+)
 
 _ADAGENTS_EXCEPTION_NAMES = frozenset(
     {
@@ -37,6 +41,24 @@ _ADAGENTS_EXCEPTION_NAMES = frozenset(
 # The one file allowed to construct these messages directly -- it IS
 # describe_adagents_error's own implementation.
 _EXEMPT_FILE = "src/services/adagents_error_messages.py"
+
+
+def test_the_adagents_exception_classes_this_guard_names_still_exist() -> None:
+    """Resolve all four SDK classes rather than matching their names.
+
+    These live in the pinned ``adcp`` SDK, so a pin bump can rename or drop one
+    without touching this repo at all. The scan would then match nothing for that
+    class and report clean over raw message text it was written to catch.
+    """
+    assert_guard_subject_resolves(
+        "adcp.exceptions",
+        *sorted(_ADAGENTS_EXCEPTION_NAMES),
+        why=(
+            "This guard scans for them by name, so each missing one is a silent hole rather "
+            "than a failure -- and these live in the PINNED SDK, so a pin bump can drop one "
+            "without touching this repo at all."
+        ),
+    )
 
 
 def _exception_type_names(node: ast.expr) -> set[str]:

@@ -16,7 +16,8 @@ ways:
 
 Three copies is not a coincidence; it is what happens when the auth decision is
 a two-line ``if`` that is cheaper to retype than to look up. The fix is one
-resolver (``webhook_auth_for`` in :mod:`src.core.security.webhook_egress`), and
+seam (``deliver_webhook``/``adeliver_webhook`` in
+:mod:`src.core.security.webhook_egress`), and
 this guard is what keeps copy #4 from appearing — the same role
 ``test_architecture_no_hardcoded_unsigned_webhook.py`` plays for the sibling
 defect, whose own docstring records that the previous instance was "caught by a
@@ -52,9 +53,9 @@ import ast
 import pytest
 
 from tests.unit._architecture_helpers import (
+    SCHEME_LITERAL_CASINGS,
     assert_detector_catches_ast_snippets,
     assert_violations_match_allowlist,
-    iter_call_expressions,
     scan_src,
 )
 
@@ -62,17 +63,7 @@ from tests.unit._architecture_helpers import (
 # listed because the whole point is that the two senders disagree about which
 # one the column holds; the resolver is where that comparison becomes
 # case-insensitive, and it is the ONLY place allowed to make it.
-_SCHEME_LITERALS = frozenset(
-    {
-        "Bearer",
-        "bearer",
-        "HMAC-SHA256",
-        "hmac-sha256",
-        "hmac_sha256",
-        "Basic",
-        "basic",
-    }
-)
+_SCHEME_LITERALS = SCHEME_LITERAL_CASINGS
 
 # Credential columns a sender may not read off a config object.
 # NARROWED in Epic D lane C4 to ``webhook_secret`` alone.
@@ -96,18 +87,20 @@ _CREDENTIAL_ATTRS = frozenset({"webhook_secret"})
 # resolver is not scanned. Not an allowlist entry: an allowlist records debt,
 # and this records the one legitimate home for the logic.
 
-# The one function allowed to be handed the raw columns (see
-# ``_resolver_argument_nodes``).
-# The seam that OWNS the auth decision. Repointed from ``webhook_auth_for`` in
-# Epic D lane C4, which deleted that resolver together with the hand-rolled union
-# it returned: the decision now lives in ``deliver_webhook`` / ``adeliver_webhook``,
-# which construct the pinned ``LibraryAuthentication`` and match on it once.
+# NO exemption for arguments forwarded to the seam.
 #
-# The RULE is unchanged — a sender must not answer "how is this authenticated?"
-# itself — and so is the exemption's logic: a credential column read passed
-# DIRECTLY to the seam is the fix, not the disease, while stashing it in a local
-# and using it elsewhere is exactly the inline resolution this guard exists to stop.
-_RESOLVER_FUNCTIONS = ("deliver_webhook", "adeliver_webhook")
+# There used to be one: a sender migrating onto the resolver necessarily wrote
+# ``resolver(config.authentication_type, config.authentication_token)``, and that
+# read was the fix rather than the disease. Epic D lane C4 narrowed
+# ``_CREDENTIAL_ATTRS`` to ``webhook_secret`` alone and thereby removed the
+# exemption's reason to exist; it survived the narrowing as residue.
+#
+# Measured before deleting it: its ONLY reachable effect was to whitelist a read
+# of ``webhook_secret`` -- the column this module's own docstring calls one with
+# ZERO writers in src/, so any read of it reaches for a credential nothing
+# populates -- plus a scheme-literal comparison written inline as a seam
+# argument, which is a hole in the primary rule too. Keeping it would have meant
+# certifying both holes as intended.
 
 # Files permitted to still contain the disease, by path. Shrink-only.
 #
@@ -182,33 +175,10 @@ def _credential_read_lineno(node: ast.AST) -> int | None:
     return None
 
 
-def _resolver_argument_nodes(tree: ast.AST) -> set[int]:
-    """``id()`` of every expression handed straight to the resolver.
-
-    The resolver takes PRIMITIVES, so a migrated sender necessarily writes
-    ``webhook_auth_for(config.authentication_type, config.authentication_token)``
-    — that read is the fix, not the disease, and flagging it would make the
-    rule unsatisfiable. Only a read passed DIRECTLY to the resolver is exempt:
-    stashing the column in a local first and using it elsewhere is exactly the
-    inline resolution this guard exists to stop.
-    """
-    exempt: set[int] = set()
-    for function_name in _RESOLVER_FUNCTIONS:
-        for node in iter_call_expressions(tree, function_name):
-            for arg in node.args:
-                exempt.add(id(arg))
-            for keyword in node.keywords:
-                exempt.add(id(keyword.value))
-    return exempt
-
-
 def find_inline_webhook_auth_violations(tree: ast.Module) -> list[int]:
     """Return line numbers where webhook auth is resolved inline."""
     violations: list[int] = []
-    exempt = _resolver_argument_nodes(tree)
     for node in ast.walk(tree):
-        if id(node) in exempt:
-            continue
         if isinstance(node, ast.Compare):
             operands = [node.left, *node.comparators]
             names_column = any(_names_authentication_type(operand) for operand in operands)
@@ -261,12 +231,30 @@ class TestDetectorCatchesKnownBadSnippets:
                 "compare-bare-name": 'if authentication_type == "Bearer":\n    pass\n',
                 "read-webhook-secret": "secret = config.webhook_secret\n",
                 "getattr-webhook-secret": 'secret = getattr(config, "webhook_secret", None)\n',
+                # Forwarding the dead column to the seam is a violation like any
+                # other read. An exemption used to whitelist exactly this, which
+                # made the guard silent about a credential nothing populates; the
+                # snippet is here so deleting the exemption stays deliberate.
+                "forward-webhook-secret-to-the-seam": (
+                    "deliver_webhook(url, payload, credentials=config.webhook_secret)\n"
+                ),
+                # Same, written as a scheme comparison inline in a seam call --
+                # the other hole the exemption opened.
+                "compare-scheme-inline-in-a-seam-call": (
+                    'deliver_webhook(url, payload, is_hmac=(config.authentication_type == "HMAC-SHA256"))\n'
+                ),
             },
         )
 
 
 class TestDetectorAllowsCleanSnippets:
-    """(c) Negative meta-tests — persistence, logging, read-back and FORWARDING stay legal."""
+    """(c) Negative meta-tests — persistence, logging, read-back and FORWARDING stay legal.
+
+    ``forward-to-the-seam`` passes on its own merits, not because an exemption
+    whitelists it: measured before the exemption was deleted, it stayed clean
+    either way. Forwarding the LIVE columns is legal; forwarding the dead
+    ``webhook_secret`` is not, and that pair is what the exemption blurred.
+    """
 
     @pytest.mark.parametrize(
         ("label", "snippet"),
