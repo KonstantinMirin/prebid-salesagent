@@ -61,7 +61,12 @@ from adcp.server.helpers import valid_actions_for_status
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, MediaBuyStatus
 
-from src.core.auth import get_principal_object, require_identity, require_tenant
+from src.core.auth import (
+    require_identity,
+    require_principal_id,
+    require_tenant,
+    resolve_principal_or_raise,
+)
 from src.core.database.models import CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
 from src.core.database.repositories.creative import CreativeRepository
@@ -107,35 +112,28 @@ def _get_media_buys_impl(
         raise AdCPCapabilityNotSupportedError()
 
     testing_ctx = identity.testing_context
-    principal_id = identity.principal_id
-    if not principal_id:
-        # No principal_id resolved at all (absent credential) -> AUTH_MISSING
-        # per v3.1.1 error-code.json. Was a hardcoded "AUTH_REQUIRED" literal
-        # bypassing the exception hierarchy entirely (salesagent-mkso).
-        return GetMediaBuysResponse(
-            media_buys=[],
-            errors=[
-                Error.of(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
-                    ErrorCode.AUTH_MISSING
-                )
-            ],
-        )
-
-    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id)
-    if not principal:
-        # principal_id was presented but doesn't resolve -> AUTH_INVALID
-        # per v3.1.1 error-code.json.
-        return GetMediaBuysResponse(
-            media_buys=[],
-            errors=[
-                Error.of(  # structural-guard: advisory: get_media_buys degrades to empty list + error, not a raise
-                    ErrorCode.AUTH_INVALID, details={"principal_id": principal_id}
-                )
-            ],
-        )
+    # Both guards RAISE rather than degrading to an empty list plus a payload
+    # advisory, and both now use the shared helpers every other media-buy tool
+    # already uses -- get_media_buys was the one tool open-coding them, precisely
+    # because it degraded instead of raising.
+    #
+    # Why raising is the correct shape: a credential that is absent or does not
+    # resolve means the task did NOT run, so the empty media_buys was never a
+    # result. transport-errors.mdx separates the two layers on exactly that line
+    # (:206-207 -- envelope "the task failed", payload errors[] "the task ran ...
+    # issues"), says a fatal failure SHOULD populate both (:209), and then names
+    # this precise shape in the client detection order (:220): "a fatal task that
+    # surfaces errors only via the payload is a conformance gap on the agent side".
+    #
+    # Only MCP ever reached these branches -- REST and A2A reject an
+    # unauthenticated request at the boundary and already return the two-layer
+    # envelope -- which is why get_media_buys was the ONE tool of 16 answering a
+    # fatal auth failure with HTTP 200 and isError:false (salesagent-3dawm.20).
+    principal_id = require_principal_id(identity, context=req.context)
+    principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
 
     # require_tenant raises the canonical auth envelope instead of a raw TypeError
-    # if no tenant resolved (the principal advisories above take precedence).
+    # if no tenant resolved (the principal guards above take precedence).
     tenant = require_tenant(identity, context=req.context)
     today = datetime.now(UTC).date()
     tenant_id: str = tenant["tenant_id"]

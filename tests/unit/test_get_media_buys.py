@@ -19,6 +19,7 @@ import pytest
 from adcp.types import MediaBuyStatus
 from pydantic import RootModel, ValidationError
 
+from src.core.exceptions import AdCPAuthRequiredError
 from src.core.schemas import (
     ApprovalStatus,
     CreativeApproval,
@@ -313,7 +314,11 @@ def patched_internals():
     """
     with (
         patch("src.core.tools.media_buy_list.MediaBuyUoW") as m_uow,
-        patch("src.core.tools.media_buy_list.get_principal_object") as m_principal,
+        # Patched on src.core.auth, not re-exported into the tool module:
+        # media_buy_list now calls the shared resolve_principal_or_raise()
+        # rather than open-coding the lookup (salesagent-3dawm.20). This is
+        # the same target the sibling media-buy wrapper tests already use.
+        patch("src.core.auth.get_principal_object") as m_principal,
         patch("src.core.tools.media_buy_list._fetch_target_media_buys") as m_buys,
         patch("src.core.tools.media_buy_list._fetch_packages") as m_packages,
         patch("src.core.tools.media_buy_list._fetch_creative_approvals") as m_approvals,
@@ -352,16 +357,31 @@ class TestGetMediaBuysImpl:
         assert len(response.media_buys) == 1
         assert response.media_buys[0].media_buy_id == "buy_active"
 
-    def test_missing_principal_returns_error(self):
-        """If principal ID not in identity, return empty list with error."""
+    def test_missing_principal_raises_rather_than_degrading(self):
+        """An identity with no principal_id is a FATAL auth failure, so it raises.
+
+        This test previously asserted the opposite -- empty media_buys plus a
+        payload-level errors[] entry, HTTP 200, no adcp_error. That shape is
+        named as non-conformant by the pinned spec
+        (dist/docs/3.1.1/building/operating/transport-errors.mdx): the two layers
+        mean different things (:206-207 -- envelope "the task failed", payload
+        errors[] "the task ran ... issues"), a fatal failure SHOULD populate both
+        (:209), and the client detection order calls out this exact shape (:220):
+        "a fatal task that surfaces errors only via the payload is a conformance
+        gap on the agent side".
+
+        Nothing could be authorized, so the empty list was never a result. The
+        requirement changed, and the test changes with it rather than the code
+        being bent back to a graded gap (salesagent-3dawm.20).
+        """
         identity = make_identity(principal_id=None)
-
         req = self._make_request()
-        response = _get_media_buys_impl(req, identity=identity)
 
-        assert response.media_buys == []
-        assert response.errors is not None
-        assert len(response.errors) > 0
+        with pytest.raises(AdCPAuthRequiredError) as exc_info:
+            _get_media_buys_impl(req, identity=identity)
+
+        assert exc_info.value.error_code == "AUTH_MISSING"
+        assert exc_info.value.recovery == "correctable"
 
     def test_snapshot_not_requested_when_false(self, patched_internals):
         """When include_snapshot=False, adapter.get_packages_snapshot not called."""

@@ -4318,14 +4318,28 @@ class TestGetMediaBuysImplAuth:
         with pytest.raises(AdCPAuthenticationError):
             _get_media_buys_impl(req, identity=None)
 
-    def test_missing_principal_returns_empty(self):
-        """GMB-A02: no principal_id returns empty media_buys with error.
+    def test_missing_principal_raises_auth_missing(self):
+        """GMB-A02: no principal_id is a FATAL auth failure, so it raises.
 
-        Spec: UNSPECIFIED (implementation-defined principal resolution)
+        Spec: CONFIRMED -- this was recorded as "UNSPECIFIED (implementation-defined
+        principal resolution)", and that assumption is what let the gap persist. It
+        IS specified: dist/docs/3.1.1/building/operating/transport-errors.mdx gives
+        the two layers different meanings (:206-207 -- envelope "the task failed",
+        payload errors[] "the task ran ... issues"), says a fatal failure SHOULD
+        populate both (:209), and names this exact shape in the client detection
+        order (:220): "a fatal task that surfaces errors only via the payload is a
+        conformance gap on the agent side".
+
+        The previous assertion (empty media_buys + payload errors[], HTTP 200,
+        isError false) pinned that gap. Nothing could be authorized, so the empty
+        list was never a result.
+
         Priority: P0
         Type: unit
         Source: get_media_buys
+        Covers: salesagent-3dawm.20
         """
+        from src.core.exceptions import AdCPAuthRequiredError
         from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
@@ -4338,11 +4352,11 @@ class TestGetMediaBuysImplAuth:
             testing_context=None,
         )
 
-        resp = _get_media_buys_impl(req, identity=identity)
+        with pytest.raises(AdCPAuthRequiredError) as exc_info:
+            _get_media_buys_impl(req, identity=identity)
 
-        assert isinstance(resp, GetMediaBuysResponse)
-        assert resp.media_buys == []
-        assert resp.errors is not None
+        assert exc_info.value.error_code == "AUTH_MISSING"
+        assert exc_info.value.recovery == "correctable"
 
     def test_account_id_not_supported(self):
         """GMB-A03: account_id parameter raises 'not yet supported' error.
