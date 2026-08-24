@@ -134,12 +134,17 @@ def _rebuild_error(cls: type[AdCPError], code: ErrorCodeT) -> AdCPError:
 class AdCPError(Exception):
     """Base exception for all AdCP errors.
 
-    Class-level identity (``_code``, ``_default_status_code``,
-    ``_default_recovery``) is declared with ``ClassVar`` per PEP 526 — each
-    typed subclass overrides the ``_default_*`` slot, not the public name.
-    The public ``error_code``/``status_code``/``recovery`` are instance
-    attributes set in ``__init__`` from the class-level default unless the
-    caller overrides via kwargs (``error_code=`` on the base, refused on a coded subclass).
+    Class-level identity (``_code``, ``_default_status_code``) is declared
+    with ``ClassVar`` per PEP 526 — each typed subclass overrides the
+    ``_default_*`` slot, not the public name. The public ``error_code``,
+    ``message``, ``recovery`` and ``suggestion`` are read-only properties
+    over ``_error_code`` — functions of the code, resolved from
+    ``CODE_TABLE`` at every read, so no instance can carry a value that
+    disagrees with the table by any route, assignment included.
+    ``status_code`` remains an instance attribute: the HTTP status is a
+    transport choice, not a field of the wire error object, so it is the one
+    per-class default a caller may override (``error_code=`` on the base,
+    refused on a coded subclass).
 
     Code that needs class-level identity (e.g. ``_build_error_code_to_status``
     walking ``__subclasses__()`` to build the wire-code → HTTP-status table)
@@ -147,13 +152,15 @@ class AdCPError(Exception):
     Instance code reads ``self.error_code`` etc. as before.
 
     Attributes:
-        message: Human-readable error description.
+        message: Human-readable error description (read-only, from CODE_TABLE).
         status_code: HTTP status code for REST/FastAPI responses (instance).
-        error_code: Machine-readable error code string (instance).
-        recovery: Recovery classification for buyer agents (instance).
+        error_code: Machine-readable error code string (read-only).
+        recovery: Recovery classification for buyer agents (read-only, from
+            CODE_TABLE).
         details: Optional structured error details.
         field: Optional field name that caused the error.
-        suggestion: Optional correction hint for buyer agents.
+        suggestion: Correction hint for buyer agents (read-only, from
+            CODE_TABLE).
         context: Optional AdCP ContextObject (or dict) echoed in the
             envelope so buyer agents can correlate failures to the
             request that produced them (spec 3.0.0 normative).
@@ -193,38 +200,41 @@ class AdCPError(Exception):
     """
 
     # Class-level identity defaults. Subclasses override these.
-    # Recovery follows the WIRE code, not the internal taxonomy: the base
-    # INTERNAL_ERROR maps to SERVICE_UNAVAILABLE on the wire, whose pinned
-    # enumMetadata classification is transient (#1430 review). Subclasses
-    # whose wire code is pinned terminal declare terminal explicitly.
     _default_status_code: ClassVar[int] = 500
     #: The code this class IS. Annotation only on the base: a class that declares
     #: none cannot be constructed (see ``__new__``), so a code is identity rather
     #: than a default anyone can fall through to.
+    #:
+    #: There is NO class-level recovery or suggestion knob. Both existed as
+    #: ``_default_recovery``/``_default_suggestion`` overrides until it was
+    #: measured that zero subclasses used either — the table owned every value
+    #: in practice, so the knobs were only a route by which a class could come
+    #: to disagree with the pin. They were deleted rather than guarded.
     _code: ClassVar[ErrorCodeT]
-    #: ``None`` means "the table owns my code": recovery resolves from
-    #: ``CODE_TABLE[_code].recovery``. It is the DEFAULT because a class-level literal is a
-    #: hand-maintained transcription of the table, and a transcription can drift from its
-    #: source — which is exactly how two classes came to contradict it while the code
-    #: rewriters hid the disagreement behind a collapse onto spec codes. A subclass that
-    #: still declares a value is now a VISIBLE override of a table-owned default rather than
-    #: inherited boilerplate.
-    _default_recovery: ClassVar[RecoveryHint | None] = None
-    # Optional class-level suggestion default (#1417 round-8 review item 4): a subclass
-    # whose every rejection shares one buyer fix hint (e.g. AUTH_REQUIRED →
-    # "provide valid credentials") sets this so no raise site can forget the
-    # graded top-level ``suggestion``. ``None`` means CODE_TABLE owns the value.
-    # There is no per-raise override: the ``suggestion=`` parameter was DELETED
-    # (salesagent-3dawm.12) precisely so a raise site cannot author one.
-    _default_suggestion: ClassVar[str | None] = None
 
-    # Instance attributes — set in __init__ from _default_* unless overridden.
-    # ``error_code`` and ``message`` are NOT here: they are read-only properties over
-    # ``_error_code``, so neither slot can be written after construction.
+    # Instance attributes — set in __init__.
+    # ``error_code``, ``message``, ``recovery`` and ``suggestion`` are NOT
+    # here: they are read-only properties over ``_error_code``, so none of
+    # those slots can be written after construction.
     _error_code: ErrorCodeT
     status_code: int
-    recovery: RecoveryHint
     internal_detail: BaseException | str | None
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Refuse, at class creation, a subclass whose code the table does not classify.
+
+        ``CODE_TABLE`` is the single classifier: every code carries its
+        recovery, suggestion and message there, so a class naming a code
+        outside it could never resolve those three. Failing here moves that
+        contradiction from the first raise (a ``KeyError`` deep in an error
+        path) to import time, where the class definition itself is the error.
+        """
+        super().__init_subclass__(**kwargs)
+        if hasattr(cls, "_code") and cls._code not in CODE_TABLE:
+            raise TypeError(
+                f"{cls.__name__} declares _code {cls._code!r}, which CODE_TABLE does not "
+                "classify. Declare a code the table knows, or add the entry."
+            )
 
     def __new__(cls, *args: Any, **kwargs: Any) -> AdCPError:
         """Refuse to build an error whose code is absent, or doubly named.
@@ -268,35 +278,20 @@ class AdCPError(Exception):
         # no caught exception's text can reach the wire. Provenance-bearing text goes
         # to ``internal_detail`` (server log only); values go to ``field``/``details``.
         #
-        # Assigned FIRST: the message property and the entry lookup both key on it.
+        # Assigned FIRST: every derived property keys on it.
         self._error_code = error_code if error_code is not None else type(self)._code
-        # A NAMED code is the authority for its own entry. A CLASS-CODED error takes BOTH its
-        # recovery and its suggestion from the table unless it declares an explicit override:
-        # ``None`` on either ClassVar means "the table owns this". A subclass can no longer
-        # silently disagree with the pin -- it can only OVERRIDE, visibly.
-        #
-        # ONE table lookup serves both fields. Two independent lookups would duplicate both the
-        # subscript and the KeyError it can raise.
-        default_recovery: RecoveryHint
-        default_suggestion: str | None
-        if error_code is not None:
-            entry = CODE_TABLE[error_code]
-            default_recovery = cast("RecoveryHint", entry.recovery.value)
-            default_suggestion = entry.suggestion
-        else:
-            # Safe for every concrete subclass: each declares a ``_code`` and every such code is
-            # a CODE_TABLE key, so this cannot KeyError -- and ``__new__`` already refuses a
-            # subclass declaring neither.
-            entry = CODE_TABLE[type(self)._code]
-            declared_recovery = type(self)._default_recovery
-            default_recovery = (
-                cast("RecoveryHint", entry.recovery.value) if declared_recovery is None else declared_recovery
+        # A class-coded error's membership is already settled at class creation
+        # (``__init_subclass__``); a NAMED code is checked here, so an
+        # out-of-table code cannot outlive construction on either path.
+        # ``message``/``recovery``/``suggestion`` need no assignment at all:
+        # they are read-only properties resolving from CODE_TABLE per read.
+        if self._error_code not in CODE_TABLE:
+            raise TypeError(
+                f"error_code {self._error_code!r} is not classified by CODE_TABLE; "
+                "name a code the table knows, or add the entry."
             )
-            declared_suggestion = type(self)._default_suggestion
-            default_suggestion = entry.suggestion if declared_suggestion is None else declared_suggestion
         self.details = details
         self.field = field
-        self.suggestion = default_suggestion
         self.retry_after = retry_after
         self.context = context
         # NON-WIRE. Deliberately absent from to_dict()/to_adcp_error()/
@@ -304,7 +299,6 @@ class AdCPError(Exception):
         # by normalize_to_adcp_error(). Never add it to a serializer.
         self.internal_detail = internal_detail
         self.status_code = status_code if status_code is not None else type(self)._default_status_code
-        self.recovery = default_recovery
         # args stays EMPTY: BaseException.__reduce__ replays ``cls(*args)``, and this
         # constructor takes none. ``__reduce__`` below replays the keyword form instead,
         # and ``__str__`` reads the property, so str(e) and .message cannot diverge.
@@ -324,6 +318,20 @@ class AdCPError(Exception):
         parameter: the text is a function of the code, not of the raise site.
         """
         return CODE_TABLE[self._error_code].message
+
+    @property
+    def recovery(self) -> RecoveryHint:
+        """The pinned recovery classification for this code. Read-only for the
+        same reason as ``message``: recovery is the one field a receiver MUST
+        read to decode an unknown code, so no instance may carry one that
+        disagrees with the table.
+        """
+        return cast("RecoveryHint", CODE_TABLE[self._error_code].recovery.value)
+
+    @property
+    def suggestion(self) -> str:
+        """The pinned correction hint for this code, derived like ``message``."""
+        return CODE_TABLE[self._error_code].suggestion
 
     def __str__(self) -> str:
         return self.message
@@ -377,8 +385,9 @@ class AdCPError(Exception):
         }
         if self.field is not None:
             result["field"] = self.field
-        if self.suggestion is not None:
-            result["suggestion"] = self.suggestion
+        # ``suggestion`` is a read-only property over CODE_TABLE, and every
+        # entry carries one, so it is unconditionally present.
+        result["suggestion"] = self.suggestion
         if self.retry_after is not None:
             result["retry_after"] = self.retry_after
         serialized_context = _serialize_context(self.context)
@@ -717,8 +726,8 @@ class AdCPUrlNotAllowedError(AdCPError):
     ``internal_detail`` (server log only). Deliberate loss in the switch: the retired
     entry's suggestion enumerated the refused host classes, where VALIDATION_ERROR's is
     the generic "review error details and fix field values". A per-class override is NOT
-    the fix -- ``_default_suggestion`` would make the suggestion a function of the class
-    rather than the code, which ADR-010 forbids.
+    the fix -- it would make the suggestion a function of the class rather than the code,
+    which ADR-010 forbids (the override knob that once allowed it is deleted).
     """
 
     _default_status_code: ClassVar[int] = 400
