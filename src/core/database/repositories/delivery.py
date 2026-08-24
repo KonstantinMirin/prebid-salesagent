@@ -23,7 +23,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import WebhookDeliveryLog, WebhookDeliveryRecord
-from src.core.security.webhook_egress import WebhookDeliveryOutcome, WebhookTaskContext
+from src.core.webhooks.delivery import WebhookDeliveryOutcome, WebhookTaskContext
 
 # The ``task_type`` that marks a row as the delivery-poll sequence counter rather
 # than a delivery. Named here because the repository owns what the row means; a

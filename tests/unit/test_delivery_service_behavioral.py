@@ -583,7 +583,7 @@ class TestDeliverWithBackoffGenericException:
     def test_generic_exception_breaks_retry_loop(self):
         from unittest.mock import MagicMock
 
-        from src.core.security.webhook_egress import WebhookDeliveryOutcome
+        from src.core.webhooks.delivery import WebhookDeliveryOutcome
         from src.services.webhook_delivery_service import (
             CircuitBreaker,
             WebhookDeliveryService,

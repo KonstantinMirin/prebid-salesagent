@@ -24,13 +24,10 @@ from google.protobuf.json_format import MessageToDict
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
-from src.core.database.repositories.delivery import DeliveryRepository
-from src.core.security.webhook_egress import (
-    WebhookDeliveryOutcome,
-    WebhookTaskContext,
-    adeliver_webhook,
-)
+from src.core.security.webhook_egress import adeliver_webhook
 from src.core.webhook_validator import webhook_url_for_log
+from src.core.webhooks.delivery import WebhookDeliveryOutcome, WebhookTaskContext
+from src.services.webhook_conclusion import record_conclusion
 
 
 class DeliverableWebhookTarget(Protocol):
@@ -258,14 +255,15 @@ class ProtocolWebhookService:
             assert ctx.tenant_id
             try:
                 with get_db_session() as session:
-                    DeliveryRepository(session, ctx.tenant_id).record_outcome(
+                    record_conclusion(
+                        session,
+                        tenant_id=ctx.tenant_id,
                         ctx=ctx,
                         log_id=log_id,
                         webhook_url=url,
                         outcome=outcome,
                         response_time_ms=response_time_ms,
                     )
-                    session.commit()
             except Exception as e:
                 logger.error(f"Failed to write webhook delivery log: {e}")
 

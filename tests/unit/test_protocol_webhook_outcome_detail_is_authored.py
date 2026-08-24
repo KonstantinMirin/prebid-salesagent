@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from src.core.security.webhook_egress import WebhookDeliveryOutcome
+from src.core.webhooks.delivery import WebhookDeliveryOutcome
 from src.services.protocol_webhook_service import ProtocolWebhookService
 
 # Verbatim shape of adcp.signing.IpPinnedTransport's wrong-host guard message.

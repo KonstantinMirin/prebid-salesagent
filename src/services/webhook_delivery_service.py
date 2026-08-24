@@ -22,14 +22,11 @@ from uuid import uuid4
 
 from adcp import get_adcp_spec_version
 
-from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.security.egress.attempts import env_float
-from src.core.security.webhook_egress import (
-    WebhookDeliveryOutcome,
-    WebhookTaskContext,
-    deliver_webhook,
-)
+from src.core.security.webhook_egress import deliver_webhook
 from src.core.webhook_validator import webhook_url_for_log
+from src.core.webhooks.delivery import WebhookDeliveryOutcome, WebhookTaskContext
+from src.services.webhook_conclusion import record_conclusion
 
 logger = logging.getLogger(__name__)
 
@@ -428,20 +425,20 @@ class WebhookDeliveryService:
         # delivery. Without this swallow a DB error would be caught by
         # this method's outer bare ``except`` and turn a webhook that WAS
         # delivered into ``False`` — and upstream into a spurious retry.
+        # Committed PER CONCLUSION, not once at the end: a later config's
+        # failure must not roll back an earlier config's recorded row.
+        # (expire_on_commit is True, so `config` re-loads after this — safe,
+        # the session is still open, and safe_url was computed above.)
         try:
-            DeliveryRepository(db, tenant_id).record_outcome(
+            record_conclusion(
+                db,
+                tenant_id=tenant_id,
                 ctx=ctx,
                 log_id=str(uuid4()),
                 webhook_url=config.url,
                 outcome=outcome,
                 response_time_ms=int((time.time() - attempt_started) * 1000),
             )
-            # Committed PER CONCLUSION, not once at the end: a later
-            # config's failure must not roll back an earlier config's
-            # recorded row. (expire_on_commit is True, so `config`
-            # re-loads after this — safe, the session is still open, and
-            # safe_url was computed above.)
-            db.commit()
         except Exception as e:
             logger.error("Failed to write webhook delivery log: %s", e)
             db.rollback()

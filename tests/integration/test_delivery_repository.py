@@ -24,7 +24,7 @@ from src.core.database.models import (
     WebhookDeliveryRecord,
 )
 from src.core.database.repositories.delivery import DeliveryRepository
-from src.core.security.webhook_egress import WebhookDeliveryOutcome, WebhookTaskContext
+from src.core.webhooks.delivery import WebhookDeliveryOutcome, WebhookTaskContext
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
