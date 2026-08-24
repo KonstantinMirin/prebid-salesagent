@@ -92,15 +92,19 @@ _BLOCKED_MESSAGE = "Outbound request to the supplied URL was refused by egress p
 class PinnedHost(NamedTuple):
     """The resolved identity a pinned transport is built from.
 
-    A ``tuple[str, str, int]`` return made ``ip, hostname, port = ...`` type-check
-    inside the function that decides what gets dialled, because hostname and IP
-    are both ``str``. Naming the fields is only half the fix — a NamedTuple still
-    unpacks positionally — so the two transport builders read it by ATTRIBUTE.
+    A bare tuple return made ``ip, hostname = ...`` type-check inside the
+    function that decides what gets dialled, because hostname and IP are both
+    ``str``. Naming the fields is only half the fix — a NamedTuple still unpacks
+    positionally — so the two transport builders read it by ATTRIBUTE.
+
+    Carries only what a caller consumes. The SDK's ``resolve_and_validate_host``
+    also returns the port, but no reader of this type has ever used it and
+    ``IpPinnedTransport`` takes no port, so it is dropped at the construction
+    site below rather than projected here for nobody.
     """
 
     hostname: str
     resolved_ip: str
-    port: int
 
 
 class OutboundError(Exception):
@@ -320,7 +324,7 @@ class EgressPolicy:
             raise OutboundRequestBlocked(_BLOCKED_MESSAGE, field=field)
 
         try:
-            hostname, ip, port = resolve_and_validate_host(url, allow_private=allow_private)
+            hostname, ip, _port = resolve_and_validate_host(url, allow_private=allow_private)
         except SSRFValidationError as exc:
             logger.warning("Outbound request refused by address policy: %s", exc)
             raise OutboundRequestBlocked(_BLOCKED_MESSAGE, field=field) from exc
@@ -329,4 +333,4 @@ class EgressPolicy:
             logger.warning("Outbound request refused by address policy: matched the supplement range set")
             raise OutboundRequestBlocked(_BLOCKED_MESSAGE, field=field)
 
-        return PinnedHost(hostname=hostname, resolved_ip=ip, port=port)
+        return PinnedHost(hostname=hostname, resolved_ip=ip)
