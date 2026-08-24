@@ -105,7 +105,7 @@ storyboards:
       A previous revision of this note claimed the 40 "are now gone" and that
       the roadmap dropped "from 80 checks to 48". That was measured against a
       branch carrying a production fix this PR reverts; on the reverted tree it
-      is false. The roadmap now reports 70 ledgered checks.
+      is false. The roadmap reports 80 ledgered checks at the re-seeded head.
       The remaining gap here is the unwritten scenario, not a measured failure.
 
   universal/idempotency.yaml:

@@ -183,8 +183,10 @@ def classify_gates(
     return "UNKNOWN", "unclassified tier"
 
 
-def on_path_from_vendored_index(repo: Path, index: dict[str, Any]) -> set[str]:
-    """On-path storyboard paths, classified purely from a vendored index snapshot.
+def statuses_from_vendored_index(repo: Path, index: dict[str, Any]) -> dict[str, str]:
+    """Storyboard path -> gate status (ON-PATH / GATED / OFF-PATH), offline.
+
+    Classified purely from a vendored index snapshot.
 
     No live ``~/projects/adcp`` clone: every gate value (``required_tools``,
     ``requires_capability``, ``required_by``) is already structured in
@@ -205,7 +207,7 @@ def on_path_from_vendored_index(repo: Path, index: dict[str, Any]) -> set[str]:
         if entry.get("required_by")
     }
 
-    on_path: set[str] = set()
+    statuses: dict[str, str] = {}
     for rel, entry in storyboards.items():
         capability = entry.get("requires_capability")
         status, _ = classify_gates(
@@ -216,9 +218,18 @@ def on_path_from_vendored_index(repo: Path, index: dict[str, Any]) -> set[str]:
             tools=ADVERTISED_TOOLS,
             required_by=required_by,
         )
-        if status == "ON-PATH":
-            on_path.add(rel)
-    return on_path
+        statuses[rel] = status
+    return statuses
+
+
+def on_path_from_vendored_index(repo: Path, index: dict[str, Any]) -> set[str]:
+    """The ON-PATH subset of :func:`statuses_from_vendored_index`.
+
+    Kept as its own name because two guards ask exactly this question and
+    reading ``{k for k, v in ... if v == "ON-PATH"}`` at each call site is how a
+    second implementation starts.
+    """
+    return {rel for rel, status in statuses_from_vendored_index(repo, index).items() if status == "ON-PATH"}
 
 
 def covered_storyboards(repo: Path) -> dict[str, list[str]]:

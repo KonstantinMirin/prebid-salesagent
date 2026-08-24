@@ -87,6 +87,21 @@ class CheckRecord:
     # provenance — every claim below is checkable against this
     citation: str
     tier: str
+    # conformance scope. Every check the pinned spec defines for a storyboard we
+    # can reach is indexed, INCLUDING one we do not grade — a gated check is a
+    # row with `gate="GATED"`, never a row that was dropped. Deleting them made
+    # the headline count a floor that read like a total, and made a single
+    # misclassification silently shrink the denominator by 43.
+    #
+    # GATED means "this storyboard declares `requires_capability` and the
+    # offline classifier cannot evaluate it" — `declared_capabilities()` exposes
+    # specialisms and protocols only, so a `media_buy.features.*` path is not
+    # expressible. It does NOT assert we lack the capability. The live @adcp/sdk
+    # runner reads the real capability document off the wire and may well grade
+    # what we gate; when the two disagree the runner is right and the ledger
+    # will show it. Reported, not hidden — that is the point of the column.
+    gate: str
+    gate_reason: str
     # gating: why a check may be unreachable rather than untested
     required_tools: list[str]
     requires_controller: bool
@@ -185,6 +200,11 @@ def _wire_fields(entry: dict[str, Any] | None, requires_controller: bool) -> dic
     }
 
 
+# Statuses that earn a row in the index. OFF-PATH (a protocol we do not declare
+# at all) stays out — that is a different agent's surface, not a gap in ours.
+INDEXED_STATUSES = ("ON-PATH", "GATED")
+
+
 def build(repo: Path, adcp: Path) -> dict[str, Any]:
     coverage = storyboard_coverage_map.build(repo, adcp)
     dist = storyboard_spec.dist_root(adcp, coverage["pinned_version"])
@@ -192,13 +212,17 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     ledger_failures = _ledger_steps(repo)
     wireability = ledger.load_wireability(repo)
     buckets = binding_buckets(repo, adcp)
-    claiming_scenarios = {s for row in coverage["storyboards"] if row["status"] == "ON-PATH" for s in row["covered_by"]}
+    claiming_scenarios = {
+        s for row in coverage["storyboards"] if row["status"] in INDEXED_STATUSES for s in row["covered_by"]
+    }
     liveness = scenario_liveness_join.build_index(claiming_scenarios)
 
     records: list[CheckRecord] = []
     for row in coverage["storyboards"]:
-        if row["status"] != "ON-PATH":
+        if row["status"] not in INDEXED_STATUSES:
             continue
+        gate = row["status"]
+        gate_reason = row["reason"] if gate == "GATED" else ""
         text = (dist / row["storyboard"]).read_text(encoding="utf-8")
         storyboard_id = storyboard_spec.storyboard_id(text) or row["stem"].replace("-", "_")
         tools = sorted(storyboard_spec.required_tools(text))
@@ -215,7 +239,12 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
             # gradable checks ungradable.
             step_controller = CONTROLLER in tools or CONTROLLER in storyboard_spec.step_tools(text, step_id)
             wire = _wire_fields(wireability.get(f"{row['storyboard']}::{step_id}"), step_controller)
-            measured = "FAILING" if failing else ("ungradable" if step_controller else "no ledger entry")
+            if gate == "GATED":
+                # Not graded, so not "no ledger entry" either — that phrasing
+                # belongs to a check we DO grade and that happens to pass.
+                measured = "gated"
+            else:
+                measured = "FAILING" if failing else ("ungradable" if step_controller else "no ledger entry")
             claiming = row["covered_by"]
             live_facts = {s: liveness[s] for s in claiming}
             # A ledgered claiming scenario (a curated xfail for a known gap) whose
@@ -236,6 +265,8 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
                     # provenance — every claim below is checkable against this
                     citation=f"repo=adcp ref={coverage['pinned_version']} path={row['storyboard']}",
                     tier=storyboard_spec.storyboard_tier(row["storyboard"]),
+                    gate=gate,
+                    gate_reason=gate_reason,
                     # gating: why a check may be unreachable rather than untested
                     required_tools=tools,
                     requires_controller=step_controller,
@@ -297,23 +328,35 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
             + "\n".join(f"  {s}" for s in unresolved_scenarios)
         )
 
-    gaps = [r for r in records if not r.scenarios and not r.issues]
+    # Every derived metric below is scoped to the GRADED surface (gate="ON-PATH").
+    # A gated check has no ledger entry by construction and its BDD/wireability
+    # status grades nothing, so folding it into "claimed by a scenario" or
+    # "measured FAILING" would inflate a denominator with rows that cannot move.
+    # `checks` (total in scope) and `graded_checks` are therefore two numbers,
+    # not one — the earlier single number was the graded set wearing the total's
+    # label, which is exactly how 43 checks went missing without a trace.
+    graded = [r for r in records if r.gate == "ON-PATH"]
+    gaps = [r for r in graded if not r.scenarios and not r.issues]
     return {
         "pinned_version": coverage["pinned_version"],
         "totals": {
             "checks": len(records),
             "storyboards": len({r.storyboard for r in records}),
-            "with_scenario": sum(1 for r in records if r.scenarios),
-            "with_live_scenario": sum(1 for r in records if r.graded_by_live_scenario),
-            "graduation_candidates": sum(1 for r in records if r.graduation_candidate),
-            "with_issue": sum(1 for r in records if r.issues),
+            "graded_checks": len(graded),
+            "graded_storyboards": len({r.storyboard for r in graded}),
+            "gated_checks": len(records) - len(graded),
+            "gated_storyboards": len({r.storyboard for r in records if r.gate == "GATED"}),
+            "with_scenario": sum(1 for r in graded if r.scenarios),
+            "with_live_scenario": sum(1 for r in graded if r.graded_by_live_scenario),
+            "graduation_candidates": sum(1 for r in graded if r.graduation_candidate),
+            "with_issue": sum(1 for r in graded if r.issues),
             "neither": len(gaps),
-            "failing": sum(1 for r in records if r.measured_failing_protocols),
-            "ungradable": sum(1 for r in records if r.requires_controller),
-            "wireable": sum(1 for r in records if r.e2e_wireable == "wireable"),
-            "conditional": sum(1 for r in records if r.e2e_wireable == "conditional"),
-            "not_wireable": sum(1 for r in records if r.e2e_wireable == "not_wireable"),
-            "unassessed": sum(1 for r in records if r.e2e_wireable == "unassessed"),
+            "failing": sum(1 for r in graded if r.measured_failing_protocols),
+            "ungradable": sum(1 for r in graded if r.requires_controller),
+            "wireable": sum(1 for r in graded if r.e2e_wireable == "wireable"),
+            "conditional": sum(1 for r in graded if r.e2e_wireable == "conditional"),
+            "not_wireable": sum(1 for r in graded if r.e2e_wireable == "not_wireable"),
+            "unassessed": sum(1 for r in graded if r.e2e_wireable == "unassessed"),
         },
         # to_dict() at the JSONL boundary, mirroring Binding.to_dict() — every
         # consumer of build()'s return value (render(), jsonl(), the plain
@@ -346,8 +389,17 @@ def render(result: dict[str, Any]) -> str:
         "view of those same records, so they cannot disagree. Regenerate both with "
         "`scripts/audit/storyboard_check_index.py` (`--jsonl` / `--markdown`).",
         "",
-        f"- graded checks on our conformance path: **{totals['checks']}** across "
-        f"**{totals['storyboards']}** storyboards",
+        f"- checks the pinned spec defines for storyboards on our protocol: **{totals['checks']}** "
+        f"across **{totals['storyboards']}** storyboards",
+        f"- of those, GRADED (`gate=ON-PATH`): **{totals['graded_checks']}** across "
+        f"**{totals['graded_storyboards']}** storyboards — every metric below is over this set",
+        f"- GATED, not graded (`gate=GATED`): **{totals['gated_checks']}** across "
+        f"**{totals['gated_storyboards']}** storyboards. GATED means the storyboard declares "
+        "`requires_capability` and the OFFLINE classifier cannot evaluate it — "
+        "`declared_capabilities()` exposes specialisms and protocols only, so a "
+        "`media_buy.features.*` path is not expressible. It is not a claim that we lack the "
+        "capability: the live runner reads the real capability document off the wire and may "
+        "grade what we gate. These rows are listed, with their reason, in §7.",
         f"- claimed by a BDD scenario: **{totals['with_scenario']}**",
         f"- graded by a LIVE scenario (steps bound + registry-verified harness): **{totals['with_live_scenario']}**",
         f"- tracked by an issue: **{totals['with_issue']}**",

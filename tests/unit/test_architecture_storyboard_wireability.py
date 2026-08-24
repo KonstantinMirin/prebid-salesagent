@@ -236,7 +236,16 @@ def test_every_on_path_non_controller_step_is_assessed_or_untriaged() -> None:
     identity against the committed wireability file.
     """
     result = storyboard_check_index.build(REPO_ROOT, ADCP_HOME)
-    required = {f"{r['storyboard']}::{r['step_id']}" for r in result["records"] if not r["requires_controller"]}
+    # Scoped to the GRADED surface. The index now also carries `gate="GATED"`
+    # records (a storyboard whose `requires_capability` the offline classifier
+    # cannot evaluate) so the published totals stop reading as a floor — but we
+    # do not grade those checks, so demanding an e2e wireability verdict for
+    # them would be triage debt for work nobody is measured on.
+    required = {
+        f"{r['storyboard']}::{r['step_id']}"
+        for r in result["records"]
+        if not r["requires_controller"] and r["gate"] == "ON-PATH"
+    }
     assert required, "no on-path, non-controller-gated records resolved — the fixture, not the fix, is broken"
 
     missing = sorted(_missing(required, set(_steps()), _untriaged()))
@@ -285,9 +294,14 @@ def _min_record(**overrides) -> dict:
 
 
 def _min_totals(records: list[dict]) -> dict:
+    graded = [r for r in records if r.get("gate", "ON-PATH") == "ON-PATH"]
     return {
         "checks": len(records),
         "storyboards": len({r["storyboard"] for r in records}),
+        "graded_checks": len(graded),
+        "graded_storyboards": len({r["storyboard"] for r in graded}),
+        "gated_checks": len(records) - len(graded),
+        "gated_storyboards": len({r["storyboard"] for r in records if r.get("gate") == "GATED"}),
         "with_scenario": sum(1 for r in records if r["scenarios"]),
         "with_live_scenario": sum(1 for r in records if r["graded_by_live_scenario"]),
         "graduation_candidates": sum(1 for r in records if r["graduation_candidate"]),

@@ -802,7 +802,11 @@ def run_cli(
             print(json.dumps(record, sort_keys=True))
         wrote = True
     if args.markdown:
-        print(render_fn(result))
+        # Exactly ONE trailing newline. render_fn already ends its last line, so
+        # a bare print() added a second — which end-of-file-fixer then strips,
+        # leaving the committed artifact permanently unreproducible from its own
+        # generator and every regeneration a spurious one-byte diff.
+        sys.stdout.write(render_fn(result).rstrip("\n") + "\n")
         wrote = True
     if not wrote:
         print(json.dumps(result, indent=2))

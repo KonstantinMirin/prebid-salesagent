@@ -382,6 +382,21 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         config.workeroutput[_WORKEROUTPUT_KEY] = [_RECORDS[k].to_dict() for k in sorted(_RECORDS)]
         return
 
+    # A COLLECT-ONLY session observes nothing: no scenario runs, so `_RECORDS`
+    # is empty by construction rather than by measurement. Writing here would
+    # clobber a real artifact with `{"scenarios": []}`, and the join
+    # (scripts/audit/scenario_liveness_join.load_artifact) fails CLOSED on an
+    # empty file — so the next artifact regeneration silently reports liveness
+    # as 0 for every check.
+    #
+    # This is not hypothetical. tests/unit/test_architecture_env_route_agreement.py
+    # shells out to `pytest tests/bdd --collect-only` to derive its marker sets,
+    # which means `make quality` destroyed the liveness artifact on every run and
+    # the published "graded by a LIVE scenario" figure could not be reproduced by
+    # anyone who had run the unit suite since their last BDD run.
+    if getattr(config.option, "collectonly", False):
+        return
+
     # Controller (or a serial run): merge this process's own records over any
     # shards received, then write once.
     _merge_shard([_RECORDS[k].to_dict() for k in sorted(_RECORDS)])

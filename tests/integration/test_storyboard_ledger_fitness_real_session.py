@@ -3,8 +3,8 @@
 ``tests/bdd/e2e_rest_known_failures.txt`` has one
 (``tests/unit/test_e2e_rest_ledger_fitness.py::
 test_every_ledger_entry_resolves_to_a_collected_item``);
-``tests/storyboard/known_failures.txt`` — 101 entries, 69 ``mcp::`` + 32 ``a2a::``
-— has none. The consequence is written into the ledger's own header, which
+``tests/storyboard/known_failures.txt`` — whose exact contents are pinned by
+``EXPECTED_LEDGER`` — has none. The consequence is written into the ledger's own header, which
 claims "a graduation (entry no longer failing) or a regression (new un-ledgered
 failure) both fail CI". Only the second half is true today: the ledger xfails
 NON-STRICTLY by nodeid, and ``test_storyboard_conformance._collect_checks``
@@ -19,7 +19,7 @@ against the collected nodeids. The storyboard suite's parametrization is not
 static: ``pytest_generate_tests`` SHELLS OUT TO A LIVE AGENT, and without
 ``STORYBOARD_COMPLIANCE_DIR``/``STORYBOARD_SCHEMA_ROOT`` it short-circuits to a
 single ``environment-not-configured`` id. A verbatim port would therefore either
-declare all 101 entries stale on every developer machine, or skip and grade
+declare every entry stale on every developer machine, or skip and grade
 nothing. The join must be computed **in-session**, from the ids
 ``pytest_generate_tests`` itself produced — which means it only BITES in the
 in-network job, where the runner really grades the agent. Everywhere else the
@@ -48,7 +48,7 @@ correct failure everywhere except the one job that installs those deps. Pointing
 the nested session at the whole directory therefore added exactly one failing
 item to all three cases on every machine without the npm install (CI run
 32152198573's "Integration (other)": ``{'failed': 2, 'xfailed': 74}``,
-``{'failed': 1, 'xfailed': 101}``, ``{'failed': 1, 'skipped': 1}`` — each one more
+``{'failed': 1, 'xfailed': N}``, ``{'failed': 1, 'skipped': 1}`` — each one more
 than expected), and passed only where a developer had happened to install them.
 The subject under measurement here is the conformance module's parametrization
 and ledger join, so that is what the session collects; the sdk pin guard is
@@ -69,6 +69,8 @@ from typing import Any
 import pytest
 
 from scripts.audit import ledger
+from tests.helpers.ledger import load_ledger_nodeids
+from tests.unit import test_storyboard_ledger_state as ledger_state
 
 pytestmark = [pytest.mark.integration]
 
@@ -103,14 +105,29 @@ def pytest_configure(config):
 
 def _ledger_entries() -> list[ledger.LedgerCheckId]:
     entries = ledger.load(LEDGER)
-    # The premise of every case below. A ledger that has been emptied or whose
-    # grammar drifted would make all three vacuous.
-    # 101 = 75 seeded - 14 (the "newly reachable after the version-envelope fix"
-    # block, whose entries were only collectable because of a production fix this
-    # branch reverts) + 40 (mcp signed_requests, GRADED because the capability
-    # probe is rejected — GH #1291). The 32 a2a:: entries are unchanged: that run
-    # graded 0 A2A checks (GH #1440), so they were never measured.
-    assert len(entries) == 101, f"expected the measured 101-entry storyboard ledger, loaded {len(entries)}"
+    # The premise of every case below: a ledger that has been emptied, or whose
+    # grammar drifted, would make all three vacuous.
+    #
+    # Pinned against EXPECTED_LEDGER — the ONE place the ledger's exact contents
+    # are fixed — rather than against a literal count. A bare integer here has
+    # now rotted on every re-seed (44 -> 75 -> 101 -> 81) and each time it went
+    # stale in a DIFFERENT file from the one being re-seeded, so the re-seeder
+    # never saw it. Comparing sets, not lengths, also makes the failure name the
+    # entries that moved instead of just the arithmetic.
+    # Both sides as NODEIDs: LedgerCheckId.format() emits the bracket CONTENT
+    # (`mcp::core::…`), while EXPECTED_LEDGER holds full pytest nodeids.
+    expected = ledger_state.EXPECTED_LEDGER
+    actual = load_ledger_nodeids(LEDGER)
+    if actual != expected:
+        only_ledger = sorted(actual - expected)
+        only_expected = sorted(expected - actual)
+        raise AssertionError(
+            "the storyboard ledger disagrees with EXPECTED_LEDGER in "
+            "tests/unit/test_storyboard_ledger_state.py — re-seed both together. "
+            f"ledger={len(actual)} EXPECTED_LEDGER={len(expected)}\n"
+            f"  only in the ledger ({len(only_ledger)}): {only_ledger[:5]}\n"
+            f"  only in EXPECTED_LEDGER ({len(only_expected)}): {only_expected[:5]}"
+        )
     assert {e.protocol for e in entries} == {"mcp", "a2a"}
     return entries
 
@@ -222,7 +239,7 @@ def test_unconfigured_session_does_not_report_stale_entries(tmp_path: Path) -> N
 
     Without ``STORYBOARD_COMPLIANCE_DIR``/``STORYBOARD_SCHEMA_ROOT``,
     ``pytest_generate_tests`` emits the single ``environment-not-configured``
-    id. Treating that as "100 of 101 entries are stale" is the failure mode that
+    id. Treating that as "every entry but one is stale" is the failure mode that
     makes a verbatim port of the e2e_rest fitness test unusable, and it would
     red every offline run of this suite.
     """

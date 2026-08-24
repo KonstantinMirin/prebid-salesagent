@@ -39,7 +39,7 @@ CHECKS_JSONL = REPO_ROOT / "docs" / "test-obligations" / "storyboard-checks.json
 
 sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.audit import storyboard_coverage_map, storyboard_spec  # noqa: E402
+from scripts.audit import storyboard_check_index, storyboard_coverage_map, storyboard_spec  # noqa: E402
 
 
 def _index() -> dict[str, Any]:
@@ -54,7 +54,10 @@ def _violations(records: list[dict[str, Any]], index: dict[str, Any]) -> list[st
     """The storyboard-level cross-checks. Empty when the JSONL still agrees with the index."""
     storyboards: dict[str, dict[str, Any]] = index["storyboards"]
     fixture_version: str = index["adcp_spec_version"]
-    on_path = storyboard_coverage_map.on_path_from_vendored_index(REPO_ROOT, index)
+    # The full status map, not just the on-path set: the JSONL now indexes GATED
+    # storyboards too (with `gate="GATED"`), so the offline cross-check grades
+    # the gate COLUMN rather than asserting every indexed row is on-path.
+    statuses = storyboard_coverage_map.statuses_from_vendored_index(REPO_ROOT, index)
 
     grouped: dict[str, list[dict[str, Any]]] = {}
     for record in records:
@@ -67,8 +70,19 @@ def _violations(records: list[dict[str, Any]], index: dict[str, Any]) -> list[st
             problems.append(f"{rel}: not present in the vendored index at {fixture_version}")
             continue
 
-        if rel not in on_path:
-            problems.append(f"{rel}: no longer classifies ON-PATH from the vendored index + declared capabilities")
+        expected_status = statuses.get(rel, "OFF-PATH")
+        if expected_status not in storyboard_check_index.INDEXED_STATUSES:
+            problems.append(
+                f"{rel}: classifies {expected_status} from the vendored index + declared capabilities, "
+                "so it should not be indexed at all"
+            )
+        else:
+            gates = {r["gate"] for r in rows}
+            if gates != {expected_status}:
+                problems.append(
+                    f"{rel}: gate {sorted(gates)} does not match {expected_status!r} derived offline "
+                    "from the vendored index + declared capabilities"
+                )
 
         expected_tier = storyboard_spec.storyboard_tier(rel)
         tiers = {r["tier"] for r in rows}

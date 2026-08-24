@@ -2,14 +2,16 @@
 
 **One row per graded check**, not per storyboard. Generated from `storyboard-checks.jsonl`, which is the source of truth — every table below is a view of those same records, so they cannot disagree. Regenerate both with `scripts/audit/storyboard_check_index.py` (`--jsonl` / `--markdown`).
 
-- graded checks on our conformance path: **1135** across **61** storyboards
+- checks the pinned spec defines for storyboards on our protocol: **1343** across **68** storyboards
+- of those, GRADED (`gate=ON-PATH`): **1135** across **61** storyboards — every metric below is over this set
+- GATED, not graded (`gate=GATED`): **208** across **7** storyboards. GATED means the storyboard declares `requires_capability` and the OFFLINE classifier cannot evaluate it — `declared_capabilities()` exposes specialisms and protocols only, so a `media_buy.features.*` path is not expressible. It is not a claim that we lack the capability: the live runner reads the real capability document off the wire and may grade what we gate. These rows are listed, with their reason, in §7.
 - claimed by a BDD scenario: **184**
-- graded by a LIVE scenario (steps bound + registry-verified harness): **75**
+- graded by a LIVE scenario (steps bound + registry-verified harness): **89**
 - tracked by an issue: **442**
 - **neither scenario nor ticket: 509**
-- measured FAILING: **130**
+- measured FAILING: **143**
 - permanently ungradable (`comply_test_controller`): **481**
-- graduation candidates (ledgered, not measured FAILING): **75**
+- graduation candidates (ledgered, not measured FAILING): **89**
 
 E2E wireability — **451** wireable as-is, **197** conditional on provisioning, **487** not wireable.
 
@@ -34,6 +36,60 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `media_buy_seller/audience_buy_flow/simulate_audience_delivery/field_value` | ungradable | — |
 | `media_buy_seller/audience_buy_flow/get_audience_delivery/response_schema` | ungradable | — |
 | `media_buy_seller/audience_buy_flow/get_audience_delivery/field_present` | ungradable | — |
+| `media_buy_seller/available_actions/get_product_allowed_actions/response_schema` | gated | — |
+| `media_buy_seller/available_actions/get_product_allowed_actions/field_value` | gated | — |
+| `media_buy_seller/available_actions/get_product_allowed_actions/field_contains` | gated | — |
+| `media_buy_seller/available_actions/get_product_allowed_actions/field_contains#1` | gated | — |
+| `media_buy_seller/available_actions/get_product_allowed_actions/field_contains#2` | gated | — |
+| `media_buy_seller/available_actions/get_product_allowed_actions/field_contains#3` | gated | — |
+| `media_buy_seller/available_actions/sync_available_actions_creative/response_schema` | gated | — |
+| `media_buy_seller/available_actions/sync_available_actions_creative/field_value` | gated | — |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/response_schema` | gated | — |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_present` | gated | — |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_present#1` | gated | — |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_value` | gated | — |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_value#1` | gated | — |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_contains` | gated | — |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_contains#1` | gated | — |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_contains#2` | gated | — |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_present#2` | gated | — |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/response_schema` | gated | — |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/field_value` | gated | — |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/field_value#1` | gated | — |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/field_contains` | gated | — |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/field_contains#1` | gated | — |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/field_contains#2` | gated | — |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/field_value#2` | gated | — |
+| `media_buy_seller/available_actions/increase_budget/response_schema` | gated | — |
+| `media_buy_seller/available_actions/increase_budget/field_value` | gated | — |
+| `media_buy_seller/available_actions/increase_budget/field_present` | gated | — |
+| `media_buy_seller/available_actions/increase_budget/field_contains` | gated | — |
+| `media_buy_seller/available_actions/increase_budget/field_contains#1` | gated | — |
+| `media_buy_seller/available_actions/increase_budget/field_value#1` | gated | — |
+| `media_buy_seller/available_actions/direct_extend_requires_approval/error_code` | gated | — |
+| `media_buy_seller/available_actions/direct_extend_requires_approval/field_value` | gated | — |
+| `media_buy_seller/available_actions/direct_extend_requires_approval/field_value#1` | gated | — |
+| `media_buy_seller/available_actions/direct_extend_requires_approval/field_value#2` | gated | — |
+| `media_buy_seller/available_actions/direct_extend_requires_approval/field_contains` | gated | — |
+| `media_buy_seller/available_actions/direct_extend_requires_approval/field_value#3` | gated | — |
+| `media_buy_seller/available_actions/direct_cancel_requires_approval/error_code` | gated | — |
+| `media_buy_seller/available_actions/direct_cancel_requires_approval/field_value` | gated | — |
+| `media_buy_seller/available_actions/direct_cancel_requires_approval/field_value#1` | gated | — |
+| `media_buy_seller/available_actions/direct_cancel_requires_approval/field_value#2` | gated | — |
+| `media_buy_seller/available_actions/direct_cancel_requires_approval/field_contains` | gated | — |
+| `media_buy_seller/available_actions/direct_cancel_requires_approval/field_value#3` | gated | — |
+| `media_buy_seller/available_actions/direct_decrease_wrong_status/error_code` | gated | — |
+| `media_buy_seller/available_actions/direct_decrease_wrong_status/field_value` | gated | — |
+| `media_buy_seller/available_actions/direct_decrease_wrong_status/field_value#1` | gated | — |
+| `media_buy_seller/available_actions/direct_decrease_wrong_status/field_value#2` | gated | — |
+| `media_buy_seller/available_actions/direct_decrease_wrong_status/field_contains` | gated | — |
+| `media_buy_seller/available_actions/direct_decrease_wrong_status/field_value#3` | gated | — |
+| `media_buy_seller/available_actions/direct_pause_not_supported_on_product/error_code` | gated | — |
+| `media_buy_seller/available_actions/direct_pause_not_supported_on_product/field_value` | gated | — |
+| `media_buy_seller/available_actions/direct_pause_not_supported_on_product/field_value#1` | gated | — |
+| `media_buy_seller/available_actions/direct_pause_not_supported_on_product/field_value#2` | gated | — |
+| `media_buy_seller/available_actions/direct_pause_not_supported_on_product/field_contains` | gated | — |
+| `media_buy_seller/available_actions/direct_pause_not_supported_on_product/field_value#3` | gated | — |
 | `media_buy_seller/billing_finality_delivery/sync_accounts/response_schema` | ungradable | — |
 | `media_buy_seller/billing_finality_delivery/sync_accounts/field_present` | ungradable | — |
 | `media_buy_seller/billing_finality_delivery/create_media_buy/response_schema` | ungradable | — |
@@ -140,17 +196,6 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `media_buy_seller/create_media_buy_async/create_media_buy_submitted/field_value#1` | ungradable | — |
 | `media_buy_seller/create_media_buy_async/create_media_buy_submitted/field_present#1` | ungradable | — |
 | `media_buy_seller/create_media_buy_async/create_media_buy_submitted/field_value#2` | ungradable | — |
-| `media_buy_seller/creative_fate_after_cancellation/get_products_brief/response_schema` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/creative_fate_after_cancellation/get_products_brief/field_present` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/creative_fate_after_cancellation/get_products_brief/field_present#1` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/creative_reception/get_capabilities/response_schema` | FAILING | `mcp` |
-| `media_buy_seller/creative_reception/get_capabilities/field_present` | FAILING | `mcp` |
-| `media_buy_seller/creative_reception/get_capabilities/field_present#1` | FAILING | `mcp` |
-| `media_buy_seller/creative_reception/get_capabilities/field_value` | FAILING | `mcp` |
-| `media_buy_seller/creative_reception/sync_creatives/response_schema` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/creative_reception/sync_creatives/field_present` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/creative_reception/sync_creatives/field_present#1` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/creative_reception/sync_creatives/field_value` | FAILING | `a2a`, `mcp` |
 | `media_buy_seller/delivery_reporting/sync_accounts/response_schema` | ungradable | — |
 | `media_buy_seller/delivery_reporting/sync_accounts/field_present` | ungradable | — |
 | `media_buy_seller/delivery_reporting/get_products_brief/response_schema` | ungradable | — |
@@ -267,6 +312,20 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `media_buy_seller/dependency_impairment_cardinality/verify_cardinality_zero/response_schema` | ungradable | — |
 | `media_buy_seller/dependency_impairment_cardinality/verify_cardinality_zero/field_value` | ungradable | — |
 | `media_buy_seller/dependency_impairment_cardinality/verify_cardinality_zero/field_value_or_absent` | ungradable | — |
+| `media_buy_seller/event_dedup_flow/sync_accounts/response_schema` | gated | — |
+| `media_buy_seller/event_dedup_flow/sync_accounts/field_present` | gated | — |
+| `media_buy_seller/event_dedup_flow/get_products_for_dedup/response_schema` | gated | — |
+| `media_buy_seller/event_dedup_flow/get_products_for_dedup/field_present` | gated | — |
+| `media_buy_seller/event_dedup_flow/sync_event_sources/response_schema` | gated | — |
+| `media_buy_seller/event_dedup_flow/sync_event_sources/field_present` | gated | — |
+| `media_buy_seller/event_dedup_flow/sync_event_sources/field_present#1` | gated | — |
+| `media_buy_seller/event_dedup_flow/create_media_buy_dedup/response_schema` | gated | — |
+| `media_buy_seller/event_dedup_flow/create_media_buy_dedup/field_present` | gated | — |
+| `media_buy_seller/event_dedup_flow/log_event_from_pixel/response_schema` | gated | — |
+| `media_buy_seller/event_dedup_flow/log_event_from_capi/response_schema` | gated | — |
+| `media_buy_seller/event_dedup_flow/simulate_deduplicated_delivery/field_value` | gated | — |
+| `media_buy_seller/event_dedup_flow/get_dedup_delivery/response_schema` | gated | — |
+| `media_buy_seller/event_dedup_flow/get_dedup_delivery/field_value` | gated | — |
 | `media_buy_seller/frequency_cap_enforcement/sync_accounts/response_schema` | ungradable | — |
 | `media_buy_seller/frequency_cap_enforcement/sync_accounts/field_present` | ungradable | — |
 | `media_buy_seller/frequency_cap_enforcement/get_products_for_frequency_cap/response_schema` | ungradable | — |
@@ -311,16 +370,49 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#4` | ungradable | — |
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#5` | ungradable | — |
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#6` | ungradable | — |
-| `media_buy_seller/invalid_transitions/get_products_brief/response_schema` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/invalid_transitions/get_products_brief/field_present` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/invalid_transitions/update_unknown_package/error_code` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/invalid_transitions/update_unknown_package/field_present` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/invalid_transitions/update_unknown_package/field_value` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/inventory_list_no_match/get_products_brief/response_schema` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/inventory_list_no_match/get_products_brief/field_present` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/inventory_list_targeting/get_products_brief/response_schema` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/inventory_list_targeting/get_products_brief/field_present` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/inventory_list_targeting/get_products_brief/field_present#1` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/inline_creatives_without_sync/get_capabilities/response_schema` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_capabilities/field_present` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_capabilities/field_value` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_capabilities/field_value#1` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_products_canonical_format/response_schema` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_products_canonical_format/field_present` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_products_canonical_format/field_present#1` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_products_canonical_format/field_present#2` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_products_canonical_format/field_value` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_canonical_inline_creative/response_schema` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_canonical_inline_creative/field_present` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_canonical_inline_creative/field_present#1` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_canonical_inline_creative/field_value` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_canonical_inline_creative/field_value#1` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_canonical_inline_creative/response_schema` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_canonical_inline_creative/field_equals_context` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_canonical_inline_creative/field_equals_context#1` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_canonical_inline_creative/field_contains` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_canonical_inline_creative/field_value` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_products_legacy_format/response_schema` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_products_legacy_format/field_present` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_products_legacy_format/field_present#1` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_products_legacy_format/field_value` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_legacy_inline_creative/response_schema` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_legacy_inline_creative/field_present` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_legacy_inline_creative/field_present#1` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_legacy_inline_creative/field_value` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_legacy_inline_creative/field_value#1` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_legacy_inline_creative/response_schema` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_legacy_inline_creative/field_equals_context` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_legacy_inline_creative/field_equals_context#1` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_legacy_inline_creative/field_contains` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_legacy_inline_creative/field_value` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_canonical_media_buy_after_inline_replacement/response_schema` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_canonical_media_buy_after_inline_replacement/field_equals_context` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_canonical_media_buy_after_inline_replacement/field_equals_context#1` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_canonical_media_buy_after_inline_replacement/field_value` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_canonical_media_buy_after_inline_replacement/field_value#1` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_legacy_media_buy_after_inline_replacement/response_schema` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_legacy_media_buy_after_inline_replacement/field_equals_context` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_legacy_media_buy_after_inline_replacement/field_equals_context#1` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_legacy_media_buy_after_inline_replacement/field_value` | gated | — |
+| `media_buy_seller/inline_creatives_without_sync/get_legacy_media_buy_after_inline_replacement/field_value#1` | gated | — |
 | `media_buy_seller/measurement_accountability/sync_accounts/response_schema` | ungradable | — |
 | `media_buy_seller/measurement_accountability/sync_accounts/field_present` | ungradable | — |
 | `media_buy_seller/measurement_accountability/get_products_required_metrics/response_schema` | ungradable | — |
@@ -332,12 +424,47 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `media_buy_seller/measurement_accountability/simulate_delivery/field_value` | ungradable | — |
 | `media_buy_seller/measurement_accountability/get_delivery_clean/response_schema` | ungradable | — |
 | `media_buy_seller/measurement_accountability/get_delivery_clean/field_value_or_absent` | ungradable | — |
-| `media_buy_seller/measurement_terms_rejected/get_products_brief/response_schema` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/measurement_terms_rejected/get_products_brief/field_present` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/measurement_terms_rejected/get_products_brief/field_present#1` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/measurement_terms_rejected/create_media_buy_aggressive_terms/error_code` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/measurement_terms_rejected/create_media_buy_aggressive_terms/field_present` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/measurement_terms_rejected/create_media_buy_aggressive_terms/field_value` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/pending_creatives_to_start/get_products_brief/response_schema` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/get_products_brief/field_present` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/get_products_brief/field_present#1` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/response_schema` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_present` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_value` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_value#1` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_present#1` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_value#2` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_equals_context` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_value#3` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/sync_creative/response_schema` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/assign_creative_to_package/response_schema` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/assign_creative_to_package/field_present` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/assign_creative_to_package/field_contains` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/assign_creative_to_package/field_value` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/assign_creative_to_package/field_value#1` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/get_media_buy_after_sync/response_schema` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/get_media_buy_after_sync/field_value` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/get_media_buy_after_sync/field_equals_context` | gated | — |
+| `media_buy_seller/pending_creatives_to_start/get_media_buy_after_sync/field_value#1` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/sync_accounts/response_schema` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/sync_accounts/field_present` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/get_products_for_per_creative/response_schema` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/get_products_for_per_creative/field_present` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/sync_event_sources/response_schema` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/sync_event_sources/field_present` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/sync_event_sources/upstream_traffic` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/sync_two_creatives/response_schema` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/sync_two_creatives/field_present` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/sync_two_creatives/field_present#1` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/create_media_buy_two_creatives/response_schema` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/create_media_buy_two_creatives/field_present` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/log_purchase_event_1/response_schema` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/log_purchase_event_2/response_schema` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/simulate_per_creative_delivery/field_value` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/get_per_creative_delivery/response_schema` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/get_per_creative_delivery/field_present` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/get_per_creative_delivery/field_present#1` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/get_per_creative_delivery/field_present#2` | gated | — |
+| `media_buy_seller/per_creative_conversion_attribution/get_per_creative_delivery/field_present#3` | gated | — |
 | `media_buy_seller/performance_buy_flow/sync_accounts/response_schema` | ungradable | — |
 | `media_buy_seller/performance_buy_flow/sync_accounts/field_present` | ungradable | — |
 | `media_buy_seller/performance_buy_flow/get_products_for_performance/response_schema` | ungradable | — |
@@ -464,11 +591,24 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `media_buy_seller/reach_buy_flow/simulate_reach_no_window/field_value` | ungradable | — |
 | `media_buy_seller/reach_buy_flow/get_delivery_reach_no_window/response_schema` | ungradable | — |
 | `media_buy_seller/reach_buy_flow/get_delivery_reach_no_window/field_present` | ungradable | — |
-| `media_buy_seller/refine_products/sync_accounts/response_schema` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/refine_products/sync_accounts/field_present` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/refine_products/get_products_brief/response_schema` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/refine_products/get_products_brief/field_present` | FAILING | `a2a`, `mcp` |
-| `media_buy_seller/refine_products/get_products_brief/field_present#1` | FAILING | `a2a`, `mcp` |
+| `media_buy_seller/refine_finalize_exclusivity/sync_accounts/response_schema` | gated | — |
+| `media_buy_seller/refine_finalize_exclusivity/sync_accounts/field_present` | gated | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_brief/response_schema` | gated | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_brief/field_present` | gated | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_brief_second/field_present` | gated | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_mixed_finalize/error_code` | gated | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_mixed_finalize/field_present` | gated | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_product_finalize/error_code` | gated | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/response_schema` | gated | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_present` | gated | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_contains` | gated | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_contains#1` | gated | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_value` | gated | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_value#1` | gated | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_value#2` | gated | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_value#3` | gated | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_unsupported/error_code` | gated | — |
+| `media_buy_seller/refine_finalize_exclusivity/assert_multi_finalize/any_of` | gated | — |
 | `media_buy_seller/vendor_metric_accountability/sync_accounts/response_schema` | ungradable | — |
 | `media_buy_seller/vendor_metric_accountability/sync_accounts/field_present` | ungradable | — |
 | `media_buy_seller/vendor_metric_accountability/get_products_required_vendor_metrics/response_schema` | ungradable | — |
@@ -516,24 +656,62 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `media_buy_seller/vendor_metric_optimization_flow/create_media_buy_missing_committed/field_value` | ungradable | — |
 | `media_buy_seller/vendor_metric_optimization_flow/create_media_buy_unreportable_metric/error_code` | ungradable | — |
 | `media_buy_seller/vendor_metric_optimization_flow/create_media_buy_unreportable_metric/field_value` | ungradable | — |
-| `billing_gate_dispatch/get_capabilities/response_schema` | FAILING | `a2a`, `mcp` |
-| `billing_gate_dispatch/get_capabilities/field_present` | FAILING | `a2a`, `mcp` |
-| `billing_gate_dispatch/get_capabilities/field_present#1` | FAILING | `a2a`, `mcp` |
-| `billing_gate_dispatch/get_capabilities/field_value` | FAILING | `a2a`, `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/response_schema` | FAILING | `a2a`, `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value` | FAILING | `a2a`, `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#1` | FAILING | `a2a`, `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#2` | FAILING | `a2a`, `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#3` | FAILING | `a2a`, `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#4` | FAILING | `a2a`, `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_present` | FAILING | `a2a`, `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent` | FAILING | `a2a`, `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#1` | FAILING | `a2a`, `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#2` | FAILING | `a2a`, `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#3` | FAILING | `a2a`, `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#4` | FAILING | `a2a`, `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#5` | FAILING | `a2a`, `mcp` |
-| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#5` | FAILING | `a2a`, `mcp` |
+| `media_buy_state_machine/get_capabilities/response_schema` | gated | — |
+| `media_buy_state_machine/get_capabilities/field_present` | gated | — |
+| `media_buy_state_machine/get_capabilities/field_present#1` | gated | — |
+| `media_buy_state_machine/get_capabilities/field_value` | gated | — |
+| `media_buy_state_machine/discover_products/response_schema` | gated | — |
+| `media_buy_state_machine/discover_products/field_present` | gated | — |
+| `media_buy_state_machine/discover_products/field_present#1` | gated | — |
+| `media_buy_state_machine/discover_products/field_value` | gated | — |
+| `media_buy_state_machine/discover_products/field_present#2` | gated | — |
+| `media_buy_state_machine/discover_products/field_present#3` | gated | — |
+| `media_buy_state_machine/discover_products/field_present#4` | gated | — |
+| `media_buy_state_machine/sync_creative/response_schema` | gated | — |
+| `media_buy_state_machine/sync_creative/field_present` | gated | — |
+| `media_buy_state_machine/sync_creative/field_value` | gated | — |
+| `media_buy_state_machine/create_buy/response_schema` | gated | — |
+| `media_buy_state_machine/create_buy/field_present` | gated | — |
+| `media_buy_state_machine/create_buy/field_value` | gated | — |
+| `media_buy_state_machine/create_buy/field_present#1` | gated | — |
+| `media_buy_state_machine/create_buy/field_value#1` | gated | — |
+| `media_buy_state_machine/create_buy/field_present#2` | gated | — |
+| `media_buy_state_machine/pause_buy/field_present` | gated | — |
+| `media_buy_state_machine/pause_buy/field_present#1` | gated | — |
+| `media_buy_state_machine/pause_buy/field_value` | gated | — |
+| `media_buy_state_machine/resume_buy/field_present` | gated | — |
+| `media_buy_state_machine/resume_buy/field_present#1` | gated | — |
+| `media_buy_state_machine/resume_buy/field_value` | gated | — |
+| `media_buy_state_machine/cancel_buy/field_present` | gated | — |
+| `media_buy_state_machine/cancel_buy/field_present#1` | gated | — |
+| `media_buy_state_machine/cancel_buy/field_value` | gated | — |
+| `media_buy_state_machine/pause_canceled_buy/error_code` | gated | — |
+| `media_buy_state_machine/pause_canceled_buy/field_present` | gated | — |
+| `media_buy_state_machine/pause_canceled_buy/field_value` | gated | — |
+| `media_buy_state_machine/resume_canceled_buy/error_code` | gated | — |
+| `media_buy_state_machine/resume_canceled_buy/field_present` | gated | — |
+| `media_buy_state_machine/resume_canceled_buy/field_value` | gated | — |
+| `media_buy_state_machine/recancel_buy/error_code` | gated | — |
+| `media_buy_state_machine/recancel_buy/field_present` | gated | — |
+| `media_buy_state_machine/recancel_buy/field_value` | gated | — |
+| `billing_gate_dispatch/get_capabilities/response_schema` | FAILING | `mcp` |
+| `billing_gate_dispatch/get_capabilities/field_present` | FAILING | `mcp` |
+| `billing_gate_dispatch/get_capabilities/field_present#1` | FAILING | `mcp` |
+| `billing_gate_dispatch/get_capabilities/field_value` | FAILING | `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/response_schema` | FAILING | `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value` | FAILING | `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#1` | FAILING | `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#2` | FAILING | `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#3` | FAILING | `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#4` | FAILING | `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_present` | FAILING | `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent` | FAILING | `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#1` | FAILING | `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#2` | FAILING | `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#3` | FAILING | `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#4` | FAILING | `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_absent#5` | FAILING | `mcp` |
+| `billing_gate_dispatch/sync_accounts_passthrough_rejects_agent/field_value#5` | FAILING | `mcp` |
 | `capability_discovery/get_capabilities/response_schema` | FAILING | `mcp` |
 | `capability_discovery/get_capabilities/field_present` | FAILING | `mcp` |
 | `capability_discovery/get_capabilities/field_present#1` | FAILING | `mcp` |
@@ -546,39 +724,45 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `error_compliance/get_capabilities/field_present` | FAILING | `mcp` |
 | `error_compliance/get_capabilities/field_present#1` | FAILING | `mcp` |
 | `error_compliance/get_capabilities/field_value` | FAILING | `mcp` |
-| `error_compliance/nonexistent_product/error_code` | FAILING | `a2a`, `mcp` |
-| `error_compliance/nonexistent_product/field_present` | FAILING | `a2a`, `mcp` |
-| `error_compliance/nonexistent_product/field_value` | FAILING | `a2a`, `mcp` |
-| `error_compliance/reversed_dates_error/error_code` | FAILING | `a2a`, `mcp` |
-| `error_compliance/reversed_dates_error/field_present` | FAILING | `a2a`, `mcp` |
-| `error_compliance/reversed_dates_error/field_value` | FAILING | `a2a`, `mcp` |
-| `error_compliance/unsupported_major_version/error_code` | FAILING | `a2a`, `mcp` |
-| `error_compliance/unsupported_major_version/field_present` | FAILING | `a2a`, `mcp` |
-| `error_compliance/unsupported_major_version/field_value` | FAILING | `a2a`, `mcp` |
-| `error_compliance/unsupported_release_version/error_code` | FAILING | `a2a`, `mcp` |
-| `error_compliance/unsupported_release_version/field_present` | FAILING | `a2a`, `mcp` |
-| `error_compliance/unsupported_release_version/field_value` | FAILING | `a2a`, `mcp` |
-| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/response_schema` | FAILING | `a2a`, `mcp` |
-| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value` | FAILING | `a2a`, `mcp` |
-| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value#1` | FAILING | `a2a`, `mcp` |
-| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value#2` | FAILING | `a2a`, `mcp` |
-| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value#3` | FAILING | `a2a`, `mcp` |
-| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value#4` | FAILING | `a2a`, `mcp` |
-| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/response_schema` | FAILING | `a2a`, `mcp` |
-| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_present` | FAILING | `a2a`, `mcp` |
-| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value` | FAILING | `a2a`, `mcp` |
-| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#1` | FAILING | `a2a`, `mcp` |
-| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#2` | FAILING | `a2a`, `mcp` |
-| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#3` | FAILING | `a2a`, `mcp` |
-| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#4` | FAILING | `a2a`, `mcp` |
-| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_absent` | FAILING | `a2a`, `mcp` |
-| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#5` | FAILING | `a2a`, `mcp` |
-| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/response_schema` | FAILING | `a2a`, `mcp` |
-| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value` | FAILING | `a2a`, `mcp` |
-| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#1` | FAILING | `a2a`, `mcp` |
-| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#2` | FAILING | `a2a`, `mcp` |
-| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#3` | FAILING | `a2a`, `mcp` |
-| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#4` | FAILING | `a2a`, `mcp` |
+| `error_compliance/nonexistent_product/error_code` | FAILING | `mcp` |
+| `error_compliance/nonexistent_product/field_present` | FAILING | `mcp` |
+| `error_compliance/nonexistent_product/field_value` | FAILING | `mcp` |
+| `error_compliance/missing_fields/response_schema` | FAILING | `mcp` |
+| `error_compliance/missing_fields/field_present` | FAILING | `mcp` |
+| `error_compliance/missing_fields/field_value` | FAILING | `mcp` |
+| `error_compliance/reversed_dates_error/error_code` | FAILING | `mcp` |
+| `error_compliance/reversed_dates_error/field_present` | FAILING | `mcp` |
+| `error_compliance/reversed_dates_error/field_value` | FAILING | `mcp` |
+| `error_compliance/unsupported_major_version/error_code` | FAILING | `mcp` |
+| `error_compliance/unsupported_major_version/field_present` | FAILING | `mcp` |
+| `error_compliance/unsupported_major_version/field_value` | FAILING | `mcp` |
+| `error_compliance/unsupported_release_version/error_code` | FAILING | `mcp` |
+| `error_compliance/unsupported_release_version/field_present` | FAILING | `mcp` |
+| `error_compliance/unsupported_release_version/field_value` | FAILING | `mcp` |
+| `error_compliance/supported_major_version/response_schema` | FAILING | `mcp` |
+| `error_compliance/supported_major_version/field_present` | FAILING | `mcp` |
+| `error_compliance/supported_major_version/field_value` | FAILING | `mcp` |
+| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/response_schema` | FAILING | `mcp` |
+| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value` | FAILING | `mcp` |
+| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value#1` | FAILING | `mcp` |
+| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value#2` | FAILING | `mcp` |
+| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value#3` | FAILING | `mcp` |
+| `notification_config_event_scope/sync_accounts_rejects_scheduled_account_notification/field_value#4` | FAILING | `mcp` |
+| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/response_schema` | FAILING | `mcp` |
+| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_present` | FAILING | `mcp` |
+| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value` | FAILING | `mcp` |
+| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#1` | FAILING | `mcp` |
+| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#2` | FAILING | `mcp` |
+| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#3` | FAILING | `mcp` |
+| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#4` | FAILING | `mcp` |
+| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_absent` | FAILING | `mcp` |
+| `notification_config_lifecycle/sync_accounts_create_paused_notification_config/field_value#5` | FAILING | `mcp` |
+| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/response_schema` | FAILING | `mcp` |
+| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value` | FAILING | `mcp` |
+| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#1` | FAILING | `mcp` |
+| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#2` | FAILING | `mcp` |
+| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#3` | FAILING | `mcp` |
+| `notification_config_rejections/sync_accounts_rejects_duplicate_subscriber_id/field_value#4` | FAILING | `mcp` |
 | `pagination_integrity_creative_formats/seed_format_1/field_value` | ungradable | — |
 | `pagination_integrity_creative_formats/seed_format_2/field_value` | ungradable | — |
 | `pagination_integrity_list_accounts/seed_account_1/field_value` | ungradable | — |
@@ -588,10 +772,22 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `read_tool_idempotency/get_capabilities_with_idempotency_key/field_present` | FAILING | `mcp` |
 | `read_tool_idempotency/get_capabilities_with_idempotency_key/field_present#1` | FAILING | `mcp` |
 | `read_tool_idempotency/get_capabilities_with_idempotency_key/field_value` | FAILING | `mcp` |
-| `read_tool_idempotency/list_creative_formats_with_idempotency_key/response_schema` | FAILING | `a2a`, `mcp` |
-| `read_tool_idempotency/list_creative_formats_with_idempotency_key/field_present` | FAILING | `a2a`, `mcp` |
-| `read_tool_idempotency/list_creative_formats_with_idempotency_key/field_present#1` | FAILING | `a2a`, `mcp` |
-| `read_tool_idempotency/list_creative_formats_with_idempotency_key/field_value` | FAILING | `a2a`, `mcp` |
+| `read_tool_idempotency/get_products_with_idempotency_key/response_schema` | FAILING | `mcp` |
+| `read_tool_idempotency/get_products_with_idempotency_key/field_present` | FAILING | `mcp` |
+| `read_tool_idempotency/get_products_with_idempotency_key/field_present#1` | FAILING | `mcp` |
+| `read_tool_idempotency/get_products_with_idempotency_key/field_value` | FAILING | `mcp` |
+| `read_tool_idempotency/list_accounts_with_idempotency_key/response_schema` | FAILING | `mcp` |
+| `read_tool_idempotency/list_accounts_with_idempotency_key/field_present` | FAILING | `mcp` |
+| `read_tool_idempotency/list_accounts_with_idempotency_key/field_present#1` | FAILING | `mcp` |
+| `read_tool_idempotency/list_accounts_with_idempotency_key/field_value` | FAILING | `mcp` |
+| `read_tool_idempotency/list_creative_formats_with_idempotency_key/response_schema` | FAILING | `mcp` |
+| `read_tool_idempotency/list_creative_formats_with_idempotency_key/field_present` | FAILING | `mcp` |
+| `read_tool_idempotency/list_creative_formats_with_idempotency_key/field_present#1` | FAILING | `mcp` |
+| `read_tool_idempotency/list_creative_formats_with_idempotency_key/field_value` | FAILING | `mcp` |
+| `read_tool_idempotency/list_creatives_with_idempotency_key/response_schema` | FAILING | `mcp` |
+| `read_tool_idempotency/list_creatives_with_idempotency_key/field_present` | FAILING | `mcp` |
+| `read_tool_idempotency/list_creatives_with_idempotency_key/field_present#1` | FAILING | `mcp` |
+| `read_tool_idempotency/list_creatives_with_idempotency_key/field_value` | FAILING | `mcp` |
 | `read_tool_idempotency/get_capabilities_without_idempotency_key_3_1_accept/response_schema` | FAILING | `mcp` |
 | `read_tool_idempotency/get_capabilities_without_idempotency_key_3_1_accept/field_present` | FAILING | `mcp` |
 | `read_tool_idempotency/get_capabilities_without_idempotency_key_3_1_accept/field_value` | FAILING | `mcp` |
@@ -599,9 +795,11 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `read_tool_idempotency/get_capabilities_without_idempotency_key_3_1_reject/field_present` | FAILING | `mcp` |
 | `read_tool_idempotency/get_capabilities_without_idempotency_key_3_1_reject/field_value` | FAILING | `mcp` |
 | `read_tool_idempotency/assert_omitted_key_grace_handled/any_of` | FAILING | `mcp` |
-| `security_baseline/probe_unauth/http_status_in` | FAILING | `a2a`, `mcp` |
-| `security_baseline/probe_unauth/on_401_require_header` | FAILING | `a2a`, `mcp` |
-| `security_baseline/assert_mechanism/any_of` | FAILING | `a2a`, `mcp` |
+| `security_baseline/probe_unauth/http_status_in` | FAILING | `mcp` |
+| `security_baseline/probe_unauth/on_401_require_header` | FAILING | `mcp` |
+| `security_baseline/assert_mechanism/any_of` | FAILING | `mcp` |
+| `signed_requests/get_capabilities/field_present` | FAILING | `mcp` |
+| `signed_requests/get_capabilities/field_value` | FAILING | `mcp` |
 | `stale_response_advisory/get_capabilities/response_schema` | FAILING | `mcp` |
 | `stale_response_advisory/get_capabilities/field_present` | FAILING | `mcp` |
 | `stale_response_advisory/get_capabilities/field_present#1` | FAILING | `mcp` |
@@ -617,19 +815,44 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `stale_response_advisory/stale_response_wire_placement/field_present#2` | ungradable | — |
 | `stale_response_advisory/stale_response_wire_placement/field_value#2` | ungradable | — |
 | `stale_response_advisory/stale_response_wire_placement/field_present#3` | ungradable | — |
+| `stale_response_advisory/no_stale_on_healthy_upstream/response_schema` | FAILING | `mcp` |
+| `stale_response_advisory/no_stale_on_healthy_upstream/field_present` | FAILING | `mcp` |
+| `stale_response_advisory/no_stale_on_healthy_upstream/field_value` | FAILING | `mcp` |
 | `v3_envelope_integrity/no_legacy_status_fields/response_schema` | FAILING | `mcp` |
 | `v3_envelope_integrity/no_legacy_status_fields/envelope_field_present` | FAILING | `mcp` |
 | `v3_envelope_integrity/no_legacy_status_fields/envelope_field_absent` | FAILING | `mcp` |
 | `v3_envelope_integrity/no_legacy_status_fields/envelope_field_absent#1` | FAILING | `mcp` |
 | `v3_envelope_integrity/no_legacy_status_fields/field_present` | FAILING | `mcp` |
 | `v3_envelope_integrity/no_legacy_status_fields/field_value` | FAILING | `mcp` |
-| `version_negotiation/get_capabilities_with_version/response_schema` | FAILING | `a2a`, `mcp` |
-| `version_negotiation/get_capabilities_with_version/field_present` | FAILING | `a2a`, `mcp` |
-| `version_negotiation/get_capabilities_with_version/field_present#1` | FAILING | `a2a`, `mcp` |
-| `version_negotiation/get_capabilities_with_version/envelope_field_present` | FAILING | `a2a`, `mcp` |
-| `version_negotiation/get_capabilities_with_version/envelope_field_pattern` | FAILING | `a2a`, `mcp` |
-| `version_negotiation/get_capabilities_with_version/field_present#2` | FAILING | `a2a`, `mcp` |
-| `version_negotiation/get_capabilities_with_version/field_value` | FAILING | `a2a`, `mcp` |
+| `version_negotiation/get_capabilities_with_version/response_schema` | FAILING | `mcp` |
+| `version_negotiation/get_capabilities_with_version/field_present` | FAILING | `mcp` |
+| `version_negotiation/get_capabilities_with_version/field_present#1` | FAILING | `mcp` |
+| `version_negotiation/get_capabilities_with_version/envelope_field_present` | FAILING | `mcp` |
+| `version_negotiation/get_capabilities_with_version/envelope_field_pattern` | FAILING | `mcp` |
+| `version_negotiation/get_capabilities_with_version/field_present#2` | FAILING | `mcp` |
+| `version_negotiation/get_capabilities_with_version/field_value` | FAILING | `mcp` |
+| `webhook_emission/get_capabilities/field_present` | FAILING | `mcp` |
+| `wholesale_feed_bulk_webhooks/register_bulk_change_webhook/response_schema` | FAILING | `mcp` |
+| `wholesale_feed_bulk_webhooks/register_bulk_change_webhook/field_value` | FAILING | `mcp` |
+| `wholesale_feed_bulk_webhooks/register_bulk_change_webhook/field_value#1` | FAILING | `mcp` |
+| `wholesale_feed_bulk_webhooks/register_bulk_change_webhook/field_value#2` | FAILING | `mcp` |
+| `wholesale_feed_bulk_webhooks/register_bulk_change_webhook/field_value#3` | FAILING | `mcp` |
+| `wholesale_feed_product_webhooks/register_product_pricing_webhook/response_schema` | FAILING | `mcp` |
+| `wholesale_feed_product_webhooks/register_product_pricing_webhook/field_value` | FAILING | `mcp` |
+| `wholesale_feed_product_webhooks/register_product_pricing_webhook/field_value#1` | FAILING | `mcp` |
+| `wholesale_feed_product_webhooks/register_product_pricing_webhook/field_value#2` | FAILING | `mcp` |
+| `wholesale_feed_product_webhooks/register_product_pricing_webhook/field_value#3` | FAILING | `mcp` |
+| `wholesale_feed_products/bootstrap_products/response_schema` | FAILING | `mcp` |
+| `wholesale_feed_products/bootstrap_products/field_present` | FAILING | `mcp` |
+| `wholesale_feed_products/bootstrap_products/field_present#1` | FAILING | `mcp` |
+| `wholesale_feed_products/bootstrap_products/field_value` | FAILING | `mcp` |
+| `wholesale_feed_products/bootstrap_products/field_absent` | FAILING | `mcp` |
+| `wholesale_feed_products/bootstrap_products/field_value#1` | FAILING | `mcp` |
+| `wholesale_feed_signal_webhooks/register_signal_pricing_webhook/response_schema` | FAILING | `mcp` |
+| `wholesale_feed_signal_webhooks/register_signal_pricing_webhook/field_value` | FAILING | `mcp` |
+| `wholesale_feed_signal_webhooks/register_signal_pricing_webhook/field_value#1` | FAILING | `mcp` |
+| `wholesale_feed_signal_webhooks/register_signal_pricing_webhook/field_value#2` | FAILING | `mcp` |
+| `wholesale_feed_signal_webhooks/register_signal_pricing_webhook/field_value#3` | FAILING | `mcp` |
 
 ## 2. Tracking
 
@@ -1175,20 +1398,20 @@ Checks whose storyboard carries an issue. `coverage` is the map's own assessment
 | `media_buy_seller/delivery_reporting/get_viewability_delivery/field_present#3` | `T-UC-004-storyboard-controller-driven-delivery-schema-compliance` | claimed only |
 | `media_buy_seller/delivery_reporting/get_viewability_delivery/field_present#4` | `T-UC-004-storyboard-controller-driven-delivery-schema-compliance` | claimed only |
 | `media_buy_seller/delivery_reporting/get_viewability_delivery/field_present#5` | `T-UC-004-storyboard-controller-driven-delivery-schema-compliance` | claimed only |
-| `media_buy_seller/invalid_transitions/update_unknown_media_buy/error_code` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | claimed only |
-| `media_buy_seller/invalid_transitions/update_unknown_media_buy/field_present` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | claimed only |
-| `media_buy_seller/invalid_transitions/update_unknown_media_buy/field_value` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | claimed only |
-| `media_buy_seller/invalid_transitions/get_products_brief/response_schema` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | claimed only |
-| `media_buy_seller/invalid_transitions/get_products_brief/field_present` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | claimed only |
-| `media_buy_seller/invalid_transitions/create_buy/response_schema` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | claimed only |
-| `media_buy_seller/invalid_transitions/create_buy/field_present` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | claimed only |
-| `media_buy_seller/invalid_transitions/update_unknown_package/error_code` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | claimed only |
-| `media_buy_seller/invalid_transitions/update_unknown_package/field_present` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | claimed only |
-| `media_buy_seller/invalid_transitions/update_unknown_package/field_value` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | claimed only |
-| `media_buy_seller/invalid_transitions/first_cancel/response_schema` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | claimed only |
-| `media_buy_seller/invalid_transitions/second_cancel/error_code` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | claimed only |
-| `media_buy_seller/invalid_transitions/second_cancel/field_present` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | claimed only |
-| `media_buy_seller/invalid_transitions/second_cancel/field_value` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | claimed only |
+| `media_buy_seller/invalid_transitions/update_unknown_media_buy/error_code` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | yes |
+| `media_buy_seller/invalid_transitions/update_unknown_media_buy/field_present` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | yes |
+| `media_buy_seller/invalid_transitions/update_unknown_media_buy/field_value` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | yes |
+| `media_buy_seller/invalid_transitions/get_products_brief/response_schema` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | yes |
+| `media_buy_seller/invalid_transitions/get_products_brief/field_present` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | yes |
+| `media_buy_seller/invalid_transitions/create_buy/response_schema` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | yes |
+| `media_buy_seller/invalid_transitions/create_buy/field_present` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | yes |
+| `media_buy_seller/invalid_transitions/update_unknown_package/error_code` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | yes |
+| `media_buy_seller/invalid_transitions/update_unknown_package/field_present` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | yes |
+| `media_buy_seller/invalid_transitions/update_unknown_package/field_value` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | yes |
+| `media_buy_seller/invalid_transitions/first_cancel/response_schema` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | yes |
+| `media_buy_seller/invalid_transitions/second_cancel/error_code` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | yes |
+| `media_buy_seller/invalid_transitions/second_cancel/field_present` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | yes |
+| `media_buy_seller/invalid_transitions/second_cancel/field_value` | `T-UC-003-storyboard-media-buy-not-found`, `T-UC-003-storyboard-not-cancellable-on-recancel`, `T-UC-003-storyboard-package-not-found` | yes |
 | `media_buy_seller/inventory_list_no_match/get_products_brief/response_schema` | `T-UC-002-storyboard-inventory-list-no-match` | claimed only |
 | `media_buy_seller/inventory_list_no_match/get_products_brief/field_present` | `T-UC-002-storyboard-inventory-list-no-match` | claimed only |
 | `media_buy_seller/inventory_list_no_match/create_buy_no_match/field_present` | `T-UC-002-storyboard-inventory-list-no-match` | claimed only |
@@ -1328,6 +1551,20 @@ A claiming scenario locally xfails this check's storyboard as a known gap (the `
 | `media_buy_seller/get_delivery/field_present` | `T-UC-006-storyboard-multi-format-sync-status` |
 | `media_buy_seller/get_delivery/field_present#1` | `T-UC-006-storyboard-multi-format-sync-status` |
 | `media_buy_seller/get_delivery/field_value` | `T-UC-006-storyboard-multi-format-sync-status` |
+| `media_buy_seller/invalid_transitions/update_unknown_media_buy/error_code` | `T-UC-003-storyboard-not-cancellable-on-recancel` |
+| `media_buy_seller/invalid_transitions/update_unknown_media_buy/field_present` | `T-UC-003-storyboard-not-cancellable-on-recancel` |
+| `media_buy_seller/invalid_transitions/update_unknown_media_buy/field_value` | `T-UC-003-storyboard-not-cancellable-on-recancel` |
+| `media_buy_seller/invalid_transitions/get_products_brief/response_schema` | `T-UC-003-storyboard-not-cancellable-on-recancel` |
+| `media_buy_seller/invalid_transitions/get_products_brief/field_present` | `T-UC-003-storyboard-not-cancellable-on-recancel` |
+| `media_buy_seller/invalid_transitions/create_buy/response_schema` | `T-UC-003-storyboard-not-cancellable-on-recancel` |
+| `media_buy_seller/invalid_transitions/create_buy/field_present` | `T-UC-003-storyboard-not-cancellable-on-recancel` |
+| `media_buy_seller/invalid_transitions/update_unknown_package/error_code` | `T-UC-003-storyboard-not-cancellable-on-recancel` |
+| `media_buy_seller/invalid_transitions/update_unknown_package/field_present` | `T-UC-003-storyboard-not-cancellable-on-recancel` |
+| `media_buy_seller/invalid_transitions/update_unknown_package/field_value` | `T-UC-003-storyboard-not-cancellable-on-recancel` |
+| `media_buy_seller/invalid_transitions/first_cancel/response_schema` | `T-UC-003-storyboard-not-cancellable-on-recancel` |
+| `media_buy_seller/invalid_transitions/second_cancel/error_code` | `T-UC-003-storyboard-not-cancellable-on-recancel` |
+| `media_buy_seller/invalid_transitions/second_cancel/field_present` | `T-UC-003-storyboard-not-cancellable-on-recancel` |
+| `media_buy_seller/invalid_transitions/second_cancel/field_value` | `T-UC-003-storyboard-not-cancellable-on-recancel` |
 | `media_buy_seller/provenance_enforcement/get_products_with_disclosure_policy/response_schema` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
 | `media_buy_seller/provenance_enforcement/get_products_with_disclosure_policy/field_value` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
 | `media_buy_seller/provenance_enforcement/get_products_with_disclosure_policy/field_value#1` | `T-UC-006-storyboard-provenance-corrected-acceptance`, `T-UC-006-storyboard-provenance-digital-source-type-missing`, `T-UC-006-storyboard-provenance-disclosure-missing`, `T-UC-006-storyboard-provenance-required-rejection` |
@@ -1377,6 +1614,60 @@ Can a BDD scenario for this check be wired in the e2e environment — Given seed
 | `media_buy_seller/audience_buy_flow/simulate_audience_delivery/field_value` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/audience_buy_flow/get_audience_delivery/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/audience_buy_flow/get_audience_delivery/field_present` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/available_actions/get_product_allowed_actions/response_schema` | unassessed | — | — |
+| `media_buy_seller/available_actions/get_product_allowed_actions/field_value` | unassessed | — | — |
+| `media_buy_seller/available_actions/get_product_allowed_actions/field_contains` | unassessed | — | — |
+| `media_buy_seller/available_actions/get_product_allowed_actions/field_contains#1` | unassessed | — | — |
+| `media_buy_seller/available_actions/get_product_allowed_actions/field_contains#2` | unassessed | — | — |
+| `media_buy_seller/available_actions/get_product_allowed_actions/field_contains#3` | unassessed | — | — |
+| `media_buy_seller/available_actions/sync_available_actions_creative/response_schema` | unassessed | — | — |
+| `media_buy_seller/available_actions/sync_available_actions_creative/field_value` | unassessed | — | — |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/response_schema` | unassessed | — | — |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_present` | unassessed | — | — |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_present#1` | unassessed | — | — |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_value` | unassessed | — | — |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_value#1` | unassessed | — | — |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_contains` | unassessed | — | — |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_contains#1` | unassessed | — | — |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_contains#2` | unassessed | — | — |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_present#2` | unassessed | — | — |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/response_schema` | unassessed | — | — |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/field_value` | unassessed | — | — |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/field_value#1` | unassessed | — | — |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/field_contains` | unassessed | — | — |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/field_contains#1` | unassessed | — | — |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/field_contains#2` | unassessed | — | — |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/field_value#2` | unassessed | — | — |
+| `media_buy_seller/available_actions/increase_budget/response_schema` | unassessed | — | — |
+| `media_buy_seller/available_actions/increase_budget/field_value` | unassessed | — | — |
+| `media_buy_seller/available_actions/increase_budget/field_present` | unassessed | — | — |
+| `media_buy_seller/available_actions/increase_budget/field_contains` | unassessed | — | — |
+| `media_buy_seller/available_actions/increase_budget/field_contains#1` | unassessed | — | — |
+| `media_buy_seller/available_actions/increase_budget/field_value#1` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_extend_requires_approval/error_code` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_extend_requires_approval/field_value` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_extend_requires_approval/field_value#1` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_extend_requires_approval/field_value#2` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_extend_requires_approval/field_contains` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_extend_requires_approval/field_value#3` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_cancel_requires_approval/error_code` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_cancel_requires_approval/field_value` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_cancel_requires_approval/field_value#1` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_cancel_requires_approval/field_value#2` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_cancel_requires_approval/field_contains` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_cancel_requires_approval/field_value#3` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_decrease_wrong_status/error_code` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_decrease_wrong_status/field_value` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_decrease_wrong_status/field_value#1` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_decrease_wrong_status/field_value#2` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_decrease_wrong_status/field_contains` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_decrease_wrong_status/field_value#3` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_pause_not_supported_on_product/error_code` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_pause_not_supported_on_product/field_value` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_pause_not_supported_on_product/field_value#1` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_pause_not_supported_on_product/field_value#2` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_pause_not_supported_on_product/field_contains` | unassessed | — | — |
+| `media_buy_seller/available_actions/direct_pause_not_supported_on_product/field_value#3` | unassessed | — | — |
 | `media_buy_seller/billing_finality_delivery/sync_accounts/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/billing_finality_delivery/sync_accounts/field_present` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/billing_finality_delivery/create_media_buy/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
@@ -1603,6 +1894,20 @@ Can a BDD scenario for this check be wired in the e2e environment — Given seed
 | `media_buy_seller/dependency_impairment_cardinality/verify_cardinality_zero/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/dependency_impairment_cardinality/verify_cardinality_zero/field_value` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/dependency_impairment_cardinality/verify_cardinality_zero/field_value_or_absent` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/event_dedup_flow/sync_accounts/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/event_dedup_flow/sync_accounts/field_present` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/event_dedup_flow/get_products_for_dedup/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/event_dedup_flow/get_products_for_dedup/field_present` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/event_dedup_flow/sync_event_sources/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/event_dedup_flow/sync_event_sources/field_present` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/event_dedup_flow/sync_event_sources/field_present#1` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/event_dedup_flow/create_media_buy_dedup/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/event_dedup_flow/create_media_buy_dedup/field_present` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/event_dedup_flow/log_event_from_pixel/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/event_dedup_flow/log_event_from_capi/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/event_dedup_flow/simulate_deduplicated_delivery/field_value` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/event_dedup_flow/get_dedup_delivery/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/event_dedup_flow/get_dedup_delivery/field_value` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/frequency_cap_enforcement/sync_accounts/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/frequency_cap_enforcement/sync_accounts/field_present` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/frequency_cap_enforcement/get_products_for_frequency_cap/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
@@ -1647,6 +1952,49 @@ Can a BDD scenario for this check be wired in the e2e environment — Given seed
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#4` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#5` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#6` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/inline_creatives_without_sync/get_capabilities/response_schema` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_capabilities/field_present` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_capabilities/field_value` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_capabilities/field_value#1` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_products_canonical_format/response_schema` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_products_canonical_format/field_present` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_products_canonical_format/field_present#1` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_products_canonical_format/field_present#2` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_products_canonical_format/field_value` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_canonical_inline_creative/response_schema` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_canonical_inline_creative/field_present` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_canonical_inline_creative/field_present#1` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_canonical_inline_creative/field_value` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_canonical_inline_creative/field_value#1` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_canonical_inline_creative/response_schema` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_canonical_inline_creative/field_equals_context` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_canonical_inline_creative/field_equals_context#1` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_canonical_inline_creative/field_contains` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_canonical_inline_creative/field_value` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_products_legacy_format/response_schema` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_products_legacy_format/field_present` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_products_legacy_format/field_present#1` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_products_legacy_format/field_value` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_legacy_inline_creative/response_schema` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_legacy_inline_creative/field_present` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_legacy_inline_creative/field_present#1` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_legacy_inline_creative/field_value` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_legacy_inline_creative/field_value#1` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_legacy_inline_creative/response_schema` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_legacy_inline_creative/field_equals_context` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_legacy_inline_creative/field_equals_context#1` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_legacy_inline_creative/field_contains` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_legacy_inline_creative/field_value` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_canonical_media_buy_after_inline_replacement/response_schema` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_canonical_media_buy_after_inline_replacement/field_equals_context` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_canonical_media_buy_after_inline_replacement/field_equals_context#1` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_canonical_media_buy_after_inline_replacement/field_value` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_canonical_media_buy_after_inline_replacement/field_value#1` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_legacy_media_buy_after_inline_replacement/response_schema` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_legacy_media_buy_after_inline_replacement/field_equals_context` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_legacy_media_buy_after_inline_replacement/field_equals_context#1` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_legacy_media_buy_after_inline_replacement/field_value` | unassessed | — | — |
+| `media_buy_seller/inline_creatives_without_sync/get_legacy_media_buy_after_inline_replacement/field_value#1` | unassessed | — | — |
 | `media_buy_seller/inventory_list_no_match/create_buy_no_match/field_present` | conditional | `other` | The buyer-side inventory lists referenced in targeting_overlay must exist as resolvable lists for the seller: 'This scenario exercises the no-match path using the test kit's pre-po |
 | `media_buy_seller/inventory_list_no_match/create_buy_no_match/field_value` | conditional | `other` | The buyer-side inventory lists referenced in targeting_overlay must exist as resolvable lists for the seller: 'This scenario exercises the no-match path using the test kit's pre-po |
 | `media_buy_seller/inventory_list_targeting/create_buy_with_lists/response_schema` | conditional | `other` | The two matching test-kit lists must be resolvable by the seller before the call: prerequisites say 'The seller must accept PropertyListReference and CollectionListReference in pac |
@@ -1675,6 +2023,47 @@ Can a BDD scenario for this check be wired in the e2e environment — Given seed
 | `media_buy_seller/package_correlation_legacy_fallback/get_seeded_legacy_buy/field_absent` | conditional | — | GIVEN: the legacy package shape (a package with no product_id) cannot be produced by any AdCP client request — the storyboard requires controller seeding via seed_media_buy |
 | `media_buy_seller/package_correlation_legacy_fallback/get_seeded_legacy_buy/field_value#2` | conditional | — | GIVEN: the legacy package shape (a package with no product_id) cannot be produced by any AdCP client request — the storyboard requires controller seeding via seed_media_buy |
 | `media_buy_seller/package_correlation_legacy_fallback/get_seeded_legacy_buy/field_value#3` | conditional | — | GIVEN: the legacy package shape (a package with no product_id) cannot be produced by any AdCP client request — the storyboard requires controller seeding via seed_media_buy |
+| `media_buy_seller/pending_creatives_to_start/get_products_brief/response_schema` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/get_products_brief/field_present` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/get_products_brief/field_present#1` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/response_schema` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_present` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_value` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_value#1` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_present#1` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_value#2` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_equals_context` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_value#3` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/sync_creative/response_schema` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/assign_creative_to_package/response_schema` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/assign_creative_to_package/field_present` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/assign_creative_to_package/field_contains` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/assign_creative_to_package/field_value` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/assign_creative_to_package/field_value#1` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/get_media_buy_after_sync/response_schema` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/get_media_buy_after_sync/field_value` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/get_media_buy_after_sync/field_equals_context` | unassessed | — | — |
+| `media_buy_seller/pending_creatives_to_start/get_media_buy_after_sync/field_value#1` | unassessed | — | — |
+| `media_buy_seller/per_creative_conversion_attribution/sync_accounts/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/sync_accounts/field_present` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/get_products_for_per_creative/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/get_products_for_per_creative/field_present` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/sync_event_sources/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/sync_event_sources/field_present` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/sync_event_sources/upstream_traffic` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/sync_two_creatives/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/sync_two_creatives/field_present` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/sync_two_creatives/field_present#1` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/create_media_buy_two_creatives/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/create_media_buy_two_creatives/field_present` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/log_purchase_event_1/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/log_purchase_event_2/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/simulate_per_creative_delivery/field_value` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/get_per_creative_delivery/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/get_per_creative_delivery/field_present` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/get_per_creative_delivery/field_present#1` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/get_per_creative_delivery/field_present#2` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/per_creative_conversion_attribution/get_per_creative_delivery/field_present#3` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/performance_buy_flow/sync_accounts/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/performance_buy_flow/sync_accounts/field_present` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/performance_buy_flow/get_products_for_performance/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
@@ -1821,6 +2210,24 @@ Can a BDD scenario for this check be wired in the e2e environment — Given seed
 | `media_buy_seller/reach_buy_flow/simulate_reach_no_window/field_value` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/reach_buy_flow/get_delivery_reach_no_window/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/reach_buy_flow/get_delivery_reach_no_window/field_present` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/refine_finalize_exclusivity/sync_accounts/response_schema` | unassessed | — | — |
+| `media_buy_seller/refine_finalize_exclusivity/sync_accounts/field_present` | unassessed | — | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_brief/response_schema` | unassessed | — | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_brief/field_present` | unassessed | — | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_brief_second/field_present` | unassessed | — | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_mixed_finalize/error_code` | unassessed | — | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_mixed_finalize/field_present` | unassessed | — | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_product_finalize/error_code` | unassessed | — | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/response_schema` | unassessed | — | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_present` | unassessed | — | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_contains` | unassessed | — | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_contains#1` | unassessed | — | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_value` | unassessed | — | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_value#1` | unassessed | — | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_value#2` | unassessed | — | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_value#3` | unassessed | — | — |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_unsupported/error_code` | unassessed | — | — |
+| `media_buy_seller/refine_finalize_exclusivity/assert_multi_finalize/any_of` | unassessed | — | — |
 | `media_buy_seller/refine_products/get_products_refine/response_schema` | conditional | `prior_state` | The refine array pins a literal catalog id — `product_id: "sports_preroll_q2"` — that no earlier step produces and no `fixtures:` block in this storyboard declares (prerequisites o |
 | `media_buy_seller/refine_products/get_products_refine/field_present` | conditional | `prior_state` | The refine array pins a literal catalog id — `product_id: "sports_preroll_q2"` — that no earlier step produces and no `fixtures:` block in this storyboard declares (prerequisites o |
 | `media_buy_seller/vendor_metric_accountability/sync_accounts/response_schema` | not_wireable | — | requires comply_test_controller, which will not be implemented |
@@ -1870,6 +2277,44 @@ Can a BDD scenario for this check be wired in the e2e environment — Given seed
 | `media_buy_seller/vendor_metric_optimization_flow/create_media_buy_missing_committed/field_value` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/vendor_metric_optimization_flow/create_media_buy_unreportable_metric/error_code` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/vendor_metric_optimization_flow/create_media_buy_unreportable_metric/field_value` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_state_machine/get_capabilities/response_schema` | unassessed | — | — |
+| `media_buy_state_machine/get_capabilities/field_present` | unassessed | — | — |
+| `media_buy_state_machine/get_capabilities/field_present#1` | unassessed | — | — |
+| `media_buy_state_machine/get_capabilities/field_value` | unassessed | — | — |
+| `media_buy_state_machine/discover_products/response_schema` | unassessed | — | — |
+| `media_buy_state_machine/discover_products/field_present` | unassessed | — | — |
+| `media_buy_state_machine/discover_products/field_present#1` | unassessed | — | — |
+| `media_buy_state_machine/discover_products/field_value` | unassessed | — | — |
+| `media_buy_state_machine/discover_products/field_present#2` | unassessed | — | — |
+| `media_buy_state_machine/discover_products/field_present#3` | unassessed | — | — |
+| `media_buy_state_machine/discover_products/field_present#4` | unassessed | — | — |
+| `media_buy_state_machine/sync_creative/response_schema` | unassessed | — | — |
+| `media_buy_state_machine/sync_creative/field_present` | unassessed | — | — |
+| `media_buy_state_machine/sync_creative/field_value` | unassessed | — | — |
+| `media_buy_state_machine/create_buy/response_schema` | unassessed | — | — |
+| `media_buy_state_machine/create_buy/field_present` | unassessed | — | — |
+| `media_buy_state_machine/create_buy/field_value` | unassessed | — | — |
+| `media_buy_state_machine/create_buy/field_present#1` | unassessed | — | — |
+| `media_buy_state_machine/create_buy/field_value#1` | unassessed | — | — |
+| `media_buy_state_machine/create_buy/field_present#2` | unassessed | — | — |
+| `media_buy_state_machine/pause_buy/field_present` | unassessed | — | — |
+| `media_buy_state_machine/pause_buy/field_present#1` | unassessed | — | — |
+| `media_buy_state_machine/pause_buy/field_value` | unassessed | — | — |
+| `media_buy_state_machine/resume_buy/field_present` | unassessed | — | — |
+| `media_buy_state_machine/resume_buy/field_present#1` | unassessed | — | — |
+| `media_buy_state_machine/resume_buy/field_value` | unassessed | — | — |
+| `media_buy_state_machine/cancel_buy/field_present` | unassessed | — | — |
+| `media_buy_state_machine/cancel_buy/field_present#1` | unassessed | — | — |
+| `media_buy_state_machine/cancel_buy/field_value` | unassessed | — | — |
+| `media_buy_state_machine/pause_canceled_buy/error_code` | unassessed | — | — |
+| `media_buy_state_machine/pause_canceled_buy/field_present` | unassessed | — | — |
+| `media_buy_state_machine/pause_canceled_buy/field_value` | unassessed | — | — |
+| `media_buy_state_machine/resume_canceled_buy/error_code` | unassessed | — | — |
+| `media_buy_state_machine/resume_canceled_buy/field_present` | unassessed | — | — |
+| `media_buy_state_machine/resume_canceled_buy/field_value` | unassessed | — | — |
+| `media_buy_state_machine/recancel_buy/error_code` | unassessed | — | — |
+| `media_buy_state_machine/recancel_buy/field_present` | unassessed | — | — |
+| `media_buy_state_machine/recancel_buy/field_value` | unassessed | — | — |
 | `sales_non_guaranteed/get_products_brief/response_schema` | conditional | `other` | The step is stateless on the wire (`stateful: false`, no $context inputs), but nine of its fourteen checks are assertions about a specific seeded auction catalog: two non-guarantee |
 | `sales_non_guaranteed/get_products_brief/field_present` | conditional | `other` | The step is stateless on the wire (`stateful: false`, no $context inputs), but nine of its fourteen checks are assertions about a specific seeded auction catalog: two non-guarantee |
 | `sales_non_guaranteed/get_products_brief/field_present#1` | conditional | `other` | The step is stateless on the wire (`stateful: false`, no $context inputs), but nine of its fourteen checks are assertions about a specific seeded auction catalog: two non-guarantee |
@@ -2050,6 +2495,60 @@ The list to take to triage: 3.1.1 grades these, we do not test them, and nothing
 
 | Check | Storyboard | Required tools |
 |---|---|---|
+| `media_buy_seller/available_actions/get_product_allowed_actions/response_schema` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/get_product_allowed_actions/field_value` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/get_product_allowed_actions/field_contains` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/get_product_allowed_actions/field_contains#1` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/get_product_allowed_actions/field_contains#2` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/get_product_allowed_actions/field_contains#3` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/sync_available_actions_creative/response_schema` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/sync_available_actions_creative/field_value` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/response_schema` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_present` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_present#1` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_value` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_value#1` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_contains` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_contains#1` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_contains#2` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/create_media_buy_with_available_actions/field_present#2` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/response_schema` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/field_value` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/field_value#1` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/field_contains` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/field_contains#1` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/field_contains#2` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/get_created_buy_available_actions/field_value#2` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/increase_budget/response_schema` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/increase_budget/field_value` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/increase_budget/field_present` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/increase_budget/field_contains` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/increase_budget/field_contains#1` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/increase_budget/field_value#1` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_extend_requires_approval/error_code` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_extend_requires_approval/field_value` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_extend_requires_approval/field_value#1` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_extend_requires_approval/field_value#2` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_extend_requires_approval/field_contains` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_extend_requires_approval/field_value#3` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_cancel_requires_approval/error_code` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_cancel_requires_approval/field_value` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_cancel_requires_approval/field_value#1` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_cancel_requires_approval/field_value#2` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_cancel_requires_approval/field_contains` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_cancel_requires_approval/field_value#3` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_decrease_wrong_status/error_code` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_decrease_wrong_status/field_value` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_decrease_wrong_status/field_value#1` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_decrease_wrong_status/field_value#2` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_decrease_wrong_status/field_contains` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_decrease_wrong_status/field_value#3` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_pause_not_supported_on_product/error_code` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_pause_not_supported_on_product/field_value` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_pause_not_supported_on_product/field_value#1` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_pause_not_supported_on_product/field_value#2` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_pause_not_supported_on_product/field_contains` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/available_actions/direct_pause_not_supported_on_product/field_value#3` | `protocols/media-buy/scenarios/available_actions.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives`, `update_media_buy` |
 | `media_buy_seller/clicks_buy_flow/sync_accounts/response_schema` | `protocols/media-buy/scenarios/clicks_buy_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products` |
 | `media_buy_seller/clicks_buy_flow/sync_accounts/field_present` | `protocols/media-buy/scenarios/clicks_buy_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products` |
 | `media_buy_seller/clicks_buy_flow/get_products_for_clicks/response_schema` | `protocols/media-buy/scenarios/clicks_buy_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products` |
@@ -2182,6 +2681,20 @@ The list to take to triage: 3.1.1 grades these, we do not test them, and nothing
 | `media_buy_seller/dependency_impairment_cardinality/verify_cardinality_zero/response_schema` | `protocols/media-buy/scenarios/dependency_impairment_cardinality.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buys`, `get_products`, `list_creatives`, `sync_creatives`, `update_media_buy` |
 | `media_buy_seller/dependency_impairment_cardinality/verify_cardinality_zero/field_value` | `protocols/media-buy/scenarios/dependency_impairment_cardinality.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buys`, `get_products`, `list_creatives`, `sync_creatives`, `update_media_buy` |
 | `media_buy_seller/dependency_impairment_cardinality/verify_cardinality_zero/field_value_or_absent` | `protocols/media-buy/scenarios/dependency_impairment_cardinality.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buys`, `get_products`, `list_creatives`, `sync_creatives`, `update_media_buy` |
+| `media_buy_seller/event_dedup_flow/sync_accounts/response_schema` | `protocols/media-buy/scenarios/event_dedup_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `log_event`, `sync_event_sources` |
+| `media_buy_seller/event_dedup_flow/sync_accounts/field_present` | `protocols/media-buy/scenarios/event_dedup_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `log_event`, `sync_event_sources` |
+| `media_buy_seller/event_dedup_flow/get_products_for_dedup/response_schema` | `protocols/media-buy/scenarios/event_dedup_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `log_event`, `sync_event_sources` |
+| `media_buy_seller/event_dedup_flow/get_products_for_dedup/field_present` | `protocols/media-buy/scenarios/event_dedup_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `log_event`, `sync_event_sources` |
+| `media_buy_seller/event_dedup_flow/sync_event_sources/response_schema` | `protocols/media-buy/scenarios/event_dedup_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `log_event`, `sync_event_sources` |
+| `media_buy_seller/event_dedup_flow/sync_event_sources/field_present` | `protocols/media-buy/scenarios/event_dedup_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `log_event`, `sync_event_sources` |
+| `media_buy_seller/event_dedup_flow/sync_event_sources/field_present#1` | `protocols/media-buy/scenarios/event_dedup_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `log_event`, `sync_event_sources` |
+| `media_buy_seller/event_dedup_flow/create_media_buy_dedup/response_schema` | `protocols/media-buy/scenarios/event_dedup_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `log_event`, `sync_event_sources` |
+| `media_buy_seller/event_dedup_flow/create_media_buy_dedup/field_present` | `protocols/media-buy/scenarios/event_dedup_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `log_event`, `sync_event_sources` |
+| `media_buy_seller/event_dedup_flow/log_event_from_pixel/response_schema` | `protocols/media-buy/scenarios/event_dedup_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `log_event`, `sync_event_sources` |
+| `media_buy_seller/event_dedup_flow/log_event_from_capi/response_schema` | `protocols/media-buy/scenarios/event_dedup_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `log_event`, `sync_event_sources` |
+| `media_buy_seller/event_dedup_flow/simulate_deduplicated_delivery/field_value` | `protocols/media-buy/scenarios/event_dedup_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `log_event`, `sync_event_sources` |
+| `media_buy_seller/event_dedup_flow/get_dedup_delivery/response_schema` | `protocols/media-buy/scenarios/event_dedup_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `log_event`, `sync_event_sources` |
+| `media_buy_seller/event_dedup_flow/get_dedup_delivery/field_value` | `protocols/media-buy/scenarios/event_dedup_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `log_event`, `sync_event_sources` |
 | `media_buy_seller/frequency_cap_enforcement/sync_accounts/response_schema` | `protocols/media-buy/scenarios/frequency_cap_enforcement.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products` |
 | `media_buy_seller/frequency_cap_enforcement/sync_accounts/field_present` | `protocols/media-buy/scenarios/frequency_cap_enforcement.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products` |
 | `media_buy_seller/frequency_cap_enforcement/get_products_for_frequency_cap/response_schema` | `protocols/media-buy/scenarios/frequency_cap_enforcement.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products` |
@@ -2193,12 +2706,96 @@ The list to take to triage: 3.1.1 grades these, we do not test them, and nothing
 | `media_buy_seller/frequency_cap_enforcement/get_capped_delivery/field_present` | `protocols/media-buy/scenarios/frequency_cap_enforcement.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products` |
 | `media_buy_seller/frequency_cap_enforcement/get_capped_delivery/field_present#1` | `protocols/media-buy/scenarios/frequency_cap_enforcement.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products` |
 | `media_buy_seller/frequency_cap_enforcement/get_capped_delivery/field_less_than` | `protocols/media-buy/scenarios/frequency_cap_enforcement.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products` |
+| `media_buy_seller/inline_creatives_without_sync/get_capabilities/response_schema` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_capabilities/field_present` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_capabilities/field_value` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_capabilities/field_value#1` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_products_canonical_format/response_schema` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_products_canonical_format/field_present` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_products_canonical_format/field_present#1` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_products_canonical_format/field_present#2` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_products_canonical_format/field_value` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_canonical_inline_creative/response_schema` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_canonical_inline_creative/field_present` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_canonical_inline_creative/field_present#1` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_canonical_inline_creative/field_value` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_canonical_inline_creative/field_value#1` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_canonical_inline_creative/response_schema` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_canonical_inline_creative/field_equals_context` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_canonical_inline_creative/field_equals_context#1` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_canonical_inline_creative/field_contains` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_canonical_inline_creative/field_value` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_products_legacy_format/response_schema` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_products_legacy_format/field_present` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_products_legacy_format/field_present#1` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_products_legacy_format/field_value` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_legacy_inline_creative/response_schema` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_legacy_inline_creative/field_present` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_legacy_inline_creative/field_present#1` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_legacy_inline_creative/field_value` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/create_buy_with_legacy_inline_creative/field_value#1` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_legacy_inline_creative/response_schema` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_legacy_inline_creative/field_equals_context` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_legacy_inline_creative/field_equals_context#1` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_legacy_inline_creative/field_contains` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/update_buy_with_replacement_legacy_inline_creative/field_value` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_canonical_media_buy_after_inline_replacement/response_schema` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_canonical_media_buy_after_inline_replacement/field_equals_context` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_canonical_media_buy_after_inline_replacement/field_equals_context#1` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_canonical_media_buy_after_inline_replacement/field_value` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_canonical_media_buy_after_inline_replacement/field_value#1` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_legacy_media_buy_after_inline_replacement/response_schema` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_legacy_media_buy_after_inline_replacement/field_equals_context` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_legacy_media_buy_after_inline_replacement/field_equals_context#1` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_legacy_media_buy_after_inline_replacement/field_value` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
+| `media_buy_seller/inline_creatives_without_sync/get_legacy_media_buy_after_inline_replacement/field_value#1` | `protocols/media-buy/scenarios/inline_creatives_without_sync.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `update_media_buy` |
 | `media_buy_seller/package_correlation_legacy_fallback/get_seeded_legacy_buy/response_schema` | `protocols/media-buy/scenarios/package_correlation_legacy_fallback.yaml` | `get_media_buys` |
 | `media_buy_seller/package_correlation_legacy_fallback/get_seeded_legacy_buy/field_value` | `protocols/media-buy/scenarios/package_correlation_legacy_fallback.yaml` | `get_media_buys` |
 | `media_buy_seller/package_correlation_legacy_fallback/get_seeded_legacy_buy/field_value#1` | `protocols/media-buy/scenarios/package_correlation_legacy_fallback.yaml` | `get_media_buys` |
 | `media_buy_seller/package_correlation_legacy_fallback/get_seeded_legacy_buy/field_absent` | `protocols/media-buy/scenarios/package_correlation_legacy_fallback.yaml` | `get_media_buys` |
 | `media_buy_seller/package_correlation_legacy_fallback/get_seeded_legacy_buy/field_value#2` | `protocols/media-buy/scenarios/package_correlation_legacy_fallback.yaml` | `get_media_buys` |
 | `media_buy_seller/package_correlation_legacy_fallback/get_seeded_legacy_buy/field_value#3` | `protocols/media-buy/scenarios/package_correlation_legacy_fallback.yaml` | `get_media_buys` |
+| `media_buy_seller/pending_creatives_to_start/get_products_brief/response_schema` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/get_products_brief/field_present` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/get_products_brief/field_present#1` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/response_schema` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_present` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_value` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_value#1` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_present#1` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_value#2` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_equals_context` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/create_buy_no_creatives/field_value#3` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/sync_creative/response_schema` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/assign_creative_to_package/response_schema` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/assign_creative_to_package/field_present` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/assign_creative_to_package/field_contains` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/assign_creative_to_package/field_value` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/assign_creative_to_package/field_value#1` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/get_media_buy_after_sync/response_schema` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/get_media_buy_after_sync/field_value` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/get_media_buy_after_sync/field_equals_context` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/pending_creatives_to_start/get_media_buy_after_sync/field_value#1` | `protocols/media-buy/scenarios/pending_creatives_to_start.yaml` | `create_media_buy`, `get_media_buys`, `get_products`, `sync_creatives` |
+| `media_buy_seller/per_creative_conversion_attribution/sync_accounts/response_schema` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/sync_accounts/field_present` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/get_products_for_per_creative/response_schema` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/get_products_for_per_creative/field_present` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/sync_event_sources/response_schema` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/sync_event_sources/field_present` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/sync_event_sources/upstream_traffic` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/sync_two_creatives/response_schema` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/sync_two_creatives/field_present` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/sync_two_creatives/field_present#1` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/create_media_buy_two_creatives/response_schema` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/create_media_buy_two_creatives/field_present` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/log_purchase_event_1/response_schema` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/log_purchase_event_2/response_schema` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/simulate_per_creative_delivery/field_value` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/get_per_creative_delivery/response_schema` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/get_per_creative_delivery/field_present` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/get_per_creative_delivery/field_present#1` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/get_per_creative_delivery/field_present#2` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
+| `media_buy_seller/per_creative_conversion_attribution/get_per_creative_delivery/field_present#3` | `protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_creatives`, `sync_event_sources` |
 | `media_buy_seller/performance_buy_flow/sync_accounts/response_schema` | `protocols/media-buy/scenarios/performance_buy_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_event_sources` |
 | `media_buy_seller/performance_buy_flow/sync_accounts/field_present` | `protocols/media-buy/scenarios/performance_buy_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_event_sources` |
 | `media_buy_seller/performance_buy_flow/get_products_for_performance/response_schema` | `protocols/media-buy/scenarios/performance_buy_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products`, `log_event`, `sync_event_sources` |
@@ -2308,6 +2905,24 @@ The list to take to triage: 3.1.1 grades these, we do not test them, and nothing
 | `media_buy_seller/reach_buy_flow/simulate_reach_no_window/field_value` | `protocols/media-buy/scenarios/reach_buy_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products` |
 | `media_buy_seller/reach_buy_flow/get_delivery_reach_no_window/response_schema` | `protocols/media-buy/scenarios/reach_buy_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products` |
 | `media_buy_seller/reach_buy_flow/get_delivery_reach_no_window/field_present` | `protocols/media-buy/scenarios/reach_buy_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_media_buy_delivery`, `get_products` |
+| `media_buy_seller/refine_finalize_exclusivity/sync_accounts/response_schema` | `protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml` | `get_products` |
+| `media_buy_seller/refine_finalize_exclusivity/sync_accounts/field_present` | `protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml` | `get_products` |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_brief/response_schema` | `protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml` | `get_products` |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_brief/field_present` | `protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml` | `get_products` |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_brief_second/field_present` | `protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml` | `get_products` |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_mixed_finalize/error_code` | `protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml` | `get_products` |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_mixed_finalize/field_present` | `protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml` | `get_products` |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_product_finalize/error_code` | `protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml` | `get_products` |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/response_schema` | `protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml` | `get_products` |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_present` | `protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml` | `get_products` |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_contains` | `protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml` | `get_products` |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_contains#1` | `protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml` | `get_products` |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_value` | `protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml` | `get_products` |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_value#1` | `protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml` | `get_products` |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_value#2` | `protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml` | `get_products` |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_atomic/field_value#3` | `protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml` | `get_products` |
+| `media_buy_seller/refine_finalize_exclusivity/get_products_multi_finalize_unsupported/error_code` | `protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml` | `get_products` |
+| `media_buy_seller/refine_finalize_exclusivity/assert_multi_finalize/any_of` | `protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml` | `get_products` |
 | `media_buy_seller/refine_products/sync_accounts/response_schema` | `protocols/media-buy/scenarios/refine_products.yaml` | `get_products` |
 | `media_buy_seller/refine_products/sync_accounts/field_present` | `protocols/media-buy/scenarios/refine_products.yaml` | `get_products` |
 | `media_buy_seller/refine_products/get_products_brief/response_schema` | `protocols/media-buy/scenarios/refine_products.yaml` | `get_products` |
@@ -2345,6 +2960,44 @@ The list to take to triage: 3.1.1 grades these, we do not test them, and nothing
 | `media_buy_seller/vendor_metric_optimization_flow/create_media_buy_missing_committed/field_value` | `protocols/media-buy/scenarios/vendor_metric_optimization_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_products` |
 | `media_buy_seller/vendor_metric_optimization_flow/create_media_buy_unreportable_metric/error_code` | `protocols/media-buy/scenarios/vendor_metric_optimization_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_products` |
 | `media_buy_seller/vendor_metric_optimization_flow/create_media_buy_unreportable_metric/field_value` | `protocols/media-buy/scenarios/vendor_metric_optimization_flow.yaml` | `comply_test_controller`, `create_media_buy`, `get_products` |
+| `media_buy_state_machine/get_capabilities/response_schema` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/get_capabilities/field_present` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/get_capabilities/field_present#1` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/get_capabilities/field_value` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/discover_products/response_schema` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/discover_products/field_present` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/discover_products/field_present#1` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/discover_products/field_value` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/discover_products/field_present#2` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/discover_products/field_present#3` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/discover_products/field_present#4` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/sync_creative/response_schema` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/sync_creative/field_present` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/sync_creative/field_value` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/create_buy/response_schema` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/create_buy/field_present` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/create_buy/field_value` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/create_buy/field_present#1` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/create_buy/field_value#1` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/create_buy/field_present#2` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/pause_buy/field_present` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/pause_buy/field_present#1` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/pause_buy/field_value` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/resume_buy/field_present` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/resume_buy/field_present#1` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/resume_buy/field_value` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/cancel_buy/field_present` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/cancel_buy/field_present#1` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/cancel_buy/field_value` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/pause_canceled_buy/error_code` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/pause_canceled_buy/field_present` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/pause_canceled_buy/field_value` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/resume_canceled_buy/error_code` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/resume_canceled_buy/field_present` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/resume_canceled_buy/field_value` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/recancel_buy/error_code` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/recancel_buy/field_present` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
+| `media_buy_state_machine/recancel_buy/field_value` | `protocols/media-buy/state-machine.yaml` | `create_media_buy`, `sync_creatives`, `update_media_buy` |
 | `sales_non_guaranteed/get_capabilities/response_schema` | `specialisms/sales-non-guaranteed/index.yaml` | `create_media_buy`, `get_products`, `sync_governance` |
 | `sales_non_guaranteed/get_capabilities/field_present` | `specialisms/sales-non-guaranteed/index.yaml` | `create_media_buy`, `get_products`, `sync_governance` |
 | `sales_non_guaranteed/get_capabilities/field_contains` | `specialisms/sales-non-guaranteed/index.yaml` | `create_media_buy`, `get_products`, `sync_governance` |
@@ -2559,4 +3212,3 @@ The list to take to triage: 3.1.1 grades these, we do not test them, and nothing
 | `wholesale_feed_signals/unchanged_probe/field_absent` | `universal/wholesale-feed-signals.yaml` | `get_signals` |
 | `wholesale_feed_signals/unchanged_probe/field_value#2` | `universal/wholesale-feed-signals.yaml` | `get_signals` |
 | `wholesale_feed_signals/standalone_pricing_token_rejected/error_code` | `universal/wholesale-feed-signals.yaml` | `get_signals` |
-

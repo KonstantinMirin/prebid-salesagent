@@ -288,6 +288,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     ledgered = _ledgered_failures(repo)
 
     on_path = [r for r in coverage["storyboards"] if r["status"] == "ON-PATH"]
+    gated = [r for r in coverage["storyboards"] if r["status"] == "GATED"]
     untriaged = check_issue_map_complete(repo, [r["storyboard"] for r in on_path])
 
     rows: list[dict[str, Any]] = []
@@ -365,6 +366,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         "pinned_version": coverage["pinned_version"],
         "totals": {
             "on_path": len(on_path),
+            "gated": len(gated),
             "measured_join": joined,
             "runner_reported": runner_ran_count,
             "no_scenario": sum(1 for r in rows if not r["scenarios"]),
@@ -375,6 +377,12 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
             "ledgered_checks": sum(len(r["ledgered_failures"]) for r in rows),
         },
         "rows": rows,
+        # Gated storyboards travel with the result so render() can LIST them.
+        # They are excluded from `rows` because every row column (scenario,
+        # ticket, measured status) is a property of a graded storyboard, but
+        # excluding them from the DOCUMENT is what made the count read as a
+        # total when it was a floor.
+        "gated": [{"storyboard": r["storyboard"], "reason": r["reason"]} for r in gated],
     }
 
 
@@ -393,6 +401,11 @@ def render(result: dict[str, Any]) -> str:
         "the curated `storyboard-issue-map.yaml`, the one hand-maintained input.",
         "",
         f"- on-path storyboards: **{result['totals']['on_path']}**",
+        f"- gated, not graded: **{result['totals']['gated']}** — listed below the table. A gated "
+        "storyboard declares `requires_capability` that the OFFLINE classifier cannot evaluate "
+        "(`declared_capabilities()` exposes specialisms and protocols only). It is NOT a claim "
+        "that we lack the capability; per-check detail is in `storyboard-checks.jsonl`, where "
+        "gated checks are indexed with `gate=GATED` rather than dropped.",
         f"- **measured FAILING: {result['totals']['failing']} storyboards, "
         f"{result['totals']['ledgered_checks']} ledgered checks**",
         f"- **scenarios TO WRITE: {result['totals']['no_scenario']}**",
@@ -475,6 +488,22 @@ def render(result: dict[str, Any]) -> str:
         refs = ", ".join(f"#{n}" for n in r["tracking_issues"])
         note = (r["tracking_note"] or "—").replace("\n", " ").strip()
         out.append(f"| `{r['storyboard']}` | {total} | {refs} | {note} |")
+
+    out += [
+        "",
+        "## Gated storyboards (declared `requires_capability`, not graded)",
+        "",
+        "Listed, not dropped. The offline classifier cannot evaluate a `requires_capability` "
+        "path because `declared_capabilities()` exposes specialisms and protocols only — so "
+        'GATED means "undetermined offline", not "does not apply to us". The live @adcp/sdk '
+        "runner reads the real capability document off the wire and may grade what we gate; "
+        "when it does, the ledger shows it and the disagreement is visible here rather than "
+        "silently absent.",
+        "",
+        "| Storyboard | Gate |",
+        "|---|---|",
+    ]
+    out += [f"| `{r['storyboard']}` | {r['reason']} |" for r in result["gated"]]
 
     return "\n".join(out) + "\n"
 
