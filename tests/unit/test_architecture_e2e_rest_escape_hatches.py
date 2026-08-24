@@ -258,21 +258,6 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "live stack always serves the agent catalog; an empty catalog cannot be realized over e2e",
         ),
         ("tests/harness/creative_formats.py", "_validate_registry_formats", "<dynamic>"),
-        # salesagent-qrqh. The e2e stack fixes its own hatch posture WIDE OPEN
-        # (docker-compose.e2e.yml adcp-server :81-82, runner :227-228) and the
-        # process issuing the outbound request is not the one the test controls,
-        # so "both hatches open" is already realized and asking for it is a no-op,
-        # while any other posture has no surface at all. This moves ONE scenario
-        # (a plaintext-http refusal, which needs them shut) out of live grading;
-        # the two scenarios that matter over e2e_rest — a cloud-metadata address
-        # and an unresolvable host — are refused with the hatches open, which is
-        # precisely why they were chosen: their green mark there means the same
-        # thing it means in-process. Declared in tests/harness/egress.py since
-        # set_egress_hatches moved to the shared EgressHatchMixin (the media-buy
-        # create env grades the same seam for the ingest-time webhook refusal) —
-        # same single declaration, one more env mixing it in, no scenario moved
-        # out of live grading by the move itself.
-        ("tests/harness/egress.py", "_egress_hatches_on_the_live_stack", "<dynamic>"),
     }
 )
 

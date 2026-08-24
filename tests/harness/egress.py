@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 from unittest.mock import patch
 
-from tests.harness._realize import E2EUnsupportedSetup, realize_e2e
+from tests.harness._realize import realize_e2e
 from tests.helpers.egress_hatches import egress_hatch_env
 
 
@@ -24,26 +24,32 @@ def _egress_hatches_on_the_live_stack(self: EgressHatchMixin, *, private: bool) 
     ``docker-compose.e2e.yml`` exports ``ADCP_OUTBOUND_ALLOW_PRIVATE=true`` on
     both the adcp-server and the runner, and the process making the outbound
     request is not the process this test controls — so over e2e_rest the
-    posture cannot be set from here. ``private=True`` is therefore ALREADY
-    realized and asking for it is a no-op; ``private=False`` has no surface at
-    all and is declared unrealizable rather than silently graded against the
-    stack's own posture.
+    posture cannot be set from here. ``private=True`` is ALREADY realized, and
+    asking for it is a true no-op rather than an assumption.
+
+    No Gherkin phrase asks for the CLOSED posture any more. salesagent-pldmk.32
+    deleted both the ``... egress hatch is closed`` step and its one binding, so
+    there is no reachable caller with ``private=False`` over e2e_rest, and this
+    function returns unconditionally. That deletion is the mitigation, not the
+    escape-hatch pin: the pin only sees declaration sites, so it would say
+    nothing about a future scenario that asks for the closed posture with no
+    declaration and gets silently graded against the stack's open one. Restoring
+    that ability means restoring a Gherkin phrase AND a pinned declaration
+    together.
+
+    This function and its ``@realize_e2e`` decorator stay even though nothing
+    raises: without them the e2e branch would run the in-process ``patch.dict``
+    and claim to have set a posture in a process that is not the server's, which
+    is the silent lie the decorator exists to prevent.
 
     ``ADCP_OUTBOUND_ALLOW_INSECURE`` no longer exists anywhere in this stack
     (salesagent-e6h0 deleted it — the outbound origins the server dials are all
     https now). That asymmetry (private always open, scheme never relaxable) is
-    what makes the refusal causes the egress scenarios grade (a cloud-metadata
-    address, an unresolvable host) meaningful over e2e_rest: both are refused
-    with the private hatch WIDE OPEN, so they are the only causes whose green
-    mark over e2e_rest means the same thing as in-process.
+    what makes the refusal causes the egress scenarios grade — a cloud-metadata
+    address, an unresolvable host, and a plaintext http scheme — meaningful over
+    e2e_rest: all three are refused with the private hatch WIDE OPEN, so their
+    green mark over e2e_rest means what it means in-process.
     """
-    if private:
-        return
-    raise E2EUnsupportedSetup(
-        "docker-compose.e2e.yml opens the private-range egress hatch for the "
-        "test stack, and the server's environment is not settable from the "
-        f"test process: private={private} cannot be realized over e2e_rest."
-    )
 
 
 class EgressHatchMixin:

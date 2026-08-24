@@ -53,16 +53,25 @@
 # Why THESE causes: with the private-range escape hatch open — which is the
 # posture of docker-compose.e2e.yml and of run_all_tests_host.sh, and the ONLY
 # hatch left (salesagent-e6h0 deleted the scheme hatch: the seam now requires
-# https unconditionally, no operator override) — a cloud-metadata address and
-# an unresolvable host are still refused (the SDK checks BLOCKED_METADATA_IPS
-# and raises on getaddrinfo failure upstream of the allow_private gate). They
-# are the only two refusal causes that grade the same production on every
-# transport, so both envelope scenarios pin the hatch ON deliberately. The
-# plaintext-http scenario needs the PRIVATE hatch OFF — irrelevant to its own
-# outcome (its host is public, so scheme is what refuses it either way), kept
-# off anyway to keep that one scenario deliberately unrealizable over e2e_rest
-# rather than silently xpassing there — it declares that at the env, not in a
-# nodeid ledger.
+# https unconditionally, no operator override) — a cloud-metadata address, an
+# unresolvable host, and a plaintext http scheme are all still refused (the SDK
+# checks BLOCKED_METADATA_IPS and raises on getaddrinfo failure upstream of the
+# allow_private gate; the scheme is checked before that gate is read at all).
+# All three grade the same production on every transport, so all three
+# scenarios pin the hatch ON.
+#
+# The plaintext-http scenario used to pin it OFF instead, deliberately, to keep
+# itself unrealizable over e2e_rest rather than silently xpassing there
+# (salesagent-qrqh). salesagent-pldmk.32 REVERSES that: the posture cannot
+# change this scenario's outcome, because EgressPolicy.resolve_for_dial raises
+# on the scheme at src/core/security/egress/policy.py:322 — before
+# allow_private is read at all, at :331 and :333. Pinning the hatch OPEN is
+# therefore the honest declaration (it is the live stack's real posture) and it
+# is never less discriminating: it disarms one gate that could otherwise emit
+# the same VALIDATION_ERROR, so a green mark here can only be the scheme gate.
+# What the reversal COSTS: no BDD scenario exercises the CLOSED posture any
+# more — that is graded solely by
+# tests/integration/test_url_provenance_wire.py:111.
 #
 # NOT here, on purpose: the redirect-not-followed obligation (proved by a
 # second live origin's hit count in
@@ -133,7 +142,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   @T-EGRESS-SSRF-plaintext-http-refused @egress
   Scenario: a plaintext http agent_url is refused
     Given a tenant is configured for product discovery
-    And the outbound private-range egress hatch is closed
+    And the outbound private-range egress hatch is open
     When the buyer requests products with a property list agent at "http://example.com"
     Then the request is rejected with VALIDATION_ERROR naming field "property_list.agent_url"
 

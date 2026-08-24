@@ -83,11 +83,15 @@ services:
       # set_flags() in tests/integration/test_outbound_http.py monkeypatches the
       # variable to the literal "false" per case and is therefore immune to
       # this ambient env. SCHEME refusal, by contrast, is now gradeable in THIS
-      # stack too (there is no hatch left to disarm it) — see
-      # local-egress-ssrf-refusal.feature's plaintext-http scenario, still
-      # deliberately held to private=False / E2EUnsupportedSetup so its green
-      # mark stays meaningful (the private-range gate is a separate, still
-      # untestable-in-network claim).
+      # stack too (there is no hatch left to disarm it), and as of
+      # salesagent-pldmk.32 it IS graded here: local-egress-ssrf-refusal.
+      # feature's plaintext-http scenario now runs live under this stack's own
+      # open posture instead of being held to private=False and declared
+      # unrealizable. It can be, because the scheme is checked before
+      # allow_private is read at all (src/core/security/egress/policy.py:322,
+      # ahead of :331/:333), so this ambient env cannot change that scenario's
+      # outcome. The private-range gate remains a separate, still
+      # untestable-in-network claim.
       #
       # CLOUD METADATA is refused UNCONDITIONALLY regardless of any hatch — the
       # SDK's metadata check runs before the allow_private gate, so
