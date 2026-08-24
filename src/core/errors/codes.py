@@ -319,6 +319,23 @@ def _build_code_table() -> dict[ErrorCodeT, CodeEntry]:
     published = _load_published_codes()
     table: dict[ErrorCodeT, CodeEntry] = {}
 
+    # An authored override exists ONLY while neither downstream source ships a
+    # buyer-usable message for its code ("each one deletes itself the moment the
+    # pin ships a message for it" -- the block comment above). Enforced here, at
+    # the one place the sources meet, rather than promised in prose: an adcp
+    # bump that adds an SDK message for an overridden code fails the import,
+    # forcing the override's deletion instead of leaving a silent divergence
+    # between the override and the message the SDK now carries.
+    stale_overrides = sorted(
+        code.value for code in _AUTHORED_SPEC_MESSAGES if STANDARD_ERROR_CODES.get(code.value, {}).get("message")
+    )
+    if stale_overrides:
+        raise RuntimeError(
+            f"_AUTHORED_SPEC_MESSAGES overrides {stale_overrides}, but the installed adcp SDK now "
+            "ships a message for them. Delete the stale override(s) -- or, if the SDK's sentence is "
+            "wrong for buyers, record why the override stays."
+        )
+
     for code in ErrorCode:
         spec = published[code.value]
         table[code] = CodeEntry(
