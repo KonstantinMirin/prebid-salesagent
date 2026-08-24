@@ -119,6 +119,7 @@ from src.core.schemas import (
     SnapshotUnavailableReason,
     Targeting,
 )
+from src.core.schemas._pinned_fields import revision_minimum
 from src.core.tools._mcp import mcp_result
 from src.core.validation_helpers import adcp_validation_boundary
 
@@ -591,16 +592,12 @@ def _resolve_status_filter(
         ) from e
 
 
-# The pinned `get-media-buys-response.json` types media_buys[].revision as an integer
-# with `minimum: 1`. A row below it cannot be published at all — and the refusal has
-# to be raised HERE rather than left to the response model, because a model-level
-# ValidationError reaches the buyer as VALIDATION_ERROR/correctable: advice to "fix
-# field values" for a column the SELLER owns and the buyer has never seen. Same
+# A row below the pin's bound on media_buys[].revision cannot be published at all — and
+# the refusal has to be raised HERE rather than left to the response model, because a
+# model-level ValidationError reaches the buyer as VALIDATION_ERROR/correctable: advice
+# to "fix field values" for a column the SELLER owns and the buyer has never seen. Same
 # reasoning, same typed error, and the same read boundary as an out-of-vocabulary
-# status (PersistedMediaBuyStatus.parse).
-_PINNED_REVISION_MINIMUM = 1
-
-
+# status (PersistedMediaBuyStatus.parse). The bound itself is read from the pin.
 def _persisted_revision(buy) -> int:
     """The row's revision, or ``AdCPPersistedStateError``.
 
@@ -609,12 +606,12 @@ def _persisted_revision(buy) -> int:
     here does not fail the listing — the fetch stage catches it and omits this one row
     with an advisory naming it.
     """
+    minimum = revision_minimum()
     revision = buy.revision
-    if revision is None or revision < _PINNED_REVISION_MINIMUM:
+    if revision is None or revision < minimum:
         raise AdCPPersistedStateError(
             f"media buy {buy.media_buy_id!r} carries persisted revision {revision!r}, below the "
-            f"pinned minimum of {_PINNED_REVISION_MINIMUM}; the optimistic-concurrency token "
-            f"cannot be published",
+            f"pinned minimum of {minimum}; the optimistic-concurrency token cannot be published",
             field="revision",
         )
     return revision
