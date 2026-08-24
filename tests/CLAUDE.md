@@ -67,10 +67,20 @@ for transport in [Transport.A2A, Transport.MCP, Transport.REST]:
 ```
 
 BDD tests do this automatically via `pytest_generate_tests()` parametrization
-(a2a/mcp/rest, plus the e2e variants when the stack is up). `Transport.IMPL`
-still exists for harness-level direct `_impl` calls, but it is SUNSETTED for
-BDD: no scenario runs on it — every BDD run is a real wire run, which is what
-makes wire-level assertions non-vacuous.
+(a2a/mcp/rest, plus the e2e variants when the stack is up).
+
+There is no IMPL transport. `Transport.IMPL`, `ImplDispatcher` and
+`TransportResult.synthesized_error_envelope` are DELETED — a direct in-process
+call is not a transport, and modelling it as one gave every "assert on the wire"
+rule an escape hatch. Every `Transport` member dispatches over a real wire, so a
+`TransportResult` can only come from one.
+
+Calling `_impl` directly is still correct where the obligation is about what
+`_impl` returns or raises: use `env.call_impl(...)` and assert against the
+returned DTO or, with `pytest.raises`, the error class. That is the oracle —
+`_impl` has no other output form (its return types are annotated and
+`test_architecture_no_model_dump_in_impl` keeps serialization at the boundary).
+What is gone is the pretence that doing so is a transport.
 
 ### Symbol index
 
@@ -109,8 +119,8 @@ Step definitions are organized in two layers:
 - **`tests/bdd/steps/domain/`** — Use-case-specific steps (delivery, creative formats)
 
 Every BDD scenario is automatically parametrized across the wire transports (a2a, mcp,
-rest — plus e2e variants when enabled) unless tagged with a specific transport. IMPL is
-sunsetted for BDD. The `ctx` fixture is a mutable dict shared across steps, with
+rest — plus e2e variants when enabled) unless tagged with a specific transport. There
+is no IMPL transport to opt out of — it is deleted. The `ctx` fixture is a mutable dict shared across steps, with
 `ctx["env"]` holding the harness environment.
 
 ```bash
@@ -127,7 +137,7 @@ all of them have caused real defects when skipped.
    scenario over a2a/mcp/rest (+e2e); transport-specific logic lives ONLY in the env
    (`env.call_via` → `TransportResult`). A `When` that says "calls the X MCP tool" is a
    defect unless the scenario grades a spec-cited transport-specific behavior (cite it
-   in a comment). With IMPL removed, every run is a real wire run — assertions got
+   in a comment). Every run is a real wire run — assertions got
    stricter for free.
 
 2. **Setup goes through env methods; dispatch goes through `dispatch_request`.**
@@ -143,12 +153,13 @@ all of them have caused real defects when skipped.
      the assertion is non-vacuous without per-scenario duplication;
    - success: `wire_field(ctx, "x")` / `wire_dict(ctx)`
      (`tests/bdd/steps/_outcome_helpers.py`) — these raise loudly when the env didn't
-     stash the wire, instead of silently falling back to `model_dump()` (a serializer
-     round-trip proves model self-consistency, not what the buyer received). The
-     `model_dump` fallback exists ONLY for an EXPLICIT `Transport.IMPL` in
-     `ctx["transport"]`; an unset transport raises too, naming the fix — set
-     `ctx['transport']` or pass IMPL explicitly (GH #1744). Contract pinned by
-     `tests/harness/test_outcome_helpers_wire_contract.py`.
+     stash the wire. There is NO `model_dump()` fallback: a serializer round-trip
+     proves model self-consistency, not what the buyer received. The fallback used
+     to exist for an explicit `Transport.IMPL` and went with it, so the
+     "is the transport unset, or deliberately no-wire?" question every caller had
+     to answer is gone too (GH #1744 was the narrower fix for the same hazard).
+     Contract pinned by `tests/harness/test_outcome_helpers_wire_contract.py`
+     and `tests/harness/test_wire_bytes_required.py`.
 
 4. **Assertions compare values, not existence.** `assert status` is green for ANY
    status. `assert actual == expected` or it isn't a test. A Then whose text claims a
@@ -371,11 +382,17 @@ def then_response_has_formats(ctx, count):
 
 ### Principle: Assert on the Wire Envelope, Not Reconstructed Exceptions
 
-The test harness reconstructs `AdCPError` subclasses from wire responses so tests can
-use `isinstance()` and `.error_code`. This reconstruction is **lossy** — e.g.,
-`AdCPAuthenticationError` and `AdCPAuthorizationError` both map to `AUTH_REQUIRED` on
-the wire, so reconstruction always produces `AdCPAuthenticationError`. Tests that assert
-on reconstructed exceptions verify the reconstruction layer, not the actual wire shape.
+The harness NO LONGER reconstructs `AdCPError` subclasses from wire responses. It used
+to, so tests could write `isinstance()` and `.error_code` against a wire error — and
+that reconstruction was lossy: it covered 20 of 43 classes, and because
+`AdCPAuthenticationError` and `AdCPAuthorizationError` share a wire code, it always
+produced the first. A test asserting on the rebuilt object graded the reconstruction,
+not the wire.
+
+The map is deleted (`salesagent-3dawm.15`). `result.error` now carries what the
+transport actually raised: a `WireError` holding the envelope VERBATIM on REST and A2A
+(deliberately not an `AdCPError` subclass, so `isinstance` against a production class
+fails loudly instead of quietly passing), and the raw `ToolError` on MCP.
 
 **New error-path tests MUST assert on the wire error envelope** as the primary authority.
 The wire envelope is the buyer-facing contract — it is what the AdCP spec defines and
@@ -427,22 +444,40 @@ code, the recovery, the field, and the details.
 
 ### What NOT to assert on (in new error tests)
 
-- `isinstance(error, AdCPValidationError)` — verifies reconstruction, not wire
-- `error.error_code == "VALIDATION_ERROR"` — verifies reconstructed attribute, not wire
-- `error.recovery == "correctable"` — same issue
+- `isinstance(result.error, AdCPValidationError)` — cannot pass on a wire transport at
+  all now (`result.error` is a `WireError`), so it is a broken assertion rather than a
+  weak one
+- `result.error.error_code == "VALIDATION_ERROR"` — same: reads an attribute the wire
+  carrier does not have
+- hand-indexing the envelope: `result.wire_error_envelope["errors"][0]["code"]` — go
+  through the helpers, which resolve one locator and cannot disagree with each other
 
-These patterns are acceptable ONLY in `_impl`-level tests (no wire involved) and in
-existing tests that predate this policy.
+There is NO exemption for these. The previous wording made them "acceptable ONLY in
+`_impl`-level tests (no wire involved) and in existing tests that predate this policy" —
+both halves are now wrong. There is no `_impl` TIER: a direct `env.call_impl(...)` asserts
+against the returned DTO or, via `pytest.raises`, the error class, and neither needs
+`result.error`. And a grandfather clause for "existing tests" licenses an empty set,
+because the reconstruction those tests relied on is gone.
 
 ### Migration path
 
-Existing tests (~660 call sites, ~80 BDD steps) use `ctx["error"]` or `result.error`
-(reconstructed exceptions). These are NOT broken — they continue to work. Migration is
-incremental:
+There is nothing left to migrate incrementally. This section used to say ~660 call sites
+and ~80 BDD steps asserted on reconstructed exceptions and "continue to work"; both
+claims expired when the reconstruction was deleted. Those assertions do not silently
+work — on a wire transport they raise, because `result.error` is a `WireError` with no
+`.error_code`. The BDD steps were migrated wholesale (`salesagent-3dawm.18`), and the
+wire-discipline guard's allowlists are EMPTY.
 
-1. **New error tests**: MUST use `result.wire_error_envelope` + `assert_envelope_shape()`
-2. **Existing tests**: Migrate when touched for other reasons (boy-scout rule)
-3. **BDD Then steps**: Add wire-envelope variants alongside existing exception-based steps
+What remains is a short, enumerated list rather than a programme:
+
+1. **New error tests**: use `result.assert_wire_error(code, recovery=...)` when you hold
+   a `TransportResult`; `assert_envelope_shape(...)` only for a bare envelope or an
+   `AdCPToolError` where no `TransportResult` exists.
+2. **The known off-path sites** — three that hand-index `wire_error_envelope`
+   (`test_mcp_unknown_field_handling`, `test_cross_principal_creative_scoping`,
+   `test_idempotency_rate_limit`) and two that read `result.error.error_code`
+   (`test_creative_formats_discovery`). One of the three is FORCED: no helper can express
+   `retry_after`, so it has to be added before that site can move.
 
 ### TransportResult.wire_error_envelope
 
@@ -453,24 +488,25 @@ error verification.
 
 **Authenticity per transport (matters for what regressions the field catches):**
 
-| Transport | `wire_error_envelope` source                                          | `synthesized_error_envelope`                                          | Catches a regression in...                                |
-|-----------|-----------------------------------------------------------------------|-----------------------------------------------------------------------|-----------------------------------------------------------|
-| REST      | HTTP response body (real wire)                                        | `None`                                                                | exception handler + envelope serialization + HTTP framing |
-| MCP       | JSON string in `ToolError`, else the real envelope stashed on the reconstructed error by `_envelope_to_adcp_error` — never synthesized | Built via `build_two_layer_error_envelope` against the caught error   | `_handle_tool_exception` + `build_two_layer_error_envelope` |
-| A2A       | Failed Task's artifact DataPart, stashed by `_envelope_to_adcp_error` | `None`                                                                | `on_message_send` + `_serialize_for_a2a` + envelope build |
-| IMPL      | `None` (no wire by definition)                                        | Built via `build_two_layer_error_envelope` against the caught error   | `build_two_layer_error_envelope` only                     |
+| Transport | `wire_error_envelope` source | Catches a regression in... |
+|-----------|------------------------------|---------------------------|
+| REST | HTTP response body (real wire) | exception handler + envelope serialization + HTTP framing |
+| MCP | JSON string in the raised `ToolError` (real wire) | `_handle_tool_exception` + `build_two_layer_error_envelope` |
+| A2A | Failed Task's artifact DataPart, carried on the raised `WireError` as `.envelope` (`tests/harness/_base.py`) | `on_message_send` + `_serialize_for_a2a` + envelope build |
 
-IMPL has no wire. Use `result.synthesized_error_envelope` to see what
-production WOULD emit at the boundary for the same exception, but be aware
-that field cannot catch a regression in the production boundary translator
-— both IMPL and production call the same envelope builder, so the
-synthesized value moves in lockstep with whatever the builder produces.
-Tests that need to catch real wire-shape regressions must run on REST,
-MCP, or A2A — only those transports observe actual wire bytes.
+`synthesized_error_envelope` is DELETED. It exposed "what production WOULD emit
+at the boundary for this exception", which could not catch a regression in the
+production boundary translator: both sides called `build_two_layer_error_envelope`
+over the same in-memory exception, so the value moved in lockstep with whatever
+the builder produced. A field that cannot fail is not a weak check, it is a
+zero-information one — and it was actively harmful, because it stood in for a
+missing wire and made a dead transport path indistinguishable from a live one
+(salesagent-b2wny is an A2A gap it concealed). Every wire-shape assertion now runs
+on REST, MCP or A2A, which observe actual wire bytes.
 
-`result.error` (reconstructed exception) remains available for backward
-compatibility. Reconstruction is lossy — assert on `wire_error_envelope`
-(or `synthesized_error_envelope` for IMPL).
+`result.error` is the raised or captured exception, not a reconstruction: on
+REST/A2A it is a `WireError` carrying the envelope verbatim, on MCP the raw
+`ToolError`. Assert on `wire_error_envelope` through the helpers below.
 
 ### TransportResult.wire_response (success-path wire)
 
@@ -479,7 +515,7 @@ success-path response body**, the success-path analogue of `wire_error_envelope`
 Populated on success by the REST dispatcher (HTTP body) and by the A2A/MCP
 dispatchers **only when the env routes through `_run_a2a_handler` /
 `_run_mcp_client`** (which stash the wire). The direct `*_raw` wrappers do not
-stash, so `wire_response` is `None` there — as it is on error and on IMPL. (The
+stash, so `wire_response` is `None` there — as it is on error. (The
 legacy `_run_mcp_wrapper` bypass is DELETED, salesagent-3dawm.21: it skipped the
 FastMCP middleware chain, so an env using it captured no wire envelope at all.)
 Today only `CreativeFormatsEnv` reads it.
@@ -495,10 +531,8 @@ declared types and so cannot catch a serialization regression.
 | REST | HTTP JSON body (`response.json()`) | Real wire; equals `raw_response.json()`. |
 | MCP  | `ToolResult.structured_content` (real wire) | Stashed by `_run_mcp_client`. |
 | A2A  | Full artifact DataPart (real wire) | Stashed by `_run_a2a_handler` BEFORE the `message`/`success` strip, so top-level envelope fields are present. |
-| IMPL | `None` (no wire by definition) | Serialize the typed `payload` (`model_dump(mode="json")`) — exercises the production serializer, not transport framing. |
 
-As with `wire_error_envelope`, real wire-shape regressions are only observable on
-REST/MCP/A2A; IMPL's `model_dump` only exercises the serializer. See
+As with `wire_error_envelope`, every transport here observes real wire bytes. See
 `tests/integration/test_harness_wire_response.py` (pins that the field is real
 wire, not a payload reconstruction) and
 `tests/bdd/steps/domain/uc005_format_id_shape.py` (uses it for the format_id
