@@ -55,33 +55,7 @@ _NOQA_STRIP_RE = re.compile(r"#\s*noqa:\s*TID251[^\n]*")
 _ANY_NOQA_MARKER = "# noqa: ANN401"
 _ANY_NOQA_STRIP_RE = re.compile(r"#\s*noqa:\s*ANN401[^\n]*")
 
-# ANN401's scope is the two directories the negated glob in ruff-egress.toml
-# names, so a synthetic probe must live inside one of them — presenting it
-# under src/core/ (TID251's probe path) would be ignored and pass vacuously.
-_ANY_SYNTHETIC_PATH = "src/adapters/_synthetic_any_probe.py"
 
-# A forwarder that re-widens the payload one hop before the seam. This is the
-# exact shape pldmk.23 removed from VendorHttpClient.call.
-_ANY_POSITIVE_SNIPPET = "from typing import Any\ndef call(url: str, *, json: Any = None) -> None:\n    ...\n"
-
-# ---------------------------------------------------------------------------
-# (d) The two seam definitions -- not an exemption list, a floor.
-#
-# A seam architecture cannot have zero sanctioned importers of the thing it
-# wraps: the seam itself has to import httpx, and the guarded MCP seam has to
-# import StreamableHttpTransport to factory-pin it. Every entry is a
-# line-scoped `noqa: TID251` comment (never a per-file-ignore) at the one
-# construction/import site the seam architecture sanctions:
-#   - outbound_http.py       — the seam itself imports httpx
-#   - mcp_client.py          — StreamableHttpTransport, factory-pinned
-# Adding a file here requires a matching live violation (case c) — the set
-# and the noqa lines move together or this module fails. Both are
-# liveness-proven: strip the noqa and the build fails.
-#
-# creative_agent_registry.py / signals_agent_registry.py were listed here
-# for constructing adcp.ADCPMultiAgentClient on the un-pinned OPERATOR-agent
-# path (adcp 6.6.0 exposed no transport injection point — GH #1589). Both were
-# migrated onto the guarded MCP seam (src.core.utils.mcp_client.call_mcp_tool)
 # by salesagent-4n88, so neither file constructs an adcp SDK client anymore —
 # the set SHRANK from 4 to 2, per this module's own non-vacuity contract
 # (case c/d): removing a noqa without a live violation is required, not
@@ -309,48 +283,18 @@ ANY_EXEMPT_FILES: frozenset[str] = frozenset(
 )
 
 
-class TestAnyBanFires:
-    """(a) A re-widening forwarder yields ANN401 — in EITHER scoped directory."""
-
-    @pytest.mark.parametrize(
-        "stdin_filename",
-        [_ANY_SYNTHETIC_PATH, "src/core/security/_synthetic_any_probe.py"],
-        ids=["adapters", "core-security"],
-    )
-    def test_any_payload_parameter_yields_ann401(self, stdin_filename: str) -> None:
-        _assert_rule_fires(_ANY_POSITIVE_SNIPPET, stdin_filename, f"any-ban:{stdin_filename}", "ANN401")
-
-    def test_ban_covers_files_that_do_not_exist_yet(self) -> None:
-        """The negated glob is what makes this class-level, not a file list."""
-        _assert_rule_fires(
-            _ANY_POSITIVE_SNIPPET,
-            "src/adapters/brand_new_vendor/client.py",
-            "any-ban:new-module",
-            "ANN401",
-        )
-
-
-class TestAnyBanScopeIsBounded:
-    """(b) ANN401 is scoped to the outbound chain, NOT to all of src/."""
-
-    def test_typed_payload_is_not_flagged(self) -> None:
-        clean = (
-            "from pydantic import JsonValue\ndef call(url: str, *, json: JsonValue | None = None) -> None:\n    ...\n"
-        )
-        proc = _run_ruff_egress(clean, _ANY_SYNTHETIC_PATH)
-        assert proc.returncode == 0, f"clean snippet failed ruff:\n{proc.stdout}\n{proc.stderr}"
-        assert "ANN401" not in proc.stdout, f"typed payload was flagged:\n{proc.stdout}"
-
-    def test_outside_the_scoped_directories_is_ignored(self) -> None:
-        """src/ as a whole carries ~200 pre-existing Any and is not this ban's business."""
-        proc = _run_ruff_egress(_ANY_POSITIVE_SNIPPET, "src/core/schemas/_probe.py")
-        assert "ANN401" not in proc.stdout, (
-            f"ANN401 escaped its two-directory scope — the negated glob in ruff-egress.toml is wrong:\n{proc.stdout}"
-        )
-
-
 class TestAnyExemptionsAreExecutable:
-    """(c) Each `# noqa: ANN401` still covers a LIVE violation (never dead prose)."""
+    """(c) Each `# noqa: ANN401` still covers a LIVE violation (never dead prose).
+
+    This also carries the rule-is-live claim, so nothing else needs to assert it:
+    stripping a noqa can only produce ANN401 if the rule is selected AND the
+    negated glob still covers that file. Both mutations -- dropping ANN401 from
+    ``select``, and widening the glob so it matches nothing -- redden this class.
+    A separate "the ban fires" test would be a second copy of that, and the
+    opposite failure (a ban too WIDE) is not silent: it yields ~209 violations
+    and reddens the build on its own. `make quality` runs the rule; this module
+    only owns what the rule cannot check about ITSELF -- our suppressions.
+    """
 
     @pytest.mark.parametrize("rel_path", sorted(ANY_EXEMPT_FILES))
     def test_stripping_the_noqa_makes_the_file_violate(self, rel_path: str) -> None:
