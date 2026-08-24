@@ -902,9 +902,9 @@ Feature: BR-UC-006 Sync Creative Assets
 
     Examples: Invalid assignment structures
       | partition            | assignment_setup                                | outcome                                                              |
-      | empty_array          | an empty assignments array                      | the error should be ASSIGNMENTS_EMPTY with suggestion                |
-      | missing_creative_id  | an assignment entry missing creative_id         | the error should be ASSIGNMENT_CREATIVE_ID_REQUIRED with suggestion  |
-      | missing_package_id   | an assignment entry missing package_id          | the error should be ASSIGNMENT_PACKAGE_ID_REQUIRED with suggestion   |
+      | empty_array          | an empty assignments array                      | the error should be INVALID_REQUEST with suggestion                |
+      | missing_creative_id  | an assignment entry missing creative_id         | the error should be INVALID_REQUEST with suggestion  |
+      | missing_package_id   | an assignment entry missing package_id          | the error should be INVALID_REQUEST with suggestion   |
 
   @T-UC-006-partition-assignment-weight @partition @assignment-weight
   Scenario Outline: Assignment weight validation — <partition>
@@ -924,8 +924,8 @@ Feature: BR-UC-006 Sync Creative Assets
 
     Examples: Invalid weights
       | partition          | weight | outcome                                                                     |
-      | weight_below_min   | -1     | the error should be ASSIGNMENT_WEIGHT_BELOW_MINIMUM with suggestion         |
-      | weight_above_max   | 101    | the error should be ASSIGNMENT_WEIGHT_ABOVE_MAXIMUM with suggestion         |
+      | weight_below_min   | -1     | the error should be INVALID_REQUEST with suggestion         |
+      | weight_above_max   | 101    | the error should be INVALID_REQUEST with suggestion         |
 
   @T-UC-006-partition-auth @partition @authentication
   Scenario Outline: Authentication partition - <partition>
@@ -983,9 +983,9 @@ Feature: BR-UC-006 Sync Creative Assets
 
     Examples: Invalid keys
       | partition      | key_value  | expected                                                      |
-      | empty_string   | ""         | the error should be IDEMPOTENCY_KEY_TOO_SHORT with suggestion |
-      | too_short      | "abc1234"  | the error should be IDEMPOTENCY_KEY_TOO_SHORT with suggestion |
-      | too_long       | "a]x256"   | the error should be IDEMPOTENCY_KEY_TOO_LONG with suggestion  |
+      | empty_string   | ""         | the error should be INVALID_REQUEST with suggestion |
+      | too_short      | "abc1234"  | the error should be INVALID_REQUEST with suggestion |
+      | too_long       | "a]x256"   | the error should be INVALID_REQUEST with suggestion  |
 
   @T-UC-006-boundary-approval @boundary @approval-mode
   Scenario Outline: Approval mode boundary — <boundary_point>
@@ -1157,10 +1157,10 @@ Feature: BR-UC-006 Sync Creative Assets
     Examples:
       | boundary_point                           | assignment_setup                                                 | expected                                                       |
       | assignments absent                       | no assignments field                                             | no assignment processing should occur                          |
-      | empty array []                           | an empty assignments array                                       | the error should be ASSIGNMENTS_EMPTY with suggestion          |
+      | empty array []                           | an empty assignments array                                       | the error should be INVALID_REQUEST with suggestion          |
       | single entry (minItems boundary)         | an assignment with creative_id "c1" and package_id "p1"         | the assignment should be created successfully                  |
-      | entry missing creative_id                | an assignment entry with only package_id                         | the error should be ASSIGNMENT_CREATIVE_ID_REQUIRED            |
-      | entry missing package_id                 | an assignment entry with only creative_id                        | the error should be ASSIGNMENT_PACKAGE_ID_REQUIRED             |
+      | entry missing creative_id                | an assignment entry with only package_id                         | the error should be INVALID_REQUEST            |
+      | entry missing package_id                 | an assignment entry with only creative_id                        | the error should be INVALID_REQUEST             |
       | entry with weight = 0 (paused)           | an assignment with weight 0                                      | the assignment should be created as paused                     |
       | entry with placement_ids                 | an assignment with placement_ids ["slot_a"]                      | the assignment should include placement targeting              |
       | duplicate (creative_id, package_id) pair | two assignment entries with same creative_id and package_id      | the second should be an idempotent upsert                      |
@@ -1177,13 +1177,13 @@ Feature: BR-UC-006 Sync Creative Assets
     Examples:
       | boundary_point                     | weight_value | expected                                                                     |
       | weight absent (field omitted)      |              | the assignment should use equal rotation                                     |
-      | weight = -1 (min - 1)              | -1           | the error should be ASSIGNMENT_WEIGHT_BELOW_MINIMUM with suggestion          |
+      | weight = -1 (min - 1)              | -1           | the error should be INVALID_REQUEST with suggestion          |
       | weight = 0 (min, inclusive — paused)| 0            | the assignment should be created as paused (no delivery)                     |
       | weight = 1 (min + 1)               | 1            | the assignment should be created with weight 1                               |
       | weight = 50 (typical)              | 50           | the assignment should be created with weight 50                              |
       | weight = 99 (max - 1)              | 99           | the assignment should be created with weight 99                              |
       | weight = 100 (max, inclusive)       | 100          | the assignment should be created with weight 100                             |
-      | weight = 101 (max + 1)             | 101          | the error should be ASSIGNMENT_WEIGHT_ABOVE_MAXIMUM with suggestion          |
+      | weight = 101 (max + 1)             | 101          | the error should be INVALID_REQUEST with suggestion          |
 
   @T-UC-006-boundary-account @boundary @account
   Scenario Outline: Account resolution boundary — <boundary_point>

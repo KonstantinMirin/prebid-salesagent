@@ -141,16 +141,16 @@ Feature: BR-UC-012 Manage Content Standards
     And the response contains standards_id "std_abc123"
 
   @T-UC-012-update-scope-conflict @update @scope-conflict @error @post-s7 @post-f1 @post-f2 @post-f3 @post-f4
-  Scenario: Update content standard - scope change triggers SCOPE_CONFLICT via error branch (success: false)
+  Scenario: Update content standard - scope change triggers VALIDATION_ERROR via error branch (success: false)
     Given an existing content standard "std_001" with scope {"languages_any": ["en"]}
     And another existing content standard "std_002" with scope {"languages_any": ["de"]}
     When the Buyer Agent updates "std_001" scope to {"languages_any": ["de"]}
     Then the response success field is false
     And the response contains errors array with at least 1 item
-    And the errors array includes error code "CONFLICT"
+    And the errors array includes error code "VALIDATION_ERROR"
     And the response includes conflicting_standards_id "std_002"
     And the error should include "suggestion"
-    # BR-RULE-065 INV-2: Update scope overlap → SCOPE_CONFLICT via oneOf error branch
+    # BR-RULE-065 INV-2: Update scope overlap → VALIDATION_ERROR via oneOf error branch
     # POST-S7: Scope conflict detected
     # POST-F1: System state unchanged
     # POST-F4: conflicting_standards_id returned
@@ -231,10 +231,10 @@ Feature: BR-UC-012 Manage Content Standards
   Scenario: Delete content standard - blocked when referenced by active media buy
     Given an existing content standard "std_active" referenced by 2 active media buys
     When the Buyer Agent attempts to delete "std_active"
-    Then the error code should be "CONFLICT"
+    Then the error code should be "INVALID_STATE"
     And the error should include "suggestion"
     And the content standard "std_active" still exists
-    # BR-RULE-067 INV-1: Active media buy references → STANDARDS_IN_USE
+    # BR-RULE-067 INV-1: Active media buy references → INVALID_STATE
     # POST-F1: System state unchanged
     # POST-F2: Buyer knows what failed
     # POST-F3: Suggestion present
@@ -256,13 +256,13 @@ Feature: BR-UC-012 Manage Content Standards
   Scenario: Failed delete does not modify system state
     Given an existing content standard "std_active" referenced by active media buys
     When the Buyer Agent attempts to delete "std_active"
-    Then the error code should be "CONFLICT"
+    Then the error code should be "INVALID_STATE"
     And the error should include "suggestion"
     And the content standard "std_active" still exists with unchanged data
     # POST-F1: System state unchanged on failure
 
   @T-UC-012-not-found-operations @not-found @error @ext-e @post-f1 @post-f2 @post-f3
-  Scenario Outline: STANDARDS_NOT_FOUND on <operation> with non-existent ID
+  Scenario Outline: REFERENCE_NOT_FOUND on <operation> with non-existent ID
     When the Buyer Agent sends a <operation> request for standards_id "nonexistent_id"
     Then the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion"
@@ -278,7 +278,7 @@ Feature: BR-UC-012 Manage Content Standards
       | delete_content_standards |
 
   @T-UC-012-not-found-wrong-tenant @not-found @tenant-isolation @partition @post-f2
-  Scenario: STANDARDS_NOT_FOUND when standards_id belongs to different tenant
+  Scenario: REFERENCE_NOT_FOUND when standards_id belongs to different tenant
     Given a content standard "std_other" exists in tenant "other_tenant"
     When the Buyer Agent in tenant "my_tenant" requests get_content_standards for "std_other"
     Then the error code should be "REFERENCE_NOT_FOUND"
@@ -292,13 +292,13 @@ Feature: BR-UC-012 Manage Content Standards
     # BR-RULE-065 INV-3: No overlap → proceeds via success branch
 
   @T-UC-012-scope-conflict-update @scope-conflict @update @error @ext-f @post-s7 @post-f1 @post-f2 @post-f3 @post-f4
-  Scenario: Update content standard - scope change triggers SCOPE_CONFLICT with error branch (success: false)
+  Scenario: Update content standard - scope change triggers VALIDATION_ERROR with error branch (success: false)
     Given an existing content standard "std_a" with scope {"languages_any": ["en"]}
     And another existing content standard "std_b" with scope {"languages_any": ["de"]}
     When the Buyer Agent updates "std_a" scope to {"languages_any": ["de"]}
     Then the response success field is false
     And the response contains errors array with at least 1 item
-    And the errors array includes error code "CONFLICT"
+    And the errors array includes error code "VALIDATION_ERROR"
     And the response includes conflicting_standards_id "std_b"
     And the error should include "suggestion"
     # BR-RULE-065 INV-2: Update scope overlap → error branch
@@ -371,9 +371,9 @@ Feature: BR-UC-012 Manage Content Standards
 
     Examples:
       | error_type         |
-      | STANDARDS_NOT_FOUND |
-      | SCOPE_CONFLICT      |
-      | STANDARDS_IN_USE    |
+      | REFERENCE_NOT_FOUND |
+      | VALIDATION_ERROR      |
+      | INVALID_STATE    |
 
   @T-UC-012-context-omitted @context-echo @partition
   Scenario: Context omitted in request - response omits context
@@ -427,7 +427,7 @@ Feature: BR-UC-012 Manage Content Standards
 
   @T-UC-012-escalation-severity-enum @escalation @enum @governance @partition
   Scenario Outline: Governance escalation severity must be one of info|warning|critical
-    Given a governance escalation is attached to a content-standards SCOPE_CONFLICT event
+    Given a governance escalation is attached to a content-standards VALIDATION_ERROR event
     When the escalation is emitted with severity "<severity>"
     Then the severity value is <validity> per /schemas/enums/escalation-severity.json
 

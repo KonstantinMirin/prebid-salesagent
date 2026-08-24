@@ -459,7 +459,7 @@ Feature: BR-UC-028 Manage Collection Lists
   Scenario: Delete collection list -- in use by active media buy returns LIST_IN_USE
     Given an existing collection list "list-in-use" referenced by an active media buy
     When the Buyer Agent deletes "list-in-use"
-    Then the error code should be "CONFLICT"
+    Then the error code should be "INVALID_STATE"
     And the error should include "suggestion" field
     And the list "list-in-use" still exists
 

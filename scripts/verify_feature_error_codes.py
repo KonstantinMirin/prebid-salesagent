@@ -76,6 +76,25 @@ CELL_RE = re.compile(r'(?<!response has )\berror "([^"]+)"')
 PROSE_RE = re.compile(r'error code "')
 QUOTED_RE = re.compile(r'"([^"]+)"')
 
+# Bare (UNQUOTED) sentence form: `Then the error should be ASSIGNMENTS_EMPTY`.
+# Structurally identifiable, so it can be graded without guessing whether a bare
+# ALL_CAPS token is an error code at all.
+BARE_SENTENCE_RE = re.compile(r"\berror should be ([A-Z][A-Z0-9_]*)")
+
+# Examples columns whose HEADER declares the cell is an error code, so bare
+# ALL_CAPS values in them are codes by declaration rather than by guesswork.
+#
+# This is the whole reason bare tokens are graded by column NAME and not by
+# shape: the corpus is full of ALL_CAPS values that are NOT wire error codes --
+# `snapshot_unavailable_reason` values (SNAPSHOT_UNSUPPORTED,
+# SNAPSHOT_PERMISSION_DENIED), comply_test_controller's own payload `error` enum
+# (NOT_FOUND, INVALID_TRANSITION, UNKNOWN_SCENARIO), config names like
+# GEMINI_API_KEY. Grading every bare token would flag all of them, which is the
+# same namespace confusion that made CELL_RE flag a payload field and led to a
+# scenario being "fixed" into a conformance break (see the CELL_RE note above).
+ERROR_COLUMN_RE = re.compile(r"^(error|error_code|expected_error|error_type)$", re.IGNORECASE)
+BARE_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
 # Gherkin block boundaries — placeholder resolution is scoped to the owning
 # Scenario Outline's Examples table (file-wide resolution bleeds across tables).
 BLOCK_RE = re.compile(r"^\s*(Feature|Rule|Background|Scenario|Scenario Outline):")
@@ -186,6 +205,19 @@ def expected_codes(feature: Path) -> list[tuple[int, str]]:
             if line.strip().startswith("|"):
                 for match in CELL_RE.finditer(line):
                     found.append((lineno, match.group(1)))
+            for match in BARE_SENTENCE_RE.finditer(line):
+                found.append((lineno, match.group(1)))
+        # Bare values in Examples columns the header declares to be error codes.
+        # Reported against the block start: _block_columns flattens the table, so
+        # the per-cell line number is not preserved. The file+code is enough to
+        # locate it, and keeping the column map as the single table parser beats
+        # a second, drifting one.
+        for name, values in columns.items():
+            if not ERROR_COLUMN_RE.match(name):
+                continue
+            for value in values:
+                if BARE_CODE_RE.match(value):
+                    found.append((start + 1, value))
     return found
 
 

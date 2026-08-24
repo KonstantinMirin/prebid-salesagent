@@ -19,10 +19,10 @@ Feature: BR-UC-024 Content Compliance
   #
   # Rules: BR-RULE-179..188 + BR-RULE-260 (idempotency, v3.1 net-new)
   # Extensions: A (Calibrate Content), B (Validate Content Delivery),
-  #   C (STANDARDS_NOT_FOUND), D (MEDIA_BUY_NOT_FOUND), E (RECORDS_REQUIRED),
+  #   C (REFERENCE_NOT_FOUND), D (MEDIA_BUY_NOT_FOUND), E (RECORDS_REQUIRED),
   #   F (RECORDS_LIMIT_EXCEEDED), G (ARTIFACT_REQUIRED), H (SAMPLING_RATE_INVALID -- DEPRECATED v3.1),
   #   I (PAGINATION_INVALID)
-  # Error codes: STANDARDS_NOT_FOUND, MEDIA_BUY_NOT_FOUND, RECORDS_REQUIRED,
+  # Error codes: REFERENCE_NOT_FOUND, MEDIA_BUY_NOT_FOUND, RECORDS_REQUIRED,
   #   RECORDS_LIMIT_EXCEEDED, ARTIFACT_REQUIRED, PAGINATION_INVALID, PAGINATION_CURSOR_INVALID,
   #   FEATURE_IDS_EMPTY, INCLUDE_PASSED_INVALID_TYPE, VERDICT_REQUIRED,
   #   VERDICT_INVALID, CONFIDENCE_OUT_OF_RANGE, FEATURE_STATUS_INVALID,
@@ -210,7 +210,7 @@ Feature: BR-UC-024 Content Compliance
     And the response summary shows total_records 20, passed_records 15, failed_records 5
 
   @T-UC-024-ext-c-calibrate @extension @ext-c @error @standards-not-found
-  Scenario: Calibrate content -- STANDARDS_NOT_FOUND when standards_id does not exist
+  Scenario: Calibrate content -- REFERENCE_NOT_FOUND when standards_id does not exist
     Given no content standard exists with standards_id "nonexistent-std"
     And a valid artifact with required fields
     When the Seller invokes calibrate_content with standards_id "nonexistent-std" and the artifact
@@ -223,7 +223,7 @@ Feature: BR-UC-024 Content Compliance
     # POST-F3: Context echoed when possible
 
   @T-UC-024-ext-c-validate @extension @ext-c @error @standards-not-found
-  Scenario: Validate content delivery -- STANDARDS_NOT_FOUND when standards_id does not exist
+  Scenario: Validate content delivery -- REFERENCE_NOT_FOUND when standards_id does not exist
     Given no content standard exists with standards_id "missing-std"
     And 5 valid delivery records
     When the Buyer Agent invokes validate_content_delivery with standards_id "missing-std" and records

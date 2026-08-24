@@ -481,7 +481,7 @@ Feature: BR-UC-015 Track Conversions
       | partition                          | sync_config                                                     | outcome                                           |
       | empty_event_sources_array          | account and event_sources []                                    | error "INVALID_REQUEST" with suggestion     |
       | missing_event_source_id            | account and event_sources [{"name": "Pixel"}]                   | error "INVALID_REQUEST" with suggestion   |
-      | duplicate_event_source_id_in_request | account and event_sources with two "src_1" entries             | error "CONFLICT" with suggestion     |
+      | duplicate_event_source_id_in_request | account and event_sources with two "src_1" entries             | error "VALIDATION_ERROR" with suggestion     |
 
   @T-UC-015-033 @boundary @event_source_sync @br-rule-106
   Scenario Outline: Event source sync boundary validation - <boundary_point>
@@ -497,7 +497,7 @@ Feature: BR-UC-015 Track Conversions
       | event_sources with 1 item, delete_missing=false                           | account and event_sources [{"event_source_id": "src_1"}], delete_missing false | source created or updated, nothing deleted       |
       | event_sources is empty array []                                           | account and event_sources []                                                 | error "INVALID_REQUEST" with suggestion    |
       | event source item missing event_source_id                                 | account and event_sources [{"name": "Pixel"}]                                | error "INVALID_REQUEST" with suggestion  |
-      | two items with same event_source_id                                       | account and event_sources with two "src_dup" entries                         | error "CONFLICT" with suggestion    |
+      | two items with same event_source_id                                       | account and event_sources with two "src_dup" entries                         | error "VALIDATION_ERROR" with suggestion    |
       | delete_missing=true but event_sources omitted (discovery-only; delete_missing ignored) | account only, delete_missing true, no event_sources                 | response lists all sources (discovery-only)       |
 
   @T-UC-015-034 @partition @event_dedup @br-rule-107

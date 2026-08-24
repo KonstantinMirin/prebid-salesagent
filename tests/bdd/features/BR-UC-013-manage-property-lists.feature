@@ -450,7 +450,7 @@ Feature: BR-UC-013 Manage Property Lists
   Scenario: Delete property list -- LIST_IN_USE when referenced by active media buy
     Given an existing property list "list-active" referenced by an active media buy
     When the Buyer Agent deletes property list "list-active"
-    Then the error code should be "CONFLICT"
+    Then the error code should be "INVALID_STATE"
     And the error should include "suggestion" field
     When the Buyer Agent sends a get_property_list request for "list-active"
     Then the response contains the full list metadata
