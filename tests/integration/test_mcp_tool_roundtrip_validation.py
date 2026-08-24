@@ -33,6 +33,39 @@ from tests.utils.database_helpers import create_tenant_with_timestamps
 
 
 @pytest.mark.requires_db
+def _pricing_kwargs_from_orm(pricing_option) -> dict:
+    """Build a V3 pricing-option dict from an ORM PricingOption row (or None).
+
+    V3 shape: fixed pricing carries fixed_price; auction pricing carries
+    floor_price plus percentile-only price_guidance. The ORM columns keep the
+    legacy names (rate, is_fixed, price_guidance.floor) — this mirrors the
+    mapping in src/core/product_conversion.py.
+    """
+    if pricing_option is None:
+        return {
+            "pricing_option_id": "cpm_usd_fixed",
+            "pricing_model": "cpm",
+            "currency": "USD",
+            "fixed_price": 10.0,
+        }
+    pricing_type = "fixed" if pricing_option.is_fixed else "auction"
+    kwargs = {
+        "pricing_option_id": f"{pricing_option.pricing_model}_{pricing_option.currency.lower()}_{pricing_type}",
+        "pricing_model": pricing_option.pricing_model,
+        "currency": pricing_option.currency,
+    }
+    if pricing_option.is_fixed:
+        kwargs["fixed_price"] = float(pricing_option.rate) if pricing_option.rate else 10.0
+    else:
+        guidance = dict(pricing_option.price_guidance or {"floor": 5.0, "p50": 10.0, "p75": 15.0})
+        floor = guidance.pop("floor", None)
+        if floor is not None:
+            kwargs["floor_price"] = float(floor)
+        if guidance:
+            kwargs["price_guidance"] = guidance
+    return kwargs
+
+
 class TestMCPToolRoundtripValidation:
     """Test MCP tools with real objects to catch roundtrip conversion bugs."""
 
@@ -179,35 +212,8 @@ class TestMCPToolRoundtripValidation:
             # NEW: Access pricing via pricing_options relationship
             pricing_option = db_product.pricing_options[0] if db_product.pricing_options else None
 
-            # Generate pricing_option_id from pricing_model, currency, and is_fixed
-            if pricing_option:
-                pricing_type = "fixed" if pricing_option.is_fixed else "auction"
-                pricing_option_id = f"{pricing_option.pricing_model}_{pricing_option.currency.lower()}_{pricing_type}"
-            else:
-                pricing_option_id = "cpm_usd_fixed"
-
-            # Build pricing_options dict (is_fixed required by adcp 2.5.0 discriminated unions)
-            pricing_kwargs = {
-                "pricing_option_id": pricing_option_id,
-                "pricing_model": pricing_option.pricing_model if pricing_option else "cpm",
-                "currency": pricing_option.currency if pricing_option else "USD",
-            }
-
-            # Add rate or price_guidance based on is_fixed (MUST include is_fixed for adcp 2.5.0)
-            if pricing_option:
-                pricing_kwargs["is_fixed"] = pricing_option.is_fixed
-                if pricing_option.is_fixed:
-                    pricing_kwargs["rate"] = float(pricing_option.rate) if pricing_option.rate else 10.0
-                else:
-                    # For auction pricing, price_guidance is required
-                    pricing_kwargs["price_guidance"] = pricing_option.price_guidance or {
-                        "floor": 5.0,
-                        "p50": 10.0,
-                        "p75": 15.0,
-                    }
-            else:
-                pricing_kwargs["is_fixed"] = True
-                pricing_kwargs["rate"] = 10.0
+            # Build a V3-shaped pricing_options dict from the ORM row
+            pricing_kwargs = _pricing_kwargs_from_orm(pricing_option)
 
             # Convert format_ids to FormatId objects if they're dicts or strings
             formats = db_product.format_ids
@@ -318,35 +324,8 @@ class TestMCPToolRoundtripValidation:
             # NEW: Access pricing via pricing_options relationship
             pricing_option = db_product.pricing_options[0] if db_product.pricing_options else None
 
-            # Generate pricing_option_id from pricing_model, currency, and is_fixed
-            if pricing_option:
-                pricing_type = "fixed" if pricing_option.is_fixed else "auction"
-                pricing_option_id = f"{pricing_option.pricing_model}_{pricing_option.currency.lower()}_{pricing_type}"
-            else:
-                pricing_option_id = "cpm_usd_fixed"
-
-            # Build pricing_options dict (is_fixed required by adcp 2.5.0 discriminated unions)
-            pricing_kwargs = {
-                "pricing_option_id": pricing_option_id,
-                "pricing_model": pricing_option.pricing_model if pricing_option else "cpm",
-                "currency": pricing_option.currency if pricing_option else "USD",
-            }
-
-            # Add rate or price_guidance based on is_fixed (MUST include is_fixed for adcp 2.5.0)
-            if pricing_option:
-                pricing_kwargs["is_fixed"] = pricing_option.is_fixed
-                if pricing_option.is_fixed:
-                    pricing_kwargs["rate"] = float(pricing_option.rate) if pricing_option.rate else 10.0
-                else:
-                    # For auction pricing, price_guidance is required
-                    pricing_kwargs["price_guidance"] = pricing_option.price_guidance or {
-                        "floor": 5.0,
-                        "p50": 10.0,
-                        "p75": 15.0,
-                    }
-            else:
-                pricing_kwargs["is_fixed"] = True
-                pricing_kwargs["rate"] = 10.0
+            # Build a V3-shaped pricing_options dict from the ORM row
+            pricing_kwargs = _pricing_kwargs_from_orm(pricing_option)
 
             # Convert format_ids to FormatId objects if they're dicts or strings
             formats = db_product.format_ids
@@ -455,9 +434,9 @@ class TestMCPToolRoundtripValidation:
                 {
                     "pricing_option_id": "cpm_usd_fixed",
                     "pricing_model": "cpm",
-                    "rate": 15.75,
+                    # V3 fixed pricing: fixed_price replaces the pre-V3 rate/is_fixed pair
+                    "fixed_price": 15.75,
                     "currency": "USD",
-                    "is_fixed": True,  # Required in adcp 2.4.0+
                 }
             ],
         )
@@ -520,9 +499,10 @@ class TestMCPToolRoundtripValidation:
                 {
                     "pricing_option_id": "cpm_usd_auction",
                     "pricing_model": "cpm",
-                    "price_guidance": {"floor": 5.0, "p50": 8.25, "p75": 10.0},
+                    # V3 auction shape: floor at top level, percentiles in guidance
+                    "floor_price": 5.0,
+                    "price_guidance": {"p50": 8.25, "p75": 10.0},
                     "currency": "USD",
-                    "is_fixed": False,  # Required in adcp 2.4.0+
                 }
             ],
         )
@@ -583,9 +563,9 @@ class TestMCPToolRoundtripValidation:
                 {
                     "pricing_option_id": "cpm_usd_fixed",
                     "pricing_model": "cpm",
-                    "rate": 10.0,
+                    # V3 fixed pricing: fixed_price replaces the pre-V3 rate/is_fixed pair
+                    "fixed_price": 10.0,
                     "currency": "USD",
-                    "is_fixed": True,  # Required in adcp 2.4.0+
                 }
             ],
         }
@@ -612,9 +592,9 @@ class TestMCPToolRoundtripValidation:
                 {
                     "pricing_option_id": "cpm_usd_fixed",
                     "pricing_model": "cpm",
-                    "rate": 10.0,
+                    # V3 fixed pricing: fixed_price replaces the pre-V3 rate/is_fixed pair
+                    "fixed_price": 10.0,
                     "currency": "USD",
-                    "is_fixed": True,  # Required in adcp 2.4.0+
                 }
             ],
         }
@@ -658,9 +638,9 @@ class TestMCPToolRoundtripPatterns:
                         {
                             "pricing_option_id": "cpm_usd_fixed",
                             "pricing_model": "cpm",
-                            "rate": 12.0,
+                            # V3 fixed pricing: fixed_price replaces the pre-V3 rate/is_fixed pair
+                            "fixed_price": 12.0,
                             "currency": "USD",
-                            "is_fixed": True,  # Required in adcp 2.4.0+
                             "min_spend_per_package": 2000.0,
                         }
                     ],
@@ -690,8 +670,9 @@ class TestMCPToolRoundtripPatterns:
                         {
                             "pricing_option_id": "cpm_usd_auction",
                             "pricing_model": "cpm",
-                            "is_fixed": False,  # Required in adcp 2.4.0+
-                            "price_guidance": {"floor": 3.0, "p50": 5.0, "p75": 7.0},
+                            # V3 auction shape: floor at top level, percentiles in guidance
+                            "floor_price": 3.0,
+                            "price_guidance": {"p50": 5.0, "p75": 7.0},
                             "currency": "USD",
                             "min_spend_per_package": 5000.0,
                         }
@@ -719,8 +700,9 @@ class TestMCPToolRoundtripPatterns:
                         {
                             "pricing_option_id": "cpm_usd_auction",
                             "pricing_model": "cpm",
-                            "is_fixed": False,  # Required in adcp 2.4.0+
-                            "price_guidance": {"floor": 3.0, "p50": 5.0, "p75": 7.0},
+                            # V3 auction shape: floor at top level, percentiles in guidance
+                            "floor_price": 3.0,
+                            "price_guidance": {"p50": 5.0, "p75": 7.0},
                             "currency": "USD",
                         }
                     ],
@@ -793,9 +775,9 @@ class TestMCPToolRoundtripPatterns:
                 {
                     "pricing_option_id": "cpm_usd_fixed",
                     "pricing_model": "cpm",
-                    "rate": 15.0,
+                    # V3 fixed pricing: fixed_price replaces the pre-V3 rate/is_fixed pair
+                    "fixed_price": 15.0,
                     "currency": "USD",
-                    "is_fixed": True,  # Required in adcp 2.4.0+
                     "min_spend_per_package": 2500.0,
                 }
             ],

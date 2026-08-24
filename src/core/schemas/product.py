@@ -26,6 +26,11 @@ from src.core.schemas._base import (
     strip_none_deep,
 )
 
+# Private alias: product.py is star-imported by the package __init__, and a bare
+# `PricingOption` import here would re-export the pricing wrapper over the legacy
+# flat PricingOption that src.core.schemas still exposes (see pricing.py's naming note).
+from src.core.schemas.pricing import PricingOption as _PricingOption
+
 
 def _default_reporting_capabilities() -> LibraryReportingCapabilities:
     """Minimal reporting_capabilities for callers that haven't populated it yet.
@@ -101,6 +106,16 @@ class Product(LibraryProduct):
     # yet get a validated default from the factory below, so the attribute, the
     # wire and the persisted row always agree and None is unconstructible.
     reporting_capabilities: LibraryReportingCapabilities = Field(default_factory=_default_reporting_capabilities)
+
+    # Narrowed to the local pricing wrapper (src.core.schemas.pricing) so every
+    # member carries our extra policy and the internal supported /
+    # unsupported_reason annotations as declared, never-serialized fields. Same
+    # wire shape and constraints as the SDK field it overrides; the [assignment]
+    # ignore is the expected cost of narrowing a list element type (invariance).
+    pricing_options: list[_PricingOption] = Field(  # type: ignore[assignment]
+        description="Available pricing models for this product",
+        min_length=1,
+    )
 
     # Internal-only fields (not in AdCP spec)
     implementation_config: dict[str, Any] | None = Field(

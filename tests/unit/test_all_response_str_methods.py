@@ -110,9 +110,10 @@ class TestResponseStrMethods:
                         "pricing_option_id": "cpm_usd_auction",
                         "pricing_model": "cpm",
                         "currency": "USD",
-                        "is_fixed": False,  # Required in adcp 2.4.0+
-                        "price_guidance": {"floor": 1.0, "p50": 5.0},
-                        # Auction pricing (anonymous user)
+                        # Auction pricing (anonymous user): V3 shape — no fixed_price,
+                        # floor at top level, price_guidance holds percentiles only
+                        "floor_price": 1.0,
+                        "price_guidance": {"p50": 5.0},
                     }
                 ],
             )

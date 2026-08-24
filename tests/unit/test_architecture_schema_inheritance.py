@@ -129,9 +129,23 @@ def _is_strict_narrowing(local: object, library: object) -> bool:
     is not provably a narrowing stays a violation — including a widening, an
     optional-ization (``str`` -> ``str | None``: ``NoneType`` is not a ``str``), and a
     substitution of an unrelated model.
+
+    Same-origin generics recurse elementwise: ``list[Sub]`` narrows ``list[Base]``
+    because every value the local list admits is a valid library list value.
+    A different origin (or arity) is never a narrowing.
     """
     if local == library:
         return False
+    local_origin = typing.get_origin(local)
+    library_origin = typing.get_origin(library)
+    if local_origin is not None and local_origin not in (typing.Union, types.UnionType):
+        if local_origin is not library_origin:
+            return False
+        local_args = typing.get_args(local)
+        library_args = typing.get_args(library)
+        if len(local_args) != len(library_args):
+            return False
+        return all(la == lb or _is_strict_narrowing(la, lb) for la, lb in zip(local_args, library_args, strict=True))
     lib_members = _annotation_members(library)
     if not all(isinstance(m, type) for m in lib_members):
         return False

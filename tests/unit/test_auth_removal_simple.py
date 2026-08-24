@@ -140,11 +140,10 @@ class TestAuthRemovalChanges:
         principal_id = None
 
         # Verify we have a fixed rate pricing option (for authenticated users)
-        # adcp 2.14.0+ uses RootModel wrapper - rate is on .root
+        # adcp 2.14.0+ uses RootModel wrapper - the V3 fixed rate is on .root.fixed_price
         pricing_option = product.pricing_options[0]
         assert hasattr(pricing_option, "root")  # noqa: rootmodel
-        assert hasattr(pricing_option.root, "rate")
-        assert pricing_option.root.rate == 2.50
+        assert pricing_option.root.fixed_price == 2.50
 
         # For anonymous users, we would replace with auction pricing (no rate field)
         # Here we just verify the concept by checking the structure
@@ -213,7 +212,7 @@ class TestAuthRemovalChanges:
         # Verify pricing data is preserved (not removed for authenticated users)
         # adcp 2.14.0+ uses RootModel wrapper - access via .root
         pricing_option = product.pricing_options[0]
-        assert pricing_option.root.rate == 2.50
+        assert pricing_option.root.fixed_price == 2.50
         assert pricing_option.root.min_spend_per_package == 1000.0
 
         # No pricing message for authenticated users

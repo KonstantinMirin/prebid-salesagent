@@ -28,9 +28,10 @@ def test_product_with_empty_pricing_options():
                 "pricing_option_id": "cpm_usd_auction",
                 "pricing_model": "cpm",
                 "currency": "USD",
-                "is_fixed": False,  # Required in adcp 2.4.0+
-                "price_guidance": {"floor": 1.0, "p50": 5.0},  # Median guidance for auction
-                # Auction pricing (anonymous user view)
+                # Auction pricing (anonymous user view): V3 shape — no fixed_price,
+                # floor at top level, price_guidance holds percentiles only
+                "floor_price": 1.0,
+                "price_guidance": {"p50": 5.0},
             }
         ],
         publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="test.com")],

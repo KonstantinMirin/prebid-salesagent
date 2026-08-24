@@ -756,18 +756,18 @@ async def _get_products_impl(
 
             for product in eligible_products:
                 if product.pricing_options:
-                    # Annotate each pricing option with "supported" flag
+                    # Annotate each pricing option with "supported" flag.
+                    # supported / unsupported_reason are declared (excluded)
+                    # fields on every local pricing member, so these are plain
+                    # attribute writes that never reach the wire.
                     for option in product.pricing_options:
                         inner = option.root
-                        # Get pricing model as string (handle both enum and literal)
-                        pricing_model = getattr(inner.pricing_model, "value", inner.pricing_model)
-                        # Add supported annotation (will be included in response)
-                        # Dynamic attributes on discriminated union types
+                        pricing_model = inner.pricing_model
                         is_supported = pricing_model in supported_models
-                        inner.supported = is_supported  # type: ignore[union-attr]
+                        inner.supported = is_supported
                         if not is_supported:
-                            inner.unsupported_reason = (  # type: ignore[union-attr]
-                                f"Current adapter does not support {str(pricing_model).upper()} pricing"
+                            inner.unsupported_reason = (
+                                f"Current adapter does not support {pricing_model.upper()} pricing"
                             )
         except (ImportError, RuntimeError, OSError, ValueError) as e:
             # structural-guard: spec-neutral — the dropped fields are not in

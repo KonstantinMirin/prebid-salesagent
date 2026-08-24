@@ -585,8 +585,9 @@ class TestAdCPContract:
                     "pricing_option_id": "cpm_usd_auction",
                     "pricing_model": "cpm",
                     "currency": "USD",
-                    "is_fixed": False,  # Required in adcp 2.4.0+
-                    "price_guidance": {"floor": 1.0, "p50": 5.0},
+                    # V3 auction shape: floor at top level, percentiles in guidance
+                    "floor_price": 1.0,
+                    "price_guidance": {"p50": 5.0},
                 }
             ],
         )

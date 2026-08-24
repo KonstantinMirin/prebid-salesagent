@@ -163,15 +163,17 @@ class TestCpcvConversion:
         assert result.fixed_price == 0.05
         assert result.pricing_option_id == "cpcv_usd_fixed"
 
-    def test_cpcv_with_parameters(self):
+    def test_cpcv_with_parameters_raises(self):
+        """AdCP 3.1.1 cpcv-option.json defines no parameters property.
+
+        Stored parameters are unrepresentable on the wire, so conversion must
+        fail loud instead of leaking them through extra="allow" (the pre-fix
+        behavior) or silently dropping them.
+        """
         params = {"view_completion_threshold": 0.75}
         po = _make_pricing_option("cpcv", is_fixed=True, rate=0.05, parameters=params)
-        result = convert_pricing_option_to_adcp(po)
-
-        assert isinstance(result, CpcvPricingOption)
-        assert result.fixed_price == 0.05
-        # CpcvPricingOption accepts parameters as extra fields
-        assert hasattr(result, "parameters")
+        with pytest.raises(ValueError, match="no parameters property"):
+            convert_pricing_option_to_adcp(po)
 
     def test_cpcv_without_parameters(self):
         po = _make_pricing_option("cpcv", is_fixed=True, rate=0.05)

@@ -539,16 +539,18 @@ def create_test_cpm_pricing_option(
     is_fixed: bool = True,
     **kwargs,
 ) -> dict[str, Any]:
-    """Create a test CPM fixed rate pricing option (discriminated union).
+    """Create a test CPM pricing option dict (V3 discriminated-union shape).
 
-    This creates a proper AdCP 2.4.0+ CpmFixedRatePricingOption discriminated union.
-    As of adcp 2.4.0, is_fixed is a required field per AdCP spec.
+    V3 discriminates fixed vs auction by field presence: fixed pricing carries
+    fixed_price, auction pricing carries floor_price. The rate/is_fixed
+    parameter names are kept for the many existing call sites; they select
+    which V3 field the rate lands in.
 
     Args:
         pricing_option_id: Unique identifier for this pricing option
         currency: Currency code (3-letter ISO)
         rate: CPM rate in the specified currency
-        is_fixed: Whether this is fixed rate (True) or auction (False). Defaults to True.
+        is_fixed: True -> rate becomes fixed_price; False -> rate becomes floor_price.
         **kwargs: Additional optional fields (min_spend_per_package, etc.)
 
     Returns:
@@ -557,14 +559,17 @@ def create_test_cpm_pricing_option(
     Example:
         pricing = create_test_cpm_pricing_option(rate=15.0, currency="EUR")
     """
-    return {
+    # V3 shape: fixed pricing carries fixed_price, auction pricing carries
+    # floor_price — never the pre-V3 "rate" / "is_fixed" keys, which the local
+    # pricing members (extra="forbid" outside production) reject as drift.
+    option: dict[str, Any] = {
         "pricing_option_id": pricing_option_id,
         "pricing_model": "cpm",
         "currency": currency,
-        "rate": rate,
-        "is_fixed": is_fixed,
-        **kwargs,
     }
+    option["fixed_price" if is_fixed else "floor_price"] = rate
+    option.update(kwargs)
+    return option
 
 
 def create_test_pricing_option(pricing_model: str = "cpm", currency: str = "USD", **kwargs) -> dict[str, Any]:

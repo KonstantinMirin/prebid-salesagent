@@ -35,7 +35,7 @@ from tests.harness._mixins import ProductMixin
 
 _DEFAULT_PRICING_OPTION = {
     "pricing_model": "cpm",
-    "rate": "5.00",
+    "fixed_price": 5.0,  # V3: the pre-V3 "rate" key is rejected by the local members
     "currency": "USD",
     "pricing_option_id": "po_default",
 }

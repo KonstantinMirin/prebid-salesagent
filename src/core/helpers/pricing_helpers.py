@@ -7,27 +7,34 @@ from typing import Any
 
 
 def pricing_option_has_rate(pricing_option: Any) -> bool:
-    """Check if a pricing option has a rate value.
+    """Check if a pricing option carries a fixed rate.
+
+    V3 renamed the fixed rate to ``fixed_price`` (auction options have no rate;
+    they carry ``floor_price`` / ``price_guidance``). The pre-V3 ``rate`` key is
+    still honored as a fallback for ORM rows and stored legacy dicts, whose
+    column keeps that name. Before this check knew about ``fixed_price`` it only
+    matched ``rate``, so every V3-shaped option counted as rate-less — the
+    anonymous-pricing heuristic in GetProductsResponse.__str__ misfired for
+    authenticated buyers, hidden by test fixtures that leaked ``rate`` through
+    the SDK members' ``extra="allow"``.
 
     Handles multiple formats:
-    - Dict format (from JSON/serialization): checks po["rate"]
-    - Pydantic RootModel wrapper (adcp 2.14.0+): checks po.root.rate
-    - Direct attribute access (SQLAlchemy models): checks po.rate
+    - Dict format (from JSON/serialization): checks fixed_price, then rate
+    - Pydantic RootModel wrapper: checks the wrapped member's fixed_price
+    - Direct attribute access (SQLAlchemy models): checks fixed_price, then rate
 
     Args:
         pricing_option: A pricing option in any supported format
 
     Returns:
-        True if the pricing option has a non-None rate value
+        True if the pricing option has a non-None fixed rate value
     """
     # Dict format (JSON/serialization)
     if isinstance(pricing_option, dict):
-        return pricing_option.get("rate") is not None
+        return pricing_option.get("fixed_price", pricing_option.get("rate")) is not None
 
-    # Try RootModel wrapper first (adcp 2.14.0+ Pydantic models)
-    root = getattr(pricing_option, "root", None)
-    if root is not None:
-        return getattr(root, "rate", None) is not None
-
-    # Direct attribute (SQLAlchemy models or plain objects)
-    return getattr(pricing_option, "rate", None) is not None
+    # Unwrap RootModel wrapper if present, then check the model/row attributes
+    target = getattr(pricing_option, "root", pricing_option)
+    if getattr(target, "fixed_price", None) is not None:
+        return True
+    return getattr(target, "rate", None) is not None

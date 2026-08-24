@@ -333,14 +333,14 @@ class XandrAdapter(AdServerAdapter):
         """Get available products (placement groups in Xandr)."""
         try:
             # Use V3 consolidated pricing types
-            # FIXME(#1388): SDK types have local subclasses; import from src.core.schemas (Pattern #7/#4).
-            from adcp.types import CpmPricingOption, DeliveryMeasurement, DeliveryType
+            # FIXME(#1388): DeliveryMeasurement has a local subclass; import from src.core.schemas (Pattern #7/#4).
+            from adcp.types import DeliveryMeasurement, DeliveryType
             from adcp.types import PriceGuidance as AdCPPriceGuidance
             from adcp.types.generated_poc.core.publisher_property_selector import (
                 PublisherPropertySelector1,
             )  # TODO: no stable alias in adcp.types
 
-            from src.core.schemas import FormatId
+            from src.core.schemas import CpmPricingOption, FormatId
 
             # In Xandr, products map to placement groups or custom deals
             # For now, return standard IAB formats as products

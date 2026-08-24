@@ -76,23 +76,16 @@ LibraryPackage: TypeAlias = AdCPPackage  # noqa: UP040 — runtime re-export use
 # Simple types that match library exactly
 # V3: Structured geo targeting types
 from adcp.types import ActivateSignalRequest as LibraryActivateSignalRequest
-from adcp.types import (
-    CpcPricingOption,
-    CpcvPricingOption,
-    CpmPricingOption,  # V3: consolidated from CpmAuctionPricingOption/CpmFixedRatePricingOption
-    CppPricingOption,
-    CpvPricingOption,
-    FlatRatePricingOption,
-    GeoCountry,
-    GeoMetro,
-    GeoRegion,
-    TargetingOverlay,
-    VcpmPricingOption,  # V3: consolidated from VcpmAuctionPricingOption/VcpmFixedRatePricingOption
-)
 
 # AdCP creative types for schema definitions
 from adcp.types import CreativePolicy as LibraryCreativePolicy
 from adcp.types import FrequencyCap as LibraryFrequencyCap
+from adcp.types import (
+    GeoCountry,
+    GeoMetro,
+    GeoRegion,
+    TargetingOverlay,
+)
 from adcp.types import GetSignalsRequest as LibraryGetSignalsRequest
 from adcp.types import GetSignalsResponse as LibraryGetSignalsResponse
 from adcp.types import Measurement as LibraryMeasurement
@@ -125,16 +118,9 @@ from pydantic import (
     model_validator,
 )
 
-# Type alias for the union of all AdCP pricing option types (V3 consolidated)
-AdCPPricingOption = (
-    CpmPricingOption
-    | VcpmPricingOption
-    | CpcPricingOption
-    | CpcvPricingOption
-    | CpvPricingOption
-    | CppPricingOption
-    | FlatRatePricingOption
-)
+# The pricing option types (nine local member subclasses, the AdCPPricingOption
+# union, and the PricingOption wrapper) live in src.core.schemas.pricing; the
+# package __init__ star-exports the members and the union from there.
 
 
 # Helper function for creating AnyUrl instances (eliminates mypy warnings)
@@ -963,7 +949,15 @@ class PricingParameters(SalesAgentBaseModel):
 
 
 class PricingOption(SalesAgentBaseModel):
-    """A pricing model option offered by a publisher for a product per AdCP spec.
+    """LEGACY flat pricing option — no production consumers.
+
+    Production pricing options are the discriminated-union subclasses in
+    ``src.core.schemas.pricing`` (``Product.pricing_options`` is typed with
+    that module's RootModel wrapper). This flat model is retained only because
+    ledgered schema-validation tests (T-UC-001-boundary-pricing-xor in
+    tests/integration/test_get_products_behavioral.py and
+    tests/unit/test_null_field_exclusion.py) still grade its XOR validator;
+    retire it together with those tests once the scenario is reconciled.
 
     V3 Migration: Consolidated pricing fields:
     - rate → fixed_price (for fixed-rate pricing)

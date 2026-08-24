@@ -46,17 +46,16 @@ def test_pricing_option_rootmodel_unwrapping():
     # so .pricing_model is accessible directly on the wrapper
     assert hasattr(po, "pricing_model"), "pricing_options wrapper should proxy .pricing_model from .root"
 
-    # Direct access works (proxy behavior)
+    # Direct access works (proxy behavior). V3: the fixed rate is
+    # fixed_price; its presence is what marks the option as fixed pricing.
     assert po.pricing_model == "cpm"
     assert po.currency == "USD"
-    assert po.rate == 10.0
-    assert po.is_fixed is True
+    assert po.fixed_price == 10.0
 
     # Access via .root should also still work
     assert po.root.pricing_model == "cpm"
     assert po.root.currency == "USD"
-    assert po.root.rate == 10.0
-    assert po.root.is_fixed is True
+    assert po.root.fixed_price == 10.0
 
 
 def test_pricing_option_unwrap_helper():
@@ -78,11 +77,10 @@ def test_pricing_option_unwrap_helper():
 
     first_option = unwrap_po(product.pricing_options[0])
 
-    # Now we can access attributes directly
+    # Now we can access attributes directly (V3: rate lives in fixed_price)
     assert first_option.pricing_model == "cpm"
     assert first_option.currency == "EUR"
-    assert first_option.rate == 15.0
-    assert first_option.is_fixed is True
+    assert first_option.fixed_price == 15.0
 
 
 def test_legacy_pricing_option_id_generation():
@@ -102,12 +100,13 @@ def test_legacy_pricing_option_id_generation():
         pricing_options=[create_test_cpm_pricing_option(currency="USD", rate=10.0, is_fixed=True)],
     )
 
-    # This is the FIXED logic from media_buy_create.py
+    # This is the FIXED logic from media_buy_create.py. V3 schema models
+    # carry no is_fixed flag — fixed pricing is fixed_price being present.
     first_option = product.pricing_options[0]
     first_option = getattr(first_option, "root", first_option)  # Unwrap RootModel
     pricing_model = first_option.pricing_model.lower()
     currency = first_option.currency.lower()
-    is_fixed = "fixed" if first_option.is_fixed else "auction"
+    is_fixed = "fixed" if first_option.fixed_price is not None else "auction"
     pricing_option_id = f"{pricing_model}_{currency}_{is_fixed}"
 
     assert pricing_option_id == "cpm_usd_fixed"
@@ -128,18 +127,19 @@ def test_legacy_pricing_option_id_auction():
                 "pricing_option_id": "cpm_eur_auction",
                 "pricing_model": "cpm",
                 "currency": "EUR",
-                "is_fixed": False,
-                "price_guidance": {"floor": 1.0, "p50": 5.0},
+                # V3 auction shape: floor at top level, percentiles in guidance
+                "floor_price": 1.0,
+                "price_guidance": {"p50": 5.0},
             }
         ],
     )
 
-    # FIXED logic
+    # FIXED logic (V3: auction = no fixed_price)
     first_option = product.pricing_options[0]
     first_option = getattr(first_option, "root", first_option)
     pricing_model = first_option.pricing_model.lower()
     currency = first_option.currency.lower()
-    is_fixed = "fixed" if first_option.is_fixed else "auction"
+    is_fixed = "fixed" if first_option.fixed_price is not None else "auction"
     pricing_option_id = f"{pricing_model}_{currency}_{is_fixed}"
 
     assert pricing_option_id == "cpm_eur_auction"

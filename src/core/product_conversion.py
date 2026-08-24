@@ -13,26 +13,26 @@ V3 Migration Notes:
 
 import logging
 
-from adcp import (
+from adcp import EventType, TimeUnit
+from adcp.types._generated import MediaChannel
+from adcp.types.generated_poc.pricing_options.time_option import Parameters as TimeParameters
+from packaging.version import InvalidVersion, Version
+
+# Import our extended Product (includes implementation_config) and the local
+# pricing member subclasses (our extra policy + internal adapter annotations)
+# — not the raw SDK types (Pattern #1 / local-schema-imports guard).
+from src.core.schemas import (
     CpaPricingOption,
     CpcPricingOption,
     CpcvPricingOption,
     CpmPricingOption,
     CppPricingOption,
     CpvPricingOption,
-    EventType,
     FlatRatePricingOption,
+    Product,
     TimeBasedPricingOption,
-    TimeUnit,
     VcpmPricingOption,
 )
-from adcp.types._generated import MediaChannel
-from adcp.types.generated_poc.pricing_options.time_option import Parameters as TimeParameters
-from packaging.version import InvalidVersion, Version
-
-# Import our extended Product (includes implementation_config)
-# Not the library Product - we need the internal fields
-from src.core.schemas import Product
 
 logger = logging.getLogger(__name__)
 
@@ -204,14 +204,21 @@ def convert_pricing_option_to_adcp(
         # CPCV (Cost Per Completed View) - typically fixed rate
         if not rate:
             raise ValueError(f"CPCV pricing option {pricing_option_id} requires rate")
-        result_fields = {
-            **common_fields,
-            "fixed_price": float(rate),
-        }
-        # CPCV may have optional parameters for view completion threshold
+        # AdCP 3.1.1 pricing-options/cpcv-option.json declares NO parameters
+        # property (completion is definitional for CPCV). Stored parameters
+        # cannot be expressed on the wire — fail loud rather than silently
+        # dropping seller-configured data (no-quiet-failures). They previously
+        # leaked through the SDK members' extra="allow" as a non-spec emission.
         if parameters:
-            result_fields["parameters"] = parameters
-        return CpcvPricingOption(**result_fields)
+            raise ValueError(
+                f"CPCV pricing option {pricing_option_id} has parameters {parameters!r}, "
+                f"but AdCP 3.1.1 cpcv-option.json defines no parameters property. "
+                f"Remove them from the pricing option record."
+            )
+        return CpcvPricingOption(
+            **common_fields,
+            fixed_price=float(rate),
+        )
 
     elif pricing_model == "cpv":
         # CPV (Cost Per View) - typically auction-based
