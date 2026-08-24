@@ -9,16 +9,15 @@ import inspect
 import json
 import logging
 from collections.abc import Callable
-from typing import Any, NoReturn, cast, get_args
+from typing import Any, NoReturn
 
 from fastapi.responses import JSONResponse
 from fastmcp.exceptions import ToolError
 from fastmcp.server import Context as FastMCPContext
 
-from src.core.errors.codes import CODE_TABLE, AppErrorCode
+from src.core.errors.codes import CODE_TABLE, AppErrorCode, Recovery
 from src.core.exceptions import (
     AdCPError,
-    RecoveryHint,
     build_two_layer_error_envelope,
     normalize_to_adcp_error,
 )
@@ -103,7 +102,7 @@ def _extract_tenant_and_principal(context: Any) -> tuple[str | None, str | None]
     return tenant_id, principal_id
 
 
-def extract_error_info(error: Exception) -> tuple[str, str, RecoveryHint | None]:
+def extract_error_info(error: Exception) -> tuple[str, str, Recovery | None]:
     """Extract error code, message, and recovery hint from an exception.
 
     For AdCPToolError, reads directly from the carried two-layer envelope.
@@ -136,7 +135,7 @@ def extract_error_info(error: Exception) -> tuple[str, str, RecoveryHint | None]
             )
             if is_error_code and len(error.args) > 1:
                 # Structured format: ToolError("CODE", "message") or ("CODE", "message", "recovery")
-                recovery: RecoveryHint | None = None
+                recovery: Recovery | None = None
                 if len(error.args) > 2:
                     recovery = _coerce_recovery(str(error.args[2]))
                 return first_arg, str(error.args[1]), recovery
@@ -148,24 +147,22 @@ def extract_error_info(error: Exception) -> tuple[str, str, RecoveryHint | None]
         return type(error).__name__, str(error), None
 
 
-# Valid recovery values — sourced from the RecoveryHint Literal so a future
-# extension of the Literal doesn't silently drop values in this validator.
-_VALID_RECOVERY_VALUES: frozenset[str] = frozenset(get_args(RecoveryHint))
-
-
-def _coerce_recovery(value: object) -> RecoveryHint | None:
-    """Validate that ``value`` is a valid ``RecoveryHint`` literal, else ``None``.
+def _coerce_recovery(value: object) -> Recovery | None:
+    """Validate that ``value`` is a ``Recovery`` wire string, else ``None``.
 
     The envelope's ``recovery`` field is typed ``str | None`` on the wire,
-    but ``extract_error_info`` advertises ``RecoveryHint | None``. Without
+    but ``extract_error_info`` advertises ``Recovery | None``. Without
     membership validation the legacy ToolError path passes any string
     through (silently bypassing the type contract), and the envelope branch
-    returns whatever the wire payload carries unchanged. Coerce both paths
-    through this helper so downstream consumers can trust the declared type.
+    returns whatever the wire payload carries unchanged. The enum itself is
+    the validator: an unknown value raises and maps to ``None`` here.
     """
-    if value in _VALID_RECOVERY_VALUES:
-        return cast(RecoveryHint, value)
-    return None
+    if not isinstance(value, str):
+        return None
+    try:
+        return Recovery(value)
+    except ValueError:
+        return None
 
 
 def record_boundary_error(

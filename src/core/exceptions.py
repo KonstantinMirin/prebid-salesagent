@@ -11,13 +11,13 @@ to help buyer agents decide whether to retry, fix, or abandon a request.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from adcp.server.helpers import adcp_error
 from adcp.types import ErrorCode
 from pydantic import BaseModel, ValidationError
 
-from src.core.errors.codes import CODE_TABLE, AppErrorCode, ErrorCodeT
+from src.core.errors.codes import CODE_TABLE, AppErrorCode, ErrorCodeT, Recovery
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
@@ -26,7 +26,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-RecoveryHint = Literal["transient", "correctable", "terminal"]
+# The recovery vocabulary is the ``Recovery`` StrEnum in src/core/errors/codes.py
+# -- one transcription of the wire schema's three values, not two. The parallel
+# ``RecoveryHint`` Literal this module used to declare was a second copy of the
+# same closed set, bridged to the enum by unchecked casts; it is deleted so the
+# two cannot disagree.
 
 # ---------------------------------------------------------------------------
 # Error codes on the wire
@@ -278,13 +282,14 @@ class AdCPError(Exception):
         return CODE_TABLE[self._error_code].message
 
     @property
-    def recovery(self) -> RecoveryHint:
+    def recovery(self) -> Recovery:
         """The pinned recovery classification for this code. Read-only for the
         same reason as ``message``: recovery is the one field a receiver MUST
         read to decode an unknown code, so no instance may carry one that
-        disagrees with the table.
+        disagrees with the table. A :class:`Recovery` StrEnum member -- it
+        compares and serializes as its wire string.
         """
-        return cast("RecoveryHint", CODE_TABLE[self._error_code].recovery.value)
+        return CODE_TABLE[self._error_code].recovery
 
     @property
     def suggestion(self) -> str:
