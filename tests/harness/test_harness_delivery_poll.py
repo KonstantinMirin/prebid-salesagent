@@ -182,7 +182,7 @@ class TestDeliveryPollEnvContract:
     def test_call_impl_accepts_identity_kwarg(self):
         """call_impl must handle identity kwarg from dispatcher without error.
 
-        When dispatched via call_via → ImplDispatcher, identity is injected
+        When dispatched via call_impl directly, identity is injected
         as a kwarg. call_impl must pop it before building the request (identity
         is not a GetMediaBuyDeliveryRequest field) and pass it to _impl separately.
         """

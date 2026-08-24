@@ -205,11 +205,6 @@ class TestUnsetTransportIsNotImpl:
         with pytest.raises(AssertionError, match=r"transport unset.*ctx\['transport'\].*Transport\.IMPL"):
             wire_dict(ctx)
 
-    def test_explicit_impl_still_serializes_the_typed_payload(self):
-        """The sanctioned no-wire path: IMPL declared explicitly grades the serializer."""
-        ctx = {"transport": Transport.IMPL, "response": _TypedPayload()}
-        assert wire_field(ctx, "adcp_version") == "3.1.1"
-
     def test_a_captured_wire_wins_regardless_of_unset_transport(self):
         """A stashed wire is a real wire — the guard is about the MISSING-wire path only."""
         assert wire_field({"wire_response": _WIRE}, "adcp_version") == "3.1.1"

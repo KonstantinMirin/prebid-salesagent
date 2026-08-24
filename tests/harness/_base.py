@@ -242,7 +242,7 @@ class BaseTestEnv:
 
     Usage (multi-transport)::
 
-        @pytest.mark.parametrize("transport", [Transport.IMPL, Transport.A2A, Transport.REST])
+        @pytest.mark.parametrize("transport", [Transport.A2A, Transport.MCP, Transport.REST])
         def test_something(self, integration_db, transport):
             with CreativeSyncEnv() as env:
                 result = env.call_via(transport, creatives=[...])
@@ -496,7 +496,7 @@ class BaseTestEnv:
             return direct
         from tests.harness.transport import Transport
 
-        return self.identity_for(Transport.IMPL)
+        return self.identity_for(Transport.MCP)
 
     # -- Transport dispatch -------------------------------------------------
 

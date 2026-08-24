@@ -95,7 +95,6 @@ def extract_wire_suggestion(envelope: dict | None) -> str | None:
 class Transport(StrEnum):
     """Dispatch transports for behavioral tests."""
 
-    IMPL = "impl"  # Direct _impl() call
     A2A = "a2a"  # _raw() A2A wrapper
     REST = "rest"  # FastAPI TestClient → route → _raw() → _impl()
     MCP = "mcp"  # Mock Context → MCP wrapper → _impl()
@@ -106,7 +105,6 @@ class Transport(StrEnum):
 
 # Maps Transport → ResolvedIdentity.protocol value
 TRANSPORT_PROTOCOL: dict[Transport, str] = {
-    Transport.IMPL: "mcp",  # _impl doesn't inspect protocol; keep default
     Transport.A2A: "a2a",
     Transport.REST: "rest",
     Transport.MCP: "mcp",
@@ -149,10 +147,6 @@ class TransportResult:
             IMPL transport, which has no wire. This is the canonical field
             for error verification — see ``tests/CLAUDE.md`` § Error
             Verification Policy.
-        synthesized_error_envelope: Two-layer envelope produced by
-            ``build_two_layer_error_envelope`` against the IMPL-caught
-            ``AdCPError`` — what production WOULD emit at the boundary.
-            ``None`` on success and on REST/MCP/A2A (those expose the real
             wire envelope above instead). Tests asserting on this field
             verify the envelope-builder contract, NOT the wire shape — a
             regression in the production boundary translator would not be
@@ -165,7 +159,6 @@ class TransportResult:
     raw_response: Any = None
     wire_response: dict[str, Any] | None = None
     wire_error_envelope: dict[str, Any] | None = None
-    synthesized_error_envelope: dict[str, Any] | None = None
 
     @property
     def is_success(self) -> bool:

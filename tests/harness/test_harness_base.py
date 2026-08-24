@@ -189,8 +189,8 @@ class TestBaseClassContract:
 
         env = BaseTestEnv(principal_id="p1", tenant_id="t1")
 
-        impl_id = env.identity_for(Transport.IMPL)
-        assert impl_id.protocol == "mcp"
+        mcp_id = env.identity_for(Transport.MCP)
+        assert mcp_id.protocol == "mcp"
 
         a2a_id = env.identity_for(Transport.A2A)
         assert a2a_id.protocol == "a2a"
@@ -217,7 +217,7 @@ class TestBaseClassContract:
         assert id1 is id2
 
     def test_identity_backward_compat(self):
-        """env.identity still works and returns IMPL protocol."""
+        """env.identity still works and defaults to the mcp protocol."""
         from tests.harness._base import BaseTestEnv
 
         env = BaseTestEnv(principal_id="p1")
@@ -265,25 +265,6 @@ class TestBaseClassContract:
         assert result.is_success
         assert result.payload.ok is True
         assert result.envelope.get("transport") == "mcp"
-
-    def test_call_via_impl_uses_call_impl(self):
-        """call_via(Transport.IMPL) routes through call_impl."""
-        from tests.harness._base import BaseTestEnv
-        from tests.harness.transport import Transport
-
-        class _TestEnv(BaseTestEnv):
-            def call_impl(self, **kwargs):
-                from pydantic import BaseModel
-
-                class _Resp(BaseModel):
-                    ok: bool = True
-
-                return _Resp()
-
-        env = _TestEnv()
-        result = env.call_via(Transport.IMPL)
-        assert result.is_success
-        assert result.payload.ok is True
 
     def test_nested_integration_env_raises(self):
         """Nesting two IntegrationEnvs must raise to prevent session corruption."""

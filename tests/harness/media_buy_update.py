@@ -308,16 +308,3 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         else:
             identity = kwargs.pop("identity", self.identity)
         return _update_media_buy_impl(req=req, identity=identity)
-
-    def call_via(self, transport: Any, **kwargs: Any) -> Any:
-        """Route all transports through call_impl for unit env.
-
-        Unit env has no real transport wrappers. All 4 transports exercise
-        the same _update_media_buy_impl code path via call_impl. This is
-        correct for testing validation logic that runs before any
-        transport-specific code.
-        """
-        from tests.harness.dispatchers import ImplDispatcher
-
-        kwargs.setdefault("identity", self.identity)
-        return ImplDispatcher().dispatch(self, **kwargs)

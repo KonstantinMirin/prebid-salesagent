@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from tests.harness.transport import Transport
-
 
 class _WireMissing:
     """Type of :data:`WIRE_MISSING` — exists only to give it a readable repr."""
@@ -32,18 +30,17 @@ WIRE_MISSING = _WireMissing()
 def _wire_body(ctx: dict) -> dict:
     """The serialized success-path wire body, behind the loud guard.
 
-    REST/A2A/MCP expose the real success-path wire dict via ``ctx["wire_response"]``.
-    IMPL has no wire, so serialize the typed payload through the production
-    serializer — the same path that produces wire bytes for the other transports.
+    Every BDD transport (REST/A2A/MCP and the e2e variants) exposes the real
+    success-path wire dict via ``ctx["wire_response"]``. There is no other kind:
+    a missing wire is always a defect in the env, so this raises rather than
+    falling back.
 
-    Loud guard: a real-wire transport (REST/A2A/MCP) that didn't stash
-    ``wire_response`` would otherwise fall through to the ``model_dump`` path and
-    assert nothing on the wire — a silent tautology. A sibling wired against a
-    non-stashing env trips this instead of passing green. Only an EXPLICIT
-    ``Transport.IMPL`` legitimately has no wire; an unset transport (``None`` —
-    any non-parametrized caller, e.g. a @rest/@mcp/@a2a-tagged scenario's empty
-    ctx) raises too, naming the fix, because silently serializing there turns
-    the wire assertion into a serializer round-trip (GH #1744).
+    It used to serialize the typed payload through ``model_dump`` when the
+    transport was an explicit no-wire IMPL. That fallback turned a wire assertion
+    into a serializer round-trip, and the pseudo-transport it served is deleted —
+    so the branch, and the "is the transport unset or deliberately no-wire?"
+    question it forced on every caller, are gone with it (GH #1744 was the
+    narrower fix for the same hazard).
 
     Sole guard implementation for :func:`wire_field`, :func:`wire_dict` and
     :func:`wire_absent` — three copies of it would be exactly the duplication the
@@ -60,20 +57,16 @@ def _wire_body(ctx: dict) -> dict:
     if wire is None and error is not None and ctx.get("response") is None:
         raise AssertionError(f"expected a success response, got error: {error!r}")
     transport = ctx.get("transport")
-    if wire is None and transport is None:
+    if wire is None:
+        # No serializer fallback any more. It existed for an explicit IMPL
+        # pseudo-transport (no wire), which is deleted: every BDD scenario now
+        # runs on a real wire, so a missing wire is a defect in the env, never a
+        # legitimate no-wire case to serialize around.
         raise AssertionError(
-            "wire assertion with transport unset — a non-parametrized caller reached the "
-            "wire helpers without a stashed wire. Set ctx['transport'] (or pass "
-            "Transport.IMPL explicitly) to declare whether a real wire must exist."
+            f"{transport}: wire_response missing — the env does not stash success-path "
+            "wire. Every BDD transport is a real wire; there is no no-wire fallback."
         )
-    if wire is None and transport is not Transport.IMPL:
-        raise AssertionError(f"{transport}: wire_response missing — env does not stash success-path wire")
-    if wire is not None:
-        return wire
-    # Explicit IMPL has no wire — serialize the typed payload through the production
-    # serializer. _require_response preserves the diagnostic if a (reused) sibling
-    # scenario hit an error path, instead of a bare ctx["response"] KeyError.
-    return _require_response(ctx).model_dump(mode="json")
+    return wire
 
 
 def _dig(doc: Any, path: str) -> Any:

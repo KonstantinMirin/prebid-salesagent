@@ -42,14 +42,16 @@ def _no_wire_ctx(envelope: dict) -> dict:
     """What a wire dispatch that captured NOTHING leaves in ctx.
 
     ``dispatch_request`` is the one writer: on a transport that produced no
-    capturable envelope it leaves ``ctx["wire_error_envelope"]`` unset while the
-    harness still exposes the synthesized envelope built from the caught
-    exception. That is the exact shape every fallback branch under grading here
-    accepts today.
+    capturable envelope it leaves ``ctx["wire_error_envelope"]`` unset. The ctx
+    also used to carry a ``synthesized_error_envelope`` -- an envelope the harness
+    rebuilt from the caught exception -- which is what every fallback branch under
+    grading here used to accept. That key is deleted along with the no-wire
+    pseudo-transport, so the negative control is now simply "no wire, and nothing
+    standing in for one". The ``error`` entry stays: a fallback onto the raised
+    exception is still a way to pass without wire bytes, and still must redden.
     """
     return {
         "transport": Transport.REST,
-        "synthesized_error_envelope": envelope,
         "result": TransportResult(payload=None, envelope={}, wire_error_envelope=None),
         "error": RuntimeError(envelope["errors"][0]["message"]),
     }

@@ -744,6 +744,18 @@ class TestFormatValidationUnreachable:
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_unreachable_agent_fails_creative(self, integration_db, transport):
         """Typed transient from registry.get_format → SERVICE_UNAVAILABLE, recovery=transient."""
+        if transport is Transport.A2A:
+            pytest.xfail(
+                "salesagent-b2wny: A2A emits no wire envelope for a tool-internal "
+                "SERVICE_UNAVAILABLE — the raw AdCPServiceUnavailableError escapes instead "
+                "of becoming a failed Task with an artifact DataPart. This leg only ever "
+                "looked green because two synthesizing fallbacks (dispatchers' "
+                "_envelope_from_adcp_error and this test's own `or "
+                "synthesized_error_envelope`) rebuilt the envelope from the same in-memory "
+                "exception with the same builder production uses, so a dead wire and a live "
+                "one were indistinguishable. Both fallbacks are gone; graduating this means "
+                "making A2A emit the envelope, never restoring a fallback."
+            )
         from src.core.exceptions import AdCPServiceUnavailableError
         from tests.helpers import assert_envelope_shape
 
@@ -761,7 +773,7 @@ class TestFormatValidationUnreachable:
             )
 
             assert result.is_error, f"[{transport.value}] transient agent failure must fail the request"
-            envelope = result.wire_error_envelope or result.synthesized_error_envelope
+            envelope = result.wire_error_envelope
             assert_envelope_shape(
                 envelope,
                 "SERVICE_UNAVAILABLE",
