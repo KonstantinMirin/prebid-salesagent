@@ -287,6 +287,48 @@ fi
 echo "Reports: $RESULTS_DIR/"
 ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
 
+# Reconcile a non-zero exit against what the suites actually reported. This does
+# NOT change the exit code -- masking a failure is how the real cause of a dead
+# run became unknowable before (the `psql_admin() { ...; } || true` and the
+# discarded migrate.py output). It only says WHICH layer failed, because
+# "exit 125, no explanation, all suites OK" sends you hunting for a test bug
+# that does not exist.
+#
+# Docker reserves 125/126/127 for "the runner itself failed" (125 = the daemon
+# or CLI could not run/wait on the container) as distinct from any code the
+# command inside returned. A long `-p` run that drops its CLI connection at the
+# end lands here with every suite already finished and every report written.
+if [ "$RC" -ne 0 ] && ls "$RESULTS_DIR"/*.json >/dev/null 2>&1; then
+    if python3 - "$RESULTS_DIR" <<'PYEOF'
+import glob, json, os, sys
+bad = []
+for f in sorted(glob.glob(os.path.join(sys.argv[1], "*.json"))):
+    try:
+        s = json.load(open(f)).get("summary", {})
+    except Exception:
+        bad.append(f"{os.path.basename(f)}: unreadable")
+        continue
+    if s.get("failed") or s.get("error"):
+        bad.append(f"{os.path.basename(f)}: failed={s.get('failed', 0)} error={s.get('error', 0)}")
+sys.exit(1 if bad else 0)
+PYEOF
+    then
+        echo ""
+        echo "NOTE: exit code is $RC but every suite report shows 0 failures and 0 errors."
+        case "$RC" in
+            125|126|127)
+                echo "      $RC is Docker's own 'could not run/wait on the container' range, not a"
+                echo "      test result -- the suites finished and wrote their reports first."
+                echo "      Look at the runner (daemon connection, container lifetime), not the tests." ;;
+            *)
+                echo "      The failure is therefore OUTSIDE the suites: check the report-copy step"
+                echo "      and the security audit above." ;;
+        esac
+        echo "      Exit code is left as-is on purpose: this is a diagnostic, not a downgrade."
+        echo ""
+    fi
+fi
+
 # Security audit (uv-secure) — runs on the HOST (scans uv.lock; no Docker). The
 # host runner runs this too; keep parity so the canonical local gate still scans
 # for known vulnerabilities. Single-sourced in scripts/security-audit.sh (also
