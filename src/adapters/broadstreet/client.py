@@ -9,6 +9,8 @@ import logging
 from types import MappingProxyType
 from typing import Any
 
+from pydantic import JsonValue
+
 from src.adapters.vendor_http import VendorHttpClient
 from src.core.security.outbound_http import OutboundDeliveryFailed, OutboundError, QueryParams
 
@@ -82,7 +84,7 @@ class BroadstreetClient:
         self,
         method: str,
         path: str,
-        data: dict[str, Any] | None = None,
+        data: dict[str, JsonValue] | None = None,
         query_params: QueryParams | None = None,
     ) -> Any:
         """Make an API request.
@@ -118,11 +120,11 @@ class BroadstreetClient:
         """Make a GET request."""
         return self._request("GET", path, query_params=query_params)
 
-    def post(self, path: str, data: dict[str, Any]) -> Any:
+    def post(self, path: str, data: dict[str, JsonValue]) -> Any:
         """Make a POST request."""
         return self._request("POST", path, data=data)
 
-    def put(self, path: str, data: dict[str, Any]) -> Any:
+    def put(self, path: str, data: dict[str, JsonValue]) -> Any:
         """Make a PUT request."""
         return self._request("PUT", path, data=data)
 
@@ -185,7 +187,7 @@ class BroadstreetClient:
         Returns:
             Created campaign data
         """
-        data: dict[str, Any] = {"name": name}
+        data: dict[str, JsonValue] = {"name": name}
         if start_date:
             data["start_date"] = start_date
         if end_date:
@@ -210,7 +212,7 @@ class BroadstreetClient:
         advertiser_id: str,
         name: str,
         ad_type: str,
-        params: dict[str, Any] | None = None,
+        params: dict[str, JsonValue] | None = None,
     ) -> dict[str, Any]:
         """Create a new advertisement.
 
@@ -223,7 +225,7 @@ class BroadstreetClient:
         Returns:
             Created advertisement data
         """
-        data: dict[str, Any] = {"name": name, "type": ad_type, "active": 1}
+        data: dict[str, JsonValue] = {"name": name, "type": ad_type, "active": 1}
         if params:
             data.update(params)
 
@@ -238,7 +240,9 @@ class BroadstreetClient:
         result = self.get(f"/networks/{self.network_id}/advertisers/{advertiser_id}/advertisements/{advertisement_id}")
         return result.get("advertisement", result) if result else {}
 
-    def update_advertisement(self, advertiser_id: str, advertisement_id: str, params: dict[str, Any]) -> dict[str, Any]:
+    def update_advertisement(
+        self, advertiser_id: str, advertisement_id: str, params: dict[str, JsonValue]
+    ) -> dict[str, Any]:
         """Update an advertisement."""
         result = self.put(
             f"/networks/{self.network_id}/advertisers/{advertiser_id}/advertisements/{advertisement_id}",
@@ -251,7 +255,7 @@ class BroadstreetClient:
         advertiser_id: str,
         advertisement_id: str,
         source_type: str,
-        params: dict[str, Any] | None = None,
+        params: dict[str, JsonValue] | None = None,
     ) -> dict[str, Any]:
         """Set the source/template for an advertisement.
 
@@ -268,7 +272,7 @@ class BroadstreetClient:
         Returns:
             Updated advertisement data
         """
-        data: dict[str, Any] = {"type": source_type}
+        data: dict[str, JsonValue] = {"type": source_type}
         if params:
             data.update(params)
 
@@ -334,7 +338,7 @@ class BroadstreetClient:
         Returns:
             Created placement data
         """
-        data = {
+        data: dict[str, JsonValue] = {
             "zone_id": zone_id,
             "advertisement_id": advertisement_id,
         }
@@ -368,7 +372,7 @@ class BroadstreetClient:
         Returns:
             Created zone data
         """
-        data: dict[str, Any] = {"name": name}
+        data: dict[str, JsonValue] = {"name": name}
         if alias:
             data["alias"] = alias
         data["self_serve"] = self_serve

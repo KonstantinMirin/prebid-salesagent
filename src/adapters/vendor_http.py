@@ -19,7 +19,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any
+
+from pydantic import JsonValue
 
 from src.core.exceptions import AdCPConfigurationError
 from src.core.security.outbound_http import OutboundResult, QueryParams, send
@@ -45,7 +46,9 @@ class VendorHttpClient:
     params: QueryParams = MappingProxyType({})
     timeout: float = 30.0
 
-    def call(self, method: str, path: str, *, json: Any = None, params: QueryParams | None = None) -> OutboundResult:
+    def call(
+        self, method: str, path: str, *, json: JsonValue | None = None, params: QueryParams | None = None
+    ) -> OutboundResult:
         """One vendor call through the egress seam. Returns the OutboundResult.
 
         Deliberately does NOT parse and does NOT map errors — callers whose

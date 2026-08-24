@@ -4,6 +4,8 @@ import uuid
 from datetime import datetime
 from typing import Any
 
+from pydantic import JsonValue
+
 from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
 from src.adapters.vendor_http import VendorHttpClient, require_vendor
@@ -311,7 +313,7 @@ class Kevel(AdServerAdapter):
                 self.log("  }")
         else:
             # Create campaign in Kevel
-            campaign_payload = {
+            campaign_payload: dict[str, JsonValue] = {
                 "AdvertiserId": int(self.advertiser_id) if self.advertiser_id else 0,
                 "Name": f"AdCP Campaign {media_buy_id}",
                 "StartDate": start_time.isoformat(),
@@ -548,7 +550,7 @@ class Kevel(AdServerAdapter):
             )
         else:
             # Queue a report in Kevel
-            report_request = {
+            report_request: dict[str, JsonValue] = {
                 "StartDate": date_range.start.isoformat(),
                 "EndDate": date_range.end.isoformat(),
                 "GroupBy": ["day", "campaign", "flight"],
@@ -692,7 +694,7 @@ class Kevel(AdServerAdapter):
 
                 if action in ["pause_media_buy", "resume_media_buy"]:
                     # Update campaign status
-                    update_payload = {"IsActive": action == "resume_media_buy"}
+                    update_payload: dict[str, JsonValue] = {"IsActive": action == "resume_media_buy"}
                     update_response = require_vendor(self._vendor, vendor="Kevel").call(
                         "PUT", f"/campaign/{campaign_id}", json=update_payload
                     )
@@ -753,7 +755,7 @@ class Kevel(AdServerAdapter):
                         new_impressions = budget  # budget param contains impressions
 
                     # Update flight impressions
-                    impressions_payload: dict[str, int] = {"Impressions": new_impressions}
+                    impressions_payload: dict[str, JsonValue] = {"Impressions": new_impressions}
                     update_response = require_vendor(self._vendor, vendor="Kevel").call(
                         "PUT", f"/flight/{flight['Id']}", json=impressions_payload
                     )

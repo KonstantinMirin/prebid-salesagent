@@ -3,6 +3,8 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from pydantic import JsonValue
+
 from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import REQUIRED_UPDATE_ACTIONS
 from src.adapters.vendor_http import VendorHttpClient, require_vendor
@@ -230,7 +232,7 @@ class TritonDigital(AdServerAdapter):
                 self.log("  }")
         else:
             # Create campaign in Triton
-            campaign_payload = {
+            campaign_payload: dict[str, JsonValue] = {
                 "advertiserId": self.advertiser_id,
                 "name": f"AdCP Campaign {media_buy_id}",
                 "startDate": start_time.date().isoformat(),
@@ -331,7 +333,7 @@ class TritonDigital(AdServerAdapter):
                         "POST", "/creatives", json=creative_payload
                     )
                     creative_data = creative_response.json()
-                    creative_id = creative_data["id"]
+                    creative_id: JsonValue = creative_data["id"]
 
                     # Associate the creative with the assigned flights
                     flight_ids_to_associate = [
@@ -340,7 +342,7 @@ class TritonDigital(AdServerAdapter):
 
                     if flight_ids_to_associate:
                         for flight_id in flight_ids_to_associate:
-                            association_payload = {"creativeIds": [creative_id]}
+                            association_payload: dict[str, JsonValue] = {"creativeIds": [creative_id]}
                             assoc_response = require_vendor(self._vendor, vendor="Triton Digital").call(
                                 "PUT", f"/flights/{flight_id}", json=association_payload
                             )
@@ -449,7 +451,7 @@ class TritonDigital(AdServerAdapter):
                 currency="USD",
             )
         else:
-            report_payload = {
+            report_payload: dict[str, JsonValue] = {
                 "reportType": "FLIGHT",
                 "startDate": date_range.start.isoformat(),
                 "endDate": date_range.end.isoformat(),

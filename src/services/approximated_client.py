@@ -12,7 +12,8 @@ the client that produces those statuses instead of inline in the blueprint.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+
+from pydantic import JsonValue
 
 from src.core.security.egress.destination import VendorConstant
 from src.core.security.outbound_http import OutboundError, OutboundResult, send
@@ -24,7 +25,7 @@ from src.core.security.outbound_http import OutboundError, OutboundResult, send
 APPROXIMATED_BASE_URL = VendorConstant(url="https://cloud.approximated.app")
 
 
-def _api(method: str, path: str, api_key: str, *, json_body: Any = None) -> OutboundResult:
+def _api(method: str, path: str, api_key: str, *, json_body: JsonValue | None = None) -> OutboundResult:
     """One Approximated call through the egress seam.
 
     max_attempts=1: these are vhost mutations and a status read, none of which

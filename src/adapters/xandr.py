@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from dateutil import parser as dateutil_parser
+from pydantic import JsonValue
 
 from src.adapters.base import AdServerAdapter
 from src.adapters.vendor_http import VendorHttpClient, require_vendor
@@ -248,7 +249,7 @@ class XandrAdapter(AdServerAdapter):
         if self.token and self.token_expiry and datetime.now(UTC) < self.token_expiry:
             return  # Token still valid
 
-        auth_data = {"auth": {"username": self.username, "password": self.password}}
+        auth_data: dict[str, JsonValue] = {"auth": {"username": self.username, "password": self.password}}
 
         try:
             # max_attempts=1: this call did not retry by intent — it retried because
