@@ -302,7 +302,7 @@ class LineItem:
         return data
 
     @classmethod
-    def _safe_serialize(cls, obj: Any, field_name: str, line_item_id: str) -> dict[str, Any] | None:
+    def _safe_serialize(cls, obj: Any, field_name: str, line_item_id: str) -> dict[str, Any] | None:  # noqa: ANN401 — genuinely dynamic input, not a payload: this parameter accepts any object by design.
         """Safely serialize an object, returning None on failure."""
         if obj is None:
             return None

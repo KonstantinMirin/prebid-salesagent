@@ -89,7 +89,7 @@ class OutboundResult:
             return ""
         return self.content.decode(_text_encoding(self.headers), errors="replace")
 
-    def json(self) -> Any:
+    def json(self) -> Any:  # noqa: ANN401 — decoded-JSON return: the inbound twin of the outbound narrowing. Honest type is JsonValue, but narrowing it cascades to every response.json()[...] reader (salesagent-pldmk.37).
         """Decode the body as JSON.
 
         Raises ``json.JSONDecodeError`` on a non-JSON body. That is

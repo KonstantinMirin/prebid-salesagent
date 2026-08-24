@@ -46,6 +46,24 @@ _SYNTHETIC_PATH = "src/core/_synthetic_egress_probe.py"
 _NOQA_MARKER = "# noqa: TID251"
 _NOQA_STRIP_RE = re.compile(r"#\s*noqa:\s*TID251[^\n]*")
 
+# The same three properties, for the second rule this config carries. ANN401
+# bans `Any` in a signature across the outbound chain (GH #1802 /
+# salesagent-pldmk.37): `Any` is an opt-out of type checking, assignable to and
+# from everything, so it is the one value the seam's own JsonValue signatures
+# cannot make unrepresentable — a NEW forwarder declaring `json: Any` and
+# passing it straight to send() type-checks clean under mypy.
+_ANY_NOQA_MARKER = "# noqa: ANN401"
+_ANY_NOQA_STRIP_RE = re.compile(r"#\s*noqa:\s*ANN401[^\n]*")
+
+# ANN401's scope is the two directories the negated glob in ruff-egress.toml
+# names, so a synthetic probe must live inside one of them — presenting it
+# under src/core/ (TID251's probe path) would be ignored and pass vacuously.
+_ANY_SYNTHETIC_PATH = "src/adapters/_synthetic_any_probe.py"
+
+# A forwarder that re-widens the payload one hop before the seam. This is the
+# exact shape pldmk.23 removed from VendorHttpClient.call.
+_ANY_POSITIVE_SNIPPET = "from typing import Any\ndef call(url: str, *, json: Any = None) -> None:\n    ...\n"
+
 # ---------------------------------------------------------------------------
 # (d) The two seam definitions -- not an exemption list, a floor.
 #
@@ -139,12 +157,17 @@ def _run_ruff_egress(source: str, stdin_filename: str) -> subprocess.CompletedPr
     )
 
 
-def _assert_tid251_fires(source: str, stdin_filename: str, label: str) -> None:
+def _assert_rule_fires(source: str, stdin_filename: str, label: str, code: str) -> None:
+    """One assertion for every rule this config carries — see _assert_tid251_fires."""
     proc = _run_ruff_egress(source, stdin_filename)
-    assert "TID251" in proc.stdout, (
-        f"[{label}] expected a TID251 violation from ruff for:\n{source}\n"
+    assert code in proc.stdout, (
+        f"[{label}] expected a {code} violation from ruff for:\n{source}\n"
         f"--- ruff stdout ---\n{proc.stdout}\n--- ruff stderr ---\n{proc.stderr}"
     )
+
+
+def _assert_tid251_fires(source: str, stdin_filename: str, label: str) -> None:
+    _assert_rule_fires(source, stdin_filename, label, "TID251")
 
 
 def _module_ban_cases() -> list[tuple[str, str]]:
@@ -203,13 +226,15 @@ class TestCleanCodePasses:
         assert "TID251" not in proc.stdout, f"clean snippet was flagged:\n{proc.stdout}"
 
 
-def _files_carrying_noqa() -> set[str]:
+def _files_carrying_marker(marker: str) -> set[str]:
     repo = repo_root()
     return {
-        str(path.relative_to(repo))
-        for path in src_python_files(repo)
-        if _NOQA_MARKER in path.read_text(encoding="utf-8")
+        str(path.relative_to(repo)) for path in src_python_files(repo) if marker in path.read_text(encoding="utf-8")
     }
+
+
+def _files_carrying_noqa() -> set[str]:
+    return _files_carrying_marker(_NOQA_MARKER)
 
 
 class TestExemptionsAreExecutable:
@@ -239,6 +264,118 @@ class TestExemptSetIsClosed:
         missing = SEAM_FILES - found
         assert not unrecorded and not missing, (
             "src/ files carrying '# noqa: TID251' must equal SEAM_FILES.\n"
+            + (f"unrecorded exemptions (record here or remove the noqa): {sorted(unrecorded)}\n" if unrecorded else "")
+            + (f"recorded exemptions with no noqa in the file: {sorted(missing)}\n" if missing else "")
+        )
+
+
+# ---------------------------------------------------------------------------
+# ANN401's exempt set — an allowlist that SHRINKS, unlike SEAM_FILES's floor.
+#
+# SEAM_FILES is a floor: a seam architecture must have sanctioned importers of
+# the thing it wraps, so that set never empties. This set is the opposite — it
+# records `Any` that PREDATES the ban, in three groups, none of which is a
+# payload parameter on the outbound chain (pldmk.23 removed the last of those):
+#
+#   xandr.py                     — 11 `**kwargs: Any` response stubs that absorb
+#                                  arbitrary vendor fields by setattr. No value
+#                                  type exists to state; retiring them means a
+#                                  typed response model, not an annotation.
+#   *.py `-> Any` decode returns — OutboundResult.json() and its readers. The
+#                                  honest type is JsonValue; narrowing it
+#                                  cascades to every response.json()[...] reader
+#                                  in the adapters, so it is its own change.
+#   logging/serializer/handles   — genuinely dynamic inputs; a log sanitizer
+#                                  legitimately accepts any object.
+#
+# Every entry is liveness-proven by case (c): strip its noqa and ANN401 fires.
+# Entries leave this set as pldmk.37's follow-ups land. It must not grow — a new
+# file needing `Any` in a signature under these two directories is the very
+# thing the ban exists to refuse.
+# ---------------------------------------------------------------------------
+ANY_EXEMPT_FILES: frozenset[str] = frozenset(
+    {
+        "src/adapters/base_inventory.py",
+        "src/adapters/broadstreet/client.py",
+        "src/adapters/gam/managers/targeting.py",
+        "src/adapters/gam/utils/error_handler.py",
+        "src/adapters/gam/utils/formatters.py",
+        "src/adapters/gam/utils/logging.py",
+        "src/adapters/gam_orders_discovery.py",
+        "src/adapters/xandr.py",
+        "src/core/security/egress/response.py",
+        "src/core/security/webhook_strict_json.py",
+    }
+)
+
+
+class TestAnyBanFires:
+    """(a) A re-widening forwarder yields ANN401 — in EITHER scoped directory."""
+
+    @pytest.mark.parametrize(
+        "stdin_filename",
+        [_ANY_SYNTHETIC_PATH, "src/core/security/_synthetic_any_probe.py"],
+        ids=["adapters", "core-security"],
+    )
+    def test_any_payload_parameter_yields_ann401(self, stdin_filename: str) -> None:
+        _assert_rule_fires(_ANY_POSITIVE_SNIPPET, stdin_filename, f"any-ban:{stdin_filename}", "ANN401")
+
+    def test_ban_covers_files_that_do_not_exist_yet(self) -> None:
+        """The negated glob is what makes this class-level, not a file list."""
+        _assert_rule_fires(
+            _ANY_POSITIVE_SNIPPET,
+            "src/adapters/brand_new_vendor/client.py",
+            "any-ban:new-module",
+            "ANN401",
+        )
+
+
+class TestAnyBanScopeIsBounded:
+    """(b) ANN401 is scoped to the outbound chain, NOT to all of src/."""
+
+    def test_typed_payload_is_not_flagged(self) -> None:
+        clean = (
+            "from pydantic import JsonValue\ndef call(url: str, *, json: JsonValue | None = None) -> None:\n    ...\n"
+        )
+        proc = _run_ruff_egress(clean, _ANY_SYNTHETIC_PATH)
+        assert proc.returncode == 0, f"clean snippet failed ruff:\n{proc.stdout}\n{proc.stderr}"
+        assert "ANN401" not in proc.stdout, f"typed payload was flagged:\n{proc.stdout}"
+
+    def test_outside_the_scoped_directories_is_ignored(self) -> None:
+        """src/ as a whole carries ~200 pre-existing Any and is not this ban's business."""
+        proc = _run_ruff_egress(_ANY_POSITIVE_SNIPPET, "src/core/schemas/_probe.py")
+        assert "ANN401" not in proc.stdout, (
+            f"ANN401 escaped its two-directory scope — the negated glob in ruff-egress.toml is wrong:\n{proc.stdout}"
+        )
+
+
+class TestAnyExemptionsAreExecutable:
+    """(c) Each `# noqa: ANN401` still covers a LIVE violation (never dead prose)."""
+
+    @pytest.mark.parametrize("rel_path", sorted(ANY_EXEMPT_FILES))
+    def test_stripping_the_noqa_makes_the_file_violate(self, rel_path: str) -> None:
+        path = repo_root() / rel_path
+        assert path.is_file(), f"recorded ANN401 exemption does not exist: {rel_path}"
+
+        source = path.read_text(encoding="utf-8")
+        assert _ANY_NOQA_MARKER in source, (
+            f"{rel_path} is recorded as a sanctioned ANN401 exemption but carries no "
+            f"line-scoped '{_ANY_NOQA_MARKER}' — the exemption must be executable, not prose"
+        )
+
+        stripped = _ANY_NOQA_STRIP_RE.sub("", source)
+        _assert_rule_fires(stripped, rel_path, f"strip-any-noqa:{rel_path}", "ANN401")
+
+
+class TestAnyExemptSetIsClosed:
+    """(d) The ANN401 exempt set is exactly the recorded constant — it only shrinks."""
+
+    def test_noqa_files_equal_recorded_constant(self) -> None:
+        found = _files_carrying_marker(_ANY_NOQA_MARKER)
+        unrecorded = found - ANY_EXEMPT_FILES
+        missing = ANY_EXEMPT_FILES - found
+        assert not unrecorded and not missing, (
+            "src/ files carrying '# noqa: ANN401' must equal ANY_EXEMPT_FILES.\n"
             + (f"unrecorded exemptions (record here or remove the noqa): {sorted(unrecorded)}\n" if unrecorded else "")
             + (f"recorded exemptions with no noqa in the file: {sorted(missing)}\n" if missing else "")
         )

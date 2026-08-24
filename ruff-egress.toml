@@ -16,7 +16,25 @@
 # written path textually — a single-path ban is bypassable via re-exports).
 
 [lint]
-select = ["TID251"]
+select = ["TID251", "ANN401"]
+
+# ANN401 (`Any` in a signature) is scoped to the outbound chain, not all of src/.
+#
+# `Any` is not a type, it is an opt-out of type checking: assignable to and from
+# everything by definition. So it is the one value the seam's own signatures
+# CANNOT make unrepresentable. `send`/`asend` declare `json: JsonValue | None`,
+# but a NEW forwarder declaring `json: Any` and passing it straight through
+# type-checks clean, and mypy reports Success while a `datetime` reaches the
+# wire (GH #1802 / salesagent-pldmk.37). That is the same defect pldmk.23 just
+# removed from `VendorHttpClient.call` -- eliminated at every existing site,
+# while remaining writable at the next one.
+#
+# The negated glob is what makes this a class-level ban rather than a list of
+# known files: a forwarder added to a NEW module under either directory is
+# covered on the day it is written. src/ as a whole is 209 violations and not
+# this backstop's business; these two directories are 25.
+[lint.per-file-ignores]
+"!{src/core/security,src/adapters}/**" = ["ANN401"]
 
 [lint.flake8-tidy-imports.banned-api]
 # --- Module bans: the bare import fires, so verb/class enumeration is moot ---

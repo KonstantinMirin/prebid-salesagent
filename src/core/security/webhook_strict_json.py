@@ -137,7 +137,7 @@ def _reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def loads_rejecting_duplicate_keys(data: bytes | str) -> Any:
+def loads_rejecting_duplicate_keys(data: bytes | str) -> Any:  # noqa: ANN401 — decoded-JSON return: the inbound twin of the outbound narrowing. Honest type is JsonValue, but narrowing it cascades to every response.json()[...] reader (salesagent-pldmk.37).
     """``json.loads`` that rejects a JSON object repeating a key, at any depth.
 
     Raises :class:`DuplicateKeyInput` — never a generic parse error — when a
