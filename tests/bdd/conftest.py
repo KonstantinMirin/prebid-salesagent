@@ -2603,9 +2603,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
 
         # --- UC-019: HTTP transport xfails for auth suggestion mismatch ---
-        # impl/a2a/mcp graduated (kb7y); REST/e2e_rest suggestion string differs
-        # from spec ("authenticate" vs "authentication").
-        if (is_rest or is_e2e_rest) and "T-UC-019-ext-a" in marker_names:
+        # Graduated on `rest` (salesagent-ma52s): the reason below -- a REST-only
+        # suggestion string -- cannot be true any more. Suggestions derive from
+        # CODE_TABLE[code], one source for every transport, so no transport can
+        # carry a different one (salesagent-3dawm.14). Verified xpassing on rest
+        # once UC-019 regained REST parametrization.
+        #
+        # e2e_rest STAYS routed: it dispatches real HTTP to the live stack, which
+        # this local run cannot exercise, so graduating it here would be a claim
+        # I have not tested. Narrowed rather than removed.
+        if is_e2e_rest and "T-UC-019-ext-a" in marker_names:
             item.add_marker(
                 pytest.mark.xfail(
                     reason="HTTP transport: auth error suggestion says 'authenticate' not 'authentication' — spec-production gap",
@@ -3320,8 +3327,21 @@ _ADMIN_TAG_PREFIX = "T-ADMIN-"
 _CHANNEL_COLUMN_TAGS = {"T-UC-010-auth"}
 
 # UCs whose tool has no REST route — parametrize across A2A + MCP only (a REST
-# variant would 404). get_media_buys (UC-019) is A2A/MCP-only.
-_NO_REST_UC_TAG_PREFIXES = ("T-UC-019-",)
+# variant would 404).
+#
+# EMPTY, and it must stay that way. It held "T-UC-019-" because get_media_buys
+# genuinely had no REST route, which silently dropped 61 scenarios from REST
+# while the suite read as covering three transports. The tool now has one
+# (POST /api/v1/media-buys/query), so the entry is gone rather than the
+# exclusion being kept as documentation of a fixed gap.
+#
+# The repo invariant is that every _impl is wrapped by MCP, A2A and REST
+# (tests/CLAUDE.md). A missing wrapper is therefore a production gap to close,
+# not a parametrization to trim: dropping a transport here is INVISIBLE to both
+# escape-hatch detectors in test_architecture_e2e_rest_escape_hatches.py, which
+# walk xfail conditions and E2EUnsupportedSetup sites — neither sees a scenario
+# that was never parametrized. Add the route; do not re-add a prefix.
+_NO_REST_UC_TAG_PREFIXES: tuple[str, ...] = ()
 
 # Send-time webhook scenarios that assert in-process mock/circuit-breaker state.
 # Do NOT append e2e_rest (false-green) and do NOT grow _UC004_E2E_WEBHOOK_INTERNAL_TAGS.
@@ -3454,13 +3474,11 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     transports = [Transport.A2A, Transport.MCP, Transport.REST]
     ids = ["a2a", "mcp", "rest"]
 
-    # UCs without a REST endpoint (get_media_buys has no REST route) are graded on
-    # the A2A + MCP wire transports only — including a REST variant would 404.
-    # This applies to e2e_rest too: it dispatches real HTTP REST to the live
-    # server, so a tool with no REST route 404s there identically (confirmed by
-    # the first in-network CI run: every UC-019 e2e_rest param died on a live
-    # 404). Skip the e2e append for these UCs instead of parking ~40 ledger
-    # entries for a definitionally-unsupported transport.
+    # UCs without a REST endpoint are graded on the A2A + MCP wire transports only
+    # — including a REST variant would 404, on e2e_rest identically since it
+    # dispatches real HTTP to the live server. The set is EMPTY now: UC-019 was
+    # its only member and get_media_buys has a REST route again, so this branch
+    # is dormant by design (see the declaration's note before re-populating it).
     no_rest_uc = any(t.startswith(_uc_prefix) for _uc_prefix in _NO_REST_UC_TAG_PREFIXES for t in marker_names)
     if no_rest_uc:
         transports = [Transport.A2A, Transport.MCP]

@@ -78,7 +78,16 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     "'T-UC-004-boundary-ownership' in marker_names and is_e2e_rest and ('differs from owner' in nodeid)",
     "'T-UC-004-dim-sortby-fallback' in marker_names and is_e2e_rest",
     "(is_rest or is_e2e_rest) and 'T-UC-019-boundary-principal' in marker_names",
-    "(is_rest or is_e2e_rest) and 'T-UC-019-ext-a' in marker_names",
+    # NARROWED from "(is_rest or is_e2e_rest)" to e2e_rest only (salesagent-ma52s).
+    # The route's reason was a REST-only auth suggestion string ("authenticate" vs
+    # "authentication"), which cannot exist any more: suggestions derive from
+    # CODE_TABLE[code], one source shared by every transport, so no transport can
+    # carry a different one (salesagent-3dawm.14). Verified xpassing on `rest`
+    # once UC-019 regained REST parametrization. e2e_rest stays routed because it
+    # needs the live stack, which the local run cannot exercise -- graduating it
+    # here would be an untested claim. This SHRINKS the escape hatch by one
+    # transport; it does not add one.
+    "is_e2e_rest and 'T-UC-019-ext-a' in marker_names",
     "(is_rest or is_e2e_rest) and 'T-UC-019-partition-principal-invalid' in marker_names",
     "_samp_is_named and (is_rest or is_e2e_rest)",
     "is_e2e_rest",

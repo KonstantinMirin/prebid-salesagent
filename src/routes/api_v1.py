@@ -37,6 +37,7 @@ from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
 from src.core.tools import media_buy_create as media_buy_create_module
 from src.core.tools import media_buy_delivery as media_buy_delivery_module
+from src.core.tools import media_buy_list as media_buy_list_module
 from src.core.tools import media_buy_update as media_buy_update_module
 from src.core.tools import performance as performance_module
 from src.core.tools import products as products_module
@@ -132,6 +133,24 @@ class GetMediaBuyDeliveryBody(SalesAgentBaseModel):
     reporting_dimensions: ReportingDimensions | None = None
     attribution_window: AttributionWindow | None = None
     include_package_daily_breakdown: bool | None = None
+    account: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
+    adcp_version: str = "1.0.0"
+
+
+class GetMediaBuysBody(SalesAgentBaseModel):
+    # `Any`, not `list[str] | None`, and for the same reason status_filter is Any
+    # in GetMediaBuyDeliveryBody: a typed field here makes FASTAPI reject a bad
+    # value before any AdCP code runs, which returns INVALID_REQUEST, while MCP
+    # and A2A reject the identical request inside adcp_validation_boundary and
+    # return VALIDATION_ERROR. Same request, two different codes depending on
+    # transport -- exactly what "each transport returns the same typed response"
+    # forbids. Keeping it permissive defers validation to the ONE shared boundary
+    # in _build_get_media_buys_request, so all three answer alike. Surfaced by
+    # test_request_validation_failed[rest] once UC-019 regained REST coverage.
+    media_buy_ids: Any = None
+    status_filter: Any = None
+    include_snapshot: bool | None = None
     account: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
@@ -444,6 +463,45 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
         reporting_dimensions=body.reporting_dimensions,
         attribution_window=body.attribution_window,
         include_package_daily_breakdown=body.include_package_daily_breakdown,
+        context=to_context_object(body.context),
+        identity=identity,
+    )
+    return response.model_dump(mode="json")
+
+
+@router.post("/media-buys/query")
+async def get_media_buys(body: GetMediaBuysBody, identity: ResolvedIdentity = require_auth):
+    """Query media buys with status and optional delivery snapshots (auth required).
+
+    POST /media-buys is create_media_buy, so the query surface is a distinct
+    path rather than a GET on the same one: the AdCP request carries filters and
+    an account reference in a body, which a GET cannot express cleanly.
+
+    This route existed for MCP and A2A but not REST, which silently dropped every
+    UC-019 scenario from REST parametrization -- 61 scenarios graded on two
+    transports while the suite read as covering three (salesagent-ma52s).
+    """
+    # NO enrich_identity_with_account here, deliberately -- unlike the
+    # /media-buys/delivery sibling this route was modelled on. get_media_buys
+    # REJECTS an account filter outright (AdCPCapabilityNotSupportedError ->
+    # UNSUPPORTED_FEATURE), so resolving the account first is not just
+    # unnecessary, it is WRONG: enriching raised ACCOUNT_NOT_FOUND for an
+    # unresolvable account and pre-empted the UNSUPPORTED_FEATURE the buyer is
+    # owed. The MCP wrapper does no enrichment either -- it forwards `account`
+    # into the request and lets _impl reject it -- and REST must answer
+    # identically. Both wrong shapes were caught by
+    # test_account_filter_not_supported[rest] the moment REST parametrization
+    # came back, which is the coverage this route exists to restore.
+    account_ref = None
+    if body.account is not None:
+        with adcp_validation_boundary(context="get_media_buys request"):
+            account_ref = to_account_reference(body.account)
+
+    response = media_buy_list_module.get_media_buys_raw(
+        media_buy_ids=body.media_buy_ids,
+        status_filter=body.status_filter,
+        include_snapshot=bool(body.include_snapshot),
+        account=account_ref,
         context=to_context_object(body.context),
         identity=identity,
     )
