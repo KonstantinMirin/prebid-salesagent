@@ -279,7 +279,9 @@ def test_creative_agent(tenant_id, agent_id):
                         "sample_formats": list(result.samples),
                     }
                 )
-            return jsonify({"success": False, "error": result.message}), 400
+            # ProbeResult.message is a required field, not an AdCP response
+            # attribute -- the hook regex cannot tell the two apart.
+            return jsonify({"success": False, "error": result.message}), 400  # noqa: response-attribute
 
     except Exception as e:
         logger.error(f"Error testing creative agent: {e}", exc_info=True)

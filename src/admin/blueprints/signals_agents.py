@@ -310,7 +310,9 @@ def test_signals_agent(tenant_id, agent_id):
                     jsonify(
                         {
                             "success": False,
-                            "error": result.message,
+                            # ProbeResult.message is a required field, not an AdCP
+                            # response attribute -- the hook regex cannot tell.
+                            "error": result.message,  # noqa: response-attribute
                         }
                     ),
                     400,
