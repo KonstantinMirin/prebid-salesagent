@@ -29,7 +29,7 @@ from tests.helpers import assert_envelope_shape
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
-WIRE_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]
+WIRE_TRANSPORTS = [Transport.A2A, Transport.MCP, Transport.REST]
 
 
 def _create_kwargs(product, *, idempotency_key, po_number="WIRE-1"):
@@ -109,14 +109,7 @@ class TestIdempotencyWireMatrix:
             second = env.call_via(transport, **mutated)
 
         assert second.is_error, f"conflicting payload must reject on {transport.value}"
-        if transport is Transport.IMPL:
-            # IMPL has no wire by definition — its leg grades the synthesized
-            # envelope (what production WOULD emit at the boundary). The three
-            # wire legs below assert REAL wire bytes strictly: an `or` fallback
-            # here would let a dead wire path pass on the synthesized shape.
-            envelope = second.synthesized_error_envelope
-        else:
-            envelope = second.wire_error_envelope
+        envelope = second.wire_error_envelope
         assert envelope is not None, f"conflict must carry the two-layer envelope on {transport.value}"
         assert_envelope_shape(envelope, "IDEMPOTENCY_CONFLICT", recovery="correctable")
 
@@ -176,12 +169,7 @@ class TestIdempotencyWireMatrix:
             second = env.call_via(transport, **dict(kwargs))
 
         assert second.is_error, f"an expired replay window must reject on {transport.value}"
-        if transport is Transport.IMPL:
-            # IMPL has no wire — grade the synthesized envelope (what production
-            # WOULD emit), exactly as the conflict leg does.
-            envelope = second.synthesized_error_envelope
-        else:
-            envelope = second.wire_error_envelope
+        envelope = second.wire_error_envelope
         assert envelope is not None, f"EXPIRED must carry the two-layer envelope on {transport.value}"
         assert_envelope_shape(envelope, "IDEMPOTENCY_EXPIRED", recovery="correctable")
         # The spec's buyer-recovery guidance (the natural-key check that MAKES

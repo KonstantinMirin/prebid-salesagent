@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import pytest
 
+from src.core.exceptions import AdCPAuthRequiredError
 from src.core.schemas import Format, FormatId, ListCreativeFormatsResponse
 from tests.factories import PrincipalFactory, TenantFactory
 from tests.harness import CreativeFormatsEnv
@@ -97,30 +98,6 @@ class TestAuthOptionalForDiscovery:
         assert len(response.formats) == 1
         assert response.formats[0].format_id.id == "a2a_fmt"
 
-    def test_impl_with_no_auth_token_via_call_via(self, integration_db):
-        """UC-005-MAIN-MCP-02: call_via(IMPL) with explicit no-token identity.
-
-        Uses the multi-transport dispatch path with an unauthenticated identity
-        to verify the TransportResult wrapper also succeeds.
-        """
-        formats = [_make_format("dispatch_fmt", "Dispatched Format")]
-
-        with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            env.set_registry_formats(formats)
-
-            identity_no_token = PrincipalFactory.make_identity(
-                principal_id="anon_buyer",
-                tenant_id="test_tenant",
-                protocol="mcp",
-                auth_token=None,
-            )
-            result = env.call_via(Transport.IMPL, identity=identity_no_token)
-
-        assert result.is_success
-        assert isinstance(result.payload, ListCreativeFormatsResponse)
-        assert len(result.payload.formats) == 1
-
     def test_a2a_with_no_auth_token_via_call_via(self, integration_db):
         """UC-005-MAIN-MCP-02: call_via(A2A) with explicit no-token identity.
 
@@ -165,10 +142,14 @@ class TestAuthOptionalForDiscovery:
                 protocol="mcp",
                 auth_token=None,
             )
-            result = env.call_via(Transport.IMPL, identity=identity_no_tenant)
+            # _impl is called directly and the raised error class IS the oracle --
+            # no transport is involved, so none is named. Previously dispatched
+            # through Transport.IMPL, a "transport" with no wire, and asserted on
+            # the reconstructed .error attribute; both are gone.
+            with pytest.raises(AdCPAuthRequiredError) as exc_info:
+                env.call_impl(identity=identity_no_tenant)
 
-        assert result.is_error
-        assert result.error.error_code == "AUTH_MISSING"
+        assert exc_info.value.error_code == "AUTH_MISSING"
 
     def test_authenticated_vs_unauthenticated_return_same_catalog(self, integration_db):
         """UC-005-MAIN-MCP-02: auth token does not affect the catalog returned.
@@ -233,10 +214,14 @@ class TestTenantResolutionFailure:
                 protocol="mcp",
                 auth_token=None,
             )
-            result = env.call_via(Transport.IMPL, identity=identity)
+            # _impl is called directly and the raised error class IS the oracle --
+            # no transport is involved, so none is named. Previously dispatched
+            # through Transport.IMPL, a "transport" with no wire, and asserted on
+            # the reconstructed .error attribute; both are gone.
+            with pytest.raises(AdCPAuthRequiredError) as exc_info:
+                env.call_impl(identity=identity)
 
-        assert result.is_error
-        assert result.error.error_code == "AUTH_MISSING"
+        assert exc_info.value.error_code == "AUTH_MISSING"
 
     def test_error_message_mentions_tenant(self, integration_db):
         """UC-005-EXT-A-01: error message indicates tenant context could not be determined."""

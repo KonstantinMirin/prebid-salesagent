@@ -144,9 +144,3 @@ class TestWireResponseIsRealWire:
             "MCP wire_response does not round-trip through ListCreativeFormatsResponse — "
             "looks like a fabricated/partial reconstruction, not real wire"
         )
-
-    def test_impl_has_no_wire(self, integration_db):
-        """IMPL is an in-process call — no wire by definition."""
-        with CreativeFormatsEnv() as env:
-            result = env.call_via(Transport.IMPL)
-            assert result.wire_response is None

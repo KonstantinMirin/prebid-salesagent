@@ -17,7 +17,7 @@ from tests.helpers import assert_envelope_shape
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
-ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST, Transport.MCP]
+ALL_TRANSPORTS = [Transport.A2A, Transport.REST, Transport.MCP]
 
 
 def _action_value(action):

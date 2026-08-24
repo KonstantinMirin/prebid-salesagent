@@ -270,10 +270,11 @@ def test_get_products_impl_payload_is_schema_valid(integration_db):
     in the table and must never be the reason any of them is dropped.
     """
     with _get_products_env() as (env, call_kwargs):
-        result = env.call_via(Transport.IMPL, **call_kwargs)
-        assert result.is_success, f"IMPL get_products failed: {result.error}"
-
-        response = result.payload.model_dump(mode="json")
+        # Calls _impl directly: this grades Product.model_dump, and a serializer
+        # needs no transport. Was dispatched through Transport.IMPL -- a
+        # "transport" with no wire, now deleted -- which added a TransportResult
+        # wrapper around a value the function already returns.
+        response = env.call_impl(**call_kwargs).model_dump(mode="json")
         products = response.get("products")
         assert isinstance(products, list) and products, (
             f"IMPL: expected a non-empty 'products' list in the response, got {products!r}"
@@ -323,10 +324,7 @@ def test_get_signals_impl_payload_omits_signal_ref(integration_db):
         tenant = TenantFactory(tenant_id="wire-shape-signals")
         PrincipalFactory(tenant=tenant, principal_id="test_principal")
 
-        result = env.call_via(Transport.IMPL)
-        assert result.is_success, f"get_signals failed: {result.error}"
-
-        payload = result.payload.model_dump(mode="json")
+        payload = env.call_impl().model_dump(mode="json")
         assert len(payload["signals"]) > 0, "expected non-empty signals list"
         assert "signal_ref" not in payload["signals"][0], (
             f"expected signals[0].signal_ref absent, got {payload['signals'][0].get('signal_ref')!r}"
@@ -339,9 +337,6 @@ def test_activate_signal_impl_payload_omits_unset_fields(integration_db):
         tenant = TenantFactory(tenant_id="wire-shape-activate-signal")
         PrincipalFactory(tenant=tenant, principal_id="test_principal")
 
-        result = env.call_via(Transport.IMPL, signal_agent_segment_id="auto_intenders_q1_2025")
-        assert result.is_success, f"activate_signal failed: {result.error}"
-
-        payload = result.payload.model_dump(mode="json")
+        payload = env.call_impl(signal_agent_segment_id="auto_intenders_q1_2025").model_dump(mode="json")
         for name in ("errors", "context"):
             assert name not in payload, f"expected '{name}' absent, got {payload.get(name)!r}"

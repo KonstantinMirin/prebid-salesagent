@@ -23,6 +23,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
+from src.core.exceptions import AdCPError
 from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope, make_identity
 from tests.helpers.creative_test_helpers import assert_stored_creative_assets, creative_payload
@@ -42,7 +43,7 @@ def _error_codes(errors: list | None) -> list[str]:
 
 
 # All four transports: IMPL, A2A, REST, MCP
-ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST, Transport.MCP]
+ALL_TRANSPORTS = [Transport.A2A, Transport.REST, Transport.MCP]
 
 
 @pytest.mark.requires_db
@@ -947,15 +948,17 @@ class TestAuthPrincipalRequired:
                 tenant=env.identity.tenant,
             )
 
-            result = env.call_via(
-                Transport.IMPL,
-                creatives=[_creative()],
-                identity=identity_no_principal,
-            )
+            # _impl raises; the error class and its code ARE the oracle. This used
+            # to dispatch through Transport.IMPL so the dispatcher would catch the
+            # exception into a TransportResult -- a wrapper around a raise.
+            with pytest.raises(AdCPError) as exc_info:
+                env.call_impl(
+                    creatives=[_creative()],
+                    identity=identity_no_principal,
+                )
 
-        assert result.is_error
-        assert result.error_code() in {"AUTH_MISSING", "AUTH_INVALID"}, (
-            f"Expected an authentication rejection, got {result.error_code()!r}"
+        assert exc_info.value.error_code in {"AUTH_MISSING", "AUTH_INVALID"}, (
+            f"Expected an authentication rejection, got {exc_info.value.error_code!r}"
         )
 
 
@@ -977,15 +980,17 @@ class TestAuthTenantRequired:
                 tenant=None,
             )
 
-            result = env.call_via(
-                Transport.IMPL,
-                creatives=[_creative()],
-                identity=identity_no_tenant,
-            )
+            # _impl raises; the error class and its code ARE the oracle. This used
+            # to dispatch through Transport.IMPL so the dispatcher would catch the
+            # exception into a TransportResult -- a wrapper around a raise.
+            with pytest.raises(AdCPError) as exc_info:
+                env.call_impl(
+                    creatives=[_creative()],
+                    identity=identity_no_tenant,
+                )
 
-        assert result.is_error
-        assert result.error_code() in {"AUTH_MISSING", "AUTH_INVALID"}, (
-            f"Expected an authentication rejection, got {result.error_code()!r}"
+        assert exc_info.value.error_code in {"AUTH_MISSING", "AUTH_INVALID"}, (
+            f"Expected an authentication rejection, got {exc_info.value.error_code!r}"
         )
 
 
@@ -1198,12 +1203,13 @@ class TestSlackNotificationOnSync:
             # require-human mode but NO slack_webhook_url
             env.identity.tenant["approval_mode"] = "require-human"
 
-            result = env.call_via(
-                Transport.IMPL,
+            response = env.call_impl(
                 creatives=[_creative(creative_id="c_no_webhook")],
             )
 
-            assert result.is_success
+            # call_impl returns the response DTO itself -- no TransportResult
+            # wrapper, so success is "it returned instead of raising".
+            assert response.creatives
             send_mock = env.mock["send_notifications"]
             # Called because creatives_needing_approval is non-empty and not dry_run
             assert send_mock.called
@@ -1337,8 +1343,7 @@ class TestAsyncLifecycleSubmitted:
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            result = env.call_via(
-                Transport.IMPL,
+            result = env.call_impl(
                 creatives=[_creative(creative_id="c_async_sub", name="Async Submit")],
                 # BDD: "the system supports async creative sync"
                 async_mode=True,
@@ -1376,8 +1381,7 @@ class TestAsyncLifecycleWorking:
             env.setup_default_data()
 
             # First: queue an async operation
-            submit_result = env.call_via(
-                Transport.IMPL,
+            submit_result = env.call_impl(
                 creatives=[
                     _creative(creative_id="c_prog_1", name="Progress 1"),
                     _creative(creative_id="c_prog_2", name="Progress 2"),
@@ -1387,8 +1391,7 @@ class TestAsyncLifecycleWorking:
             context_id = submit_result.payload.context
 
             # BDD: "When the Buyer checks status"
-            status_result = env.call_via(
-                Transport.IMPL,
+            status_result = env.call_impl(
                 context=context_id,
             )
 
@@ -1428,8 +1431,7 @@ class TestAsyncLifecycleInputRequired:
             env.identity.tenant["approval_mode"] = "require-human"
 
             # BDD: "async sync operation requires Buyer input"
-            result = env.call_via(
-                Transport.IMPL,
+            result = env.call_impl(
                 creatives=[_creative(creative_id="c_input_req", name="Needs Approval")],
                 async_mode=True,
             )
