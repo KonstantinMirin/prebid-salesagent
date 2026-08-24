@@ -95,13 +95,13 @@ def _assert_ssrf_rejection(exc: AdCPUrlNotAllowedError, *, detail_pattern: str, 
     ``internal_detail`` slot, so each test keeps its specific expectation
     without the message carrying it.
     """
-    # The buyer's actionable signal is the CODE and the FIELD. VALIDATION_ERROR /
-    # correctable says a different URL will work; the previous AdCPAdapterError said
-    # SERVICE_UNAVAILABLE / transient — "retry with exponential backoff" — for a condition
-    # retrying can never resolve. The suggestion is the code's and is asserted nowhere,
-    # since comparing it to CODE_TABLE would grade the table against itself.
+    # The buyer's actionable signal is the CODE and the FIELD. VALIDATION_ERROR
+    # (correctable, per the pin) says a different URL will work; the previous
+    # AdCPAdapterError said SERVICE_UNAVAILABLE / transient — "retry with exponential
+    # backoff" — for a condition retrying can never resolve. Recovery and suggestion are
+    # read-only properties over CODE_TABLE, so neither is asserted here: with the code
+    # pinned, either assert would grade the table against itself.
     assert exc.error_code == "VALIDATION_ERROR", f"expected VALIDATION_ERROR, got {exc.error_code}"
-    assert exc.recovery == "correctable", f"a rejected URL is correctable, got {exc.recovery}"
     assert re.search(detail_pattern, str(exc.internal_detail)), (
         f"the rejection reason must survive server-side on internal_detail; "
         f"expected /{detail_pattern}/ in {exc.internal_detail!r}"

@@ -18,7 +18,6 @@ from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no
 # ImageFormatAsset = individual image, VideoFormatAsset = individual video
 # RepeatableAssetGroup = repeatable_group (has nested assets, no asset_type)
 # Nested group assets: ImageFormatGroupAsset, VideoFormatGroupAsset, TextFormatGroupAsset, etc.
-from src.core.errors.codes import CODE_TABLE
 from src.core.schemas import Format, FormatId, ListCreativeFormatsRequest
 from tests.factories import PrincipalFactory
 
@@ -676,14 +675,15 @@ class TestPartialAgentFailureReturnsFormatsAndErrors:
         healthy_formats = [
             _make_format("display_300x250", "Display 300x250"),
         ]
-        # The fixture is the message the registry ACTUALLY publishes. It used to
-        # hand-build "Creative agent at <url> is unreachable: Connection refused"
-        # — i.e. it normalized a leaking message as the expected shape while
-        # asserting nothing about it. AdCP 3.1.1 transport-errors.mdx § Security
-        # Considerations makes errors[] client-facing too, so the fixture now
-        # carries the first-party sentence and the assertions compare values.
+        # The fixture carries only the CODE. It used to hand-build "Creative agent
+        # at <url> is unreachable: Connection refused" — a leaking message pinned
+        # as the expected shape. Message, suggestion and recovery are now derived
+        # from the code by the Error model itself (read-only, from CODE_TABLE),
+        # so the fixture cannot author a sentence and no assertion compares one:
+        # with the code asserted below, a message assert would grade the table
+        # against itself.
         agent_errors = [
-            AdCPResponseError(code="AGENT_UNREACHABLE", message=CODE_TABLE["AGENT_UNREACHABLE"].message),
+            AdCPResponseError(code="AGENT_UNREACHABLE"),
         ]
         response = _call_impl_raw(healthy_formats, errors=agent_errors)
 
@@ -694,7 +694,6 @@ class TestPartialAgentFailureReturnsFormatsAndErrors:
         assert response.errors is not None, "Response must include errors[] for failed agents, not silently drop them"
         assert len(response.errors) == 1
         assert response.errors[0].code == "AGENT_UNREACHABLE"
-        assert response.errors[0].message == CODE_TABLE["AGENT_UNREACHABLE"].message
         # NOTE (honest limit): these fixtures are fed straight to _call_impl_raw,
         # so they grade the _impl's error PROPAGATION, never the registry's
         # message construction. The construction site is graded by
@@ -721,11 +720,10 @@ class TestAllAgentsFailReturnsEmptyFormatsAndErrors:
 
         # Simulate all agents failing — registry returns no formats but reports
         # errors. Same conversion as UC-005-EXT-C-01 above: the fixtures carry
-        # the first-party sentence the registry actually publishes, not the
-        # leaking "<url> is unreachable: <raw cause>" shape they used to pin.
+        # only the code; the Error model derives the buyer-facing text from it.
         agent_errors = [
-            AdCPResponseError(code="AGENT_UNREACHABLE", message=CODE_TABLE["AGENT_UNREACHABLE"].message),
-            AdCPResponseError(code="AGENT_UNREACHABLE", message=CODE_TABLE["AGENT_UNREACHABLE"].message),
+            AdCPResponseError(code="AGENT_UNREACHABLE"),
+            AdCPResponseError(code="AGENT_UNREACHABLE"),
         ]
         response = _call_impl_raw(formats=[], errors=agent_errors)
 
@@ -738,7 +736,6 @@ class TestAllAgentsFailReturnsEmptyFormatsAndErrors:
         assert len(response.errors) == 2
         for err in response.errors:
             assert err.code == "AGENT_UNREACHABLE"
-            assert err.message == CODE_TABLE["AGENT_UNREACHABLE"].message
 
 
 class TestRegistryCreationFailureRaisesServiceUnavailable:
@@ -784,14 +781,16 @@ class TestErrorEntriesFollowAdCPSchema:
         """
         from src.core.schemas import Error
 
-        agent_errors = [Error(code="AGENT_UNREACHABLE", message=CODE_TABLE["AGENT_UNREACHABLE"].message)]
+        agent_errors = [Error(code="AGENT_UNREACHABLE")]
         response = _call_impl_raw(formats=[], errors=agent_errors)
 
         assert response.errors is not None
         for err in response.errors:
             assert isinstance(err, Error), f"Error must be an AdCP Error instance, got {type(err)}"
             assert err.code == "AGENT_UNREACHABLE"
-            assert err.message == CODE_TABLE["AGENT_UNREACHABLE"].message
+            # The "and message" half of the obligation is structural now: the Error
+            # model derives message from the code at validation and CodeEntry refuses
+            # an empty one, so a constructed Error cannot lack a message.
 
 
 class TestSuccessfulDiscoveryHasNoErrors:

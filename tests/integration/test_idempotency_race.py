@@ -123,7 +123,6 @@ class TestDegradedReplayFailsClosed:
 
         exc = exc_info.value
         assert exc.error_code == "SERVICE_UNAVAILABLE"
-        assert exc.recovery == "transient"
         assert exc.retry_after >= 1
 
 
@@ -192,7 +191,6 @@ class TestIdempotencyRaceRecovery:
                     principal_id,
                 )
             assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
-            assert exc_info.value.recovery == "transient"
 
         assert caught, "IntegrityError should have been raised by the duplicate idempotency_key"
 
@@ -237,7 +235,6 @@ class TestDegradedFallbackStatus:
             )
 
         assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
-        assert exc_info.value.recovery == "transient"
 
 
 class TestRaceLoserPayloadRules:
@@ -327,7 +324,6 @@ class TestRaceLoserPayloadRules:
             )
 
         assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
-        assert exc_info.value.recovery == "transient"
 
 
 class TestRaceSeamThroughEntrypoint:
@@ -390,7 +386,6 @@ class TestRaceSeamThroughEntrypoint:
         # the except-branch failed closed instead of fabricating a body.
         assert calls_after == calls_before + 1, "the retry must re-execute (probe miss), not replay"
         assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
-        assert exc_info.value.recovery == "transient"
 
         # Exactly one booking exists for the key — the backstop held.
         with MediaBuyUoW(tenant_id) as verify_uow:

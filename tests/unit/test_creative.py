@@ -975,11 +975,11 @@ class TestCreativeValidation:
             "src.core.format_resolver.fetch_format_spec",
             side_effect=AdCPServiceUnavailableError(),
         ):
-            with pytest.raises(AdCPServiceUnavailableError) as exc_info:
+            with pytest.raises(AdCPServiceUnavailableError):
                 _validate_creative_input(creative, mock_registry, "p1")
-            # The old pattern matched the AUTHORED sentence; the sentence is the
-            # code's table entry now, so assert it exactly.
-        assert exc_info.value.recovery == "transient"
+            # The raised TYPE is the whole contract: code, message, recovery and
+            # suggestion are all read-only derivations from the class's code, so
+            # there is nothing else on the instance this test could pin.
 
     def test_unknown_format_raises_with_discovery_hint(self):
         """Known agent but unknown format raises ValueError mentioning list_creative_formats.

@@ -6,7 +6,6 @@ This tests the fix for the bug where trying to approve a media buy would crash w
 "'CreateMediaBuyError' object has no attribute 'media_buy_id'"
 """
 
-from src.core.errors.codes import CODE_TABLE
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Error
 
 
@@ -16,13 +15,11 @@ class TestApprovalErrorHandling:
     def test_create_media_buy_error_has_errors_field_not_media_buy_id(self):
         """Verify CreateMediaBuyError structure - has 'errors' but not 'media_buy_id'."""
         # This test documents the schema structure that caused the bug
-        error_response = CreateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="Test error message")])
+        error_response = CreateMediaBuyError(errors=[Error(code="VALIDATION_ERROR")])
 
         # CreateMediaBuyError has 'errors' field
         assert hasattr(error_response, "errors")
         assert len(error_response.errors) == 1
-        # Derived from the code (ADR-010), not the authored string.
-        assert error_response.errors[0].message == CODE_TABLE["VALIDATION_ERROR"].message
 
         # CreateMediaBuyError does NOT have 'media_buy_id' field
         assert not hasattr(error_response, "media_buy_id")

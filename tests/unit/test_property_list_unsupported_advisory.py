@@ -137,22 +137,18 @@ class TestBuildPropertyListUnsupportedAdvisories:
             "packages[2].targeting_overlay.property_list",
         ]
 
-    def test_advisory_carries_the_code_table_text_and_names_the_feature(self):
-        """Buyers need to know WHY and WHAT TO DO, and WHICH feature is off.
+    def test_advisory_names_the_feature_and_the_field(self):
+        """Buyers need to know WHICH feature is off and WHERE the request tripped it.
 
-        The first two come from the CODE_TABLE entry for the code (ADR-010: a
-        graded wire field is a function of the code, never authored at the site).
-        The third is site-specific, so it travels structurally in ``details`` --
-        asserting it appeared in the SENTENCE only ever checked the table against
-        a copy of itself.
+        Both are site-specific choices, so they travel structurally in ``details``
+        and ``field``. WHY and WHAT TO DO are not asserted at all any more:
+        message and suggestion are derived from the code by the Error model
+        (read-only, from CODE_TABLE), so with the code pinned by
+        ``test_one_advisory_per_offending_package`` an assert on either would
+        only grade the table against itself.
         """
-        from src.core.errors.codes import CODE_TABLE
-
         pkgs = [_make_pkg_with_property_list()]
         advisory = build_property_list_unsupported_advisories(pkgs, False)[0]
-        entry = CODE_TABLE["UNSUPPORTED_FEATURE"]
-        assert advisory.message == entry.message
-        assert advisory.suggestion == entry.suggestion
         assert advisory.details == {"feature": "property_list_filtering"}
         assert advisory.field == "packages[0].targeting_overlay.property_list"
 

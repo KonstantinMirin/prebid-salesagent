@@ -80,11 +80,25 @@ class Recovery(StrEnum):
 
 @dataclass(frozen=True)
 class CodeEntry:
-    """Everything a code resolves to. Frozen: the table is a fact, not state."""
+    """Everything a code resolves to. Frozen: the table is a fact, not state.
+
+    Refuses an empty ``suggestion`` or ``message`` at construction: every error
+    on the wire derives both from its table entry, so an empty string here would
+    put a blank buyer-facing field on every raise of that code. Checking it at
+    the one place entries are built — pinned-schema load and platform authorship
+    alike — means no test or raise site ever needs to re-check non-emptiness.
+    """
 
     recovery: Recovery
     suggestion: str
     message: str
+
+    def __post_init__(self) -> None:
+        if not self.suggestion or not self.message:
+            raise ValueError(
+                f"CodeEntry requires non-empty suggestion and message, got "
+                f"suggestion={self.suggestion!r}, message={self.message!r}"
+            )
 
 
 class AppErrorCode(StrEnum):

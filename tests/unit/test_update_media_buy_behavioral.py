@@ -1215,7 +1215,6 @@ class TestUC003UpdateCreativeIds:
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
             # The identifier is STRUCTURED now: details/field, not prose.
-            assert exc_info.value.suggestion
             assert exc_info.value.error_code == "CREATIVE_REJECTED"
 
     def test_creative_rejected_state_rejected(self):
@@ -1239,7 +1238,6 @@ class TestUC003UpdateCreativeIds:
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
             # The identifier is STRUCTURED now: details/field, not prose.
-            assert exc_info.value.suggestion
             assert exc_info.value.error_code == "CREATIVE_REJECTED"
 
     def test_creative_format_compatibility_check(self):
@@ -1282,7 +1280,6 @@ class TestUC003UpdateCreativeIds:
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
             # The identifier is STRUCTURED now: details/field, not prose.
-            assert exc_info.value.suggestion
             assert exc_info.value.error_code == "CREATIVE_REJECTED"
 
     def test_creative_update_no_adapter_call(self):
@@ -1661,7 +1658,6 @@ class TestUC003UpdateCreativeAssignments:
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
             # The identifier is STRUCTURED now: details/field, not prose.
-            assert exc_info.value.suggestion
             assert exc_info.value.error_code == "CREATIVE_REJECTED"
 
 
@@ -2354,7 +2350,6 @@ class TestUC003ExtJ:
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
             # The identifier is STRUCTURED now: details/field, not prose.
-            assert exc_info.value.suggestion
             assert exc_info.value.error_code == "CREATIVE_REJECTED"
 
     def test_all_validation_errors_collected(self):

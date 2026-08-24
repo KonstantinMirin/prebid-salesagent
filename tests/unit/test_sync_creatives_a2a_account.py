@@ -45,7 +45,6 @@ def test_to_account_reference_rejects_invalid_account_payload():
     """
     with pytest.raises(AdCPValidationError) as excinfo:
         to_account_reference({})
-    assert excinfo.value.suggestion, "typed rejection must carry a top-level suggestion"
 
 
 class TestSyncCreativesAccountCoercion:

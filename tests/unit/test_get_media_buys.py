@@ -381,7 +381,6 @@ class TestGetMediaBuysImpl:
             _get_media_buys_impl(req, identity=identity)
 
         assert exc_info.value.error_code == "AUTH_MISSING"
-        assert exc_info.value.recovery == "correctable"
 
     def test_snapshot_not_requested_when_false(self, patched_internals):
         """When include_snapshot=False, adapter.get_packages_snapshot not called."""

@@ -870,7 +870,6 @@ class TestListCreativeObjectConstruction:
         advisories = response.errors or []
         assert len(advisories) == 1, f"expected one advisory for the unreadable row; got {advisories!r}"
         assert advisories[0].code == "CONFIGURATION_ERROR"
-        assert advisories[0].recovery == "terminal"
         # WHICH creative travels in details. The unparseable stored status is INTERNAL
         # state and is deliberately kept OFF the buyer wire (salesagent-3dawm.14);
         # the operator gets it from the log line the same branch emits.

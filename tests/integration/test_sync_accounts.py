@@ -10,7 +10,6 @@ BR-RULE-061 (delete_missing), BR-RULE-062 (dry_run)
 
 import pytest
 
-from src.core.errors.codes import CODE_TABLE
 from src.core.schemas.account import SyncAccountsRequest
 from tests.harness import Transport
 from tests.harness.account_sync import AccountSyncEnv
@@ -803,11 +802,17 @@ class TestSyncAccountsBillingPolicyTransport:
             result = env.call_via(transport, req=req)
 
         assert result.is_success
-        err = result.payload.accounts[0].errors[0]
-        # The suggestion is the CODE_TABLE entry for the code, not a sentence the
-        # gate authored (ADR-010), so it is asserted by identity rather than by
-        # substring-matching a phrase the table never promised.
-        assert err.suggestion == CODE_TABLE[err.code].suggestion
+        # BR-RULE-059 is a WIRE obligation: the SERIALIZED error object must carry
+        # a non-empty suggestion. Asserting on the typed payload would be vacuous:
+        # parsing re-derives suggestion from the code, so a parsed Error carries
+        # one whether or not the wire did. IMPL has no wire; there the production
+        # serialization of the typed payload stands in.
+        wire = result.wire_response or result.payload.model_dump(mode="json")
+        wire_err = wire["accounts"][0]["errors"][0]
+        assert wire_err["code"] == "BILLING_NOT_SUPPORTED"
+        assert wire_err.get("suggestion"), (
+            f"BR-RULE-059: serialized error must carry a non-empty suggestion, got {wire_err!r}"
+        )
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_unconfigured_billing_policy_accepts_all(self, integration_db, transport):

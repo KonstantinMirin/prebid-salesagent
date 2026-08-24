@@ -4356,7 +4356,6 @@ class TestGetMediaBuysImplAuth:
             _get_media_buys_impl(req, identity=identity)
 
         assert exc_info.value.error_code == "AUTH_MISSING"
-        assert exc_info.value.recovery == "correctable"
 
     def test_account_id_not_supported(self):
         """GMB-A03: account_id parameter raises 'not yet supported' error.

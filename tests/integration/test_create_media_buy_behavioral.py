@@ -338,7 +338,6 @@ class TestCreativeMissingUrl:
 
             assert "creative_errors" in exc_info.value.details
             assert exc_info.value.error_code == "CREATIVE_REJECTED"
-            assert exc_info.value.suggestion
 
     def test_creative_missing_dimensions_raises_invalid_creatives(self):
         """When creative has URL but missing dimensions, raise INVALID_CREATIVES.
@@ -377,7 +376,6 @@ class TestCreativeMissingUrl:
 
             assert "creative_errors" in exc_info.value.details
             assert exc_info.value.error_code == "CREATIVE_REJECTED"
-            assert exc_info.value.suggestion
 
 
 class TestCreativeUploadFailure:
@@ -563,7 +561,6 @@ class TestMultipleInvalidCreativesAccumulated:
             assert "creative_2" in accumulated
             assert "creative_3" in accumulated
             assert exc_info.value.error_code == "CREATIVE_REJECTED"
-            assert exc_info.value.suggestion
 
 
 class TestPricingOptionXOR:
@@ -659,7 +656,6 @@ class TestCreativeIdsNotFound:
                 env.call_impl(req=req)
 
             assert exc_info.value.error_code == "CREATIVE_REJECTED"
-            assert exc_info.value.suggestion
 
     def test_set_difference_logic_detects_missing_creative_ids(self):
         """The set-difference logic (requested - found) correctly identifies missing IDs.

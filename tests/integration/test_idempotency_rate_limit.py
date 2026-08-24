@@ -61,7 +61,6 @@ class TestInsertCeilingRepository:
 
         exc = exc_info.value
         assert exc.error_code == "RATE_LIMITED"
-        assert exc.recovery == "transient"
         # Both rows were seeded with a 1h TTL from ``now`` — the oldest frees
         # capacity in exactly 3600s.
         assert exc.retry_after == 3600
@@ -134,7 +133,6 @@ class TestInsertRateWindow:
 
         exc = exc_info.value
         assert exc.error_code == "RATE_LIMITED"
-        assert exc.recovery == "transient"
         assert 1 <= exc.retry_after <= 10, "rate-window retry_after is bounded by the window length"
 
     def test_rows_outside_window_do_not_count_toward_rate(self, integration_db):
