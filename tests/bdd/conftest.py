@@ -2675,6 +2675,36 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                     break
 
+        # --- UC-019: e2e_rest xfails for Givens that seed the SUITE db ---
+        # UC-019 regained REST parametrization when get_media_buys got a REST
+        # route (salesagent-ma52s). That correctly enabled `rest`, and it also
+        # enabled `e2e_rest`, which is a different proposition: e2e_rest sends
+        # real HTTP to the LIVE server, and the server reads its OWN database.
+        #
+        # Every UC-019 Given seeds through MediaBuyFactory into the harness
+        # session -- the step file contains no realize_e2e call at all -- so on
+        # e2e_rest the rows land in the suite DB while the request is answered
+        # from the server's, and the buys are simply not there. It presents as
+        # "Filter 'active' returned no media buys" and "got IDs: []", which reads
+        # like a filtering bug and is not one.
+        #
+        # Routed rather than dropped from parametrization: an xfail is visible to
+        # the escape-hatch detectors in
+        # test_architecture_e2e_rest_escape_hatches.py, and a parametrize-time
+        # exclusion is not -- that invisibility is exactly what hid UC-019's
+        # missing REST coverage in the first place. Graduating these needs the
+        # Givens seeding through realize_e2e (salesagent-tracked separately), not
+        # a change to production.
+        # (folded into the existing UC-019 e2e_rest block below rather than
+        # opening a second one on the same condition -- one guard, several
+        # reasons, and no new entry in EXPECTED_XFAIL_ROUTES.)
+        _UC019_E2E_SUITE_DB_SEED_TAGS: set[str] = {
+            "T-UC-019-partition-status-filter",
+            "T-UC-019-boundary-status-filter",
+            "T-UC-019-inv-150-1",
+            "T-UC-019-inv-150-11",
+        }
+
         # --- UC-019: e2e_rest xfails for datetime-mock-dependent tests ---
         # These scenarios use `And today is "<date>"` which patches datetime
         # in-process. The patch has no effect on Docker — real datetime.now()
@@ -2709,6 +2739,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(
                     pytest.mark.xfail(
                         reason="e2e_rest: datetime.now() mock has no effect in Docker — status computed from real date",
+                        strict=False,
+                    )
+                )
+            if marker_names & _UC019_E2E_SUITE_DB_SEED_TAGS:
+                item.add_marker(
+                    pytest.mark.xfail(
+                        reason=(
+                            "e2e_rest: UC-019 Givens seed via MediaBuyFactory into the suite DB; "
+                            "the live server reads its own DB, so the seeded buys are invisible. "
+                            "Needs realize_e2e seeding, not a production change."
+                        ),
                         strict=False,
                     )
                 )

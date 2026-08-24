@@ -1091,11 +1091,17 @@ class TestCreativeLifecycleMCP:
                 delivery_type="non_guaranteed",
                 pricing_options=[
                     {
+                        # V3 shape. Was the pre-V3 form -- "is_fixed": False plus
+                        # price_guidance.floor -- which the pinned schema replaced:
+                        # auction pricing carries floor_price at option level, and
+                        # PriceGuidance declares only p25/p50/p75/p90. It survived
+                        # because the SDK DTO's extra="allow" accepted both keys
+                        # silently; our own members forbid them, which is the point.
                         "pricing_option_id": "cpm_usd_auction",
                         "pricing_model": "cpm",
                         "currency": "USD",
-                        "is_fixed": False,
-                        "price_guidance": {"floor": 5.0, "p50": 10.0, "p75": 12.0, "p90": 15.0},
+                        "floor_price": 5.0,
+                        "price_guidance": {"p50": 10.0, "p75": 12.0, "p90": 15.0},
                     }
                 ],
             )
