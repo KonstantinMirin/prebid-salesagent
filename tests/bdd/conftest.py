@@ -2197,6 +2197,38 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "production lax-coerces non-boolean strings to bool (no strict-bool "
                 "validation, no AdCPError(INVALID_REQUEST)). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
+            # VERIFIED 2026-08-24 (xpass-graduation walk of e2e_rest ledger line
+            # :55). This entry is CORRECT and stays. Three independent checks:
+            #  1. The mechanism in the reason above is real, not inferred. Direct
+            #     probe of the request model:
+            #       GetMediaBuyDeliveryRequest.model_validate(
+            #           {"include_package_daily_breakdown": "true"})
+            #     -> ACCEPTED, field == True. Same for "TRUE"/"yes"/"1". The value
+            #     is a DECLARED bool|None field, so it never reaches extra="forbid";
+            #     Pydantic v2 lax mode coerces it. Production raises nothing at all.
+            #  2. The obligation is spec-grounded, not over-specified. The pinned
+            #     adcp 3.1 schema (media-buy/get-media-buy-delivery-request.json)
+            #     declares include_package_daily_breakdown as {"type": "boolean"};
+            #     JSON Schema type:boolean does not admit the string "true". The
+            #     scenario is right and production is lax — a real gap.
+            #  3. The row is NOT an xpass and never was. Full slice, all three
+            #     in-process wire transports:
+            #       saci test bdd tests/bdd/test_uc004_deliver_media_buy_metrics.py \
+            #         -k daily_breakdown -- -rxX
+            #     -> 18 passed, 12 xfailed, 0 XPASSED. a2a/mcp/rest all XFAIL on
+            #     this reason. (Local slices persist no test-results/ report, so
+            #     there is no run id to cite; the command above reproduces it.)
+            # e2e_rest ledger line :55 therefore STAYS. No bdd-in-network run was
+            # performed, and none is required: this change removes no routing, and
+            # e2e_rest exercises the same app/request model as the in-process rest
+            # transport, which XFAILs here for the reason above.
+            # CAVEAT on the reason text: the "item C4" pointer is WRONG for this
+            # row. C4 is "Pydantic ValidationError not translated to AdCPError";
+            # here no ValidationError is ever raised (the value is coerced and
+            # accepted), so C4's remedy — a boundary translator wrapping
+            # ValidationError — would not move these rows. C4's "one change clears
+            # ~32 rows" estimate over-counts by however many of them are coercion,
+            # not translation. Fixing this needs strict-bool validation, not C4.
             (
                 "T-UC-004-boundary-daily-breakdown",
                 {"string 'true' (non-boolean type)"},
@@ -2668,6 +2700,28 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Only the failing subset gets xfailed; clean-pass examples graduate to PASS.
         _UC004_BOUNDARY_SELECTIVE: list[tuple[str, set[str], str]] = [
             # include_package_daily_breakdown: only non_boolean fails (all transports)
+            #
+            # SHADOW — DO NOT REMOVE THE strict=True ENTRY WITHOUT REMOVING THIS ONE.
+            # This entry duplicates the routing of the SAME tag + the SAME row that
+            # the strict=True Phase-2 entry above (search: "lax-coerces non-boolean")
+            # already covers, but with strict=False. Measured 2026-08-24:
+            #   * With both present, the strict=True entry governs — the reported
+            #     reason is the Phase-2 one, so the ratchet works TODAY.
+            #   * Mutation M1 (this entry left in place, the strict=True entry
+            #     temporarily deleted) -> the row still XFAILs, now reporting THIS
+            #     reason. So this entry is live and reachable, not dead code.
+            # Consequence: the moment production grows strict-bool validation, the
+            # strict=True entry fires (XPASS -> failure) and forces its own removal —
+            # which is the intended ratchet. But removing it hands the row straight
+            # to this strict=False entry, under which the now-passing row reports a
+            # silent XPASS forever instead of graduating. That is a mechanism for
+            # MANUFACTURING xpass residue out of a completed fix, and the route pin
+            # (EXPECTED_XFAIL_ROUTES in tests/unit/test_architecture_e2e_rest_escape_
+            # hatches.py) cannot catch it: it records conditions only, never `strict`,
+            # so a strict=False shadow behind a strict=True route is invisible to it.
+            # 62 tags in this file are routed more than once; only this one has been
+            # checked. Deliberately NOT deleted here — it is behaviour-neutral today
+            # and removing a pinned route is its own change, not part of walking :55.
             (
                 "T-UC-004-boundary-daily-breakdown",
                 {"non-boolean", "non_boolean", "string 'true'"},
