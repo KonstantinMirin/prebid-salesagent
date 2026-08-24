@@ -14,6 +14,7 @@ import pytest
 from src.core.database.database_session import get_db_session, get_engine
 from src.core.database.models import MediaPackage as DBMediaPackage
 from src.core.schemas import CreateMediaBuySuccess
+from tests.helpers.media_buy_approval import run_approval
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -220,9 +221,7 @@ def _run_execute_approved(media_buy_id, tenant_id, adapter_response):
             return_value=type("MockAdapter", (), {"orders_manager": None})(),
         ),
     ):
-        from src.core.tools.media_buy_create import execute_approved_media_buy
-
-        return execute_approved_media_buy(media_buy_id, tenant_id)
+        return run_approval(media_buy_id, tenant_id)
 
 
 class TestExecuteApprovedPlatformIds:
@@ -261,11 +260,9 @@ class TestExecuteApprovedPlatformIds:
                 return_value=type("MockAdapter", (), {"orders_manager": None})(),
             ),
         ):
-            from src.core.tools.media_buy_create import execute_approved_media_buy
+            result = run_approval(media_buy_id, tenant_id)
 
-            success, error = execute_approved_media_buy(media_buy_id, tenant_id)
-
-        assert success is True, f"execute_approved_media_buy failed: {error}"
+        assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
 
         # THE KEY ASSERTION: platform_line_item_id must be in package_config
         from sqlalchemy import select
@@ -306,8 +303,8 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
             {"pkg_A": "LINE_ITEM_A", "pkg_B": "LINE_ITEM_B"},
         )
 
-        success, error = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
-        assert success is True, f"execute_approved_media_buy failed: {error}"
+        result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
+        assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
 
         from sqlalchemy import select
 
@@ -337,8 +334,8 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
             {"nonexistent_pkg": "LINE_ITEM_999"},
         )
 
-        success, error = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
-        assert success is True, f"Should succeed even if package not found: {error}"
+        result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
+        assert result.ok, f"Should succeed even if package not found: {result.error_msg}"
 
     def test_empty_platform_line_item_ids_dict(self, pending_media_buy_with_package):
         """Empty _platform_line_item_ids dict — no writes, no crash."""
@@ -352,8 +349,8 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
         )
         object.__setattr__(adapter_response, "_platform_line_item_ids", {})
 
-        success, error = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
-        assert success is True, f"Should succeed with empty dict: {error}"
+        result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
+        assert result.ok, f"Should succeed with empty dict: {result.error_msg}"
 
         # Package config should be unchanged (no platform_line_item_id added)
         from sqlalchemy import select
@@ -377,8 +374,8 @@ class TestExecuteApprovedPlatformIdsEdgeCases:
         )
         # Don't set _platform_line_item_ids at all
 
-        success, error = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
-        assert success is True, f"Should succeed without attr: {error}"
+        result = _run_execute_approved(media_buy_id, tenant_id, adapter_response)
+        assert result.ok, f"Should succeed without attr: {result.error_msg}"
 
         from sqlalchemy import select
 
@@ -539,11 +536,9 @@ class TestExecuteApprovedEnrichesSellerConcept:
             ),
             patch("src.core.helpers.adapter_helpers.get_adapter", return_value=mock_adapter),
         ):
-            from src.core.tools.media_buy_create import execute_approved_media_buy
+            result = run_approval(media_buy_id, tenant_id)
 
-            success, error = execute_approved_media_buy(media_buy_id, tenant_id)
-
-        assert success is True, f"execute_approved_media_buy failed: {error}"
+        assert result.ok, f"execute_approved_media_buy failed: {result.error_msg}"
         mock_adapter.creatives_manager.add_creative_assets.assert_called_once_with(gam_order_id, ANY, ANY)
 
         # (3) The concept is PERSISTED to the creative's data blob (the Finding 1 fix —

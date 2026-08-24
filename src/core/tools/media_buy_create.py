@@ -99,6 +99,11 @@ def validate_agent_url(url: str | None) -> bool:
 
 
 # Tool-specific imports
+from dataclasses import dataclass
+from enum import StrEnum
+
+from sqlalchemy.exc import SQLAlchemyError
+
 from src.core import schemas
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
@@ -149,6 +154,7 @@ from src.core.schemas import (
 from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testing_hooks
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
+from src.core.tools._media_buy_transitions import resolve_flight_window_status
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
     validate_budget_positive,
@@ -725,7 +731,77 @@ def _build_adapter_asset_from_creative(
     return asset, None
 
 
-def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool, str | None]:
+class ApprovalOutcome(StrEnum):
+    """What an approval attempt did to the media buy."""
+
+    EXECUTED = "executed"
+    HELD_PENDING_CREATIVES = "held_pending_creatives"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class ApprovalResult:
+    """The outcome of an approval, and the row state it produced.
+
+    Replaces ``tuple[bool, str | None]``. The tuple could say "it worked" but not
+    what state the buy reached, so every caller re-read the row to find out — and
+    three callers then wrote their own answer over the one the callee had just
+    committed. Carrying the state back is what lets a route render a flash and a
+    webhook without touching the row, which is the whole point: a route that never
+    reads the buy after the call cannot read a detached one.
+
+    ``confirmed_at`` and ``revision`` are carried because the webhook envelope
+    publishes both.
+    """
+
+    outcome: ApprovalOutcome
+    status: PersistedMediaBuyStatus | None = None
+    revision: int | None = None
+    confirmed_at: datetime | None = None
+    error_msg: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        """True when the adapter ran and the buy reached its post-approval status."""
+        return self.outcome is ApprovalOutcome.EXECUTED
+
+    @classmethod
+    def failed(cls, error_msg: str) -> "ApprovalResult":
+        return cls(outcome=ApprovalOutcome.FAILED, error_msg=error_msg)
+
+
+def _mark_approval_failed(tenant_id: str, media_buy_id: str, error_msg: str) -> ApprovalResult:
+    """Record that the adapter did not create the order, and report it.
+
+    Lives beside the single writer rather than in a route: the failure arm is a
+    state transition like any other, and leaving it to callers is how one route
+    came to write FAILED and two did not. Because nothing is written before the
+    adapter runs, ``confirmed_at`` is still NULL here — the buy failed without
+    ever carrying a seller commitment.
+    """
+    from src.core.database.repositories.uow import MediaBuyUoW as _MediaBuyUoW
+
+    try:
+        with _MediaBuyUoW(tenant_id) as uow_failed:
+            assert uow_failed.media_buys is not None
+            uow_failed.media_buys.update_status(media_buy_id, PersistedMediaBuyStatus.FAILED)
+    except SQLAlchemyError:
+        # Narrow deliberately. A broad except here swallowed a NameError once and
+        # reported it as an ad-server failure, which is a lie the caller cannot see
+        # through: only a database problem is worth continuing past, and anything
+        # else is a defect in this function that must not be disguised as one in
+        # the adapter.
+        logger.exception(f"[APPROVAL] could not record FAILED for {media_buy_id}")
+    return ApprovalResult.failed(error_msg)
+
+
+def execute_approved_media_buy(
+    media_buy_id: str,
+    tenant_id: str,
+    *,
+    approved_by: str | None = None,
+    approved_at: datetime | None = None,
+) -> ApprovalResult:
     """Execute adapter creation for a manually approved media buy.
 
     This function is called after a media buy has been manually approved
@@ -754,6 +830,8 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
     from src.core.config_loader import set_current_tenant
     from src.core.database.models import Tenant
 
+    adapter_ran = False
+
     try:
         # Load tenant and set context — single UoW for all reads
         with MediaBuyUoW(tenant_id) as uow:
@@ -766,7 +844,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             if not tenant_obj:
                 error_msg = f"Tenant {tenant_id} not found"
                 logger.error(f"[APPROVAL] {error_msg}")
-                return False, error_msg
+                return ApprovalResult.failed(error_msg)
 
             # Set tenant ContextVar via standard config_loader boundary
             from src.core.config_loader import get_tenant_by_id
@@ -783,7 +861,33 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             if not media_buy:
                 error_msg = f"Media buy {media_buy_id} not found"
                 logger.error(f"[APPROVAL] {error_msg}")
-                return False, error_msg
+                return ApprovalResult.failed(error_msg)
+
+            # THE creative gate. One gate, before the adapter runs, tenant-scoped by
+            # the repository's own tenant_id rather than by whatever predicate the
+            # caller remembered. Three routes previously open-coded this and the
+            # three disagreed — on tenant scoping, on whether `active` counts as
+            # cleared, and on what an empty assignment list means.
+            from src.core.database.repositories.creative import CreativeAssignmentRepository
+            from src.core.database.repositories.media_buy import MediaBuyRepository as _MediaBuyRepository
+
+            unapproved = CreativeAssignmentRepository(session, tenant_id).unapproved_creative_ids(media_buy_id)
+            if unapproved:
+                logger.info(f"[APPROVAL] Media buy {media_buy_id} held: {len(unapproved)} creative(s) not approved")
+                held = _MediaBuyRepository(session, tenant_id).update_status(
+                    media_buy_id,
+                    PersistedMediaBuyStatus.PENDING_CREATIVES,
+                    approved_at=approved_at,
+                    approved_by=approved_by,
+                )
+                session.commit()
+                return ApprovalResult(
+                    outcome=ApprovalOutcome.HELD_PENDING_CREATIVES,
+                    status=PersistedMediaBuyStatus.PENDING_CREATIVES,
+                    revision=held.revision if held else None,
+                    confirmed_at=held.confirmed_at if held else None,
+                    error_msg=f"{len(unapproved)} creative(s) not approved: {unapproved}",
+                )
 
             # Reconstruct CreateMediaBuyRequest from raw_request
             try:
@@ -806,7 +910,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             except ValidationError as ve:
                 error_msg = f"Failed to reconstruct request: {format_validation_error(ve)}"
                 logger.error(f"[APPROVAL] {error_msg}")
-                return False, error_msg
+                return ApprovalResult.failed(error_msg)
 
             # Load packages from media_packages table
             # FIXME: migrate to uow.media_buys.get_packages()
@@ -816,7 +920,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             if not db_packages:
                 error_msg = f"No packages found for media buy {media_buy_id}"
                 logger.error(f"[APPROVAL] {error_msg}")
-                return False, error_msg
+                return ApprovalResult.failed(error_msg)
 
             # Reconstruct MediaPackage objects (what adapters expect) from database
             # We need to load Products to get name, delivery_type, format_ids, etc.
@@ -837,7 +941,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                     if not product_id:
                         error_msg = f"Package {package_id} missing product_id"
                         logger.error(f"[APPROVAL] {error_msg}")
-                        return False, error_msg
+                        return ApprovalResult.failed(error_msg)
 
                     # Load product to get name, delivery_type, format_ids, pricing
                     stmt_product = (
@@ -850,7 +954,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                     if not product:
                         error_msg = f"Product {product_id} not found for package {package_id}"
                         logger.error(f"[APPROVAL] {error_msg}")
-                        return False, error_msg
+                        return ApprovalResult.failed(error_msg)
 
                     # Get budget from package_config (AdCP 2.5.0: budget is always float | None)
                     budget_data = package_config.get("budget")
@@ -886,7 +990,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                     if not pricing_option_inner:
                         error_msg = f"Product {product_id} has no pricing options"
                         logger.error(f"[APPROVAL] {error_msg}")
-                        return False, error_msg
+                        return ApprovalResult.failed(error_msg)
 
                     # Calculate CPM and impressions (convert Decimal to float for math operations)
                     cpm = float(pricing_option_inner.rate) if pricing_option_inner.rate else 0.0
@@ -929,14 +1033,14 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                                 f"targeting_overlay corrupt in package_config: {exc}"
                             )
                             logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
-                            return False, error_msg
+                            return ApprovalResult.failed(error_msg)
 
                     # Create MediaPackage object (what adapters expect)
                     # Note: Product model has 'formats' not 'format_ids'
                     if not package_id:
                         error_msg = f"Package ID missing for package in media buy {media_buy_id}"
                         logger.error(f"[APPROVAL] {error_msg}")
-                        return False, error_msg
+                        return ApprovalResult.failed(error_msg)
 
                     delivery_type_str = enum_value(product.delivery_type)
 
@@ -963,7 +1067,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                                 f"Format validation failed at index {idx}: {e}"
                             )
                             logger.error(f"[APPROVAL] {error_msg}")
-                            return False, error_msg
+                            return ApprovalResult.failed(error_msg)
 
                     # Validate non-empty format_ids (required by AdCP spec)
                     if not format_ids_list:
@@ -972,7 +1076,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                             f"Product {product_id} has no valid formats - cannot create media buy"
                         )
                         logger.error(f"[APPROVAL] {error_msg}")
-                        return False, error_msg
+                        return ApprovalResult.failed(error_msg)
 
                     # Log conversion results
                     logger.info(
@@ -1000,11 +1104,11 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                 except ValidationError as ve:
                     error_msg = f"Failed to reconstruct package {db_pkg.package_id}: {format_validation_error(ve)}"
                     logger.error(f"[APPROVAL] {error_msg}")
-                    return False, error_msg
+                    return ApprovalResult.failed(error_msg)
                 except Exception as e:
                     error_msg = f"Failed to reconstruct package {db_pkg.package_id}: {str(e)}"
                     logger.error(f"[APPROVAL] {error_msg}")
-                    return False, error_msg
+                    return ApprovalResult.failed(error_msg)
 
             # Use start_time/end_time from media_buy (already resolved)
             start_time = media_buy.start_time
@@ -1014,7 +1118,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             if not start_time or not end_time:
                 error_msg = f"Media buy {media_buy_id} missing required start_time or end_time"
                 logger.error(f"[APPROVAL] {error_msg}")
-                return False, error_msg
+                return ApprovalResult.failed(error_msg)
 
             # Get the Principal object (needed for adapter). Capture the id while
             # the session is open — media_buy detaches (attributes expired) when
@@ -1026,7 +1130,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             if not principal:
                 error_msg = f"Principal {buy_principal_id} not found"
                 logger.error(f"[APPROVAL] {error_msg}")
-                return False, error_msg
+                return ApprovalResult.failed(error_msg)
 
             # Create testing context (dry_run should be False for approved buys)
             testing_ctx = TestingContext(dry_run=False, test_session_id=None)
@@ -1041,6 +1145,11 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             _validate_creatives_before_adapter_call(packages, tenant_id, buy_principal_id, session=session)
 
         # Execute adapter creation (outside session to avoid conflicts)
+        # Set BEFORE the call, not after: the condition is whether the ad server was
+        # ASKED, not whether it answered. A raising adapter may still have created a
+        # partial order, so that buy has failed — where a buy that never reached the
+        # boundary was simply never attempted.
+        adapter_ran = True
         response = _execute_adapter_media_buy_creation(
             request,
             packages,
@@ -1058,7 +1167,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
             error_messages = [str(err) for err in response.errors] if response.errors else ["Unknown error"]
             error_msg = "; ".join(error_messages)
             logger.error(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}")
-            return False, error_msg
+            return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
 
         logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}: {response.media_buy_id}")
 
@@ -1159,7 +1268,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         + "\n\nAll creatives must have dimensions (width/height) and a content URL."
                     )
                     logger.error(f"[APPROVAL] {error_msg}")
-                    return False, error_msg
+                    return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
 
                 if assets:
                     logger.info(f"[APPROVAL] Uploading {len(assets)} creatives to adapter")
@@ -1206,7 +1315,7 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         # Creative upload failed - this is critical for GAM orders
                         error_msg = f"Failed to upload creatives to adapter: {str(creative_error)}"
                         logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
-                        return False, error_msg
+                        return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
             else:
                 logger.info(f"[APPROVAL] No creative assignments found for {media_buy_id}, skipping creative upload")
 
@@ -1229,23 +1338,51 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
                         f"GAM still processing inventory forecasts."
                     )
                     logger.warning(f"[APPROVAL] {error_msg}")
-                    return False, error_msg
+                    return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
             else:
                 logger.info("[APPROVAL] Adapter does not support order approval, skipping")
         except Exception as approval_error:
             # Approval exception - return failure
             error_msg = f"Failed to approve order {response.media_buy_id}: {str(approval_error)}"
             logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
-            return False, error_msg
+            return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
 
-        # Update media buy status to 'active' after successful adapter execution
-        # (UC-002:437 — "updates the media buy status to active")
+        # THE post-adapter write. One writer, one write, one revision bump.
+        #
+        # The row is re-fetched inside this UoW rather than reusing the instance
+        # loaded before the adapter call: that instance was detached when a nested
+        # get_db_session() closed the shared scoped session, and resolving a flight
+        # window off a detached row is the defect this function exists to stop the
+        # routes from committing. Reusing it here would move that defect one frame
+        # down rather than remove it.
         with MediaBuyUoW(tenant_id) as uow3:
             assert uow3.media_buys is not None
-            uow3.media_buys.update_status(media_buy_id, PersistedMediaBuyStatus.ACTIVE)
-            logger.info(f"[APPROVAL] Updated media buy {media_buy_id} status to 'active'")
-
-        return True, None
+            fresh = uow3.media_buys.get_by_id(media_buy_id)
+            if fresh is None:
+                return ApprovalResult.failed(f"media buy {media_buy_id!r} vanished during approval")
+            resolved = resolve_flight_window_status(
+                fresh,
+                now=datetime.now(UTC),
+                creatives_approved=True,
+            )
+            assert resolved is not None, (
+                "flight_window() returned None for a persisted media buy; "
+                "MediaBuy.start_date/end_date are NOT NULL, so this cannot happen"
+            )
+            written = uow3.media_buys.update_status(
+                media_buy_id,
+                resolved,
+                approved_at=approved_at,
+                approved_by=approved_by,
+            )
+            assert written is not None, f"media buy {media_buy_id!r} vanished mid-write"
+            logger.info(f"[APPROVAL] Media buy {media_buy_id} -> {resolved}")
+            return ApprovalResult(
+                outcome=ApprovalOutcome.EXECUTED,
+                status=resolved,
+                revision=written.revision,
+                confirmed_at=written.confirmed_at,
+            )
 
     except Exception as e:
         import traceback
@@ -1253,7 +1390,13 @@ def execute_approved_media_buy(media_buy_id: str, tenant_id: str) -> tuple[bool,
         error_traceback = traceback.format_exc()
         error_msg = f"Adapter creation failed: {str(e)}"
         logger.error(f"[APPROVAL] {error_msg}\n{error_traceback}")
-        return False, error_msg
+        if not adapter_ran:
+            # The adapter never ran, so nothing was created and the buy has not failed —
+            # it was never attempted. Persisting FAILED here would be a dead end: all
+            # three approval routes gate on status == "pending_approval", so an operator
+            # who fixed the underlying row could never retry.
+            return ApprovalResult.failed(error_msg)
+        return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
 
 
 def push_creative_to_existing_buy(

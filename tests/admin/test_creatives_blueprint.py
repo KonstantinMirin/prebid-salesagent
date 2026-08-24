@@ -6,6 +6,7 @@ Requires PostgreSQL (integration_db fixture).
 
 import uuid
 from datetime import UTC, datetime
+from typing import NamedTuple
 from unittest.mock import patch
 
 import pytest
@@ -14,6 +15,13 @@ from sqlalchemy import delete, select
 from src.admin.app import create_app
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, Principal, Tenant
+from tests.helpers.media_buy_approval import (
+    ADAPTER_BOUNDARY,
+    adapter_success,
+    login_as,
+    seed_pending_buy,
+    uploadable_creative,
+)
 from tests.helpers.media_buy_write_seam import MediaBuyState, assert_status_move_carried_bookkeeping
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
@@ -262,8 +270,42 @@ def _create_assignment(session, tenant_id: str, creative_id: str, media_buy_id: 
 # Patch at the use site: creatives.py binds this name via `from ... import`, so the
 # definition module (src.core.tools.media_buy_create) is not where the call resolves.
 _PUSH_PATCH = "src.admin.blueprints.creatives.push_creative_to_existing_buy"
-# Same binding, same reason — the adapter execution that gates the unblocked-buy status write.
-_EXECUTE_APPROVED_PATCH = "src.admin.blueprints.creatives.execute_approved_media_buy"
+
+
+class _HeldBuy(NamedTuple):
+    """A buy waiting on exactly one creative, and that creative."""
+
+    buy: object
+    creative: object
+
+    @property
+    def tenant_id(self) -> str:
+        return self.buy.tenant_id
+
+    @property
+    def media_buy_id(self) -> str:
+        return self.buy.media_buy_id
+
+
+def _seed_buy_held_on_one_creative(*, starts_in_days: int) -> _HeldBuy:
+    """A ``pending_creatives`` buy whose only creative is still awaiting review.
+
+    Approving that creative is what unblocks the buy, and the unblocking runs the REAL
+    ``execute_approved_media_buy`` — so the buy needs everything that callee
+    reconstructs from (see ``seed_pending_buy``) and the creative needs assets the
+    pre-upload asset gate can read (see ``uploadable_creative``).
+    """
+    from tests.factories import CreativeAssignmentFactory, CreativeFactory
+
+    buy = seed_pending_buy(starts_in_days=starts_in_days, status="pending_creatives")
+    creative = uploadable_creative(
+        CreativeFactory,
+        tenant=buy.tenant,
+        principal=buy.principal,
+        status="pending_review",
+    )
+    CreativeAssignmentFactory(creative=creative, media_buy=buy.media_buy, package_id="pkg_unblock")
+    return _HeldBuy(buy, creative)
 
 
 class TestCreativeApprovalRetroactivePush:
@@ -433,16 +475,16 @@ class TestCreativeApprovalUnblocksMediaBuy:
     through MediaBuyRepository.update_status is what carries both.
     """
 
-    def test_unblocked_buy_bumps_revision_and_preserves_confirmation(self, client, test_tenant, factory_session):
+    def test_unblocked_buy_bumps_revision_and_preserves_confirmation(self, client, factory_session):
         """Approving the last pending creative moves a pending_creatives buy to active."""
         from src.core.database.repositories import MediaBuyRepository
 
-        _auth_session(client, test_tenant)
-        creative_id = _create_creative_for_retro_push(factory_session, test_tenant, status="pending_review")
-        media_buy_id, package_id = _create_active_media_buy(factory_session, test_tenant, status="pending_creatives")
-        _create_assignment(factory_session, test_tenant, creative_id, media_buy_id, package_id)
+        seeded = _seed_buy_held_on_one_creative(starts_in_days=-1)
+        media_buy_id = seeded.media_buy_id
+        creative_id = seeded.creative.creative_id
+        login_as(client, tenant_id=seeded.tenant_id)
 
-        repo = MediaBuyRepository(factory_session, test_tenant)
+        repo = MediaBuyRepository(factory_session, seeded.tenant_id)
         before = repo.get_by_id(media_buy_id)
         before_revision = before.revision
         # The buy starts ALREADY stamped, and that is correct: "pending_creatives" is a
@@ -456,26 +498,25 @@ class TestCreativeApprovalUnblocksMediaBuy:
             "fixture must start from a seller-committed status carrying its commitment instant"
         )
 
-        # The adapter execution is a different concern; this test grades the status write
-        # that follows a successful one.
+        # execute_approved_media_buy is the SOLE writer of the status below, so mocking
+        # it would remove the only writer and leave nothing for these assertions to
+        # grade. The ad-server boundary is the one seam stubbed.
         with (
             patch(_SIDE_EFFECTS_PATCH),
-            patch(_EXECUTE_APPROVED_PATCH, return_value=(True, None)) as mock_execute,
+            patch(ADAPTER_BOUNDARY, side_effect=adapter_success),
         ):
             response = client.post(
-                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                f"/tenant/{seeded.tenant_id}/creatives/review/{creative_id}/approve",
                 content_type="application/json",
                 json={"approved_by": "test@example.com"},
             )
 
-        assert response.status_code == 200
-        mock_execute.assert_called_once_with(media_buy_id, test_tenant)
+        assert response.status_code == 200, response.data
 
         factory_session.expire_all()
         after = MediaBuyState.of(repo.get_by_id(media_buy_id))
         assert after.approved_by == "system"
-        # The factory buy's flight window (2025-01-01 .. 2027-12-31) is open now, so the
-        # shared flight-window rule picks "active". confirms=None: the buy was ALREADY
+        # The seeded flight window opened yesterday, so the shared rule picks "active". confirms=None: the buy was ALREADY
         # committed (pending_creatives is a committed status), so what this move owes is
         # write-once stability of the stamp, not a new one.
         assert_status_move_carried_bookkeeping(
@@ -485,7 +526,7 @@ class TestCreativeApprovalUnblocksMediaBuy:
             subject="approving the last pending creative",
         )
 
-    def test_approval_after_the_flight_end_completes_the_buy(self, client, test_tenant, factory_session):
+    def test_approval_after_the_flight_end_completes_the_buy(self, client, factory_session):
         """A buy whose creatives are approved AFTER its flight window closed is completed.
 
         This is the case the route-local copy got wrong. It asked only "is now inside
@@ -498,36 +539,25 @@ class TestCreativeApprovalUnblocksMediaBuy:
         is completed whatever else is true of it. Driven through the real approval route
         rather than by calling the rule, so it grades the route's adoption of it.
         """
-        from datetime import date
-
         from src.core.database.repositories import MediaBuyRepository
 
-        _auth_session(client, test_tenant)
-        creative_id = _create_creative_for_retro_push(factory_session, test_tenant, status="pending_review")
-        media_buy_id, package_id = _create_active_media_buy(
-            factory_session,
-            test_tenant,
-            status="pending_creatives",
-            start_date=date(2025, 1, 1),
-            end_date=date(2025, 6, 30),
-            start_time=datetime(2025, 1, 1, tzinfo=UTC),
-            end_time=datetime(2025, 6, 30, 23, 59, 59, tzinfo=UTC),
-        )
-        _create_assignment(factory_session, test_tenant, creative_id, media_buy_id, package_id)
+        # A window that opened 60 days ago and closed 30 days ago.
+        seeded = _seed_buy_held_on_one_creative(starts_in_days=-60)
+        login_as(client, tenant_id=seeded.tenant_id)
 
         with (
             patch(_SIDE_EFFECTS_PATCH),
-            patch(_EXECUTE_APPROVED_PATCH, return_value=(True, None)),
+            patch(ADAPTER_BOUNDARY, side_effect=adapter_success),
         ):
             response = client.post(
-                f"/tenant/{test_tenant}/creatives/review/{creative_id}/approve",
+                f"/tenant/{seeded.tenant_id}/creatives/review/{seeded.creative.creative_id}/approve",
                 content_type="application/json",
                 json={"approved_by": "test@example.com"},
             )
 
-        assert response.status_code == 200
+        assert response.status_code == 200, response.data
         factory_session.expire_all()
-        after = MediaBuyRepository(factory_session, test_tenant).get_by_id(media_buy_id)
+        after = MediaBuyRepository(factory_session, seeded.tenant_id).get_by_id(seeded.media_buy_id)
         assert after.status == "completed", (
             f"a buy approved after its flight window closed must be 'completed', got {after.status!r} "
             f"— 'scheduled' here would report a finished campaign as one that has not started"

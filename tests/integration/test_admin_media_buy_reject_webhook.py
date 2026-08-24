@@ -404,19 +404,25 @@ class TestAdminMediaBuyRejectWebhook:
     def test_approve_bumps_revision_for_every_status_move(
         self, authenticated_admin_session, pending_reject_media_buy, webhook_capture
     ):
-        """An admin approval makes TWO status moves, so revision must move twice.
+        """An admin approval is ONE status move, so revision must move exactly once.
 
-        The full approve path (no adapter mock — the mock adapter really runs) moves the buy
-        pending_approval -> scheduled in approve_media_buy's four-branch if/elif, and then
-        execute_approved_media_buy moves it scheduled -> active through
-        MediaBuyUoW.media_buys.update_status. BOTH writes go through the repository, so the
-        buy ends at revision+2 and neither transition is invisible to a buyer polling on
-        ``revision``.
+        THE CONTRACT CHANGED, and this test previously graded the old one: ``bumps=2``
+        and ``expected_status="active"``. That was two committed writes for a single
+        approval — ``approve_media_buy`` resolved the flight-window status and committed
+        it BEFORE calling the adapter, and ``execute_approved_media_buy`` then committed
+        an unconditional ``ACTIVE`` over it. Both defects are real and both are named in
+        the finding list: the buy was published as ``active`` before its flight window
+        opened, and a buyer polling on ``revision`` was handed a token that
+        skipped a value for one logical event.
 
-        (This paragraph used to describe the defect instead of the contract — that only
-        the second write was routed, so the buy ended at revision+1 — while the assertion
-        below already demanded +2 and passed. A docstring arguing against its own passing
-        assertion is worse than none: the next reader believes the prose.)
+        ``execute_approved_media_buy`` is now the sole post-adapter writer, and the route
+        touches nothing after calling it. So the delta is 1, and the status is the
+        flight-window rule's answer — ``scheduled`` here, because this fixture's buy is
+        approved before its window opens.
+
+        ``bumps`` is an EXACT delta, which is what makes this the grader for the
+        single-writer property: if any caller reintroduces a second write, this fails
+        rather than looking like a smaller-but-positive increase.
         """
         tenant_id = pending_reject_media_buy["tenant_id"]
         media_buy_id = pending_reject_media_buy["media_buy_id"]
@@ -429,16 +435,12 @@ class TestAdminMediaBuyRejectWebhook:
 
         after = read_media_buy_state(tenant_id, media_buy_id)
         assert after.approved_by == "test@example.com"
-        # bumps=2: two real status moves, each owing exactly one bump. The shared oracle
-        # takes an exact delta, so a path that routed only one of the two writes fails
-        # here rather than looking like a smaller-but-positive increase.
         assert_status_move_carried_bookkeeping(
             MediaBuyState(status="pending_approval", revision=before_revision, confirmed_at=None),
             after,
-            expected_status="active",
-            bumps=2,
+            expected_status="scheduled",
             confirms=True,
-            subject="admin approval (pending_approval -> scheduled -> active)",
+            subject="admin approval (pending_approval -> scheduled)",
         )
 
     def test_a2a_reject_webhook_carries_policy_violation_task(

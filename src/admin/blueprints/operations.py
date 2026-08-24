@@ -12,12 +12,12 @@ from adcp.types import Package
 from flask import Blueprint, request
 from sqlalchemy import select
 
-from src.admin.utils import echo_context, require_auth, require_tenant_access
+from src.admin.utils import approve_media_buy_through_writer, echo_context, require_auth, require_tenant_access
 from src.core.database.models import PersistedMediaBuyStatus, PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.exceptions import AdCPMediaBuyRejectedError
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
-from src.core.tools._media_buy_transitions import resolve_flight_window_status
+from src.core.tools.media_buy_create import ApprovalOutcome
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -393,81 +393,18 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 )
                 attributes.flag_modified(step, "comments")
 
+                # Commit the step BEFORE calling the writer. The callee opens nested
+                # sessions, and get_db_session()'s exit closes the shared thread-scoped
+                # session without committing — which discards whatever this route still
+                # had pending. The step's approval and its audit comment must not depend
+                # on what the adapter does next: a successful approval that leaves the
+                # step reading 'requires_approval' is what the operator sees.
+                db_session.commit()
+
                 if media_buy and media_buy.status == "pending_approval":
-                    # Check if all creatives are approved before moving to scheduled
-                    from src.core.database.models import Creative, CreativeAssignment
+                    approval = approve_media_buy_through_writer(media_buy_id, tenant_id, approved_by=user_email)
 
-                    stmt_assignments = select(CreativeAssignment).filter_by(
-                        tenant_id=tenant_id, media_buy_id=media_buy_id
-                    )
-                    assignments = db_session.scalars(stmt_assignments).all()
-
-                    all_creatives_approved = True
-                    if assignments:
-                        creative_ids = [a.creative_id for a in assignments]
-                        stmt_creatives = select(Creative).filter(
-                            Creative.tenant_id == tenant_id, Creative.creative_id.in_(creative_ids)
-                        )
-                        creatives = db_session.scalars(stmt_creatives).all()
-
-                        # Check if any creatives are not approved
-                        for creative in creatives:
-                            if creative.status != "approved":
-                                all_creatives_approved = False
-                                break
-                    else:
-                        # No creatives assigned yet
-                        all_creatives_approved = False
-
-                    # The flight-window rule is the shared domain owner, not a
-                    # route-local copy: this branch used to compute scheduled /
-                    # completed / active inline, a third spelling of the same rule.
-                    # No `or ACTIVE` fallback: MediaBuy.start_date and end_date are
-                    # nullable=False, so flight_window() always resolves for a persisted
-                    # row and the None branch it guarded cannot be reached.
-                    # Not `or ACTIVE`: that silently substituted a status for a branch that
-                    # cannot occur. MediaBuy.start_date and end_date are nullable=False, so
-                    # flight_window() always resolves for a persisted row. The assert narrows
-                    # the type AND states the premise — if a migration ever makes those columns
-                    # nullable, this fires instead of quietly writing the wrong status.
-                    approved_status = resolve_flight_window_status(
-                        media_buy,
-                        now=datetime.now(UTC),
-                        creatives_approved=all_creatives_approved,
-                    )
-                    assert approved_status is not None, (
-                        "flight_window() returned None for a persisted media buy; "
-                        "MediaBuy.start_date/end_date are NOT NULL, so this cannot happen"
-                    )
-
-                    # One repository write for the whole branch: the status and the
-                    # approval stamps move together, and the repository owns the
-                    # revision bump and the write-once confirmed_at stamp.
-                    approve_repo.update_status(
-                        media_buy_id,
-                        approved_status,
-                        approved_at=datetime.now(UTC),
-                        approved_by=user_email,
-                    )
-                    db_session.commit()
-
-                    # Execute adapter creation for approved media buy
-                    # This creates the order/line items in GAM (or other adapter)
-                    # Uses the same logic as auto-approved media buys
-                    from src.core.tools.media_buy_create import execute_approved_media_buy
-
-                    logger.info(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}")
-                    success, error_msg = execute_approved_media_buy(media_buy_id, tenant_id)
-
-                    if not success:
-                        # Adapter creation failed - update status and show error
-                        with get_db_session() as error_session:
-                            error_repo = MediaBuyRepository(error_session, tenant_id)
-                            error_buy = error_repo.update_status(media_buy_id, PersistedMediaBuyStatus.FAILED)
-                            if error_buy:
-                                error_session.commit()
-
-                        flash(f"Media buy approved but adapter creation failed: {error_msg}", "error")
+                    if approval.outcome is ApprovalOutcome.HELD_PENDING_CREATIVES or not approval.ok:
                         return redirect(
                             url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id)
                         )
@@ -497,17 +434,14 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         # the creative approval webhook in blueprints/creatives.py).
                         approve_context = echo_context(request_data)
 
-                        # The buy IS committed at this point — the approval above ran
-                        # update_status, which stamps confirmed_at and bumps revision.
-                        # So read them back off the row rather than asserting them: this
-                        # envelope reports the same two columns get_media_buys will
-                        # publish, and there is exactly one producer for each.
-                        approved_row = approve_repo.get_by_id_or_raise(media_buy_id)
+                        # Both columns come off the ApprovalResult, not a re-read. The
+                        # writer reports what it wrote; a route that re-reads the row after
+                        # the call is the shape that made a detached read possible here.
                         create_media_buy_approved_result = CreateMediaBuySuccess.sync_success(
                             media_buy_id=media_buy_id,
                             packages=[Package(package_id=x.package_id) for x in all_packages],
-                            confirmed_at=approved_row.confirmed_at,
-                            revision=approved_row.revision,
+                            confirmed_at=approval.confirmed_at,
+                            revision=approval.revision,
                             context=approve_context,
                         )
                         metadata = _media_buy_webhook_metadata(step_data, tenant_id, media_buy_id, media_buy_data)

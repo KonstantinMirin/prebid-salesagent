@@ -22,7 +22,6 @@ from src.core.database.models import (
 )
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
-from src.core.tools._media_buy_transitions import resolve_flight_window_status
 from src.core.webhook_validator import validate_webhook_task_type
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -579,15 +578,10 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} status: {media_buy.status}")
 
                 if media_buy.status in {"pending_creatives", "draft"}:
-                    # Get all creative assignments for this media buy
-                    all_assignments = uow.assignments.get_by_media_buy(media_buy_id)
-
-                    creative_ids = [a.creative_id for a in all_assignments]
-                    all_creatives = uow.creatives.admin_get_by_ids(creative_ids)
-
-                    unapproved_creatives = [
-                        c.creative_id for c in all_creatives if c.status not in ["approved", "active"]
-                    ]
+                    # The same gate the writer applies, asked once. Open-coding it here
+                    # meant the route evaluated it, decided to call execute, and the
+                    # callee then evaluated it again in the same request.
+                    unapproved_creatives = uow.assignments.unapproved_creative_ids(media_buy_id)
 
                     logger.info(
                         f"[CREATIVE APPROVAL] Media buy {media_buy_id} has {len(unapproved_creatives)} unapproved creatives remaining"
@@ -618,40 +612,24 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 f"[CREATIVE APPROVAL] All creatives approved for media buy {action['media_buy_id']}, executing adapter creation"
             )
 
-            success, error_msg = execute_approved_media_buy(action["media_buy_id"], tenant_id)
+            approval = execute_approved_media_buy(
+                action["media_buy_id"],
+                tenant_id,
+                approved_by="system",
+                approved_at=datetime.now(UTC),
+            )
 
-            if success:
-                # Update media buy status in a separate UoW
-                with AdminCreativeUoW(tenant_id) as uow2:
-                    assert uow2.media_buys is not None
-                    mb = uow2.media_buys.get_by_id(action["media_buy_id"])
-                    if mb:
-                        # Creatives just approved on this path, hence
-                        # creatives_approved=True. The shared rule is what makes a buy
-                        # approved PAST its flight end come out `completed`; the
-                        # route-local copy this replaced answered `scheduled` for it.
-                        # Not `or ACTIVE`: that silently substituted a status for a branch
-                        # that cannot occur. MediaBuy.start_date and end_date are
-                        # nullable=False, so flight_window() always resolves for a persisted
-                        # row. The assert narrows the type AND states the premise — if a
-                        # migration ever makes those columns nullable, this fires instead of
-                        # quietly writing the wrong status.
-                        new_status = resolve_flight_window_status(mb, now=datetime.now(UTC), creatives_approved=True)
-                        assert new_status is not None, (
-                            "flight_window() returned None for a persisted media buy; "
-                            "MediaBuy.start_date/end_date are NOT NULL, so this cannot happen"
-                        )
-                        uow2.media_buys.update_status(
-                            action["media_buy_id"],
-                            new_status,
-                            approved_at=datetime.now(UTC),
-                            approved_by="system",
-                        )
-                    # auto-commits
-
-                logger.info(f"[CREATIVE APPROVAL] Media buy {action['media_buy_id']} successfully created in adapter")
+            if approval.ok:
+                # No post-execute read or write here. The callee resolved the flight
+                # window and committed it in the same write that bumped the revision;
+                # this route only reports what it was told.
+                logger.info(
+                    f"[CREATIVE APPROVAL] Media buy {action['media_buy_id']} created in adapter -> {approval.status}"
+                )
             else:
-                logger.error(f"[CREATIVE APPROVAL] Adapter creation failed for {action['media_buy_id']}: {error_msg}")
+                logger.error(
+                    f"[CREATIVE APPROVAL] Adapter creation failed for {action['media_buy_id']}: {approval.error_msg}"
+                )
 
         # Retroactive push for already-live buys (#1038):
         # Buys in pending_creatives/draft were handled above. For buys that are

@@ -5,7 +5,7 @@ Requires PostgreSQL (integration_db fixture).
 """
 
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pytest
@@ -14,6 +14,12 @@ from sqlalchemy import delete, select
 from src.admin.app import create_app
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context, Principal, Tenant, WorkflowStep
+from tests.helpers.media_buy_approval import (
+    ADAPTER_BOUNDARY,
+    adapter_success,
+    login_as,
+    seed_pending_buy,
+)
 from tests.helpers.media_buy_write_seam import (
     MediaBuyState,
     assert_status_move_carried_bookkeeping,
@@ -78,16 +84,8 @@ def test_tenant(integration_db):
 
 
 def _auth_session(client, tenant_id):
-    """Set up authenticated session for test client."""
-    with client.session_transaction() as sess:
-        sess["authenticated"] = True
-        sess["user"] = {"email": "test@example.com", "is_super_admin": True}
-        sess["email"] = "test@example.com"
-        sess["tenant_id"] = tenant_id
-        sess["test_user"] = "test@example.com"
-        sess["test_user_role"] = "super_admin"
-        sess["test_user_name"] = "Test User"
-        sess["test_tenant_id"] = tenant_id
+    """Set up authenticated super-admin session for test client."""
+    login_as(client, tenant_id=tenant_id)
 
 
 def _create_context_and_step(tenant_id: str, status: str = "pending_approval") -> tuple[str, str]:
@@ -222,104 +220,55 @@ class TestWorkflowRejection:
         assert response.status_code == 404
 
 
-# Patch target: workflows.py imports this inside approve_workflow_step(), so the name
-# resolves in the DEFINING module at call time (unlike a module-level `from ... import`).
-_EXECUTE_APPROVED_PATCH = "src.core.tools.media_buy_create.execute_approved_media_buy"
-
-
-def _create_step_mapped_to_media_buy(session, tenant_id: str, media_buy_id: str, **media_buy_fields) -> tuple[str, str]:
-    """Create a pending_approval media buy + an approval step mapped to it.
-
-    Returns (context_id, step_id). Uses the ContextManager production API for the
-    context/step/mapping so the route's ``get_mappings_for_step`` lookup sees exactly
-    what production writes — without the mapping, approve_workflow_step never reaches
-    the media-buy branch at all.
-    """
-    from src.core.context_manager import ContextManager
-    from src.core.database.models import Principal as PrincipalModel
-    from src.core.database.models import Tenant as TenantModel
-    from tests.factories import MediaBuyFactory
-
-    tenant = session.scalars(select(TenantModel).filter_by(tenant_id=tenant_id)).first()
-    principal = session.scalars(
-        select(PrincipalModel).filter_by(tenant_id=tenant_id, principal_id="wf_test_principal")
-    ).first()
-    MediaBuyFactory(
-        tenant=tenant,
-        principal=principal,
-        media_buy_id=media_buy_id,
-        status="pending_approval",
-        **media_buy_fields,
-    )
-
-    cm = ContextManager()
-    context = cm.create_context(tenant_id=tenant_id, principal_id=principal.principal_id)
-    step = cm.create_workflow_step(
-        context_id=context.context_id,
-        step_type="approval",
-        owner="publisher",
-        status="requires_approval",
-        tool_name="create_media_buy",
-        request_data={},
-        object_mappings=[
-            {
-                "object_type": "media_buy",
-                "object_id": media_buy_id,
-                "action": "approve",
-            }
-        ],
-    )
-    return context.context_id, step.step_id
-
-
 class TestWorkflowApprovalMovesMediaBuy:
     """Approving a media-buy workflow step moves the buy — with its mutation bookkeeping.
 
-    Both status writes in approve_workflow_step must go through MediaBuyRepository, which
-    is the only writer of ``revision`` (the buyer's optimistic-concurrency token, which must
-    strictly increase on every mutation) and of ``confirmed_at`` (the instant the seller
-    committed, stamped once on the first committed status). A handler that assigns
-    media_buy.status directly moves the buy while leaving both behind, so the buyer polling
-    get_media_buys sees a changed buy at an unchanged revision.
+    The status write these tests grade lives in ``execute_approved_media_buy``, which is
+    the SOLE post-adapter writer: it owns ``revision`` (the buyer's optimistic-concurrency
+    token, which must strictly increase on every mutation) and ``confirmed_at`` (the instant
+    the seller committed, stamped once on the first committed status). The route no longer
+    touches the row at all.
+
+    So the callee is exactly what must NOT be mocked here — patching it removes the only
+    writer, and every assertion below would then be grading a mock. The one seam these
+    tests stub is the AD-SERVER boundary. That was the original defect: these tests patched
+    ``execute_approved_media_buy`` and asserted the route's own write, which is how the
+    callee and the three routes came to disagree about the final status without anything
+    going red.
     """
 
-    def test_approve_waiting_on_creatives_bumps_revision(self, client, test_tenant, factory_session):
-        """The pending_creatives arm: buy still waiting on creatives, but the buy DID move."""
-        _auth_session(client, test_tenant)
-        media_buy_id = f"mb_wf_{uuid.uuid4().hex[:8]}"
-        context_id, step_id = _create_step_mapped_to_media_buy(factory_session, test_tenant, media_buy_id)
-
-        # The ROW here, not the write-seam state tuple: this site needs the buy's
-        # relationships to build the creative, which is a different question from
-        # "what did the status move carry".
-        from src.core.database.repositories import MediaBuyRepository
+    def test_approve_waiting_on_creatives_bumps_revision(self, client, factory_session):
+        """The pending_creatives arm: the buy moved, and the ad server was never contacted."""
         from tests.factories import CreativeAssignmentFactory, CreativeFactory
 
-        factory_session.expire_all()
-        media_buy = MediaBuyRepository(factory_session, test_tenant).get_by_id(media_buy_id)
-        assert media_buy is not None, f"media buy {media_buy_id} vanished"
-        before_revision = media_buy.revision
-        assert media_buy.confirmed_at is None, "fixture must start with an unstamped confirmation instant"
+        seeded = seed_pending_buy(starts_in_days=7)
+        _auth_session(client, seeded.tenant_id)
 
-        creative = CreativeFactory(
-            tenant=media_buy.tenant,
-            principal=media_buy.principal,
-            status="pending",
-        )
-        CreativeAssignmentFactory(creative=creative, media_buy=media_buy, package_id="pkg_wf_1")
+        before = read_media_buy_state(seeded.tenant_id, seeded.media_buy_id, session=factory_session)
+        assert before.confirmed_at is None, "fixture must start with an unstamped confirmation instant"
 
-        response = client.post(
-            f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/approve",
-            content_type="application/json",
-            json={},
-        )
-        assert response.status_code == 200
+        creative = CreativeFactory(tenant=seeded.tenant, principal=seeded.principal, status="pending")
+        CreativeAssignmentFactory(creative=creative, media_buy=seeded.media_buy, package_id="pkg_wf_1")
 
-        after = read_media_buy_state(test_tenant, media_buy_id, session=factory_session)
+        with patch(ADAPTER_BOUNDARY) as adapter_boundary:
+            response = client.post(
+                f"/tenant/{seeded.tenant_id}/workflows/{seeded.context_id}/steps/{seeded.step_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+        assert response.status_code == 200, response.data
+
+        # The whole point of holding a buy is that nothing is created downstream. An
+        # order in the ad server for a buy whose creatives are unapproved is the failure
+        # this arm exists to prevent, and only the boundary can testify to it.
+        adapter_boundary.assert_not_called()
+
+        after = read_media_buy_state(seeded.tenant_id, seeded.media_buy_id, session=factory_session)
         assert_status_move_carried_bookkeeping(
-            MediaBuyState(status="pending_approval", revision=before_revision, confirmed_at=after.confirmed_at),
+            MediaBuyState(status="pending_approval", revision=before.revision, confirmed_at=None),
             after,
             expected_status="pending_creatives",
+            confirms=True,
             subject="approve with an unapproved creative",
         )
         # pending_creatives IS in models._SELLER_COMMITTED_STATUSES, so the seller has
@@ -329,46 +278,34 @@ class TestWorkflowApprovalMovesMediaBuy:
             "without stamping confirmed_at"
         )
 
-    def test_approve_schedules_buy_and_bumps_revision(self, client, test_tenant, factory_session):
+    def test_approve_schedules_buy_and_bumps_revision(self, client, factory_session):
         """The scheduled arm: a buy approved BEFORE its flight window opens.
 
         The status this write persists is the flight-window rule's answer, not a
-        constant. This route used to write ``scheduled`` unconditionally, so a buy
-        approved INSIDE its window persisted as scheduled and disagreed with the
-        calendar; the wire projection and the sweep corrected it downstream, which
-        is why nothing caught it. The sibling test below grades the inside-window
-        answer, and the two together pin that the rule is consulted at all.
+        constant. The sibling test below grades the inside-window answer, and the two
+        together pin that the rule is consulted at all: replace the resolved status with
+        a bare ``PersistedMediaBuyStatus.SCHEDULED`` and this test stays green while its
+        sibling reddens.
         """
-        _auth_session(client, test_tenant)
-        media_buy_id = f"mb_wf_{uuid.uuid4().hex[:8]}"
-        context_id, step_id = _create_step_mapped_to_media_buy(
-            factory_session,
-            test_tenant,
-            media_buy_id,
-            start_date=date(2099, 1, 1),
-            end_date=date(2099, 12, 31),
-        )
+        seeded = seed_pending_buy(starts_in_days=7)
+        _auth_session(client, seeded.tenant_id)
 
-        before = read_media_buy_state(test_tenant, media_buy_id, session=factory_session)
-        before_revision = before.revision
+        before = read_media_buy_state(seeded.tenant_id, seeded.media_buy_id, session=factory_session)
         assert before.confirmed_at is None, "fixture must start with an unstamped confirmation instant"
 
-        # The adapter call is a different concern; this test grades the status write that
-        # follows a successful one.
-        with patch(_EXECUTE_APPROVED_PATCH, return_value=(True, None)):
+        with patch(ADAPTER_BOUNDARY, side_effect=adapter_success):
             response = client.post(
-                f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/approve",
+                f"/tenant/{seeded.tenant_id}/workflows/{seeded.context_id}/steps/{seeded.step_id}/approve",
                 content_type="application/json",
                 json={},
             )
-        assert response.status_code == 200
+        assert response.status_code == 200, response.data
 
-        after = read_media_buy_state(test_tenant, media_buy_id, session=factory_session)
-        assert after.status == "scheduled"
+        after = read_media_buy_state(seeded.tenant_id, seeded.media_buy_id, session=factory_session)
         assert after.approved_by == "test@example.com"
         assert after.approved_at is not None
         assert_status_move_carried_bookkeeping(
-            MediaBuyState(status="pending_approval", revision=before_revision, confirmed_at=None),
+            MediaBuyState(status="pending_approval", revision=before.revision, confirmed_at=None),
             after,
             expected_status="scheduled",
             confirms=True,
@@ -381,7 +318,40 @@ class TestWorkflowApprovalMovesMediaBuy:
             "confirmed_at is still NULL after approval"
         )
 
-    def test_approval_from_another_tenants_session_is_refused(self, client, test_tenant, factory_session):
+    def test_approve_inside_the_flight_window_activates_rather_than_schedules(self, client, factory_session):
+        """The active arm: a buy approved INSIDE its window is serving, not scheduled.
+
+        This is the case the route got wrong when it wrote ``scheduled`` unconditionally.
+        The wire projection and the sweep corrected it downstream, which is why nothing
+        caught it — but the column disagreed with the calendar.
+        """
+        seeded = seed_pending_buy(starts_in_days=-1)
+        _auth_session(client, seeded.tenant_id)
+
+        before = read_media_buy_state(seeded.tenant_id, seeded.media_buy_id, session=factory_session)
+
+        with patch(ADAPTER_BOUNDARY, side_effect=adapter_success):
+            response = client.post(
+                f"/tenant/{seeded.tenant_id}/workflows/{seeded.context_id}/steps/{seeded.step_id}/approve",
+                content_type="application/json",
+                json={},
+            )
+        assert response.status_code == 200, response.data
+
+        after = read_media_buy_state(seeded.tenant_id, seeded.media_buy_id, session=factory_session)
+        assert_status_move_carried_bookkeeping(
+            MediaBuyState(status="pending_approval", revision=before.revision, confirmed_at=None),
+            after,
+            expected_status="active",
+            confirms=True,
+            subject="approving a buy inside its flight window",
+        )
+        assert after.status == "active", (
+            "a buy approved inside its flight window is serving; persisting 'scheduled' "
+            "makes the column disagree with the calendar"
+        )
+
+    def test_approval_from_another_tenants_session_is_refused(self, client, factory_session):
         """@require_tenant_access() on approve_workflow_step is graded here.
 
         Nothing graded it: deleting the decorator left the admin suite green, because
@@ -393,67 +363,22 @@ class TestWorkflowApprovalMovesMediaBuy:
         redirects to a login page still returns 200 for the redirect target, so
         "did the write happen" is the question that cannot be answered two ways.
         """
-        media_buy_id = f"mb_wf_{uuid.uuid4().hex[:8]}"
-        context_id, step_id = _create_step_mapped_to_media_buy(factory_session, test_tenant, media_buy_id)
+        seeded = seed_pending_buy(starts_in_days=7)
 
         # A session scoped to a DIFFERENT tenant, and not a super admin.
-        with client.session_transaction() as sess:
-            sess["authenticated"] = True
-            sess["user"] = {"email": "outsider@example.com", "is_super_admin": False}
-            sess["email"] = "outsider@example.com"
-            sess["test_user"] = "outsider@example.com"
-            sess["test_user_role"] = "tenant_admin"
-            sess["test_tenant_id"] = "some_other_tenant"
-            sess["tenant_id"] = "some_other_tenant"
+        login_as(client, tenant_id="some_other_tenant", email="outsider@example.com", super_admin=False)
 
-        before = read_media_buy_state(test_tenant, media_buy_id, session=factory_session)
-        with patch(_EXECUTE_APPROVED_PATCH, return_value=(True, None)):
+        before = read_media_buy_state(seeded.tenant_id, seeded.media_buy_id, session=factory_session)
+        with patch(ADAPTER_BOUNDARY, side_effect=adapter_success):
             client.post(
-                f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/approve",
+                f"/tenant/{seeded.tenant_id}/workflows/{seeded.context_id}/steps/{seeded.step_id}/approve",
                 content_type="application/json",
                 json={},
             )
 
-        after = read_media_buy_state(test_tenant, media_buy_id, session=factory_session)
+        after = read_media_buy_state(seeded.tenant_id, seeded.media_buy_id, session=factory_session)
         assert after.status == before.status, (
             f"a session scoped to another tenant moved this buy from {before.status!r} to "
             f"{after.status!r}; require_tenant_access() is not holding"
         )
         assert after.confirmed_at is None, "an outsider's request stamped the seller-commitment instant"
-
-    def test_approve_inside_the_flight_window_activates_rather_than_schedules(
-        self, client, test_tenant, factory_session
-    ):
-        """The active arm: a buy approved INSIDE its window is serving, not scheduled.
-
-        This is the case the route got wrong. Mutate ``approved_status`` back to a
-        bare ``PersistedMediaBuyStatus.SCHEDULED`` and this test reddens while its
-        sibling above stays green — which is what tells you the flight-window rule is
-        being consulted rather than a constant happening to match.
-        """
-        _auth_session(client, test_tenant)
-        media_buy_id = f"mb_wf_{uuid.uuid4().hex[:8]}"
-        context_id, step_id = _create_step_mapped_to_media_buy(
-            factory_session,
-            test_tenant,
-            media_buy_id,
-            start_date=date(2020, 1, 1),
-            end_date=date(2099, 12, 31),
-        )
-
-        with patch(_EXECUTE_APPROVED_PATCH, return_value=(True, None)):
-            response = client.post(
-                f"/tenant/{test_tenant}/workflows/{context_id}/steps/{step_id}/approve",
-                content_type="application/json",
-                json={},
-            )
-        assert response.status_code == 200
-
-        after = read_media_buy_state(test_tenant, media_buy_id, session=factory_session)
-        assert after.status == "active", (
-            "a buy approved inside its flight window is serving; persisting 'scheduled' "
-            "makes the column disagree with the calendar"
-        )
-        assert after.confirmed_at is not None, (
-            "'active' is a seller-confirmed status, so approval must stamp confirmed_at"
-        )
