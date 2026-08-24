@@ -159,6 +159,23 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     sleep 3
 done
 [ "$pg" = true ] || { echo "Postgres never became ready"; dc logs postgres; exit 1; }
+# The same guard for the SERVER, which was missing: $srv was computed and printed
+# and then never checked, so a stack whose app never came up proceeded silently
+# into the suites. Measured cost of that omission on 2026-08-24: the wait spun its
+# full 360s, said only "Postgres ready", and then bdd + e2e + ui produced 2537
+# errors -- "live E2E stack is unreachable", "Server not ready after 60s",
+# "TargetClosedError" -- none of which names the actual cause. One precondition
+# failure, reported once, replaces all of it.
+#
+# Unconditional because THIS path just started the stack a few lines above: if we
+# brought the server up and it never became healthy, that is a failure for every
+# caller, not a caller-specific one. Symmetric with the Postgres guard by design;
+# an asymmetry here is what hid the problem.
+[ "$srv" = true ] || {
+    echo "Server never became healthy (waited 360s for http://localhost:8080/health inside adcp-server)"
+    dc logs --tail=120 adcp-server
+    exit 1
+}
 
 # The suites use the adcp_test database (matches scripts/test-stack.sh).
 dc exec -T postgres psql -U adcp_user -d postgres -c "CREATE DATABASE adcp_test" >/dev/null 2>&1 || true
