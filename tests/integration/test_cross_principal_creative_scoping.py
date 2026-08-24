@@ -90,12 +90,12 @@ def _assert_not_found_and_no_leak(result: Any) -> None:
     # raise. What the buyer receives is therefore the same code and the code's own
     # sentence — asserting a "not found" PHRASE tested the old authored wording, which
     # could drift from the code while the security property held, or vice versa.
-    payload_error = result.wire_error_envelope["errors"][0]
-    assert payload_error["code"] == "CREATIVE_REJECTED", (
-        f"Cross-principal creative must yield the uniform rejection code, got: {payload_error}"
-    )
-    assert "creative_ids" in (payload_error.get("details") or {}), (
-        f"The uniform rejection must report WHICH creative_ids were unresolvable: {payload_error}"
+    # wire_error_details asserts the code FIRST and then returns the details block,
+    # so a details oracle can never read the wrong envelope's details. Replaces a
+    # hand-indexed errors[0] that resolved the protocol position itself.
+    payload_details = result.wire_error_details("CREATIVE_REJECTED", recovery="correctable")
+    assert "creative_ids" in payload_details, (
+        f"The uniform rejection must report WHICH creative_ids were unresolvable: {payload_details}"
     )
     for marker in _LEAK_MARKERS:
         assert marker.lower() not in envelope_text, (

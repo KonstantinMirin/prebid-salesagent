@@ -241,6 +241,7 @@ class TransportResult:
         require_suggestion: bool = False,
         field: str | None = None,
         details: Mapping[str, Any] | None = None,
+        retry_after: int | None = None,
     ) -> None:
         """Assert this result carries the AdCP two-layer wire error ``code``.
 
@@ -284,6 +285,7 @@ class TransportResult:
             recovery=expected_recovery,
             field=field,
             details=details,
+            retry_after=retry_after,
         )
         if require_suggestion:
             # Presence, not equality: error.json defines `suggestion` as free-form

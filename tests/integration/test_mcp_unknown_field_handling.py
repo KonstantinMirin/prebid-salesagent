@@ -13,7 +13,6 @@ import pytest
 
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.harness.transport import Transport
-from tests.helpers import assert_envelope_shape
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -57,12 +56,11 @@ class TestMcpDevMode:
             result = env.call_via(Transport.MCP, brief="test ads", nonsense_field="bar")
 
             assert result.is_error
-            assert_envelope_shape(
-                result.wire_error_envelope,
+            result.assert_wire_error(
                 "VALIDATION_ERROR",
                 recovery="correctable",
+                field="nonsense_field",
             )
-            assert result.wire_error_envelope["errors"][0]["field"] == "nonsense_field"
 
     def test_deprecated_field_translated_even_in_dev(self, integration_db):
         """Deprecated field translation works in dev mode (always active)."""

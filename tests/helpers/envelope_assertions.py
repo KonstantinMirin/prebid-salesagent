@@ -110,6 +110,7 @@ def assert_envelope_shape(
     recovery: str,
     field: str | None = None,
     details: Mapping[str, Any] | None = None,
+    retry_after: int | None = None,
     check_mcp_tool_error: bool = False,
 ) -> None:
     """Assert the AdCP spec two-layer error envelope shape.
@@ -186,6 +187,20 @@ def assert_envelope_shape(
     if field is not None:
         actual_field = error.get("field")
         assert actual_field == field, f"errors[0].field={actual_field!r}, expected {field!r}"
+
+    if retry_after is not None:
+        # Mirrors `recovery` in being checked on BOTH layers. Until this existed
+        # there was no way to grade retry_after through the sanctioned surface, so
+        # the one test that needs it hand-indexed the envelope
+        # (`wire_error_envelope["adcp_error"].get("retry_after")`) -- an off-path
+        # read that existed because the helper could not express the fact, not
+        # because the author reached past it.
+        assert body["adcp_error"].get("retry_after") == retry_after, (
+            f"adcp_error.retry_after={body['adcp_error'].get('retry_after')!r}, expected {retry_after!r}"
+        )
+        assert error.get("retry_after") == retry_after, (
+            f"errors[0].retry_after={error.get('retry_after')!r}, expected {retry_after!r}"
+        )
 
     if details is not None:
         actual_details = error.get("details")

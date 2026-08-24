@@ -198,7 +198,6 @@ class TestInsertCeilingThroughEntrypoint:
     def test_fresh_key_over_ceiling_rejects_rate_limited_on_wire(self, integration_db, monkeypatch):
         """A fresh key in a full scope rejects with RATE_LIMITED + retry_after on the real wire."""
         from tests.harness.transport import Transport
-        from tests.helpers import assert_envelope_shape
 
         monkeypatch.setattr("src.services.idempotency_policy.MAX_ACTIVE_ATTEMPTS_PER_SCOPE", 1)
 
@@ -212,8 +211,11 @@ class TestInsertCeilingThroughEntrypoint:
             )
 
         assert result.is_error, f"A fresh key in a full scope must reject, got: {result.payload}"
-        assert_envelope_shape(result.wire_error_envelope, "RATE_LIMITED", recovery="transient")
-        retry_after = result.wire_error_envelope["adcp_error"].get("retry_after")
+        result.assert_wire_error("RATE_LIMITED", recovery="transient")
+        # An inequality oracle (">= 1"), so it reads through the sanctioned reader
+        # rather than the new retry_after= kwarg, which pins an exact value. Either
+        # way it no longer resolves the protocol position by hand.
+        retry_after = (result.wire_error_object() or {}).get("retry_after")
         assert isinstance(retry_after, int) and retry_after >= 1, (
             f"RATE_LIMITED must carry integer retry_after >= 1, got {retry_after!r}"
         )
