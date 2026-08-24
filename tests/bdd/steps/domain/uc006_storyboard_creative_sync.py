@@ -5,7 +5,7 @@ Covers the six ``@uc006-storyboard-routing @storyboard-v3.1`` scenarios in
 creative/index.yaml sync_multiple, and the media-buy/index.yaml format_id
 roundtrip). These scenarios previously auto-xfailed at
 ``StepDefinitionNotFoundError`` — every Given/When/Then below is new
-(salesagent-vuz9t.12.3).
+.
 
 Several exercise production behavior that genuinely does not exist yet:
 ``check_provenance_required`` (src/core/tools/creatives/_validation.py) only

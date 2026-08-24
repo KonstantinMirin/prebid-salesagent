@@ -33,7 +33,7 @@ A storyboard with zero matching runner scenarios is reported ``not_yet_run``,
 never silently omitted -- this script asserts a minimum join rate against the
 runner's own ``storyboards_executed``/``storyboards_missing_tools`` totals so
 a regression in the join logic cannot ship looking like "nothing was
-measured" (salesagent-pw71, architect review finding).
+measured" (architect review finding).
 
 Read-only. Emits JSON, or ``--markdown`` for the checked-in artifact.
 """
@@ -60,7 +60,7 @@ COMPLY_TEST_CONTROLLER = "comply_test_controller"
 # pin it was a strict SUBSET of the storyboards declaring the tool: 20 typed in
 # against 29 declaring it, so 9 -- 4 of them on-path -- rendered as "no ledger
 # entries", i.e. a permanent by-design divergence displayed as not-yet-measured
-# (salesagent-g6m2.1's sibling, salesagent-g6m2.2). Adding a stem here does not
+# (the sibling). Adding a stem here does not
 # make a storyboard ungradable and removing one does not make it gradable.
 #
 # What survives is the judgement no structure carries: DETERMINISTIC INJECTION
@@ -305,7 +305,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         storyboard_id = storyboard_spec.storyboard_id(text) or row["stem"].replace("-", "_")
         # Never sum checks_for_phase() over phases() here: phase windows
         # enclose their steps' windows, so that spelling counts every nested
-        # check twice (salesagent-g6m2.1).
+        # check twice.
         checks = storyboard_spec.check_inventory(text)
 
         measured = _measured_status(row["stem"], runner_scenarios)

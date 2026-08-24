@@ -1,4 +1,4 @@
-"""Emit the scenario-liveness artifact from a real BDD run (salesagent-vuz9t.12.1).
+"""Emit the scenario-liveness artifact from a real BDD run.
 
 ``storyboard_coverage_map.covered_storyboards`` (and the ``storyboard-checks.jsonl``
 built on top of it) derives "covered" from tag presence plus the ``@source``
@@ -25,7 +25,7 @@ each record carries the three facts the parent finding names:
   ..."``). ``None`` when the scenario's steps aren't bound at all (the
   question is unreached: a step that doesn't even parse never gets to the
   harness-selection branch). ``scripts/audit/scenario_liveness_join.py``
-  (salesagent-vuz9t.12.2) does not trust this field — it replaces it with a
+  does not trust this field — it replaces it with a
   proper data lookup against the declarative ``ENV_ROUTES`` registry (no
   reason-text matching), which is why this module's own ``harness_wired`` is
   documented as best-effort rather than promoted further here: any UC not yet

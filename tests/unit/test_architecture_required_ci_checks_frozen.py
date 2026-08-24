@@ -31,7 +31,7 @@ REQUIRED_RENDERED_CHECKS = {
     # In-network bdd (e2e_rest transport) — grades the known-failures ledger
     # (PR #1430 review). Mirror this into branch protection's required checks.
     "CI / BDD In-Network (e2e_rest)",
-    # SB-4b (salesagent-syhj): grades tests/storyboard/ against a live
+    # SB-4b: grades tests/storyboard/ against a live
     # in-network stack. Not yet in the Summary job's `needs` (report-only
     # until the known-failures ledger is seeded from a real run) — still
     # rendered unconditionally by rendered_ci_check_names(), so it must be

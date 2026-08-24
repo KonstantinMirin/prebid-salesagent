@@ -20,7 +20,7 @@ Parsing primitives (pinned version, declared capabilities, phase/check grading,
 scripts/audit/storyboard_spec.py -- the shared L0 module also used by
 storyboard_coverage_map.py and the tests/fixtures/adcp_storyboards_pinned index,
 so this sweep's findings agree with the coverage map and the make quality guard
-by construction (salesagent-pw71).
+by construction.
 """
 
 from __future__ import annotations
@@ -190,7 +190,7 @@ def audit(repo: Path, adcp: Path) -> dict[str, Any]:
                 # (protocol, track, storyboard_id, step_id) -- resolved against
                 # the cited file exactly like `phase` is, so a `step=` that
                 # names nothing real fails loudly instead of being carried
-                # unchecked (salesagent-vuz9t.4).
+                # unchecked.
                 step_grading = storyboard_spec.phase_is_graded(text, step)
                 if step_grading == "absent":
                     binding.findings.append(f"step {step!r} not in cited file at {version}")

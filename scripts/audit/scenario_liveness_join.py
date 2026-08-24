@@ -1,16 +1,16 @@
-"""Join BDD scenario liveness into the storyboard-checks pipeline (salesagent-vuz9t.12.2).
+"""Join BDD scenario liveness into the storyboard-checks pipeline.
 
 ``storyboard_check_index`` derives ``covered_by`` from tag presence plus the
 ``@source`` footer alone — a ``@storyboard-v3.1``-tagged scenario with zero bound
 step definitions has counted as "covered" forever, because nothing joined the
-three liveness facts that already exist as data (salesagent-vuz9t.12's finding).
+three liveness facts that already exist as data (the finding).
 This module is that join:
 
 * ``steps_bound`` — measured by a real ``pytest tests/bdd`` run, emitted by
-  ``tests/bdd/scenario_liveness.py`` (salesagent-vuz9t.12.1) as
+  ``tests/bdd/scenario_liveness.py`` as
   ``test-results/bdd_scenario_liveness.json``.
 * ``registry_wired`` — a DATA LOOKUP against the declarative
-  ``tests.bdd.conftest.ENV_ROUTES`` registry (salesagent-vuz9t.11/.19), never
+  ``tests.bdd.conftest.ENV_ROUTES`` registry, never
   reason-text matching. A scenario is registry-wired when its own ``T-*`` tag is a
   row (the SB-4a per-scenario demonstrator), or the ``UC-<n>`` bucket its
   ``T-UC-<n>...`` tag derives — the same derivation ``conftest._detect_uc`` uses
@@ -26,7 +26,7 @@ This module is that join:
   stop relying on.
 * ``ledgered`` — read straight from the artifact, itself already a join of the
   e2e_rest known-failures ledger and conftest's curated xfail-reason bucket
-  (salesagent-vuz9t.12.1). Combined here with the conformance-ledger ``measured``
+ . Combined here with the conformance-ledger ``measured``
   column ``CheckRecord`` already carries (built from ``scripts/audit/ledger.py``'s
   ``load()`` against ``tests/storyboard/known_failures.txt`` — the third ledger)
   to flag a graduation candidate: a scenario we locally xfail as a known gap, for

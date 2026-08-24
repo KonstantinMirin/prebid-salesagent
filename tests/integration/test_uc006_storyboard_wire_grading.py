@@ -1,4 +1,4 @@
-"""RED grader for Lane C (salesagent-qbac1.3): UC-006 storyboard Thens must grade the WIRE.
+"""RED grader for Lane C: UC-006 storyboard Thens must grade the WIRE.
 
 Core Invariant under grade (lane plan, verbatim): *every storyboard ``Then``
 asserts a transport-observable signal, on every transport, through the guarded

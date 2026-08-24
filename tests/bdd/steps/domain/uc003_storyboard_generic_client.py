@@ -1,11 +1,10 @@
 """BDD step definitions for UC-003 storyboard scenarios wired onto AdCPTestClient.
 
-SB-4a demonstrator (salesagent-35to): dispatches through the transport-generic
+SB-4a demonstrator: dispatches through the transport-generic
 ``AdCPTestClient`` (``tests/harness/client.py``) via ``dispatch_via_client``
 instead of ``MediaBuyDualEnv``/``dispatch_request``. Additive only — see
 ``tests/bdd/conftest.py``'s ``_UC003_STORYBOARD_GENERIC_CLIENT`` branch.
 
-beads: salesagent-35to
 """
 
 from __future__ import annotations
@@ -51,7 +50,7 @@ def when_update_media_buy_recancel(ctx: dict) -> None:
 
     Sends the buyer's literal payload — ``canceled: true`` included — through
     ``AdCPTestClient`` so the request-field normalization seam is what decides
-    whether ``canceled`` is honored or refused (Lane A, salesagent-qbac1.1).
+    whether ``canceled`` is honored or refused (Lane A).
     Deliberately NOT ``dispatch_request`` on ``MediaBuyDualEnv``: that env's
     ``_flatten_update_request`` pops ``canceled``/``cancellation_reason``
     (``_WRAPPER_UNSUPPORTED_FIELDS``) before the wire, so the scenario would

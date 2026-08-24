@@ -1,4 +1,4 @@
-"""Regression tests for scripts/audit/scenario_liveness_join.py (salesagent-vuz9t.12.2).
+"""Regression tests for scripts/audit/scenario_liveness_join.py.
 
 Pure-logic, offline tests for the join primitives: the ``ENV_ROUTES`` registry data
 lookup (never reason-text matching), the artifact loader's conservative

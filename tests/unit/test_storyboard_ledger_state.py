@@ -1,4 +1,4 @@
-"""Lock test for the storyboard-conformance known-failures ledger (SB-4b, salesagent-syhj).
+"""Lock test for the storyboard-conformance known-failures ledger (SB-4b).
 
 Mirrors ``tests/unit/test_e2e_rest_ledger_state.py`` verbatim in shape: the storyboard
 CI job (SB-4b) grades a MEASURED run of the real ``@adcp/sdk`` storyboard runner through
@@ -6,7 +6,7 @@ pytest as ordinary parametrized tests -- one per ``(protocol, track, storyboard_
 step_id)``, the runner being executed once per protocol (mcp, a2a) against the same
 agent -- reusing the exact ledger/xfail/lock-test discipline already established by
 ``tests/bdd/e2e_rest_known_failures.txt`` rather than inventing a second comparator
-system (Core Invariant, salesagent-syhj design). That means a sibling ledger file
+system (Core Invariant). That means a sibling ledger file
 (``tests/storyboard/known_failures.txt``), a conftest loader
 (``tests/storyboard/conftest.py``) that reads it to xfail(strict=False) exactly those
 known-failing storyboard test ids, and this lock test pinning the ledger's exact

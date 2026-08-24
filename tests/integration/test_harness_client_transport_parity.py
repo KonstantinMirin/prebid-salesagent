@@ -25,8 +25,7 @@ from tests.harness.transport import NO_IDENTITY_OVERRIDE, E2EConfig, Transport
 
 
 def _assert_success_equivalent(via, client_result) -> None:
-    """Shared success-path equivalence assertion (salesagent-vuz9t.10/.18):
-    ``env.call_via`` and ``AdCPTestClient(env).call`` must agree on
+    """Shared success-path equivalence assertion ``env.call_via`` and ``AdCPTestClient(env).call`` must agree on
     success, transport tag, and the exact wire-visible response body.
     Module-level so both ``TestEnvVsClientEquivalence`` (in-process) and
     ``TestEnvVsClientEquivalenceE2E`` (live-stack) share one assertion
@@ -61,8 +60,7 @@ def _dispatch_via_env_pinning_one_dispatch_core(env, transport: Transport, tool:
     ONE dispatch core — Lane B's Core Invariant made runtime-observable.
 
     ``AdCPTestClient`` must be the implementation ``call_via``/``call_mcp``/
-    ``call_a2a`` delegate to, not a peer beside them (beads
-    salesagent-qbac1.2). Structurally that is graded by
+    ``call_a2a`` delegate to, not a peer beside them (beads). Structurally that is graded by
     ``tests/unit/test_architecture_harness_single_dispatch.py``; behaviorally
     it means a dispatch entering through the legacy ``env.call_via`` door and
     a dispatch entering through ``AdCPTestClient(env).call`` reach the server
@@ -99,7 +97,7 @@ def _dispatch_via_env_pinning_one_dispatch_core(env, transport: Transport, tool:
         f"{type(env).__name__}.call_via({transport}) must dispatch through the one "
         f"tests.harness.client._dispatch_core with tool {tool!r} — recorded {seen!r} instead. "
         f"Two live dispatch mechanisms in the harness is exactly what Lane B "
-        f"(salesagent-qbac1.2) removes: BaseTestEnv.deliver_mcp/deliver_a2a delegate to the client's "
+        f"removes: BaseTestEnv.deliver_mcp/deliver_a2a delegate to the client's "
         f"core, and call_mcp/call_a2a are `deliver_*(...).payload` on the base only."
     )
     return via
@@ -221,7 +219,7 @@ class TestClientCrossTransportConsistency:
     (the IntegrationEnv/real-DB variant) so REST dispatch (which needs
     get_rest_client()) is available alongside MCP/A2A.
 
-    Renamed from "TestClientTransportParity" (salesagent-vuz9t.10, Finding 6):
+    Renamed from "TestClientTransportParity" (Finding 6):
     these tests compare AdCPTestClient against ITSELF across three transports —
     real, valuable coverage, but NOT the env.call_via() vs
     AdCPTestClient(env).call() equivalence the old name implied. That
@@ -250,7 +248,7 @@ class TestClientCrossTransportConsistency:
         assert rest_result.is_success, rest_result.error
 
         # payload is the pinned GetProductsResponse model on every transport —
-        # attribute access, not subscripting (salesagent-vuz9t.8.3).
+        # attribute access, not subscripting.
         mcp_ids = {p.product_id for p in mcp_result.payload.products}
         a2a_ids = {p.product_id for p in a2a_result.payload.products}
         rest_ids = {p.product_id for p in rest_result.payload.products}
@@ -270,7 +268,7 @@ class TestClientCrossTransportConsistency:
 @pytest.mark.integration
 @pytest.mark.requires_db
 class TestEnvVsClientEquivalence:
-    """The migration precondition (salesagent-vuz9t.10, Finding 6): prove
+    """The migration precondition (Finding 6): prove
     ``env.call_via(T, ...)`` and ``AdCPTestClient(env).call(..., T)`` dispatch
     the same production code, on the SAME env, and produce an IDENTICAL
     wire-visible contract — for a success case AND an error case, per
@@ -360,7 +358,7 @@ class TestEnvVsClientEquivalence:
 @pytest.mark.requires_db
 class TestNewlyDelegatingEnvEquivalence:
     """``TestEnvVsClientEquivalence`` extended to the envs Lane B converts
-    (beads salesagent-qbac1.2 change-set §5: "EXTEND its coverage to the
+    (the task change-set §5: "EXTEND its coverage to the
     newly-delegating envs").
 
     ``TestEnvVsClientEquivalence`` above proves the two entry points agree for
@@ -434,8 +432,7 @@ class TestNewlyDelegatingEnvEquivalence:
 @pytest.mark.integration
 @pytest.mark.requires_db
 class TestEnvVsClientEquivalenceE2E:
-    """The remaining half of "all six transport families" (salesagent-vuz9t.18,
-    split off ``salesagent-vuz9t.10`` which proved MCP/A2A/REST — the three
+    """The remaining half of "all six transport families" (split off this file which proved MCP/A2A/REST — the three
     IN-PROCESS families — only): the three LIVE families, E2E_REST/E2E_MCP/
     E2E_A2A, dispatched over real HTTP through nginx to a Docker stack.
 

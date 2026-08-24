@@ -80,7 +80,7 @@ def _envelope_from_adcp_error(exc: Exception) -> dict[str, Any] | None:
     ``client.py`` for the generic ``AdCPTestClient`` error path. Housing it
     in either would force the other to reach back across the dispatch-core
     boundary, which is exactly the mutual-lazy-import cycle this module
-    breaks (salesagent-vuz9t.17).
+    breaks.
 
     A2A and REST tests asserting on ``result.wire_error_envelope`` see
     REAL wire bytes:

@@ -641,7 +641,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
 
   @T-UC-004-attr-campaign-invalid @invariant @BR-RULE-092 @attribution @error
   Scenario: Campaign unit with interval != 1 - rejected
-    # HAND-EDITED (salesagent-rlgl.2): Then asserts the buyer-facing WIRE envelope
+    # HAND-EDITED: Then asserts the buyer-facing WIRE envelope
     # via the existing wire-assertion path (attribution_window in _WIRE_ASSERTED_FIELDS
     # -> _assert_error_outcome -> assert_envelope_shape on ctx["wire_error_envelope"]),
     # not the lossy reconstructed ctx["error"] generic then_error.py steps.

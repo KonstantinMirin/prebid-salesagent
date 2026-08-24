@@ -41,7 +41,7 @@ class TestClientMcpDispatchNoDb:
         assert result.envelope["transport"] == "mcp"
         assert result.wire_response is not None
         # payload is the pinned GetProductsResponse model, not the raw dict —
-        # attribute access, not subscripting (salesagent-vuz9t.8.3).
+        # attribute access, not subscripting.
         product_ids = [p.product_id for p in result.payload.products]
         assert product_ids == ["prod_001"]
 
@@ -77,7 +77,7 @@ class TestClientA2ADispatchNoDb:
         assert result.is_success, result.error
         assert result.envelope["transport"] == "a2a"
         # payload is the pinned GetProductsResponse model, not the raw dict —
-        # attribute access, not subscripting (salesagent-vuz9t.8.3).
+        # attribute access, not subscripting.
         product_ids = [p.product_id for p in result.payload.products]
         assert product_ids == ["prod_001"]
 
@@ -124,7 +124,7 @@ class TestClientRestWrapPathParamPeeling:
 
 
 class TestRestRequestKwargsBodilessVerbs:
-    """salesagent-vuz9t.9: get_adcp_capabilities becoming REST-resolvable
+    """get_adcp_capabilities becoming REST-resolvable
     (GET /api/v1/capabilities, resolved via the route's declared
     operation_id — formerly via address_table.py's REST_TOOL_ALIASES)
     exposed that ``_deliver_rest``/``_deliver_e2e_rest`` sent ``json=`` for
@@ -198,7 +198,7 @@ class TestClientRestDispatchNoDb:
 
 
 class TestUnwrapRestResponse:
-    """``unwrap_rest_response`` (salesagent-vuz9t.8.2) — the one REST unwrap
+    """``unwrap_rest_response`` — the one REST unwrap
     shared by ``RestDispatcher``, ``RestE2EDispatcher``
     (``tests/harness/dispatchers.py``) and the generic client's
     ``_unwrap_rest``. Before this consolidation, the generic client core's
@@ -263,7 +263,7 @@ class TestUnwrapRestResponse:
 
 
 class TestClientE2eRestDelivery:
-    """E2E_REST DELIVER (``_deliver_e2e_rest``, salesagent-uz00/SB-3a) — real
+    """E2E_REST DELIVER (``_deliver_e2e_rest``, SB-3a) — real
     HTTP through nginx to a live Docker stack. Mocks ``httpx.Client`` so
     coverage does not require a live server; genuine e2e-with-real-server
     verification happens in ``tests/e2e/``."""
@@ -326,7 +326,7 @@ class TestClientE2eRestDelivery:
         assert captured["headers"]["x-adcp-tenant"] == identity.tenant["subdomain"]
 
     def test_e2e_rest_delivery_sends_same_header_set_the_deleted_inline_code_did(self, monkeypatch):
-        """salesagent-vuz9t.10: ``_deliver_e2e_rest`` (via ``e2e_identity_headers``)
+        """``_deliver_e2e_rest`` (via ``e2e_identity_headers``)
         must emit the SAME x-adcp-auth / x-adcp-tenant / x-dry-run header set that
         ``RestE2EDispatcher`` used to build inline, before commit 4363757dc
         deleted that code and routed delivery through this shared function
@@ -435,7 +435,7 @@ class TestClientE2eRestDelivery:
 class TestRestE2EDispatcherIdentityDefault:
     """``RestE2EDispatcher`` (``tests/harness/dispatchers.py``) -- the legacy
     ``env.call_via(Transport.E2E_REST, **kwargs)`` entry point. Regression
-    coverage for salesagent-vuz9t.8.1: omitting ``identity=`` entirely (not
+    coverage for: omitting ``identity=`` entirely (not
     ``identity=None``) must fall back to ``env.identity_for(Transport.E2E_REST)``
     inside ``_deliver_e2e_rest`` -- before the fix, ``kwargs.pop("identity",
     None)`` forwarded a bare ``None`` on omission, which ``_deliver_e2e_rest``
@@ -489,7 +489,7 @@ class TestRestE2EDispatcherIdentityDefault:
 
 
 class TestClientE2eMcpDelivery:
-    """Real e2e MCP DELIVER (salesagent-wu78/SB-3b) — mocks the fastmcp
+    """Real e2e MCP DELIVER (/SB-3b) — mocks the fastmcp
     ``Client``/HTTP transport layer for unit-level coverage. Genuine
     e2e-with-a-real-server verification happens in ``tests/e2e/`` via
     ``./run_all_tests.sh`` (no Docker stack available in this worktree)."""
@@ -523,7 +523,7 @@ class TestClientE2eMcpDelivery:
             # reporting_capabilities, ...) irrelevant to what these tests
             # verify (transport wiring / headers / delegation); an empty list
             # still round-trips through GetProductsResponse
-            # (salesagent-vuz9t.8.3's spec_response_model parse-back).
+            # (the spec_response_model parse-back).
             return TestClientE2eMcpDelivery._FakeToolResult({"products": []})
 
     def test_e2e_mcp_dispatch_builds_real_http_transport_and_succeeds(self, monkeypatch):
@@ -543,7 +543,7 @@ class TestClientE2eMcpDelivery:
 
         assert result.is_success, result.error
         # Tag derived from Transport.E2E_MCP.value ("e2e_mcp") — before
-        # salesagent-vuz9t.8.2 this incorrectly pinned the in-process "mcp"
+        # this incorrectly pinned the in-process "mcp"
         # tag on an E2E dispatch (client.py's _unwrap_mcp_success is shared
         # by both Transport.MCP and Transport.E2E_MCP).
         assert result.envelope["transport"] == "e2e_mcp"
@@ -622,7 +622,7 @@ class TestClientE2eMcpDelivery:
 
 
 class TestClientE2eA2aDelivery:
-    """``_deliver_e2e_a2a`` (salesagent-tisr / SB-3c) — real JSON-RPC
+    """``_deliver_e2e_a2a`` (SB-3c) — real JSON-RPC
     ``message/send`` HTTP delivery, HTTP layer mocked (unit-level; genuine
     e2e-with-real-server verification happens in tests/e2e/ against a live
     Docker stack, per this task's scope)."""
@@ -655,7 +655,7 @@ class TestClientE2eA2aDelivery:
         # ...) that are irrelevant to what this test actually verifies (the
         # JSON-RPC envelope shape and the artifact-stripping behavior below);
         # an empty list still round-trips through GetProductsResponse
-        # (salesagent-vuz9t.8.3's spec_response_model parse-back) without
+        # (the spec_response_model parse-back) without
         # hand-maintaining an unrelated fixture of the full Product schema.
         artifact_data = {"products": [], "message": "ok", "success": True}
         rpc_response = self._rpc_success_body(artifact_data=artifact_data)
@@ -673,7 +673,7 @@ class TestClientE2eA2aDelivery:
 
         assert result.is_success, result.error
         # payload is the pinned GetProductsResponse model, not the raw dict —
-        # attribute access, not subscripting (salesagent-vuz9t.8.3).
+        # attribute access, not subscripting.
         assert result.payload.products == []
         assert result.wire_response == artifact_data  # unstripped — captured before pop
 
@@ -779,14 +779,14 @@ class TestClientE2eA2aDelivery:
 
     def test_task_state_submitted_synthesizes_submitted_wire(self):
         """``create_media_buy`` is the named no-pinned-response-model case
-        (salesagent-vuz9t.8.3): its SDK response type is a ``Union`` of
-        outcome variants (``spec_response_model`` returns ``None`` for it, see
-        that function's docstring), so UNWRAP cannot pick a single class to
-        parse the synthesized "submitted" wire into. ``payload`` stays
-        explicitly ``None`` — ``result.error is None`` (not ``is_success``,
-        which requires a non-``None`` payload) is the correct success check
-        here — and ``wire_response`` carries the raw dict, exactly as
-        production callers that only read the wire body already expect."""
+        : its SDK response type is a ``Union`` of
+         outcome variants (``spec_response_model`` returns ``None`` for it, see
+         that function's docstring), so UNWRAP cannot pick a single class to
+         parse the synthesized "submitted" wire into. ``payload`` stays
+         explicitly ``None`` — ``result.error is None`` (not ``is_success``,
+         which requires a non-``None`` payload) is the correct success check
+         here — and ``wire_response`` carries the raw dict, exactly as
+         production callers that only read the wire body already expect."""
         from unittest.mock import MagicMock, patch
 
         from tests.harness.transport import E2EConfig
@@ -824,7 +824,7 @@ class TestClientE2eA2aDelivery:
     def test_http_error_status_still_surfaces_the_wire_error_envelope(self):
         """An A2A response with an HTTP error status must NOT discard its body.
 
-        Lane B change-set B4 (beads salesagent-qbac1.2): ``_deliver_e2e_a2a``
+        Lane B change-set B4 : ``_deliver_e2e_a2a``
         calls ``response.raise_for_status()`` BEFORE ``response.json()``, so on
         any >=400 the JSON-RPC error body — the only place the AdCP two-layer
         envelope exists on this leg — is thrown away and the caller gets a bare
@@ -917,7 +917,7 @@ class TestClientE2eA2aDelivery:
 
 
 class TestA2AE2EDispatcher:
-    """``A2AE2EDispatcher`` (salesagent-tisr / SB-3c) — the legacy
+    """``A2AE2EDispatcher`` (SB-3c) — the legacy
     ``env.call_via(Transport.E2E_A2A, ...)`` entry point, delegating to
     ``AdCPTestClient``/``_deliver_e2e_a2a`` under the hood."""
 
@@ -932,7 +932,7 @@ class TestA2AE2EDispatcher:
             # MissingToolNameError subclasses NotImplementedError, so this stays
             # the "hard wiring failure" _dispatch_core re-raises rather than
             # downgrading into an error TransportResult -- pinning the exact
-            # unified type (salesagent-vuz9t.8.1) instead of the bare parent.
+            # unified type instead of the bare parent.
             with pytest.raises(MissingToolNameError, match="tool_name"):
                 A2AE2EDispatcher().dispatch(env, brief="video ads")
 
@@ -966,13 +966,13 @@ class TestA2AE2EDispatcher:
 
     def test_omitted_identity_falls_back_to_env_identity_for(self):
         """Consistency/regression coverage for the identity-default reconciliation
-        (salesagent-vuz9t.8.1): A2AE2EDispatcher already handled omission
-        correctly before this ticket (its own local ``_NO_OVERRIDE``), so this
-        proves the refactor onto the shared ``NO_IDENTITY_OVERRIDE`` sentinel +
-        ``_dispatch_core`` preserves that behavior — the sibling assertion to
-        McpE2EDispatcher's/RestE2EDispatcher's genuine bug-fix regression tests
-        (acceptance criterion: identical call_via omissions authenticate
-        identically on every transport)."""
+        : A2AE2EDispatcher already handled omission
+         correctly before this ticket (its own local ``_NO_OVERRIDE``), so this
+         proves the refactor onto the shared ``NO_IDENTITY_OVERRIDE`` sentinel +
+         ``_dispatch_core`` preserves that behavior — the sibling assertion to
+         McpE2EDispatcher's/RestE2EDispatcher's genuine bug-fix regression tests
+         (acceptance criterion: identical call_via omissions authenticate
+         identically on every transport)."""
         from unittest.mock import MagicMock, patch
 
         from tests.harness.dispatchers import A2AE2EDispatcher
@@ -1019,7 +1019,7 @@ class TestMcpE2EDispatcherDelegation:
 
         with _UnitEnv() as env:
             # MissingToolNameError (tests.harness.transport) is the ONE missing-
-            # tool-name exception type (salesagent-vuz9t.8.1) -- it used to be a
+            # tool-name exception type -- it used to be a
             # per-dispatcher fork (TypeError here, NotImplementedError on
             # A2AE2EDispatcher below).
             with pytest.raises(MissingToolNameError, match="tool_name"):
@@ -1049,7 +1049,7 @@ class TestMcpE2EDispatcherDelegation:
         assert fake_client.calls == [("get_products", {"brief": "video ads"})]
 
     def test_omitted_identity_falls_back_to_env_identity_for(self, monkeypatch):
-        """The regression this ticket (salesagent-vuz9t.8.1) fixes: omitting
+        """The regression this ticket fixes: omitting
         ``identity=`` entirely (not passing ``identity=None``) must fall back
         to ``env.identity_for(transport)`` — same as every other transport's
         omission semantics — not force unauthenticated dispatch.

@@ -50,7 +50,7 @@ export COMPOSE_PROJECT_NAME="$(printf '%s' "${COMPOSE_PROJECT_NAME:-adcp-innet-$
 # the bind-mounted repo is owned by whoever launched the run, with no uid
 # plumbing at all. Exporting `id -u` here actively broke that -- rootless maps a
 # non-zero container uid to a host SUBUID, which is what left /app/logs
-# unwritable and killed adcp-server at import (cassini-w37).
+# unwritable and killed adcp-server at import.
 # The delivery-webhook scheduler runs on the SERVER (adcp-server), gated by this
 # interval. docker-compose.e2e.yml defaults it empty (scheduler off); the host
 # e2e path sets it to 5 via conftest. Mirror that so test_daily_delivery_webhook

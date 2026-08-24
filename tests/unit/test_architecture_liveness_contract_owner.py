@@ -1,4 +1,4 @@
-"""Guard: the tests/ <-> scripts/audit liveness contract has ONE owner (Lane F, salesagent-qbac1.6).
+"""Guard: the tests/ <-> scripts/audit liveness contract has ONE owner (Lane F).
 
 A real layering constraint — a pytest plugin must not import a CLI, and
 ``scripts/audit`` (imported *by* tests) cannot depend on ``tests/helpers`` — was
@@ -9,7 +9,7 @@ bucket-keys-plus-hardcoded-elif chain vs
 lookup), producing the exact dormant-claim false positive the join was built to
 eliminate.
 
-Core Invariant (bd salesagent-qbac1.6): a real layering constraint is resolved by
+Core Invariant : a real layering constraint is resolved by
 extracting a shared, dependency-free contract module both sides import — never by
 copying constants or re-implementing a lookup on each side.
 

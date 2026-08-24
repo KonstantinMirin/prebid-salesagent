@@ -26,7 +26,7 @@ C. **No hand-rolled wire-envelope access** (access-pattern, not symbol-name). Ch
    (``tests/bdd/steps/_outcome_helpers.py``'s ``wire_error_dict`` /
    ``wire_error_envelope_or_none``) sails through Check B untouched, because it never
    touches the reconstruction symbols Check B looks for. This was Finding 7
-   (salesagent-vuz9t.7/.16): six sites duplicated the guard logic (loud-raise-on-missing /
+   six sites duplicated the guard logic (loud-raise-on-missing /
    IMPL-synthesized-fallback) that the accessor centralizes. ``_outcome_helpers.py`` (defines
    the accessors) and ``_dispatch.py`` (the harness's sole producer that mirrors the field into
    ``ctx``'s convenience keys) are the only sanctioned direct readers; everywhere else must
@@ -73,7 +73,7 @@ _RECONSTRUCTED_ASSERTION_ALLOWLIST: set[str] = set()
 # -- Check C: hand-rolled wire-envelope access (access pattern) ---------------
 # Keyed by "<relative path> <enclosing func>". Pre-existing sites found the moment
 # this check started scanning the ACCESS PATTERN instead of Check B's symbol names
-# (salesagent-vuz9t.16) — none introduced by that change. Tracked at
+# — none introduced by that change. Tracked at
 # https://github.com/prebid/salesagent/issues/1995; remove each entry as it migrates
 # onto wire_error_dict / wire_error_envelope_or_none (_outcome_helpers.py).
 _WIRE_ENVELOPE_ACCESS_ALLOWLIST: set[str] = {
@@ -264,7 +264,7 @@ def _find_hand_rolled_wire_envelope_access() -> set[str]:
 
 
 def test_no_hand_rolled_wire_envelope_access() -> None:
-    """salesagent-vuz9t.16: TransportResult.wire_error_envelope has one reader — the guarded accessor."""
+    """TransportResult.wire_error_envelope has one reader — the guarded accessor."""
     assert_violations_match_allowlist(
         _find_hand_rolled_wire_envelope_access(),
         _WIRE_ENVELOPE_ACCESS_ALLOWLIST,

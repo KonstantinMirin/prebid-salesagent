@@ -23,7 +23,7 @@ def _wire_code(ctx: dict) -> str | None:
     ``ctx['result']`` and exposes the real two-layer envelope on
     ``wire_error_envelope`` (REST/A2A/MCP), read through the single guarded
     accessor ``wire_error_envelope_or_none`` (``_outcome_helpers.py`` — no
-    hand-rolled ``getattr``, salesagent-vuz9t.16). The wire code is the
+    hand-rolled ``getattr``). The wire code is the
     buyer-facing contract; prefer it over the lossy reconstructed
     ``ctx['error']`` (which collapses distinct wire codes onto one exception
     class — e.g. yields ``RuntimeError`` for an unmapped code). Returns
@@ -42,7 +42,7 @@ def _wire_suggestion(ctx: dict) -> str | None:
     Mirrors ``_wire_code``: when the scenario dispatched through a wire transport
     (REST/A2A/MCP), the ``suggestion`` is the buyer-facing contract and must be
     read from the real envelope (via ``wire_error_envelope_or_none``, not a
-    hand-rolled ``getattr`` — salesagent-vuz9t.16), not the lossy reconstructed
+    hand-rolled ``getattr``), not the lossy reconstructed
     ``ctx['error']``. STRICT error.json conformance: only the top-level
     ``suggestion`` on the error object (``errors[0]`` or ``adcp_error`` layer)
     counts — a suggestion buried in ``details`` is a conformance bug the
@@ -63,7 +63,7 @@ def _wire_error_object(ctx: dict) -> dict | None:
     Mirrors ``_wire_code`` / ``_wire_suggestion``: when the scenario dispatched
     through a wire transport (REST/A2A/MCP), field-presence checks must read the
     real envelope's error object (via ``wire_error_envelope_or_none``, not a
-    hand-rolled ``getattr`` — salesagent-vuz9t.16), not the lossy reconstructed
+    hand-rolled ``getattr``), not the lossy reconstructed
     ``ctx['error']``. Prefers the ``errors[0]`` layer (per-error fields like
     ``field``) and falls back to the envelope-level ``adcp_error``. Returns
     ``None`` on IMPL / no-wire scenarios so callers fall back to the

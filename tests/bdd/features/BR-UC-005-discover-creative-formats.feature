@@ -915,7 +915,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # Type filter REMOVED in adcp 3.12 — ListCreativeFormatsRequest has no
     # 'type' field, so every value dispatches unfiltered and production returns
     # the full catalog. The former 'unknown_value -> invalid' rejection no longer
-    # exists; reconciled to valid (success). salesagent-33r0.
+    # exists; reconciled to valid (success).
     Examples: Formerly-invalid partitions (filter removed in 3.12, now valid)
       | partition      | expected |
       | unknown_value  | valid    |
@@ -950,7 +950,7 @@ Feature: BR-UC-005 Discover Creative Formats
 
     # Type filter REMOVED in adcp 3.12 — no 'type' field on the request, so
     # 'native' dispatches unfiltered like every other value; production no longer
-    # rejects it. Reconciled to valid (success). salesagent-33r0.
+    # rejects it. Reconciled to valid (success).
     Examples:
       | boundary_point                                                  | expected |
       | audio (first enum value)                                        | valid    |

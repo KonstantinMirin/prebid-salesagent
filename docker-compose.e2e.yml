@@ -53,7 +53,7 @@ services:
     # open it; and because src/core/audit_logger.py:33 builds that FileHandler at
     # MODULE IMPORT time, the server died before serving one request, surfacing
     # as thousands of "Server not ready" errors instead of one permission error
-    # (cassini-w37, reproduced twice on this worktree).
+    # (reproduced twice on this worktree).
     #
     # The fix attempted here was to pin BOTH services to the same
     # "${TEST_UID:-0}:${TEST_GID:-0}". That works on a ROOTFUL daemon, which is
@@ -82,7 +82,7 @@ services:
       # the live server rejects spec-invalid input the same way the dev/test
       # transports do. is_production() defaults to "development" already, but make
       # it explicit so a future Dockerfile/env change can't silently flip the
-      # boundary to production's lenient extra="ignore". (salesagent-hm9q)
+      # boundary to production's lenient extra="ignore".
       ENVIRONMENT: development
       SKIP_NGINX: "true"
       SKIP_CRON: "true"
@@ -94,7 +94,7 @@ services:
       # create flows resolve format specs server-side, and references carry the
       # PUBLIC canonical agent_url — without this, the registry's connection
       # alias has nothing to route to and the server calls the LIVE public host,
-      # which rate-limits under CI load (salesagent-9qe2). The runner service
+      # which rate-limits under CI load. The runner service
       # already sets the same value for the direct integration tests.
       CREATIVE_AGENT_URL: http://creative-agent:8080/api/creative-agent
       CREATE_DEMO_TENANT: "true"
@@ -110,8 +110,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
       # BLACKHOLE the live public creative agent: tests must NEVER depend on it
-      # (its catalog drifts and it rate-limits under CI load — salesagent-9qe2,
-      # salesagent-kczg). The registry aliases this host to the pinned in-network
+      # (its catalog drifts and it rate-limits under CI load,
+      #). The registry aliases this host to the pinned in-network
       # agent; if any code path regresses and connects to it verbatim, this makes
       # it fail INSTANTLY (connection refused) instead of flaking on a 429.
       - "creative.adcontextprotocol.org:127.0.0.1"
@@ -171,7 +171,7 @@ services:
     # reason (cassini/identity.py: "a workaround for a root daemon, and there is
     # no longer a root daemon"). Symptom this caused live: /app/logs/* created
     # root-owned, adcp-server (uid 1001) dying at import on a module-level
-    # FileHandler, cascading into ~2100 test failures (cassini-w37).
+    # FileHandler, cascading into ~2100 test failures.
     build:
       context: .
       dockerfile: Dockerfile.test
@@ -328,7 +328,7 @@ services:
   # (run_all_tests.sh for the in-network path; tests/e2e/conftest.py for the
   # host-side standalone path). NOT profile-gated: the SERVER resolves format
   # specs against this agent (CREATIVE_AGENT_URL) and the live public host is
-  # blackholed, so every e2e `up` needs it (salesagent-9qe2).
+  # blackholed, so every e2e `up` needs it.
   creative-pg:
     image: postgres:17-alpine
     environment:

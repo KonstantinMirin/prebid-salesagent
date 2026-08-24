@@ -1,4 +1,4 @@
-"""The pinned Lane F contract (bd salesagent-qbac1.6), shared by its two graders.
+"""The pinned Lane F contract, shared by its two graders.
 
 One place, so the structural guard
 (``tests/unit/test_architecture_liveness_contract_owner.py``) and the behavioral
@@ -50,12 +50,12 @@ LEDGER_PARSER = "parse_ledger_lines"
 DERIVATION_ACCESSOR = "derive_marker_names"
 
 # G2 (binding input): under reachability the accessor's home is genuine
-# latitude, so the IMPLEMENT atom picks it, RECORDS it in bd salesagent-qbac1.6,
+# latitude, so the IMPLEMENT atom picks it, RECORDS it in the task,
 # and pins it here — the guards cite this value. Constraints already
 # established: NOT tests/bdd/conftest.py (the plugin importing conftest is a
 # partial-import cycle, conftest.py:47-49) and NOT scripts/audit/storyboard_spec.py
 # (stdlib-only, no pytest).
-# PICKED AND RECORDED by the implement atom (bd salesagent-qbac1.6): tests/helpers
+# PICKED AND RECORDED by the implement atom : tests/helpers
 # is the existing leaf both sides already import — tests/helpers/ledger.py plays
 # exactly this role — and it satisfies both stated constraints (not conftest, not
 # the stdlib-only owner).
@@ -79,7 +79,7 @@ ABSORBED_HELPERS = frozenset(
 )
 
 FIX_HINT = (
-    "Lane F (bd salesagent-qbac1.6): the shared contract has ONE stdlib-only owner both "
+    "Lane F : the shared contract has ONE stdlib-only owner both "
     f"sides import ({OWNER}) — never copied, never re-implemented."
 )
 

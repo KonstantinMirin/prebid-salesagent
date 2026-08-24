@@ -1,18 +1,18 @@
-"""Structural guard: nobody re-derives a storyboard-tree primitive (salesagent-g6m2.1).
+"""Structural guard: nobody re-derives a storyboard-tree primitive.
 
 ``scripts/audit/storyboard_spec.py`` exists to be the SINGLE implementation of
 every fact read out of the pinned AdCP compliance tree. Its own docstring
 records why: before it, 14+ primitives had 2-4 incompatible implementations
 each, six of which had silently diverged into live bugs.
 
-salesagent-g6m2.1 was the seventh. ``storyboard_roadmap.py`` built its
+A seventh case. ``storyboard_roadmap.py`` built its
 published check-type inventory by summing ``checks_for_phase()`` over
 ``phases()`` -- an aggregate the module never offered, invented at the call
 site, and wrong: ``phases()`` returns ids at every depth while a phase's
 window already encloses its steps', so every nested check was counted twice.
 119 of 121 storyboards shipped inflated numbers.
 
-salesagent-vuz9t.2 widened the guard from these two literal names to the
+A later change widened the guard from these two literal names to the
 pattern CLASSES they belong to, after finding the guard itself had a sibling
 gap: it policed two of roughly 14 primitives by name, and a fresh copy of a
 third (the pinned-version regex) shipped green right next to two guards that
@@ -34,7 +34,7 @@ Five forms are banned here:
    ``storyboard_spec.dist_root()``.
 5. **The raw stem collapse.** ``Path(rel).stem`` on a storyboard's relative
    path -- collapses every ``*/index.yaml`` onto the literal ``"index"``
-   (salesagent-pw71) instead of calling ``storyboard_spec.storyboard_key()``.
+   instead of calling ``storyboard_spec.storyboard_key()``.
    Anchored on the argument name ``rel``: every primitive in this module and
    its consumers spells a storyboard-relative path ``rel`` (
    ``storyboard_key(rel)``, ``classify(rel, ...)``, ``classify_gates(rel,
@@ -202,7 +202,7 @@ def _scan_files() -> list[Path]:
 
 
 def test_no_consumer_sums_checks_for_phase_over_phases():
-    """The salesagent-g6m2.1 double-count may not return in any consumer."""
+    """The double-count may not return in any consumer."""
     violations = {
         str(path.relative_to(REPO_ROOT)): lines
         for path in _scan_files()
@@ -211,7 +211,7 @@ def test_no_consumer_sums_checks_for_phase_over_phases():
     assert violations == {}, (
         "Summing checks_for_phase() over phases() double-counts every nested check "
         "(a phase's window already encloses its steps'). Call "
-        "storyboard_spec.check_inventory() instead — see salesagent-g6m2.1."
+        "storyboard_spec.check_inventory() instead."
     )
 
 
@@ -223,8 +223,7 @@ def test_no_consumer_re_derives_the_declared_storyboard_id():
         if (lines := find_declared_id_regexes(ast.parse(path.read_text(encoding="utf-8"))))
     }
     assert violations == {}, (
-        "A local `^id:` regex re-derives a compliance-tree primitive. Call "
-        "storyboard_spec.storyboard_id() instead — see salesagent-g6m2.1."
+        "A local `^id:` regex re-derives a compliance-tree primitive. Call storyboard_spec.storyboard_id() instead."
     )
 
 
@@ -237,7 +236,7 @@ def test_no_consumer_re_derives_the_pinned_version_regex():
     }
     assert violations == {}, (
         "A local copy of the pinned-version regex re-derives a compliance-tree primitive. "
-        "Call storyboard_spec.pinned_version(repo) instead — see salesagent-vuz9t.2."
+        "Call storyboard_spec.pinned_version(repo) instead."
     )
 
 
@@ -250,7 +249,7 @@ def test_no_consumer_hand_joins_the_dist_compliance_path():
     }
     assert violations == {}, (
         "A hand-joined dist/compliance/<version> path re-derives a compliance-tree primitive. "
-        "Call storyboard_spec.dist_root(adcp, version) instead — see salesagent-vuz9t.2."
+        "Call storyboard_spec.dist_root(adcp, version) instead."
     )
 
 
@@ -262,8 +261,8 @@ def test_no_consumer_collapses_a_storyboard_rel_path_with_raw_stem():
         if (lines := find_raw_storyboard_stem_collapses(ast.parse(path.read_text(encoding="utf-8"))))
     }
     assert violations == {}, (
-        'Path(rel).stem collapses every */index.yaml onto the literal "index" (salesagent-pw71). '
-        "Call storyboard_spec.storyboard_key(rel) instead — see salesagent-vuz9t.2."
+        'Path(rel).stem collapses every */index.yaml onto the literal "index". '
+        "Call storyboard_spec.storyboard_key(rel) instead."
     )
 
 

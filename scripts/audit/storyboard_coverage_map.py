@@ -10,7 +10,7 @@ A storyboard is on our path unless a gate the spec defines excludes it:
   * ``universal/``            — applies to every agent type, but is NOT
                                 exempt from ``required_tools`` (see below).
                                 Confirmed against SB-1b's real-runner baseline
-                                (salesagent-exbf): the SDK's capability-driven
+                               : the SDK's capability-driven
                                 selection put every one of the 35 real,
                                 gradable ``universal/`` storyboards through the
                                 same any-of tool gate as protocol/specialism
@@ -59,7 +59,7 @@ Parsing primitives (universe filter, gate-field extraction, tagged-scenario
 block extraction, storyboard identity) come from scripts/audit/storyboard_spec.py
 — the shared L0 module also used by storyboard_binding_sweep.py and the
 tests/fixtures/adcp_storyboards_pinned index, so this map's classification and
-the binding sweep's audit agree by construction (salesagent-pw71).
+the binding sweep's audit agree by construction.
 
 Read-only. Emits JSON, or ``--markdown`` for the checked-in artifact.
 """
@@ -197,7 +197,7 @@ def statuses_from_vendored_index(repo: Path, index: dict[str, Any]) -> dict[str,
     (``test_architecture_storyboard_issue_map.py``) and the artifact-truth check
     on ``docs/test-obligations/storyboard-checks.jsonl`` — a fixture-driven
     on-path judgement drifted into two disagreeing implementations before this
-    module existed (salesagent-pw71); it does not get a third here.
+    module existed; it does not get a third here.
     """
     declared = storyboard_spec.declared_capabilities(repo)
     storyboards: dict[str, dict[str, Any]] = index["storyboards"]

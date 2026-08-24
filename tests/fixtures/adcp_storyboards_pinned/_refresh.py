@@ -23,7 +23,7 @@ Reads from a local clone at ~/projects/adcp. Parsing primitives (the storyboard
 universe filter, required_tools/requires_capability/requires_scenarios extraction,
 phase-id parsing) come from scripts/audit/storyboard_spec.py — the shared L0 module
 also used by storyboard_coverage_map.py and storyboard_binding_sweep.py, so this
-index's universe and gate fields agree with theirs by construction (salesagent-pw71).
+index's universe and gate fields agree with theirs by construction.
 """
 
 from __future__ import annotations

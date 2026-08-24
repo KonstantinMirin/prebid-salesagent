@@ -1,10 +1,10 @@
-"""Storyboard-conformance test configuration (SB-4b, salesagent-syhj).
+"""Storyboard-conformance test configuration (SB-4b).
 
 Grades a MEASURED run of the real ``@adcp/sdk`` storyboard runner through pytest
 as ordinary parametrized tests — one per ``(protocol, track, storyboard_id,
 step_id)``, the runner being executed once per protocol (mcp, a2a) against the
 same agent — reusing the exact ledger/xfail/lock-test discipline established by
-``tests/bdd/e2e_rest_known_failures.txt`` (Core Invariant, salesagent-syhj design)
+``tests/bdd/e2e_rest_known_failures.txt`` (Core Invariant)
 rather than inventing a second comparator system.
 
 Runner-reported skips (missing_test_controller, missing_tool, prerequisite_failed)

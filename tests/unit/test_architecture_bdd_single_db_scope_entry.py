@@ -15,7 +15,6 @@ This guard pins the call count to exactly one and pins that one call site
 inside ``_db_scope_for`` itself. There is no allowlist: any new direct call
 site is a defect, not debt to track.
 
-beads: salesagent-vuz9t.11.2
 """
 
 from __future__ import annotations

@@ -1,5 +1,5 @@
 """Structural guard: `docs/test-obligations/storyboard-binding-baseline.md` agrees with
-the feature tree it was generated from (salesagent-qbac1.5, Lane E4).
+the feature tree it was generated from (Lane E4).
 
 The checked-in baseline opens with "`21` scenarios tagged `@storyboard-v3.1`". The
 tree carries **20** (`storyboard_spec.tagged_scenarios`), its table lists a

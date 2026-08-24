@@ -5,7 +5,6 @@ Real: get_db_session, MediaBuyRepository, all validation (all hit real DB).
 
 Requires: integration_db fixture.
 
-beads: salesagent-4n0
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ from tests.harness.transport import DeliverResult
 # request with NO key (the schema rejects it as "Field required" — AdCP 3.0.1).
 # Deliberately NOT tests.harness.transport.NO_IDENTITY_OVERRIDE — a different
 # sentinel for a different field (idempotency_key, not identity); the "one
-# sentinel" consolidation (salesagent-vuz9t.8.1) is scoped to the
+# sentinel" consolidation is scoped to the
 # identity-argument omission disease, not every object()-as-sentinel use in
 # tests/harness/.
 OMIT_IDEMPOTENCY_KEY: Any = object()

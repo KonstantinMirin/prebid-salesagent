@@ -1,6 +1,6 @@
 """The ONE marker-set derivation both routing call sites use.
 
-Lane F (bd salesagent-qbac1.6), binding input G2: the accessor's home is genuine
+Lane F, binding input G2: the accessor's home is genuine
 latitude, so the implement atom picks it and records it. It cannot live in
 ``tests/bdd/conftest.py`` — the liveness plugin importing conftest is a
 partial-import cycle — and it cannot live in ``scripts/audit/storyboard_spec.py``,

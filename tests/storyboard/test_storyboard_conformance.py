@@ -1,4 +1,4 @@
-"""Storyboard-conformance grading via pytest (SB-4b, salesagent-syhj).
+"""Storyboard-conformance grading via pytest (SB-4b).
 
 Grades a MEASURED run of the real ``@adcp/sdk`` storyboard runner (never
 re-derived/inferred) as ordinary parametrized pytest tests, one per

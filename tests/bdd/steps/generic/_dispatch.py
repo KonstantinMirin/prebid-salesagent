@@ -30,7 +30,7 @@ def _populate_ctx_from_result(ctx: dict, result: TransportResult) -> None:
     (``then_error.py``'s ``_wire_code``/``_wire_suggestion``/``_wire_error_object``)
     read — ``ctx['result']`` is the only key with exactly one producer; leaving
     it unset silently downgrades those Then steps to the lossy reconstructed
-    ``ctx['error']`` fallback (salesagent-957x.1/.2 disease scan).
+    ``ctx['error']`` fallback (disease scan).
     """
     # Expose the normalized TransportResult so Then-steps can use the
     # harness-provided, transport-independent assertions (result.assert_wire_error)

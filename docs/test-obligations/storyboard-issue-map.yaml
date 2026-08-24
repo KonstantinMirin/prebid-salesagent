@@ -65,7 +65,7 @@ storyboards:
   universal/signed-requests.yaml:
     issues: [1291]
     coverage: partial
-    # RETRACTION (salesagent-g6m2.3). This entry used to read: "the first real
+    # RETRACTION. This entry used to read: "the first real
     # in-network run disproved [the skip]: it grades them and they FAIL ... Not
     # advertising a capability does not exempt you from its storyboard." That
     # conclusion is wrong. The storyboard's gating clause — byte-identical at
@@ -89,7 +89,6 @@ storyboards:
     # Nothing is owed upstream: the CLI threads the discovered profile correctly
     # (bin/adcp.js builds runOptions with no _client/_profile, so
     # runStoryboardBody discovers its own and hands it to checkRequires).
-    # Full evidence chain: salesagent-g6m2.3.
     note: >-
       #1291 is the implementation epic. MEASURED 2026-08-21
       (test-results/innet_210826_1048/, in-network, MCP pass): the 40 checks

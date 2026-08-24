@@ -24,7 +24,7 @@ Feature-file parsing (tagged-scenario extraction, `@source` footer parsing, path
 normalization) comes from scripts/audit/storyboard_spec.py, the shared L0 module
 also used by storyboard_coverage_map.py and storyboard_binding_sweep.py, so this
 guard's notion of a tagged scenario's block/footer agrees with the audit scripts by
-construction (salesagent-pw71) — importing it is safe here because none of its
+construction — importing it is safe here because none of its
 functions this file calls (`tagged_scenarios`, `parse_source_footer`,
 `normalize_cited_path`) touch the pinned compliance tree; only the vendored
 `index.json` and this repo's own `.feature` files are read.
@@ -56,7 +56,7 @@ from scripts.audit import storyboard_spec  # noqa: E402
 #
 # Empty: every @storyboard-v3.1 scenario's footer was re-verified against the pinned
 # v3.1.1 tree and corrected to its true source (wrong path/phase/step fixed, missing
-# footers added) rather than ledgered here (salesagent-vuz9t.5). Stays the (empty)
+# footers added) rather than ledgered here. Stays the (empty)
 # seed of this shrink-only guard.
 KNOWN_BROKEN_BINDINGS: frozenset[str] = frozenset()
 
@@ -129,7 +129,7 @@ def _violations() -> dict[str, str]:
         # The footer's own `phase=`/`step=` resolve against the cited file's ids
         # directly -- `step` is the addressable unit the conformance ledger keys
         # on (protocol, track, storyboard_id, step_id); a `step=` naming nothing
-        # real must fail here, not carry unchecked (salesagent-vuz9t.4).
+        # real must fail here, not carry unchecked.
         if footer.phase and footer.phase not in known:
             bad[scenario.identifier] = f"{scenario.feature}: cites phase {footer.phase!r}, absent from cited {rel!r}"
             continue

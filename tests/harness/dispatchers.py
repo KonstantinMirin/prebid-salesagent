@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 # _envelope_from_adcp_error lives in transport.py, not here — both this module
 # and client.py need it, and housing it in either would recreate the mutual
-# lazy-import cycle untangled by salesagent-vuz9t.17 (client.py used to lazily
+# lazy-import cycle untangled later (client.py used to lazily
 # import it back from this module, while this module lazily imports dispatch
 # functions FROM client.py — the two together being the "mutual" part).
 #
@@ -118,7 +118,7 @@ class RestDispatcher:
             # derives status=transport_fault, because an exception here means no
             # HTTP body, hence no AdCP envelope, ever existed.
             return unwrap_rest_error(exc, Transport.REST)
-        # unwrap_rest_response (salesagent-vuz9t.8.2) owns the status-code
+        # unwrap_rest_response owns the status-code
         # branching, envelope tag, and the #1417 pristine-wire deepcopy rule —
         # the same function RestE2EDispatcher and the generic client's
         # _unwrap_rest delegate to below.
@@ -170,10 +170,10 @@ class RestE2EDispatcher:
     DELIVER (the actual httpx call) is NOT hand-rolled here — it delegates to
     ``tests.harness.client._deliver_e2e_rest``, the single delivery
     implementation also used by ``AdCPTestClient.call(..., Transport.E2E_REST)``
-    (salesagent-uz00, SB-3a; design doc §5).
+    (SB-3a; design doc §5).
 
     UNWRAP (the status-code/envelope handling) delegates to
-    ``tests.harness.client.unwrap_rest_response`` (salesagent-vuz9t.8.2) —
+    ``tests.harness.client.unwrap_rest_response`` —
     the one REST unwrap shared with the in-process ``RestDispatcher`` and the
     generic client's ``_unwrap_rest``. It derives the envelope tag from
     ``Transport.E2E_REST.value`` (``"e2e_rest"``) and keeps the graceful
@@ -195,7 +195,7 @@ class RestE2EDispatcher:
         # back to env.identity_for(transport) inside _deliver_e2e_rest, the
         # same resolution every other transport's omitted-identity dispatch
         # gets — a bare ``None`` default here would force every omitted-
-        # identity call unauthenticated instead (salesagent-vuz9t.8.1).
+        # identity call unauthenticated instead.
         identity = kwargs.pop("identity", NO_IDENTITY_OVERRIDE)
         body = env.build_rest_body(**kwargs)
         endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
@@ -210,7 +210,7 @@ class McpE2EDispatcher:
     """Dispatch via real HTTP through nginx to the Docker stack's MCP endpoint.
 
     Delegates to ``AdCPTestClient`` (``tests/harness/client.py``,
-    ``salesagent-wu78``/SB-3b) instead of duplicating the
+    SB-3b) instead of duplicating the
     ADDRESS/WRAP/DELIVER/UNWRAP logic here a second time — ``client.call()``
     already builds the real ``fastmcp.Client`` against
     ``env.e2e_config.base_url`` and unwraps the response identically to the
@@ -255,7 +255,7 @@ class A2AE2EDispatcher:
     Unlike ``RestE2EDispatcher`` (which reuses each env's hand-written
     ``REST_ENDPOINT``/``build_rest_body``/``parse_rest_response`` overrides),
     this delegates entirely to ``AdCPTestClient``/``_deliver_e2e_a2a``
-    (``tests/harness/client.py``, salesagent-tisr / SB-3c) — the address,
+    (``tests/harness/client.py``, SB-3c) — the address,
     JSON-RPC envelope construction, and Task-state handling all live there,
     derived from the live ``create_agent_card()`` registration
     (``tests/harness/address_table.py``), not re-implemented per-env.

@@ -1,4 +1,4 @@
-"""Grader: the two env-route resolvers must agree, per COLLECTED scenario (Lane F, salesagent-qbac1.6).
+"""Grader: the two env-route resolvers must agree, per COLLECTED scenario (Lane F).
 
 The structural half of this lane — one owner, one routing call, the four routing
 helpers absorbed — lives in ``test_architecture_liveness_contract_owner.py``.
@@ -420,7 +420,7 @@ def test_pinned_derivation_accessor_reproduces_iter_markers_for_every_collected_
     rows = _collected_items()
     assert accessor_dotted_module() is not None, (
         f"{DERIVATION_ACCESSOR}()'s home is not pinned yet (binding input G2: the implement atom records the "
-        f"chosen module in bd salesagent-qbac1.6 and pins it in tests/unit/_liveness_contract_pins.py).\n{FIX_HINT}"
+        f"chosen module in the task and pins it in tests/unit/_liveness_contract_pins.py).\n{FIX_HINT}"
     )
     mismatches = {(row["nodeid"], tuple(row["markers"])) for row in rows if row["derived"] != row["markers"]}
     assert_violations_match_allowlist(

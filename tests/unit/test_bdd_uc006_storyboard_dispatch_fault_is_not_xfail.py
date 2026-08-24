@@ -16,7 +16,7 @@ Why it lives here rather than as a one-shot manual pytest run: a manual
 mutation is executed once by a human and never again. This runs on every
 ``make quality``.
 
-Scope, per the pre-implementation solution review of salesagent-qbac1.4:
+Scope, per the pre-implementation solution review:
 this is NECESSARY BUT NOT SUFFICIENT. It cannot detect RELOCATION of the hatch
 to a conftest tag route, an ``e2e_rest_known_failures.txt`` line, or another
 step module — only the AST lock pins those. Keep both.

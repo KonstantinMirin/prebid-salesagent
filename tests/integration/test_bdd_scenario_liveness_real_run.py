@@ -1,4 +1,4 @@
-"""Real-run proof for tests/bdd/scenario_liveness.py (salesagent-vuz9t.12.1).
+"""Real-run proof for tests/bdd/scenario_liveness.py.
 
 The pure-logic tests live in ``tests/unit/test_architecture_bdd_scenario_liveness.py``.
 This file is the grounding the parent finding demands: the liveness artifact must be
@@ -9,7 +9,7 @@ Shells out to two narrow, fast, real ``pytest tests/bdd`` slices (selected by th
 ``@storyboard-v3.1`` marker so the count of scenarios discovered matches what
 ``scripts/audit/storyboard_coverage_map.covered_storyboards`` claims as covered):
 
-* UC-006's ``uc006-storyboard-routing`` scenarios — salesagent-vuz9t.12.3 landed real
+* UC-006's ``uc006-storyboard-routing`` scenarios landed real
   step definitions for all six (none are dormant/steps-unbound any more). Five
   genuinely xfail with a ``ledgered`` reason citing a real production gap
   (provenance validation, multi-format sync status); the sixth,
@@ -25,7 +25,7 @@ Needs a real Postgres reachable via ``DATABASE_URL`` (the harness these scenario
 exercise creates tenants/principals/products for real) — skipped otherwise, same as
 every other ``requires_db`` test in this suite.
 
-Two further obligations are graded here (salesagent-qbac1.5, Lane E steps 1-2),
+Two further obligations are graded here (Lane E steps 1-2),
 because neither is observable from the pure-logic unit tests:
 
 * **The artifact must survive xdist.** ``tox.ini`` runs the bdd env under
@@ -148,7 +148,7 @@ def _run_bdd_slice(tmp_path: Path, test_file: str, marker_expr: str, *, extra_ar
 def test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live(tmp_path: Path) -> None:
     """The UC-006 storyboard-routing slice is measured in full, and its
     ``@storyboard-v3.1``-tagged members have real, bound step definitions
-    (salesagent-vuz9t.12.3) — none are dormant/steps-unbound. Five genuinely xfail
+    — none are dormant/steps-unbound. Five genuinely xfail
     with a real, ledgered production-gap reason (not StepDefinitionNotFoundError);
     the sixth, format-id-roundtrip-on-sync, genuinely passes. Proves the artifact
     tracks real state, not a frozen count, and distinguishes ledgered-xfail from

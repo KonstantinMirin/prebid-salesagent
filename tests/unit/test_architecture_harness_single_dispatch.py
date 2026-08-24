@@ -1,6 +1,6 @@
 """Guard: the harness has ONE dispatch mechanism, and it lives on the base.
 
-Lane B's Core Invariant (beads salesagent-qbac1.2, ``.claude/notes/
+Lane B's Core Invariant (the task, ``.claude/notes/
 pr1858-round2-remediation.md`` § "Lane B"): ``AdCPTestClient`` is the
 implementation ``call_via``/``call_mcp``/``call_a2a`` delegate to, **not** a
 peer beside them. Today the harness carries two live dispatch mechanisms — the
@@ -37,7 +37,6 @@ AST and not text: ``tests/unit/test_architecture_harness_mcp_with_error_logging.
 holds a ``def call_mcp`` inside a meta-test STRING literal, which a grep census
 would miscount as a real definition.
 
-beads: salesagent-qbac1.2 (Lane B), graded by salesagent-9qi1w.11.
 """
 
 from __future__ import annotations
@@ -253,7 +252,7 @@ def test_no_env_subclass_overrides_the_legacy_dispatch_methods():
         f"delegating to BaseTestEnv (which defines each once as `return self.deliver_*(**kwargs).payload`): "
         f"{sorted(violations)}. Rename the override to deliver_mcp/deliver_a2a returning a DeliverResult "
         f"and allowlist it in _KNOWN_DELIVER_OVERRIDES, or delete it and declare MCP_TOOL/A2A_SKILL so the "
-        f"base delegates for you (salesagent-qbac1.2, change-set B1/R1)."
+        f"base delegates for you (change-set B1/R1)."
     )
 
 
@@ -270,7 +269,7 @@ def test_deliver_overrides_match_allowlist():
         fix_hint=(
             "Declare MCP_TOOL/A2A_SKILL (and, if the response needs a non-default parser, the "
             "response_parser(self, tool) instance hook) so BaseTestEnv.deliver_* dispatches through "
-            "the one AdCPTestClient core instead of a per-env copy (salesagent-qbac1.2, change-set B1)."
+            "the one AdCPTestClient core instead of a per-env copy (change-set B1)."
         ),
     )
 
@@ -295,7 +294,7 @@ def test_base_env_owns_the_one_dispatch_pair():
     assert _DELIVER_METHODS <= defined, (
         f"BaseTestEnv must define {sorted(_DELIVER_METHODS)} — the ONE dispatch pair the transport "
         f"dispatchers call and envs override. Missing: {sorted(_DELIVER_METHODS - defined)} "
-        f"(salesagent-qbac1.2, change-set B1 (a''))."
+        f"(change-set B1 (a''))."
     )
     assert _LEGACY_DISPATCH_METHODS <= defined, (
         f"BaseTestEnv must keep defining {sorted(_LEGACY_DISPATCH_METHODS)} — the typed-payload return "
@@ -309,7 +308,7 @@ def test_base_env_owns_the_one_dispatch_pair():
         body = [s for s in func.body if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))]
         assert len(body) == 1 and isinstance(body[0], ast.Return), (
             f"BaseTestEnv.{legacy} must be a single `return self.{deliver}(**kwargs).payload` statement, "
-            f"got {len(body)} statement(s) (salesagent-qbac1.2, change-set B1 (b''))."
+            f"got {len(body)} statement(s) (change-set B1 (b''))."
         )
         returned = body[0].value
         assert (
@@ -335,7 +334,7 @@ def test_no_per_env_wire_stash_attribute():
         f"{len(references)} reference(s) to the deleted per-env wire stash "
         f"`{_WIRE_STASH_ATTR}` remain: {sorted(references)}. The success-path wire travels on "
         f"DeliverResult.wire_response (the dispatchers read the RETURN VALUE, never another object's "
-        f"private attribute) — salesagent-qbac1.2, change-set B2/R3."
+        f"private attribute) — change-set B2/R3."
     )
 
 

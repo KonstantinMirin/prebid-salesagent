@@ -5,7 +5,6 @@ No patches needed (pure DB read).
 
 Requires: integration_db fixture + existing media buys in the DB.
 
-beads: salesagent-4n0
 """
 
 from __future__ import annotations

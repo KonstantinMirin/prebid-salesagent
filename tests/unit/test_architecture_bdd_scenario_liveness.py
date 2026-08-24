@@ -1,6 +1,6 @@
-"""Regression tests for tests/bdd/scenario_liveness.py (salesagent-vuz9t.12.1).
+"""Regression tests for tests/bdd/scenario_liveness.py.
 
-The parent finding (salesagent-vuz9t.12): a ``@storyboard-v3.1``-tagged scenario
+The parent finding: a ``@storyboard-v3.1``-tagged scenario
 whose steps have no bound step definitions is converted to ``xfail`` by
 ``tests/bdd/conftest.py``'s auto-xfail hookwrapper and counts as "covered" in
 ``storyboard_coverage_map`` forever — nothing measures whether the scenario

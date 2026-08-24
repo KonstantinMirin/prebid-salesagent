@@ -10,7 +10,7 @@ the normal gate.
   - UC-002: fixed in commit 655ba1f56
   - UC-003: fixed in #1417 (this guard's motivating bug)
 
-RESTRUCTURED FOR LANE F (bd salesagent-qbac1.6), as this guard's own failure
+RESTRUCTURED FOR LANE F, as this guard's own failure
 message instructed. The `if/elif/else` chain it used to walk is gone: routing is
 now a declarative table of `EnvRoute` rows resolved by
 `storyboard_spec.resolve_env_route`, so the extension split is a row carrying a
@@ -26,7 +26,6 @@ Detection stays AST over the conftest source (never an import of the live table)
 so a row deleted in the source is caught even if some other module happens to
 reconstruct an equivalent table at runtime.
 
-beads: salesagent-j4bo
 """
 
 import ast

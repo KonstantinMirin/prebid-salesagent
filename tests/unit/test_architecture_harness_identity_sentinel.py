@@ -1,13 +1,13 @@
 """Guard: NO_IDENTITY_OVERRIDE is the ONLY identity-omission sentinel.
 
-Prevents the object()-sentinel fork (salesagent-vuz9t.8.1) from regrowing: a
+Prevents the object()-sentinel fork from regrowing: a
 local ``_NO_OVERRIDE = object()`` (or similarly identity/override-named
 sentinel), reintroduced anywhere under ``tests/harness/`` or
 ``tests/helpers/`` instead of importing the shared
 ``tests.harness.transport.NO_IDENTITY_OVERRIDE``. Census at the time this
 guard was added: 10 such local sentinels across client.py, dispatchers.py,
 _base.py (x4), _mixins.py, and tests/helpers/mcp_envelope_capture.py — see
-salesagent-vuz9t.8.1's beads notes for the full disposition table.
+the beads notes for the full disposition table.
 
 AST-based (not regex/text) — walks assignment targets, so there is no
 regex-slip case to cover (per the dev-practices sweep-verify formula: an
@@ -88,7 +88,7 @@ def test_no_local_identity_sentinels_outside_transport_module() -> None:
         "Local identity-omission sentinel(s) found outside the canonical export "
         f"{CANONICAL_NAME} ({CANONICAL_FILE}): {offenders}. Import {CANONICAL_NAME} "
         "from tests.harness.transport instead of reintroducing a local object() "
-        "sentinel (salesagent-vuz9t.8.1)."
+        "sentinel."
     )
 
 
