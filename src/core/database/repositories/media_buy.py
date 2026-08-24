@@ -55,23 +55,6 @@ class MediaBuyRepository:
     )
     _PACKAGE_IMMUTABLE_FIELDS: frozenset[str] = frozenset({"media_buy_id", "package_id"})
 
-    @staticmethod
-    def _validated_status(status: PersistedMediaBuyStatus) -> PersistedMediaBuyStatus:
-        """The member ``status`` spells, or ``AdCPPersistedStateError``.
-
-        Every door that writes the column goes through here. The vocabulary is
-        closed, so a value with no member is refused where it would ENTER rather
-        than interpreted by each reader: the wire projection maps persisted statuses
-        to protocol ones, and a value it has no row for cannot be described at all.
-
-        The normalization itself is not implemented here — it is
-        ``PersistedMediaBuyStatus.parse``, the single coercion this seam and the read
-        seam share, so a casing or membership rule cannot hold at one door and not
-        the other. What was a bare ``ValueError`` is now a typed terminal error:
-        the value is the seller's own store, not something the buyer can correct.
-        """
-        return PersistedMediaBuyStatus.parse(status)
-
     def __init__(self, session: Session, tenant_id: str) -> None:
         self._session = session
         self._tenant_id = tenant_id
@@ -159,7 +142,7 @@ class MediaBuyRepository:
         principal_id: str,
         *,
         media_buy_ids: list[str] | None = None,
-        statuses: list[str] | None = None,
+        statuses: list[PersistedMediaBuyStatus] | None = None,
     ) -> list[MediaBuy]:
         """Get media buys for a principal within the tenant.
 
@@ -290,7 +273,7 @@ class MediaBuyRepository:
         """Get all media buys for the tenant."""
         return list(self._session.scalars(select(MediaBuy).where(MediaBuy.tenant_id == self._tenant_id)).all())
 
-    def list_by_statuses(self, statuses: list[str]) -> list[MediaBuy]:
+    def list_by_statuses(self, statuses: list[PersistedMediaBuyStatus]) -> list[MediaBuy]:
         """Get media buys for the tenant filtered by status list."""
         return list(
             self._session.scalars(
@@ -324,7 +307,7 @@ class MediaBuyRepository:
     def list_in_flight_on_date(
         self,
         target_date: datetime.date,
-        statuses: list[str] | None = None,
+        statuses: list[PersistedMediaBuyStatus] | None = None,
     ) -> list[MediaBuy]:
         """Get media buys whose flight period covers target_date.
 
@@ -421,7 +404,7 @@ class MediaBuyRepository:
             "end_date": end_time.date(),
             "start_time": start_time,
             "end_time": end_time,
-            "status": self._validated_status(status),
+            "status": PersistedMediaBuyStatus.parse(status, media_buy_id=media_buy_id),
             "raw_request": raw,
             # Canonical request hash as computed by the idempotency probe —
             # raw_request is not canonicalizable (injected package_ids,
@@ -528,7 +511,7 @@ class MediaBuyRepository:
         it, which the pinned response schema forbids. A closed vocabulary is enforced
         where values enter, not interpreted where they are read.
         """
-        normalized = self._validated_status(status)
+        normalized = PersistedMediaBuyStatus.parse(status, media_buy_id=media_buy_id)
         media_buy = self.get_by_id(media_buy_id)
         if media_buy is None:
             return None
@@ -563,7 +546,7 @@ class MediaBuyRepository:
         # update_status applies — otherwise the closed vocabulary is enforced on one
         # write path and bypassable on another.
         if "status" in kwargs:
-            kwargs["status"] = self._validated_status(kwargs["status"])
+            kwargs["status"] = PersistedMediaBuyStatus.parse(kwargs["status"], media_buy_id=media_buy_id)
         media_buy = self.get_by_id(media_buy_id)
         if media_buy is None:
             return None

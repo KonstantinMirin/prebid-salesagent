@@ -14,7 +14,7 @@ from sqlalchemy.orm import joinedload
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
-from src.core.database.models import PricingOption, Product, ProductInventoryMapping, Tenant
+from src.core.database.models import PersistedMediaBuyStatus, PricingOption, Product, ProductInventoryMapping, Tenant
 from src.core.database.product_pricing import get_product_pricing_options
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.schemas import Format
@@ -2137,7 +2137,13 @@ def delete_product(tenant_id, product_id):
 
             # Check if product is used in any active media buys
             mb_repo = MediaBuyRepository(db_session, tenant_id)
-            active_buys = mb_repo.list_by_statuses(["pending", "active", "paused"])
+            active_buys = mb_repo.list_by_statuses(
+                [
+                    PersistedMediaBuyStatus.PENDING,
+                    PersistedMediaBuyStatus.ACTIVE,
+                    PersistedMediaBuyStatus.PAUSED,
+                ]
+            )
 
             # Check if any active media buys reference this product
             for buy in active_buys:

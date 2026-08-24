@@ -23,8 +23,7 @@ What this file grades, precisely:
     bumps serialize in the database, and it used to be ungraded: swapping
     ``_bump_revision`` to a read-modify-write left every other test in this file
     green, so the protection could be deleted silently. ``TestConcurrentBumps``
-    below discriminates the two implementations against two real connections
-    (round-1 R1-6).
+    below discriminates the two implementations against two real connections.
 
 Semantics adopted verbatim from PR #1544 (GH #1928 requires reconciling with it
 rather than deciding independently):
@@ -409,6 +408,11 @@ class TestConfirmedAtStamp:
         assert refusal.value.error_code == "CONFIGURATION_ERROR"
         assert refusal.value.recovery == "terminal"
         assert _UNRECOGNISED_STATUS in str(refusal.value)
+        # The refusal names the ROW, not just the offending value. An operator reading
+        # this in a log has no other way to find which buy carries the defect, and the
+        # wrapper this door used to route through could not carry the id at all — its
+        # signature had no parameter for it.
+        assert media_buy.media_buy_id in str(refusal.value)
 
         after = _reread(repo, media_buy.media_buy_id)
         assert after.status == before.status, f"the refused write still moved the status to {after.status!r}"
@@ -601,7 +605,7 @@ _LOCK_HOLD_SECONDS = 1.0
 
 @pytest.mark.requires_db
 class TestConcurrentBumps:
-    """Two OVERLAPPING transactions bumping one row must not lose an update (R1-6).
+    """Two OVERLAPPING transactions bumping one row must not lose an update.
 
     The interleaving is the whole test, and it needs real threads: the second
     UPDATE has to be issued while the first transaction still holds the row lock.

@@ -946,13 +946,18 @@ class PersistedMediaBuyStatus(StrEnum):
     FAILED = "failed"
 
     @classmethod
-    def parse(cls, raw: str | None, *, media_buy_id: str | None = None) -> "PersistedMediaBuyStatus":
+    def parse(cls, raw: str | None, *, media_buy_id: str | None) -> "PersistedMediaBuyStatus":
         """The member *raw* spells, or ``AdCPPersistedStateError``.
 
         The ONE coercion between the ``String`` column and the vocabulary. Casing is
         spelling, not meaning, so it is normalized here rather than tolerated by each
         reader; anything with no member is a seller-side store defect and is refused
         at the door it arrives at, never interpreted, defaulted, or passed through.
+
+        ``media_buy_id`` is required to SPELL, and still nullable to pass: a caller
+        with no row identity writes ``media_buy_id=None`` and says so. A defaulted
+        keyword is a permission to omit, and an omitted id yields a refusal that
+        names no row — a defect nobody sees until they are reading a log.
 
         Refusing is the whole point. A defaulted unknown state reaches the buyer as a
         lifecycle claim nobody defined, and the pinned item schema forbids the

@@ -109,7 +109,7 @@ from src.core.auth import (
     resolve_principal_or_raise,
 )
 from src.core.context_manager import get_context_manager
-from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy
+from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, PersistedMediaBuyStatus
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.database.models import MediaPackage as DBMediaPackage
@@ -256,7 +256,7 @@ def _determine_media_buy_status(
     start_time: datetime,
     end_time: datetime,
     now: datetime | None = None,
-) -> str:
+) -> PersistedMediaBuyStatus:
     """Centralized media buy status determination logic.
 
     This ensures consistent status across all adapters (GAM, Mock, Kevel, etc.).
@@ -282,28 +282,30 @@ def _determine_media_buy_status(
         now: Current time (defaults to datetime.now(UTC))
 
     Returns:
-        Status string matching AdCP MediaBuyStatus enum
-        (pending_creatives, pending_start, active, paused, completed)
+        The persisted-vocabulary member the flight window and creative state imply.
+        Returning the member rather than its spelling is what lets the caller hand it
+        straight to the repository: a string would have to be coerced back, one frame
+        from the door that coerces it again.
     """
     if now is None:
         now = datetime.now(UTC)
 
     # Priority 1: Completed (past end date - check first to avoid false pending states)
     if now > end_time:
-        return MediaBuyStatus.completed.value
+        return PersistedMediaBuyStatus.COMPLETED
 
     # Priority 2: Pending creatives (missing or unapproved creatives block delivery)
     # This is distinct from pending_start: the buy is otherwise ready, but creatives
     # need to be assigned/approved before it can go active.
     if not has_creatives or not creatives_approved:
-        return MediaBuyStatus.pending_creatives.value
+        return PersistedMediaBuyStatus.PENDING_CREATIVES
 
     # Priority 3: Pending start (manual approval required or scheduled for future)
     if manual_approval_required or now < start_time:
-        return MediaBuyStatus.pending_start.value
+        return PersistedMediaBuyStatus.PENDING_START
 
     # Priority 4: Active (currently delivering - all conditions met)
-    return MediaBuyStatus.active.value
+    return PersistedMediaBuyStatus.ACTIVE
 
 
 def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
@@ -1623,7 +1625,6 @@ async def _validate_and_convert_format_ids(
     return validated_format_ids
 
 
-from src.core.database.models import PersistedMediaBuyStatus
 from src.services.setup_checklist_service import SetupIncompleteError, validate_setup_complete
 from src.services.slack_notifier import get_slack_notifier
 
@@ -3653,7 +3654,7 @@ async def _create_media_buy_impl(
                     currency=request_currency,
                     start_time=start_time,
                     end_time=end_time,
-                    status=PersistedMediaBuyStatus.parse(media_buy_status),
+                    status=media_buy_status,
                     campaign_objective=getattr(req, "campaign_objective", "") or "",
                     kpi_goal=getattr(req, "kpi_goal", "") or "",
                     account_id=identity.account_id if identity else None,
