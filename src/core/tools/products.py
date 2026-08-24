@@ -154,6 +154,29 @@ def filter_products_by_property_list(
     return [p for p in products if should_include_product_for_property_list(p, allowed_properties)]
 
 
+def _annotate_pricing_support(option: object, *, supported: bool, reason: str | None) -> None:
+    """Attach the LOCAL, non-spec support annotation to an SDK pricing option.
+
+    ``supported`` and ``unsupported_reason`` are deliberately absent from AdCP
+    3.1.1 ``core/pricing-option.json`` -- they are this seller's own hint. The SDK
+    option models carry ``extra="allow"``, so pydantic accepts them at runtime,
+    but mypy cannot see an undeclared attribute on a 7-member discriminated
+    union and reported ``union-attr`` at each write.
+
+    Two inline union-attr suppressions were the previous answer.
+    A named helper is better on both counts: ``setattr`` states plainly that the
+    field is dynamic by design rather than asking the reader to trust a
+    suppression, and the "which fields are the local annotation" decision now
+    lives in ONE place instead of being spelled out at each write site.
+
+    Subclassing all seven union members to declare two non-spec fields would be
+    the fully-static alternative, and is out of proportion to the hint.
+    """
+    setattr(option, "supported", supported)  # noqa: B010 - dynamic by design, see docstring
+    if reason is not None:
+        setattr(option, "unsupported_reason", reason)  # noqa: B010 - see docstring
+
+
 async def _get_products_impl(
     req: GetProductsRequestGenerated, identity: ResolvedIdentity | None
 ) -> GetProductsResponse:
@@ -764,11 +787,15 @@ async def _get_products_impl(
                         # Add supported annotation (will be included in response)
                         # Dynamic attributes on discriminated union types
                         is_supported = pricing_model in supported_models
-                        inner.supported = is_supported  # type: ignore[union-attr]
-                        if not is_supported:
-                            inner.unsupported_reason = (  # type: ignore[union-attr]
-                                f"Current adapter does not support {str(pricing_model).upper()} pricing"
-                            )
+                        _annotate_pricing_support(
+                            inner,
+                            supported=is_supported,
+                            reason=(
+                                None
+                                if is_supported
+                                else f"Current adapter does not support {str(pricing_model).upper()} pricing"
+                            ),
+                        )
         except (ImportError, RuntimeError, OSError, ValueError) as e:
             # structural-guard: spec-neutral — the dropped fields are not in
             # the pin. `supported` / `unsupported_reason` do not exist in
