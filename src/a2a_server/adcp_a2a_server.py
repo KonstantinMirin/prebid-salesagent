@@ -1520,12 +1520,17 @@ class AdCPRequestHandler(RequestHandler):
         # returns were simply absent, which the test harness was papering over by
         # synthesizing an envelope production never sent (salesagent-pldmk.26).
         #
-        # The code stays AUTH_REQUIRED for consistency with the other 41 sites in
-        # src/, NOT because it is spec-current: 3.1.1 deprecates it in favour of
-        # AUTH_MISSING / AUTH_INVALID and reserves JSON-RPC -32028 for this exact
-        # case. Migrating that is salesagent-pldmk.38, which owns all of them at
-        # once; emitting a different code here alone would split the wire
-        # contract across two A2A sites.
+        # AUTH_REQUIRED is the correct code at the 3.1.1 pin, not merely the
+        # consistent one. The pin's enum marks it deprecated in favour of
+        # AUTH_MISSING / AUTH_INVALID, but its implementation prose has not made
+        # that switch: error-handling.mdx:221 still lists AUTH_REQUIRED in the
+        # normative table and :237 says the split lands in "a future minor
+        # release ... until then, agents branch on whether credentials were
+        # attached". The generated features grade AUTH_REQUIRED accordingly,
+        # including for the invalid-token case (BR-UC-011:256). The pin
+        # contradicts itself here -- transport-errors.mdx separately reserves
+        # -32028 for AUTH_MISSING -- and salesagent-pldmk.38 tracks raising that
+        # upstream and migrating when the pin actually performs the split.
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
             raise InvalidRequestError(
                 message="Authentication required for skill invocation",
