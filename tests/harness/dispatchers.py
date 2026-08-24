@@ -55,19 +55,27 @@ def _envelope_from_adcp_error(exc: Exception) -> dict[str, Any] | None:
 
 
 def _wire_envelope_from_exception(exc: Exception) -> dict[str, Any] | None:
-    """Prefer the REAL wire envelope stashed by the harness; fall back to synthesized.
+    """The REAL wire envelope stashed by the harness, or None. Never synthesized.
 
     When the A2A pipeline reconstructs an AdCPError from a failed Task's
     artifact DataPart, ``tests.harness._base._envelope_to_adcp_error``
-    attaches the captured envelope to the exception as
-    ``_wire_error_envelope``. This helper returns that real wire envelope
-    if present; otherwise falls back to ``_envelope_from_adcp_error``
-    (synthesized — same helper production calls).
+    attaches the captured envelope to the exception as ``_wire_error_envelope``.
+
+    This used to fall back to ``_envelope_from_adcp_error`` — the same builder
+    production calls — and hand the result back under ``wire_error_envelope``,
+    the field named for what actually crossed the wire. A scenario asserting on
+    that field then graded the harness rebuilding an envelope from the exception
+    it had just caught, which passes whether or not production emitted anything
+    at all. Making the synthesized field private (salesagent-pldmk.5) does not
+    close that channel: the laundered copy arrives under the name of the thing it
+    is impersonating (salesagent-pldmk.26).
+
+    None is the honest answer when no envelope crossed the wire. A transport that
+    genuinely has no wire says so through ``has_wire=False`` and offers
+    ``_synthesized_error_envelope`` under its own name, as ImplDispatcher does.
     """
     real_wire = getattr(exc, "_wire_error_envelope", None)
-    if isinstance(real_wire, dict):
-        return real_wire
-    return _envelope_from_adcp_error(exc)
+    return real_wire if isinstance(real_wire, dict) else None
 
 
 def _envelope_from_mcp_error(exc: Exception) -> dict[str, Any] | None:

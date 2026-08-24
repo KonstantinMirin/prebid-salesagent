@@ -1509,9 +1509,33 @@ class AdCPRequestHandler(RequestHandler):
 
         logger.info("Handling explicit skill: %s with parameters: %s", skill_name, list(parameters.keys()))
 
-        # Validate identity for non-discovery skills
+        # Validate identity for non-discovery skills. Stay a JSON-RPC
+        # InvalidRequestError (the skill never dispatches, so this is a
+        # transport-channel rejection) but carry the two-layer envelope in
+        # ``data``, which AdCP 3.1.1 names as the binding for a request rejected
+        # before dispatch — dist/docs/3.1.1/building/operating/transport-errors
+        # .mdx, "Transport-Level Errors", and position 4 of its client detection
+        # order (``error.data.adcp_error``). Without it the A2A wire carried a
+        # bare JSON-RPC error and the buyer-facing code and suggestion that REST
+        # returns were simply absent, which the test harness was papering over by
+        # synthesizing an envelope production never sent (salesagent-pldmk.26).
+        #
+        # The code stays AUTH_REQUIRED for consistency with the other 41 sites in
+        # src/, NOT because it is spec-current: 3.1.1 deprecates it in favour of
+        # AUTH_MISSING / AUTH_INVALID and reserves JSON-RPC -32028 for this exact
+        # case. Migrating that is salesagent-pldmk.38, which owns all of them at
+        # once; emitting a different code here alone would split the wire
+        # contract across two A2A sites.
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
-            raise InvalidRequestError(message="Authentication required for skill invocation")
+            raise InvalidRequestError(
+                message="Authentication required for skill invocation",
+                data=build_two_layer_error_envelope(
+                    AdCPAuthRequiredError(
+                        "Authentication required for skill invocation",
+                        suggestion=AUTH_REQUIRED_SUGGESTION,
+                    )
+                ),
+            )
 
         # Map skill names to handlers. Handler signatures are heterogeneous
         # (discovery skills accept ``identity: ResolvedIdentity | None``; the rest
