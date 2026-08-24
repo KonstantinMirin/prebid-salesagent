@@ -8,9 +8,8 @@ specialisms, a storyboard's ``required_tools``/``requires_capability``/
 phases, a phase's graded check types, a tagged scenario's ``@source``
 footer. Before this module each consumer re-derived these independently —
 14+ primitives, 2-4 incompatible implementations each, six of which had
-silently diverged into live bugs (see salesagent-pw71's codebase-scan,
-``.claude/code-review/salesagent-pw71/``). This module is the single
-implementation; every consumer imports it.
+silently diverged into live bugs. This module is the single implementation;
+every consumer imports it.
 
 Deliberately import-safe: nothing here resolves a live ``~/projects/adcp``
 clone at import time. ``dist_root()`` takes the clone path as an argument and
@@ -30,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from collections import Counter
@@ -37,6 +37,8 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+import adcp
 
 
 class StoryboardAuditError(Exception):
@@ -60,24 +62,81 @@ _SPEC_VERSION_RE = re.compile(r"targets \*\*AdCP spec version ([0-9][^*]*)\*\*")
 
 
 def pinned_version(repo: Path) -> str:
-    """Read the pinned AdCP spec version from docs/adcp-spec-version.md.
+    """The pinned AdCP spec version, from the INSTALLED SDK.
 
-    Never hardcoded — a consumer that hardcodes the version rots the same
-    way the pins it audits did.
+    ``adcp.get_adcp_spec_version()`` is the authority: it is the version the
+    wheel this repo actually runs against reports for itself, so it cannot
+    disagree with the code under audit.
+
+    Prose was the sole source before, regex-parsed out of
+    ``docs/adcp-spec-version.md`` and fed to 8+ call sites including the SDK-pin
+    guard — so an edit to one English sentence silently repointed the entire
+    audit chain at a compliance tree the installed wheel is not on. The doc is
+    still CHECKED here (it is documentation of the pin, and drifting docs are
+    their own defect) but it no longer decides.
     """
-    text = (repo / "docs" / "adcp-spec-version.md").read_text(encoding="utf-8")
-    match = _SPEC_VERSION_RE.search(text)
-    if not match:
-        raise StoryboardAuditError("cannot determine pinned version from docs/adcp-spec-version.md")
-    return match.group(1).strip()
+    version = adcp.get_adcp_spec_version()
+    documented = _SPEC_VERSION_RE.search((repo / "docs" / "adcp-spec-version.md").read_text(encoding="utf-8"))
+    if documented and documented.group(1).strip() != version:
+        raise StoryboardAuditError(
+            f"docs/adcp-spec-version.md documents AdCP {documented.group(1).strip()}, but the installed "
+            f"adcp SDK reports {version}. The SDK is the pin — update the doc."
+        )
+    return version
+
+
+ADCP_HOME_ENV_VAR = "ADCP_HOME"
+ADCP_REPO = "adcontextprotocol/adcp"
+# Where `gh release download <tag> --repo adcontextprotocol/adcp` + `tar -xzf`
+# lands, relative to the repo root. The storyboard-conformance CI job already
+# does exactly this (.github/workflows/ci.yml, "Download pinned … bundle").
+BUNDLE_PARENT = Path("tests") / "storyboard" / "runner"
+
+
+def adcp_home(repo: Path | None = None, version: str | None = None) -> Path:
+    """Root of the pinned AdCP tree, preferring the PUBLISHED release bundle.
+
+    Resolution order, first hit wins:
+
+    1. ``$ADCP_HOME`` — explicit override.
+    2. The GitHub release bundle extracted in-repo at
+       ``tests/storyboard/runner/adcp-<version>/``. This is the authority: it
+       is the published, sha256-verified artifact of ``adcontextprotocol/adcp``,
+       identical for CI and for every contributor, and it is what the
+       storyboard-conformance job already downloads.
+    3. ``~/projects/adcp`` — a personal working clone. Last, and only a
+       convenience: it is one maintainer's checkout at whatever revision that
+       happens to sit on, which is not a thing CI or a contributor can reproduce.
+
+    Six structural guards hardcoded (3) and gated on it, so 23 guards were dead
+    in every CI run — they pass whenever they can actually resolve a tree.
+    """
+    override = os.environ.get(ADCP_HOME_ENV_VAR)
+    if override:
+        return Path(override)
+    if repo is not None:
+        resolved = version or pinned_version(repo)
+        bundle = repo / BUNDLE_PARENT / f"adcp-{resolved}"
+        if bundle.is_dir():
+            return bundle
+    return Path.home() / "projects" / "adcp"
 
 
 def dist_root(adcp: Path, version: str) -> Path:
-    """The pinned compliance tree root for ``version`` inside a local adcp clone.
+    """The pinned compliance tree root for ``version`` under an adcp root.
 
     Callers own the existence check (``is_dir()``) — this function only
-    joins the path, so it stays import-safe with no adcp clone present.
+    differently and both are legitimate inputs:
+
+    * clone   — ``<adcp>/dist/compliance/<version>/`` (every version side by side)
+    * bundle  — ``<adcp>/compliance/`` (the tarball is already ONE version)
+
+    Callers own the existence check (``is_dir()``), so this stays import-safe
+    with no tree present at all.
     """
+    bundle = adcp / "compliance"
+    if bundle.is_dir():
+        return bundle
     return adcp / "dist" / "compliance" / version
 
 
@@ -256,7 +315,7 @@ def _phase_window(text: str, phase_id: str) -> tuple[int, str] | None:
     is correct for "is this phase graded at all?" and fatal for "how many
     checks does this storyboard grade?" — which is why the offset is returned
     alongside the text: :func:`check_inventory` keys on it to count each
-    check line exactly once (salesagent-g6m2.1).
+    check line exactly once.
     """
     anchor = re.search(rf"^(?P<indent>\s*)-\s*id:\s*{re.escape(phase_id)}\s*$", text, re.M)
     if anchor is None:
@@ -398,7 +457,7 @@ def phase_is_graded(text: str, phase_id: str) -> str | None:
 
 # ── @source footers + tagged scenarios ──────────────────────────────────────
 
-# ── THE SHARED LIVENESS CONTRACT (PR #1858 Lane F, bd salesagent-qbac1.6) ───
+# ── THE SHARED LIVENESS CONTRACT (PR #1858 Lane F, the task) ───
 #
 # This module is the ONE owner of the constants and lookups that tests/bdd and
 # scripts/audit both need. It is stdlib-only and imports no pytest and no
@@ -663,7 +722,7 @@ class SourceFooterError(ValueError):
     ``(recovery via enumMetadata)``) used to parse clean and vanish -- the
     unknown key was dropped, the trailing prose was never even attempted.
     Both are writer-side mistakes and must fail loudly at ``make quality``,
-    not ship as a footer that looks valid and isn't (salesagent-vuz9t.4).
+    not ship as a footer that looks valid and isn't.
     """
 
 

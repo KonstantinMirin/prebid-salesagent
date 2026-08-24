@@ -1,4 +1,4 @@
-"""Regression tests for scripts/audit/ledger.py (salesagent-vuz9t.1.1).
+"""Regression tests for scripts/audit/ledger.py.
 
 Three facts this audit pipeline joins used to each have MULTIPLE parsing/loading
 owners: the ledger check-id grammar (``test_storyboard_check[protocol::track::
@@ -36,7 +36,7 @@ This module pins the new single-owner shape:
   the first place). Typed, not ``SystemExit`` -- this is a library function
   importable from tests and sibling scripts, and ``SystemExit`` would kill
   the importing process rather than give the caller something catchable
-  (salesagent-vuz9t.1.2).
+ .
 
 """
 
@@ -298,7 +298,7 @@ DIST = storyboard_spec.dist_root(ADCP_HOME, storyboard_spec.pinned_version(REPO_
 
 requires_clone = pytest.mark.skipif(
     not DIST.is_dir(),
-    reason=f"live pinned AdCP compliance tree not found at {DIST} (clone adcontextprotocol/adcp to ~/projects/adcp)",
+    reason=f"live pinned AdCP compliance tree not found at {DIST} (download the pinned bundle: gh release download v<pinned> --repo adcontextprotocol/adcp -p '<pinned>.tgz' && tar -xzf into tests/storyboard/runner/, or set $ADCP_HOME)",
 )
 
 

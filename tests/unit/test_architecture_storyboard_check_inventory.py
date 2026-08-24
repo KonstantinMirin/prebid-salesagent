@@ -1,4 +1,4 @@
-"""Regression tests for the storyboard check-type inventory (salesagent-g6m2.1).
+"""Regression tests for the storyboard check-type inventory.
 
 ``docs/test-obligations/storyboard-roadmap.md`` publishes a per-storyboard
 inventory of graded check types ("Checks" column, plus the per-storyboard
@@ -43,17 +43,18 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ADCP_HOME = Path.home() / "projects" / "adcp"
 
 sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.audit import storyboard_spec  # noqa: E402
 
+ADCP_HOME = storyboard_spec.adcp_home(REPO_ROOT)
+
 DIST = storyboard_spec.dist_root(ADCP_HOME, storyboard_spec.pinned_version(REPO_ROOT))
 
 requires_clone = pytest.mark.skipif(
     not DIST.is_dir(),
-    reason=f"live pinned AdCP compliance tree not found at {DIST} (clone adcontextprotocol/adcp to ~/projects/adcp)",
+    reason=f"live pinned AdCP compliance tree not found at {DIST} (download the pinned bundle: gh release download v<pinned> --repo adcontextprotocol/adcp -p '<pinned>.tgz' && tar -xzf into tests/storyboard/runner/, or set $ADCP_HOME)",
 )
 
 # The literal ground truth this whole module is graded against: one entry per
@@ -144,7 +145,7 @@ def test_phase_is_graded_still_sees_grading_in_a_later_step():
 @pytest.mark.parametrize(
     ("rel", "expected"),
     [
-        # The two files named in salesagent-g6m2.1, at their file-literal counts.
+        # The two files named in the original finding, at their file-literal counts.
         ("universal/signed-requests.yaml", {"field_present": 1, "field_value": 1}),
         (
             "protocols/media-buy/scenarios/billing_finality_delivery.yaml",

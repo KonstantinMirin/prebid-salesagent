@@ -1,4 +1,4 @@
-"""Controller-ungradable status derives from required_tools (salesagent-g6m2.2).
+"""Controller-ungradable status derives from required_tools.
 
 ``docs/test-obligations/storyboard-roadmap.md``'s Status column answers one
 question objectively: what did the in-network job actually measure. It has
@@ -9,8 +9,7 @@ the column --
 * ``no ledger entries`` — the job ran it and nothing failed. Debt at worst.
 * ``ungradable (comply_test_controller)`` — the job could not reach the
   assertions at all, and never will: the storyboard needs a tool this agent
-  has decided not to implement (it is a production test-control backdoor, see
-  salesagent-xg5w). A documented divergence, not debt.
+  has decided not to implement (it is a production test-control backdoor, see). A documented divergence, not debt.
 
 That last state was read off ``_COMPLY_TEST_CONTROLLER_DIVERGENCE``, a
 hand-maintained dict of 20 stems. Measured against the 3.1.1 pin: 29
@@ -40,17 +39,18 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INDEX = REPO_ROOT / "tests" / "fixtures" / "adcp_storyboards_pinned" / "index.json"
-ADCP_HOME = Path.home() / "projects" / "adcp"
 
 sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.audit import storyboard_roadmap, storyboard_spec  # noqa: E402
 
+ADCP_HOME = storyboard_spec.adcp_home(REPO_ROOT)
+
 DIST = storyboard_spec.dist_root(ADCP_HOME, storyboard_spec.pinned_version(REPO_ROOT))
 
 requires_clone = pytest.mark.skipif(
     not DIST.is_dir(),
-    reason=f"live pinned AdCP compliance tree not found at {DIST} (clone adcontextprotocol/adcp to ~/projects/adcp)",
+    reason=f"live pinned AdCP compliance tree not found at {DIST} (download the pinned bundle: gh release download v<pinned> --repo adcontextprotocol/adcp -p '<pinned>.tgz' && tar -xzf into tests/storyboard/runner/, or set $ADCP_HOME)",
 )
 
 CONTROLLER = "comply_test_controller"

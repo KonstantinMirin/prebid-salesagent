@@ -1,8 +1,8 @@
-"""Regression tests for the liveness join in storyboard_check_index.build() (salesagent-vuz9t.12.2).
+"""Regression tests for the liveness join in storyboard_check_index.build().
 
 storyboard_check_index derived ``covered_by`` from tag presence alone: a
 ``@storyboard-v3.1``-tagged scenario with zero bound step definitions counted as
-"covered" forever (salesagent-vuz9t.12's finding). This file proves the fix: two
+"covered" forever (the finding). This file proves the fix: two
 published headline numbers (``claimed-by-a-scenario`` vs ``graded-by-a-live-scenario``),
 and a ``graduation_candidate`` flag on entries the BDD suite locally xfails as a known
 gap that the real conformance ledger does not currently measure as failing.
@@ -26,11 +26,12 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ADCP_HOME = Path.home() / "projects" / "adcp"
 
 sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.audit import scenario_liveness_join, storyboard_check_index, storyboard_spec  # noqa: E402
+
+ADCP_HOME = storyboard_spec.adcp_home(REPO_ROOT)
 
 # Captured before any test monkeypatches scenario_liveness_join.load_artifact --
 # tests below patch that name to a fixed-path lambda, so the lambda body must call
@@ -41,7 +42,7 @@ DIST = storyboard_spec.dist_root(ADCP_HOME, storyboard_spec.pinned_version(REPO_
 
 requires_clone = pytest.mark.skipif(
     not DIST.is_dir(),
-    reason=f"live pinned AdCP compliance tree not found at {DIST} (clone adcontextprotocol/adcp to ~/projects/adcp)",
+    reason=f"live pinned AdCP compliance tree not found at {DIST} (download the pinned bundle: gh release download v<pinned> --repo adcontextprotocol/adcp -p '<pinned>.tgz' && tar -xzf into tests/storyboard/runner/, or set $ADCP_HOME)",
 )
 
 
@@ -66,7 +67,7 @@ def test_no_artifact_publishes_zero_graded_and_zero_candidates(monkeypatch, tmp_
     real BDD run had ever written one (observed: with_live_scenario == 89). That
     made the result a function of ambient filesystem state rather than of the
     behaviour under test -- the same defect shape as the storyboard grader that
-    collected a whole directory and inherited its npm state (salesagent-qbac1.7).
+    collected a whole directory and inherited its npm state.
     """
     monkeypatch.setenv(storyboard_spec.ARTIFACT_ENV_VAR, str(tmp_path / "no-such-liveness-artifact.json"))
     result = storyboard_check_index.build(REPO_ROOT, ADCP_HOME)

@@ -169,6 +169,21 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
+      # The six storyboard structural guards resolve the pinned AdCP tree via
+      # storyboard_spec.adcp_home(), which prefers this extracted release
+      # bundle. Without it they skip, which silently disabled 23 guards in every
+      # unit run — they all pass once a tree is actually resolvable.
+      - name: Download the pinned AdCP compliance bundle
+        working-directory: tests/storyboard/runner
+        run: |
+          version="$(sed -n 's/.*targets \*\*AdCP spec version \([0-9][^*]*\)\*\*.*/\1/p' \
+            "$GITHUB_WORKSPACE/docs/adcp-spec-version.md" | head -1)"
+          gh release download "v${version}" --repo adcontextprotocol/adcp \
+            -p "${version}.tgz" -p "${version}.tgz.sha256"
+          shasum -a 256 -c "${version}.tgz.sha256"
+          tar -xzf "${version}.tgz"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/unit/ tests/harness/

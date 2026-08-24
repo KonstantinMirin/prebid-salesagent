@@ -1,8 +1,8 @@
 """Transport-generic AdCP test client — one ``call()``, all transports.
 
 Implements the design at ``.claude/notes/storyboard-conformance/
-sb2a-transport-generic-client-design.md`` (beads ``salesagent-xxa1``, this
-file is ``salesagent-geru``/SB-2b). ``AdCPTestClient.call(tool, payload,
+sb2a-transport-generic-client-design.md`` (beads this file, this
+file is SB-2b). ``AdCPTestClient.call(tool, payload,
 transport)`` replaces the per-tool ``call_a2a``/``call_mcp``/
 ``build_rest_body``/``parse_rest_response`` quartet that today is
 hand-written on every one of the 33 ``tests/harness/*.py`` env classes
@@ -25,13 +25,13 @@ invariant for no benefit. ``client.py`` only adds the tool-name-generic
 glue around them; passing ``response_cls=dict`` gets a plain dict back
 from ``_run_mcp_client``/``_run_a2a_handler`` — UNWRAP (not DELIVER) then
 parses that dict into ``tool_name``'s pinned SDK response model via
-``spec_response_model`` (salesagent-vuz9t.8.3), so ``call()`` still does not
+``spec_response_model``, so ``call()`` still does not
 need a ``response_cls`` parameter — see the "typed payload" docstring note
 on ``TransportResult.payload`` below for the no-pinned-model case.
 
 All three E2E transports are now implemented — ``_deliver_e2e_rest``
-(salesagent-uz00/SB-3a), ``_deliver_e2e_mcp`` (salesagent-wu78/SB-3b), and
-``_deliver_e2e_a2a`` (salesagent-tisr/SB-3c) below, each real HTTP through
+(/SB-3a), ``_deliver_e2e_mcp`` (/SB-3b), and
+``_deliver_e2e_a2a`` (/SB-3c) below, each real HTTP through
 nginx to the live Docker stack. ``RestE2EDispatcher`` and
 ``A2AE2EDispatcher`` (``tests/harness/dispatchers.py``) delegate to the
 matching DELIVER function instead of duplicating it, so there is one
@@ -197,7 +197,7 @@ def _deliver_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any]
 # the client (starlette TestClient.get/httpx.Client.get do not accept `json=`
 # at all) or simply wrong to send. address_table.py's REST_TOOL_ALIASES made
 # get_adcp_capabilities (GET /api/v1/capabilities) genuinely REST-resolvable
-# (salesagent-vuz9t.9), which surfaced this: every verb used to get `json=`
+# , which surfaced this: every verb used to get `json=`
 # unconditionally, so a GET dispatch raised TypeError before any HTTP call.
 _BODILESS_REST_VERBS = frozenset({"get", "delete"})
 
@@ -261,7 +261,7 @@ def e2e_identity_headers(identity: Any) -> dict[str, str]:
 def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> Any:
     """E2E_REST DELIVER: real HTTP through nginx to the live Docker stack.
 
-    The single implementation of e2e_rest delivery (salesagent-uz00, SB-3a)
+    The single implementation of e2e_rest delivery (SB-3a)
     — ``RestE2EDispatcher`` (``tests/harness/dispatchers.py``) delegates
     here instead of hand-rolling its own header-building/httpx-client
     construction, matching the design doc §5 DELIVER-function split: WRAP
@@ -295,7 +295,7 @@ def _deliver_e2e_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
     """E2E MCP DELIVER: real HTTP via ``fastmcp.Client`` against the live Docker
     stack — the transport ``runStoryboard`` (the real AdCP conformance runner)
     actually speaks (``request_signing.transport = 'mcp'``, agent URLs ending
-    ``/mcp``), see beads salesagent-wu78 (SB-3b).
+    ``/mcp``), see the task (SB-3b).
 
     Same call shape as ``_run_mcp_client`` (``tests/harness/_base.py:754``) —
     ``call_tool`` -> ``structured_content`` -> returned on the ``DeliverResult``
@@ -343,7 +343,7 @@ def _deliver_e2e_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
 
 # -- E2E_A2A DELIVER: real JSON-RPC message/send over HTTP ------------------
 #
-# salesagent-tisr (SB-3c). Same message shape ``_run_a2a_handler`` builds
+# SB-3c. Same message shape ``_run_a2a_handler`` builds
 # in-process (design doc §5 table row) — only how it reaches the server
 # differs: a real ``POST /a2a`` JSON-RPC 2.0 request instead of a direct
 # ``AdCPRequestHandler().on_message_send()`` call. The route is mounted at
@@ -417,7 +417,7 @@ def _deliver_e2e_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
     (``tests/harness/_base.py``) never needed this: it calls
     ``AdCPRequestHandler().on_message_send()`` directly, bypassing the
     route-level decorator entirely — a divergence invisible until this
-    function got its first live caller (salesagent-vuz9t.18).
+    function got its first live caller.
     """
     import httpx
     from a2a.utils import constants as a2a_constants
@@ -533,16 +533,18 @@ def _parse_pinned_response(tool_name: str, raw: dict[str, Any]) -> Any | None:
 def _unwrap_tool_success(
     env: BaseTestEnv, delivered: DeliverResult, transport: Transport, tool_name: str
 ) -> TransportResult:
-    """Success-path unwrap for every tool-style transport (MCP and A2A, in-process
-    and E2E).
+    """Success-path unwrap for tool-style transports, returning PINNED types.
 
-    One function, not two: the MCP and A2A versions were byte-identical (Lane B,
-    change-set B3). The wire comes off the DELIVERED VALUE rather than
-    ``env._last_wire_response`` — one delivery, one channel (B2).
+    One function only: the MCP and A2A versions were byte-identical.
 
-    tag: transport.value, never a literal — Transport.MCP -> "mcp",
-    Transport.E2E_MCP -> "e2e_mcp" — so an E2E dispatch is never mislabeled
-    in-process.
+    Not the sole unwrap. The in-process dispatchers re-parse with the env's own
+    ``response_parser`` on purpose, so they return the env-LOCAL response type
+    that ~34 call sites outside tests/harness depend on — see
+    ``_base.py:656-660``. Do not collapse them into this.
+
+    The wire comes off the DELIVERED VALUE, not ``env._last_wire_response``:
+    one delivery, one channel. ``tag`` is ``transport.value``, never a literal,
+    so an E2E dispatch is never mislabeled in-process.
     """
     return TransportResult(
         payload=_parse_pinned_response(tool_name, delivered.payload),
@@ -560,7 +562,7 @@ def unwrap_rest_response(
     """The one REST UNWRAP — ``RestDispatcher``, ``RestE2EDispatcher``
     (``tests/harness/dispatchers.py``) and the generic client's
     ``_unwrap_rest`` (below) all delegate here instead of each re-parsing the
-    raw HTTP response (salesagent-vuz9t.8.2 — three REST unwraps collapsed
+    raw HTTP response (— three REST unwraps collapsed
     into one).
 
     *transport* supplies the envelope ``"transport"`` tag via
@@ -650,7 +652,7 @@ def _dispatch_core(
 ) -> TransportResult:
     """Address -> wrap -> deliver -> unwrap -> ``TransportResult``.
 
-    The one dispatch core (salesagent-vuz9t.8.1) — ``AdCPTestClient.call``
+    The one dispatch core — ``AdCPTestClient.call``
     below and every E2E dispatcher (``tests/harness/dispatchers.py``:
     ``McpE2EDispatcher``, ``A2AE2EDispatcher``) delegate here instead of each
     re-implementing ADDRESS/WRAP/DELIVER/UNWRAP or hand-rolling their own
@@ -669,7 +671,7 @@ def _dispatch_core(
     pinned SDK response model via ``spec_response_model`` (mirroring the
     production request seam, ``src/core/version_compat.py``) and parses the
     wire dict back into it — ``result.payload.<field>`` attribute access,
-    never ``result.payload["<field>"]`` subscripting (salesagent-vuz9t.8.3).
+    never ``result.payload["<field>"]`` subscripting.
     Tools with no single pinned response class (no schema, or a ``Union`` of
     outcome variants — see ``spec_response_model``'s docstring) get the
     explicit named case instead: ``payload`` is ``None`` and

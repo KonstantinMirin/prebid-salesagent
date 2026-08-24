@@ -1,12 +1,12 @@
-"""Regression tests for scripts/audit/storyboard_spec.py (salesagent-pw71, SB-5b).
+"""Regression tests for scripts/audit/storyboard_spec.py (SB-5b).
 
 ``storyboard_spec.py`` is the new shared L0 parsing module that
 ``scripts/audit/storyboard_coverage_map.py``, ``scripts/audit/storyboard_binding_sweep.py``,
 ``tests/fixtures/adcp_storyboards_pinned/_refresh.py`` and
 ``tests/unit/test_architecture_storyboard_binding.py`` are migrated onto (Implementation
 Plan v2, step 1-2). Per step 4, this file pins ONE regression case per fixed parsing bug
-found by the codebase disease scan (salesagent-pw71 NOTES, "Codebase Disease Scan")
-and confirmed by the architect review (salesagent-pvxw.20) -- these are the ticket's own
+found by the codebase disease scan (NOTES, "Codebase Disease Scan")
+and confirmed by the architect review -- these are the ticket's own
 acceptance criteria.
 
 This file is written BEFORE ``scripts/audit/storyboard_spec.py`` exists (TDD red): every
@@ -56,7 +56,7 @@ DIST = storyboard_spec.dist_root(ADCP_HOME, storyboard_spec.pinned_version(REPO_
 
 pytestmark = pytest.mark.skipif(
     not DIST.is_dir(),
-    reason=f"live pinned AdCP compliance tree not found at {DIST} (clone adcontextprotocol/adcp to ~/projects/adcp)",
+    reason=f"live pinned AdCP compliance tree not found at {DIST} (download the pinned bundle: gh release download v<pinned> --repo adcontextprotocol/adcp -p '<pinned>.tgz' && tar -xzf into tests/storyboard/runner/, or set $ADCP_HOME)",
 )
 
 
