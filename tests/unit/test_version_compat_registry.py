@@ -99,12 +99,21 @@ class TestVersionCompatRegistry:
         result = apply_version_compat("nonexistent_tool", response, "2.0.0")
         assert result == {"data": "unchanged"}
 
-    def test_none_version_applies_compat(self):
-        """None adcp_version should apply compat (safe default)."""
+    def test_none_version_emits_the_pinned_shape(self):
+        """No declared adcp_version means the PIN, so no v2 compat fields.
+
+        Was "None applies compat (safe default)" asserting is_fixed and rate are
+        present. Inverted deliberately: is_fixed / rate / price_guidance.floor do
+        not exist in the pinned pricing-option schema, so emitting them to a
+        caller that declared nothing made the non-conformant shape the default.
+        A caller that wants v2 fields can ask for v2.
+        """
         from src.core.version_compat import apply_version_compat
 
         response = _make_response(fixed_price=3.0)
         result = apply_version_compat("get_products", response, None)
         po = result["products"][0]["pricing_options"][0]
-        assert po["is_fixed"] is True
-        assert po["rate"] == 3.0
+        assert "is_fixed" not in po, f"non-spec is_fixed emitted to an undeclared client: {sorted(po)}"
+        assert "rate" not in po, f"non-spec rate emitted to an undeclared client: {sorted(po)}"
+        # the spec field it replaced IS present
+        assert po["fixed_price"] == 3.0

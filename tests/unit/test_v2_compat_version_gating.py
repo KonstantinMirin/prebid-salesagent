@@ -11,9 +11,21 @@ from src.core.product_conversion import needs_v2_compat
 class TestNeedsV2Compat:
     """Test the version gating helper."""
 
-    def test_none_version_needs_compat(self):
-        """None version (unknown client) should get v2 compat for safety."""
-        assert needs_v2_compat(None) is True
+    def test_absent_version_assumes_the_pin(self):
+        """No declared version means the PINNED version, so no v2 compat.
+
+        This asserted the opposite -- None -> True, "for safety". That framing had
+        it backwards: the unsafe outcome is emitting is_fixed / rate /
+        price_guidance.floor, none of which exist in the pinned schema, to a
+        caller that never asked for them. On an agent that declares itself 3.1.1,
+        silence is not evidence of a legacy client, and defaulting to v2 made the
+        NON-CONFORMANT shape the one you get by saying nothing.
+
+        An unparseable version still gets compat (see below) -- that is a
+        positive signal we cannot read the caller, which is a different thing
+        from the caller sending nothing.
+        """
+        assert needs_v2_compat(None) is False
 
     def test_v1_needs_compat(self):
         """V1.x clients need v2 compat fields."""

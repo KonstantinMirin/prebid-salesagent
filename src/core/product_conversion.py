@@ -45,14 +45,24 @@ def needs_v2_compat(adcp_version: str | None) -> bool:
     V2 compat fields (is_fixed, rate, price_guidance.floor) are only needed
     for pre-3.0 clients. V3+ clients get clean responses per AdCP v3 spec.
 
+    An ABSENT version means the PINNED version, not v2. This used to return True
+    for ``None``, so any client that simply omitted ``adcp_version`` was served
+    three fields that do not exist in the pinned schema -- on an agent that
+    declares itself as 3.1.1, silence is not evidence of a legacy caller, and
+    guessing "ancient" on no evidence made the non-conformant shape the default.
+    An UNPARSEABLE version still gets compat: that is a positive signal that the
+    caller sent something we do not understand, which is a different situation
+    from sending nothing at all.
+
     Args:
-        adcp_version: Client-declared AdCP version string, or None if unknown.
+        adcp_version: Client-declared AdCP version string, or None if absent.
 
     Returns:
-        True if v2 compat fields should be added (version is None, < 3.0, or unparseable).
+        True only if the client declared a version below 3.0, or declared one we
+        cannot parse. False when no version was declared (assume the pin).
     """
     if adcp_version is None:
-        return True
+        return False
     try:
         return Version(adcp_version) < V3_VERSION
     except InvalidVersion:
