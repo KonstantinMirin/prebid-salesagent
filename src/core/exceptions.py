@@ -17,7 +17,7 @@ from adcp.server.helpers import adcp_error
 from adcp.types import ErrorCode
 from pydantic import BaseModel, ValidationError
 
-from src.core.errors.codes import CODE_TABLE, AppErrorCode, CodeEntry, ErrorCodeT
+from src.core.errors.codes import CODE_TABLE, AppErrorCode, ErrorCodeT
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
@@ -33,7 +33,7 @@ RecoveryHint = Literal["transient", "correctable", "terminal"]
 # ---------------------------------------------------------------------------
 # There is ONE classifier: ``CODE_TABLE`` in src/core/errors/codes.py, loaded from
 # the pinned enums/error-code.json (92 published codes) plus this platform's own
-# ``AppErrorCode`` members (12) = 104. The SDK's ``STANDARD_ERROR_CODES`` is a
+# ``AppErrorCode`` members. The SDK's ``STANDARD_ERROR_CODES`` is a
 # cross-check, never the authority, and is consulted only as a message fallback.
 #
 # Every code a raise site declares reaches the buyer VERBATIM: the AdCP error
@@ -41,48 +41,6 @@ RecoveryHint = Literal["transient", "correctable", "terminal"]
 # server-only set. Message, recovery and suggestion are all functions of the code
 # (see docs/decisions/adr-010-graded-wire-fields-are-functions-of-the-code.md), so a
 # raise site cannot make one of them disagree with the pin.
-
-
-def advisory_recovery_for(code: str) -> RecoveryHint:
-    """Recovery classification for a hand-built ``errors[]`` advisory.
-
-    A LOOKUP in :data:`CODE_TABLE`, the single authority for what a code means to
-    a buyer -- all 104 of them, spec and platform alike.
-
-    It used to read a second hand-maintained table, and its raise was documented as
-    UNREACHABLE by construction because a now-deleted collapse rewrote anything
-    unmapped to ``SERVICE_UNAVAILABLE`` before the value arrived. Deleting that
-    collapse falsified the closed world: a platform-coded advisory would have
-    raised KeyError inside an ``_impl``. CODE_TABLE covers every code a raise site
-    can name, so the hole closes without reintroducing a rewrite.
-
-    The raise STAYS, and it is no longer decorative: an ad-hoc advisory string is
-    still expressible, and a few former INTERNAL_CODES entries (``API_ERROR``,
-    ``FLIGHT_NOT_FOUND``, ``API_UPDATE_FAILED``) are absent from CODE_TABLE. A
-    silent default here would put an unclassified code on the buyer's wire.
-    """
-    # CODE_TABLE is keyed by the ErrorCode/AppErrorCode StrEnums; both compare equal to
-    # their string values at runtime, but the Mapping's declared key type is the union, so
-    # a plain str needs the cast to satisfy the checker.
-    return cast(RecoveryHint, _advisory_entry_for(code).recovery.value)
-
-
-def _advisory_entry_for(code: str) -> CodeEntry:
-    """The table entry an advisory code resolves to, or KeyError naming the code.
-
-    ONE lookup and ONE raise, shared by the recovery and suggestion fills in
-    the advisory recovery lookup. Two independent lookups would duplicate both.
-    """
-    # CODE_TABLE is keyed by the ErrorCode/AppErrorCode StrEnums; both compare equal to
-    # their string values at runtime, but the Mapping's declared key type is the union, so
-    # a plain str needs the cast to satisfy the checker.
-    entry = CODE_TABLE.get(cast("ErrorCodeT", code))
-    if entry is None:
-        raise KeyError(
-            f"No recovery classification for error code {code!r}: it is absent from CODE_TABLE, "
-            "so no raise site can emit it. Name a code the table classifies."
-        )
-    return entry
 
 
 def _serialize_context(

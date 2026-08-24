@@ -13,8 +13,6 @@ import pytest
 from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPCapabilityNotSupportedError,
-    AdCPError,
-    AdCPValidationError,
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import GetMediaBuysRequest
@@ -89,10 +87,10 @@ class TestGetMediaBuysImplRaisesAdCPError:
         with pytest.raises(AdCPCapabilityNotSupportedError):
             _get_media_buys_impl(req, identity=identity)
 
-    def test_error_types_are_adcp_error_subclasses(self):
-        """All errors raised by _impl are AdCPError subclasses, not ToolError."""
-        assert issubclass(AdCPAuthenticationError, AdCPError)
-        assert issubclass(AdCPValidationError, AdCPError)
+    # No issubclass test here: "errors raised by _impl are AdCPError, never
+    # ToolError" is enforced for EVERY _impl by the AST guard
+    # test_no_toolerror_in_impl.py; asserting two class statements' inheritance
+    # re-stated the source against itself.
 
 
 class TestGetMediaBuysImplNoTransportImports:
