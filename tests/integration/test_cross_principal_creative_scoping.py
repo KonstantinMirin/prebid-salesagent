@@ -30,7 +30,6 @@ from tests.factories import CreativeFactory, PrincipalFactory
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.media_buy_dual import MediaBuyDualEnv
 from tests.harness.transport import Transport
-from tests.helpers import assert_envelope_shape
 from tests.integration.media_buy_helpers import _make_create_request
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -76,8 +75,7 @@ def _assert_not_found_and_no_leak(result: Any) -> None:
     envelope text.
     """
     assert result.is_error, f"Cross-principal creative reference must be rejected, got success: {result.payload!r}"
-    assert_envelope_shape(
-        result.wire_error_envelope,
+    result.assert_wire_error(
         "CREATIVE_REJECTED",
         recovery="correctable",
     )

@@ -13,7 +13,6 @@ import pytest
 from src.core.schemas.account import SyncAccountsRequest
 from tests.harness import Transport
 from tests.harness.account_sync import AccountSyncEnv
-from tests.helpers import assert_envelope_shape
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -951,8 +950,7 @@ class TestSyncAccountsBrandlessEntryRejected:
             result = env.call_via(transport, req=req)
 
         assert result.is_error, f"brandless entry must error on {transport.value}, got {result.payload!r}"
-        assert_envelope_shape(
-            result.wire_error_envelope,
+        result.assert_wire_error(
             "VALIDATION_ERROR",
             recovery="correctable",
         )

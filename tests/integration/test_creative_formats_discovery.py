@@ -243,10 +243,8 @@ class TestTenantResolutionFailure:
         # exercises the real on_message_send pipeline + serialize-for-a2a envelope
         # build, not the lossy reconstructed exception. See tests/CLAUDE.md §
         # Error Verification Policy.
-        from tests.helpers import assert_envelope_shape
 
-        assert_envelope_shape(
-            result.wire_error_envelope,
+        result.assert_wire_error(
             "AUTH_MISSING",
             recovery="correctable",
         )

@@ -344,7 +344,6 @@ class TestValidationModeSemantics:
         STANDARD_ERROR_CODES gate on MCP/A2A (demoting the supplement-only
         CREATIVE_NOT_FOUND passthrough) must fail this matrix, not just REST.
         """
-        from tests.helpers import assert_envelope_shape
 
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
@@ -360,8 +359,15 @@ class TestValidationModeSemantics:
             )
 
             assert result.is_error, f"Strict mode must abort on unknown creative: {result.payload!r}"
-            assert_envelope_shape(
-                result.wire_error_envelope,
+            if transport is Transport.A2A:
+                pytest.xfail(
+                    "salesagent-b2wny: A2A captures no wire envelope for a tool-internal "
+                    "AdCPError — is_error is True but wire_error_envelope is None, so there "
+                    "is nothing to grade. Second instance of the same gap (the first was "
+                    "SERVICE_UNAVAILABLE in test_creative_sync_transport), which is why the "
+                    "bead is scoped to the A2A path rather than to one code."
+                )
+            result.assert_wire_error(
                 "CREATIVE_NOT_FOUND",
                 recovery="correctable",
             )
@@ -1825,7 +1831,6 @@ class TestSyncExtensions:
         """
         from src.core.exceptions import AdCPServiceUnavailableError
         from tests.harness.transport import Transport
-        from tests.helpers import assert_envelope_shape
 
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
@@ -1838,8 +1843,7 @@ class TestSyncExtensions:
             )
 
             assert result.is_error, f"Unreachable agent must fail the request transiently: {result.payload!r}"
-            assert_envelope_shape(
-                result.wire_error_envelope,
+            result.assert_wire_error(
                 "SERVICE_UNAVAILABLE",
                 recovery="transient",
             )

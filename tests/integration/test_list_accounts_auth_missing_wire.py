@@ -23,7 +23,6 @@ import pytest
 
 from tests.harness.account_list import AccountListEnv
 from tests.harness.transport import Transport
-from tests.helpers import assert_envelope_shape
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -46,8 +45,7 @@ class TestListAccountsNoTokenEmitsAuthMissing:
             # This is the regression: production currently emits the deprecated
             # AUTH_REQUIRED code (correctable) instead of the 3.1.1 AUTH_MISSING
             # code (correctable) for the absent-credential case.
-            assert_envelope_shape(
-                result.wire_error_envelope,
+            result.assert_wire_error(
                 "AUTH_MISSING",
                 recovery="correctable",
             )

@@ -264,7 +264,7 @@ class TestWireLevelHashInput:
             second = env.call_via(Transport.REST, **reencoded)
 
         assert second.is_error, "a differently-encoded wire payload must not replay"
-        assert_envelope_shape(second.wire_error_envelope, "IDEMPOTENCY_CONFLICT", recovery="correctable")
+        second.assert_wire_error("IDEMPOTENCY_CONFLICT", recovery="correctable")
 
 
 class TestCaptureUniformity:

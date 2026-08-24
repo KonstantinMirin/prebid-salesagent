@@ -719,7 +719,6 @@ class TestManualApprovalPathCreativeValidation:
         """
         from tests.factories import CreativeFactory
         from tests.harness.transport import Transport
-        from tests.helpers import assert_envelope_shape
 
         req = _make_request(
             packages=[
@@ -750,8 +749,7 @@ class TestManualApprovalPathCreativeValidation:
             assert result.is_error, (
                 f"Manual-approval path accepted missing creative_ids (pending success): {result.payload}"
             )
-            assert_envelope_shape(
-                result.wire_error_envelope,
+            result.assert_wire_error(
                 "CREATIVE_REJECTED",
                 recovery="correctable",
             )
@@ -763,7 +761,6 @@ class TestManualApprovalPathCreativeValidation:
         """
         from tests.factories import CreativeFactory
         from tests.harness.transport import Transport
-        from tests.helpers import assert_envelope_shape
 
         req = _make_request(
             packages=[
@@ -793,8 +790,7 @@ class TestManualApprovalPathCreativeValidation:
             result = env.call_via(Transport.REST, req=req)
 
             assert result.is_error, f"Manual-approval path accepted a format-mismatched creative: {result.payload}"
-            assert_envelope_shape(
-                result.wire_error_envelope,
+            result.assert_wire_error(
                 "CREATIVE_REJECTED",
                 recovery="correctable",
             )

@@ -40,7 +40,6 @@ _WIRE_TRANSPORTS = [Transport.MCP, Transport.A2A]
 def test_resolver_crash_is_not_reported_as_the_buyers_validation_error(integration_db, transport):
     """A crash inside property-list resolution reaches the buyer as a server fault."""
     from tests.harness.product import ProductEnv
-    from tests.helpers import assert_envelope_shape
 
     with ProductEnv() as env:
         tenant = TenantFactory(tenant_id="test_tenant")
@@ -72,8 +71,7 @@ def test_resolver_crash_is_not_reported_as_the_buyers_validation_error(integrati
         # about it, which is what AdCP 3.1.1 core/error.json makes the decode path for a code
         # outside the published enum. No internal detail reaches the wire: the message is
         # CODE_TABLE's generic sentence, which BR-SECURITY-001 grades separately.
-        assert_envelope_shape(
-            result.wire_error_envelope,
+        result.assert_wire_error(
             "INTERNAL_ERROR",
             recovery="transient",
         )

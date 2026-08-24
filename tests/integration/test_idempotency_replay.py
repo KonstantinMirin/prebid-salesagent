@@ -276,7 +276,6 @@ class TestMissingKeyRejectedAtWire:
 
         from tests.harness.media_buy_create import OMIT_IDEMPOTENCY_KEY
         from tests.harness.transport import Transport
-        from tests.helpers import assert_envelope_shape
 
         with MediaBuyCreateEnv() as env:
             _tenant, _principal, product, _pricing = env.setup_media_buy_data()
@@ -292,8 +291,7 @@ class TestMissingKeyRejectedAtWire:
             )
 
         assert result.is_error, f"Missing idempotency_key must reject, got success: {result.payload}"
-        assert_envelope_shape(
-            result.wire_error_envelope,
+        result.assert_wire_error(
             "VALIDATION_ERROR",
             recovery="correctable",
         )
