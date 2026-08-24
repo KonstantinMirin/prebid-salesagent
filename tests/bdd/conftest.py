@@ -2476,6 +2476,43 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 # boundary variant used here still has the bug). Do NOT graduate
                 # until when_boundary_ownership is fixed to route through a real
                 # identity swap.
+                #
+                # VERIFIED AND EXTENDED (salesagent-n78j0.13, e2e_rest ledger walk).
+                # The claim above is accurate and still holds: when_boundary_ownership
+                # (uc004_delivery.py:1293) calls _dispatch_partition(ctx, "ownership", ...),
+                # which falls through to dispatch_request(ctx, ownership=<label text>).
+                # `ownership` is not a field of GetMediaBuyDeliveryRequest (14 fields,
+                # extra="forbid"), so the request dies at the model boundary. The correct
+                # helper already exists 2200 lines away — _dispatch_ownership_partition
+                # (:3566) "queries the same buy id as a foreign principal" — and the
+                # sibling When one function above (:1289) already calls it.
+                #
+                # WHAT IS NEW: the vacuity is not mcp-only. Mutation M1 deleted
+                # `MediaBuy.principal_id == principal_id` from
+                # MediaBuyRepository.get_by_principal (repositories/media_buy.py:140) —
+                # i.e. removed cross-principal ownership enforcement outright — and NOT ONE
+                # of the 12 ownership rows moved: boundary[a2a-differs] PASSED,
+                # boundary[mcp-differs] XPASS, boundary[rest-differs] XFAIL,
+                # partition[*-owner_mismatch] XFAIL, before and after, identically. The
+                # whole UC-004 module (516 passed) and `make quality` (6751 passed) were
+                # green with the control deleted.
+                #
+                # THE OBLIGATION IS NOT UNGRADED, THOUGH — and that distinction matters
+                # before anyone reads the above as a security hole. M1 turns
+                # tests/integration/test_cross_principal_security.py::TestCrossPrincipalSecurity
+                # ::test_get_media_buy_delivery_cannot_see_other_principals_data RED. Real
+                # coverage exists, in an integration test that performs the identity swap
+                # these BDD rows only describe. What the ledger row would "graduate" is
+                # therefore redundant theatre on top of a working test, not the coverage
+                # itself — which is exactly why un-routing it would be a false green.
+                #
+                # Scenario quality, upstream of all of this (protocol step 2): the Examples
+                # say only `invalid`, so _assert_partition_or_boundary takes the
+                # _assert_wire_rejection path (uc004_delivery.py:3137), which pins NO code —
+                # it only excludes server faults and auth codes. Any client rejection
+                # satisfies it, including the VALIDATION_ERROR the bogus kwarg produces.
+                # The sibling sampling scenario 8 lines below in the feature file shows the
+                # corrected form: `error "INVALID_REQUEST" with suggestion`.
                 item.add_marker(
                     pytest.mark.xfail(reason="ownership boundary: validation gaps on some transports", strict=False)
                 )
