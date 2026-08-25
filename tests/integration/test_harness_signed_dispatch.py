@@ -69,6 +69,7 @@ from tests.helpers.signing import (
     SIGNING_PRINCIPAL_ID,
     SIGNING_TENANT_ID,
     VERIFIED_METRIC,
+    VERIFIER_ERROR,
     VERIFIER_RESULT,
     bucketed_declaration,
     declared_posture,
@@ -143,18 +144,35 @@ def _assert_verified_under_counterparty_key(
     this a strictly stronger claim than the constant was — the signature must be
     verified under the key THIS env published, not merely under a key named like it.
 
-    ``len(calls) == 1`` is exact on purpose, and is a claim in its own right on
-    the MCP leg: an MCP session puts SEVERAL requests on the wire (``initialize``,
-    ``notifications/initialized``, the ``tools/call``, the session ``DELETE``),
-    and only the ``tools/call`` resolves to a graded operation — the others name
-    a protocol method with no declared bucket, or no operation at all, and the
-    middleware passes them through without verifying
-    (``request_verifier_middleware`` s ``bucket == "none"`` arm). A count above
-    one means session frames were graded as operations; a count of zero means the
-    request never reached the verifier at all.
+    Exactly ONE GRADED verification is the claim, and it is a claim in its own
+    right on the MCP leg: an MCP session puts SEVERAL requests on the wire
+    (``initialize``, ``notifications/initialized``, the ``tools/call``, the
+    session ``DELETE``), all of them SIGNED by the harness, and only the
+    ``tools/call`` resolves to a graded operation. The others name a protocol
+    method with no declared bucket, or no operation at all, so they fall in the
+    narrowed ``none`` bucket.
+
+    Those frames DO reach the verifier — ``security.mdx`` :1226 binds a verifier
+    to pre-check a signed request "even for operations not in ``required_for``",
+    and they are signed and on an AdCP surface. They clear the pre-check, fail
+    step 7 against the empty resolver the narrowed ``none`` path supplies BY
+    CONSTRUCTION, and pass through. So counting verifier INVOCATIONS stopped
+    being a proxy for "one graded verification" when the verifier gained its
+    pre-check phase; it now counts pass-throughs too.
+
+    Counting frames that reached a VERIFIED outcome states the obligation
+    directly and is strictly stronger. Two above one still means session frames
+    were graded as operations — the failure this guards — and zero still means
+    the request never reached the verifier at all. What it no longer reddens on
+    is a pre-checked pass-through, which is specified behaviour.
     """
-    assert len(calls) == 1, f"the verifier must run exactly once on a signed request; it ran {len(calls)} time(s)"
-    signer = calls[0].get(VERIFIER_RESULT)
+    graded = [call for call in calls if VERIFIER_ERROR not in call]
+    assert len(graded) == 1, (
+        f"exactly one frame must be GRADED against the counterparty key; {len(graded)} were "
+        f"(of {len(calls)} verifier invocation(s) — the rest are narrowed-none pre-check "
+        "pass-throughs, which do not count and must not be graded)"
+    )
+    signer = graded[0].get(VERIFIER_RESULT)
     assert signer is not None, (
         "the verifier RAISED on the signature this seam produced — the harness "
         "signed bytes other than the ones it sent, or under a key the "
