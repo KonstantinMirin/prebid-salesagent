@@ -50,4 +50,3 @@ Actions — `RETAG` tag claims a grading that does not apply to us (becomes `@sc
 | `uc020-vast` | NOT GRADED | **RETAG** | NOT GRADED — undeclared gate. |
 | `uc021-preview` | NOT GRADED | **RETAG** | NOT GRADED — undeclared gate. Three independent reasons, any one of which is sufficient: |
 | `uc030-govbinding` | NOT GRADED | **RETAG** | NOT GRADED — twice over. |
-

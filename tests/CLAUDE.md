@@ -175,8 +175,6 @@ Tests tagged with `Covers: <obligation-id>` verify behavioral contracts from `do
 
 ### Enforced by structural guards
 
-- `test_architecture_obligation_coverage.py` — every behavioral obligation has a test
-- `test_architecture_obligation_test_quality.py` — obligation tests actually call production code
 
 ## Anti-Patterns in This Codebase
 

@@ -413,6 +413,24 @@ def render(result: dict[str, Any]) -> str:
         + (f", **{totals['unassessed']}** unassessed" if totals["unassessed"] else "")
         + ".",
         "",
+        "**Grain caveat — `measured` is a join, and it does not resolve everywhere.** "
+        "`measured_failing_protocols` joins the conformance ledger to these records on "
+        "`(storyboard_id, step_id)`. The ledger's `step_id` comes VERBATIM from the real "
+        "`@adcp/sdk` runner, which this repo does not control; this index's `step_id` comes from "
+        "`storyboard_spec.checks_by_owner`, which recognises a graded check only where the pinned "
+        "YAML declares a literal `check:` line. Those two disagree wherever a storyboard grades via "
+        "`task: expect_webhook` instead: such a step carries no `check:` of its own, so it produces "
+        "NO record here, while the runner grades it and attributes any failure to the step named in "
+        "its `triggered_by`. At the pinned version that affects four storyboards "
+        "(`universal/webhook-emission.yaml`, `creative_lifecycle_webhooks`, `get_products_async`, "
+        "`get_signals_async`). Concretely, `webhook_emission` shows 8 checks across 5 steps here "
+        "while the file declares 17 steps and the ledger records failures against 7 step ids that "
+        "appear in no row. **Consequence: for those storyboards a check reading `no ledger entry` "
+        "is not evidence that it passed, and the graded count is a floor.** Everything else joins "
+        "cleanly; the only other unjoined ledger ids are `signed_requests`' runtime-generated "
+        "`negative-NNN` steps (built from vector fixtures, as the pinned file states) and the "
+        "`agent_reachability` runner-level synthetic, neither of which is a spec check.",
+        "",
         "Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario "
         "to a storyboard, not to a check), so a scenario shown against a check means "
         '"this check\'s storyboard is claimed" — not that this check is asserted. That '

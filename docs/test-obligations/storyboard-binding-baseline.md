@@ -27,4 +27,3 @@ Buckets — **A** binding verified · **B** wrong/stale `@source` · **C** tag u
 | `T-UC-006-storyboard-multi-format-sync-status` | BR-UC-006-sync-creatives.feature:1681 | **B** | self-declared storyboard ['sync_multiple'] does not match cited file ['media-buy'] — footer points at a storyboard this scenario never claims |
 | `T-UC-006-storyboard-format-id-roundtrip-on-sync` | BR-UC-006-sync-creatives.feature:1692 | **A** | — |
 | `T-UC-019-storyboard-post-create-status-poll` | BR-UC-019-query-media-buys.feature:1235 | **B** | self-declared storyboard ['check_buy_status'] does not match cited file ['media-buy'] — footer points at a storyboard this scenario never claims |
-
