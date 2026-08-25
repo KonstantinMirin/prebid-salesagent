@@ -1,4 +1,4 @@
-"""Regression test for include_package_daily_breakdown shape differential (, gates xzky).
+"""Regression test for include_package_daily_breakdown shape differential.
 
 The owner-flagged invariant: when the buyer requests
 ``include_package_daily_breakdown=True``, the response's per-package

@@ -72,7 +72,7 @@ class TestCreativeQueryTenantIsolation:
         Originally this pinned an inline tenant-filtered select(). The lookup
         now routes through CreativeRepository.get_by_ids (tenant_id pinned in
         the constructor, principal_id required) — the centralized form of the
-        same isolation fix (, DRY'd in ). An
+        same isolation fix. An
         inline select(Creative) reappearing here is a regression.
         """
         selects = _extract_select_calls_in_function(
@@ -96,7 +96,7 @@ class TestCreativeQueryTenantIsolation:
         Originally this pinned an inline tenant-filtered select(). The lookup
         now routes through CreativeRepository.get_by_ids (tenant_id pinned in
         the constructor, principal_id required) — the centralized form of the
-        same isolation fix (, DRY'd in ). An
+        same isolation fix. An
         inline select(Creative) reappearing here is a regression.
         """
         selects = _extract_select_calls_in_function(

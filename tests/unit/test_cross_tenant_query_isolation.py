@@ -1,4 +1,4 @@
-"""Reproduction tests for cross-tenant query leaks (, 353c, v7lw, gcjx).
+"""Reproduction tests for cross-tenant query leaks.
 
 After the composite PK migration (bfbf084c), IDs like principal_id, creative_id,
 media_buy_id, and package_id are no longer globally unique. Every query on a

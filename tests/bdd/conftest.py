@@ -184,7 +184,6 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-002-inv-087-5": "duplicate optimization_goals priority: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
     "T-UC-002-inv-087-6": "empty optimization_goals array: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
     "T-UC-002-inv-087-7": "per_ad_spend without value_field: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
-    # FIXME(): disclosure_positions filter not implemented in production
     # Note: violated/nofield pass vacuously (field rejected at schema level)
     "T-UC-005-inv-049-8-holds": "disclosure_positions filter not implemented",
     # adcp 3.12: FormatCategory/type filter removed from ListCreativeFormatsRequest.
@@ -211,18 +210,15 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-005-ext-a": "error code AUTH_REQUIRED instead of TENANT_REQUIRED — spec-production gap",
     # Graduated: creative agent partition/boundary tests
     # Steps now dispatch through harness — all 34 tests pass across 4 transports.
-    # FIXME(): suggestion field not in production error model
     # NOTE(ah98 red-step inspection, 2026-07-06): NOT graduatable as-is — the
     # When step no-ops (type filter removed in adcp 3.12), so the scenario
     # fails on "operation should fail", not on the missing suggestion.
     # Suggestion parity for list_creative_formats is pinned instead by
     # tests/integration/test_request_validation_suggestion_parity.py.
     "T-UC-005-ext-b": "suggestion field not implemented in error responses",
-    # FIXME(): disclosure validation errors not implemented
     "T-UC-005-ext-b-disclosure-invalid": "disclosure_positions validation not implemented",
     "T-UC-005-ext-b-disclosure-empty": "disclosure_positions validation not implemented",
     "T-UC-005-ext-b-disclosure-dupes": "disclosure_positions validation not implemented",
-    # FIXME(): specific error codes (OUTPUT_FORMAT_IDS_EMPTY etc.)
     # not produced by production — Pydantic gives generic VALIDATION_ERROR
     "T-UC-005-ext-b-output-empty": "specific validation error codes not implemented",
     "T-UC-005-ext-b-output-invalid": "specific validation error codes not implemented",
@@ -327,7 +323,6 @@ _XFAIL_TAGS: dict[str, str] = {
     # sandbox-production passes vacuously (sandbox absent from response by default).
     "T-UC-002-sandbox-happy": "sandbox mode not implemented in create_media_buy — spec-production gap",
     "T-UC-002-sandbox-validation": "sandbox mode not implemented in create_media_buy — spec-production gap",
-    # FIXME(production-gap bead): natural-key sandbox resolution
     # without prior provisioning is unimplemented. _resolve_by_natural_key
     # (account_helpers.py:110) requires the sandbox account to already exist —
     # raises ACCOUNT_NOT_FOUND rather than auto-provisioning — and
@@ -355,7 +350,6 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-002-nfr-001": "rate limiting + payload size validation not implemented — spec-production gap",
 }
 
-# FIXME(): Selective xfail for parametrized scenarios where only
 # some examples exercise unimplemented features. Each entry: (tag, node_id
 # substrings that should xfail, reason).
 _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
@@ -792,7 +786,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
                 break  # One xfail per scenario is sufficient
 
-        # FIXME(production-gap bead): UC-003 ext-n insufficient
         # privileges. Storyboard BR-UC-003-ext-n grounds an ADMIN-only adapter gate
         # (e.g. GAM guaranteed-item activation) that emits the canonical
         # PERMISSION_DENIED (pinned enum @04f59d2d5; reconciled from the prose's
@@ -810,12 +803,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     reason="production gap: no admin-only privilege gate on update_media_buy; "
                     "AdCP buyers have no principal-role concept and the fields-less request "
                     "short-circuits via empty-update INVALID_REQUEST before any adapter call "
-                    "(canonical target: PERMISSION_DENIED) — ",
+                    "(canonical target: PERMISSION_DENIED).",
                     strict=True,
                 )
             )
 
-        # FIXME(production-gap bead): UC-003 ext-v cancellation
         # refused. canceled IS a valid UpdateMediaBuyRequest field but production
         # never reads it, has no state-based NOT_CANCELLABLE check, and
         # has_updatable_fields() omits canceled — so a media_buy_id+canceled
@@ -828,7 +820,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 pytest.mark.xfail(
                     reason="production gap: update_media_buy never reads canceled and has no state-based "
                     "cancellation gate; has_updatable_fields() omits canceled so the request short-circuits "
-                    "via empty-update INVALID_REQUEST (canonical target: NOT_CANCELLABLE) — ",
+                    "via empty-update INVALID_REQUEST (canonical target: NOT_CANCELLABLE).",
                     strict=True,
                 )
             )
@@ -841,7 +833,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # would XPASS-fail.
 
         # --- UC-005: disclosure/asset scenarios with partial impl ---
-        # FIXME(): disclosure_positions and brief/catalog asset types
         # partially implemented — some transport variants pass, others fail.
         # Must run BEFORE selective xfails (which use strict=True) to avoid
         # XPASS failures on transport variants that now pass.
@@ -1422,14 +1413,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # buyer-supplied start_date/end_date in response.reporting_period,
             # so T-UC-004-daterange now genuinely passes (no strict xfail).
             #
-            # date-range partition (, #1545): the a2a rows GRADUATED —
+            # date-range partition (#1545): the a2a rows GRADUATED —
             # the Examples now name the wire code (error "VALIDATION_ERROR" with
             # suggestion) and production emits exactly that on the a2a wire ("Start date
             # must be before end date", media_buy_delivery.py:209-218 via
             # AdCPValidationError). Under the transport-aware harness (e2e-harness-wiring)
             # mcp/rest ARE parametrized for this partition and still gap, so they retain a
             # marker below.
-            # date-range partition/boundary (, 18h.10 Phase-2):
+            # date-range partition/boundary:
             # when_partition/boundary_date_range now translate the descriptor
             # into real start_date/end_date (previously the axis name was sent
             # as a literal request field and rejected by extra=forbid, so the
@@ -1521,7 +1512,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # valid rows (explicit_account_id / natural_key) now resolve the
                     # account on a2a/mcp/rest — the delivery When seeds the named valid
                     # accounts via _seed_valid_account_if_named / seed_account_with_access
-                    # (, #1545), which is exactly the "seed the account in the
+                    # (#1545), which is exactly the "seed the account in the
                     # delivery Given" follow-up the e2e-harness-wiring branch flagged as the
                     # condition for graduation. That seeding is present in the merged tree,
                     # so the earlier REVERT no longer applies — the valid rows are removed.
@@ -1547,8 +1538,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "impl-account_id present + not found",
                     # Valid rows (account exists / single match = "brand + operator
                     # present", incl. the sandbox:true variant) now resolve on a2a/mcp/rest
-                    # once their accounts are seeded (, present in the merged
-                    # tree) — removed. a2a invalid rows (both / not found / empty) already
+                    # once their accounts are seeded — removed. a2a invalid rows (both / not found / empty) already
                     # raise AdCPError (wire-drop XPASS, #1417) — removed.
                     "mcp-both account_id and brand/operator",
                     # mcp-account_id present + not found genuinely passes
@@ -1607,7 +1597,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "field); ValidationError not AdCPError (rest silently drops it). "
                 "See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
-            # resolution (, #1545): GRADUATED on all transports. The
+            # resolution (#1545): GRADUATED on all transports. The
             # Examples now name error "VALIDATION_ERROR" with suggestion, and the empty
             # media_buy_ids=[] hits the SDK min_length=1 constraint, surfacing as
             # AdCPValidationError(VALIDATION_ERROR)+suggestion on the a2a/mcp/rest wire
@@ -1859,7 +1849,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # INVALID_REQUEST mis-pin per the AdCP graded error-compliance storyboard), the
         # step asserts it on the harness wire envelope. interval=0 / unit=weeks /
         # model=last_click PASS on a2a/mcp/rest (VALIDATION_ERROR).
-        # GRADUATED (, #1545): the partition "campaign with interval=2"
+        # GRADUATED (#1545): the partition "campaign with interval=2"
         # (campaign_interval_not_one) now passes on a2a — the only transport parametrized
         # for that row — because the attribution_window.post_click reaches production and
         # INV-5 fires (VALIDATION_ERROR "interval must be 1 when unit is 'campaign'"), which
@@ -1883,7 +1873,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker(
                 pytest.mark.xfail(
                     reason="attribution_window partition: the generic 'with {request_params}' step "
-                    "shadows the specific partition step and drops the window ; "
+                    "shadows the specific partition step and drops the window."
                     "validation never fires so the rejection assertion can't pass",
                     strict=True,
                 )
@@ -2045,7 +2035,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # "with {request_params}" step shadows the specific "with attribution_window
             # {value}" step and _parse_request_params drops the space-form window
             # (#1417) — a TEST step-binding bug, not the #1462 in-process gap.
-            # campaign_interval_not_one removed (, #1545): the only
+            # campaign_interval_not_one removed (#1545): the only
             # transport parametrized for it (a2a) now emits VALIDATION_ERROR+suggestion
             # for the named Example and passes unmasked. interval_zero/negative/unit/model
             # remain: those rows XPASS on a2a/rest but genuinely XFAIL on mcp under the
@@ -2081,13 +2071,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"unknown_value", "empty_array"},
                 "status_filter validation not implemented — production accepts invalid values",
             ),
-            # date range partition GRADUATED (, #1545): only [a2a-…] is
+            # date range partition GRADUATED (#1545): only [a2a-…] is
             # parametrized for start_equals_end/start_after_end, and a2a now emits
             # VALIDATION_ERROR+suggestion ("Start date must be before end date",
             # media_buy_delivery.py:209-218) for the named Examples — passes unmasked. Entry
             # removed. (mcp/rest are only parametrized on the BOUNDARY counterpart, which
             # stays masked in _UC004_GENUINE_XFAIL_ROWS above.)
-            # resolution partition GRADUATED (, #1545): empty media_buy_ids=[]
+            # resolution partition GRADUATED (#1545): empty media_buy_ids=[]
             # hits the SDK min_length=1 constraint -> VALIDATION_ERROR+suggestion on the
             # a2a/mcp/rest wire (all three empirically PASS the named Example). Entry removed.
             # ownership: production doesn't validate principal mismatch

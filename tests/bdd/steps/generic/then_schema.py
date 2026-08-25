@@ -6,7 +6,7 @@ is correct on its own merits — it overrides no generic text, so unlike the eig
 deliberately module-scoped UC-019 steps there is nothing to keep it local.
 
 It was NOT, however, why the UC-019 scenario was dormant, and this docstring used
-to say it was (round-1 R1-9). Measured: ``-k freshly`` reported ``2 xfailed`` with
+to say it was. Measured: ``-k freshly`` reported ``2 xfailed`` with
 ``Step definition not found: Given "the buyer captured a media_buy_id from a
 successful create_media_buy response"``. The blocker was the missing ``Given`` —
 moving this ``Then`` would not have woken the scenario. That ``Given`` now exists

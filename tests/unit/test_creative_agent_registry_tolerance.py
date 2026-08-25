@@ -1,4 +1,4 @@
-"""Regression test for per-format resilient ingestion (, gates o94v).
+"""Regression test for per-format resilient ingestion.
 
 The owner-flagged invariant: a single non-conforming format in a creative
 agent's list_creative_formats response must NOT invalidate the whole batch.
