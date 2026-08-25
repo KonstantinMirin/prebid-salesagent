@@ -547,11 +547,26 @@ class CircuitBreakerMixin(LocalOriginMixin):
     # ``test_no_private_circuit_breaker_state_in_steps`` (permanently empty
     # allowlist): no step under tests/bdd/steps/ may touch ``_circuit_breakers``.
 
+    @realize_e2e(
+        e2e_unsupported(
+            "seeding a breaker reaches into WebhookDeliveryService._circuit_breakers in the TEST "
+            "process; the live server's breaker is in-memory in ITS process and cannot be forced "
+            "into a state or have its clock aged from outside — no write surface"
+        )
+    )
     def _breaker_for(self, endpoint_key: str) -> CircuitBreaker:
         """The breaker production would use for *endpoint_key*, creating it if absent.
 
         THE single private-state touch. Everything else in this seam goes
-        through it, so there is one line to audit rather than six.
+        through it, so there is one line to audit rather than six -- and one
+        declaration to make rather than six.
+
+        SEEDING is what has no wire surface, not reading. A scenario whose Given
+        forces the breaker OPEN or ages its clock past the recovery timeout is
+        describing state the SERVER would have to be in, and nothing outside that
+        process can put it there. Reading is a different matter and is no longer
+        declared unsupported: :meth:`breaker_snapshot` asks the server for its own
+        verdict over ``/debug/circuit-breaker`` (salesagent-pldmk.39).
         """
         service = self.get_service()
         if endpoint_key not in service._circuit_breakers:
