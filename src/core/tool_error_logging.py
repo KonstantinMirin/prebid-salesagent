@@ -16,6 +16,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server import Context as FastMCPContext
 
 from src.core.errors.codes import CODE_TABLE, AppErrorCode, Recovery
+from src.core.errors.details import ErrorDetails
 from src.core.exceptions import (
     AdCPError,
     build_two_layer_error_envelope,
@@ -453,7 +454,12 @@ def handle_tool_error(e: ToolError) -> JSONResponse:
     # recovery is NOT passed: it is a function of the code, resolved from CODE_TABLE by the
     # named-code branch of the constructor. A caller-supplied recovery could contradict the
     # code it travels with, which is what deleting the parameter prevents.
-    synthetic = AdCPError(
+    # Annotated because AdCPError is parameterized on its detail shape and this
+    # call passes no details, so there is nothing for mypy to infer from. The
+    # bare ErrorDetails argument is honest here: this boundary resolves a code
+    # from a lookup rather than from a class, so it has no specific shape to
+    # name -- and it carries no details at all.
+    synthetic: AdCPError[ErrorDetails] = AdCPError(
         error_code=resolved_code,
         status_code=_ERROR_CODE_TO_STATUS.get(error_code, 500),
     )

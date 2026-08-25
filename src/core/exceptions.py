@@ -11,13 +11,14 @@ to help buyer agents decide whether to retry, fix, or abandon a request.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast, get_args, get_origin
 
 from adcp.server.helpers import adcp_error
 from adcp.types import ErrorCode
 from pydantic import BaseModel, ValidationError
 
 from src.core.errors.codes import CODE_TABLE, AppErrorCode, ErrorCodeT, Recovery
+from src.core.errors.details import ErrorDetails, VersionUnsupportedDetails
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
@@ -93,8 +94,34 @@ def _rebuild_error(cls: type[AdCPError], code: ErrorCodeT) -> AdCPError:
     return cls() if hasattr(cls, "_code") else cls(error_code=code)
 
 
-class AdCPError(Exception):
+def _details_to_wire(details: ErrorDetails | Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Render a details block for the wire.
+
+    The construction API is a class; the wire slot is an object. This is the
+    one place that conversion happens, so no caller reaches for
+    ``model_dump()`` on its own and no raise site has to think about it.
+
+    The ``Mapping`` branch is migration scaffolding: error classes convert to
+    declared detail classes one at a time, and until the last one lands some
+    ``self.details`` values are still plain dicts. Delete the branch, and this
+    union, when salesagent-rys3u.2 finishes converting all 177 sites.
+    """
+    if details is None:
+        return None
+    if isinstance(details, ErrorDetails):
+        return details.to_wire()
+    return dict(details)
+
+
+class AdCPError[DetailsT: ErrorDetails](Exception):
     """Base exception for all AdCP errors.
+
+    Parameterized on the detail shape it carries. Parameterizing rather than
+    overriding ``__init__`` on each of the 32 error classes that carry details
+    is what keeps the narrowing free of boilerplate: one ``__init__`` signature
+    here, typed ``DetailsT | None``, gives every subclass its own exact detail
+    type. mypy then rejects both a dict and a foreign detail class at every
+    raise site, and reading ``exc.details`` back is typed without a cast.
 
     Class-level identity (``_code``, ``_default_status_code``) is declared
     with ``ClassVar`` per PEP 526 — each typed subclass overrides the
@@ -192,11 +219,42 @@ class AdCPError(Exception):
         path) to import time, where the class definition itself is the error.
         """
         super().__init_subclass__(**kwargs)
+        cls._adopt_code_from_details()
         if hasattr(cls, "_code") and cls._code not in CODE_TABLE:
             raise TypeError(
                 f"{cls.__name__} declares _code {cls._code!r}, which CODE_TABLE does not "
                 "classify. Declare a code the table knows, or add the entry."
             )
+
+    @classmethod
+    def _adopt_code_from_details(cls) -> None:
+        """Take the code from the detail class, so it is declared exactly once.
+
+        The detail class already names its code. An exception class that also
+        declared ``_code`` would state the same fact twice, and two statements
+        of one fact can contradict each other — mypy cannot catch that, because
+        one is a ClassVar VALUE and the other a type ARGUMENT, and no type
+        relationship holds between them. Rather than check the two halves
+        agree, this removes the second half: a parameterized class inherits the
+        code from its detail shape and declaring it again is refused here.
+
+        Error classes that carry no details keep declaring ``_code`` directly.
+        There is nothing to adopt from, and no second declaration to contradict.
+        """
+        for base in cls.__dict__.get("__orig_bases__", ()):
+            if get_origin(base) is None:
+                continue
+            for arg in get_args(base):
+                detail_code = getattr(arg, "__dict__", {}).get("_code")
+                if detail_code is None:
+                    continue
+                if "_code" in cls.__dict__:
+                    raise TypeError(
+                        f"{cls.__name__} declares _code and also parameterizes on "
+                        f"{arg.__name__}, which names {detail_code!r}. Declare the code "
+                        "once: on the detail class, and drop it from the exception."
+                    )
+                cls._code = detail_code
 
     def __new__(cls, *args: Any, **kwargs: Any) -> AdCPError:
         """Refuse to build an error whose code is absent, or doubly named.
@@ -229,7 +287,7 @@ class AdCPError(Exception):
         *,
         error_code: ErrorCodeT | None = None,
         status_code: int | None = None,
-        details: dict[str, Any] | None = None,
+        details: DetailsT | None = None,
         field: str | None = None,
         retry_after: int | None = None,
         context: ContextObject | dict[str, Any] | None = None,
@@ -344,7 +402,7 @@ class AdCPError(Exception):
             "error_code": self.error_code,
             "message": self.message,
             "recovery": self.recovery,
-            "details": self.details,
+            "details": _details_to_wire(self.details),
         }
         if self.field is not None:
             result["field"] = self.field
@@ -377,7 +435,7 @@ class AdCPError(Exception):
             retained only for non-envelope callers (audit logging, SDK
             interop) that still want the flat ``{"errors": [...]}`` payload.
         """
-        merged_details = dict(self.details) if self.details else {}
+        merged_details = _details_to_wire(self.details) or {}
         serialized_context = _serialize_context(self.context)
         if serialized_context is not None:
             merged_details.setdefault("context", serialized_context)
@@ -399,15 +457,17 @@ class AdCPValidationError(AdCPError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.VALIDATION_ERROR
 
 
-class AdCPVersionUnsupportedError(AdCPError):
+class AdCPVersionUnsupportedError(AdCPError[VersionUnsupportedDetails]):
     """Buyer pinned an adcp_version/adcp_major_version this seller doesn't support (400).
 
     Recovery is correctable per v3.1.1 error-code.json enumMetadata: re-pin to
     a release in the returned error.details.supported_versions and retry.
+
+    ``_code`` is absent deliberately: it comes from ``VersionUnsupportedDetails``,
+    which is the single place VERSION_UNSUPPORTED is written down for this error.
     """
 
     _default_status_code: ClassVar[int] = 400
-    _code: ClassVar[ErrorCodeT] = ErrorCode.VERSION_UNSUPPORTED
 
 
 class AdCPInvalidRequestError(AdCPValidationError):
@@ -1071,7 +1131,7 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
         field=exc.field,
         suggestion=exc.suggestion,
         retry_after=exc.retry_after,
-        details=exc.details,
+        details=_details_to_wire(exc.details),
     )
     # Copy errors[0] for the envelope-level mirror so callers that mutate one
     # layer don't accidentally mutate the other (aliasing footgun once both

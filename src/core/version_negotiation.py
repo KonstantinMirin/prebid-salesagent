@@ -40,6 +40,7 @@ def negotiate_adcp_version(adcp_version: str | None, adcp_major_version: int | N
     if adcp_major_version is not None and adcp_major_version in SUPPORTED_ADCP_MAJORS:
         return
 
+    from src.core.errors.details import VersionUnsupportedDetails
     from src.core.exceptions import AdCPVersionUnsupportedError
     from src.core.version import get_version
 
@@ -47,10 +48,10 @@ def negotiate_adcp_version(adcp_version: str | None, adcp_major_version: int | N
     # use it for negotiation (v3.1.1 error-details/version-unsupported.json).
     # The actual negotiation outcome above depends solely on SUPPORTED_ADCP_VERSIONS.
     raise AdCPVersionUnsupportedError(
-        details={
-            "supported_versions": list(SUPPORTED_ADCP_VERSIONS),
-            "build_version": get_version(),
-            "adcp_version": adcp_version,
-            "adcp_major_version": adcp_major_version,
-        },
+        details=VersionUnsupportedDetails(
+            supported_versions=list(SUPPORTED_ADCP_VERSIONS),
+            build_version=get_version(),
+            adcp_version=adcp_version,
+            adcp_major_version=adcp_major_version,
+        ),
     )
