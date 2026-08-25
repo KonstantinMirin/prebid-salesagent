@@ -79,32 +79,6 @@ async def reset_db_pool(request: Request):
         return JSONResponse({"error": f"Failed to reset: {str(e)}"}, status_code=500)
 
 
-@debug_router.get("/debug/circuit-breaker")
-async def circuit_breaker_state(endpoint_url: str):
-    """The live server's circuit-breaker verdict for one endpoint.
-
-    The breaker is in-memory and process-local by design — that is what makes it
-    fail fast — so a test running outside the server process has no way to see it.
-    Over e2e_rest the harness's ``get_service()`` builds a FRESH
-    ``WebhookDeliveryService`` in the test process, whose breakers are empty no
-    matter what the server did, so the assertion was declared unrealizable and its
-    scenarios dropped out of live grading (salesagent-pldmk.39, and pldmk.10's
-    remaining half is blocked on exactly this).
-
-    This projects the verdict onto the wire instead. It reads the same public
-    getter the in-process path reads, on the module singleton the server actually
-    delivers through, so what a test observes over HTTP is what production exposes
-    in-process — not a second source of truth.
-
-    Read-only, ADCP_TESTING-gated by the router, and it reports no URL back: the
-    caller supplied it.
-    """
-    from src.services.webhook_delivery_service import webhook_delivery_service
-
-    state, failure_count = webhook_delivery_service.get_circuit_breaker_state(endpoint_url)
-    return JSONResponse({"state": state.value, "failure_count": failure_count})
-
-
 @debug_router.get("/debug/db-state")
 async def debug_db_state(request: Request):
     """Debug endpoint to show database state (testing only)."""

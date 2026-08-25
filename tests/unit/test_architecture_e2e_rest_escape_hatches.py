@@ -243,20 +243,14 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "the seam's BR-RULE-029 retry-schedule sleep count is process-local "
             "(env.mock['sleep']), not observable across the Docker HTTP boundary",
         ),
-        # salesagent-pldmk.39. Seeding a breaker touches
-        # WebhookDeliveryService._circuit_breakers in the TEST process. The live
-        # server's breaker is in-memory in ITS process, so a Given that forces a
-        # state or ages the recovery clock cannot be realized from outside it.
-        # This is the WRITE half only: reading is now projected onto the wire via
-        # /debug/circuit-breaker, which is why
-        # assert_circuit_breaker_failure_recorded is no longer declared here and
-        # its scenarios grade over e2e_rest.
+        # salesagent-47n9.3: get_service() under e2e_rest is a fresh, in-process
+        # WebhookDeliveryService never touched by the live server's actual
+        # delivery — service._circuit_breakers has no wire surface at all.
         (
             "tests/harness/_mixins.py",
-            "_breaker_for",
-            "seeding a breaker reaches into WebhookDeliveryService._circuit_breakers in the TEST "
-            "process; the live server's breaker is in-memory in ITS process and cannot be forced "
-            "into a state or have its clock aged from outside — no write surface",
+            "assert_circuit_breaker_failure_recorded",
+            "get_service() constructs a fresh in-process WebhookDeliveryService under e2e_rest, "
+            "disconnected from the live server's real circuit-breaker state — no wire surface",
         ),
         (
             "tests/harness/creative_formats.py",
