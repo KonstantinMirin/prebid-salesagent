@@ -854,9 +854,21 @@ def _describe_active_patch(active: Any) -> str:
     return f"{name}.{getattr(active, 'attribute', '?')}"
 
 
+_threads_at_setup: set[int] = set()
+_reported_threads: set[int] = set()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_setup(item: pytest.Item):
+    """Snapshot live threads so a leak is blamed on the test that STARTED it."""
+    _threads_at_setup.clear()
+    _threads_at_setup.update(id(t) for t in threading.enumerate())
+    yield
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None):
-    """Fail the test that leaked a patch, at the moment it leaked it."""
+    """Fail the test that leaked a patch or a thread, at the moment it leaked it."""
     yield  # let every finalizer run first
 
     leaked = []
@@ -876,13 +888,28 @@ def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None):
             leaked.append(f"{name} (replaced without patch())")
             _PRISTINE_CALLABLES[name] = _resolve_dotted(name)  # blame the culprit, not its victims
 
+    # Threads this test started that are still RUNNING. Reported once each: one
+    # leak stays alive for the rest of the session, so a naive check would blame
+    # every subsequent test -- ~5000 failures from one defect.
+    frames = sys._current_frames()
+    for thread in threading.enumerate():
+        if id(thread) in _threads_at_setup or id(thread) in _reported_threads:
+            continue
+        _reported_threads.add(id(thread))
+        frame = frames.get(thread.ident)
+        if frame is None or _thread_is_parked_pool_worker(frame):
+            continue
+        leaked.append(f"thread {_describe_thread(thread, frame)}")
+
     if leaked:
         raise AssertionError(
-            f"{item.nodeid} finished with {len(leaked)} patch(es) still active: "
+            f"{item.nodeid} finished with {len(leaked)} patch(es)/thread(s) still active: "
             f"{', '.join(sorted(leaked))}. Every later test in this worker now sees them. "
-            f"Stop the patch -- use `with patch(...)`, a fixture that stops in teardown, "
-            f"or try/finally. Do not rely on a `.stop()` as the last statement of the test: "
-            f"any exception before that line skips it."
+            f"For a patch: use `with patch(...)`, a fixture that stops in teardown, or "
+            f"try/finally -- never a `.stop()` as the last statement, since any exception "
+            f"before that line skips it. For a thread: patch whatever spawns it, or join it "
+            f"in a fixture. A running thread is not inert -- one calling time.sleep inside "
+            f"another test's mock is exactly how #2006's last failure happened."
         )
 
 
@@ -898,6 +925,47 @@ _PRISTINE_CALLABLES: dict[str, Any] = {
 def _resolve_dotted(dotted: str) -> Any:
     module_name, _, attr = dotted.rpartition(".")
     return getattr(sys.modules[module_name], attr)
+
+
+# ---------------------------------------------------------------------------
+# Leaked-thread guard — a test must not leave a thread RUNNING
+# ---------------------------------------------------------------------------
+# Same principle as the patch guard above, different organ, and it caught a real
+# defect the patch guard structurally cannot see. `test_start_approval_creates_sync_job`
+# spawned a real daemon thread that ran the production retry path -- httpx POSTs at
+# timeout=10.0 with `time.sleep(2**attempt)` backoff -- so it lived tens of seconds
+# past its own test and called sleep(1)/sleep(2) from inside an unrelated test's
+# window. Because src/core/webhook_delivery.py does `import time`, that test's
+# patch of `src.core.webhook_delivery.time.sleep` is PROCESS-GLOBAL, so the stray
+# calls landed on its mock and broke `assert call_count == 2` about once in twenty
+# full runs. No patch leaked; a thread did.
+#
+# CLASSIFY BY WHAT THE THREAD IS DOING, NOT BY WHEN IT APPEARED. A birth-time
+# check misfires on process-lifetime application resources: a2wsgi's
+# WSGIMiddleware builds `ThreadPoolExecutor(thread_name_prefix="WSGI")` in its
+# __init__, and src/app.py constructs one at module import -- so its `WSGI_0`
+# worker appears mid-session only because `src.app` is imported lazily inside a
+# test body, and it is not a leak at all. An idle pooled worker is parked in
+# `queue.get()`; a leaked thread is executing. That distinction is readable from
+# the top frame and needs no allowlist -- which matters, because an allowlist
+# here would have to carry a FIXME for a thread that is not a defect.
+_POOL_WORKER_FILE = os.path.join("concurrent", "futures", "thread.py")
+
+
+def _thread_is_parked_pool_worker(frame: Any) -> bool:
+    """True for an executor worker blocked on its work queue (idle, not leaked).
+
+    Deliberately specific: a thread blocked on some OTHER queue still reports. A
+    leaked thread parked in an executor's work queue IS an idle pool worker by
+    definition, so nothing can hide behind this.
+    """
+    code = frame.f_code
+    return code.co_name == "_worker" and code.co_filename.endswith(_POOL_WORKER_FILE)
+
+
+def _describe_thread(thread: threading.Thread, frame: Any) -> str:
+    where = f"{os.path.basename(frame.f_code.co_filename)}:{frame.f_lineno} in {frame.f_code.co_name}"
+    return f"{thread.name} (daemon={thread.daemon}, at {where})"
 
 
 # ---------------------------------------------------------------------------
