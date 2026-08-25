@@ -69,7 +69,13 @@ from adcp.types.generated_poc.enums.media_buy_valid_action import (
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.errors.codes import CODE_TABLE, ErrorCodeT
-from src.core.exceptions import AdCPInvalidRequestError, AdCPNotFoundError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPError,
+    AdCPInvalidRequestError,
+    AdCPNotFoundError,
+    AdCPValidationError,
+    _details_to_wire,
+)
 
 # For backward compatibility, alias AdCPPackage as LibraryPackage
 LibraryPackage: TypeAlias = AdCPPackage  # noqa: UP040 — runtime re-export used as base class
@@ -224,6 +230,32 @@ class Error(_LibraryError):
             payload["details"] = details
         if retry_after is not None:
             payload["retry_after"] = retry_after
+        return cls.model_validate(payload)
+
+    @classmethod
+    def from_exception(cls, exc: AdCPError[Any]) -> "Error":
+        """Build an advisory from the error that already knows its own code.
+
+        The EXCEPTION class is the authority on which code an error is, so an
+        advisory derived from one needs no code argument: there is nothing for a
+        caller to get wrong, and no way to pair a code with a details block
+        belonging to a different failure. Detail typing comes along for free,
+        because constructing the exception is what mypy checked.
+
+        This replaces the hand-rolled decomposition at the webhook rejection
+        path, which spelled the same thing as three separate reads
+        (``rejection.error_code``, ``rejection.field``, ``rejection.details``)
+        and so could drift from the transport envelope built from the same
+        exception.
+        """
+        payload: dict[str, Any] = {"code": exc.error_code}
+        if exc.field is not None:
+            payload["field"] = exc.field
+        wire_details = _details_to_wire(exc.details)
+        if wire_details is not None:
+            payload["details"] = wire_details
+        if exc.retry_after is not None:
+            payload["retry_after"] = exc.retry_after
         return cls.model_validate(payload)
 
     def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> "Error":

@@ -595,19 +595,17 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # cannot carry it. It travels in `details` — without this the buyer is told
                     # only "The media buy was declined" and never learns why, which is what the
                     # comment above has always promised ("embed that with the reason").
-                    # DERIVED, not hand-listed. Error.of resolves message, suggestion and
-                    # recovery from CODE_TABLE, so the advisory and the transport envelope
-                    # cannot disagree about the same failure -- there is one derivation, not a
-                    # second copy. Listing the fields here did exactly that: once
-                    # salesagent-3dawm.8 made suggestion resolve from CODE_TABLE, a hand-built
-                    # copy that omitted it gave the buyer MEDIA_BUY_REJECTED *with* the pin's
-                    # suggestion on the tool path and *without* it on this webhook -- one code,
-                    # two behaviours, split by lane. The reason rides on the exception so the
-                    # single derivation carries it.
+                    # DERIVED from the exception, not hand-listed. Error.from_exception takes
+                    # the code, field, details and retry_after off the error that already knows
+                    # them, so the advisory and the transport envelope cannot disagree about the
+                    # same failure -- there is one derivation, not a second copy. Reading the
+                    # three fields separately did exactly that: once salesagent-3dawm.8 made
+                    # suggestion resolve from CODE_TABLE, a hand-built copy that omitted it gave
+                    # the buyer MEDIA_BUY_REJECTED *with* the pin's suggestion on the tool path
+                    # and *without* it on this webhook -- one code, two behaviours, split by
+                    # lane.
                     rejection = AdCPMediaBuyRejectedError(details={"rejection_reason": reason} if reason else None)
-                    create_media_buy_rejected_result = CreateMediaBuyError(
-                        errors=[Error.of(rejection.error_code, field=rejection.field, details=rejection.details)]
-                    )
+                    create_media_buy_rejected_result = CreateMediaBuyError(errors=[Error.from_exception(rejection)])
                     metadata = _media_buy_webhook_metadata(step_data, tenant_id, media_buy_id, media_buy_data)
 
                     # Determine protocol type from workflow step request_data

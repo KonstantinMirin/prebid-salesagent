@@ -8,15 +8,18 @@ failure rather than two different keys on the buyer's wire. Before this,
 with ``validation_errors``, ``creative_errors``, ``config_errors``,
 ``adapter_errors`` and ``violations`` all naming "a list of problems".
 
-Each subclass names the code it belongs to via ``_code``. That single
-declaration does three jobs:
+A detail class does NOT name an error code, deliberately. The EXCEPTION class
+is the authority on which code it is; a detail shape is just a shape, and the
+same shape legitimately serves several errors. ``{package_id, media_buy_id}``
+fits both ``AdCPPackageNotFoundError`` and ``AdCPGamUpdateError``, and
+``{creative_id}`` already appears under three different error classes. Putting
+a code here would invert that authority and force a copy of the shape per
+error.
 
-* ``AdCPError.__init_subclass__`` asserts an exception class and its detail
-  class agree about the code, at import time.
-* ``Error.from_details()`` reads the code off the instance, so the advisory
-  lane needs no code argument and cannot pair a code with a foreign shape.
-* The exception class ADOPTS it, so ``_code`` is declared once per error and a
-  disagreement between the two halves cannot be written down.
+The pairing is declared exactly once, in the exception's type parameter:
+``class AdCPPackageNotFoundError(AdCPError[EntityRefDetails])``. mypy enforces
+it at every raise site, and the advisory lane reads the code off the exception
+via ``Error.from_exception()`` rather than off the details.
 
 Extras are declared, not accepted. ``get_pydantic_extra_mode()`` yields
 ``forbid`` in development and CI and ``ignore`` in production, so an undeclared
@@ -34,12 +37,12 @@ prevents — so it holds in production too.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
 from src.core.config import get_pydantic_extra_mode
-from src.core.errors.codes import CODE_TABLE, ErrorCode, ErrorCodeT
+from src.core.errors.codes import ErrorCodeT
 
 __all__ = ["ErrorDetails", "ErrorProblem", "VersionUnsupportedDetails"]
 
@@ -47,24 +50,11 @@ __all__ = ["ErrorDetails", "ErrorProblem", "VersionUnsupportedDetails"]
 class ErrorDetails(BaseModel):
     """Base for every error-details shape.
 
-    ``_code`` is annotation-only here, so ``hasattr`` is False on the base and
-    True on every subclass that declares one. A subclass that names a code the
-    table does not classify fails at class creation rather than at first raise,
-    mirroring the check ``AdCPError.__init_subclass__`` already performs.
+    Carries fields only. Which error a shape belongs to is declared by the
+    exception's type parameter, not here.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
-
-    _code: ClassVar[ErrorCodeT]
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
-        code = cls.__dict__.get("_code")
-        if code is not None and code not in CODE_TABLE:
-            raise TypeError(
-                f"{cls.__name__} declares _code {code!r}, which CODE_TABLE does not "
-                "classify. Declare a code the table knows, or add the entry."
-            )
 
     def to_wire(self) -> dict[str, Any]:
         """Serialize for the ``details`` slot of the wire error object.
@@ -142,8 +132,6 @@ class VersionUnsupportedDetails(ErrorDetails):
     on the wire; declaring them is what stops the next site spelling one of
     them ``version`` or ``major``.
     """
-
-    _code: ClassVar[ErrorCodeT] = ErrorCode.VERSION_UNSUPPORTED
 
     supported_versions: list[str]
     supported_majors: list[int] | None = None

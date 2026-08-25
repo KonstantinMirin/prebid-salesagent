@@ -11,7 +11,7 @@ to help buyer agents decide whether to retry, fix, or abandon a request.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from adcp.server.helpers import adcp_error
 from adcp.types import ErrorCode
@@ -219,42 +219,11 @@ class AdCPError[DetailsT: ErrorDetails](Exception):
         path) to import time, where the class definition itself is the error.
         """
         super().__init_subclass__(**kwargs)
-        cls._adopt_code_from_details()
         if hasattr(cls, "_code") and cls._code not in CODE_TABLE:
             raise TypeError(
                 f"{cls.__name__} declares _code {cls._code!r}, which CODE_TABLE does not "
                 "classify. Declare a code the table knows, or add the entry."
             )
-
-    @classmethod
-    def _adopt_code_from_details(cls) -> None:
-        """Take the code from the detail class, so it is declared exactly once.
-
-        The detail class already names its code. An exception class that also
-        declared ``_code`` would state the same fact twice, and two statements
-        of one fact can contradict each other — mypy cannot catch that, because
-        one is a ClassVar VALUE and the other a type ARGUMENT, and no type
-        relationship holds between them. Rather than check the two halves
-        agree, this removes the second half: a parameterized class inherits the
-        code from its detail shape and declaring it again is refused here.
-
-        Error classes that carry no details keep declaring ``_code`` directly.
-        There is nothing to adopt from, and no second declaration to contradict.
-        """
-        for base in cls.__dict__.get("__orig_bases__", ()):
-            if get_origin(base) is None:
-                continue
-            for arg in get_args(base):
-                detail_code = getattr(arg, "__dict__", {}).get("_code")
-                if detail_code is None:
-                    continue
-                if "_code" in cls.__dict__:
-                    raise TypeError(
-                        f"{cls.__name__} declares _code and also parameterizes on "
-                        f"{arg.__name__}, which names {detail_code!r}. Declare the code "
-                        "once: on the detail class, and drop it from the exception."
-                    )
-                cls._code = detail_code
 
     def __new__(cls, *args: Any, **kwargs: Any) -> AdCPError:
         """Refuse to build an error whose code is absent, or doubly named.
@@ -463,11 +432,12 @@ class AdCPVersionUnsupportedError(AdCPError[VersionUnsupportedDetails]):
     Recovery is correctable per v3.1.1 error-code.json enumMetadata: re-pin to
     a release in the returned error.details.supported_versions and retry.
 
-    ``_code`` is absent deliberately: it comes from ``VersionUnsupportedDetails``,
-    which is the single place VERSION_UNSUPPORTED is written down for this error.
+    The class is the authority on the code; ``VersionUnsupportedDetails`` is a
+    shape and names none, so it stays reusable.
     """
 
     _default_status_code: ClassVar[int] = 400
+    _code: ClassVar[ErrorCodeT] = ErrorCode.VERSION_UNSUPPORTED
 
 
 class AdCPInvalidRequestError(AdCPValidationError):
