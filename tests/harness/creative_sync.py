@@ -598,12 +598,29 @@ class CreativeSyncEnv(IntegrationEnv):
         return _sync_creatives_impl(**kwargs)
 
     def call_a2a(self, **kwargs: Any) -> SyncCreativesResponse:
-        """Call sync_creatives_raw (A2A wrapper) with real DB.
+        """Call sync_creatives_raw directly — NOT the A2A pipeline. See below.
 
-        Note: uses _raw() path instead of _run_a2a_handler because the real
-        A2A handler's _handle_sync_creatives_skill constructs CreativeAsset
-        from raw dicts, which fails validation (assets field required).
-        That handler bug needs a separate fix.
+        THIS IS A TRANSPORT BYPASS and it is why salesagent-b2wny looked like an
+        A2A framing gap. Every "a2a" creative-sync scenario runs the same
+        in-process wrapper the other legs run, so nothing frames a Task and no
+        wire envelope can exist. The original reason recorded here -- that
+        ``_handle_sync_creatives_skill`` pre-built ``CreativeAsset(**c)`` from wire
+        dicts and hard-failed the whole call -- was a REAL production bug and is
+        now fixed (the handler passes wire dicts through, so ``_impl`` validates
+        per entry and partial success works on A2A as it does everywhere else).
+
+        The bypass stays only because removing it exposes 11 further ``[a2a]``
+        failures in ``test_creative_sync_transport.py``, all in the
+        generative/preview family: the env's mock configuration
+        (``set_run_async_result``, ``registry.preview_creative``,
+        ``config.gemini_api_key``) does not take effect through
+        ``_run_a2a_handler``, so a creative that must fail is created instead.
+        Entry point is identical (both reach ``sync_creatives_raw``), so the cause
+        is in how the env's patches interact with the handler's ``asyncio.run``
+        path -- not yet diagnosed.
+
+        Removing this line is the whole of salesagent-kyc89. Do not remove it
+        without fixing those 11, and do not "fix" them by restoring a fallback.
         """
         from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
 

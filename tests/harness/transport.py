@@ -276,8 +276,11 @@ class TransportResult:
         envelope = self.wire_error_envelope
         assert envelope is not None, (
             f"Expected a wire rejection with {code}, but no wire_error_envelope was captured "
-            f"(is_error={self.is_error}, payload={self.payload!r}). The operation either "
-            "succeeded or errored before reaching a transport."
+            f"(is_error={self.is_error}, payload={self.payload!r}, "
+            f"error={type(self.error).__name__ if self.error else None}: {self.error!r}). "
+            "The operation either succeeded or errored before reaching a transport. "
+            "When `error` is set but the envelope is not, the transport swallowed a typed "
+            "error instead of framing it — name THAT, not the missing envelope."
         )
         assert_envelope_shape(
             envelope,

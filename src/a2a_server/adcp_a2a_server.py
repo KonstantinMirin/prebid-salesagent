@@ -49,7 +49,7 @@ from a2a.types import (
 )
 from a2a.utils.errors import A2AError
 from adcp import create_a2a_webhook_payload
-from adcp.types import ContextObject, CreativeAsset, GeneratedTaskStatus
+from adcp.types import ContextObject, GeneratedTaskStatus
 from adcp.types.base import AdCPBaseModel
 from google.protobuf import json_format, struct_pb2
 
@@ -1821,16 +1821,26 @@ class AdCPRequestHandler(RequestHandler):
         if "creatives" not in parameters:
             raise AdCPValidationError()
 
-        # Construct typed models at the A2A boundary (Pydantic validation at entry).
-        # Pre-process format_id: upgrade legacy strings to FormatId models.
+        # Pass wire dicts THROUGH; do not pre-construct CreativeAsset here.
+        # ``sync_creatives_raw`` declares ``list[CreativeAsset] | list[dict]`` for
+        # exactly this reason: ``_sync_creatives_impl`` validates each entry
+        # individually, which is what produces the per-creative partial-success
+        # results this tool's contract promises. Building CreativeAsset(**c) at the
+        # boundary hard-failed the WHOLE call on one malformed entry, so A2A alone
+        # could not express a partial success -- and it was a third construction of
+        # a request the other two transports build by one shared path.
+        #
+        # The legacy format_id upgrade stays: it is a wire-compatibility rewrite of
+        # a field's shape, not a model construction.
         from src.core.format_cache import upgrade_legacy_format_id
 
         with adcp_validation_boundary(context="sync_creatives request"):
-            creatives = []
-            for c in parameters["creatives"]:
-                if isinstance(c, dict) and "format_id" in c:
-                    c = {**c, "format_id": upgrade_legacy_format_id(c["format_id"])}
-                creatives.append(CreativeAsset(**c) if isinstance(c, dict) else c)
+            creatives = [
+                {**c, "format_id": upgrade_legacy_format_id(c["format_id"])}
+                if isinstance(c, dict) and "format_id" in c
+                else c
+                for c in parameters["creatives"]
+            ]
 
             ctx_param = parameters.get("context")
             context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param
