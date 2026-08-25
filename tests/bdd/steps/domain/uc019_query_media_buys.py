@@ -3172,3 +3172,284 @@ def then_included_entry_exposes_id_and_status(ctx: dict, expected_status: str) -
     assert status == expected_status, (
         f"post-create poll: expected media_buys[0].status {expected_status!r} for a freshly-created buy, got {status!r}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# THE BLOB RULE — package_config is untyped, so every value read out of it
+# is a legacy value the pinned types may reject, so every one is resolved before the
+# constructor rather than passed straight through
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _resolve_media_buy_row(ctx: dict, mb_id: str) -> Any:
+    """Return the persisted MediaBuy ORM row for a Gherkin media-buy label.
+
+    The label is not the stored id — the seeding Given generates a unique one per
+    scenario — so it resolves through the same map the wire assertions use.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import MediaBuy
+
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    env = ctx["env"]
+    row = env._session.scalars(select(MediaBuy).filter_by(media_buy_id=real_id)).first()
+    assert row is not None, (
+        f"Media buy {mb_id!r} (real_id={real_id!r}) is not seeded — the raw_request "
+        f"Given must follow a Given that creates the buy."
+    )
+    return row
+
+
+def _package_row(ctx: dict, pkg_id: str) -> Any:
+    """Return the persisted MediaPackage ORM row for a Gherkin package label.
+
+    Reads through the harness-bound session (``env._session``) like
+    ``given_media_buy_has_dates`` — the seeding Given already committed the row,
+    and this step only overwrites one key of its untyped JSON column.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import MediaPackage
+
+    env = ctx["env"]
+    row = env._session.scalars(select(MediaPackage).filter_by(package_id=pkg_id)).first()
+    assert row is not None, (
+        f"Package {pkg_id!r} is not seeded — the package_config Given must follow a "
+        f"Given that creates the buy and its package. Known packages: "
+        f"{sorted(ctx.get('seeded_packages', {}))}"
+    )
+    return row
+
+
+#: A value the pinned model accepts for each blob key the read path resolves. Used to
+#: give every scenario row valid siblings, so "degrades that field ALONE" has something
+#: to be false about.
+_VALID_BLOB_SIBLINGS = {
+    "product_id": "guaranteed_display",
+    "start_time": "2026-03-01T00:00:00Z",
+    "end_time": "2026-03-31T00:00:00Z",
+    "paused": False,
+    "targeting": {"geo_country_any_of": ["US"]},
+}
+
+
+@given(parsers.parse('package "{pkg_id}" package_config key {field} holds the legacy JSON value {legacy_json}'))
+def given_package_config_legacy_value(ctx: dict, pkg_id: str, field: str, legacy_json: str) -> None:
+    """Write ONE legacy-invalid value into the package's untyped package_config column.
+
+    The value is spelled as JSON in the Examples table so the seed carries the real
+    persisted TYPE (``123`` is an int, ``"maybe"`` is a str) rather than the string
+    Gherkin would otherwise hand over — a str ``"123"`` would satisfy the pinned
+    ``product_id`` type and grade nothing.
+    """
+    import json
+
+    row = _package_row(ctx, pkg_id)
+    config = dict(row.package_config or {})
+    # Seed every OTHER blob key with a value the pinned model accepts, so the row has
+    # siblings that must survive. Without them "degrades that field alone" is not
+    # gradeable on rows whose seed carries no other blob value: an implementation that
+    # degrades everything has nothing else to destroy, so it looks correct. Measured --
+    # with these siblings absent, such an implementation passed the two product_id rows.
+    for key, valid in _VALID_BLOB_SIBLINGS.items():
+        config.setdefault(key, valid)
+    config[field] = json.loads(legacy_json)
+    row.package_config = config
+    ctx["env"]._session.commit()
+
+
+@given(parsers.parse('media buy "{mb_id}" raw_request key {field} holds the legacy JSON value {legacy_json}'))
+def given_raw_request_legacy_value(ctx: dict, mb_id: str, field: str, legacy_json: str) -> None:
+    """Write a legacy-invalid value into the media buy's untyped ``raw_request`` column.
+
+    Spelled as JSON in the step so the seed carries the real persisted TYPE: ``123`` is
+    an int, and a str ``"123"`` would satisfy the pinned ``str | None`` and grade nothing.
+    """
+    import json
+
+    row = _resolve_media_buy_row(ctx, mb_id)
+    raw = dict(row.raw_request or {})
+    raw[field] = json.loads(legacy_json)
+    row.raw_request = raw
+    ctx["env"]._session.commit()
+
+
+@then(parsers.parse('the media buy "{mb_id}" wire field {field} should be null or absent'))
+def then_media_buy_wire_field_degraded(ctx: dict, mb_id: str, field: str) -> None:
+    """The degraded media-buy-level field renders empty rather than failing the listing."""
+    buy = _wire_media_buy(ctx, mb_id)
+
+    assert buy.get(field) is None, (
+        f"expected the legacy-invalid {field!r} to render empty on media buy {mb_id!r}; got {buy.get(field)!r}"
+    )
+
+
+@then(
+    parsers.parse(
+        'response.errors[] should carry exactly one advisory for media buy "{mb_id}" '
+        'field {field} with code "{code}" and recovery "{recovery}"'
+    )
+)
+def then_raw_request_advisory_code_and_recovery(ctx: dict, mb_id: str, field: str, code: str, recovery: str) -> None:
+    """Both halves, off the wire, and exactly one advisory in the whole document.
+
+    The document-wide count is what grades "alone" here, for the same reason it does on
+    the package rows: without it an implementation that degrades every blob value passes.
+    """
+    advisories = _wire_advisories(ctx)
+
+    assert len(advisories) == 1, (
+        f"expected exactly ONE advisory in the whole response — a legacy-invalid "
+        f"{field!r} must degrade that field ALONE — got {len(advisories)}: {advisories!r}"
+    )
+    advisory = advisories[0]
+    assert field in str(advisory.get("field", "")), (
+        f"expected the advisory to name field {field!r}; got {advisory.get('field')!r}"
+    )
+    assert advisory.get("code") == code, (
+        f"expected advisory code {code!r} for a defect in the seller's own store, got {advisory.get('code')!r}"
+    )
+    assert advisory.get("recovery") == recovery, (
+        f"expected advisory recovery {recovery!r} — the code alone leaves the buyer "
+        f"inferring retry semantics; got {advisory.get('recovery')!r}"
+    )
+
+
+def _wire_media_buy(ctx: dict, mb_id: str) -> dict:
+    """Return the media buy the buyer received on the wire, by Gherkin label."""
+    real_id = _resolve_media_buy_id(ctx, mb_id)
+    document = wire_dict(ctx)
+    matching = [buy for buy in document.get("media_buys", []) if buy.get("media_buy_id") == real_id]
+    assert len(matching) == 1, (
+        f"expected exactly one media_buys[] entry for {mb_id!r} (real_id={real_id!r}); got "
+        f"{len(matching)} in {[b.get('media_buy_id') for b in document.get('media_buys', [])]!r}"
+    )
+    return matching[0]
+
+
+def _wire_package(ctx: dict, pkg_id: str, *, mb_id: str | None = None) -> dict:
+    """Return the package the buyer received on the wire, by Gherkin label.
+
+    ``mb_id`` scopes the search to one media buy when the step text names it;
+    without it the whole document is searched, and the "exactly one" assertion
+    still refuses an ambiguous match.
+    """
+    buys = [_wire_media_buy(ctx, mb_id)] if mb_id is not None else wire_dict(ctx).get("media_buys", [])
+    matching = [pkg for buy in buys for pkg in buy.get("packages", []) if pkg.get("package_id") == pkg_id]
+    assert len(matching) == 1, (
+        f"expected exactly one packages[] entry for {pkg_id!r} across {len(buys)} media buy(s) on the "
+        f"wire; got {len(matching)}: {[p.get('package_id') for buy in buys for p in buy.get('packages', [])]!r}"
+    )
+    return matching[0]
+
+
+def _wire_advisories(ctx: dict) -> list[dict]:
+    """Return the non-fatal ``errors[]`` advisories carried by the 200-OK document.
+
+    Read off the success-path wire, never off a reconstructed exception: these
+    advisories live INSIDE a successful response, so ``wire_error_envelope`` is
+    empty for them and the typed payload would show already-coerced values.
+    ``errors`` is dropped by ``exclude_none`` when the listing is clean, so an
+    absent key means "no advisories".
+    """
+    return list(wire_dict(ctx).get("errors") or [])
+
+
+@then(parsers.parse('the response should include media buy "{mb_id}" with package "{pkg_id}"'))
+def then_response_includes_buy_with_package(ctx: dict, mb_id: str, pkg_id: str) -> None:
+    """Assert the listing SURVIVED and still renders the defective row's package.
+
+    This is the half of the blob rule that a code-only assertion cannot see: one
+    legacy cell in one package must degrade that field, not fail the whole listing.
+    """
+    package = _wire_package(ctx, pkg_id, mb_id=mb_id)
+    assert package.get("package_id") == pkg_id, (
+        f"expected packages[].package_id {pkg_id!r} on the wire, got {package.get('package_id')!r}"
+    )
+
+
+@then(parsers.parse('the package "{pkg_id}" wire field {field} should be null or absent'))
+def then_package_wire_field_degraded(ctx: dict, pkg_id: str, field: str) -> None:
+    """Assert the ONE defective field renders empty on the wire.
+
+    Null or absent, because the pinned item schema types these fields non-nullable
+    but lists only ``package_id`` in ``packages.items.required`` — so the legal
+    degraded rendering is the key being dropped by ``exclude_none``, and a JSON
+    ``null`` is the same fact for a buyer reading the field.
+    """
+    package = _wire_package(ctx, pkg_id)
+    assert package.get(field) is None, (
+        f"expected the legacy-invalid {field!r} to render empty on package {pkg_id!r}; "
+        f"got {package.get(field)!r} — a value derived from a cell the pinned type rejects"
+    )
+
+
+def _advisories_naming(advisories: list[dict], pkg_id: str, field: str) -> list[dict]:
+    """The advisories that identify BOTH the package and the field they degrade.
+
+    Matched across ``field`` and ``message`` together, so a selector-shaped
+    advisory and a prose-shaped one both count — what the obligation requires is
+    that the buyer can reconcile WHICH field of WHICH package went missing, not a
+    particular selector spelling.
+    """
+    out = []
+    for advisory in advisories:
+        haystack = " ".join(str(advisory.get(key) or "") for key in ("field", "message"))
+        if pkg_id in haystack and field in haystack:
+            out.append(advisory)
+    return out
+
+
+@then(
+    parsers.parse(
+        'response.errors[] should carry exactly one advisory for package "{pkg_id}" field {field} '
+        'with code "{code}" and recovery "{recovery}"'
+    )
+)
+def then_blob_advisory_code_and_recovery(ctx: dict, pkg_id: str, field: str, code: str, recovery: str) -> None:
+    """Assert the degraded field's advisory carries the pinned code AND recovery.
+
+    Both, off the wire. ``recovery`` is the half a code-counting assertion cannot
+    see: pinned ``core/error.json`` makes the wire ``recovery`` authoritative and
+    ``enumMetadata`` only its documentary mirror, so an advisory that names
+    CONFIGURATION_ERROR while omitting ``recovery`` still leaves the buyer inferring
+    retry semantics. ``correctable`` here would tell the buyer to "fix field values"
+    for a cell in the SELLER's store.
+    """
+    advisories = _wire_advisories(ctx)
+    # The WHOLE document carries exactly one advisory, before we filter to the one
+    # naming this field. This assertion is what grades the word "alone" in the
+    # scenario's own title, and without it the row is satisfiable by an implementation
+    # that degrades EVERY blob value on every row: the sibling advisories such an
+    # implementation emits are filtered out by _advisories_naming below, so the
+    # per-field count still reads 1 and the row passes while the buyer loses every
+    # package_config value in the listing. Measured: that implementation passes all
+    # five rows without this line and fails eight of ten with it.
+    assert len(advisories) == 1, (
+        f"expected exactly ONE advisory in the whole response — a legacy-invalid "
+        f"{field!r} must degrade that field ALONE — got {len(advisories)}: {advisories!r}"
+    )
+    matching = _advisories_naming(advisories, pkg_id, field)
+    assert len(matching) == 1, (
+        f"expected exactly one errors[] advisory naming package {pkg_id!r} and field {field!r}; "
+        f"got {len(matching)} of {len(advisories)} advisories: {advisories!r}"
+    )
+    advisory = matching[0]
+    assert advisory.get("code") == code, (
+        f"expected advisory code {code!r} for a defect in the seller's own store, got {advisory.get('code')!r}"
+    )
+    assert advisory.get("recovery") == recovery, (
+        f"expected advisory recovery {recovery!r} on the wire (pinned core/error.json makes the wire "
+        f"field authoritative), got {advisory.get('recovery')!r} on code {advisory.get('code')!r}"
+    )
+
+
+@then(parsers.parse('response.errors[] should carry no advisory with code "{code}"'))
+def then_no_advisory_with_code(ctx: dict, code: str) -> None:
+    """Assert the advisory code multiset gained no entry with the superseded code."""
+    offending = [advisory for advisory in _wire_advisories(ctx) if advisory.get("code") == code]
+    assert offending == [], (
+        f"expected no errors[] advisory with code {code!r} — its pinned recovery advises a retry "
+        f"that can never repair a seller-side defect; got {offending!r}"
+    )

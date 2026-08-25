@@ -4147,10 +4147,23 @@ class TestGetMediaBuysStatusComputation:
 
     @staticmethod
     def _make_buy(*, status="active", start_offset_days, end_offset_days, start_time=None, is_paused=False):
-        from src.core.tools.media_buy_list import _MediaBuyData
+        """Build the ORM row ``_compute_status`` actually receives.
 
-        return _MediaBuyData(
+        This used to build a ``_MediaBuyData``. It cannot any more, and the reason is the
+        point of the change rather than an inconvenience: the carrier no longer holds
+        ``start_date``/``end_date``/``start_time``/``is_paused`` — the very inputs status
+        is derived from — so a carrier cannot be asked what its status should be. Only
+        the persisted row can, which is what production passes here.
+
+        Constructed unset-then-assigned rather than by keyword because ``MediaBuy``
+        refuses ``revision``/``confirmed_at`` at construction; neither is read on this
+        path.
+        """
+        from src.core.database.models import MediaBuy
+
+        return MediaBuy(
             media_buy_id="mb_1",
+            tenant_id="tenant_1",
             currency="USD",
             budget=Decimal("1000"),
             start_date=date.today() + timedelta(days=start_offset_days),
@@ -4158,15 +4171,8 @@ class TestGetMediaBuysStatusComputation:
             start_time=start_time,
             end_time=None,
             raw_request={},
-            created_at=None,
-            updated_at=None,
             status=status,
             is_paused=is_paused,
-            # Required on the row object rather than defaulted: the only producer
-            # reads both off the persisted MediaBuy, and a default here would let a
-            # missing wire-up emit revision=1 while the database says otherwise.
-            confirmed_at=None,
-            revision=1,
         )
 
     def test_active_persisted_before_flight_refines_to_pending_start(self):

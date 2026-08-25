@@ -10895,6 +10895,12 @@ mappings:
       upstream_refs: ["BR-RULE-150"]
       business_rules: ["BR-RULE-150"]
       status: new
+    - adcp_scenario_id: "T-UC-019-blob-rule-raw-request"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-150"]
+      business_rules: ["BR-RULE-150"]
+      status: new
     - adcp_scenario_id: "T-UC-019-inv-151-5"
       adcp_feature: "BR-UC-019-query-media-buys.feature"
       obligation_id: null
@@ -11082,6 +11088,17 @@ mappings:
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-019-inv-294-3"
+      adcp_feature: "BR-UC-019-query-media-buys.feature"
+      obligation_id: null
+      upstream_refs: ["BR-RULE-294"]
+      business_rules: ["BR-RULE-294"]
+      status: new
+    # Locally authored: the blob rule — every value read out of the
+    # untyped package_config column is resolved before GetMediaBuysPackage is constructed,
+    # so a legacy-invalid cell degrades ONE field with a terminal advisory instead of
+    # failing the whole listing. No upstream scenario states this; mirror upstream when
+    # BR-RULE-294 is next revised.
+    - adcp_scenario_id: "T-UC-019-blob-degraded-package-field"
       adcp_feature: "BR-UC-019-query-media-buys.feature"
       obligation_id: null
       upstream_refs: ["BR-RULE-294"]

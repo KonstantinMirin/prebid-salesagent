@@ -101,6 +101,16 @@ def make_media_buy(
     # leaves them auto-generated is a row no store could ever hold.
     buy.revision = revision
     buy.confirmed_at = confirmed_at
+    # This helper stands in for BOTH shapes the module handles: the ORM row the fetch
+    # seam reads (``status``, the persisted column) and the ``_MediaBuyData`` carrier the
+    # build loop projects (``wire_status``, the resolved answer). Tests that patch
+    # ``_fetch_target_media_buys`` feed it as the latter, so it needs the resolved value
+    # too. A corrupt ``status`` deliberately leaves ``wire_status`` unset-as-invalid:
+    # those tests exercise refusal at the seam, which reads the persisted column.
+    try:
+        buy.wire_status = MediaBuyStatus(status)
+    except ValueError:
+        buy.wire_status = status
     return buy
 
 
@@ -706,13 +716,18 @@ class TestTargetingOverlayRoundTrip:
         assert good_response_pkg.targeting_overlay.property_list.list_id == "v1"
 
         # Failure surfaced via the response errors channel — buyer can reconcile.
-        # Uses the standard ``SERVICE_UNAVAILABLE`` wire code (seller-side data
-        # integrity, matching the sibling per-creative advisory) with the
-        # rehydration detail in the message.
+        # CONFIGURATION_ERROR / recovery "terminal", not the sibling per-creative
+        # advisory's SERVICE_UNAVAILABLE. Selected by lookup rather than by name: the
+        # pin gives SERVICE_UNAVAILABLE recovery "transient", which advises a retry that
+        # can never succeed against a permanently corrupt stored blob. Both halves are
+        # asserted because the code alone cannot carry the claim -- core/error.json makes
+        # error.recovery authoritative and enumMetadata only its documentary mirror, so a
+        # test checking the code would pass with the buyer still told to retry forever.
         assert response.errors is not None
         assert len(response.errors) == 1
         err = response.errors[0]
-        assert err.code == "SERVICE_UNAVAILABLE"
+        assert err.code == "CONFIGURATION_ERROR"
+        assert err.recovery == "terminal"
         assert "TARGETING_REHYDRATION_FAILED" in err.message
         assert err.field is not None and "targeting_overlay" in err.field
 

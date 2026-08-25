@@ -1114,6 +1114,15 @@ Feature: BR-UC-019 Query Media Buys
     And the suggestion should contain "package_config" or "rehydrated"
     # BR-RULE-294 INV-3: narrow TypeError catch -> warn + non-fatal Error + null overlay
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
+    # SUPERSEDED CODE: this scenario is DORMANT — its Given has no
+    # step definition, so every parametrization reports xfail "Step definition not found"
+    # and none of the assertions below has ever executed. Its "SERVICE_UNAVAILABLE" is the
+    # defect zkde1.6 fixes: recovery "transient" advises a retry that can never repair a
+    # corrupt row in the SELLER's store. The live grader of this advisory's code and
+    # recovery is the targeting_overlay row of @T-UC-019-blob-degraded-package-field
+    # above, which asserts CONFIGURATION_ERROR / "terminal" off the wire. Wiring the rest
+    # of THIS scenario (the logging and "suggestion" obligations it also states) is a
+    # separate graduation, deliberately out of zkde1.6's scope.
 
   @T-UC-019-inv-294-5 @invariant @BR-RULE-294 @schema-v3.1
   Scenario: INV-5 holds - one corrupted package does not break sibling packages in the same buy
@@ -1146,6 +1155,67 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]
     # BR-RULE-294 INV-8: pre-rename data compatibility through legacy `targeting` key fallback
+
+  @T-UC-019-blob-degraded-package-field @invariant @BR-RULE-294 @error @schema-v3.1
+  Scenario Outline: a legacy-invalid <field> in package_config degrades that field alone - <field>
+    Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
+    And package "pkg-001" package_config key <field> holds the legacy JSON value <legacy_value>
+    When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
+    Then the response should include media buy "mb-001" with package "pkg-001"
+    And the package "pkg-001" wire field <field> should be null or absent
+    And response.errors[] should carry exactly one advisory for package "pkg-001" field <field> with code "CONFIGURATION_ERROR" and recovery "terminal"
+    And response.errors[] should carry no advisory with code "SERVICE_UNAVAILABLE"
+    # THE BLOB RULE. `package_config` is an untyped JSON column, so
+    # every value read out of it is a legacy value the current pinned types may reject.
+    # The pinned item schema (media-buy/get-media-buys-response.json) lists ONLY
+    # `package_id` in packages.items.required, so `product_id` / `start_time` /
+    # `end_time` / `paused` each have a legal absent rendering — a degraded field plus a
+    # non-fatal advisory is a schema-legal document, and failing the WHOLE listing over
+    # one legacy cell in one package is not.
+    #
+    # Stated as a RULE, not a roster: the four rows below are today's blob-sourced
+    # values, and the criterion is met only if it also holds for a fifth added later.
+    # `targeting_overlay` is the fifth row on purpose — it is the one blob value already
+    # resolved before the constructor, so it grades the code/recovery half of the same
+    # contract rather than the whole-listing half.
+    #
+    # CODE AND RECOVERY, NOT MERELY "AN ADVISORY EXISTS". A corrupt cell in the SELLER's
+    # own store is not buyer-remediable, so VALIDATION_ERROR / recovery "correctable"
+    # ("review error details and fix field values") is the wrong answer — it is the exact
+    # defect recorded under the revision outline below, where the response-model boundary
+    # translated a seller-side defect into buyer-directed advice. Pinned
+    # enums/error-code.json gives CONFIGURATION_ERROR recovery "terminal", and
+    # core/error.json makes the wire `recovery` authoritative with enumMetadata only its
+    # documentary mirror — so the grader reads `recovery` off the wire.
+    # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/get-media-buys-response.json
+
+    Examples:
+      | field             | legacy_value          |
+      | product_id        | 123                   |
+      | start_time        | "2026-01-01T00:00:00" |
+      | end_time          | "2026-01-31T00:00:00" |
+      | paused            | "maybe"               |
+      | targeting_overlay | "not a dict"          |
+
+  @T-UC-019-blob-rule-raw-request @invariant @BR-RULE-150 @schema-v3.1
+  Scenario: a legacy-invalid buyer_campaign_ref in raw_request degrades that field alone
+    # THE SAME RULE, ONE FRAME UP. `package_config` is itself a roster — of blob columns.
+    # The rule is "no untyped persisted blob value reaches a pinned constructor
+    # unresolved", and `raw_request` is an instance of it, not a separate case:
+    # it is the persisted echo of a buyer-supplied create request, so its shape is
+    # whatever some past client sent, and it was read straight into
+    # GetMediaBuysMediaBuy outside every handler.
+    #
+    # This row exists because the fix was UNGRADED: reverting it to the raw read left
+    # the whole tree green, so nothing would have caught its removal. `buyer_campaign_ref`
+    # is `str | None` and absent from the pinned `required`, so the degraded rendering is
+    # schema-legal for the same reason the package fields' is.
+    Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
+    And media buy "mb-001" raw_request key buyer_campaign_ref holds the legacy JSON value 123
+    When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
+    Then the response should include media buy "mb-001" with package "pkg-001"
+    And the media buy "mb-001" wire field buyer_campaign_ref should be null or absent
+    And response.errors[] should carry exactly one advisory for media buy "mb-001" field buyer_campaign_ref with code "CONFIGURATION_ERROR" and recovery "terminal"
 
   @T-UC-019-partition-delivery-status @partition @delivery_status @snapshot @schema-v3.1
   Scenario Outline: snapshot.delivery_status partitions - <partition>
