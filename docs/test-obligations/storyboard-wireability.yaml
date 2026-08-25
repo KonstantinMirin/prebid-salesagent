@@ -39,6 +39,48 @@
 untriaged: []
 
 steps:
+  "universal/webhook-emission.yaml::trigger_webhook_operation":
+    verdict: conditional
+    axes: {given: yes, when: yes, then: yes}
+    requires: [webhook_receiver]
+    blocker: "The assertion is that a webhook ARRIVES: the step is `task: expect_webhook`-family with `triggered_by` scoping it to the per-step receiver URL (`{{runner.webhook_url:<step>}}`) and a `webhook_payload_schema_ref` the payload must validate against. Grading it end-to-end needs the harness to own and address a receiver the separately-running agent can deliver to; nothing about it is response-only."
+    evidence: "Graded by the runner through an assertion TASK rather than a `check:` line, so it carried no index row until graded_steps_by_task() landed; the conformance ledger records failures against this step id. Owner is the step named in the assertion step's `triggered_by` where it has one, matching the runner's own attribution."
+  "universal/webhook-emission.yaml::trigger_operation_id_echo":
+    verdict: conditional
+    axes: {given: yes, when: yes, then: yes}
+    requires: [webhook_receiver]
+    blocker: "The assertion is that a webhook ARRIVES: the step is `task: expect_webhook`-family with `triggered_by` scoping it to the per-step receiver URL (`{{runner.webhook_url:<step>}}`) and a `webhook_payload_schema_ref` the payload must validate against. Grading it end-to-end needs the harness to own and address a receiver the separately-running agent can deliver to; nothing about it is response-only."
+    evidence: "Graded by the runner through an assertion TASK rather than a `check:` line, so it carried no index row until graded_steps_by_task() landed; the conformance ledger records failures against this step id. Owner is the step named in the assertion step's `triggered_by` where it has one, matching the runner's own attribution."
+  "universal/webhook-emission.yaml::trigger_idempotent_webhook_initial":
+    verdict: conditional
+    axes: {given: yes, when: yes, then: yes}
+    requires: [webhook_receiver]
+    blocker: "The assertion is that a webhook ARRIVES: the step is `task: expect_webhook`-family with `triggered_by` scoping it to the per-step receiver URL (`{{runner.webhook_url:<step>}}`) and a `webhook_payload_schema_ref` the payload must validate against. Grading it end-to-end needs the harness to own and address a receiver the separately-running agent can deliver to; nothing about it is response-only."
+    evidence: "Graded by the runner through an assertion TASK rather than a `check:` line, so it carried no index row until graded_steps_by_task() landed; the conformance ledger records failures against this step id. Owner is the step named in the assertion step's `triggered_by` where it has one, matching the runner's own attribution."
+  "universal/webhook-emission.yaml::trigger_retry_scenario":
+    verdict: conditional
+    axes: {given: yes, when: yes, then: yes}
+    requires: [webhook_receiver]
+    blocker: "The assertion is that a webhook ARRIVES: the step is `task: expect_webhook`-family with `triggered_by` scoping it to the per-step receiver URL (`{{runner.webhook_url:<step>}}`) and a `webhook_payload_schema_ref` the payload must validate against. Grading it end-to-end needs the harness to own and address a receiver the separately-running agent can deliver to; nothing about it is response-only."
+    evidence: "Graded by the runner through an assertion TASK rather than a `check:` line, so it carried no index row until graded_steps_by_task() landed; the conformance ledger records failures against this step id. Owner is the step named in the assertion step's `triggered_by` where it has one, matching the runner's own attribution."
+  "universal/webhook-emission.yaml::trigger_signed_webhook":
+    verdict: conditional
+    axes: {given: yes, when: yes, then: yes}
+    requires: [webhook_receiver]
+    blocker: "The assertion is that a webhook ARRIVES: the step is `task: expect_webhook`-family with `triggered_by` scoping it to the per-step receiver URL (`{{runner.webhook_url:<step>}}`) and a `webhook_payload_schema_ref` the payload must validate against. Grading it end-to-end needs the harness to own and address a receiver the separately-running agent can deliver to; nothing about it is response-only."
+    evidence: "Graded by the runner through an assertion TASK rather than a `check:` line, so it carried no index row until graded_steps_by_task() landed; the conformance ledger records failures against this step id. Owner is the step named in the assertion step's `triggered_by` where it has one, matching the runner's own attribution."
+  "universal/webhook-emission.yaml::fetch_brand_json":
+    verdict: conditional
+    axes: {given: yes, when: yes, then: yes}
+    requires: [signing_keypair]
+    blocker: "Graded against the agent's PUBLISHED signing material, not a response we elicit: the step fetches brand.json, follows `agents[].jwks_uri`, and asserts a key with a webhook-valid purpose. Wiring it needs the agent under test to serve a brand.json and JWKS with a real keypair, which the harness does not provision today."
+    evidence: "Graded by the runner through an assertion TASK rather than a `check:` line, so it carried no index row until graded_steps_by_task() landed; the conformance ledger records failures against this step id. Owner is the step named in the assertion step's `triggered_by` where it has one, matching the runner's own attribution."
+  "universal/webhook-emission.yaml::assert_webhook_signing_key_present":
+    verdict: conditional
+    axes: {given: yes, when: yes, then: yes}
+    requires: [signing_keypair]
+    blocker: "Graded against the agent's PUBLISHED signing material, not a response we elicit: the step fetches brand.json, follows `agents[].jwks_uri`, and asserts a key with a webhook-valid purpose. Wiring it needs the agent under test to serve a brand.json and JWKS with a real keypair, which the harness does not provision today."
+    evidence: "Graded by the runner through an assertion TASK rather than a `check:` line, so it carried no index row until graded_steps_by_task() landed; the conformance ledger records failures against this step id. Owner is the step named in the assertion step's `triggered_by` where it has one, matching the runner's own attribution."
   "protocols/media-buy/index.yaml::check_buy_status":
     verdict: wireable
     axes: {given: yes, when: yes, then: yes}

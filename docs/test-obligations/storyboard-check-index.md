@@ -2,20 +2,20 @@
 
 **One row per graded check**, not per storyboard. Generated from `storyboard-checks.jsonl`, which is the source of truth — every table below is a view of those same records, so they cannot disagree. Regenerate both with `scripts/audit/storyboard_check_index.py` (`--jsonl` / `--markdown`).
 
-- checks the pinned spec defines for storyboards on our protocol: **1343** across **68** storyboards
-- of those, GRADED (`gate=ON-PATH`): **1135** across **61** storyboards — every metric below is over this set
+- checks the pinned spec defines for storyboards on our protocol: **1351** across **68** storyboards
+- of those, GRADED (`gate=ON-PATH`): **1143** across **61** storyboards — every metric below is over this set
 - GATED, not graded (`gate=GATED`): **208** across **7** storyboards. GATED means the storyboard declares `requires_capability` and the OFFLINE classifier cannot evaluate it — `declared_capabilities()` exposes specialisms and protocols only, so a `media_buy.features.*` path is not expressible. It is not a claim that we lack the capability: the live runner reads the real capability document off the wire and may grade what we gate. These rows are listed, with their reason, in §7.
 - claimed by a BDD scenario: **184**
 - graded by a LIVE scenario (steps bound + registry-verified harness): **89**
-- tracked by an issue: **442**
+- tracked by an issue: **450**
 - **neither scenario nor ticket: 509**
-- measured FAILING: **143**
-- permanently ungradable (`comply_test_controller`): **481**
+- measured FAILING: **150**
+- permanently ungradable (`comply_test_controller`): **482**
 - graduation candidates (ledgered, not measured FAILING): **89**
 
-E2E wireability — **451** wireable as-is, **197** conditional on provisioning, **487** not wireable.
+E2E wireability — **451** wireable as-is, **204** conditional on provisioning, **488** not wireable.
 
-**Grain caveat — `measured` is a join, and it does not resolve everywhere.** `measured_failing_protocols` joins the conformance ledger to these records on `(storyboard_id, step_id)`. The ledger's `step_id` comes VERBATIM from the real `@adcp/sdk` runner, which this repo does not control; this index's `step_id` comes from `storyboard_spec.checks_by_owner`, which recognises a graded check only where the pinned YAML declares a literal `check:` line. Those two disagree wherever a storyboard grades via `task: expect_webhook` instead: such a step carries no `check:` of its own, so it produces NO record here, while the runner grades it and attributes any failure to the step named in its `triggered_by`. At the pinned version that affects four storyboards (`universal/webhook-emission.yaml`, `creative_lifecycle_webhooks`, `get_products_async`, `get_signals_async`). Concretely, `webhook_emission` shows 8 checks across 5 steps here while the file declares 17 steps and the ledger records failures against 7 step ids that appear in no row. **Consequence: for those storyboards a check reading `no ledger entry` is not evidence that it passed, and the graded count is a floor.** Everything else joins cleanly; the only other unjoined ledger ids are `signed_requests`' runtime-generated `negative-NNN` steps (built from vector fixtures, as the pinned file states) and the `agent_reachability` runner-level synthetic, neither of which is a spec check.
+**Two grains, both indexed.** The conformance ledger keys on `(storyboard_id, step_id)` and takes `step_id` VERBATIM from the real `@adcp/sdk` runner, which this repo does not control. The pinned tree grades a step two ways: by a literal `check:` line (owned by the innermost enclosing step) and by an assertion TASK — `expect_webhook` and friends — whose step declares no `check:` of its own and whose failure the runner attributes to the step named in its `triggered_by`. Both now produce rows here (`storyboard_spec.checks_by_owner` and `graded_steps_by_task`), so the `measured` join resolves: every ledger entry lands on a record except `signed_requests`' runtime-generated `negative-NNN` steps (built from vector fixtures, as the pinned file states) and the `agent_reachability` runner-level synthetic, neither of which is a spec check. Before this, seven `universal/webhook-emission.yaml` entries resolved to nothing and a check reading `no ledger entry` was not evidence it passed.
 
 Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario to a storyboard, not to a check), so a scenario shown against a check means "this check's storyboard is claimed" — not that this check is asserted. That distinction is the whole reason for indexing at this grain, and the whole reason **claimed by a BDD scenario** and **graded by a LIVE scenario** are reported as two separate numbers rather than one: claimed only asks whether a scenario's tag names this storyboard; graded additionally requires, from a real `pytest tests/bdd` run, that every one of that scenario's steps has a bound step definition AND that its harness routing resolves to a non-placeholder row in the declarative `ENV_ROUTES` registry — a data lookup, never reason-text matching. A claim with no live scenario behind it is a dormant claim, not coverage.
 
@@ -372,6 +372,7 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#4` | ungradable | — |
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#5` | ungradable | — |
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#6` | ungradable | — |
+| `media_buy_seller/get_products_async/get_products_submitted/expect_webhook` | ungradable | — |
 | `media_buy_seller/inline_creatives_without_sync/get_capabilities/response_schema` | gated | — |
 | `media_buy_seller/inline_creatives_without_sync/get_capabilities/field_present` | gated | — |
 | `media_buy_seller/inline_creatives_without_sync/get_capabilities/field_value` | gated | — |
@@ -834,6 +835,13 @@ Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario
 | `version_negotiation/get_capabilities_with_version/field_present#2` | FAILING | `mcp` |
 | `version_negotiation/get_capabilities_with_version/field_value` | FAILING | `mcp` |
 | `webhook_emission/get_capabilities/field_present` | FAILING | `mcp` |
+| `webhook_emission/trigger_webhook_operation/expect_webhook` | FAILING | `mcp` |
+| `webhook_emission/trigger_operation_id_echo/expect_webhook` | FAILING | `mcp` |
+| `webhook_emission/trigger_idempotent_webhook_initial/expect_webhook` | FAILING | `mcp` |
+| `webhook_emission/trigger_retry_scenario/expect_webhook_retry_keys_stable` | FAILING | `mcp` |
+| `webhook_emission/fetch_brand_json/fetch_brand_jwks` | FAILING | `mcp` |
+| `webhook_emission/assert_webhook_signing_key_present/assert_jwks_purpose` | FAILING | `mcp` |
+| `webhook_emission/trigger_signed_webhook/expect_webhook_signature_valid` | FAILING | `mcp` |
 | `wholesale_feed_bulk_webhooks/register_bulk_change_webhook/response_schema` | FAILING | `mcp` |
 | `wholesale_feed_bulk_webhooks/register_bulk_change_webhook/field_value` | FAILING | `mcp` |
 | `wholesale_feed_bulk_webhooks/register_bulk_change_webhook/field_value#1` | FAILING | `mcp` |
@@ -994,6 +1002,7 @@ Checks whose storyboard carries an issue. `coverage` is the map's own assessment
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#4` | #1305 | partial |
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#5` | #1305 | partial |
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#6` | #1305 | partial |
+| `media_buy_seller/get_products_async/get_products_submitted/expect_webhook` | #1305 | partial |
 | `media_buy_seller/pricing_currency_filter/get_products_usd_pricing/response_schema` | #1525 | partial |
 | `media_buy_seller/pricing_currency_filter/get_products_usd_pricing/field_present` | #1525 | partial |
 | `media_buy_seller/pricing_currency_filter/get_products_usd_pricing/field_value` | #1525 | partial |
@@ -1304,6 +1313,13 @@ Checks whose storyboard carries an issue. `coverage` is the map's own assessment
 | `webhook_emission/sync_get_products_with_webhook_config_success/field_value` | #1869, #1291, #1639, #1735, #1712 | partial |
 | `webhook_emission/sync_get_products_with_webhook_config_reject/error_code` | #1869, #1291, #1639, #1735, #1712 | partial |
 | `webhook_emission/assert_synchronous_completion_handled/any_of` | #1869, #1291, #1639, #1735, #1712 | partial |
+| `webhook_emission/trigger_webhook_operation/expect_webhook` | #1869, #1291, #1639, #1735, #1712 | partial |
+| `webhook_emission/trigger_operation_id_echo/expect_webhook` | #1869, #1291, #1639, #1735, #1712 | partial |
+| `webhook_emission/trigger_idempotent_webhook_initial/expect_webhook` | #1869, #1291, #1639, #1735, #1712 | partial |
+| `webhook_emission/trigger_retry_scenario/expect_webhook_retry_keys_stable` | #1869, #1291, #1639, #1735, #1712 | partial |
+| `webhook_emission/fetch_brand_json/fetch_brand_jwks` | #1869, #1291, #1639, #1735, #1712 | partial |
+| `webhook_emission/assert_webhook_signing_key_present/assert_jwks_purpose` | #1869, #1291, #1639, #1735, #1712 | partial |
+| `webhook_emission/trigger_signed_webhook/expect_webhook_signature_valid` | #1869, #1291, #1639, #1735, #1712 | partial |
 
 ## 3. Scenario coverage
 
@@ -1954,6 +1970,7 @@ Can a BDD scenario for this check be wired in the e2e environment — Given seed
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#4` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#5` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/get_products_async/get_products_task_status_completed/field_value#6` | not_wireable | — | requires comply_test_controller, which will not be implemented |
+| `media_buy_seller/get_products_async/get_products_submitted/expect_webhook` | not_wireable | — | requires comply_test_controller, which will not be implemented |
 | `media_buy_seller/inline_creatives_without_sync/get_capabilities/response_schema` | unassessed | — | — |
 | `media_buy_seller/inline_creatives_without_sync/get_capabilities/field_present` | unassessed | — | — |
 | `media_buy_seller/inline_creatives_without_sync/get_capabilities/field_value` | unassessed | — | — |
@@ -2490,6 +2507,13 @@ Can a BDD scenario for this check be wired in the e2e environment — Given seed
 | `webhook_emission/sync_get_products_with_webhook_config_success/field_value` | conditional | `webhook_receiver`, `seeded_account` | Same as the rejection branch: the sample_request carries "{{runner.webhook_url:sync_get_products_with_webhook_config_success}}", which the narrative forbids sending unresolved, and |
 | `webhook_emission/sync_get_products_with_webhook_config_reject/error_code` | conditional | `webhook_receiver`, `seeded_account` | The request embeds a runner-hosted receiver URL that must be resolved to a real endpoint before sending, and it names a concrete brand/operator account that must exist for the whol |
 | `webhook_emission/assert_synchronous_completion_handled/any_of` | conditional | `webhook_receiver`, `prior_state` | The step sends nothing of its own — "task: assert_contribution" is a synthetic aggregation over the two optional branch phases, so it can only be driven by first issuing the wholes |
+| `webhook_emission/trigger_webhook_operation/expect_webhook` | conditional | `webhook_receiver` | The assertion is that a webhook ARRIVES: the step is `task: expect_webhook`-family with `triggered_by` scoping it to the per-step receiver URL (`{{runner.webhook_url:<step>}}`) and |
+| `webhook_emission/trigger_operation_id_echo/expect_webhook` | conditional | `webhook_receiver` | The assertion is that a webhook ARRIVES: the step is `task: expect_webhook`-family with `triggered_by` scoping it to the per-step receiver URL (`{{runner.webhook_url:<step>}}`) and |
+| `webhook_emission/trigger_idempotent_webhook_initial/expect_webhook` | conditional | `webhook_receiver` | The assertion is that a webhook ARRIVES: the step is `task: expect_webhook`-family with `triggered_by` scoping it to the per-step receiver URL (`{{runner.webhook_url:<step>}}`) and |
+| `webhook_emission/trigger_retry_scenario/expect_webhook_retry_keys_stable` | conditional | `webhook_receiver` | The assertion is that a webhook ARRIVES: the step is `task: expect_webhook`-family with `triggered_by` scoping it to the per-step receiver URL (`{{runner.webhook_url:<step>}}`) and |
+| `webhook_emission/fetch_brand_json/fetch_brand_jwks` | conditional | `signing_keypair` | Graded against the agent's PUBLISHED signing material, not a response we elicit: the step fetches brand.json, follows `agents[].jwks_uri`, and asserts a key with a webhook-valid pu |
+| `webhook_emission/assert_webhook_signing_key_present/assert_jwks_purpose` | conditional | `signing_keypair` | Graded against the agent's PUBLISHED signing material, not a response we elicit: the step fetches brand.json, follows `agents[].jwks_uri`, and asserts a key with a webhook-valid pu |
+| `webhook_emission/trigger_signed_webhook/expect_webhook_signature_valid` | conditional | `webhook_receiver` | The assertion is that a webhook ARRIVES: the step is `task: expect_webhook`-family with `triggered_by` scoping it to the per-step receiver URL (`{{runner.webhook_url:<step>}}`) and |
 
 ## 6. Neither scenario nor ticket
 

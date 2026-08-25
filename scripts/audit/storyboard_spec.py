@@ -401,6 +401,73 @@ def checks_by_owner(text: str) -> list[tuple[str, str, str | None]]:
     return [owners[position] for position in sorted(owners)]
 
 
+# A step whose `task:` is one of these is GRADED by the runner even though it
+# declares no `check:` line of its own — the assertion lives in structured
+# fields (`expect_idempotency_key`, `webhook_payload_schema_ref`,
+# `expect_min_deliveries`, …) instead. The pinned storyboard schema documents
+# the family and its `triggered_by` link (universal/storyboard-schema.yaml:501,
+# 2005-2019). At 3.1.1 that is `expect_webhook`, `expect_webhook_*`,
+# `assert_*`, and `fetch_brand_jwks`.
+_ASSERTION_TASK_PREFIXES = ("expect_", "assert_")
+_ASSERTION_TASK_NAMES = frozenset({"fetch_brand_jwks"})
+
+_STEP_ID_RE = re.compile(r"^      - id: (\S+)\s*$", re.M)
+_STEP_TASK_RE = re.compile(r"^\s+task: ([A-Za-z0-9_]+)\s*$", re.M)
+_STEP_TRIGGERED_BY_RE = re.compile(r"^\s+triggered_by: (\S+)\s*$", re.M)
+
+
+def _is_assertion_task(task: str) -> bool:
+    return task.startswith(_ASSERTION_TASK_PREFIXES) or task in _ASSERTION_TASK_NAMES
+
+
+def graded_steps_by_task(text: str) -> list[tuple[str, str, str | None]]:
+    """Graded steps that declare NO ``check:`` line — ``(owner_id, task, phase_id)``.
+
+    The companion to :func:`checks_by_owner`, not a replacement: that function
+    owns the literal ``check:`` traversal and :func:`check_inventory` is pinned
+    to it line-for-line by a guard. This one covers the OTHER way the pinned
+    tree grades a step.
+
+    Why it exists: the conformance ledger keys on
+    ``(protocol, track, storyboard_id, step_id)`` and takes ``step_id`` verbatim
+    from the real ``@adcp/sdk`` runner. The runner grades an ``expect_webhook``
+    step and attributes any failure to the step named in its ``triggered_by``
+    — while the index, seeing no ``check:`` line, produced no row at all. So
+    ``measured`` joined nothing for those steps: 7 ledger entries on
+    ``universal/webhook-emission.yaml`` resolved to no record, and a check
+    reading "no ledger entry" was not evidence that it passed.
+
+    OWNER is ``triggered_by`` when present — matching the runner — and the step
+    itself otherwise (``fetch_brand_jwks``/``assert_jwks_purpose`` carry no
+    trigger). A step that declares its own ``check:`` lines is SKIPPED here and
+    left to :func:`checks_by_owner`, so the two never double-count the same
+    step: at 3.1.1, 8 assertion-task steps carry ``check:`` lines and 19 do not.
+    """
+    windows: list[tuple[int, int, str]] = []
+    for phase_id in phases(text):
+        window = _phase_window(text, phase_id)
+        if window is not None:
+            offset, body = window
+            windows.append((offset, offset + len(body), phase_id))
+
+    steps = list(_STEP_ID_RE.finditer(text))
+    graded: list[tuple[str, str, str | None]] = []
+    for index, match in enumerate(steps):
+        end = steps[index + 1].start() if index + 1 < len(steps) else len(text)
+        block = text[match.end() : end]
+        task_match = _STEP_TASK_RE.search(block)
+        if task_match is None or not _is_assertion_task(task_match.group(1)):
+            continue
+        if _CHECK_LINE_RE.search(block):
+            continue
+        triggered_by = _STEP_TRIGGERED_BY_RE.search(block)
+        owner = triggered_by.group(1) if triggered_by else match.group(1)
+        enclosing = [w for w in windows if w[0] <= match.start() < w[1]]
+        enclosing.sort(key=lambda w: w[1] - w[0])
+        graded.append((owner, task_match.group(1), enclosing[0][2] if enclosing else None))
+    return graded
+
+
 def check_inventory(text: str) -> dict[str, int]:
     """Every check type this storyboard grades, counted once — ``{type: count}``.
 

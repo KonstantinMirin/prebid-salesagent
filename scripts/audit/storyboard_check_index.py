@@ -230,7 +230,14 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         issues = tracking.get("issues") or []
 
         seen: dict[tuple[str, str], int] = {}
-        for step_id, check_type, phase_id in storyboard_spec.checks_by_owner(text):
+        # Two ways the pinned tree grades a step, same (owner, type, phase) shape.
+        # checks_by_owner() walks literal `check:` lines; graded_steps_by_task()
+        # covers steps graded through an assertion TASK (`expect_webhook` and
+        # friends) that declare no `check:` of their own — invisible here before,
+        # which is why 7 ledger entries on webhook-emission resolved to no record.
+        # The two never overlap: a step with `check:` lines is skipped by the second.
+        owned = storyboard_spec.checks_by_owner(text) + storyboard_spec.graded_steps_by_task(text)
+        for step_id, check_type, phase_id in owned:
             ordinal = seen[(step_id, check_type)] = seen.get((step_id, check_type), -1) + 1
             failing = ledger_failures.get((storyboard_id, step_id), [])
             # The controller gate is per-STEP as well as per-storyboard: several
@@ -413,23 +420,18 @@ def render(result: dict[str, Any]) -> str:
         + (f", **{totals['unassessed']}** unassessed" if totals["unassessed"] else "")
         + ".",
         "",
-        "**Grain caveat — `measured` is a join, and it does not resolve everywhere.** "
-        "`measured_failing_protocols` joins the conformance ledger to these records on "
-        "`(storyboard_id, step_id)`. The ledger's `step_id` comes VERBATIM from the real "
-        "`@adcp/sdk` runner, which this repo does not control; this index's `step_id` comes from "
-        "`storyboard_spec.checks_by_owner`, which recognises a graded check only where the pinned "
-        "YAML declares a literal `check:` line. Those two disagree wherever a storyboard grades via "
-        "`task: expect_webhook` instead: such a step carries no `check:` of its own, so it produces "
-        "NO record here, while the runner grades it and attributes any failure to the step named in "
-        "its `triggered_by`. At the pinned version that affects four storyboards "
-        "(`universal/webhook-emission.yaml`, `creative_lifecycle_webhooks`, `get_products_async`, "
-        "`get_signals_async`). Concretely, `webhook_emission` shows 8 checks across 5 steps here "
-        "while the file declares 17 steps and the ledger records failures against 7 step ids that "
-        "appear in no row. **Consequence: for those storyboards a check reading `no ledger entry` "
-        "is not evidence that it passed, and the graded count is a floor.** Everything else joins "
-        "cleanly; the only other unjoined ledger ids are `signed_requests`' runtime-generated "
-        "`negative-NNN` steps (built from vector fixtures, as the pinned file states) and the "
-        "`agent_reachability` runner-level synthetic, neither of which is a spec check.",
+        "**Two grains, both indexed.** The conformance ledger keys on "
+        "`(storyboard_id, step_id)` and takes `step_id` VERBATIM from the real `@adcp/sdk` "
+        "runner, which this repo does not control. The pinned tree grades a step two ways: by a "
+        "literal `check:` line (owned by the innermost enclosing step) and by an assertion TASK "
+        "— `expect_webhook` and friends — whose step declares no `check:` of its own and whose "
+        "failure the runner attributes to the step named in its `triggered_by`. Both now produce "
+        "rows here (`storyboard_spec.checks_by_owner` and `graded_steps_by_task`), so the "
+        "`measured` join resolves: every ledger entry lands on a record except "
+        "`signed_requests`' runtime-generated `negative-NNN` steps (built from vector fixtures, "
+        "as the pinned file states) and the `agent_reachability` runner-level synthetic, neither "
+        "of which is a spec check. Before this, seven `universal/webhook-emission.yaml` entries "
+        "resolved to nothing and a check reading `no ledger entry` was not evidence it passed.",
         "",
         "Scenario coverage is declared per STORYBOARD (`@storyboard-v3.1` tags a scenario "
         "to a storyboard, not to a check), so a scenario shown against a check means "
