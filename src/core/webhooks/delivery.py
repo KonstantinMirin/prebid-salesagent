@@ -146,6 +146,26 @@ class WebhookTaskContext:
             notification_type=notification_type,
         )
 
+    def as_metadata(self) -> dict[str, Any]:
+        """Project back onto the loose dict the delivery seam still speaks.
+
+        The inverse of :meth:`from_metadata`, and deliberately narrow: it emits
+        exactly the four keys ``records_delivery_log`` and the repository read out
+        of the old free-form dict. It exists so ``notify`` can hand the sender a
+        context it BUILT from named fields instead of a dict a caller assembled by
+        hand -- the assembly step is where ``tenant_id`` and ``principal_id`` used
+        to go missing without anything noticing.
+
+        Temporary by intent: it disappears when the sender takes the typed context
+        the whole way down rather than re-deriving one from a dict.
+        """
+        return {
+            "task_type": self.task_type,
+            "tenant_id": self.tenant_id,
+            "principal_id": self.principal_id,
+            "media_buy_id": self.media_buy_id,
+        }
+
     @property
     def records_delivery_log(self) -> bool:
         """Whether this delivery is eligible for a ``webhook_delivery_log`` row.

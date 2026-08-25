@@ -19,13 +19,15 @@ from typing import Any, Protocol, cast
 from uuid import uuid4
 
 from a2a.types import Task, TaskStatusUpdateEvent
+from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import McpWebhookPayload
+from adcp.webhooks import GeneratedTaskStatus
 from google.protobuf.json_format import MessageToDict
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
 from src.core.security.webhook_egress import adeliver_webhook
-from src.core.webhook_validator import webhook_url_for_log
+from src.core.webhook_validator import validate_webhook_task_type, webhook_url_for_log
 from src.core.webhooks.delivery import WebhookDeliveryOutcome, WebhookTaskContext
 from src.services.webhook_conclusion import record_conclusion
 
@@ -135,6 +137,59 @@ class ProtocolWebhookService:
     - Bearer: Sends credentials as Bearer token
     - None: No authentication
     """
+
+    async def notify(
+        self,
+        push_notification_config: DeliverableWebhookTarget,
+        *,
+        task: WebhookTaskContext,
+        status: GeneratedTaskStatus,
+        result: dict[str, Any],
+        protocol: str,
+        context_id: str = "",
+    ) -> bool:
+        """Deliver one protocol notification from VALUES, choosing the dialect here.
+
+        THE delivery entry point. Every sender used to re-derive the same two
+        decisions at its own call site: which payload builder to call
+        (``create_a2a_webhook_payload`` vs ``create_mcp_webhook_payload``, forked
+        on ``protocol``), and what to put in a free-form ``metadata`` dict. Seven
+        files forked the dialect and six built the dict, which is how
+        ``delivery_webhook_scheduler`` came to import only the MCP builder — a
+        buyer registered over A2A receives an MCP-shaped delivery report from it.
+
+        Taking a typed :class:`WebhookTaskContext` instead of ``metadata:
+        dict[str, Any]`` is what closes the other half. ``records_delivery_log``
+        needs ``tenant_id`` and ``principal_id``; the admin sender passed
+        ``{"task_type": ...}`` alone, so admin-originated deliveries wrote no
+        ``webhook_delivery_log`` row and said nothing about it. A caller now has
+        to name those fields to construct the context, so omitting one is a
+        visible decision at the call site rather than an absence in a dict.
+
+        The dialect is selected ONCE, here, from ``protocol``. A caller passes
+        values and cannot choose a builder.
+        """
+        payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
+        if protocol == "a2a":
+            payload = create_a2a_webhook_payload(
+                task_id=task.task_id,
+                status=status,
+                result=result,
+                context_id=context_id,
+            )
+        else:
+            payload = create_mcp_webhook_payload(
+                task_id=task.task_id,
+                status=status,
+                task_type=validate_webhook_task_type(task.task_type or ""),
+                result=result,
+            )
+
+        return await self.send_notification(
+            push_notification_config=push_notification_config,
+            payload=payload,
+            metadata=task.as_metadata(),
+        )
 
     async def send_notification(
         self,

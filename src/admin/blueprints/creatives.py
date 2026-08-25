@@ -9,11 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any
 
-from a2a.types import Task, TaskStatusUpdateEvent
-from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import (
     CreativeAction,
-    McpWebhookPayload,
 )
 from adcp.webhooks import GeneratedTaskStatus
 
@@ -21,6 +18,7 @@ from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
 from src.core.webhook_validator import validate_webhook_task_type
+from src.core.webhooks.delivery import WebhookTaskContext
 from src.core.webhooks.registration import accept_push_notification_config
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -112,6 +110,8 @@ async def _deliver_sync_creatives_webhook(
     step_tool_name: str | None,
     step_step_id: str,
     step_request_data: dict,
+    tenant_id: str,
+    principal_id: str | None,
     # `Any`, not `str | None`: this is the ORM row's attribute, read before the
     # UoW closed, and the repository hands it back untyped. Narrowing it here
     # would invent a type the extraction did not have and trip the
@@ -143,31 +143,31 @@ async def _deliver_sync_creatives_webhook(
         # (salesagent-yi3s, salesagent-yk7o).
         wire_task_type = validate_webhook_task_type(step_tool_name or "sync_creatives")
 
-        payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
-        if protocol == "a2a":
-            payload = create_a2a_webhook_payload(
+        # The dialect fork used to live here, and the metadata was a hand-built
+        # dict carrying task_type alone. Both are now notify()'s job: it selects
+        # the builder from `protocol` once, and it takes a typed context whose
+        # fields have to be named.
+        #
+        # tenant_id and principal_id are the two that used to go missing. Both were
+        # in scope all along -- the caller raises without tenant_id, and the
+        # creative row carries principal_id -- but neither reached the dict, so
+        # records_delivery_log was False and every admin-originated delivery wrote
+        # no webhook_delivery_log row and said nothing about it (salesagent-pldmk.39).
+        await service.notify(
+            push_notification_config,
+            task=WebhookTaskContext(
                 task_id=step_step_id,
-                status=GeneratedTaskStatus.completed,
-                result=result_dict,
-                context_id=step_context_id,
-            )
-        else:
-            # SDK 5.7: returns McpWebhookPayload directly
-            payload = create_mcp_webhook_payload(
-                task_id=step_step_id,
-                status=GeneratedTaskStatus.completed,
-                task_type=wire_task_type,
-                result=result_dict,
-            )
-
-        metadata = {
-            "task_type": step_tool_name
-            # TODO: @yusuf - check if we were passing principal_id and tenant to this previously
-            # TODO: @yusuf - check if we want to make metadata typed
-        }
-
-        await service.send_notification(
-            push_notification_config=push_notification_config, payload=payload, metadata=metadata
+                task_type=step_tool_name,
+                tenant_id=tenant_id,
+                principal_id=principal_id,
+                media_buy_id=None,
+                sequence_number=1,
+                notification_type=None,
+            ),
+            status=GeneratedTaskStatus.completed,
+            result=result_dict,
+            protocol=protocol,
+            context_id=step_context_id or "",
         )
 
         logger.info(
@@ -304,6 +304,11 @@ async def _call_webhook_for_creative_status(
             step_step_id = step.step_id
             step_request_data = step.request_data
             step_context_id = step.context_id
+            # Read INSIDE the UoW, like every other attribute here: the row is
+            # detached once the session closes. This is the identifier that never
+            # reached the delivery, which is why admin-originated sends wrote no
+            # webhook_delivery_log row (salesagent-pldmk.39).
+            step_principal_id = next((c.principal_id for c in all_creatives if c.principal_id), None)
 
         # --- Session closed here; webhook delivery is outside the transaction ---
 
@@ -316,6 +321,8 @@ async def _call_webhook_for_creative_status(
             step_step_id=step_step_id,
             step_request_data=step_request_data,
             step_context_id=step_context_id,
+            tenant_id=tenant_id,
+            principal_id=step_principal_id,
         )
 
     except Exception as e:
