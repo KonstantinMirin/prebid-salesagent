@@ -12,6 +12,25 @@ from adcp import AdagentsNotFoundError, AdagentsTimeoutError, AdagentsValidation
 from src.services.property_verification_service import PropertyVerificationService
 
 
+@pytest.fixture(autouse=True)
+def _stop_leaked_patchers():
+    """Stop any `patch(...).start()` this module leaks when a test raises.
+
+    ``MockSetup`` hands back a started patcher and each test calls ``.stop()``
+    as its LAST statement, so any assertion failure or exception before that
+    line leaves a ``get_db_session`` mock installed process-wide for every later
+    test in the worker. That is the same defect class as the leaked
+    ``patch("os.getpid")`` that made the unit suite unrunnable under xdist (see
+    tests/_xdist_report_safety.py) -- it just poisons a different global.
+
+    ``patch.start()`` registers with ``mock._patch._active_patches``, and
+    ``stopall()`` skips anything already stopped explicitly, so this is a
+    net after the existing calls rather than a replacement for them.
+    """
+    yield
+    patch.stopall()
+
+
 class MockSetup:
     """Centralized mock setup to reduce duplicate mocking."""
 

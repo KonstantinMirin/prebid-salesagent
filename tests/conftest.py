@@ -8,8 +8,11 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -796,6 +799,68 @@ def benchmark(request):
 # ============================================================================
 # Pytest Hooks
 # ============================================================================
+
+
+# ---------------------------------------------------------------------------
+# Leaked-patch guard — a test must not leave a stdlib callable replaced
+# ---------------------------------------------------------------------------
+# A test that starts a patch and never stops it corrupts every LATER test in the
+# same process, and the symptom surfaces somewhere else entirely. That is not
+# theory: `tests/harness/test_harness_base.py` sabotaged a patcher's stop() so
+# `os.getpid` stayed a MagicMock process-wide, `logging.LogRecord.__init__` then
+# put that mock in every record's `.process`, pytest-json-report copied it onto
+# the report, and execnet could not serialize it -- killing the xdist worker and
+# truncating the session behind a summary reading "0 failed". Days of the
+# resulting confusion are recorded in tests/_xdist_report_safety.py.
+#
+# These three are the ones LogRecord reads at construction (process, created /
+# msecs / relativeCreated, thread / threadName), so leaking any of them poisons
+# every subsequent log record and thus every subsequent report. Checking them by
+# identity at teardown costs three comparisons per test and names the test that
+# actually leaked, instead of the unrelated one that later trips over it.
+#
+# Hard failure, not a warning: a warning is what the original bug already had.
+#
+# Only the FIRST test to leak is blamed. Once a patch is loose every later
+# teardown sees it too, so a naive check reports the whole rest of the file --
+# 31 errors for one defect, with the culprit buried. Re-baselining after
+# reporting means exactly one failure, on the test that actually did it.
+_PRISTINE_CALLABLES: dict[str, Any] = {
+    "os.getpid": os.getpid,
+    "time.time": time.time,
+    "threading.current_thread": threading.current_thread,
+}
+
+
+def _resolve_dotted(dotted: str) -> Any:
+    module_name, _, attr = dotted.rpartition(".")
+    return getattr(sys.modules[module_name], attr)
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_stdlib_patches(request: pytest.FixtureRequest):
+    """Fail the test that leaked a stdlib patch, at the moment it leaked it.
+
+    A fixture rather than a ``pytest_runtest_teardown`` hook: raising from that
+    hook leaves pytest's own item bookkeeping unhappy and the next test errors
+    with "previous item was not torn down properly", which buries the real
+    message. Fixture teardown produces one clean error on the right test.
+    """
+    yield
+    leaked = []
+    for name, original in _PRISTINE_CALLABLES.items():
+        current = _resolve_dotted(name)
+        if current is not original:
+            leaked.append(name)
+            _PRISTINE_CALLABLES[name] = current  # blame the culprit, not its victims
+    if leaked:
+        raise AssertionError(
+            f"{request.node.nodeid} finished with {', '.join(leaked)} still patched. "
+            f"Every later test in this worker now sees the mock -- and because "
+            f"logging.LogRecord reads these at construction, every later log "
+            f"record carries it onto the xdist wire. Stop the patch (use a "
+            f"`with` block, a fixture, or try/finally)."
+        )
 
 
 # ---------------------------------------------------------------------------
