@@ -5,12 +5,14 @@ This file provides fixtures available to all test modules.
 """
 
 import json
+import multiprocessing
 import os
 import sys
 import tempfile
 import threading
 import time
 import unittest
+import unittest.mock as mock_module
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -802,65 +804,99 @@ def benchmark(request):
 
 
 # ---------------------------------------------------------------------------
-# Leaked-patch guard — a test must not leave a stdlib callable replaced
+# Leaked-patch guard — a test must not leave a patch running
 # ---------------------------------------------------------------------------
-# A test that starts a patch and never stops it corrupts every LATER test in the
-# same process, and the symptom surfaces somewhere else entirely. That is not
-# theory: `tests/harness/test_harness_base.py` sabotaged a patcher's stop() so
-# `os.getpid` stayed a MagicMock process-wide, `logging.LogRecord.__init__` then
-# put that mock in every record's `.process`, pytest-json-report copied it onto
-# the report, and execnet could not serialize it -- killing the xdist worker and
-# truncating the session behind a summary reading "0 failed". Days of the
-# resulting confusion are recorded in tests/_xdist_report_safety.py.
+# The #2006 root cause was a leaked patch("os.getpid"): a sabotaged patcher's
+# stop() never ran, so every later LogRecord in the worker carried a MagicMock
+# in .process, pytest-json-report copied it onto the report, and execnet could
+# not serialize it -- killing the worker and truncating the session behind a
+# summary reading "0 failed". The expensive part was the indirection: the
+# symptom surfaced in tests/harness/test_harness_product.py, which is clean,
+# while the defect was in tests/harness/test_harness_base.py.
 #
-# These three are the ones LogRecord reads at construction (process, created /
-# msecs / relativeCreated, thread / threadName), so leaking any of them poisons
-# every subsequent log record and thus every subsequent report. Checking them by
-# identity at teardown costs three comparisons per test and names the test that
-# actually leaked, instead of the unrelated one that later trips over it.
+# No AST guard can see a leaked patch, so this grades the OUTCOME. It reads
+# unittest.mock's own registry rather than enumerating suspect names:
+# `patch(...).start()` appends to `_patch._active_patches` and `.stop()` removes
+# it, while `with patch(...)` never registers at all -- correct, since a context
+# manager cannot leak. So the registry is exactly "patches someone started and
+# did not stop", with no list to keep in sync. Verified against the original
+# sabotage: it reports [('os', 'getpid')], target and attribute, by name.
 #
-# Hard failure, not a warning: a warning is what the original bug already had.
+# Report, never remediate. `mock.patch.stopall()` here tears down patches
+# belonging to still-live enclosing scopes -- measured at 183 errors.
 #
-# Only the FIRST test to leak is blamed. Once a patch is loose every later
-# teardown sees it too, so a naive check reports the whole rest of the file --
-# 31 errors for one defect, with the culprit buried. Re-baselining after
-# reporting means exactly one failure, on the test that actually did it.
+# A hookwrapper on pytest_runtest_teardown, not an autouse fixture: fixture
+# finalization runs INSIDE the default teardown impl, so checking after the
+# yield is guaranteed to be after every finalizer (the BDD ctx patchers at
+# tests/bdd/conftest.py, the harness's env.__exit__, and so on). An autouse
+# root-conftest fixture happens to work too, by being requested first and torn
+# down last, but that depends on request ordering and this does not.
+
+
+# Plugins legitimately hold session-long patches: pytest-mock installs 14 of
+# them over NonCallableMock.assert_* / AsyncMock.assert_* at registration time
+# (pytest.ini loads it via `-p pytest_mock`) so that assertion failures read
+# better. Those are not leaks, and allowlisting them by name would rot. Snapshot
+# whatever is already active before the first test instead, and report only what
+# a test ADDS.
+_known_active_patches: set[int] = set()
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Baseline the patches plugins hold, before any test can add one."""
+    _known_active_patches.update(id(a) for a in mock_module._patch._active_patches)
+
+
+def _describe_active_patch(active: Any) -> str:
+    target = getattr(active, "target", None)
+    name = getattr(target, "__name__", None) or repr(target)
+    return f"{name}.{getattr(active, 'attribute', '?')}"
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None):
+    """Fail the test that leaked a patch, at the moment it leaked it."""
+    yield  # let every finalizer run first
+
+    leaked = []
+    for active in list(mock_module._patch._active_patches):
+        if id(active) in _known_active_patches:
+            continue
+        leaked.append(_describe_active_patch(active))
+        _known_active_patches.add(id(active))  # blame the culprit, not its victims
+
+    # Secondary check for the routes `_active_patches` cannot see: a raw setattr
+    # or `sys.modules[x] = MagicMock()` (live in test_incremental_sync_stale_marking,
+    # test_setup_dev and test_inspect_bdd_steps). These are the callables
+    # logging.LogRecord reads at construction, so replacing one poisons every
+    # later record and therefore every later report.
+    for name, original in _PRISTINE_CALLABLES.items():
+        if _resolve_dotted(name) is not original:
+            leaked.append(f"{name} (replaced without patch())")
+            _PRISTINE_CALLABLES[name] = _resolve_dotted(name)  # blame the culprit, not its victims
+
+    if leaked:
+        raise AssertionError(
+            f"{item.nodeid} finished with {len(leaked)} patch(es) still active: "
+            f"{', '.join(sorted(leaked))}. Every later test in this worker now sees them. "
+            f"Stop the patch -- use `with patch(...)`, a fixture that stops in teardown, "
+            f"or try/finally. Do not rely on a `.stop()` as the last statement of the test: "
+            f"any exception before that line skips it."
+        )
+
+
 _PRISTINE_CALLABLES: dict[str, Any] = {
     "os.getpid": os.getpid,
     "time.time": time.time,
+    "threading.get_ident": threading.get_ident,
     "threading.current_thread": threading.current_thread,
+    "multiprocessing.current_process": multiprocessing.current_process,
 }
 
 
 def _resolve_dotted(dotted: str) -> Any:
     module_name, _, attr = dotted.rpartition(".")
     return getattr(sys.modules[module_name], attr)
-
-
-@pytest.fixture(autouse=True)
-def _no_leaked_stdlib_patches(request: pytest.FixtureRequest):
-    """Fail the test that leaked a stdlib patch, at the moment it leaked it.
-
-    A fixture rather than a ``pytest_runtest_teardown`` hook: raising from that
-    hook leaves pytest's own item bookkeeping unhappy and the next test errors
-    with "previous item was not torn down properly", which buries the real
-    message. Fixture teardown produces one clean error on the right test.
-    """
-    yield
-    leaked = []
-    for name, original in _PRISTINE_CALLABLES.items():
-        current = _resolve_dotted(name)
-        if current is not original:
-            leaked.append(name)
-            _PRISTINE_CALLABLES[name] = current  # blame the culprit, not its victims
-    if leaked:
-        raise AssertionError(
-            f"{request.node.nodeid} finished with {', '.join(leaked)} still patched. "
-            f"Every later test in this worker now sees the mock -- and because "
-            f"logging.LogRecord reads these at construction, every later log "
-            f"record carries it onto the xdist wire. Stop the patch (use a "
-            f"`with` block, a fixture, or try/finally)."
-        )
 
 
 # ---------------------------------------------------------------------------
