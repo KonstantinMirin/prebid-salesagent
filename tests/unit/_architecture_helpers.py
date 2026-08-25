@@ -229,6 +229,24 @@ def iter_import_time_statements(tree: ast.Module) -> Iterator[ast.stmt]:
             stack.extend(getattr(node, field, []) or [])
 
 
+def iter_statement_scoped_nodes(stmt: ast.stmt) -> Iterator[ast.AST]:
+    """Yield the nodes of *stmt* WITHOUT descending into nested statements.
+
+    ``ast.walk`` on a compound statement swallows its whole body, which silently
+    unions everything a function does into one "statement". A guard that binds
+    filter keys per statement needs the header only -- ``If.test``, ``Return.value``,
+    the right-hand side of an assignment -- so that two unrelated queries in one
+    ``if`` block cannot compose a key tuple neither of them checks.
+    """
+    stack: list[ast.AST] = [stmt]
+    while stack:
+        node = stack.pop()
+        yield node
+        for child in ast.iter_child_nodes(node):
+            if not isinstance(child, ast.stmt):
+                stack.append(child)
+
+
 def find_import_time_fs_io_violations(tree: ast.Module) -> list[int]:
     """Return line numbers of filesystem I/O performed at MODULE IMPORT time.
 
