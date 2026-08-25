@@ -132,16 +132,24 @@ dc build postgres adcp-server proxy tests
 
 # Bring up Postgres + the app server + proxy + the pinned creative-agent (and its
 # own registry Postgres). None publish host ports — all reached by service name.
-# Pre-create logs/ group-writable + setgid BEFORE adcp-server starts: it
-# bind-mounts .:/app and creates logs/audit.log at import time (uid 1001,
-# its own baked umask) -- when that umask strips the group-write bit the
-# tests container (a different uid, 1003 here) can create the dir but not
-# write into it, and every suite dies at collection with
-# `PermissionError: '/app/logs/audit.log'`. Owning it here first means
-# adcp-server writes into an already-correct dir instead of racing to
-# create it (confirmed live: sa-93d37d7c, sa-c9acaf66 both landed
-# drwxr-sr-x -- not group-writable -- and are latent failures until fixed).
+# Pre-create logs/ AND the specific files src/core/audit_logger.py opens --
+# audit.log/error.log via FileHandler at IMPORT time (crashes collection
+# immediately on PermissionError), structured.jsonl/security.jsonl lazily via
+# open(path, "a"). setgid + 2775 on the directory only controls the GROUP of
+# NEW files, not their write bit, and it does nothing for files that already
+# exist. Worse: chmod cannot fix a file it doesn't own -- only the owner (or
+# root) may change a file's mode, being in the same group is not enough -- so
+# a stale ci:ci 0644 file left by a prior adcp-server run silently defeats
+# both this and the `chmod -R g+w .` sweep below (EPERM, swallowed by its own
+# `|| true`). Removing and recreating is what actually works: unlink is
+# governed by the DIRECTORY's write bit (which we own), not the file's own
+# owner, so `rm -f` succeeds even on a ci-owned file; the fresh file this
+# process then creates is ours. Verified live: ci:ci 0644 -> sacirunner:ci 0664.
 mkdir -p logs && chmod 2775 logs
+for f in audit.log error.log structured.jsonl security.jsonl; do
+    rm -f "logs/$f" 2>/dev/null || true
+    : > "logs/$f" && chmod 664 "logs/$f"
+done
 
 dc up -d postgres adcp-server proxy creative-pg creative-agent
 
@@ -274,17 +282,25 @@ echo "Running suites in-network (parallel): $SUITES"
 # Capture the suite exit code without aborting under `set -e` — reports must
 # still be extracted and the security audit must still run on a suite failure.
 RC=0
-# Structural backstop, not another one-off path pin: ANY service that writes
-# into the bind-mounted repo before this point (adcp-server, the per-worker
-# gwN servers, postgres, creative-agent) can leave files/dirs non-group-
-# writable depending on its own container's umask -- same class of bug
-# regardless of which path it is (logs/audit.log today, something else
-# tomorrow). Re-sweep the whole tree writable right before the one container
-# that needs it runs, the same way salesagent-remote-run already does once
-# at sync time -- catches whatever showed up in between instead of requiring
-# another bug report + another path pinned by hand.
+# Best-effort backstop, NOT a guarantee: chmod only succeeds on paths this
+# user (the launcher) already owns -- it silently no-ops (EPERM, swallowed by
+# `|| true`) on anything a DIFFERENT uid created, e.g. files adcp-server (uid
+# 1001) writes into this bind mount. That case needs the file recreated by
+# us, not chmod'd -- see the logs/ block above for the pattern. This sweep
+# still earns its keep for paths WE created with a too-strict umask.
 chmod -R g+w . 2>/dev/null || true
 chmod -R go-w .git 2>/dev/null || true
+
+# Delete last run's reports BEFORE this run writes its own. The copy below is a
+# blanket `cp .tox/*.json`, so without this it publishes reports from envs THIS
+# run never executed, stamped into a fresh results dir as if they were current.
+# That is not hypothetical: `bdd` is swapped out for `bdd_inprocess,bdd_e2e`
+# whenever E2E_WORKERS>0 (see above), so a stale bdd.json from whenever
+# `tox -e bdd` last ran kept being republished -- one was a full DAY older than
+# its directory-mates and reported 6 failures against code that no longer
+# existed, which read as a live regression. It cuts the other way too: a suite
+# that silently stops running keeps publishing its last PASS forever.
+rm -f .tox/*.json
 
 dc run --rm --use-aliases $E2E_ENV_ARGS tests tox -p -e "$SUITES" || RC=$?
 
