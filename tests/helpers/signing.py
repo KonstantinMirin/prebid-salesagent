@@ -152,6 +152,14 @@ REWRITTEN_ADCP_PATH = "/api/v1/media-buys"
 VERIFIED_METRIC = "adcp_request_signature_verified_total"
 FAILED_METRIC = "adcp_request_signature_failed_total"
 
+#: The third counter of the same family: ``reason="absent"`` (no signature headers)
+#: or ``reason="ignored"`` (headers present, the posture buckets the operation as
+#: ``none``, nothing verified). Named here beside its two siblings because the
+#: ``ignored`` arm is the one observable that distinguishes "the middleware passed
+#: this request through and counted it" from "the middleware stopped counting" —
+#: the two look identical on the wire.
+UNSIGNED_METRIC = "adcp_request_unsigned_total"
+
 #: The AdCP operations the B1 shadow-mode ladder invokes, and which the A5
 #: revocation suite declares alongside it so both bucket the same two names.
 #:
@@ -668,6 +676,19 @@ def signing_config(**overrides: Any) -> Iterator[Any]:
 #: RETURNED. Not a kwarg name — chosen so it cannot collide with one.
 VERIFIER_RESULT = "__verifier_result__"
 
+#: The negative-path twin of :data:`VERIFIER_RESULT`: the ``SignatureVerificationError``
+#: the real verifier RAISED, recorded and then re-raised unchanged.
+#:
+#: Needed because ``(code, step)`` is a PAIR and only the code reaches the metric.
+#: ``request_signature_header_malformed`` is raised at five different checklist steps
+#: (``adcp/signing/verifier.py`` :197/:203/:213/:390 at step 1, :245/:251/:407/:414 at
+#: step 2, :230 at 5, :317 at 6, :325 at 8), and the whole malformed-signature rule
+#: turns on step 1 versus the rest. A test that reads only
+#: ``samples_with(FAILED_METRIC, code=...)`` therefore cannot tell the step-1 pre-check
+#: family from a step-2 checklist failure on a well-formed header, and a row claiming
+#: to grade one of them would silently be graded by the other.
+VERIFIER_ERROR = "__verifier_error__"
+
 
 @contextmanager
 def verifier_spy() -> Iterator[list[dict[str, Any]]]:
@@ -689,7 +710,14 @@ def verifier_spy() -> Iterator[list[dict[str, Any]]]:
     def _recording(**kwargs: Any) -> Any:
         record = dict(kwargs)
         calls.append(record)
-        result = real(**kwargs)
+        try:
+            result = real(**kwargs)
+        except BaseException as exc:  # noqa: BLE001 - recorded and re-raised unchanged
+            # The RAISED exception under a reserved key. Recorded for EVERY exception
+            # type, not just ``SignatureVerificationError``: narrowing here would make
+            # a wrong-exception-type regression look like "the verifier never raised".
+            record[VERIFIER_ERROR] = exc
+            raise
         # The RESULT under a reserved key, so a caller can assert the returned
         # ``VerifiedSigner.key_id`` — the only positive-path observable that
         # distinguishes "the verifier accepted this signature" from "the middleware
@@ -1054,7 +1082,13 @@ def signed_headers(
     }
 
 
-def signed_probe(private_key: Any, token: str) -> tuple[dict[str, str], bytes]:
+def signed_probe(
+    private_key: Any,
+    token: str,
+    *,
+    key_id: str = COUNTERPARTY_KID,
+    request_id: str = "registry-probe",
+) -> tuple[dict[str, str], bytes]:
     """A well-formed signed POST to the bodyless AdCP surface, and its wire bytes.
 
     Real Ed25519 over the real wire bytes under :data:`COUNTERPARTY_KID`, so every
@@ -1069,8 +1103,14 @@ def signed_probe(private_key: Any, token: str) -> tuple[dict[str, str], bytes]:
     inline copy is the duplication class the DRY invariant exists to stop. Both
     suites must send the SAME bytes, or "the signature verified on its merits" means
     something different in each of them.
+
+    *key_id* is the ONE knob a caller grading a checklist step BEFORE key resolution
+    needs: an over-long value reaches ``adcp/signing/verifier.py:245`` at step 2 with
+    everything ahead of it — parse, label, params, tag, alg, window, components —
+    still passing on its merits. *request_id* names the probe in the echoed body so a
+    caller can read its own receipt back off the response.
     """
-    body = json.dumps({"context": {"request_id": "registry-probe"}}).encode()
+    body = json.dumps({"context": {"request_id": request_id}}).encode()
     headers = signed_headers(
         private_key,
         token,
@@ -1078,6 +1118,7 @@ def signed_probe(private_key: Any, token: str) -> tuple[dict[str, str], bytes]:
         path=BODYLESS_ADCP_PATH,
         body=body,
         extra={"Content-Type": "application/json"},
+        key_id=key_id,
     )
     return headers, body
 

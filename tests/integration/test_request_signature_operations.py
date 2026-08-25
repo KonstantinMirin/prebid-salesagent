@@ -1186,3 +1186,74 @@ class TestTheOperationLabelCannotBeMintedByACaller:
                 "copy that misses a tool files its real traffic under 'other', which is the "
                 "bucket that exists to make an attacker-supplied name visible."
             )
+
+
+# --------------------------------------------------------------------------
+# The SIGNED over-cap 413, and which half of `none` it reaches
+# --------------------------------------------------------------------------
+
+#: ``supported: true`` narrowed so that the surface these rows drive
+#: (``POST /api/v1/capabilities`` = ``get_adcp_capabilities``) falls in ``none``,
+#: while the seller still advertises that it verifies signatures.
+#:
+#: The narrowing is what makes this the OTHER half of ``none``: a null
+#: ``supported_for`` means "verify wherever signatures appear"
+#: (``src/core/signing/posture.py`` ``_bucket_for``), so the bucket has to be
+#: narrowed by naming a different real operation rather than by omission.
+_NARROWED_NONE = bucketed_declaration("supported", "create_media_buy")
+
+
+@pytest.mark.requires_db
+class TestASignedOverCapBodyIsGradedByTheDeclaration:
+    """``max_signed_body_bytes`` bounds what the verifier will BUFFER TO HASH, and the
+    413 it answers with is reached only by a request the verifier actually inspects.
+
+    Which requests those are is exactly what the two halves of ``none`` disagree about,
+    and the disagreement is on the WIRE:
+
+    * ``supported: true`` narrowed to other operations — the seller verifies, so a
+      signed body it cannot buffer is refused rather than silently admitted unverified.
+      413.
+    * ``supported: false`` — the seller advertises that it verifies nothing, so it must
+      not start answering 413 to signed traffic it has never inspected. Its 200 is the
+      CONTROL, and it is what pins the intra-method ORDER: an over-cap check hoisted
+      ahead of the ``supported`` gate would 413 this row too, taking a conformant
+      pass-through away from every seller that never opted in.
+
+    :class:`TestUnsignedBodyReachesTheHandlerIntact` is the third point of the same
+    rule and stays untouched: an UNSIGNED request must never meet this 413 under any
+    declaration, because nothing about it is ever hashed.
+    """
+
+    @pytest.mark.parametrize(
+        ("declaration", "expected_status"),
+        [
+            pytest.param(_NARROWED_NONE, 413, id="narrowed-none"),
+            pytest.param({"supported": False}, 200, id="unsupported-none"),
+        ],
+    )
+    def test_a_signed_over_cap_body_is_413_only_where_the_seller_verifies(
+        self, integration_db, declaration, expected_status
+    ):
+        """One over-cap signed request, two declarations, two wire answers."""
+        body = {"context": {"request_id": _PADDING}}
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            token = seed_principal(env)
+            client = _client(env)
+
+            with _declared_posture(**declaration), _body_cap(_TEST_BODY_CAP):
+                response = client.post(
+                    BODYLESS_ADCP_PATH,
+                    json=body,
+                    headers=request_headers(token, {**_PRESENT_SIGNATURE_HEADERS}),
+                )
+
+            assert response.status_code == expected_status, (
+                f"a SIGNED body over max_signed_body_bytes under {declaration!r} must answer "
+                f"{expected_status}; got {response.status_code}: {response.text[:300]}"
+            )
+            assert _rejection_code(response) is None, (
+                "the over-cap answer is a 413 about the BODY, never a 401 about the "
+                "signature: nothing was hashed, so there is no signature verdict to report. "
+                f"Got WWW-Authenticate={response.headers.get('WWW-Authenticate')!r}"
+            )

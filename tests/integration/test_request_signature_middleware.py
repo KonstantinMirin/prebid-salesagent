@@ -101,6 +101,8 @@ registry-as-fallback precedence and the production refusal).
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import pytest
@@ -108,11 +110,23 @@ from adcp.signing import (
     REQUEST_SIGNATURE_HEADER_MALFORMED,
     REQUEST_SIGNATURE_REQUIRED,
 )
-from adcp.signing.errors import REQUEST_SIGNATURE_CAPABILITIES_UNREACHABLE, REQUEST_SIGNATURE_DIGEST_MISMATCH
+from adcp.signing.errors import (
+    REQUEST_SIGNATURE_CAPABILITIES_UNREACHABLE,
+    REQUEST_SIGNATURE_DIGEST_MISMATCH,
+    REQUEST_SIGNATURE_KEY_UNKNOWN,
+)
+from adcp.signing.jwks import StaticJwksResolver
+
+# The SDK's own parameter-length cap, READ rather than restated: a local literal could
+# not fail when the SDK moved the cap, and a fixture that signs a keyid the verifier has
+# started accepting stops reaching the step-2 raise it is named for.
+from adcp.signing.verifier import _MAX_PARAM_LEN as _SDK_MAX_PARAM_LEN
+from anyio.from_thread import start_blocking_portal
 from pydantic import ValidationError
 
 from src.core.config import SigningConfig
 from tests.harness._base import BareIntegrationEnv
+from tests.helpers.asgi_wire import send_wire_messages, truncated_body
 
 # The B1 seams, the counter readers, the shared counterparty/tenant/surface
 # constants and the request builders all live in tests/helpers/signing.py
@@ -134,7 +148,10 @@ from tests.helpers.signing import (
     SIGNING_PRINCIPAL_ID,
     SIGNING_TENANT_ID,
     UNRESOLVABLE_AGENT_URL,
+    UNSIGNED_METRIC,
     VERIFIED_METRIC,
+    VERIFIER_ERROR,
+    WIRE_ORIGIN,
     assert_counter_delta,
     bucketed_declaration,
     counterparty_key,
@@ -243,6 +260,69 @@ def _unsupported() -> dict[str, Any]:
     return {"supported": False}
 
 
+def _narrowed_none() -> dict[str, Any]:
+    """``supported: true``, narrowed so the surface under test lands in ``none``.
+
+    The OTHER half of the ``none`` bucket, and the one every row below exists to
+    separate from :func:`_unsupported`. Both bucket ``get_adcp_capabilities`` as
+    ``none``, and ``bucket_for`` cannot tell them apart afterwards — but the
+    declarations differ on ``supported``, which is the field the spec's pre-check
+    obligation is scoped by: the signed-requests storyboard gates all 28 negative
+    vectors on ``request_signing.supported: true`` alone, so a seller advertising
+    ``supported: false`` is outside the rule while a seller advertising
+    ``supported: true`` is inside it however narrowly it declared its buckets.
+
+    Naming ``create_media_buy`` (a real operation on another route) rather than
+    leaving ``supported_for`` absent is what does the narrowing: a NULL
+    ``supported_for`` means "verify wherever signatures appear"
+    (``src/core/signing/posture.py`` ``_bucket_for``), i.e. ``supported``, not
+    ``none``.
+    """
+    return bucketed_declaration("supported", "create_media_buy")
+
+
+#: The bucket dimension of the malformed-signature rule (security.mdx :1226/:1271),
+#: as FOUR rows rather than three.
+#:
+#: :1226 scopes the rule by the ABSENCE of a bucket — "Verifiers MUST NOT fall back to
+#: bearer-only authentication when a malformed signature is present, **even for
+#: operations not in required_for**" — so a test that pins one bucket grades a
+#: bucket-independent rule at a single point and reports green for the three points it
+#: never visited. Each row below names which point it is:
+#:
+#: * ``required``          — the point the un-parametrized test already stood on;
+#: * ``warn``              — :1273 scopes ``warn_for`` to "signed-but-invalid"
+#:   signatures, and a malformed HEADER has its own taxonomy row and its own code
+#:   (:1373-1377) distinct from ``request_signature_invalid`` (:1388), so warn does
+#:   NOT suppress it;
+#: * ``narrowed-none``     — ``supported: true`` and the operation in no list. This is
+#:   the population :1226's "even for operations not in required_for" names most
+#:   directly;
+#: * ``unsupported-none``  — ``supported: false``. NOT covered by the rule: the seller
+#:   advertises that it verifies nothing, and the storyboard gates its negatives on
+#:   ``supported: true``. Its 200 is the CONTROL, and it must stay 200 forever — a row
+#:   that expected 401 here would be a permanent red demanding a conformance break.
+_BUCKET_DIMENSION = pytest.mark.parametrize(
+    ("declaration", "expected_status", "expected_code"),
+    [
+        pytest.param(
+            bucketed_declaration("required", *LADDER_OPERATIONS),
+            401,
+            REQUEST_SIGNATURE_HEADER_MALFORMED,
+            id="required",
+        ),
+        pytest.param(
+            bucketed_declaration("warn", *LADDER_OPERATIONS),
+            401,
+            REQUEST_SIGNATURE_HEADER_MALFORMED,
+            id="warn",
+        ),
+        pytest.param(_narrowed_none(), 401, REQUEST_SIGNATURE_HEADER_MALFORMED, id="narrowed-none"),
+        pytest.param(_unsupported(), 200, None, id="unsupported-none"),
+    ],
+)
+
+
 # --------------------------------------------------------------------------
 # Counterparty key material
 # --------------------------------------------------------------------------
@@ -319,28 +399,125 @@ class TestCompositionWithFallbackAuthenticators:
                 f"got {response.headers.get('WWW-Authenticate')!r}"
             )
 
-    def test_malformed_signature_blocks_bearer_fallback(self, integration_db):
+    @_BUCKET_DIMENSION
+    def test_malformed_signature_blocks_bearer_fallback(
+        self, integration_db, declaration, expected_status, expected_code
+    ):
         """security.mdx :1271 + :1226 — a present-but-malformed signature signals
         signer intent and MUST NOT downgrade silently to bearer. A valid bearer
         does not rescue it.
+
+        "Regardless" is the whole claim, so it is graded across the whole bucket
+        dimension rather than at ``required`` alone — see :data:`_BUCKET_DIMENSION`
+        for what each row is and why the ``supported: false`` row answers 200.
         """
         with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
             token = seed_principal(env)
             client = env.get_rest_client()
 
-            with _declared_posture(**bucketed_declaration("required", *LADDER_OPERATIONS)):
+            with _declared_posture(**declaration):
                 response = client.get(
                     BODYLESS_ADCP_PATH,
                     headers=request_headers(token, MALFORMED_SIGNATURE_HEADERS),
                 )
 
-            assert response.status_code == 401, (
-                "a malformed signature blocks the bearer fallback regardless "
-                f"(security.mdx :1271), got {response.status_code}: {response.text}"
+            assert response.status_code == expected_status, (
+                "a malformed signature blocks the bearer fallback regardless of the bucket "
+                f"(security.mdx :1226/:1271); {declaration!r} must answer {expected_status}, "
+                f"got {response.status_code}: {response.text[:300]}"
             )
-            assert _rejection_code(response) == REQUEST_SIGNATURE_HEADER_MALFORMED, (
-                f"expected {REQUEST_SIGNATURE_HEADER_MALFORMED!r} on the wire, "
+            assert _rejection_code(response) == expected_code, (
+                f"expected {expected_code!r} on the wire for {declaration!r}, "
                 f"got {response.headers.get('WWW-Authenticate')!r}"
+            )
+
+
+# --------------------------------------------------------------------------
+# The other direction of the same predicate — a NON-step-1 malformation
+# --------------------------------------------------------------------------
+
+#: A ``keyid`` one byte past ``adcp/signing/verifier.py``'s ``_MAX_PARAM_LEN`` (256).
+_OVERLONG_KEYID = "k" * (_SDK_MAX_PARAM_LEN + 1)
+
+
+@pytest.mark.requires_db
+class TestWarnStillSuppressesANonStepOneMalformation:
+    """``request_signature_header_malformed`` is ELEVEN raise sites across FIVE steps,
+    and only step 1 is the spec's pre-check.
+
+    :data:`_BUCKET_DIMENSION` grades the direction in which the malformed rule can be
+    under-applied — warn swallowing a step-1 header malformation. This class grades the
+    direction in which it can be OVER-applied: a predicate widened from
+    ``(code, step == 1)`` to the bare code would also route steps 2, 5, 6 and 8 to a
+    rejection, and those are checklist failures on a WELL-FORMED header, which
+    security.mdx :1273 keeps inside ``warn_for``'s "signed-but-invalid" scope.
+
+    Measured against ``adcp==6.6.0``: step 2 is ``verifier.py`` :245/:251/:407/:414, of
+    which :245 is the over-long ``keyid`` this row drives. Everything ahead of it —
+    ``Signature-Input`` parse, label lookup, ``Signature`` parse, params-present, tag,
+    alg, window, components — passes on its merits, because the request is signed for
+    real with the counterparty's key over the real wire bytes.
+    """
+
+    def test_an_overlong_keyid_fails_at_step_2_and_still_completes_under_warn(
+        self, integration_db, counterparty_keypair
+    ):
+        """Four assertions, and the first two are what make the last two mean anything.
+
+        "It completed" on its own is equally true of a request that never failed at all,
+        and equally true of a step-7 ``key_unknown`` — both answer 200 under warn. So
+        the ``(code, step)`` PAIR is witnessed off the exception the SDK actually raised
+        (``VERIFIER_ERROR``), not off ``adcp_request_signature_failed_total``, whose
+        ``code`` label cannot distinguish step 2 from step 1: they carry the SAME code.
+
+        Then completion is witnessed on the wire AND in the handler: ``200`` plus the
+        ``context`` the route echoes back, which only a request that reached the route
+        with its body intact can produce.
+        """
+        private_key, jwks = counterparty_keypair
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            token = seed_principal(env)
+            client = env.get_rest_client()
+            # A genuinely signed POST whose ONLY defect is the length of its keyid.
+            headers, body = signed_probe(
+                private_key,
+                token,
+                key_id=_OVERLONG_KEYID,
+                request_id="overlong-keyid-completes-under-warn",
+            )
+
+            with (
+                _declared_posture(**bucketed_declaration("warn", *LADDER_OPERATIONS)),
+                counterparty_key(jwks),
+                _verifier_spy() as calls,
+            ):
+                response = client.post(BODYLESS_ADCP_PATH, content=body, headers=headers)
+
+            assert len(calls) == 1, (
+                "the warn bucket must still run the SDK checklist exactly once — warn is "
+                f"'call, catch, log, continue', not 'skip'; it ran {len(calls)} time(s)"
+            )
+            raised = calls[0].get(VERIFIER_ERROR)
+            assert (getattr(raised, "code", None), getattr(raised, "step", None)) == (
+                REQUEST_SIGNATURE_HEADER_MALFORMED,
+                2,
+            ), (
+                "this request must fail at CHECKLIST STEP 2 (verifier.py:245, keyid exceeds "
+                f"{_SDK_MAX_PARAM_LEN} bytes), which is the non-pre-check half of "
+                f"{REQUEST_SIGNATURE_HEADER_MALFORMED!r}. The verifier raised {raised!r}. A "
+                "different step means this row is no longer grading what its name says, and "
+                "the widened-predicate mutation it exists to catch would go unnoticed"
+            )
+            assert response.status_code == 200, (
+                "a step-2 malformation is a checklist failure on a well-formed header, which "
+                "security.mdx :1273 leaves inside warn_for's 'signed-but-invalid' scope. "
+                f"Got {response.status_code}: {response.text[:300]}. A 401 here is a predicate "
+                "widened from (code, step == 1) to the bare code"
+            )
+            assert response.json()["context"] == json.loads(body)["context"], (
+                "'completes' means the DOWNSTREAM HANDLER ran over the request, not merely "
+                "that no 401 was sent: the route echoes `context` verbatim, so this is the "
+                f"receipt. Got {response.json().get('context')!r}"
             )
 
 
@@ -353,31 +530,44 @@ class TestCompositionWithFallbackAuthenticators:
 class TestHeaderPresencePrecheck:
     """Both absent → composition rule; exactly one → malformed; both → verify."""
 
+    @_BUCKET_DIMENSION
     @pytest.mark.parametrize(
         "present",
         ["Signature-Input", "Signature"],
         ids=["only-signature-input", "only-signature"],
     )
-    def test_exactly_one_signature_header_is_malformed(self, integration_db, present):
+    def test_exactly_one_signature_header_is_malformed(
+        self, integration_db, present, declaration, expected_status, expected_code
+    ):
         """``_precheck_presence`` raises on BOTH one-sided branches
         (``adcp/signing/verifier.py:389``): "Signature and Signature-Input must
         both be present". A valid bearer does not rescue a half-present
         signature — same malformed rule as :1271.
+
+        Same rule, so the same bucket dimension (:data:`_BUCKET_DIMENSION`): the
+        half-present shape is a step-1 header malformation exactly like the
+        two-junk-headers shape above, and it can no more be suppressed by a bucket
+        than that one can. This test previously pinned ``supported`` — a fifth point
+        that the parametrization replaces with the four the rule is scoped by.
         """
         with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
             token = seed_principal(env)
             client = env.get_rest_client()
 
-            with _declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)):
+            with _declared_posture(**declaration):
                 response = client.get(
                     BODYLESS_ADCP_PATH,
                     headers=request_headers(token, {present: MALFORMED_SIGNATURE_HEADERS[present]}),
                 )
 
-            assert _rejection_code(response) == REQUEST_SIGNATURE_HEADER_MALFORMED, (
-                f"a request carrying only {present!r} must be rejected with "
-                f"{REQUEST_SIGNATURE_HEADER_MALFORMED!r}; got status {response.status_code}, "
+            assert _rejection_code(response) == expected_code, (
+                f"a request carrying only {present!r} under {declaration!r} must be answered "
+                f"with {expected_code!r}; got status {response.status_code}, "
                 f"WWW-Authenticate={response.headers.get('WWW-Authenticate')!r}"
+            )
+            assert response.status_code == expected_status, (
+                f"a request carrying only {present!r} under {declaration!r} must answer "
+                f"{expected_status} on the wire; got {response.status_code}: {response.text[:300]}"
             )
 
     def test_both_headers_present_enters_the_checklist(self, integration_db):
@@ -405,7 +595,29 @@ class TestHeaderPresencePrecheck:
 
 @pytest.mark.requires_db
 class TestNoneBucketCostsNothing:
-    """Posture is resolved BEFORE buffering; ``none`` passes through untouched."""
+    """What the ``none`` bucket costs, stated for BOTH of its halves.
+
+    The class previously claimed one general property — "posture is resolved BEFORE
+    buffering; ``none`` passes through untouched" — while holding a single test whose
+    fixture is ``supported: false``. That is the epic's own root R4 inside our own
+    instruments: a claim about a two-member population, evidenced from one member. The
+    two halves do not cost the same thing and must not be described as if they did.
+
+    * ``supported: false`` (:meth:`test_junk_signature_headers_under_unsupported_posture_run_no_crypto`)
+      — the seller advertises that it verifies nothing, so nothing is verified: the SDK
+      verifier is NEVER CALLED and the request passes through untouched. This half is
+      what R-H3 is about, and it is what keeps two junk headers from being an
+      unauthenticated CPU+DB amplifier.
+    * ``supported: true``, operation in no list
+      (:meth:`test_a_narrowed_none_bucket_enters_the_sdk_with_nothing_to_call_out_to`)
+      — the seller DOES verify, and the malformed-signature rule (security.mdx :1226)
+      binds it "even for operations not in ``required_for``". So this half does enter
+      the SDK. What it must not do is pay for a counterparty resolution, a replay store
+      or a revocation checker for a verdict the bucket will not act on.
+
+    Stated as one contrast because it is one: the sibling proves the SDK is never
+    called; the narrowed row proves it is called with nothing to call out to.
+    """
 
     def test_junk_signature_headers_under_unsupported_posture_run_no_crypto(self, integration_db):
         """R-H3 — two junk headers under ``supported: false`` must not buffer the
@@ -442,6 +654,79 @@ class TestNoneBucketCostsNothing:
                 f"{response.json().get('context')!r}"
             )
 
+    def test_a_narrowed_none_bucket_enters_the_sdk_with_nothing_to_call_out_to(self, integration_db):
+        """The OTHER half of ``none``: ``supported: true``, operation in no list.
+
+        Byte-identical request to the sibling above, one declaration change, and the
+        opposite call count — the sibling proves the SDK is never called, and this row
+        proves it IS called, with nothing to call out to. ``len(calls) == 1`` rather
+        than ``calls == []`` is the point: security.mdx :1226 binds the malformed rule
+        "even for operations not in ``required_for``", so the checklist has to be
+        entered before the bucket can decline to act on its verdict.
+
+        The two ENFORCING assertions are ``replay_store`` and ``revocation_checker``.
+        They hold only because this path builds its ``VerifyOptions`` deliberately:
+        ``_run_verifier`` constructs ``PostgresReplayStore`` unconditionally and
+        ``checker_for`` never returns ``None``, so reinstating the ordinary dependencies
+        for the ``none`` bucket reddens both. That is the executable half of the
+        coupling between "the none bucket is pre-checked" and "the none bucket stays
+        cheap": remove the second and these two fail.
+
+        The remaining two are SHAPE DOCUMENTATION and claim NO mutation-catching power,
+        stated so no reader credits them with any. ``_jwks_resolver(None,
+        agent_url=None)`` falls through both of its branches and returns a plain empty
+        ``StaticJwksResolver``, and ``_resolve_request_context`` makes ``agent_url``
+        structurally ``None`` when no resolution was performed — so both survive
+        reinstating a real resolver for this bucket. They record the seam's shape; they
+        do not guard it.
+
+        KNOWN BOUND (design §J): these assertions pin the seam's SHAPE, not its COST.
+        They prove the SDK was handed nothing to call out to. They do NOT prove that no
+        I/O occurred — ``_detect_tenant`` opens a session on every AdCP request whatever
+        this bucket does. Proving absence of I/O is its own work with its own instrument.
+        """
+        body = {"context": {"request_id": "narrowed-none-enters-the-sdk"}}
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            token = seed_principal(env)
+            client = env.get_rest_client()
+
+            with _declared_posture(**_narrowed_none()), _verifier_spy() as calls:
+                client.post(
+                    BODYLESS_ADCP_PATH,
+                    json=body,
+                    headers=request_headers(token, MALFORMED_SIGNATURE_HEADERS),
+                )
+
+            assert len(calls) == 1, (
+                "a supported: true seller must run the checklist for a malformed signature "
+                "even on an operation it declared in no bucket (security.mdx :1226); the SDK "
+                f"verifier ran {len(calls)} time(s). Zero means the none bucket still returns "
+                "ahead of the pre-check, i.e. the bearer fallback is still available to a "
+                "present-but-broken signature"
+            )
+            options = calls[0]["options"]
+            assert options.replay_store is None, (
+                "the none bucket must not pay for a replay store: nothing it decides can be "
+                "replayed, because nothing it decides is acted on. _run_verifier builds "
+                "PostgresReplayStore unconditionally, so a non-None value here means the "
+                f"ordinary dependencies were reinstated for this bucket; got {options.replay_store!r}"
+            )
+            assert options.revocation_checker is None, (
+                "the none bucket must not pay for a revocation checker, whose step-9 hook can "
+                "fetch a counterparty's revocation list. checker_for never returns None, so a "
+                f"non-None value here means the same reinstatement; got {options.revocation_checker!r}"
+            )
+            # Shape documentation from here down — see the docstring. These two SURVIVE the
+            # mutation the two assertions above catch, and are recorded as such.
+            assert type(options.jwks_resolver) is StaticJwksResolver, (
+                "shape: the resolver handed to the checklist is a bare StaticJwksResolver, not "
+                "a brand_json-declaring one built from a counterparty walk; got "
+                f"{type(options.jwks_resolver).__name__}"
+            )
+            assert options.agent_url is None, (
+                f"shape: no counterparty was resolved, so the checklist is told about none; got {options.agent_url!r}"
+            )
+
     def test_the_same_request_under_a_supported_posture_does_run_crypto(self, integration_db):
         """The contrast that makes the cheapness claim non-vacuous: byte-identical
         request, one declaration change, and now the checklist runs and rejects.
@@ -465,6 +750,231 @@ class TestNoneBucketCostsNothing:
                 f"expected {REQUEST_SIGNATURE_HEADER_MALFORMED!r} on the wire, "
                 f"got status {response.status_code}, WWW-Authenticate="
                 f"{response.headers.get('WWW-Authenticate')!r}"
+            )
+
+
+# --------------------------------------------------------------------------
+# The narrowed-`none` bucket's METRIC, and its remaining wire exits
+# --------------------------------------------------------------------------
+
+#: The AdCP operation ``/api/v1/capabilities`` resolves to, on both verbs
+#: (``tests.helpers.signing.LADDER_OPERATIONS`` names it alongside
+#: ``create_media_buy``). Spelled out here because these rows read the counter's
+#: ``operation`` LABEL, which is the thing being asserted rather than a fixture knob.
+_BODYLESS_OPERATION = "get_adcp_capabilities"
+
+
+@contextmanager
+def _assert_ignored_recorded(operation: str, expected: int = 1) -> Iterator[None]:
+    """``adcp_request_unsigned_total{operation, reason="ignored"}`` moved by *expected*.
+
+    Read on the LABELLED series rather than on the metric total, because "the series
+    kept counting" is the whole claim: a bare total moves for the ``absent`` arm too,
+    and an operation label collapsed to ``other`` would leave the total right and the
+    signal gone.
+
+    ``expected=0`` is a first-class case here — it is how a row says the pass-through
+    arm was NOT the one taken.
+    """
+    before = sum(_samples_with(UNSIGNED_METRIC, operation=operation, reason="ignored").values())
+    yield
+    after = sum(_samples_with(UNSIGNED_METRIC, operation=operation, reason="ignored").values())
+    assert after == before + expected, (
+        f"{UNSIGNED_METRIC}{{operation={operation!r}, reason='ignored'}} must move by "
+        f"{expected} across this block; it went {before} -> {after}. This series is what "
+        "tells 'the none bucket passed a request through' apart from 'traffic stopped'"
+    )
+
+
+@pytest.mark.requires_db
+class TestTheNarrowedNoneBucketRecordsTheRightOutcome:
+    """Two failures, two different counters — and the difference is checklist step 1.
+
+    Once the ``none`` bucket is pre-checked it can fail for two structurally different
+    reasons, and recording them the same way destroys the signal in both directions:
+
+    * **step 7, ``key_unknown`` — ENGINEERED.** This bucket hands the checklist an empty
+      key set BY CONSTRUCTION (design §C: no counterparty resolution, so
+      ``StaticJwksResolver({})``), and ``adcp/signing/verifier.py:259`` raises
+      ``request_signature_key_unknown`` the moment it is consulted. §C2: there is no
+      success exit before that point, so EVERY well-formed narrowed-``none`` signature
+      lands here. Counting those as ``signature_failed`` would put a self-inflicted
+      failure in the same series as a real key-resolution failure, at the rate of the
+      seller's whole un-narrowed traffic — so the failure is suppressed and the
+      pass-through is counted as what it is, ``ignored``.
+    * **step 1, ``header_malformed`` — GENUINE.** Nothing about this bucket engineered
+      it: the caller sent a broken header, and this is precisely the request
+      security.mdx :1226 stops from falling back to bearer. It is rejected, and because
+      the rejection returns before the pass-through arm, a suppression written as the
+      bare "the bucket is not none" would record NOTHING AT ALL for it — a 401 that no
+      counter anywhere can see.
+
+    Both limbs of that condition are graded here, one row each. Neither is observable
+    from the other: the first says a counter did NOT move and the second says the same
+    counter DID, for the same bucket.
+    """
+
+    def test_the_engineered_step_7_failure_is_not_counted_as_a_signature_failure(
+        self, integration_db, counterparty_keypair
+    ):
+        """A well-formed, cryptographically real signature under narrowed ``none``.
+
+        The counterparty's key is seeded into the resolution cache, so a ``supported``
+        sibling of this exact request verifies (that is what
+        :class:`TestVerifierSitsOutsideBodyRewriter` already shows). The failure below
+        is therefore attributable to the bucket's empty resolver and to nothing else,
+        which is what makes "do not count it" the right rule rather than a lost failure.
+
+        The ``(code, step)`` pair is witnessed off the exception the SDK raised. Without
+        it, ``FAILED_METRIC`` not moving is equally true of a middleware that never ran
+        the checklist at all — which is exactly what happens today — so the suppression
+        would read as graded while nothing had been graded.
+        """
+        private_key, jwks = counterparty_keypair
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            token = seed_principal(env)
+            client = env.get_rest_client()
+            headers, body = signed_probe(private_key, token)
+
+            with (
+                assert_counter_delta(
+                    FAILED_METRIC,
+                    0,
+                    why="the empty resolver is this bucket's own doing; counting its step-7 "
+                    "key_unknown would make self-inflicted failures indistinguishable from real "
+                    "key-resolution failures in the same series",
+                ),
+                _assert_ignored_recorded(_BODYLESS_OPERATION),
+                _declared_posture(**_narrowed_none()),
+                counterparty_key(jwks),
+                _verifier_spy() as calls,
+            ):
+                response = client.post(BODYLESS_ADCP_PATH, content=body, headers=headers)
+
+            assert len(calls) == 1, (
+                f"the narrowed none bucket must enter the checklist exactly once; it ran {len(calls)} time(s)"
+            )
+            raised = calls[0].get(VERIFIER_ERROR)
+            assert (getattr(raised, "code", None), getattr(raised, "step", None)) == (
+                REQUEST_SIGNATURE_KEY_UNKNOWN,
+                7,
+            ), (
+                "this row's whole premise is that the narrowed none bucket fails at STEP 7 "
+                "with an empty key set, engineered by the bucket itself. The verifier raised "
+                f"{raised!r}. Anything else means the suppression below is being graded "
+                "against a failure it was not written for"
+            )
+            assert response.status_code == 200, (
+                "an engineered failure is not a reason to reject: the bucket ignores the "
+                f"signature and the request passes through. Got {response.status_code}: {response.text[:300]}"
+            )
+
+    def test_a_genuine_step_1_malformation_is_still_counted_as_a_signature_failure(self, integration_db):
+        """The ``is_precheck`` limb, and the one a bare "not none" suppression eats.
+
+        Same bucket, same seller, a caller-caused failure instead of an engineered one.
+        It is rejected (:1226), and the rejection MUST be counted — the reject arm
+        returns before the pass-through arm, so a request that records neither
+        ``signature_failed`` nor ``ignored`` 401s with no counter anywhere naming it.
+
+        Both counters are asserted, in opposite directions, because either alone is
+        satisfiable by the wrong implementation: ``ignored`` alone by one that never
+        rejects, ``failed`` alone by one that counts the rejection AND the pass-through.
+        """
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            token = seed_principal(env)
+            client = env.get_rest_client()
+
+            # FAILED_METRIC is the INNERMOST of the two counter guards on purpose: context
+            # managers unwind last-entered-first, and this row's primary obligation is the
+            # one that should name itself first when it fails.
+            with (
+                _assert_ignored_recorded(_BODYLESS_OPERATION, expected=0),
+                assert_counter_delta(
+                    FAILED_METRIC,
+                    1,
+                    why="a genuine step-1 header malformation under narrowed none is rejected, "
+                    "and a rejection nothing counts is a 401 with no operational signal at all",
+                ),
+                _declared_posture(**_narrowed_none()),
+            ):
+                response = client.post(
+                    BODYLESS_ADCP_PATH,
+                    json={"context": {"request_id": "narrowed-none-step-1"}},
+                    headers=request_headers(token, MALFORMED_SIGNATURE_HEADERS),
+                )
+
+            assert _rejection_code(response) == REQUEST_SIGNATURE_HEADER_MALFORMED, (
+                f"expected {REQUEST_SIGNATURE_HEADER_MALFORMED!r} on the wire, got status "
+                f"{response.status_code} with WWW-Authenticate={response.headers.get('WWW-Authenticate')!r}"
+            )
+            assert _samples_with(
+                FAILED_METRIC, code=REQUEST_SIGNATURE_HEADER_MALFORMED, operation=_BODYLESS_OPERATION
+            ), (
+                "the counted failure must carry this request's own code and operation, not a "
+                f"neighbouring one; samples were {sorted(_counter_samples(FAILED_METRIC))}"
+            )
+
+
+@pytest.mark.requires_db
+class TestANarrowedNoneRequestThatNeverFinishesArriving:
+    """A client that disconnects mid-body still passes through, and is still counted.
+
+    The fourth of the ``none`` bucket's exits, and the one no client library can reach:
+    Starlette's ``TestClient`` builds its receive channel from a complete byte string
+    and always answers with the whole body, so ``_buffer_body``'s
+    ``not buffered.complete`` branch is unreachable from httpx. Driven here off the raw
+    ASGI boundary instead (:func:`tests.helpers.asgi_wire.truncated_body`).
+
+    There is nothing to VERIFY — the bytes a signature would cover never arrived — so
+    the middleware hands what did arrive, and then the disconnect, downstream and lets
+    the app unwind. What must not happen is that the ``ignored`` series stops moving on
+    this exit while it keeps moving on the other pass-through: a metric that disappears
+    for one shape of traffic reads as that traffic stopping.
+    """
+
+    def test_a_mid_body_disconnect_passes_through_and_is_still_counted_as_ignored(self, integration_db):
+        """Raw ASGI: one chunk promising more, then ``http.disconnect``.
+
+        The 400 is the RECEIPT, not an incidental status: it is FastAPI's own
+        body-parse verdict on the truncated JSON, which only a request that reached the
+        ROUTE can produce. A verifier that answered this request itself would send 401
+        (with a ``WWW-Authenticate`` challenge) or 413, and neither can be confused
+        with a route-level parse failure.
+        """
+        from src.app import app
+
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            token = seed_principal(env)
+            env.get_rest_client()  # installs the auth dependency overrides this app needs
+            headers = list(
+                request_headers(token, {"Content-Type": "application/json", **MALFORMED_SIGNATURE_HEADERS}).items()
+            )
+
+            with (
+                _assert_ignored_recorded(_BODYLESS_OPERATION),
+                _declared_posture(**_narrowed_none()),
+                start_blocking_portal("asyncio") as portal,
+            ):
+                response = send_wire_messages(
+                    app,
+                    portal,
+                    method="POST",
+                    url=f"{WIRE_ORIGIN}{BODYLESS_ADCP_PATH}",
+                    headers=headers,
+                    messages=truncated_body(b'{"context": {"request_id": "narrowed-none-disc'),
+                )
+
+            assert _rejection_code(response) is None, (
+                "a body that never finished arriving is not a malformed signature: there is "
+                "nothing to verify and nothing to reject. The verifier answered "
+                f"{response.status_code} with WWW-Authenticate={response.get('WWW-Authenticate')!r}"
+            )
+            assert response.status_code == 400, (
+                "the truncated request must reach the ROUTE, whose own body parse then fails "
+                f"on it — that 400 is the pass-through receipt. Got {response.status_code}: "
+                f"{response.body[:200]!r}. A 413 would mean the over-cap branch answered "
+                "instead, on a body far under the cap"
             )
 
 

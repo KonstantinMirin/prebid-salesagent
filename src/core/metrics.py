@@ -39,11 +39,12 @@ Call sites must record AI-review metrics through :func:`record_ai_review` and
 :func:`record_request_unsigned`, so the bounding logic lives in exactly one place.
 
 That "exactly one place" is INSIDE the recording helpers, never at their call sites.
-The two ``record_request_unsigned`` call sites in
-``src/core/signing/request_verifier_middleware.py`` (:352 on the ignored-posture arm,
-:449 on the absent-signature arm) are the standing proof: sanitizing at one of them
-leaves the other minting series, and a sanitizer you have to REMEMBER to call is the
-same shape of defect as the unbounded label it was added to fix.
+The four ``record_request_unsigned`` call sites in
+``src/core/signing/request_verifier_middleware.py`` (:452 on the absent-signature arm,
+and :492, :506 and :624 on the three ignored-posture exits the verifier's pre-check
+phase created) are the standing proof: sanitizing at any one of them leaves the other
+three minting series, and a sanitizer you have to REMEMBER to call is the same shape of
+defect as the unbounded label it was added to fix.
 """
 
 from collections.abc import Container
@@ -332,12 +333,22 @@ def record_request_unsigned(operation: str, reason: str) -> None:
 
     ``reason="absent"`` — the request carried no signature headers.
     ``reason="ignored"`` — headers were present but the tenant's posture puts this
-    operation in the ``none`` bucket, so nothing was verified (and, per R-H3, nothing
-    was buffered or hashed either).
+    operation in the ``none`` bucket, so no CHECKLIST ran.
 
-    Both of this helper's call sites are pre-auth arms of the verifier, and both are
-    reached with an ``operation`` the anonymous caller chose — which is why the
-    bounding is here and not at either of them.
+    What "ignored" costs depends on which half of the ``none`` bucket answered, and the
+    two differ since the verifier gained its pre-check phase:
+
+    * ``supported: false`` — the seller does not verify at all, so the spec's pre-check
+      does not bind it and R-H3 still holds exactly: nothing buffered, nothing hashed.
+    * ``supported: true`` with the operation in none of the three lists — a VERIFIER, so
+      AdCP 3.1.1 ``security.mdx`` :1226 binds it "even for operations not in
+      ``required_for``". The body is buffered and the SDK parses the headers, against an
+      EMPTY resolver that stops execution at ``verifier.py:256``. Bounded and in-memory:
+      no key resolution, no crypto, no outbound walk, no database session.
+
+    All four of this helper's call sites are pre-auth arms of the verifier, and all are
+    reached with an ``operation`` the anonymous caller chose — which is why the bounding
+    is here and not at any of them.
     """
     request_unsigned_total.labels(
         operation=sanitize_operation(operation),

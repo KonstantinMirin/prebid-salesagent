@@ -107,16 +107,45 @@ def build_scope(
     }
 
 
+def whole_body(body: bytes) -> list[dict[str, Any]]:
+    """The receive script for a body that arrives complete: one final message."""
+    return [{"type": "http.request", "body": body, "more_body": False}]
+
+
+def truncated_body(body: bytes) -> list[dict[str, Any]]:
+    """The receive script for a client that DISCONNECTS mid-body.
+
+    One chunk flagged ``more_body: True`` — promising a remainder — followed by
+    ``http.disconnect`` instead of that remainder. This shape is not expressible
+    through ``TestClient``: Starlette's test transport builds its receive from a
+    complete byte string and always answers with the whole body
+    (``starlette/testclient.py``), so the ``not buffered.complete`` branch of
+    ``_buffer_body`` (``src/core/signing/request_verifier_middleware.py``) is
+    unreachable from any httpx-based driver. Every one of the four ``none``-bucket
+    exits has to be gradeable, and this is the only driver that can reach this one.
+    """
+    return [{"type": "http.request", "body": body, "more_body": True}, {"type": "http.disconnect"}]
+
+
 async def send_asgi(app: Any, scope: dict[str, Any], body: bytes = b"") -> WireResponse:
-    """Drive *app* once with *scope* and collect the response off the boundary."""
+    """Drive *app* once with *scope* and a COMPLETE *body*, off the boundary."""
+    return await send_asgi_messages(app, scope, whole_body(body))
+
+
+async def send_asgi_messages(app: Any, scope: dict[str, Any], messages: list[dict[str, Any]]) -> WireResponse:
+    """Drive *app* once with *scope*, answering ``receive`` from *messages* in order.
+
+    Once the script is exhausted every further ``receive`` answers ``http.disconnect``
+    — a real server's behaviour after the client is gone, and what keeps a middleware
+    that reads one message too many from hanging the test instead of failing it.
+    """
     scope.setdefault("app", app)
-    received = {"done": False}
+    pending = list(messages)
 
     async def receive() -> dict[str, Any]:
-        if received["done"]:
-            return {"type": "http.disconnect"}
-        received["done"] = True
-        return {"type": "http.request", "body": body, "more_body": False}
+        if pending:
+            return pending.pop(0)
+        return {"type": "http.disconnect"}
 
     response = WireResponse(status_code=0)
 
@@ -149,5 +178,24 @@ def send_wire_request(
     mcp_app.lifespan)`` (``src/app.py:121-125``), so startup must have run, and the
     coroutine must run on the loop startup ran on.
     """
+    return send_wire_messages(app, portal, method=method, url=url, headers=headers, messages=whole_body(body))
+
+
+def send_wire_messages(
+    app: Any,
+    portal: Any,
+    *,
+    method: str,
+    url: str,
+    headers: list[tuple[str, str]],
+    messages: list[dict[str, Any]],
+) -> WireResponse:
+    """Send one hand-built request whose RECEIVE CHANNEL is scripted message by message.
+
+    The streaming form of :func:`send_wire_request` — same scope construction, same
+    portal contract — for the request shapes whose grading is about the channel rather
+    than the bytes: a body arriving in several chunks, or :func:`truncated_body`'s
+    mid-body disconnect.
+    """
     scope = build_scope(method, url, headers, app=app)
-    return portal.call(lambda: send_asgi(app, scope, body))
+    return portal.call(lambda: send_asgi_messages(app, scope, messages))

@@ -12,12 +12,15 @@ acceptance came from the verifier rather than from the verifier never running.
 a pass-through. Four different routes produce the same 2xx without the checklist
 passing (``request_verifier_middleware.py``):
 
-1. ``config.verifier_enabled == False`` — the middleware returns at :328-330;
-2. ``context.bucket == "none"`` — a SIGNED request passes through UNVERIFIED at
-   :351-354, recorded as ``record_request_unsigned(op, "ignored")``;
+1. ``config.verifier_enabled == False`` — the middleware returns at :331-333;
+2. ``context.bucket == "none"`` — a SIGNED request passes through without a CHECKLIST,
+   recorded as ``record_request_unsigned(op, "ignored")``. Only the ``supported: false``
+   half is fully UNVERIFIED (``_handle_signed`` :491-494); the ``supported: true`` half
+   is pre-checked first and a malformed header REJECTS there (``_handle_rejection``
+   :605-607), so this route yields 2xx only for a well-formed signature;
 3. ``context.bucket == "warn"`` — ``_handle_rejection`` logs and continues, so even
    an INVALID signature yields 2xx;
-4. the composition rule (:419) ALLOWS an authenticated-but-unsigned request, so a
+4. the composition rule (:423-432) ALLOWS an authenticated-but-unsigned request, so a
    bearer-authed 2xx proves nothing on its own.
 
 So a bare ``assert response.status_code == 200`` here would be exactly the disease
@@ -29,7 +32,7 @@ graded by a POSITIVE observable rather than by the absence of a rejection.
 
 * ``adcp_request_signature_verified_total{operation,keyid}`` increments by EXACTLY 1
   across the accepted request. ``record_signature_verified`` has exactly one call site
-  in ``src/`` (``request_verifier_middleware.py`` :533), reached only after
+  in ``src/`` (``request_verifier_middleware.py`` :565), reached only after
   ``_run_verifier`` returns AND Tier 3 passes — so the delta is a direct read of the
   one line that executes only on the checklist-pass branch. ``src/app.py`` mounts the
   Flask admin (whose ``/metrics`` route carries no ``@require_auth``) in the SAME
@@ -57,7 +60,7 @@ graded by a POSITIVE observable rather than by the absence of a rejection.
         ``BrandJsonResolverError("agent_not_found")``, which
         ``_map_brand_json_resolver_error`` maps to exactly this code and
         ``_FailedDiscoveryJwksResolver`` raises at checklist step 7. Tier 3
-        (``_check_brand_authorization``, :527) is the SECOND consumer of the same
+        (``_check_brand_authorization``, :560) is the SECOND consumer of the same
         document and is simply not reached on this input — the walk fails first.
         The registry branch cannot produce this code at all: with no ``agent_url``
         there is no walk, and an unmatched keyid yields the generic
@@ -72,7 +75,7 @@ graded by a POSITIVE observable rather than by the absence of a rejection.
 **DOES NOT PROVE.**
 
 * The REGISTRY key-trust source (``SigningConfig.counterparty_registry``). It is
-  consulted only when ``agent_url`` is falsy (:875-880), i.e. exactly when no trust
+  consulted only when ``agent_url`` is falsy (:987-992), i.e. exactly when no trust
   root was walked, and it DELIBERATELY skips Tier 3 — so it cannot satisfy this
   module's title and is not graded here.
 * The MCP and A2A naming surfaces for the accepted leg. The refused-leg sibling
@@ -108,7 +111,7 @@ label match filters on it — that uniqueness is what makes "exactly 1" a real c
 
 **Two traps in ``signed_headers``, both closed below.**
 
-1. It signs ``f"{origin}{path}"``. ``_verify_url`` (:1163-1232) rebuilds the authority
+1. It signs ``f"{origin}{path}"``. ``_verify_url`` (:1313-1336) rebuilds the authority
    from the ``Host`` header nginx forwards verbatim and the scheme from
    ``X-Forwarded-Proto``, so the signed origin must be the real TLS netloc INCLUDING
    the port. Hence the ``origin=`` argument.

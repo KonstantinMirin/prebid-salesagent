@@ -58,8 +58,13 @@ Per-request sequence
 2. Buffer the body and NAME the request (#1291 B2, ``src/core/signing/operations.py``).
    Two of the three transports carry the operation IN the body and the webhook
    escalation lives there on all three, so the name cannot precede the bytes; the pair
-   is skipped entirely while no tenant CAN declare a posture, which is what keeps
-   R-H3's "the ``none`` bucket costs nothing" true in production. The buffer is bounded
+   is skipped entirely while no tenant CAN declare a posture. R-H3's "the ``none``
+   bucket costs nothing" survives for the half that means ``supported: false`` — a
+   seller that does not verify at all. The other half, ``supported: true`` with the
+   operation in no list, is a VERIFIER and the spec's pre-check binds it "even for
+   operations not in ``required_for``" (``security.mdx`` :1226), so it costs a bounded
+   in-memory header parse against an empty resolver. Never more: no key resolution, no
+   crypto, no outbound walk, no session. The buffer is bounded
    and its replay is lossless in every exit, including over-cap — an unsigned request
    must reach its handler with every byte.
 3. Thread hop #1: resolve the tenant -> its posture -> the bucket for that name, and
@@ -73,7 +78,9 @@ Per-request sequence
    jwks_uri + key_origins — because ``expected_key_origins`` must be handed to every
    verify or the spec's step-7 key-origin check silently no-ops with a warning (R-M2).
 6. Thread hop #2: the Postgres replay store and the synchronous
-   ``verify_request_signature`` over ONE session checkout, per A4's wiring contract
+   ``verify_request_signature`` over ONE session checkout, per A4's wiring contract —
+   except on the narrowed ``none`` pre-check, which runs the same call against the null
+   dependency trio and checks out NO session at all
    (``src/core/signing/replay_store.py``). Called directly with method/url/headers/body
    rather than through ``verify_starlette_request`` (R-M3), because the wrapper derives
    the URL from the scope and would discard the explicit ``X-Forwarded-Proto``
@@ -130,7 +137,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable, Mapping, MutableMapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping, MutableMapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Literal, NoReturn
 
@@ -152,8 +160,10 @@ from adcp.signing.errors import (
     SignatureVerificationError,
 )
 from adcp.signing.etld import host_from
-from adcp.signing.jwks import StaticJwksResolver
+from adcp.signing.jwks import JwksResolver, StaticJwksResolver
 from adcp.signing.middleware import unauthorized_response_headers
+from adcp.signing.replay import ReplayStore
+from adcp.signing.revocation import RevocationChecker
 from adcp.signing.verifier import (
     VerifiedSigner,
     VerifierCapability,
@@ -341,11 +351,12 @@ class RequestSignatureMiddleware:
             await self._handle_unsigned(context, resolved, scope, buffered, send)
             return
 
-        if context.bucket == "none":
-            record_request_unsigned(resolved.operation, "ignored")
-            await self.app(scope, buffered.receive, send)
-            return
-
+        # NO ``none`` short-circuit here. The spec's pre-check binds every VERIFIER,
+        # "even for operations not in ``required_for``" (:1226), so a signed request
+        # whose operation buckets as ``none`` must still clear header well-formedness.
+        # ``_handle_signed`` owns that decision now, and gates it on
+        # ``posture.supported`` — a seller declaring ``supported: false`` is not a
+        # verifier at all and keeps its conformant pass-through.
         await self._handle_signed(context, resolved, headers, config, scope, buffered, send)
 
     async def _name_request(
@@ -468,8 +479,19 @@ class RequestSignatureMiddleware:
         buffered: _BufferedBody,
         send: Send,
     ) -> None:
-        """At least one signature header present: run the checklist and grade it."""
+        """At least one signature header present: run the pre-check, then the checklist."""
         operation = resolved.operation
+        # ``bucket_for`` collapses TWO situations into ``none``: a seller declaring
+        # ``supported: false``, which is not a verifier at all, and ``supported: true``
+        # with the operation in none of the three lists, which IS one. Only the second is
+        # bound by the spec's pre-check, and the storyboard gates all 28 negative vectors
+        # on ``request_signing.supported: true`` alone. So the gate reads ``supported``,
+        # never the bucket — reading the bucket would keep the defect for every
+        # ``supported: true`` operation outside the lists, the larger half.
+        if not context.posture.supported:
+            record_request_unsigned(operation, "ignored")
+            await self.app(scope, buffered.receive, send)
+            return
         if buffered.over_cap:
             logger.warning("Signed request body exceeded %d bytes; rejecting", config.max_signed_body_bytes)
             await Response(status_code=413)(scope, buffered.receive, send)
@@ -477,6 +499,11 @@ class RequestSignatureMiddleware:
         if not buffered.complete:
             # The client disconnected mid-body. There is nothing to verify and nothing
             # to answer; hand the disconnect downstream and let the app unwind.
+            # The narrowed ``none`` bucket still counts here: this is one of its
+            # pass-through exits, and the counter it used to get upstream (before the
+            # phase split moved the decision into this method) must not disappear.
+            if context.bucket == "none":
+                record_request_unsigned(operation, "ignored")
             await self.app(scope, buffered.receive, send)
             return
 
@@ -497,8 +524,20 @@ class RequestSignatureMiddleware:
             # ASGI path the server has already resolved most malformed shapes, so
             # this gate is defense-in-depth, not a hot path.
             url = _verify_url(scope, headers)
-            reject_malformed_target(url)
-            counterparty = await _resolution_for(context.agent_url, config, keyid=_parse_keyid(headers))
+            # PRE-CHECK ONLY for the narrowed ``none`` bucket. The spec's pre-check
+            # bullets cover the ``required_for`` unsigned case and the two header rules
+            # and say NOTHING about target-URI malformation, so hoisting
+            # ``reject_malformed_target`` would make ``none`` reject beyond the
+            # requirement. Skipping ``_resolution_for`` is the load-bearing half: it runs
+            # AHEAD of the SDK and is gated by no step, so leaving it in would let anyone
+            # name an unknown operation, attach two plausible headers, and force a
+            # three-hop outbound walk whose result is then discarded.
+            precheck_only = context.bucket == "none"
+            if precheck_only:
+                counterparty = _CounterpartyResolution(None, source="registry")
+            else:
+                reject_malformed_target(url)
+                counterparty = await _resolution_for(context.agent_url, config, keyid=_parse_keyid(headers))
             signer = await asyncio.to_thread(
                 _run_verifier,
                 method=scope.get("method", "GET"),
@@ -511,6 +550,7 @@ class RequestSignatureMiddleware:
                 resolution=counterparty.resolution,
                 agent_url=context.agent_url,
                 config=config,
+                precheck_only=precheck_only,
             )
             # Tier 3 (#1291 hksr): a valid signature proves WHO signed, never that the
             # signer may act for the brand. Only for brand-json-WALKED counterparties —
@@ -534,7 +574,15 @@ class RequestSignatureMiddleware:
         receive: Receive,
         send: Send,
     ) -> None:
-        """Reject — unless the operation is in ``warn_for``, which logs and continues.
+        """The ONE owner of rejection policy: the spec's two phases, as one branch.
+
+        AdCP 3.1.1 ``security.mdx`` puts header well-formedness in a PRE-CHECK above the
+        operation bucket and signature validity in a checklist inside it (:1226, and
+        :1273 scoping ``warn_for`` to signed-but-invalid). The SDK collapses presence and
+        parse into a single call (``verifier.py:185-213``), so the phase boundary cannot
+        be drawn by ordering two calls. It is drawn on WHICH EXCEPTION bypasses the warn
+        arm — ``is_precheck`` below — and it lives here rather than around the funnel so
+        the metric above it still fires for the class it makes newly rejectable.
 
         Warn mode is OURS: ``VerifierCapability`` carries 4 of ``request_signing``'s 8
         properties and 2 of its 6 operation buckets, so handing ``warn_for`` to the SDK
@@ -542,7 +590,21 @@ class RequestSignatureMiddleware:
         verifier, catch, emit the metric, continue — and it is observable on the WIRE
         (200 where ``supported_for`` answers 401), not merely in a counter.
         """
-        record_signature_failed(operation, exc.code)
+        # The pre-check family, and the only failure class that rejects in EVERY bucket.
+        # The pair, never the bare code: ``request_signature_header_malformed`` is raised
+        # at five different steps, and steps 2/5/6/8 are checklist failures on a
+        # WELL-FORMED header, which :1273 keeps warn-suppressible.
+        is_precheck = exc.code == REQUEST_SIGNATURE_HEADER_MALFORMED and exc.step == 1
+        # Suppressed for exactly one case: the narrowed ``none`` bucket verifies against
+        # an EMPTY resolver, so its step-7 ``key_unknown`` is ENGINEERED by us and would
+        # otherwise be indistinguishable from a real key-resolution failure in the same
+        # series. A step-1 malformation there is genuine, so ``is_precheck`` keeps it —
+        # without that limb A1 would return below and the request would 401 silently.
+        if context.bucket != "none" or is_precheck:
+            record_signature_failed(operation, exc.code)
+        if is_precheck:
+            await _reject(exc, scope, receive, send)
+            return
         if context.bucket == "warn":
             logger.warning(
                 "Request signature failed in warn mode (not rejecting): code=%s step=%s "
@@ -553,6 +615,13 @@ class RequestSignatureMiddleware:
                 context.principal_id,
                 context.tenant_id,
             )
+            await self.app(scope, receive, send)
+            return
+        if context.bucket == "none":
+            # Pass-through, and the series stays alive: the request genuinely IS ignored
+            # (it reached no checklist), and a metric that vanishes at a deploy reads as
+            # traffic stopping.
+            record_request_unsigned(operation, "ignored")
             await self.app(scope, receive, send)
             return
         await _reject(exc, scope, receive, send)
@@ -1152,8 +1221,9 @@ def _run_verifier(
     resolution: AgentResolution | None,
     agent_url: str | None,
     config: SigningConfig,
+    precheck_only: bool = False,
 ) -> VerifiedSigner:
-    """Run the SDK checklist over one database session.
+    """Run the SDK checklist over one database session — or the pre-check over none.
 
     One hop, one session: the replay store's ``at_capacity`` / ``seen`` / ``remember``
     are synchronous and the verifier calls them inline, so a single checkout serves all
@@ -1185,22 +1255,59 @@ def _run_verifier(
     ``tests/integration/test_request_signature_revocation.py``'s ordering canary is
     what keeps it true.
     """
-    with get_db_session() as session:
+    with _verifier_dependencies(resolution, agent_url=agent_url, config=config, precheck_only=precheck_only) as deps:
+        jwks_resolver, replay_store, revocation_checker = deps
         options = VerifyOptions(
             now=time.time(),
             capability=capability,
             operation=operation,
-            jwks_resolver=_jwks_resolver(resolution, agent_url=agent_url),
-            replay_store=PostgresReplayStore(ReplayNonceRepository(session), config),
+            jwks_resolver=jwks_resolver,
+            replay_store=replay_store,
             max_skew_seconds=config.max_skew_seconds,
             max_window_seconds=config.max_window_seconds,
             agent_url=resolution.agent_url if resolution is not None else None,
             expected_key_origins=(resolution.key_origins or {}) if resolution is not None else None,
             signing_purpose=_SIGNING_PURPOSE,
             posture=bucket,
-            revocation_checker=checker_for(resolution, config),
+            revocation_checker=revocation_checker,
         )
         return verify_request_signature(method=method, url=url, headers=headers, body=body, options=options)
+
+
+@contextmanager
+def _verifier_dependencies(
+    resolution: AgentResolution | None,
+    *,
+    agent_url: str | None,
+    config: SigningConfig,
+    precheck_only: bool,
+) -> Iterator[tuple[JwksResolver, ReplayStore | None, RevocationChecker | None]]:
+    """The three dependencies the checklist needs, or the null trio for a pre-check.
+
+    ONE :class:`VerifyOptions` construction is built on this, deliberately: two literals
+    would let the pre-check path and the verified path drift apart, which is the class of
+    duplication this seam exists to remove.
+
+    The null trio is what makes the narrowed ``none`` bucket safe to pre-check. The
+    SDK reaches ``jwks_resolver`` at ``verifier.py:256`` and every step-1 raise fires
+    before it, so an empty resolver stops execution there — no signature base, no crypto,
+    no outbound, and no database session at all. ``VerifyOptions`` declares
+    ``replay_store`` and ``revocation_checker`` as optional (``verifier.py:139-140``), so
+    the nulls are the SDK's own contract rather than an assumption about it.
+
+    WRAPS the verify call rather than merely preceding it: the replay store's
+    ``at_capacity`` / ``seen`` / ``remember`` are synchronous and the verifier calls them
+    inline, so the session has to outlive the construction.
+    """
+    if precheck_only:
+        yield StaticJwksResolver({}), None, None
+        return
+    with get_db_session() as session:
+        yield (
+            _jwks_resolver(resolution, agent_url=agent_url),
+            PostgresReplayStore(ReplayNonceRepository(session), config),
+            checker_for(resolution, config),
+        )
 
 
 def _verify_url(scope: Mapping[str, Any], headers: Mapping[str, str]) -> str:
