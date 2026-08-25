@@ -132,9 +132,9 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from dataclasses import dataclass
-from typing import Any, Literal, NoReturn, cast, get_args
+from typing import Any, Literal, NoReturn
 
-from adcp.signing.agent_resolver import AgentResolution, AgentResolverError, BrandAgentType, async_resolve_agent
+from adcp.signing.agent_resolver import AgentResolution, AgentResolverError, async_resolve_agent
 from adcp.signing.brand_authz import BrandAuthorizationResult, BrandJsonAuthorizationResolver
 from adcp.signing.canonical import split_structured_field
 from adcp.signing.errors import (
@@ -168,7 +168,6 @@ from src.core.config import CounterpartyRegistryEntry, SigningConfig, get_config
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.replay_nonce import ReplayNonceRepository
-from src.core.exceptions import AdCPConfigurationError
 from src.core.http_utils import headers_from_asgi_scope, path_from_asgi_scope
 from src.core.metrics import record_request_unsigned, record_signature_failed, record_signature_verified
 
@@ -593,42 +592,6 @@ def _bearer_token(scope: Mapping[str, Any], headers: Mapping[str, str]) -> str |
     if auth_context is not None:
         return auth_context.auth_token
     return _extract_auth_token(dict(headers))[0]
-
-
-def narrow_agent_type(agent_type: str) -> BrandAgentType:
-    """Validate a configured counterparty agent type, or refuse to start resolving.
-
-    Narrows an arbitrary ``str`` to the SDK's ``BrandAgentType`` Literal that
-    ``async_resolve_agent`` wants, refusing anything outside it.
-
-    ``SigningConfig.counterparty_agent_type`` no longer needs this: it is annotated as
-    ``BrandAgentType`` and pydantic refuses an env override naming an unresolvable type
-    at the settings boundary. The history is why the annotation exists. The field was a
-    plain ``str`` and the two call sites used ``cast(...)``, which is a RUNTIME NO-OP: a
-    typo passed validation, passed the cast, reached the resolver, matched no
-    ``agents[]`` entry in the counterparty's brand.json, and 401'd EVERY signed
-    counterparty with nothing in the logs naming the cause.
-
-    THIS IS THE SHAPE THIS PR ALREADY INTRODUCED TWO FILES AWAY.
-    :func:`~src.core.signing_contract.algorithms.narrow_alg` and ``narrow_purpose`` check
-    membership against an owned value set and raise ``AdCPConfigurationError`` BEFORE
-    casting, for exactly this reason. The values are read from the Literal itself via
-    ``get_args`` rather than re-typed, so an SDK that adds an agent type cannot leave a
-    hand-written copy behind.
-
-    Raises:
-        AdCPConfigurationError: *agent_type* is not one the SDK can resolve. Deliberately
-            fail-fast: a misconfigured deployment stops at the boundary instead of
-            refusing every counterparty that signs correctly.
-    """
-    permitted = get_args(BrandAgentType)
-    if agent_type not in permitted:
-        raise AdCPConfigurationError(
-            f"counterparty_agent_type {agent_type!r} is not a resolvable agent type; "
-            f"expected one of {permitted!r}. Left uncorrected this refuses every signed "
-            f"counterparty with a 401 that names no cause."
-        )
-    return cast(BrandAgentType, agent_type)
 
 
 def _fail_closed_bucket(posture: RequestSigningPosture, bucket: PostureBucket) -> PostureBucket:
