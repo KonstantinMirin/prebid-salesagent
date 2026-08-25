@@ -328,6 +328,45 @@ fi
 echo "Reports: $RESULTS_DIR/"
 ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
 
+# A suite that reported FEWER items than it collected did not pass -- it died
+# partway and said nothing. This is not hypothetical: an unserializable pytest
+# report kills an xdist worker, and the session then ends after relaying only
+# the tests already collected back, with a summary line reading "0 failed".
+# Measured on this branch before the fix, tests/unit at 4/8/14 workers:
+# collected 5846 but reported 5430 / 5348 / 5271, every run "0 failed".
+#
+# The delta is recorded in every suite's own JSON, so one check covers all of
+# them and cannot be regressed by whatever truncates a run next. Fails the run:
+# a truncated suite is a failed suite, and the whole point is that it must not
+# be mistakable for a green one.
+if ls "$RESULTS_DIR"/*.json >/dev/null 2>&1; then
+    _truncated="$(python3 - "$RESULTS_DIR" <<'PYEOF'
+import glob, json, os, sys
+for f in sorted(glob.glob(os.path.join(sys.argv[1], "*.json"))):
+    try:
+        summary = json.load(open(f)).get("summary", {})
+    except Exception as exc:
+        print(f"  {os.path.basename(f)}: unreadable ({exc})")
+        continue
+    collected, total = summary.get("collected"), summary.get("total")
+    if collected is None or total is None:
+        continue
+    if total < collected:
+        print(f"  {os.path.basename(f)}: collected {collected} but reported {total} "
+              f"-- {collected - total} item(s) never reported (summary claims "
+              f"{summary.get('failed', 0)} failed)")
+PYEOF
+)"
+    if [ -n "$_truncated" ]; then
+        echo ""
+        echo "ERROR: a suite reported fewer items than it collected -- the run is TRUNCATED, not green:"
+        echo "$_truncated"
+        echo "       Look for INTERNALERROR in the suite output above; an xdist worker died."
+        echo ""
+        RC=1
+    fi
+fi
+
 # Reconcile a non-zero exit against what the suites actually reported. This does
 # NOT change the exit code -- masking a failure is how the real cause of a dead
 # run became unknowable before (the `psql_admin() { ...; } || true` and the

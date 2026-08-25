@@ -14,6 +14,38 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests._xdist_report_safety import sanitize_serialized_report
+
+# ---------------------------------------------------------------------------
+# xdist wire safety — an unserializable report must not void the session
+# ---------------------------------------------------------------------------
+# pytest's _report_to_json copies report.__dict__ wholesale onto the execnet
+# wire and sanitizes only longrepr/os.PathLike/result. execnet dispatches on
+# EXACT type, so anything else a plugin attached raises DumpError, which kills
+# the worker and ends the session -- reporting only the tests already collected
+# back, with a summary line that says zero failures.
+#
+# Live instance: pytest-json-report (which tox.ini passes on every suite)
+# attaches report._json_report_extra carrying dict(record.__dict__) per captured
+# log record, and logging merges any `extra={...}` payload straight into that
+# dict. Production logs that way in ~75 places, so a mocked collaborator in a
+# PASSING unit test silently truncated 416-575 of 5846 items at 4-14 workers.
+# See tests/_xdist_report_safety.py for the full measurement.
+#
+# Registered here, at the rootdir conftest, so every suite is covered -- bdd
+# and bdd_e2e already run at 16 and 8 workers and are exposed to the same hole.
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_report_to_serializable(config, report):
+    """Replace anything execnet cannot dump, loudly, instead of dying."""
+    outcome = yield
+    data = outcome.get_result()
+    safe = sanitize_serialized_report(data, nodeid=getattr(report, "nodeid", "<unknown>"))
+    if safe is not data:
+        outcome.force_result(safe)
+
+
 # ---------------------------------------------------------------------------
 # Entity marker taxonomy — auto-applied to tests by filename / path patterns
 # ---------------------------------------------------------------------------
@@ -766,6 +798,39 @@ def benchmark(request):
 # ============================================================================
 
 
+# ---------------------------------------------------------------------------
+# Nested-pytest modules — one at a time under xdist
+# ---------------------------------------------------------------------------
+# These modules each spawn a `pytest ... --collect-only` SUBPROCESS over the
+# whole unit suite. Their timeouts were calibrated against a serial run, so with
+# N xdist workers you get up to N concurrent full-suite collections competing
+# with the N workers that spawned them. Measured on a 14-core Mac at -n 12 and
+# -n 14, `test_all_unit_tests_have_entity_markers` dies with
+#
+#     subprocess.TimeoutExpired: [... 'pytest','tests/unit/','--collect-only' ...]
+#     timed out after 60 seconds
+#
+# while passing at -n 8 and serially. Raising the timeout would hide the
+# contention rather than remove it; a shared cached collection across the six
+# would remove the duplicated work outright and is the right follow-up. Until
+# then, one xdist_group means at most ONE nested collection runs at a time,
+# whatever the worker count -- which is the property that was actually missing.
+#
+# Requires `--dist loadgroup` (tox.ini's unit env); under any other dist mode
+# the marker is inert and these simply spread out again.
+_NESTED_PYTEST_MODULES: frozenset[str] = frozenset(
+    {
+        "test_architecture_ci_bdd_shard_manifest",
+        "test_architecture_ci_suite_coverage",
+        "test_architecture_pre_commit_coverage_map",
+        "test_architecture_test_marker_coverage",
+        "test_e2e_rest_ledger_fitness",
+        "test_warning_filters",
+        "test_xdist_report_serialization",
+    }
+)
+
+
 def pytest_collection_modifyitems(config, items):
     """Auto-apply entity markers from filename/path patterns."""
     # For each test item, check filename and path against entity patterns.
@@ -795,3 +860,6 @@ def pytest_collection_modifyitems(config, items):
 
         for marker_name in _filename_cache[filename]:
             item.add_marker(getattr(pytest.mark, marker_name))
+
+        if filename in _NESTED_PYTEST_MODULES:
+            item.add_marker(pytest.mark.xdist_group("nested_pytest"))
