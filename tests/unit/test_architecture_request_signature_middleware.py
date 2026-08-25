@@ -355,3 +355,64 @@ class TestCounterpartyAgentTypeIsNarrowedNotCast:
         message = str(excinfo.value)
         assert "buyng" in message, "the refusal must name the offending value"
         assert "buying" in message, "and must show what was expected, or it is not actionable"
+
+
+class TestCounterpartyRegistryEntryIsATypeAtTheSeam:
+    """A malformed ``counterparty_registry`` entry is refused while the settings load.
+
+    ``CounterpartyRegistryEntry`` declares the four keys ``build_registry_resolution``
+    reads, so an incomplete entry cannot reach the request path. The entry WAS
+    ``dict[str, Any]``: those four subscripts raised ``KeyError`` inside a try whose
+    only handler catches ``SignatureVerificationError``, so an operator's config typo
+    escaped the handler and reached a buyer as a 500 on a signed request, rather than
+    stopping the process that loaded the typo.
+
+    ``SigningConfig`` is a ``BaseSettings`` carrying ``extra="forbid"``, which pydantic
+    propagates into the ``TypedDict`` — hence the second test: a misspelled key names
+    the misspelling itself, not merely the sibling it failed to spell.
+
+    MUTATION: widen the annotation back to ``dict[str, dict[str, Any]]`` — both tests
+    go RED because nothing raises.
+    """
+
+    @pytest.mark.arch_guard
+    def test_an_incomplete_entry_is_refused_at_config_load(self) -> None:
+        """Every absent required key is named, at construction."""
+        from pydantic import ValidationError
+
+        from src.core.config import SigningConfig
+
+        with pytest.raises(ValidationError) as excinfo:
+            SigningConfig(counterparty_registry={"kid1": {"agent_url": "https://a.example"}})
+
+        absent = {error["loc"][-1] for error in excinfo.value.errors() if error["type"] == "missing"}
+        assert absent == {"jwks_uri", "key_origin", "jwks"}, (
+            "the refusal must name every missing key, or an operator fixes one and "
+            f"rediscovers the next on the following boot; got {absent}"
+        )
+
+    @pytest.mark.arch_guard
+    def test_a_misspelled_key_names_the_misspelling(self) -> None:
+        """A typo'd key reports both the absent key and the unknown one that replaced it."""
+        from pydantic import ValidationError
+
+        from src.core.config import SigningConfig
+
+        with pytest.raises(ValidationError) as excinfo:
+            SigningConfig(
+                counterparty_registry={
+                    "kid1": {
+                        "agent_url": "https://a.example",
+                        "jwks_url": "https://a.example/jwks",
+                        "key_origin": "https://a.example",
+                        "jwks": {},
+                    }
+                }
+            )
+
+        reported = {(error["type"], error["loc"][-1]) for error in excinfo.value.errors()}
+        assert ("missing", "jwks_uri") in reported, f"the absent key must be named; got {reported}"
+        assert ("extra_forbidden", "jwks_url") in reported, (
+            f"the misspelling must be named too, or the operator reads 'jwks_uri missing' "
+            f"while looking straight at a line that appears to set it; got {reported}"
+        )
