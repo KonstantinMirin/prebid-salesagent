@@ -613,7 +613,21 @@ class CircuitBreakerMixin(LocalOriginMixin):
         test observes is what production exposes — a read of the private dict
         could report state production has no way to surface.
         """
-        return self.get_service().get_circuit_breaker_state(endpoint_url or self.webhook_url)  # type: ignore[attr-defined]
+        url = endpoint_url or self.webhook_url
+        if self.is_e2e:  # type: ignore[attr-defined]
+            # The breaker lives in the SERVER process and is process-local by
+            # design. get_service() here would build a fresh one in the TEST
+            # process, whose breakers are empty whatever the server did — which is
+            # why this was declared unrealizable over e2e_rest. Read the server's
+            # own verdict off the wire instead (salesagent-pldmk.39).
+            import httpx  # noqa: TID251 — test-side HTTP, not production egress
+
+            base = self.e2e_config.base_url  # type: ignore[attr-defined]
+            resp = httpx.get(f"{base}/debug/circuit-breaker", params={"endpoint_url": url}, timeout=10.0)
+            resp.raise_for_status()
+            body = resp.json()
+            return CircuitState(body["state"]), int(body["failure_count"])
+        return self.get_service().get_circuit_breaker_state(url)  # type: ignore[attr-defined]
 
     def call_send(
         self,
@@ -734,16 +748,15 @@ class CircuitBreakerMixin(LocalOriginMixin):
             f"schedule was entered {backoff_waits} time(s) — the destination was dialled, not refused"
         )
 
-    @realize_e2e(
-        e2e_unsupported(
-            "get_service() constructs a fresh in-process WebhookDeliveryService under e2e_rest, "
-            "disconnected from the live server's real circuit-breaker state — no wire surface"
-        )
-    )
     def assert_circuit_breaker_failure_recorded(self, endpoint_key: str) -> None:
         """Prove the circuit breaker recorded a failure for *endpoint_key*.
 
-        In-process only — declared e2e-unsupported (see the decorator).
+        Graded on EVERY transport now, e2e_rest included. It was declared
+        unrealizable there because ``get_service()`` builds a fresh in-process
+        service whose breakers are empty whatever the server did;
+        :meth:`breaker_snapshot` now reads the server's own verdict off
+        ``/debug/circuit-breaker`` in e2e mode, so there is a wire surface
+        (salesagent-pldmk.39).
 
         Reads through the production public getter, which returns ``(CLOSED, 0)``
         for an endpoint it has NO breaker for. So "no breaker was ever created"

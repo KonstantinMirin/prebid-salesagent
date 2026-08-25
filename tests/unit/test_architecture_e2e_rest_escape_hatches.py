@@ -243,15 +243,6 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "the seam's BR-RULE-029 retry-schedule sleep count is process-local "
             "(env.mock['sleep']), not observable across the Docker HTTP boundary",
         ),
-        # salesagent-47n9.3: get_service() under e2e_rest is a fresh, in-process
-        # WebhookDeliveryService never touched by the live server's actual
-        # delivery — service._circuit_breakers has no wire surface at all.
-        (
-            "tests/harness/_mixins.py",
-            "assert_circuit_breaker_failure_recorded",
-            "get_service() constructs a fresh in-process WebhookDeliveryService under e2e_rest, "
-            "disconnected from the live server's real circuit-breaker state — no wire surface",
-        ),
         (
             "tests/harness/creative_formats.py",
             "_validate_registry_formats",
