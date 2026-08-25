@@ -1053,6 +1053,45 @@ def is_media_buy_seller_confirmed(status: str | None) -> bool:
 class MediaBuy(Base):
     __tablename__ = "media_buys"
 
+    #: Columns the repository owns outright. ``revision`` is the buyer's concurrency
+    #: token and ``confirmed_at`` is the seller-commitment instant; both are derived
+    #: from a write the repository performs, never supplied by a caller.
+    _SEAM_MANAGED_FIELDS = frozenset({"confirmed_at", "revision"})
+
+    def __init__(self, **kwargs: object) -> None:
+        """Reject construction that presets a repository-managed column.
+
+        A row built with ``confirmed_at`` already set never passed
+        ``_stamp_confirmation_if_needed``, and one built with a chosen ``revision``
+        never took part in the concurrency protocol the token exists for. Both were
+        previously reachable and only *detected*, by an AST fixture that had to know
+        every spelling of a constructor call; a spelling it did not know was a silent
+        hole, and ``MediaBuy(**kwargs)`` was one, because a double-star call carries a
+        single keyword whose ``arg`` is ``None``.
+
+        Raising here removes the shape instead of recognising it, so no spelling has to
+        be enumerated: ``MediaBuy(confirmed_at=...)``, ``models.MediaBuy(revision=...)``
+        and ``MB(**{"revision": 1})`` all fail identically.
+
+        The repository is not exempted and does not need to be — it constructs the row
+        without these fields and then stamps them by attribute assignment, which is
+        where the value is actually derived.
+        """
+        # ``None`` is not a preset. A caller writing ``confirmed_at=None`` is stating the
+        # column's own default, which no more bypasses the stamp than omitting it does;
+        # refusing it would make the guard about the KEY rather than about the value, and
+        # a test that opts out of factory seeding by passing an explicit ``None`` would
+        # have to work around the model instead of being served by it.
+        preset = {field for field in self._SEAM_MANAGED_FIELDS if kwargs.get(field) is not None}
+        if preset:
+            raise TypeError(
+                f"MediaBuy cannot be constructed with repository-managed field(s) "
+                f"{sorted(preset)}: revision is assigned by the concurrency protocol and "
+                f"confirmed_at by _stamp_confirmation_if_needed. Construct the row without "
+                f"them and let MediaBuyRepository derive them."
+            )
+        super().__init__(**kwargs)
+
     media_buy_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(
         String(50), ForeignKey("tenants.tenant_id", ondelete="CASCADE"), nullable=False

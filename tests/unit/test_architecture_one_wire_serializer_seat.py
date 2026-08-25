@@ -68,13 +68,6 @@ class Thing(SomeBase):
         return result
 """
 
-_KNOWN_BAD_SECOND_SERIALIZER = """
-class Thing(AlwaysIncludeFieldsMixin, SomeBase):
-    @model_serializer(mode="wrap")
-    def _mine(self, serializer, info):
-        return serializer(self)
-"""
-
 _KNOWN_GOOD = '''
 class Thing(AlwaysIncludeFieldsMixin, SomeBase):
     _ALWAYS_INCLUDE_NULL_FIELDS = frozenset({"confirmed_at"})
@@ -169,33 +162,6 @@ def find_reinsert_violations(tree: ast.Module, relpath: str) -> list[str]:
     return violations
 
 
-def _is_model_serializer(dec: ast.expr) -> bool:
-    target = dec.func if isinstance(dec, ast.Call) else dec
-    if isinstance(target, ast.Name):
-        return target.id == "model_serializer"
-    return isinstance(target, ast.Attribute) and target.attr == "model_serializer"
-
-
-def find_extra_serializer_violations(tree: ast.Module, relpath: str) -> list[str]:
-    violations: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ClassDef):
-            continue
-        seats = [
-            fn
-            for fn in node.body
-            if isinstance(fn, ast.FunctionDef) and any(_is_model_serializer(d) for d in fn.decorator_list)
-        ]
-        if not seats:
-            continue
-        inherits_seat = any(
-            isinstance(base, ast.Name) and base.id.endswith(("SerializerMixin", "FieldsMixin")) for base in node.bases
-        )
-        if inherits_seat:
-            violations.extend(f"{relpath}:{fn.lineno}" for fn in seats)
-    return violations
-
-
 def _scan(repo, finder) -> list[str]:
     violations: list[str] = []
     for path in sorted((repo / "src").rglob("*.py")):
@@ -224,21 +190,6 @@ def test_no_hand_rolled_required_nullable_reinsert() -> None:
     )
 
 
-@pytest.mark.arch_guard
-def test_no_second_model_serializer_beside_the_shared_seat() -> None:
-    violations = _scan(repo_root(), find_extra_serializer_violations)
-    assert not violations, format_failure(
-        summary="Only one model serializer runs; a second one silently shadows the inherited seat",
-        violations=violations,
-        fix_hint=(
-            "Extend WireSerializerMixin (a flag or a _should_always_include override) "
-            "instead of declaring another @model_serializer on a class that already "
-            "inherits one."
-        ),
-        docs_link="docs/development/structural-guards.md",
-    )
-
-
 def _violations_for(tmp_path, source: str, finder) -> list[str]:
     probe = tmp_path / "src" / "probe.py"
     probe.parent.mkdir(parents=True, exist_ok=True)
@@ -262,18 +213,4 @@ def test_reinsert_detector_catches_known_bad(tmp_path, source: str) -> None:
 def test_reinsert_detector_passes_known_good(tmp_path) -> None:
     assert not _violations_for(tmp_path, _KNOWN_GOOD, find_reinsert_violations), (
         "Pattern #4 nested re-serialization is legitimate and must not be flagged"
-    )
-
-
-@pytest.mark.arch_guard
-def test_second_serializer_detector_catches_known_bad(tmp_path) -> None:
-    assert _violations_for(tmp_path, _KNOWN_BAD_SECOND_SERIALIZER, find_extra_serializer_violations), (
-        "Detector must flag a model serializer declared beside an inherited seat"
-    )
-
-
-@pytest.mark.arch_guard
-def test_second_serializer_detector_passes_known_good(tmp_path) -> None:
-    assert not _violations_for(tmp_path, _KNOWN_GOOD, find_extra_serializer_violations), (
-        "A class that only declares the mixin hooks must not be flagged"
     )

@@ -110,9 +110,6 @@ from adcp.types import (
     CppPricingOption,
     CpvPricingOption,
     FlatRatePricingOption,
-    GeoCountry,
-    GeoMetro,
-    GeoRegion,
     TargetingOverlay,
     VcpmPricingOption,  # V3: consolidated from VcpmAuctionPricingOption/VcpmFixedRatePricingOption
 )
@@ -124,9 +121,6 @@ from adcp.types import GetSignalsRequest as LibraryGetSignalsRequest
 from adcp.types import GetSignalsResponse as LibraryGetSignalsResponse
 from adcp.types import Measurement as LibraryMeasurement
 from adcp.types import PlatformDeployment as LibraryPlatformDeployment
-from adcp.types import (
-    PostalArea as GeoPostalArea,  # adcp 6.6 renamed GeoPostalArea → PostalArea (spec 3.1.1 postal-area.json title)
-)
 from adcp.types import Property as LibraryProperty
 from adcp.types import Signal as LibrarySignal
 from adcp.types import SignalFilters as LibrarySignalFilters
@@ -1452,12 +1446,6 @@ class Targeting(TargetingOverlay):
     # Override frequency_cap to use our extended FrequencyCap with scope
     frequency_cap: FrequencyCap | None = None
 
-    # --- Geo exclusion extensions (not in library) ---
-    geo_countries_exclude: list[GeoCountry] | None = None  # type: ignore[assignment]
-    geo_regions_exclude: list[GeoRegion] | None = None  # type: ignore[assignment]
-    geo_metros_exclude: list[GeoMetro] | None = None  # type: ignore[assignment]
-    geo_postal_areas_exclude: list[GeoPostalArea] | None = None
-
     # NOTE: property_list, collection_list, and collection_list_exclude are inherited from
     # TargetingOverlay (added natively in adcp 4.3). CollectionListReference is re-exported
     # from src.core.schemas (see import above) so callers can use a single import path.
@@ -2626,7 +2614,6 @@ class Signal(LibrarySignal):
     inherited from AdCP spec.
 
     Local overrides:
-    - signal_type: Literal instead of enum (string serialization in model_dump)
     - deployments: local SignalDeployment (has scope, decisioning_platform_segment_id)
     - Internal fields with Field(exclude=True): tenant_id, created_at, updated_at, metadata
     """
@@ -2634,7 +2621,6 @@ class Signal(LibrarySignal):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     # Override types that differ from library
-    signal_type: Literal["marketplace", "custom", "owned"] = Field(..., description="Type of signal")  # type: ignore[assignment]
     deployments: list[SignalDeployment] = Field(..., description="Array of platform deployments")  # type: ignore[assignment]
 
     # Internal fields (not in AdCP spec, excluded from serialization)

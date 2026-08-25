@@ -500,6 +500,40 @@ class TestConfirmedAtStamp:
 
         _assert_stamped_between(_confirmed_at(repo, media_buy.media_buy_id), t0, t1)
 
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            pytest.param({"confirmed_at": datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)}, id="confirmed_at"),
+            pytest.param({"revision": 99}, id="revision"),
+            pytest.param(
+                {"revision": 1, "confirmed_at": datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)}, id="both"
+            ),
+        ],
+    )
+    def test_a_row_cannot_be_born_with_a_repository_managed_column_set(self, kwargs):
+        """Construction presetting ``confirmed_at``/``revision`` is refused by the model.
+
+        This grades a REMOVAL, not a detection. Before the ``__init__`` override, a row
+        could be constructed already committed — never passing
+        ``_stamp_confirmation_if_needed`` — and the only thing standing against it was an
+        AST fixture that had to recognise every spelling of a constructor call. It did not
+        recognise ``MediaBuy(**kwargs)``, which is the spelling the repository itself uses,
+        because a double-star call carries one keyword whose ``arg`` is ``None``.
+
+        The point of asserting here rather than in the AST guard is that no spelling is
+        enumerated: whatever syntax reaches the constructor, the constructor refuses it.
+        """
+        with pytest.raises(TypeError, match="repository-managed field"):
+            MediaBuy(media_buy_id="mb_seam", tenant_id="t", **kwargs)
+
+    def test_a_clean_construction_is_still_allowed(self):
+        """The override must refuse the two columns and nothing else."""
+        media_buy = MediaBuy(media_buy_id="mb_clean", tenant_id="t", status="pending_approval")
+
+        assert media_buy.media_buy_id == "mb_clean"
+        assert media_buy.confirmed_at is None
+        assert media_buy.revision is None
+
     def test_confirmed_at_is_immutable_to_callers(self, repo_env):
         """Write-once is only a guarantee if the generic field writer refuses it too.
 

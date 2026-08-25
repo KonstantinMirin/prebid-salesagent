@@ -53,14 +53,8 @@ _KNOWN_BAD_SNIPPETS = {
     "annotated_assign": "def f(media_buy):\n    media_buy.revision: int = 7",
     "tuple_target": "def f(mb, now):\n    mb.confirmed_at, other = now, None",
     "setattr_literal": 'def f(mb, now):\n    setattr(mb, "confirmed_at", now)',
-    "constructor_keyword": "def f(now):\n    return MediaBuy(confirmed_at=now, revision=99)",
-    "constructor_keyword_qualified": "def f(now):\n    return models.MediaBuy(revision=7)",
+    "core_update_values": "def f(now):\n    return update(MediaBuy).values(confirmed_at=now)",
 }
-
-# The ORM row whose columns the repository owns. Construction is a write: a row
-# built with ``confirmed_at`` already set never passed ``_stamp_confirmation_if_needed``,
-# which is the state the seam exists to prevent.
-ORM_MODEL_NAME = "MediaBuy"
 
 
 def _attribute_targets(node: ast.AST) -> list[ast.Attribute]:
@@ -80,25 +74,24 @@ def _attribute_targets(node: ast.AST) -> list[ast.Attribute]:
     return found
 
 
-def _called_name(func: ast.expr) -> str | None:
-    """The bare name a call targets: ``MediaBuy`` for both ``MediaBuy`` and ``models.MediaBuy``."""
-    if isinstance(func, ast.Name):
-        return func.id
-    if isinstance(func, ast.Attribute):
-        return func.attr
-    return None
+def _is_core_dml_with_guarded_field(node: ast.AST) -> bool:
+    """True for ``update(MediaBuy).values(confirmed_at=...)`` and the ``insert`` form.
 
+    Core DML bypasses ORM instrumentation entirely, so a guarded field written this way
+    never passes ``_stamp_confirmation_if_needed`` and never bumps the revision — the
+    same hole as constructing the row with the field pre-set, reached by a different
+    spelling.
 
-def _is_orm_construction_with_guarded_field(node: ast.AST) -> bool:
-    """True for ``MediaBuy(confirmed_at=...)`` / ``MediaBuy(revision=...)``, however qualified.
-
-    Both conditions are load-bearing. The name alone is not enough: ``MediaBuy`` also
-    names an adcp capabilities DTO (``src/core/tools/capabilities.py``) and a schema stub
-    (``src/adapters/xandr.py``), neither of which is the row. The guarded KEYWORD is what
-    identifies the ORM model — no other ``MediaBuy`` declares either field, so passing one
-    to them raises ``TypeError`` rather than writing anything.
+    Keyed on the guarded KEYWORD rather than on the model class, which is what makes it
+    alias-proof without resolving anything: ``update(MediaBuy)``, ``update(MB)`` and
+    ``update(models.MediaBuy)`` all reach the same matcher, because the keyword is the
+    part that cannot be renamed. Measured against the tree: 55 ``.values(...)`` calls in
+    ``src/``, none of them passing a guarded keyword, so this admits no false positives
+    and needs no allowlist.
     """
-    if not isinstance(node, ast.Call) or _called_name(node.func) != ORM_MODEL_NAME:
+    if not isinstance(node, ast.Call):
+        return False
+    if not isinstance(node.func, ast.Attribute) or node.func.attr != "values":
         return False
     return any(kw.arg in GUARDED_FIELDS for kw in node.keywords)
 
@@ -107,11 +100,16 @@ def find_media_buy_write_seam_violations(tree: ast.Module) -> list[int]:
     """Return line numbers of writes to a guarded field in *tree*.
 
     Catches attribute assignment (plain, augmented, annotated, and unpacked), the
-    ``setattr(obj, "<field>", ...)`` string-literal escape hatch, and construction of the
-    ORM row with a guarded field as a constructor keyword. The last shape is a write the
-    guard originally missed: assignment and ``setattr`` model mutation of an existing row,
-    but a row can be born with ``confirmed_at`` already set, having never passed
-    ``_stamp_confirmation_if_needed``.
+    ``setattr(obj, "<field>", ...)`` string-literal escape hatch, and Core DML —
+    ``update(MediaBuy).values(confirmed_at=...)`` — which bypasses ORM instrumentation
+    entirely.
+
+    Construction is deliberately NOT scanned any more. It used to be, and that matcher had
+    to recognise every spelling of a constructor call; it never recognised
+    ``MediaBuy(**kwargs)``, the spelling the repository itself uses, because a double-star
+    call carries one keyword whose ``arg`` is ``None``. ``MediaBuy.__init__`` now refuses
+    the guarded fields outright, so the shape cannot be written at all and there is no
+    spelling left to enumerate.
     """
     lines: list[int] = []
     for node in ast.walk(tree):
@@ -125,7 +123,7 @@ def find_media_buy_write_seam_violations(tree: ast.Module) -> list[int]:
             and node.args[1].value in GUARDED_FIELDS
         ):
             lines.append(node.lineno)
-        if _is_orm_construction_with_guarded_field(node):
+        if _is_core_dml_with_guarded_field(node):
             lines.append(node.lineno)
     return sorted(lines)
 

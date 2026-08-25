@@ -26,6 +26,40 @@ class MediaBuyFactory(factory.alchemy.SQLAlchemyModelFactory):
         sqlalchemy_session = None
         sqlalchemy_session_persistence = "commit"
 
+    # ``MediaBuy.__init__`` refuses ``confirmed_at``/``revision`` outright, so a row
+    # cannot be born already committed without passing the repository's stamp. The
+    # factory still needs to seed those columns — a test grading listing or concurrency
+    # has to start from a row in a state production reaches — so it takes the route the
+    # repository takes: construct without them, then assign. Both doors are covered,
+    # because ``.build()`` and ``.create()`` reach the model through different hooks.
+    #
+    # This deliberately adds NO escape hatch to the model. An exemption keyed on "the
+    # caller is a factory" would have to enumerate its callers, and the guard this
+    # replaces failed precisely because enumeration always misses a spelling.
+    @staticmethod
+    def _seed_seam_fields(instance, seam):
+        """Apply repository-managed columns by assignment, the way the repository does."""
+        for field, value in seam.items():
+            setattr(instance, field, value)
+        return instance
+
+    @classmethod
+    def _split_seam_kwargs(cls, kwargs):
+        return {field: kwargs.pop(field) for field in MediaBuy._SEAM_MANAGED_FIELDS if field in kwargs}
+
+    @classmethod
+    def _build(cls, model_class, *args, **kwargs):
+        seam = cls._split_seam_kwargs(kwargs)
+        return cls._seed_seam_fields(super()._build(model_class, *args, **kwargs), seam)
+
+    @classmethod
+    def _create(cls, model_class, *args, **kwargs):
+        seam = cls._split_seam_kwargs(kwargs)
+        instance = cls._seed_seam_fields(super()._create(model_class, *args, **kwargs), seam)
+        if seam and cls._meta.sqlalchemy_session is not None:
+            cls._meta.sqlalchemy_session.flush()
+        return instance
+
     tenant = SubFactory(TenantFactory)
     principal = SubFactory(PrincipalFactory, tenant=factory.SelfAttribute("..tenant"))
 

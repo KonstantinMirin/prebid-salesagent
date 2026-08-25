@@ -46,6 +46,7 @@ from adcp.types.generated_poc.media_buy.get_media_buys_response import (
     CreativeApproval as LibraryGetMediaBuysCreativeApproval,
 )
 from pydantic import (
+    AwareDatetime,
     ConfigDict,
     Field,
     field_validator,
@@ -154,8 +155,9 @@ class Creative(LibraryCreative):
         default=CreativeStatus.pending_review,
         description="Workflow approval status",
     )
-    created_date: datetime = Field(default_factory=lambda: datetime.now(tz=UTC), description="Creation timestamp")
-    updated_date: datetime = Field(default_factory=lambda: datetime.now(tz=UTC), description="Update timestamp")
+    # AwareDatetime, matching the pin: a naive value is schema-invalid here.
+    created_date: AwareDatetime = Field(default_factory=lambda: datetime.now(tz=UTC), description="Creation timestamp")
+    updated_date: AwareDatetime = Field(default_factory=lambda: datetime.now(tz=UTC), description="Update timestamp")
     # Override assets to untyped dict (our DB stores arbitrary asset dicts, not typed models)
     assets: dict[str, Any] | None = Field(default=None, description="Creative assets")
 
@@ -336,9 +338,6 @@ class SyncCreativesRequest(LibrarySyncCreativesRequest):
     Local overrides:
     - creatives: list[Creative] instead of list[CreativeAsset] (our Creative extends
       LibraryCreative, which has a richer schema than CreativeAsset)
-    - push_notification_config: kept as dict[str, Any] | None because the library's
-      PushNotificationConfig requires 'authentication' and 'url' fields that aren't
-      enforced in our current implementation
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -352,10 +351,6 @@ class SyncCreativesRequest(LibrarySyncCreativesRequest):
     creatives: list[Creative] = Field(
         ..., min_length=1, max_length=100, description="Array of creative assets to sync (create or update)"
     )  # type: ignore[assignment]
-    push_notification_config: dict[str, Any] | None = Field(  # type: ignore[assignment]
-        None,
-        description="Application-level webhook config (NOTE: Protocol-level push notifications via A2A/MCP transport take precedence)",
-    )
 
 
 class SyncSummary(SalesAgentBaseModel):

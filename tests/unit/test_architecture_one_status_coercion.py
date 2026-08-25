@@ -61,16 +61,29 @@ def confirmed(status):
 """
 
 
-def find_direct_construction(tree: ast.Module, relpath: str) -> list[str]:
-    """``PersistedMediaBuyStatus(...)`` called as a constructor.
+def _constructs_status(func: ast.expr) -> bool:
+    """Whether *func* names the status class itself, bare or module-qualified.
 
-    Attribute calls (``PersistedMediaBuyStatus.parse(...)``) are a different AST
-    shape and are not matched, which is the point.
+    ``PersistedMediaBuyStatus(x)`` is an ``ast.Name``; ``models.PersistedMediaBuyStatus(x)``
+    is an ``ast.Attribute`` whose ``attr`` is the class name. Matching only the first left
+    the qualified spelling — the one a module-style import produces — invisible to this
+    guard, which is a hole rather than a policy.
+
+    ``PersistedMediaBuyStatus.parse(...)`` is also an ``ast.Attribute``, but its ``attr``
+    is ``parse``, not the class name, so it still does not match. That exclusion is the
+    point of the guard and is preserved by construction rather than by a special case.
     """
+    if isinstance(func, ast.Name):
+        return func.id == "PersistedMediaBuyStatus"
+    return isinstance(func, ast.Attribute) and func.attr == "PersistedMediaBuyStatus"
+
+
+def find_direct_construction(tree: ast.Module, relpath: str) -> list[str]:
+    """``PersistedMediaBuyStatus(...)`` called as a constructor, however qualified."""
     return [
         f"{relpath}:{node.lineno}"
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "PersistedMediaBuyStatus"
+        if isinstance(node, ast.Call) and _constructs_status(node.func)
     ]
 
 

@@ -1648,8 +1648,8 @@ class TestAdCPContract:
             tags=["sports", "premium"],
             # Internal fields (added by sales agent during processing)
             principal_id="principal_456",
-            created_date=datetime.now(),
-            updated_date=datetime.now(),
+            created_date=datetime.now(tz=UTC),
+            updated_date=datetime.now(tz=UTC),
         )
 
         # Test with spec-compliant fields only (adcp 3.9)
@@ -1875,8 +1875,8 @@ class TestAdCPContract:
             # Internal fields
             principal_id="principal_1",
             status="approved",
-            created_date=datetime.now(),
-            updated_date=datetime.now(),
+            created_date=datetime.now(tz=UTC),
+            updated_date=datetime.now(tz=UTC),
         )
 
         creative2 = Creative(
@@ -1891,8 +1891,8 @@ class TestAdCPContract:
             # Internal fields
             principal_id="principal_1",
             status="pending_review",
-            created_date=datetime.now(),
-            updated_date=datetime.now(),
+            created_date=datetime.now(tz=UTC),
+            updated_date=datetime.now(tz=UTC),
         )
 
         # Response Pagination in adcp 3.6.0: has_more (required), cursor/total_count (optional)
