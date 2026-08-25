@@ -164,7 +164,7 @@ from adcp.signing.verifier import (
 from starlette.responses import Response
 
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
-from src.core.config import SigningConfig, get_config
+from src.core.config import CounterpartyRegistryEntry, SigningConfig, get_config
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.replay_nonce import ReplayNonceRepository
@@ -598,11 +598,15 @@ def _bearer_token(scope: Mapping[str, Any], headers: Mapping[str, str]) -> str |
 def narrow_agent_type(agent_type: str) -> BrandAgentType:
     """Validate a configured counterparty agent type, or refuse to start resolving.
 
-    ``SigningConfig.counterparty_agent_type`` is a plain ``str`` in pydantic-settings
-    (``config.py`` :256) and therefore ENV-OVERRIDABLE, while ``async_resolve_agent`` wants
-    the SDK's ``BrandAgentType`` Literal. The two call sites used ``cast(...)``, which is a
-    RUNTIME NO-OP: a typo passed validation, passed the cast, reached the resolver, matched
-    no ``agents[]`` entry in the counterparty's brand.json, and 401'd EVERY signed
+    Narrows an arbitrary ``str`` to the SDK's ``BrandAgentType`` Literal that
+    ``async_resolve_agent`` wants, refusing anything outside it.
+
+    ``SigningConfig.counterparty_agent_type`` no longer needs this: it is annotated as
+    ``BrandAgentType`` and pydantic refuses an env override naming an unresolvable type
+    at the settings boundary. The history is why the annotation exists. The field was a
+    plain ``str`` and the two call sites used ``cast(...)``, which is a RUNTIME NO-OP: a
+    typo passed validation, passed the cast, reached the resolver, matched no
+    ``agents[]`` entry in the counterparty's brand.json, and 401'd EVERY signed
     counterparty with nothing in the logs naming the cause.
 
     THIS IS THE SHAPE THIS PR ALREADY INTRODUCED TWO FILES AWAY.
@@ -866,17 +870,17 @@ async def _buffer_body(receive: Receive, max_bytes: int) -> _BufferedBody:
 # ---------------------------------------------------------------------------
 
 
-def build_registry_resolution(entry: Mapping[str, Any]) -> AgentResolution:
+def build_registry_resolution(entry: CounterpartyRegistryEntry) -> AgentResolution:
     """The :class:`AgentResolution` a configured counterparty registry entry projects to.
 
     #1291 B4. Same shape the brand.json walk produces below — ``jwks_uri`` and
     ``key_origins`` consistent with each other — so :func:`_jwks_resolver` marks
     it ``brand_json`` and the spec's step-7 key-origin consistency check stays
     engaged for a registry-resolved counterparty exactly as it is for a walked
-    one. A registry entry missing one of the four required keys raises
-    ``KeyError`` here, at the point it is actually used, rather than at config
-    parse time (:meth:`SigningConfig.validate_counterparty_registry_keys`
-    checks only the KEY shape, not the entry shape).
+    one. The four subscripts below cannot raise ``KeyError``:
+    :class:`~src.core.config.CounterpartyRegistryEntry` is the parameter's type
+    and the setting's, so an entry missing one of them is refused at config
+    load, where an operator sees it, and never reaches a request.
     """
     agent_url = entry["agent_url"]
     jwks_uri = entry["jwks_uri"]
@@ -968,7 +972,7 @@ async def _resolution_for(
             agent_url,
             # The agents that sign requests TO a sales agent are the buy side, so the
             # brand.json entry to match is the counterparty's buying agent.
-            agent_type=narrow_agent_type(config.counterparty_agent_type),
+            agent_type=config.counterparty_agent_type,
         )
     except AgentResolverError as exc:
         mapped = _map_agent_resolver_error(exc)
@@ -1146,7 +1150,7 @@ async def _check_brand_authorization(resolution: AgentResolution, config: Signin
         result = await resolver.check(
             agent_url=resolution.agent_url,
             brand_domain=host_from(resolution.brand_json_url),
-            agent_type=narrow_agent_type(config.counterparty_agent_type),
+            agent_type=config.counterparty_agent_type,
             brand_id=None,
         )
     except Exception as exc:

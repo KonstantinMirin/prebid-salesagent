@@ -5,12 +5,12 @@ management using environment variables.
 """
 
 import os
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from src.core.signing_contract import CACHE_MAX_AGE_SECONDS
+from src.core.signing_contract import CACHE_MAX_AGE_SECONDS, BrandAgentType
 
 # AdCP 3.1.1 `security.mdx` §per-keyid cap, restated by the signed-requests test-kit
 # as `production_min_per_keyid_cap_requests: 1000000`.
@@ -18,6 +18,25 @@ _PRODUCTION_MIN_PER_KEYID_CAP = 1_000_000
 
 # Characters that make an override key a PATTERN rather than one counterparty's keyid.
 _KEYID_PATTERN_CHARS = "*?%[]"
+
+
+class CounterpartyRegistryEntry(TypedDict):
+    """One configured counterparty's key material, as the request path consumes it.
+
+    The four keys are exactly what
+    :func:`~src.core.signing.request_verifier_middleware.build_registry_resolution`
+    reads. Declaring them here makes the settings boundary refuse a malformed
+    entry, so the request path cannot meet one: ``SigningConfig`` is a
+    ``BaseSettings`` with ``extra="forbid"``, which pydantic propagates into this
+    ``TypedDict``, so a missing key raises ``missing`` and a misspelled one
+    raises both ``missing`` for the key it failed to spell and
+    ``extra_forbidden`` naming the misspelling.
+    """
+
+    agent_url: str
+    jwks_uri: str
+    key_origin: str
+    jwks: dict[str, Any]
 
 
 def _validate_explicit_keyid(key: str, field_name: str) -> None:
@@ -200,7 +219,7 @@ class SigningConfig(BaseSettings):
     )
 
     # -- Configured counterparty registry (#1291 B4) -----------------------
-    counterparty_registry: dict[str, dict[str, Any]] = Field(
+    counterparty_registry: dict[str, CounterpartyRegistryEntry] = Field(
         default_factory=dict,
         description=(
             "Per-keyid registered counterparty entries ({agent_url, jwks_uri, key_origin, jwks}), "
@@ -253,12 +272,16 @@ class SigningConfig(BaseSettings):
             "from a counterparty with a broken brand.json starts a fresh 3-hop outbound walk"
         ),
     )
-    counterparty_agent_type: str = Field(
+    counterparty_agent_type: BrandAgentType = Field(
         default="buying",
         description=(
             "brand.json agents[] type used to resolve a signing counterparty's JWKS. The agents "
             "that sign requests TO a sales agent are the buy side, so their brand.json entry is "
-            "the buying agent, not the sales one"
+            "the buying agent, not the sales one. Typed as the SDK's Literal rather than str, so "
+            "an env override naming a type the resolver cannot resolve is refused HERE, at the "
+            "settings boundary, instead of 401-ing every signed counterparty with nothing naming "
+            "the cause. The refusal reads the permitted set from the Literal itself, so an SDK "
+            "that adds an agent type cannot leave a hand-written copy behind"
         ),
     )
     # There is deliberately NO `allow_private_destinations` knob. Plan step 7 proposed
@@ -435,15 +458,15 @@ class SigningConfig(BaseSettings):
     @field_validator("counterparty_registry")
     @classmethod
     def validate_counterparty_registry_keys(
-        cls, v: dict[str, dict[str, Any]], info: ValidationInfo
-    ) -> dict[str, dict[str, Any]]:
+        cls, v: dict[str, CounterpartyRegistryEntry], info: ValidationInfo
+    ) -> dict[str, CounterpartyRegistryEntry]:
         """Registry entries are keyed by explicit keyid too — same rule as the override maps.
 
-        No value-shape check here: the four required keys (agent_url, jwks_uri,
-        key_origin, jwks) are asserted by
-        request_verifier_middleware.build_registry_resolution at the point a
-        registry entry is actually used, which is a KeyError at construction from
-        production config, not a schema the operator round-trips.
+        Only the KEY shape is checked here. The VALUE shape needs no check,
+        because :class:`CounterpartyRegistryEntry` is the annotation: pydantic
+        refuses a malformed entry while building the field, before this runs. A
+        loop restating the four required keys would re-derive what the type
+        already enforces.
         """
         for key in v:
             _validate_explicit_keyid(key, info.field_name or "")

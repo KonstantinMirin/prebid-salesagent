@@ -37,6 +37,13 @@ import secrets
 from datetime import datetime
 from typing import Literal, cast
 
+# ``BrandAgentType`` is re-exported for the same reason the value-sets live here:
+# ``src.core.config`` types ``counterparty_agent_type`` with it, and the boundary guard
+# forbids a caller outside the layer importing ``adcp.signing`` directly, because the
+# layer owns the signing contract and callers never see whether the SDK or a vendored
+# copy provides the Literal. ``signing.request_verifier_middleware`` cannot be its home:
+# it imports ``src.core.config`` back, which is the cycle documented below.
+from adcp.signing.agent_resolver import BrandAgentType as BrandAgentType
 from adcp.signing.crypto import ALG_ED25519, ALG_ES256, ALLOWED_ALGS
 from adcp.signing.provider import SigningAlgorithm
 

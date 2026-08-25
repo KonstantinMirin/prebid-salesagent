@@ -296,22 +296,22 @@ class TestAllowlistTiedToRouteTable:
 class TestCounterpartyAgentTypeIsNarrowedNotCast:
     """A misconfigured ``counterparty_agent_type`` fails FAST, not as a blanket 401.
 
-    ``SigningConfig.counterparty_agent_type`` is a plain ``str`` in pydantic-settings
-    (``config.py`` :256) and therefore env-overridable, while ``async_resolve_agent`` wants
-    the SDK's ``BrandAgentType`` Literal. Both call sites used ``cast(...)`` — a RUNTIME
-    NO-OP. A typo passed validation, passed the cast, reached the resolver, matched no
-    ``agents[]`` entry in the counterparty's brand.json, and 401'd EVERY signed
-    counterparty with nothing naming the cause.
+    ``SigningConfig.counterparty_agent_type`` is annotated as the SDK's ``BrandAgentType``
+    Literal, so pydantic refuses an env override naming an unresolvable type while
+    constructing the settings. The field WAS a plain ``str`` and both call sites used
+    ``cast(...)`` — a RUNTIME NO-OP. A typo passed validation, passed the cast, reached
+    the resolver, matched no ``agents[]`` entry in the counterparty's brand.json, and
+    401'd EVERY signed counterparty with nothing naming the cause.
 
-    THIS PR INTRODUCED THE CORRECT SHAPE TWO FILES AWAY AND THEN VIOLATED IT:
     ``narrow_alg`` / ``narrow_purpose`` (``signing_contract/algorithms.py`` :84, :96) check
     membership against an owned value set and raise ``AdCPConfigurationError`` BEFORE
-    casting. ``narrow_agent_type`` is that shape, applied here.
+    casting. ``narrow_agent_type`` is that shape for a caller holding an arbitrary ``str``.
 
-    THE BEHAVIOUR CHANGE IS THE POINT: a bad config now stops at the boundary instead of
-    silently refusing correct counterparties. MUTATION: drop the membership check and
-    return ``cast(...)`` directly — ``test_a_typo_is_refused_at_the_boundary`` goes RED
-    because nothing raises.
+    Two enforcement points, so two graders. ``test_a_typo_is_refused_at_the_boundary``
+    grades the helper; ``test_the_settings_boundary_refuses_a_typo`` grades the
+    annotation, which is where an env override actually lands. MUTATION: widen the
+    annotation back to ``str`` — the settings-boundary test goes RED because nothing
+    raises, while the helper test stays green, which is why one does not cover the other.
     """
 
     @pytest.mark.arch_guard
@@ -343,18 +343,15 @@ class TestCounterpartyAgentTypeIsNarrowedNotCast:
         assert "buying" in message, "and must show what was expected, or it is not actionable"
 
     @pytest.mark.arch_guard
-    def test_neither_call_site_casts(self) -> None:
-        """Both resolver call sites go through the narrowing, not ``cast``.
+    def test_the_settings_boundary_refuses_a_typo(self) -> None:
+        """A typo is refused where the env override lands: constructing the settings."""
+        from pydantic import ValidationError
 
-        Pinned structurally because the cast is a runtime no-op: a reintroduced one would
-        pass every behavioural test above while restoring the silent-401 failure.
-        """
-        from pathlib import Path
+        from src.core.config import SigningConfig
 
-        root = Path(__file__).resolve().parents[2]
-        source = (root / "src/core/signing/request_verifier_middleware.py").read_text(encoding="utf-8")
-        assert "cast(BrandAgentType, config.counterparty_agent_type)" not in source, (
-            "a resolver call site is casting the configured agent type again — cast() does "
-            "not validate, so a typo reaches async_resolve_agent and 401s every signed "
-            "counterparty. Use narrow_agent_type()."
-        )
+        with pytest.raises(ValidationError) as excinfo:
+            SigningConfig(counterparty_agent_type="buyng")
+
+        message = str(excinfo.value)
+        assert "buyng" in message, "the refusal must name the offending value"
+        assert "buying" in message, "and must show what was expected, or it is not actionable"

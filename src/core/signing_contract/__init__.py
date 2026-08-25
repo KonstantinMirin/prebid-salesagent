@@ -35,6 +35,7 @@ from src.core.signing_contract.algorithms import (
     MINTABLE_PURPOSES,
     REQUEST_SIGNING,
     SIGNING_ALG_VALUES,
+    BrandAgentType,
     keygen_alg,
     mint_kid,
     narrow_alg,
@@ -54,6 +55,7 @@ from src.core.signing_contract.canonical import (
 
 __all__ = [
     "CACHE_MAX_AGE_SECONDS",
+    "BrandAgentType",
     "MINTABLE_PURPOSES",
     "REQUEST_SIGNING",
     "REQUEST_TARGET_URI_MALFORMED",
