@@ -447,7 +447,8 @@ class AdCPRequestHandler(RequestHandler):
         - Final states (completed, failed, canceled): Send full Task object with artifacts
         - Intermediate states (working, input-required, submitted): Send TaskStatusUpdateEvent
 
-        Uses create_a2a_webhook_payload from adcp library to automatically select correct type.
+        ``notify`` selects the payload type from the status: Task for final states,
+        TaskStatusUpdateEvent for intermediate ones.
         """
         try:
             # Check if task has push notification config stored
