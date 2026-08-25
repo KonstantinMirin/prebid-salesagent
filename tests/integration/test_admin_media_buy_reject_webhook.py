@@ -14,11 +14,12 @@ send_notification was awaited exactly once. Pre-fix the raw construction raises 
 send, so send_notification is never called — that is what this test detects.
 """
 
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 
 from src.core.context_manager import ContextManager
+from src.services.protocol_webhook_service import ProtocolWebhookService
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -176,8 +177,14 @@ def webhook_capture():
         captured["payload"] = payload
         captured["metadata"] = metadata
 
-    mock_service = MagicMock()
-    mock_service.send_notification = AsyncMock(side_effect=_capture)
+    # A REAL service with only the wire call stubbed. The route dispatches through
+    # notify() now (salesagent-pldmk.39), and notify() on a MagicMock returns a
+    # MagicMock that asyncio.run refuses -- the route would swallow that as a failed
+    # send and this guard would assert against an empty capture. With the real
+    # object, notify() builds the payload for real and _capture still sees exactly
+    # what reaches the wire.
+    mock_service = ProtocolWebhookService()
+    mock_service.send_notification = AsyncMock(side_effect=_capture)  # type: ignore[method-assign]
     captured["service"] = mock_service
     with patch(
         "src.admin.blueprints.operations.get_protocol_webhook_service",

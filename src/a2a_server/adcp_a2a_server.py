@@ -48,7 +48,6 @@ from a2a.types import (
     UnsupportedOperationError,
 )
 from a2a.utils.errors import A2AError
-from adcp import create_a2a_webhook_payload
 from adcp.types import ContextObject, GeneratedTaskStatus
 from adcp.types.base import AdCPBaseModel
 from google.protobuf import json_format, struct_pb2
@@ -115,6 +114,7 @@ from src.core.webhook_validator import (
     webhook_ssrf_suggestion,
     webhook_url_for_log,
 )
+from src.core.webhooks.delivery import WebhookTaskContext
 from src.core.webhooks.registration import (
     ValidatedWebhookRegistration,
     accept_push_notification_primitives,
@@ -484,25 +484,38 @@ class AdCPRequestHandler(RequestHandler):
             if error and status == "failed":
                 result_data["error"] = error
 
-            # Use create_a2a_webhook_payload to get the correct payload type:
-            # - Task for final states (completed, failed, canceled)
-            # - TaskStatusUpdateEvent for intermediate states (working, input-required, submitted)
-            payload = create_a2a_webhook_payload(
-                task_id=task.id,
-                status=status_enum,
-                context_id=task.context_id or "",
-                result=result_data,
-            )
-
             # Extract skills_requested from protobuf Struct metadata
             meta_dict = json_format.MessageToDict(task.metadata) if task.metadata.ByteSize() > 0 else {}
             skills = list(meta_dict.get("skills_requested", []))
-            metadata = {
-                "task_type": skills[0] if skills else "unknown",
-            }
 
-            sent = await push_notification_service.send_notification(
-                push_notification_config=push_notification_config, payload=payload, metadata=metadata
+            # tenant_id / principal_id are None here, and that is a decision rather
+            # than an omission. This path delivers PROTOCOL task updates, whose
+            # task_type is a skill name; records_delivery_log only fires for
+            # "delivery_report" / "media_buy_delivery", so no webhook_delivery_log
+            # row is expected and the registration this sender holds
+            # (ValidatedWebhookRegistration) carries no scope ids to give it.
+            # Stating them as None is what makes that visible -- the dict this
+            # replaced simply had no such keys (salesagent-pldmk.39).
+            webhook_task = WebhookTaskContext(
+                task_id=task.id,
+                task_type=skills[0] if skills else "unknown",
+                tenant_id=None,
+                principal_id=None,
+                media_buy_id=None,
+                sequence_number=1,
+                notification_type=None,
+            )
+
+            # notify() picks the payload type: Task for final states,
+            # TaskStatusUpdateEvent for intermediate ones. protocol is "a2a"
+            # unconditionally -- this IS the A2A server.
+            sent = await push_notification_service.notify(
+                push_notification_config,
+                task=webhook_task,
+                status=status_enum,
+                result=result_data,
+                protocol="a2a",
+                context_id=task.context_id or "",
             )
             if not sent:
                 logger.warning(
