@@ -145,6 +145,7 @@ from src.core.schemas import (
     Principal,
     Product,
     Targeting,
+    canonical_agent_url,
 )
 from src.core.schemas import (
     url as make_url,
@@ -1581,7 +1582,7 @@ async def _validate_and_convert_format_ids(
             validated_fmt = FormatId.model_validate(fmt_id, from_attributes=True)
         except (ValueError, ValidationError) as e:
             raise AdCPValidationError(field=field, details=dict(where), internal_detail=e) from e
-        agent_url = str(validated_fmt.agent_url).rstrip("/")
+        agent_url = canonical_agent_url(validated_fmt.agent_url)
         format_id = validated_fmt.id
 
         if not agent_url or not format_id:
@@ -3253,13 +3254,13 @@ async def _create_media_buy_impl(
                 if pkg_product.format_ids:
                     for fmt in pkg_product.format_ids:
                         agent_url = fmt.agent_url
-                        normalized_url = str(agent_url).rstrip("/") if agent_url else None
+                        normalized_url = canonical_agent_url(agent_url) if agent_url else None
                         product_format_keys.add((normalized_url, fmt.id))
 
                 # Build set of requested format keys for comparison
                 requested_format_keys: set[tuple[str | None, str]] = set()
                 for fmt in matching_package.format_ids:
-                    normalized_url = str(fmt.agent_url).rstrip("/") if fmt.agent_url else None
+                    normalized_url = canonical_agent_url(fmt.agent_url) if fmt.agent_url else None
                     requested_format_keys.add((normalized_url, fmt.id))
 
                 def format_display(url: str | None, fid: str) -> str:
@@ -3328,7 +3329,7 @@ async def _create_media_buy_impl(
                     for fmt in pkg_product.format_ids:
                         agent_url = fmt.agent_url
                         fmt_id = fmt.id
-                        normalized_url = str(agent_url).rstrip("/") if agent_url else None
+                        normalized_url = canonical_agent_url(agent_url) if agent_url else None
                         if fmt_id:
                             product_format_dimensions[(normalized_url, fmt_id)] = (
                                 fmt.width,
@@ -3338,7 +3339,7 @@ async def _create_media_buy_impl(
 
                 # Process request format_ids, merging dimensions from product if missing
                 for req_fmt in matching_package.format_ids:
-                    normalized_url = str(req_fmt.agent_url).rstrip("/") if req_fmt.agent_url else None
+                    normalized_url = canonical_agent_url(req_fmt.agent_url) if req_fmt.agent_url else None
                     # Check if request format has dimensions
                     if req_fmt.width is not None and req_fmt.height is not None:
                         # Request has dimensions, convert to our FormatId type

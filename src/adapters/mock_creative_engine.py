@@ -19,12 +19,13 @@ class MockCreativeEngine(CreativeEngineAdapter):
         """Simulates processing creatives, returning their status."""
         processed = []
         for creative in creatives:
-            # Check if format is auto-approvable
-            # FIXME(#1388): `format_id` is a FormatId model and auto_approve_format_ids
-            # holds config STRINGS, so this membership test is never true and nothing
-            # is ever auto-approved. Fixing it changes mock-adapter behaviour, so it
-            # is tracked rather than folded into an unrelated change.
-            is_auto_approvable = creative.format_id in self.auto_approve_format_ids
+            # The id, not the reference: auto_approve_format_ids holds config STRINGS.
+            # Testing `creative.format_id in <set of str>` hashed a pydantic model, which
+            # is unhashable, so this raised TypeError for every creative on every call --
+            # even with an empty auto-approve list. Extracted ONCE here because the
+            # adaptation-suggestion block below needs exactly the same value.
+            format_id_str = creative.format_id.id if creative.format_id else ""
+            is_auto_approvable = format_id_str in self.auto_approve_format_ids
 
             # Determine status based on format and configuration
             status: Literal["pending_review", "approved", "rejected", "adaptation_required"]
@@ -45,7 +46,6 @@ class MockCreativeEngine(CreativeEngineAdapter):
 
             # Generate adaptation suggestions for video formats
             suggested_adaptations = []
-            format_id_str = creative.format_id.id if creative.format_id else ""
             if format_id_str and "video" in format_id_str.lower():
                 # Suggest vertical version for horizontal videos
                 if "16x9" in format_id_str or "horizontal" in format_id_str:

@@ -13,6 +13,8 @@ from src.core.tools.creatives import _sync_creatives_impl
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.helpers.creative_test_helpers import (
     make_creative_dict,
+    make_format_spec,
+    make_registry_mock,
 )
 from tests.helpers.creative_test_helpers import (
     make_creative_uow as _make_creative_uow_shared,
@@ -53,11 +55,7 @@ class TestSyncCreativesFormatValidation:
     @pytest.fixture
     def mock_format_spec(self):
         """Mock format specification from creative agent."""
-        format_spec = Mock()
-        format_spec.format_id = "display_300x250_image"
-        format_spec.agent_url = "https://creative.adcontextprotocol.org"
-        format_spec.name = "Medium Rectangle - Image"
-        return format_spec
+        return make_format_spec(name="Medium Rectangle - Image")
 
     def test_format_validation_success(self, identity, mock_tenant, valid_creative_dict, mock_format_spec):
         """Test that format validation succeeds when format exists."""
@@ -79,9 +77,7 @@ class TestSyncCreativesFormatValidation:
             async def mock_get_format(agent_url, format_id):
                 return mock_format_spec
 
-            mock_registry = Mock()
-            mock_registry.list_all_formats = mock_list_all_formats
-            mock_registry.get_format = mock_get_format
+            mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
             mock_registry_getter.return_value = mock_registry
 
             # Execute
@@ -112,9 +108,7 @@ class TestSyncCreativesFormatValidation:
             async def mock_get_format(agent_url, format_id):
                 return None  # Format not found
 
-            mock_registry = Mock()
-            mock_registry.list_all_formats = mock_list_all_formats
-            mock_registry.get_format = mock_get_format
+            mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
             mock_registry_getter.return_value = mock_registry
 
             # Execute
@@ -162,9 +156,7 @@ class TestSyncCreativesFormatValidation:
             async def mock_get_format(agent_url, format_id):
                 raise AdCPServiceUnavailableError(details={"failure_mode": "Connection failed"})
 
-            mock_registry = Mock()
-            mock_registry.list_all_formats = mock_list_all_formats
-            mock_registry.get_format = mock_get_format
+            mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
             mock_registry_getter.return_value = mock_registry
 
             with pytest.raises(AdCPServiceUnavailableError) as exc_info:
@@ -196,9 +188,7 @@ class TestSyncCreativesFormatValidation:
             async def mock_get_format(agent_url, format_id):
                 return mock_format_spec
 
-            mock_registry = Mock()
-            mock_registry.list_all_formats = mock_list_all_formats
-            mock_registry.get_format = mock_get_format
+            mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
             mock_registry_getter.return_value = mock_registry
 
             # Execute
@@ -243,9 +233,7 @@ class TestSyncCreativesFormatValidation:
                     return mock_format_spec
                 return None
 
-            mock_registry = Mock()
-            mock_registry.list_all_formats = mock_list_all_formats
-            mock_registry.get_format = mock_get_format
+            mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
             mock_registry_getter.return_value = mock_registry
 
             # Execute
@@ -296,9 +284,7 @@ class TestSyncCreativesFormatValidation:
             async def mock_get_format(agent_url, format_id):
                 return mock_format_spec
 
-            mock_registry = Mock()
-            mock_registry.list_all_formats = mock_list_all_formats
-            mock_registry.get_format = mock_get_format
+            mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
             mock_registry_getter.return_value = mock_registry
 
             # Execute
@@ -393,9 +379,7 @@ class TestSyncCreativesFormatValidation:
                 if "offline.example.com" in agent_url:
                     raise AdCPServiceUnavailableError(details={"failure_mode": "Connection failed"})
 
-            mock_registry = Mock()
-            mock_registry.list_all_formats = mock_list_all_formats
-            mock_registry.get_format = mock_get_format
+            mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
             mock_registry_getter.return_value = mock_registry
 
             # Unknown format: per-item terminal failure — the creative is wrong.

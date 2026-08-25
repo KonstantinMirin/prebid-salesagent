@@ -524,7 +524,7 @@ class CreativeAgentRegistry:
         import httpx
 
         logger = logging.getLogger(__name__)
-        agent_url = str(agent.agent_url).rstrip("/")
+        agent_url = canonical_agent_url(agent.agent_url)
         # MCP endpoint may be at /mcp (as per adcp SDK fallback behavior)
         mcp_url = f"{agent_url}/mcp" if not agent_url.endswith("/mcp") else agent_url
 

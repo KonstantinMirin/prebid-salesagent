@@ -27,6 +27,9 @@ from tests.helpers.creative_test_helpers import (
     make_creative_uow as _make_creative_uow_raw,
 )
 from tests.helpers.creative_test_helpers import (
+    make_format_spec,
+)
+from tests.helpers.creative_test_helpers import (
     sync_patches as _sync_patches,
 )
 
@@ -48,11 +51,7 @@ def identity():
 
 @pytest.fixture
 def mock_format_spec():
-    spec = Mock()
-    spec.format_id = "display_300x250_image"
-    spec.agent_url = "https://creative.adcontextprotocol.org"
-    spec.name = "Medium Rectangle"
-    return spec
+    return make_format_spec()
 
 
 def _make_creative_uow():

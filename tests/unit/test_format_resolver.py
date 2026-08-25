@@ -281,12 +281,16 @@ class TestGetFormat:
     def test_search_all_agents_no_agent_url(self):
         """get_format searches all agents when agent_url is None.
 
-        Note: The search loop at L53-56 compares Format.format_id (FormatId)
-        with the string parameter. To match, we use a mock with matching
-        format_id attribute instead of a real Format object.
+        The listing carries a real FormatId, because that is what
+        ``CreativeAgentRegistry.list_all_formats`` returns -- ``Format.format_id`` is
+        annotated as the library FormatId. The version of this test that shipped with
+        the bug put a bare STRING here, with a docstring explaining that a real Format
+        would not match; that was a test bent to fit broken code, and it is what kept
+        `fmt.format_id == format_id` looking correct while it resolved nothing in
+        production (#1388).
         """
         mock_fmt = MagicMock()
-        mock_fmt.format_id = "display_300x250"  # Plain string to match parameter
+        mock_fmt.format_id = create_test_format_id("display_300x250")
         mock_fmt.name = "Found Format"
 
         with (
@@ -302,7 +306,7 @@ class TestGetFormat:
     def test_search_all_agents_no_match_raises_not_found(self):
         """get_format raises AdCPNotFoundError when format not found in any agent."""
         mock_fmt = MagicMock()
-        mock_fmt.format_id = "video_1920x1080"  # Different format — won't match
+        mock_fmt.format_id = create_test_format_id("video_1920x1080")  # different id -> no match
 
         with (
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
@@ -520,12 +524,17 @@ class TestFindFormat:
         other = LibraryFormatId(agent_url="https://other-agent.example.com", id=fmt.format_id.id)
         assert find_format([fmt], other) is None
 
-    def test_parameterized_reference_does_not_match_an_unparameterized_format(self):
-        """Class-agnostic must not mean lenient.
+    def test_a_parameterized_reference_resolves_to_the_template_it_parameterizes(self):
+        """Identity is (agent_url, id) — the parameters name a variant, not another format.
 
-        The AdCP 2.5 parameters are part of a format reference's identity. Dropping
-        them from the comparison would let a 300x250 request resolve to a format
-        that declares no dimensions at all — a spec change, not a bug fix.
+        This is the graded contract, not a convenience: core/format-id.json requires
+        [agent_url, id], the list_formats storyboard matches on
+        ``match_keys: [agent_url, id]``, and a template format exists precisely so a
+        parameterized reference can resolve to it and read its spec. An identity that
+        included width/height would send a 300x250 request away empty-handed — and in
+        _processing that means format_obj is None, the generative branch is skipped,
+        and the creative is silently written as a static asset. Exactly the failure
+        this whole helper exists to prevent.
         """
         from adcp.types import FormatId as LibraryFormatId
 
@@ -535,7 +544,7 @@ class TestFindFormat:
         parameterized = LibraryFormatId(
             agent_url=str(fmt.format_id.agent_url), id=fmt.format_id.id, width=300, height=250
         )
-        assert find_format([fmt], parameterized) is None
+        assert find_format([fmt], parameterized) is fmt
 
     def test_returns_none_for_an_empty_listing(self):
         from adcp.types import FormatId as LibraryFormatId
@@ -553,3 +562,47 @@ class TestFindFormat:
         second = _make_format(name="Second")
         reference = LibraryFormatId(agent_url=str(first.format_id.agent_url), id=first.format_id.id)
         assert find_format([first, second], reference) is first
+
+
+class TestFormatIdentityCanonicalization:
+    """agent_url is compared in the spec's canonical form, not a trimmed string.
+
+        adcp/_schemas/3.1/core/format-id.json, agent_url: "Callers comparing two
+        `format-id` values MUST canonicalize `agent_url` per the AdCP URL canonicalization
+        rules before treating two formats as the same."
+
+    find_format meets that MUST by going through ``format_id_identity`` ->
+        ``canonical_agent_url`` -> the SDK's ``canonicalize_target_uri``, rather than
+        trimming the string itself. These cases are the ones that survive pydantic's own
+        AnyUrl normalization and so actually distinguish the canonical rule from a trim:
+        userinfo and a fragment are stripped by the former and kept by the latter.
+    """
+
+    @pytest.mark.parametrize(
+        ("reference_url", "what_the_trim_kept"),
+        [
+            ("https://creative.adcontextprotocol.org/#section", "a fragment"),
+            ("https://user@creative.adcontextprotocol.org", "userinfo"),
+        ],
+    )
+    def test_a_reference_matches_despite(self, reference_url, what_the_trim_kept):
+        from adcp.types import FormatId as LibraryFormatId
+
+        from src.core.format_resolver import find_format
+
+        fmt = _make_format()
+        reference = LibraryFormatId(agent_url=reference_url, id=fmt.format_id.id)
+
+        assert find_format([fmt], reference) is fmt, (
+            f"{what_the_trim_kept} split two references the spec says name one format"
+        )
+
+    def test_a_genuinely_different_host_still_does_not_match(self):
+        """Canonicalizing must not blur two agents together."""
+        from adcp.types import FormatId as LibraryFormatId
+
+        from src.core.format_resolver import find_format
+
+        fmt = _make_format()
+        other_agent = LibraryFormatId(agent_url="https://someone-else.example.com", id=fmt.format_id.id)
+        assert find_format([fmt], other_agent) is None

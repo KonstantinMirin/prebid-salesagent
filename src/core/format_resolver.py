@@ -17,7 +17,7 @@ from adcp.types import FormatId as LibraryFormatId
 from src.core.database.database_session import get_db_session
 from src.core.errors.details import EntityRefDetails
 from src.core.exceptions import AdCPError, AdCPFormatNotFoundError, AdCPNotFoundError
-from src.core.schemas import Format
+from src.core.schemas import Format, format_id_identity
 from src.core.validation_helpers import run_async_in_sync_context
 
 logger = logging.getLogger(__name__)
@@ -52,63 +52,26 @@ def fetch_format_spec(agent_url: str, format_id: str) -> Format | None:
         return None
 
 
-def format_identity(format_id: LibraryFormatId | dict | str) -> tuple[str, str, int | None, int | None, float | None]:
-    """The identity of a format reference, independent of which CLASS carries it.
-
-    ``FormatId`` exists twice — the library type the AdCP schemas declare, and
-    ``src.core.schemas._base.FormatId``, our subclass, which adds ``__str__`` and
-    dimension helpers but not a single field. Pydantic v2 equality is
-    class-sensitive, so two references naming the very same format compare
-    UNEQUAL across those two classes; and pydantic does not re-validate a model
-    instance that already satisfies an annotation, so whichever class a caller
-    built survives all the way into ``CreativeAsset.format_id``.
-
-    That is not hypothetical. The A2A boundary pre-typed format_id into the
-    subclass while MCP and REST left it library-typed, so every ``==`` match
-    against the registry failed on A2A alone and a generative creative was
-    written as a plain static asset with no error at all (salesagent-kyc89).
-
-    The tuple carries EVERY field ``==`` compared, not just ``(agent_url, id)``:
-    dropping the AdCP 2.5 parameters would let a parameterized reference match an
-    unparameterized format, which is a spec change rather than a bug fix.
-    ``agent_url`` compares as a trailing-slash-insensitive string because it
-    arrives as ``AnyUrl`` or ``str`` depending on how the reference was built.
-
-    A format reference reaches this code in three shapes, not one: the model, the
-    raw dict a registry listing or a DB row still carries, and the legacy bare
-    string. All three are normalized here rather than at the call sites, because
-    the hand-rolled isinstance ladders that do it per call site
-    (src/core/tools/products.py:523-545 is one) are how the shapes diverge in the
-    first place. A bare string has no agent_url and so never matches a structured
-    reference — the behaviour the `==` this replaced already had.
-    """
-    if isinstance(format_id, str):
-        return ("", format_id, None, None, None)
-    if isinstance(format_id, dict):
-        return (
-            str(format_id.get("agent_url", "")).rstrip("/"),
-            str(format_id.get("id", "")),
-            format_id.get("width"),
-            format_id.get("height"),
-            format_id.get("duration_ms"),
-        )
-    return (
-        str(format_id.agent_url).rstrip("/"),
-        format_id.id,
-        format_id.width,
-        format_id.height,
-        format_id.duration_ms,
-    )
-
-
-def find_format(formats: Iterable[Format], format_id: LibraryFormatId | dict | str) -> Format | None:
+def find_format(formats: Iterable[Format], format_id: LibraryFormatId) -> Format | None:
     """The format in *formats* that *format_id* names, or None.
 
     ONE definition of "is this the format the buyer asked for", so no caller can
-    reintroduce a class-sensitive ``==`` against a registry listing.
+    reintroduce a class-sensitive ``==`` against a registry listing. ``FormatId``
+    exists twice -- the library type the AdCP schemas declare and our subclass --
+    and pydantic v2 equality is class-sensitive, so comparing the models matched
+    NOTHING whenever the two sides were built by different code paths
+    (the A2A boundary built one, MCP and REST the other; #1388).
+
+    Identity is ``format_id_identity``'s ``(canonical agent_url, id)``, the pair the
+    graded contract matches on (``core/format-id.json`` requires ``[agent_url, id]``;
+    the list_formats storyboard step uses ``match_keys: [agent_url, id]``) and the
+    same pair ``list_creative_formats`` filters with. Notably that means a
+    PARAMETERIZED reference resolves to the template it parameterizes -- which is
+    the point of a template format, and what lets a 300x250 request find the
+    ``display`` format's spec.
     """
-    wanted = format_identity(format_id)
-    return next((fmt for fmt in formats if format_identity(fmt.format_id) == wanted), None)
+    wanted = format_id_identity(format_id)
+    return next((fmt for fmt in formats if format_id_identity(fmt.format_id) == wanted), None)
 
 
 def get_format(
@@ -148,14 +111,15 @@ def get_format(
     else:
         # Search all agents for this format
         all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant_id))
+        # `fmt.format_id.id == format_id`, the same component comparison
+        # CreativeAgentRegistry.get_format uses, because this parameter is a bare
+        # `str`. Comparing it against the FormatId MODEL -- as this line did -- is
+        # False for every format, so the branch resolved nothing at all (#1388).
+        # An id with no agent_url to namespace it is inherently ambiguous across
+        # agents; first in listing order wins, which is what "search all agents"
+        # has always meant here.
         for fmt in all_formats:
-            # FIXME(#1388): `format_id` is declared `str` here while `fmt.format_id`
-            # is a FormatId model, so this comparison is False for every format and
-            # this branch resolves nothing at all. Migrating it onto find_format
-            # above needs a decision about what a bare id means with no agent_url to
-            # namespace it, and graduating the strict xfail in
-            # tests/unit/test_format_id_spec_compliance.py that pins the breakage.
-            if fmt.format_id == format_id:
+            if fmt.format_id.id == format_id:
                 return fmt
 
     # Not found anywhere. The identifiers travel as structured detail rather than

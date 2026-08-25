@@ -30,8 +30,8 @@ plain ``str`` off the reference, which is precisely what the shared helper does
 internally and cannot carry a class mismatch. Nor is a comparison whose operand is
 the helper's own result, since that is already a normalized tuple.
 
-**Allowlist:** two pre-existing sites, both carrying ``# FIXME(#1388)`` at the
-source. It may only ever shrink.
+**Allowlist:** empty. The two sites this guard shipped with were fixed under the
+follow-up rather than tolerated, so nothing in ``src/`` is exempt.
 """
 
 import ast
@@ -43,19 +43,11 @@ from tests.unit._architecture_helpers import (
     src_python_files,
 )
 
-#: Files still comparing a format reference directly. Both are tracked by #1388;
-#: neither is reachable from the creative-sync path this guard was written for.
-#: ALLOWLISTS ONLY SHRINK — fix a site, delete its line.
-ALLOWLIST = frozenset(
-    {
-        # get_format() compares a declared `format_id: str` against a FormatId
-        # model, so its no-agent_url branch never matches anything.
-        "src/core/format_resolver.py",
-        # `creative.format_id in <set of config strings>` — a model against
-        # strings, so no creative is ever auto-approvable.
-        "src/adapters/mock_creative_engine.py",
-    }
-)
+#: EMPTY, and it stays that way. Both original entries were fixed rather than tolerated:
+#: get_format's no-agent_url branch now resolves through find_format_by_id, and the mock
+#: creative engine tests membership on the id. ALLOWLISTS ONLY SHRINK — an addition here
+#: is a decision to ship the defect this guard exists to prevent.
+ALLOWLIST: frozenset[str] = frozenset()
 
 
 def find_format_id_identity_comparisons(tree: ast.Module) -> list[int]:
@@ -78,6 +70,174 @@ def find_format_id_identity_comparisons(tree: ast.Module) -> list[int]:
     return sorted(lines)
 
 
+#: The one module allowed to define what "the same agent_url" means. Everything else
+#: calls ``canonical_agent_url`` / ``format_id_identity`` from it.
+CANONICALIZER_MODULE = "src/core/schemas/_base.py"
+
+
+def find_hand_rolled_agent_url_normalization(tree: ast.Module) -> list[int]:
+    """Line numbers where an ``agent_url`` is normalized by hand FOR COMPARISON.
+
+    The pinned schema makes this a MUST, not a preference: "Callers comparing two
+    format-id values MUST canonicalize agent_url per the AdCP URL canonicalization
+    rules before treating two formats as the same" (core/format-id.json, agent_url).
+    ``canonical_agent_url`` delegates to the SDK's ``canonicalize_target_uri``, which
+    lowercases scheme/host, drops default ports, normalizes percent-encoding and strips
+    userinfo and fragment. ``str(x.agent_url).rstrip("/")`` does none of that and looks
+    close enough to pass review -- which is how a second identity rule came to be
+    written while the first sat twenty lines away.
+
+    Two things the rule has to get right, both learned the hard way:
+
+    - The receiver counts by ATTRIBUTE or by NAME. An attribute-only rule waved through
+      ``agent_url = fmt.agent_url`` / ``str(agent_url).rstrip("/")`` while its sibling
+      two lines up was migrated, leaving two key sets that are COMPARED to each other
+      normalized by different rules. Half a migration on a compared pair is worse than
+      none.
+    - Only normalization used for COMPARISON is a violation. Trimming a slash before
+      concatenating an endpoint (``agent_url.rstrip("/") + "/lists/" + id``) decides no
+      identity, and flagging it would only teach authors to silence the guard. So the
+      normalized value must reach a comparison, a tuple (the shape every format key in
+      this codebase takes), or a membership test.
+    """
+    normalizers = {"rstrip", "strip", "lower", "replace", "removesuffix", "casefold"}
+
+    def reads_agent_url(node: ast.AST) -> bool:
+        return any(
+            (isinstance(sub, ast.Attribute) and sub.attr == "agent_url")
+            or (isinstance(sub, ast.Name) and "agent_url" in sub.id)
+            for sub in ast.walk(node)
+        )
+
+    def is_normalizing_call(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in normalizers
+            and reads_agent_url(node.func.value)
+        )
+
+    # Names that hold a hand-normalized agent_url -> EVERY line that built one. A dict
+    # of name->single-line silently collapses two sites that reuse a variable name, which
+    # is the exact shape this guard exists to catch: the two halves of a compared key
+    # pair, both called `normalized_url`, one migrated and one not.
+    tainted: dict[str, list[int]] = {}
+    inline: list[int] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and is_normalizing_call(node.value):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    tainted.setdefault(target.id, []).append(node.lineno)
+        elif isinstance(node, (ast.Tuple, ast.Compare)):
+            inline.extend(sub.lineno for sub in ast.walk(node) if is_normalizing_call(sub))
+        elif isinstance(node, ast.IfExp) and is_normalizing_call(node.body):
+            # `x.rstrip("/") if x else None` — the conditional form both real sites used.
+            parent_assign = None
+            for outer in ast.walk(tree):
+                if isinstance(outer, ast.Assign) and outer.value is node:
+                    parent_assign = outer
+                    break
+            if parent_assign is not None:
+                for target in parent_assign.targets:
+                    if isinstance(target, ast.Name):
+                        tainted.setdefault(target.id, []).append(parent_assign.lineno)
+
+    used_for_comparison = {
+        sub.id
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Tuple, ast.Compare))
+        for sub in ast.walk(node)
+        if isinstance(sub, ast.Name) and sub.id in tainted
+    }
+    flagged = {lineno for name in used_for_comparison for lineno in tainted[name]}
+    return sorted(flagged | set(inline))
+
+
+def test_agent_url_is_canonicalized_only_in_one_place():
+    violations: list[str] = []
+    for path in src_python_files(REPO_ROOT):
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        if rel == CANONICALIZER_MODULE:
+            continue
+        for lineno in find_hand_rolled_agent_url_normalization(parse_module(path)):
+            violations.append(f"{rel}:{lineno}")
+    assert not violations, (
+        "agent_url normalized by hand. The pinned schema REQUIRES the AdCP canonical "
+        "form before two format references may be treated as the same, and a trim is "
+        "not it — it leaves scheme/host case, default ports, percent-encoding, "
+        "userinfo and fragments to split references the spec says are one. Use "
+        "src.core.schemas.canonical_agent_url (or format_id_identity):\n  " + "\n  ".join(violations)
+    )
+
+
+def test_the_canonicalization_guard_catches_the_shape_that_shipped():
+    """Positive meta-tests: hand-normalized agent_url actually used to decide identity."""
+    assert_detector_catches_ast_snippets(
+        find_hand_rolled_agent_url_normalization,
+        snippets={
+            # The duplicate identity function, verbatim.
+            "rstrip_inside_an_identity_tuple": (
+                "def f(format_id):\n    return (str(format_id.agent_url).rstrip('/'), format_id.id)\n"
+            ),
+            # A key set built by hand — the shape media_buy_create used on both sides.
+            "local_name_bound_from_the_attribute": (
+                "def f(formats):\n"
+                "    keys = set()\n"
+                "    for fmt in formats:\n"
+                "        agent_url = fmt.agent_url\n"
+                "        normalized = str(agent_url).rstrip('/') if agent_url else None\n"
+                "        keys.add((normalized, fmt.id))\n"
+                "    return keys\n"
+            ),
+            # Same, under a prefixed local name — an `agent_url`-exact rule would miss it.
+            "local_name_with_a_prefix": (
+                "def f(fmt, other):\n"
+                "    product_agent_url = fmt.agent_url\n"
+                "    normalized = str(product_agent_url).rstrip('/')\n"
+                "    return (normalized, fmt.id) == other\n"
+            ),
+            # Case-folding is the same rule written differently, and equally partial.
+            "lower_inside_a_key_tuple": (
+                "def f(fmt, keys):\n    return (fmt.format_id.agent_url.lower(), fmt.format_id.id) in keys\n"
+            ),
+            # Direct comparison, no tuple.
+            "removesuffix_in_a_comparison": (
+                "def f(agent, other):\n    return str(agent.agent_url).removesuffix('/mcp') == other\n"
+            ),
+        },
+    )
+
+
+def test_the_canonicalization_guard_ignores_the_canonical_call():
+    """Negative meta-test: going through the shared canonicalizer is the fixed shape."""
+    fixed = (
+        "from src.core.schemas import canonical_agent_url, format_id_identity\n"
+        "\n"
+        "def f(format_id):\n"
+        "    return format_id_identity(format_id)\n"
+        "\n"
+        "def g(agent):\n"
+        "    return canonical_agent_url(agent.agent_url)\n"
+        "\n"
+        "def h(fmt):\n"
+        "    agent_url = fmt.agent_url\n"
+        "    return canonical_agent_url(agent_url) if agent_url else None\n"
+    )
+    assert find_hand_rolled_agent_url_normalization(ast.parse(fixed)) == []
+
+
+def test_the_canonicalization_guard_ignores_urls_that_are_not_agent_urls():
+    """Negative meta-test: trimming some other URL is not this disease.
+
+    The guard stays pointed at format-reference identity. A display string, or an
+    endpoint built from an already-resolved URL, normalizes nothing about identity --
+    and flagging those would push authors to silence the guard rather than use the
+    helper.
+    """
+    unrelated = "def f(url, fid):\n    clean_url = str(url).rstrip('/')\n    return f'{clean_url}/{fid}'\n"
+    assert find_hand_rolled_agent_url_normalization(ast.parse(unrelated)) == []
+
+
 def test_format_identity_goes_through_the_shared_helper():
     violations: list[str] = []
     for path in src_python_files(REPO_ROOT):
@@ -96,7 +256,12 @@ def test_format_identity_goes_through_the_shared_helper():
 
 
 def test_the_allowlist_has_not_gone_stale():
-    """An allowlisted file that no longer offends must leave the allowlist."""
+    """An allowlisted file that no longer offends must leave the allowlist.
+
+    Vacuous while ALLOWLIST is empty, and kept exactly for that reason: the moment
+    somebody adds an entry, this is what forces its removal once the site is fixed,
+    instead of letting a permanent exemption accumulate.
+    """
     still_offending = {
         path.relative_to(REPO_ROOT).as_posix()
         for path in src_python_files(REPO_ROOT)

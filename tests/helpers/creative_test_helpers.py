@@ -11,10 +11,11 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from tests.factories.creative_asset import AssetSpec, assert_assets, build_assets, image_spec
 from tests.harness import make_mock_uow
+from tests.helpers.adcp_factories import create_test_format_id
 
 
 def make_creative_dict(creative_id: str = "c1", name: str = "Test Banner") -> dict:
@@ -97,20 +98,86 @@ def make_creative_uow(*, include_assignments: bool = False):
     return mock_uow, mock_creative_repo
 
 
+def make_format_spec(
+    format_id: str = "display_300x250_image",
+    *,
+    agent_url: str = "https://creative.adcontextprotocol.org",
+    name: str = "Medium Rectangle",
+    output_format_ids: list[str] | None = None,
+) -> Mock:
+    """A registry listing entry shaped the way production's actually is.
+
+    ONE definition, because three test modules hand-rolled this same stand-in and all
+    three carried the same two defects:
+
+    - ``format_id`` as a bare STRING. ``Format.format_id`` is annotated as the library
+      FormatId, so a string is a shape production never produces. It made the old
+      class-sensitive ``fmt.format_id == creative_format`` match by accident in unit
+      tests while it matched NOTHING in production (#1388) -- the mock was propping up
+      the bug it should have caught.
+    - ``output_format_ids`` left auto-specced. _processing reads that attribute to
+      decide whether a format is generative, and a bare Mock attribute is truthy, so
+      every static format silently became a generative one the moment the lookup
+      started working. Empty by default; pass a list to build a generative spec.
+    """
+    spec = Mock()
+    spec.format_id = create_test_format_id(format_id, agent_url=agent_url)
+    spec.agent_url = agent_url
+    spec.name = name
+    spec.output_format_ids = output_format_ids or []
+    return spec
+
+
+def make_registry_mock(
+    formats: list | None = None,
+    *,
+    list_all_formats=None,
+    get_format=None,
+) -> Mock:
+    """A CreativeAgentRegistry stand-in, with the async methods actually async.
+
+    ONE definition of the CONSTRUCTION, because that is the duplicated part: seven
+    sites in one module plus sync_patches each hand-rolled ``Mock()`` +
+    ``list_all_formats`` + ``get_format``, and every one shared the same defect --
+    ``build_creative`` / ``preview_creative`` left as plain ``Mock`` attributes.
+    _processing hands both to ``run_async_in_sync_context``, which rejects anything
+    that is not a coroutine, so each copy sat one working format lookup away from
+    ``TypeError: Expected coroutine``. They stayed green only because the lookup
+    itself never matched (#1388).
+
+    What each site does DIFFERENTLY -- returning a spec, returning None, raising
+    AdCPServiceUnavailableError, branching on the requested id -- stays at that site
+    and is passed in. Collapsing those too would be the other DRY mistake: merging
+    behaviours that only look alike.
+
+    Args:
+        formats: convenience for the common case -- ``list_all_formats`` returns this
+            and ``get_format`` returns its first entry (or None).
+        list_all_formats: an async callable, when the site needs its own.
+        get_format: an async callable, when the site needs its own.
+    """
+    listing = list(formats or [])
+
+    async def _default_list_all_formats(tenant_id=None):
+        return listing
+
+    async def _default_get_format(agent_url, format_id):
+        return listing[0] if listing else None
+
+    registry = Mock()
+    registry.list_all_formats = list_all_formats or _default_list_all_formats
+    registry.get_format = get_format or _default_get_format
+    registry.build_creative = AsyncMock(return_value={})
+    registry.preview_creative = AsyncMock(return_value={})
+    return registry
+
+
 def sync_patches():
     """Context manager returning (mock_creative_repo, mock_registry) with standard patches."""
 
     @contextmanager
     def ctx(mock_format_spec_arg=None):
-        async def mock_list_all_formats(tenant_id=None):
-            return [mock_format_spec_arg] if mock_format_spec_arg else []
-
-        async def mock_get_format(agent_url, format_id):
-            return mock_format_spec_arg
-
-        mock_registry = Mock()
-        mock_registry.list_all_formats = mock_list_all_formats
-        mock_registry.get_format = mock_get_format
+        mock_registry = make_registry_mock([mock_format_spec_arg] if mock_format_spec_arg else [])
 
         mock_uow, mock_creative_repo = make_creative_uow()
 
