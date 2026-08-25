@@ -18,7 +18,13 @@ from adcp.types import ErrorCode
 from pydantic import BaseModel, ValidationError
 
 from src.core.errors.codes import CODE_TABLE, AppErrorCode, ErrorCodeT, Recovery
-from src.core.errors.details import ErrorDetails, VersionUnsupportedDetails
+from src.core.errors.details import (
+    AdapterFailureDetails,
+    EntityRefDetails,
+    ErrorDetails,
+    ProductRefDetails,
+    VersionUnsupportedDetails,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
@@ -462,7 +468,7 @@ class AdCPInvalidRequestError(AdCPValidationError):
 # genuinely-absent-credential sites.
 
 
-class AdCPAuthenticationError(AdCPError):
+class AdCPAuthenticationError(AdCPError[EntityRefDetails]):
     """Presented-but-invalid authentication credentials (401, AUTH_INVALID).
 
     Emits ``AUTH_INVALID`` per the v3.1.1 error-code enum: "Credentials were
@@ -519,7 +525,7 @@ class AdCPPolicyViolationError(AdCPAuthorizationError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.POLICY_VIOLATION
 
 
-class AdCPNotFoundError(AdCPError):
+class AdCPNotFoundError[D: ErrorDetails](AdCPError[D]):
     """Requested resource does not exist (404, REFERENCE_NOT_FOUND).
 
     Emits the PUBLISHED ``REFERENCE_NOT_FOUND`` rather than a minted generic
@@ -541,7 +547,7 @@ class AdCPNotFoundError(AdCPError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.REFERENCE_NOT_FOUND
 
 
-class AdCPAccountNotFoundError(AdCPNotFoundError):
+class AdCPAccountNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     """Account not found by ID or natural key (404, ACCOUNT_NOT_FOUND).
 
     Recovery=terminal per the pinned enumMetadata for ACCOUNT_NOT_FOUND —
@@ -559,7 +565,7 @@ class AdCPAccountSetupRequiredError(AdCPError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_SETUP_REQUIRED
 
 
-class AdCPAccountSuspendedError(AdCPError):
+class AdCPAccountSuspendedError(AdCPError[EntityRefDetails]):
     """Account is suspended and cannot be used (403, ACCOUNT_SUSPENDED).
 
     Recovery=terminal per the pinned enumMetadata — declared explicitly
@@ -570,7 +576,7 @@ class AdCPAccountSuspendedError(AdCPError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_SUSPENDED
 
 
-class AdCPAccountPaymentRequiredError(AdCPError):
+class AdCPAccountPaymentRequiredError(AdCPError[EntityRefDetails]):
     """Account has outstanding payment requirements (402, ACCOUNT_PAYMENT_REQUIRED).
 
     Recovery=terminal: from the sales agent's perspective there is
@@ -630,14 +636,14 @@ class AdCPBudgetExhaustedError(AdCPError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.BUDGET_EXHAUSTED
 
 
-class AdCPRateLimitError(AdCPError):
+class AdCPRateLimitError(AdCPError[AdapterFailureDetails]):
     """Too many requests (429)."""
 
     _default_status_code: ClassVar[int] = 429
     _code: ClassVar[ErrorCodeT] = ErrorCode.RATE_LIMITED
 
 
-class AdCPAdapterError(AdCPError):
+class AdCPAdapterError(AdCPError[AdapterFailureDetails]):
     """External adapter (GAM, etc.) failure (502)."""
 
     _default_status_code: ClassVar[int] = 502
@@ -660,7 +666,7 @@ class AdCPConfigurationError(AdCPError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.CONFIGURATION_ERROR
 
 
-class AdCPServiceUnavailableError(AdCPError):
+class AdCPServiceUnavailableError(AdCPError[AdapterFailureDetails]):
     """Service or product temporarily unavailable (503).
 
     503 indicates a temporary outage in a downstream service the sales
@@ -672,7 +678,7 @@ class AdCPServiceUnavailableError(AdCPError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.SERVICE_UNAVAILABLE
 
 
-class AdCPInternalError(AdCPError):
+class AdCPInternalError(AdCPError[EntityRefDetails]):
     """The seller's own state is inconsistent, so the request cannot be completed (500).
 
     Distinct from AdCPServiceUnavailableError, which names a downstream outage, and from
@@ -737,7 +743,7 @@ class AdCPUrlNotAllowedError(AdCPError):
 # translator runs build_two_layer_error_envelope() on the raised exception.
 
 
-class AdCPMediaBuyNotFoundError(AdCPNotFoundError):
+class AdCPMediaBuyNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     """Media buy lookup failed (404, MEDIA_BUY_NOT_FOUND).
 
     Recovery=correctable: the buyer can correct by supplying the right
@@ -749,7 +755,7 @@ class AdCPMediaBuyNotFoundError(AdCPNotFoundError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.MEDIA_BUY_NOT_FOUND
 
 
-class AdCPPackageNotFoundError(AdCPNotFoundError):
+class AdCPPackageNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     """Package lookup failed within a media buy (404, PACKAGE_NOT_FOUND).
 
     Recovery=correctable: the buyer can correct by supplying the right
@@ -760,7 +766,7 @@ class AdCPPackageNotFoundError(AdCPNotFoundError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.PACKAGE_NOT_FOUND
 
 
-class AdCPProductNotFoundError(AdCPNotFoundError):
+class AdCPProductNotFoundError(AdCPNotFoundError[ProductRefDetails]):
     """Requested product does not exist (404, PRODUCT_NOT_FOUND).
 
     Recovery=correctable: the buyer can correct by supplying a valid
@@ -774,7 +780,7 @@ class AdCPProductNotFoundError(AdCPNotFoundError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.PRODUCT_NOT_FOUND
 
 
-class AdCPContextNotFoundError(AdCPNotFoundError):
+class AdCPContextNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     """Buyer-supplied context_id does not resolve (404, SESSION_NOT_FOUND).
 
     A ``context_id`` that does not map to a persistent context is a not-found
@@ -792,7 +798,7 @@ class AdCPContextNotFoundError(AdCPNotFoundError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.SESSION_NOT_FOUND
 
 
-class AdCPCreativeNotFoundError(AdCPNotFoundError):
+class AdCPCreativeNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     """Requested creative does not exist (404, wire CREATIVE_NOT_FOUND).
 
     ``CREATIVE_NOT_FOUND`` is a pinned-spec wire code (enums/error-code.json @
@@ -808,7 +814,7 @@ class AdCPCreativeNotFoundError(AdCPNotFoundError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.CREATIVE_NOT_FOUND
 
 
-class AdCPFormatNotFoundError(AdCPNotFoundError):
+class AdCPFormatNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     """Requested creative format does not exist on the agent (404, REFERENCE_NOT_FOUND).
 
     Emits the PUBLISHED ``REFERENCE_NOT_FOUND``, not a minted ``FORMAT_NOT_FOUND``.
@@ -834,7 +840,7 @@ class AdCPFormatNotFoundError(AdCPNotFoundError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.REFERENCE_NOT_FOUND
 
 
-class AdCPTaskNotFoundError(AdCPNotFoundError):
+class AdCPTaskNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     """Requested workflow task/step does not exist (404, REFERENCE_NOT_FOUND).
 
     ``TASK_NOT_FOUND`` is not among the eight resource-specific not-found codes
@@ -937,8 +943,21 @@ class AdCPBudgetExceededError(AdCPError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.BUDGET_EXCEEDED
 
 
-class AdCPProductUnavailableError(AdCPError):
-    """Product is offline, deactivated, or otherwise unavailable (422, PRODUCT_UNAVAILABLE)."""
+class AdCPProductUnavailableError(AdCPError[EntityRefDetails]):
+    """Product is offline, sold out, deactivated, or otherwise unavailable (422).
+
+    Emits the PUBLISHED ``PRODUCT_UNAVAILABLE``, whose pinned description covers
+    the whole condition: "The requested product is sold out or no longer
+    available."
+
+    This absorbed ``AdCPInventoryUnavailableError``, which was the same error
+    under a second name: same 422, same ``PRODUCT_UNAVAILABLE``, same
+    correctable recovery, and nothing anywhere caught or ``isinstance``-checked
+    the two apart. Two classes emitting one code with identical handling give a
+    buyer no distinction to switch on and give a raise site a coin to flip. The
+    distinction that DOES matter -- which product, and why -- belongs in
+    ``details``.
+    """
 
     _default_status_code: ClassVar[int] = 422
     _code: ClassVar[ErrorCodeT] = ErrorCode.PRODUCT_UNAVAILABLE
@@ -1022,42 +1041,6 @@ class AdCPMediaBuyRejectedError(AdCPError):
 
     _default_status_code: ClassVar[int] = 422
     _code: ClassVar[ErrorCodeT] = AppErrorCode.MEDIA_BUY_REJECTED
-
-
-class AdCPInventoryUnavailableError(AdCPError):
-    """Requested inventory is not available (422, PRODUCT_UNAVAILABLE).
-
-    Emits the PUBLISHED ``PRODUCT_UNAVAILABLE``, whose pinned description is
-    exactly this condition: "The requested product is sold out or no longer
-    available." A private ``INVENTORY_UNAVAILABLE`` synonym of a published member
-    costs buyers the ability to switch on ``error.code`` across sellers, which is
-    the whole point of a published vocabulary -- the openness of that vocabulary
-    exists for conditions the spec has NOT named, not for renaming ones it has.
-
-    This docstring previously claimed "the wire code is the standard
-    PRODUCT_UNAVAILABLE" while ``_code`` said otherwise; the claim is now true.
-
-    recovery=correctable, unchanged: PRODUCT_UNAVAILABLE's pinned enumMetadata
-    classifies it correctable, the same class the retired platform code carried.
-    """
-
-    _default_status_code: ClassVar[int] = 422
-    _code: ClassVar[ErrorCodeT] = ErrorCode.PRODUCT_UNAVAILABLE
-
-
-# ---------------------------------------------------------------------------
-# Two-layer envelope serializer — single source of truth for wire shape.
-# ---------------------------------------------------------------------------
-# All three boundary translators (MCP, A2A, REST) and
-# ContextManager.audit_workflow_step_failure call this so wire
-# responses and persisted workflow_step.response_data share the same
-# two-layer shape. _impl functions never build wire shape; they raise
-# AdCPError subclasses and the boundary translator runs this.
-#
-# Spec: two-layer model is normative since AdCP 3.0.0 (``error-handling.mdx``).
-# Storyboard runners (@adcp/sdk 6.11.0+) check errors[0].code (when
-# success===false) AND adcp_error.code; missing either layer causes the
-# runner to synthesize "MCP_ERROR" and erase the real code.
 
 
 def build_error_object(exc: AdCPError) -> dict[str, Any]:

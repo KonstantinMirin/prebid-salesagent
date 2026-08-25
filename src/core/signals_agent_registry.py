@@ -34,6 +34,7 @@ from typing import Any
 from adcp import ADCPMultiAgentClient
 from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPError
 
+from src.core.errors.details import AdapterFailureDetails
 from src.core.exceptions import AdCPAdapterError
 from src.core.schemas import GetSignalsRequest
 
@@ -206,7 +207,7 @@ class SignalsAgentRegistry:
 
             else:
                 raise AdCPAdapterError(
-                    details={"agent_name": agent.name, "status": result.status},
+                    details=AdapterFailureDetails(agent_name=agent.name, status=result.status),
                 )
 
         except ADCPError as e:

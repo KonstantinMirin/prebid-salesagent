@@ -367,9 +367,13 @@ class TestErrorHandling:
 
             with pytest.raises(AdCPAdapterError) as _ei:
                 await resolve_property_list(ref)
-            # The failing URL is what the buyer can act on, and it is structured now.
-            # The sentence itself is SERVICE_UNAVAILABLE's table entry.
-            assert _ei.value.details["url"].startswith("https://")
+            # The failing URL is what the buyer can act on, and it is a DECLARED field
+            # now, not a dict key -- so a typo in the name is a typecheck failure rather
+            # than a KeyError at assert time. The sentence itself is
+            # SERVICE_UNAVAILABLE's table entry.
+            assert _ei.value.details is not None
+            assert _ei.value.details.url is not None
+            assert _ei.value.details.url.startswith("https://")
 
     @pytest.mark.asyncio
     async def test_timeout_raises_adcp_adapter_error(self):

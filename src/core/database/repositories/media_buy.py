@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from src.core.database.models import MediaBuy, MediaPackage
+from src.core.errors.details import EntityRefDetails
 
 if TYPE_CHECKING:
     from adcp.types import ContextObject
@@ -79,7 +80,7 @@ class MediaBuyRepository:
             from src.core.exceptions import AdCPMediaBuyNotFoundError
 
             raise AdCPMediaBuyNotFoundError(
-                details={"media_buy_id": media_buy_id},
+                details=EntityRefDetails(media_buy_id=media_buy_id),
                 context=context,
             )
         return media_buy
@@ -202,7 +203,7 @@ class MediaBuyRepository:
             from src.core.exceptions import AdCPPackageNotFoundError
 
             raise AdCPPackageNotFoundError(
-                details={"package_id": package_id, "media_buy_id": media_buy_id},
+                details=EntityRefDetails(package_id=package_id, media_buy_id=media_buy_id),
                 context=context,
             )
         return package

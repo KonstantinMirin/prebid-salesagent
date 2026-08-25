@@ -29,6 +29,8 @@ from src.adapters.broadstreet.managers import (
 )
 from src.adapters.broadstreet.schemas import BroadstreetConnectionConfig, BroadstreetProductConfig
 from src.adapters.constants import require_supported_update_action
+from src.core.errors.codes import AppErrorCode
+from src.core.errors.details import AdapterFailureDetails, EntityRefDetails, ErrorProblem
 from src.core.exceptions import (
     AdCPBulkUpdateError,
     AdCPPackageNotFoundError,
@@ -651,7 +653,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 db_packages = repo.get_packages(media_buy_id)
 
                 if not db_packages:
-                    raise AdCPPackageNotFoundError(details={"media_buy_id": media_buy_id})
+                    raise AdCPPackageNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
 
                 # Collect all advertisement IDs across packages
                 all_ad_ids: list[str] = []
@@ -669,9 +671,18 @@ class BroadstreetAdapter(AdServerAdapter):
                     else:
                         failed = self._toggle_advertisements(unique_ad_ids, active=is_resume)
                         if failed:
-                            failed_items = [{"id": ad_id, "reason": "update failed"} for ad_id in failed]
                             raise AdCPBulkUpdateError(
-                                details={"failed_items": failed_items},
+                                details=AdapterFailureDetails(
+                                    media_buy_id=media_buy_id,
+                                    problems=[
+                                        ErrorProblem(
+                                            code=AppErrorCode.AD_SERVER_UPDATE_FAILED,
+                                            subject_type="creative",
+                                            subject_id=str(ad_id),
+                                        )
+                                        for ad_id in failed
+                                    ],
+                                ),
                             )
                 else:
                     self.log(f"[yellow]No Broadstreet advertisement IDs found for {media_buy_id}[/yellow]")
@@ -699,7 +710,9 @@ class BroadstreetAdapter(AdServerAdapter):
                 db_package = repo.get_package(media_buy_id, package_id)
 
                 if not db_package:
-                    raise AdCPPackageNotFoundError(details={"package_id": package_id, "media_buy_id": media_buy_id})
+                    raise AdCPPackageNotFoundError(
+                        details=EntityRefDetails(package_id=package_id, media_buy_id=media_buy_id)
+                    )
 
                 ad_ids = db_package.package_config.get("broadstreet_advertisement_ids", [])
 
@@ -710,9 +723,18 @@ class BroadstreetAdapter(AdServerAdapter):
                     else:
                         failed = self._toggle_advertisements(ad_ids, active=is_resume)
                         if failed:
-                            failed_items = [{"id": ad_id, "reason": "update failed"} for ad_id in failed]
                             raise AdCPBulkUpdateError(
-                                details={"failed_items": failed_items},
+                                details=AdapterFailureDetails(
+                                    media_buy_id=media_buy_id,
+                                    problems=[
+                                        ErrorProblem(
+                                            code=AppErrorCode.AD_SERVER_UPDATE_FAILED,
+                                            subject_type="creative",
+                                            subject_id=str(ad_id),
+                                        )
+                                        for ad_id in failed
+                                    ],
+                                ),
                             )
                 else:
                     self.log(f"[yellow]No Broadstreet advertisement IDs for package {package_id}[/yellow]")
@@ -739,7 +761,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 db_package = repo.get_package(media_buy_id, package_id)
 
                 if not db_package:
-                    raise AdCPPackageNotFoundError(details={"package_id": package_id})
+                    raise AdCPPackageNotFoundError(details=EntityRefDetails(package_id=package_id))
 
                 db_package.package_config["budget"] = float(budget)
                 attributes.flag_modified(db_package, "package_config")
@@ -769,7 +791,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 db_package = repo.get_package(media_buy_id, package_id)
 
                 if not db_package:
-                    raise AdCPPackageNotFoundError(details={"package_id": package_id})
+                    raise AdCPPackageNotFoundError(details=EntityRefDetails(package_id=package_id))
 
                 db_package.package_config["impressions"] = budget
                 attributes.flag_modified(db_package, "package_config")

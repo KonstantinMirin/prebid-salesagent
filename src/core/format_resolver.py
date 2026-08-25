@@ -12,6 +12,7 @@ import json
 import logging
 
 from src.core.database.database_session import get_db_session
+from src.core.errors.details import EntityRefDetails
 from src.core.exceptions import AdCPError, AdCPFormatNotFoundError, AdCPNotFoundError
 from src.core.schemas import Format
 from src.core.validation_helpers import run_async_in_sync_context
@@ -94,11 +95,10 @@ def get_format(
     # ``details`` is where a machine can read it.
     raise AdCPFormatNotFoundError(
         field="format_id",
-        details={
-            "format_id": format_id,
-            **({"agent_url": agent_url} if agent_url else {}),
-            **({"tenant_id": tenant_id} if tenant_id else {}),
-        },
+        # The conditional spreads this replaces kept absent identifiers out of the
+        # block; ``to_wire()`` drops unset fields, so a plain None says the same
+        # thing without three dict literals.
+        details=EntityRefDetails(format_id=format_id, agent_url=agent_url, tenant_id=tenant_id),
     )
 
 

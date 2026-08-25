@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from src.core.database.jsonb_append import jsonb_list_append
 from src.core.database.models import Context as DBContext
 from src.core.database.models import ObjectWorkflowMapping, Principal, WorkflowStep
+from src.core.errors.details import EntityRefDetails
 
 
 def build_context(
@@ -231,7 +232,7 @@ class WorkflowRepository:
         if step is None:
             from src.core.exceptions import AdCPTaskNotFoundError
 
-            raise AdCPTaskNotFoundError(details={"step_id": step_id})
+            raise AdCPTaskNotFoundError(details=EntityRefDetails(step_id=step_id))
         return step
 
     def list_by_tenant(

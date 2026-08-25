@@ -44,7 +44,16 @@ from pydantic import BaseModel, ConfigDict
 from src.core.config import get_pydantic_extra_mode
 from src.core.errors.codes import ErrorCodeT
 
-__all__ = ["ErrorDetails", "ErrorProblem", "VersionUnsupportedDetails"]
+__all__ = [
+    "AdapterFailureDetails",
+    "EntityRefDetails",
+    "ErrorDetails",
+    "ErrorProblem",
+    "ProblemsDetails",
+    "ProductRefDetails",
+    "UpstreamCallDetails",
+    "VersionUnsupportedDetails",
+]
 
 
 class ErrorDetails(BaseModel):
@@ -138,3 +147,97 @@ class VersionUnsupportedDetails(ErrorDetails):
     build_version: str | None = None
     adcp_version: str | None = None
     adcp_major_version: int | None = None
+
+
+# ---------------------------------------------------------------------------
+# Shared shapes. A shape names no code (see the module docstring), so one shape
+# serves every error whose details answer the same question. These three cover
+# the 11 key-sets the AST survey found already duplicated across error classes:
+# {account_id} under four, {product_id} and {media_buy_id} under three each,
+# {agent_url, format_id} under three, and so on. Before this they were 11
+# copies of the same idea, distinguishable only by which raise site you read.
+# ---------------------------------------------------------------------------
+
+
+class EntityRefDetails(ErrorDetails):
+    """WHICH entity the error is about.
+
+    One shape for the not-found family, the ownership checks, and every error
+    whose details are simply "here is the identifier you asked about". Every
+    field is optional because a site names the identifiers it actually knows —
+    a package lookup that failed before resolving its media buy has only the
+    package id.
+
+    Shared deliberately across errors with different codes.
+    ``AdCPPackageNotFoundError`` and ``AdCPGamUpdateError`` both answer "which
+    package", and the code says what went wrong with it.
+    """
+
+    account_id: str | None = None
+    media_buy_id: str | None = None
+    package_id: str | None = None
+    product_id: str | None = None
+    creative_id: str | None = None
+    format_id: str | None = None
+    line_item_id: str | None = None
+    context_id: str | None = None
+    step_id: str | None = None
+    principal_id: str | None = None
+    tenant_id: str | None = None
+    agent_url: str | None = None
+    brand_domain: str | None = None
+    operator: str | None = None
+    idempotency_key: str | None = None
+    package_index: int | None = None
+    format_index: int | None = None
+
+
+class UpstreamCallDetails(ErrorDetails):
+    """What happened on a call OUT of this seller, to an adapter or agent.
+
+    Distinct from ``EntityRefDetails`` because these fields describe the call,
+    not the entity: a buyer reading ``status_code`` learns about the seller's
+    upstream, and a buyer reading ``package_id`` learns about their own request.
+    """
+
+    agent_name: str | None = None
+    url: str | None = None
+    status: str | None = None
+    status_code: int | None = None
+    max_retries: int | None = None
+
+
+class ProblemsDetails(ErrorDetails):
+    """A collection of problems, each one structured.
+
+    Replaces the five key names that all meant this — ``validation_errors``,
+    ``creative_errors``, ``config_errors``, ``adapter_errors`` and
+    ``violations`` — every one of which held ``list[str]`` built by discarding
+    the structure it interpolated. See ``ErrorProblem``.
+    """
+
+    problems: list[ErrorProblem] | None = None
+
+
+class ProductRefDetails(EntityRefDetails):
+    """A product reference that may name several products at once.
+
+    Extends ``EntityRefDetails`` rather than redeclaring its fields: a
+    product-not-found either names the one product asked for, or the set that
+    could not be resolved from a multi-package request.
+    """
+
+    missing_product_ids: list[str] | None = None
+
+
+class AdapterFailureDetails(EntityRefDetails, UpstreamCallDetails, ProblemsDetails):
+    """A failure on a call out to an adapter or agent.
+
+    Composed rather than redeclared. An adapter failure genuinely needs all
+    three axes: which entity the call was about (``EntityRefDetails``), what the
+    upstream did (``UpstreamCallDetails``), and the per-item problems when the
+    call partially succeeded (``ProblemsDetails``). Listing those fields again
+    here would be the copy-paste the DRY invariant forbids, and the composition
+    is why ``AdCPAdapterError`` needs no type parameter of its own -- its five
+    taxonomy subclasses all draw from the same three axes.
+    """

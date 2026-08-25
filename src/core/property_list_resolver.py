@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 from adcp.types import GetPropertyListResponse, PropertyListReference
 
+from src.core.errors.details import AdapterFailureDetails
 from src.core.exceptions import AdCPAdapterError, AdCPUrlNotAllowedError
 from src.core.security.url_validator import check_url_ssrf
 
@@ -103,13 +104,13 @@ async def resolve_property_list(ref: PropertyListReference) -> list[str]:
     # logged anything before, so the slot is also their only operator coverage.
     except httpx.HTTPStatusError as exc:
         raise AdCPAdapterError(
-            details={"url": url},
+            details=AdapterFailureDetails(url=url),
             internal_detail=exc,
         ) from exc
     except httpx.TimeoutException as exc:
-        raise AdCPAdapterError(details={"url": url}, internal_detail=exc) from exc
+        raise AdCPAdapterError(details=AdapterFailureDetails(url=url), internal_detail=exc) from exc
     except httpx.RequestError as exc:
-        raise AdCPAdapterError(details={"url": url}, internal_detail=exc) from exc
+        raise AdCPAdapterError(details=AdapterFailureDetails(url=url), internal_detail=exc) from exc
 
     # Parse response
     parsed = GetPropertyListResponse.model_validate(response.json())

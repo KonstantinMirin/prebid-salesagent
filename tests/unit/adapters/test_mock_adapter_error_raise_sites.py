@@ -154,13 +154,13 @@ class TestMockBudgetExhaustedRaiseSite:
 
 
 class TestMockInventoryUnavailableRaiseSite:
-    """Production raise site for AdCPInventoryUnavailableError (INVENTORY_UNAVAILABLE)."""
+    """Production raise site for AdCPProductUnavailableError (PRODUCT_UNAVAILABLE)."""
 
     def test_simulation_force_inventory_unavailable_raises_inventory_error(self):
         """A simulation strategy with ``force_inventory_unavailable`` drives the
         immediate-create raise site."""
         from src.core.database.models import Strategy as StrategyModel
-        from src.core.exceptions import AdCPInventoryUnavailableError
+        from src.core.exceptions import AdCPProductUnavailableError
         from src.core.strategy import StrategyContext
 
         # In-memory simulation strategy: is_simulation + sim_ prefix + force flag.
@@ -185,7 +185,7 @@ class TestMockInventoryUnavailableRaiseSite:
         start_time = datetime.now(UTC)
         end_time = start_time + timedelta(days=30)
 
-        with pytest.raises(AdCPInventoryUnavailableError) as exc_info:
+        with pytest.raises(AdCPProductUnavailableError) as exc_info:
             adapter.create_media_buy(
                 request=request,
                 packages=_make_packages(),

@@ -1598,14 +1598,17 @@ async def _validate_and_convert_format_ids(
             format_obj = await registry.get_format(agent_url, format_id)
             if not format_obj:
                 raise AdCPFormatNotFoundError(
-                    field=field, details={**where, "agent_url": agent_url, "format_id": format_id}
+                    field=field,
+                    details=EntityRefDetails(**where, agent_url=agent_url, format_id=format_id),
                 )
         except AdCPError:
             raise
         except Exception as e:
             logger.exception(f"Error fetching format {format_id} from {agent_url}: {e}")
             raise AdCPAdapterError(
-                field=field, details={**where, "agent_url": agent_url, "format_id": format_id}, internal_detail=e
+                field=field,
+                details=AdapterFailureDetails(**where, agent_url=agent_url, format_id=format_id),
+                internal_detail=e,
             )
 
         # Format validated - add to results
@@ -1614,6 +1617,7 @@ async def _validate_and_convert_format_ids(
     return validated_format_ids
 
 
+from src.core.errors.details import AdapterFailureDetails, EntityRefDetails, ProductRefDetails
 from src.services.setup_checklist_service import SetupIncompleteError, validate_setup_complete
 from src.services.slack_notifier import get_slack_notifier
 
@@ -1657,7 +1661,7 @@ def _raise_degraded_replay_outcome(
         assert uow.idempotency_attempts is not None
         existing = uow.media_buys.find_by_idempotency_key(idempotency_key, principal_id, account_id=account_id)
         if existing is None:
-            raise AdCPInternalError(details={"idempotency_key": idempotency_key})
+            raise AdCPInternalError(details=EntityRefDetails(idempotency_key=idempotency_key))
 
         # Rule 6 (security.mdx#idempotency): a key the seller has seen whose
         # replay window has expired rejects rather than silently re-deriving —
@@ -2298,7 +2302,7 @@ async def _create_media_buy_impl(
                 # product_ids), so the pointer names the array and details enumerate
                 # which ids were missing (salesagent-rfxfu).
                 raise AdCPProductNotFoundError(
-                    details={"missing_product_ids": sorted(missing_product_ids)},
+                    details=ProductRefDetails(missing_product_ids=sorted(missing_product_ids)),
                     field=PACKAGES_FIELD,
                 )
 
@@ -3231,7 +3235,7 @@ async def _create_media_buy_impl(
                 # (AdCPProductNotFoundError) catches missing products first, so this
                 # per-package branch is suite-invisible — typed for guard parity.
                 raise AdCPProductNotFoundError(
-                    details={"package_index": idx, "product_id": pkg_product_id},
+                    details=ProductRefDetails(package_index=idx, product_id=pkg_product_id),
                     field=package_field_path("product_id", pkg_index),
                 )
 

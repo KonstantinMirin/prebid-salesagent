@@ -11,6 +11,7 @@ from __future__ import annotations
 from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey
 
 from src.core.database.repositories.account import AccountRepository
+from src.core.errors.details import EntityRefDetails
 from src.core.exceptions import (
     AdCPAccountAmbiguousError,
     AdCPAccountNotFoundError,
@@ -85,11 +86,11 @@ def _check_account_status(account_id: str, status: str | None) -> None:
         )
     if status == "suspended":
         raise AdCPAccountSuspendedError(
-            details={"account_id": account_id},
+            details=EntityRefDetails(account_id=account_id),
         )
     if status == "payment_required":
         raise AdCPAccountPaymentRequiredError(
-            details={"account_id": account_id},
+            details=EntityRefDetails(account_id=account_id),
         )
 
 
@@ -118,7 +119,7 @@ def _resolve_by_id(
     account = repo.get_by_id(account_id)
     if account is None:
         raise AdCPAccountNotFoundError(
-            details={"account_id": account_id},
+            details=EntityRefDetails(account_id=account_id),
         )
 
     _require_account_access(identity, account_id, repo)
@@ -167,7 +168,7 @@ def _resolve_by_natural_key(
     account = matches[0] if matches else None
     if account is None:
         raise AdCPAccountNotFoundError(
-            details={"brand_domain": brand_domain, "operator": ref.operator},
+            details=EntityRefDetails(brand_domain=brand_domain, operator=ref.operator),
         )
 
     _require_account_access(identity, account.account_id, repo)

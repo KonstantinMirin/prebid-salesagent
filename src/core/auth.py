@@ -28,6 +28,7 @@ from src.core.config_loader import (
 )
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as ModelPrincipal
+from src.core.errors.details import EntityRefDetails
 
 # Buyer-facing correction hints, split per the v3.1.1 AUTH_MISSING/AUTH_INVALID
 # error-code split (dist/schemas/3.1.1/enums/error-code.json, salesagent-mkso).
@@ -326,7 +327,7 @@ def resolve_principal_or_raise(
 
     principal = get_principal_object(principal_id, tenant_id=tenant_id)
     if principal is None:
-        raise AdCPAuthenticationError(details={"principal_id": principal_id}, context=context)
+        raise AdCPAuthenticationError(details=EntityRefDetails(principal_id=principal_id), context=context)
     return principal
 
 

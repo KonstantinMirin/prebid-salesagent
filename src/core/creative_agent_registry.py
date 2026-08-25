@@ -180,6 +180,7 @@ class FormatFetchResult:
     failed_agent_urls: list[str] = field(default_factory=list)
 
 
+from src.core.errors.details import AdapterFailureDetails
 from src.core.utils.mcp_client import create_mcp_client  # Keep for custom tools (preview, build)
 
 
@@ -455,7 +456,7 @@ class CreativeAgentRegistry:
 
             elif result.status == "submitted":
                 raise AdCPAdapterError(
-                    details={"agent_name": agent.name},
+                    details=AdapterFailureDetails(agent_name=agent.name),
                 )
 
             elif result.status == "failed":
@@ -502,7 +503,7 @@ class CreativeAgentRegistry:
 
             else:
                 raise AdCPAdapterError(
-                    details={"agent_name": agent.name, "status": result.status},
+                    details=AdapterFailureDetails(agent_name=agent.name, status=result.status),
                 )
 
         except ADCPError as e:
@@ -572,19 +573,25 @@ class CreativeAgentRegistry:
                 # status is structured first-party data, not an identifier. The URL is
                 # already captured server-side by the logger.error above.
                 if exc.response.status_code == 429:
+                    # retry_after is a FIRST-CLASS field on AdCPError and on the wire
+                    # error object, so it travels there rather than inside details --
+                    # two channels for one fact is what this migration removes. The
+                    # header is only honoured when it is a delta-seconds integer; the
+                    # HTTP-date form carries no int for the wire field to hold.
+                    retry_header = exc.response.headers.get("Retry-After")
                     raise AdCPRateLimitError(
-                        details={"retry_after": exc.response.headers.get("Retry-After")},
+                        retry_after=int(retry_header) if retry_header and retry_header.isdigit() else None,
                     ) from exc
                 if exc.response.status_code >= 500:
                     raise AdCPServiceUnavailableError(
-                        details={"status_code": exc.response.status_code}, internal_detail=exc
+                        details=AdapterFailureDetails(status_code=exc.response.status_code), internal_detail=exc
                     ) from exc
                 # 4xx non-429 from an external agent is a buyer-side error
                 # (bad request, unauthorized, not found, etc.); retrying the
                 # same request won't help, so override the class default
                 # ``transient`` with ``terminal``.
                 raise AdCPAdapterError(
-                    details={"status_code": exc.response.status_code},
+                    details=AdapterFailureDetails(status_code=exc.response.status_code),
                     internal_detail=exc,
                 ) from exc
             except httpx.TimeoutException as exc:
@@ -608,7 +615,7 @@ class CreativeAgentRegistry:
                 # or IP addresses"; "upstream API responses").
                 raise AdCPServiceUnavailableError(internal_detail=exc) from exc
         else:
-            raise AdCPServiceUnavailableError(details={"max_retries": max_retries}) from last_exc
+            raise AdCPServiceUnavailableError(details=AdapterFailureDetails(max_retries=max_retries)) from last_exc
 
         # Parse SSE or JSON response
         content_type = response.headers.get("content-type", "")
@@ -624,7 +631,7 @@ class CreativeAgentRegistry:
                 return self._parse_mcp_tool_result(data["result"], logger)
 
         raise AdCPAdapterError(
-            details={"agent_url": agent.agent_url},
+            details=AdapterFailureDetails(agent_url=agent.agent_url),
         )
 
     def _parse_mcp_tool_result(self, result: dict, logger: Any) -> list[Format]:

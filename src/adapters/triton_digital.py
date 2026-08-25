@@ -6,6 +6,7 @@ import requests
 
 from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import require_supported_update_action
+from src.core.errors.details import EntityRefDetails
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
@@ -633,7 +634,7 @@ class TritonDigital(AdServerAdapter):
 
                     flight = next((f for f in flights if f["name"] == package_id), None)
                     if not flight:
-                        raise AdCPPackageNotFoundError(details={"package_id": package_id})
+                        raise AdCPPackageNotFoundError(details=EntityRefDetails(package_id=package_id))
 
                     # Update flight status
                     is_resume = action == "resume_package"
@@ -671,7 +672,7 @@ class TritonDigital(AdServerAdapter):
 
                     flight = next((f for f in flights if f["name"] == package_id), None)
                     if not flight:
-                        raise AdCPPackageNotFoundError(details={"package_id": package_id})
+                        raise AdCPPackageNotFoundError(details=EntityRefDetails(package_id=package_id))
 
                     # Calculate impressions based on action
                     if action == "update_package_budget":

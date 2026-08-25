@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from adcp.types import CreativeAsset
 from pydantic import BaseModel
 
+from src.core.errors.details import AdapterFailureDetails
 from src.core.exceptions import (
     AdCPConfigurationError,
     AdCPCreativeRejectedError,
@@ -601,7 +602,7 @@ def _update_existing_creative(
                 _failed_sync_result(
                     existing_creative.creative_id,
                     AdCPServiceUnavailableError(
-                        details={"creative_id": existing_creative.creative_id},
+                        details=AdapterFailureDetails(creative_id=existing_creative.creative_id),
                         internal_detail=validation_error,
                     ),
                 ),
@@ -936,7 +937,7 @@ def _create_new_creative(
                 _failed_sync_result(
                     creative_id,
                     AdCPServiceUnavailableError(
-                        details={"creative_id": creative_id},
+                        details=AdapterFailureDetails(creative_id=creative_id),
                         internal_detail=validation_error,
                     ),
                 ),

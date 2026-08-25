@@ -45,6 +45,8 @@ from src.adapters.gam.managers.orders import (
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
 from src.adapters.gam_data_freshness import validate_and_log_freshness
 from src.core.audit_logger import AuditLogger
+from src.core.errors.codes import AppErrorCode
+from src.core.errors.details import AdapterFailureDetails, EntityRefDetails, ErrorProblem
 from src.core.exceptions import (
     AdCPActivationWorkflowError,
     AdCPAdapterError,
@@ -1135,7 +1137,7 @@ class GoogleAdManager(AdServerAdapter):
         is_fresh = validate_and_log_freshness(reporting_data, media_buy_id, target_date=target_date)
 
         if not is_fresh:
-            raise AdCPAdapterError(details={"media_buy_id": media_buy_id})
+            raise AdCPAdapterError(details=AdapterFailureDetails(media_buy_id=media_buy_id))
 
         # Aggregate totals across all packages
         total_impressions = reporting_data.metrics.get("total_impressions", 0)
@@ -1391,7 +1393,9 @@ class GoogleAdManager(AdServerAdapter):
 
                 if not media_package:
                     self.log(f"[red]Package {package_id} not found for media buy {media_buy_id}[/red]")
-                    raise AdCPPackageNotFoundError(details={"package_id": package_id, "media_buy_id": media_buy_id})
+                    raise AdCPPackageNotFoundError(
+                        details=EntityRefDetails(package_id=package_id, media_buy_id=media_buy_id)
+                    )
 
                 # Validate budget isn't less than delivery to date
                 delivery_metrics = media_package.package_config.get("delivery_metrics", {})
@@ -1436,10 +1440,7 @@ class GoogleAdManager(AdServerAdapter):
                 if not success:
                     self.log(f"[red]Failed to update GAM line item {platform_line_item_id} budget[/red]")
                     raise AdCPGamUpdateError(
-                        details={
-                            "package_id": package_id,
-                            "line_item_id": platform_line_item_id,
-                        },
+                        details=AdapterFailureDetails(package_id=package_id, line_item_id=platform_line_item_id),
                     )
 
                 # Update budget in package_config JSON after successful GAM sync
@@ -1480,7 +1481,7 @@ class GoogleAdManager(AdServerAdapter):
                     media_package = repo.get_package(media_buy_id, package_id)
 
                     if not media_package:
-                        raise AdCPPackageNotFoundError(details={"package_id": package_id})
+                        raise AdCPPackageNotFoundError(details=EntityRefDetails(package_id=package_id))
 
                     # Get platform line item ID
                     platform_line_item_id = media_package.package_config.get("platform_line_item_id")
@@ -1498,10 +1499,7 @@ class GoogleAdManager(AdServerAdapter):
 
                     if not success:
                         raise AdCPGamUpdateError(
-                            details={
-                                "package_id": package_id,
-                                "line_item_id": platform_line_item_id,
-                            },
+                            details=AdapterFailureDetails(package_id=package_id, line_item_id=platform_line_item_id),
                         )
 
                     self.log(f"✓ {action_verb} package {package_id} in GAM")
@@ -1528,7 +1526,7 @@ class GoogleAdManager(AdServerAdapter):
 
                     if not packages:
                         raise AdCPPackageNotFoundError(
-                            details={"media_buy_id": media_buy_id},
+                            details=EntityRefDetails(media_buy_id=media_buy_id),
                         )
 
                     # Pause/resume each package's line item
@@ -1551,8 +1549,23 @@ class GoogleAdManager(AdServerAdapter):
                             )
 
                     if failed_items:
+                        # The GAM line-item id the replaced prose named is an internal
+                        # platform id, so it rides internal_detail via the log above
+                        # rather than the buyer's envelope. What the buyer needs is which
+                        # of THEIR packages failed, and that the failure was an ad-server
+                        # update -- both of which the code and subject carry.
                         raise AdCPBulkUpdateError(
-                            details={"failed_items": failed_items},
+                            details=AdapterFailureDetails(
+                                media_buy_id=media_buy_id,
+                                problems=[
+                                    ErrorProblem(
+                                        code=AppErrorCode.AD_SERVER_UPDATE_FAILED,
+                                        subject_type="package",
+                                        subject_id=str(item["id"]),
+                                    )
+                                    for item in failed_items
+                                ],
+                            ),
                         )
 
                     self.log(f"✓ {action_verb} all {len(packages)} packages in media buy {media_buy_id}")

@@ -73,6 +73,7 @@ from src.core.database.models import (
     Product as DBProduct,
 )
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
+from src.core.errors.details import AdapterFailureDetails, EntityRefDetails, ErrorProblem
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -428,7 +429,7 @@ def _update_media_buy_impl(
                 # a not-found condition, not a transient adapter outage.
                 if persistent_ctx is None:
                     raise AdCPContextNotFoundError(
-                        details={"context_id": ctx_id}, field="context_id", context=req.context
+                        details=EntityRefDetails(context_id=ctx_id), field="context_id", context=req.context
                     )
 
                 # Create workflow step for this tool call
@@ -962,15 +963,22 @@ def _update_media_buy_impl(
                         if failed_creatives:
                             raise AdCPAdapterError(
                                 context=req.context,
-                                details={
-                                    "failed_creatives": [
-                                        {
-                                            "creative_id": r.creative_id,
-                                            "errors": [e.message for e in (r.errors or [])],
-                                        }
+                                # ``e.code`` rather than ``e.message``: the message is a
+                                # function of the code through CODE_TABLE, so the code is
+                                # the fact and the sentence is derivable from it. Sending
+                                # the sentence made the buyer parse prose to learn which
+                                # creative failed and why.
+                                details=AdapterFailureDetails(
+                                    problems=[
+                                        ErrorProblem(
+                                            code=err.code,
+                                            subject_type="creative",
+                                            subject_id=r.creative_id,
+                                        )
                                         for r in failed_creatives
+                                        for err in r.errors or []
                                     ]
-                                },
+                                ),
                             )
 
                         # Track in affected_packages

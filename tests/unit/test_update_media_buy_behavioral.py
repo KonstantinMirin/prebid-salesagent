@@ -22,6 +22,7 @@ from unittest.mock import ANY, MagicMock, Mock, patch
 import pytest
 from pydantic import ValidationError
 
+from src.core.errors.codes import ErrorCode
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthenticationError,
@@ -33,6 +34,7 @@ from src.core.exceptions import (
 )
 from src.core.schemas import (
     Budget,
+    Error,
     UpdateMediaBuyError,
     UpdateMediaBuyRequest,
     UpdateMediaBuySubmitted,
@@ -1480,9 +1482,9 @@ class TestUC003UploadInlineCreatives:
             failed_creative = MagicMock()
             failed_creative.creative_id = "c_fail"
             failed_creative.action = "failed"
-            mock_error = MagicMock()
-            mock_error.message = "Upload failed"
-            failed_creative.errors = [mock_error]
+            # Real Error: ErrorProblem.code is typed, so a MagicMock cannot reach the
+            # buyer's envelope through it.
+            failed_creative.errors = [Error.of(ErrorCode.CREATIVE_INACCESSIBLE)]
             mock_sync_response.creatives = [failed_creative]
 
             with patch("src.core.tools.media_buy_update._sync_creatives_impl", return_value=mock_sync_response):
@@ -2423,9 +2425,12 @@ class TestUC003ExtK:
             failed = MagicMock()
             failed.creative_id = "c_fail"
             failed.action = "failed"
-            mock_err = MagicMock()
-            mock_err.message = "Network error"
-            failed.errors = [mock_err]
+            # A REAL Error, not a MagicMock with a hand-written message. The mock's
+            # ``message = "Network error"`` was authored prose that the old dict-shaped
+            # details accepted silently; the typed ``ErrorProblem.code`` refuses it, and
+            # refusing it is correct -- a MagicMock reaching a buyer's envelope is the
+            # bug the type was added to prevent.
+            failed.errors = [Error.of(ErrorCode.CREATIVE_INACCESSIBLE)]
             mock_sync_response.creatives = [failed]
 
             with patch("src.core.tools.media_buy_update._sync_creatives_impl", return_value=mock_sync_response):
@@ -2453,6 +2458,14 @@ class TestUC003ExtK:
                     _update_media_buy_impl(req=req, identity=identity)
 
                 assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+                # The per-creative failure is STRUCTURED: which creative, and which code.
+                # Before this it was a prose string the buyer had to parse.
+                details = exc_info.value.details
+                assert details is not None
+                assert details.problems is not None
+                assert [(p.subject_type, p.subject_id, p.code) for p in details.problems] == [
+                    ("creative", "c_fail", ErrorCode.CREATIVE_INACCESSIBLE)
+                ]
 
     def test_media_buy_unmodified_on_sync_failure(self):
         """Media buy unchanged when creative sync fails.
@@ -2466,9 +2479,9 @@ class TestUC003ExtK:
             failed = MagicMock()
             failed.creative_id = "c_fail"
             failed.action = "failed"
-            mock_err = MagicMock()
-            mock_err.message = "Error"
-            failed.errors = [mock_err]
+            # Real Error, same reason as the sibling test above: ErrorProblem.code is
+            # typed, so a MagicMock cannot reach the buyer's envelope through it.
+            failed.errors = [Error.of(ErrorCode.CREATIVE_INACCESSIBLE)]
             mock_sync_response.creatives = [failed]
 
             with patch("src.core.tools.media_buy_update._sync_creatives_impl", return_value=mock_sync_response):

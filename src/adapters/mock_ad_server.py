@@ -18,14 +18,15 @@ from src.adapters.base import (
     BaseProductConfig,
     TargetingCapabilities,
 )
+from src.core.errors.details import EntityRefDetails
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPBudgetExhaustedError,
     AdCPCapabilityNotSupportedError,
     AdCPCreativeRejectedError,
-    AdCPInventoryUnavailableError,
     AdCPMediaBuyNotFoundError,
     AdCPMediaBuyRejectedError,
+    AdCPProductUnavailableError,
     AdCPServiceUnavailableError,
     AdCPValidationError,
 )
@@ -828,7 +829,7 @@ class MockAdServer(AdServerAdapter):
                 )
 
             if self._should_force_error("inventory_unavailable"):
-                raise AdCPInventoryUnavailableError()
+                raise AdCPProductUnavailableError()
 
         # Default priority for campaigns (standard = 8, guaranteed = 4)
         priority = 4 if any(p.delivery_type == "guaranteed" for p in packages) else 8
@@ -1105,7 +1106,7 @@ class MockAdServer(AdServerAdapter):
             self.log(f"Would return: All {len(assets)} creatives with status 'approved'")
         else:
             if media_buy_id not in self._media_buys:
-                raise AdCPMediaBuyNotFoundError(details={"media_buy_id": media_buy_id})
+                raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
 
             self._media_buys[media_buy_id]["creatives"].extend(assets)
             self.log(f"✓ Successfully uploaded {len(assets)} creatives")
@@ -1150,7 +1151,7 @@ class MockAdServer(AdServerAdapter):
     def check_media_buy_status(self, media_buy_id: str, today: datetime) -> CheckMediaBuyStatusResponse:
         """Simulates checking the status of a media buy."""
         if media_buy_id not in self._media_buys:
-            raise AdCPMediaBuyNotFoundError(details={"media_buy_id": media_buy_id})
+            raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
 
         buy = self._media_buys[media_buy_id]
         start_date = buy["start_time"]
@@ -1276,7 +1277,10 @@ class MockAdServer(AdServerAdapter):
             # Check for test scenario outage simulation
             if test_scenario and test_scenario.simulate_outage:
                 self.log(f"🚨 Test Scenario: Simulating platform outage on day {current_day}")
-                raise AdCPServiceUnavailableError(details={"current_day": current_day})
+                # The simulated day is in the log line above. It is mock-harness state,
+                # not something a buyer can act on, and nothing reads it off the
+                # envelope -- so it does not earn a field on the shared adapter shape.
+                raise AdCPServiceUnavailableError()
 
             if elapsed_duration <= 0:
                 # Campaign hasn't started
