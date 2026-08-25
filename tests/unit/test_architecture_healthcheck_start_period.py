@@ -20,18 +20,32 @@ docker-compose.yml (local dev), and docker-compose.multi-tenant.yml
 (adcp-server AND admin-ui). Parametrized across all four rather than
 guarding only the one that was reported.
 
-Read through `docker compose config` (Docker's own real resolution of
-each file, including env-var interpolation and YAML anchors) rather than
-a hand-parsed YAML load, so this checks what Docker will ACTUALLY run,
-not what the source file happens to say before merging/interpolation.
+Read by parsing the compose YAML, NOT by shelling out to
+`docker compose config`. The subprocess form is what this guard originally
+used, on the reasoning that Docker's own resolution (env interpolation,
+YAML anchors, `extends`) is the thing that actually runs. That reasoning is
+sound in general and wrong here, for two independent reasons:
+
+1. It made a UNIT test depend on the Docker CLI. `tests/unit/` runs inside
+   the `tests` container, which has no docker binary — measured on both CI
+   boxes at once (runs ba428471/4ce20dcd, 2026-08-25): all four cases died
+   with `FileNotFoundError: [Errno 2] No such file or directory: 'docker'`
+   while passing on the developer's machine. A guard that only grades where
+   Docker happens to be installed is a guard that stops grading in CI.
+2. Nothing it bought applies to this assertion. `start_period` is a literal
+   scalar; `${VAR}` interpolation cannot produce or remove it, and YAML
+   anchors are resolved by the parser itself. The one construct that WOULD
+   move a healthcheck between files is `extends:` — so this module asserts
+   no compose file has grown one, rather than assuming it forever.
 """
 
 from __future__ import annotations
 
-import json
-import subprocess
+from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 
 from tests.unit._architecture_helpers import repo_root
 
@@ -48,16 +62,18 @@ _MUST_HAVE_START_PERIOD = (
     ("docker-compose.multi-tenant.yml", "admin-ui"),
 )
 
+_COMPOSE_FILES = tuple(dict.fromkeys(f for f, _ in _MUST_HAVE_START_PERIOD))
+
+
+def _load_compose(compose_file: str) -> dict[str, Any]:
+    path: Path = repo_root() / compose_file
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
 
 def _resolved_healthcheck(compose_file: str, service: str) -> dict:
-    out = subprocess.run(
-        ["docker", "compose", "-f", compose_file, "config", "--format", "json"],
-        cwd=repo_root(),
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    return json.loads(out)["services"][service].get("healthcheck") or {}
+    services = _load_compose(compose_file).get("services") or {}
+    assert service in services, f"{compose_file} has no service {service!r} (services: {sorted(services)})"
+    return services[service].get("healthcheck") or {}
 
 
 @pytest.mark.arch_guard
@@ -70,4 +86,25 @@ def test_app_server_healthcheck_has_a_start_period(compose_file: str, service: s
         f"{compose_file}:{service}'s healthcheck has no start_period — Docker will mark "
         f"ordinary, slow startup under load as genuinely unhealthy rather than 'starting' "
         f"(resolved healthcheck: {hc!r})"
+    )
+
+
+@pytest.mark.arch_guard
+@pytest.mark.parametrize("compose_file", _COMPOSE_FILES)
+def test_compose_healthchecks_are_readable_without_docker(compose_file: str) -> None:
+    """No service uses ``extends:``, so a plain YAML load resolves the same
+    healthcheck Docker would.
+
+    This is the assumption the module docstring rests on. ``extends`` is the
+    only compose construct that can move a healthcheck in from another file
+    (anchors are resolved by the YAML parser; ``${VAR}`` interpolation cannot
+    add or remove a ``start_period`` key). If someone introduces one, this
+    fails and the guard above must go back to Docker's own resolution — run
+    somewhere that HAS Docker, which is not the unit suite.
+    """
+    services = _load_compose(compose_file).get("services") or {}
+    extending = sorted(name for name, spec in services.items() if isinstance(spec, dict) and "extends" in spec)
+    assert not extending, (
+        f"{compose_file} services {extending} use `extends:`, which a plain yaml.safe_load does not "
+        f"resolve — this module's healthcheck reads are no longer equivalent to `docker compose config`"
     )
