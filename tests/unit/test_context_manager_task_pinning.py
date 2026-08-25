@@ -25,11 +25,12 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from src.core import async_utils, context_manager
+from src.services.protocol_webhook_service import ProtocolWebhookService
 from tests.unit._push_notification_helpers import make_push_step, session_returning
 
 
@@ -52,8 +53,12 @@ def _drive(send_notification_side):
     webhook = SimpleNamespace(id="pnc_1")
     session = session_returning([mapping], context, [webhook])
 
-    fake_service = MagicMock()
-    fake_service.send_notification = AsyncMock(side_effect=send_notification_side)
+    # A REAL service with only the wire call stubbed. _send_push_notifications
+    # dispatches through notify() now (salesagent-pldmk.39); a MagicMock service
+    # returns a MagicMock from notify(), which asyncio refuses as a coroutine, so
+    # no task is ever created and these pinning assertions grade nothing.
+    fake_service = ProtocolWebhookService()
+    fake_service.send_notification = AsyncMock(side_effect=send_notification_side)  # type: ignore[method-assign]
 
     cm = context_manager.ContextManager()
     with patch.object(context_manager, "get_protocol_webhook_service", return_value=fake_service):

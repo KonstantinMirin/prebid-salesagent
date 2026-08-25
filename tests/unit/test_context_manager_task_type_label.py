@@ -24,11 +24,12 @@ Mutation coverage (verified during authoring):
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from src.core import context_manager
+from src.services.protocol_webhook_service import ProtocolWebhookService
 from tests.unit._push_notification_helpers import make_push_step, session_returning
 
 
@@ -49,8 +50,13 @@ def _capture_send(tool_name: str):
         captured["payload"] = kwargs.get("payload")
         captured["metadata"] = kwargs.get("metadata")
 
-    fake_service = MagicMock()
-    fake_service.send_notification = AsyncMock(side_effect=record)
+    # A REAL service with only the wire call stubbed. _send_push_notifications now
+    # goes through notify(), which is where the dialect is selected and the payload
+    # built (salesagent-pldmk.39) -- mocking the whole service would mock away the
+    # code these tests exist to grade. With the real object, notify() runs for real
+    # and record() still captures exactly what reaches the wire.
+    fake_service = ProtocolWebhookService()
+    fake_service.send_notification = AsyncMock(side_effect=record)  # type: ignore[method-assign]
 
     cm = context_manager.ContextManager()
     with patch.object(context_manager, "get_protocol_webhook_service", return_value=fake_service):

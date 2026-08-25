@@ -8,9 +8,6 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
-from a2a.types import Task, TaskStatusUpdateEvent
-from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
-from adcp.types import McpWebhookPayload
 from adcp.webhooks import GeneratedTaskStatus
 from pydantic import BaseModel
 from rich.console import Console
@@ -28,9 +25,9 @@ from src.core.exceptions import (
 )
 from src.core.security.outbound_http import OutboundError
 from src.core.webhook_validator import (
-    validate_webhook_task_type,
     webhook_url_for_log,
 )
+from src.core.webhooks.delivery import WebhookTaskContext
 from src.core.webhooks.registration import ValidatedWebhookRegistration
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -899,42 +896,33 @@ class ContextManager(DatabaseManager):
                     except ValueError:
                         status_enum = GeneratedTaskStatus.unknown
 
-                    # SDK 5.7 validates task_type against TaskType enum; coerce a
-                    # COPY for the payload while leaving task_type_str untouched.
-                    wire_task_type = validate_webhook_task_type(task_type_str)
-
-                    payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
-                    if protocol == "a2a":
-                        payload = create_a2a_webhook_payload(
-                            task_id=step.step_id,
-                            status=status_enum,
-                            context_id=step.context_id,
-                            result=step.response_data or {},
-                        )
-                    else:
-                        # SDK 5.7: returns McpWebhookPayload directly
-                        payload = create_mcp_webhook_payload(
-                            task_id=step.step_id,
-                            status=status_enum,
-                            task_type=wire_task_type,
-                            result=step.response_data,
-                        )
-
-                    metadata: dict[str, Any] = {
-                        "task_type": task_type_str,
-                        "tenant_id": derived_tenant_id,
-                        "principal_id": derived_principal_id,
-                    }
+                    # The dialect fork and the metadata dict both moved into
+                    # notify() (salesagent-pldmk.39). It keeps this site's
+                    # salesagent-yi3s invariant intact: the ORIGINAL task_type_str
+                    # reaches the metadata and the guards that key on it, while the
+                    # SDK payload gets validate_webhook_task_type's coerced COPY.
+                    webhook_task = WebhookTaskContext(
+                        task_id=step.step_id,
+                        task_type=task_type_str,
+                        tenant_id=derived_tenant_id,
+                        principal_id=derived_principal_id,
+                        media_buy_id=None,
+                        sequence_number=1,
+                        notification_type=None,
+                    )
 
                     try:
                         # If we're already in an event loop, schedule the send; otherwise run it directly
                         try:
                             loop = asyncio.get_running_loop()
                             task = loop.create_task(
-                                service.send_notification(
-                                    push_notification_config=push_notification_config,
-                                    payload=payload,
-                                    metadata=metadata,
+                                service.notify(
+                                    push_notification_config,
+                                    task=webhook_task,
+                                    status=status_enum,
+                                    result=step.response_data or {},
+                                    protocol=protocol,
+                                    context_id=step.context_id or "",
                                 )
                             )
 
@@ -958,10 +946,13 @@ class ContextManager(DatabaseManager):
                         except RuntimeError:
                             # No running loop; safe to run synchronously
                             sent = asyncio.run(
-                                service.send_notification(
-                                    push_notification_config=push_notification_config,
-                                    payload=payload,
-                                    metadata=metadata,
+                                service.notify(
+                                    push_notification_config,
+                                    task=webhook_task,
+                                    status=status_enum,
+                                    result=step.response_data or {},
+                                    protocol=protocol,
+                                    context_id=step.context_id or "",
                                 )
                             )
                             _log_webhook_send_outcome(push_notification_config.url, sent)
