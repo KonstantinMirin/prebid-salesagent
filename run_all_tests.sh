@@ -232,7 +232,10 @@ E2E_ENV_ARGS=""
 if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
     N="$E2E_WORKERS"
     _admin="postgresql://adcp_user:secure_password_change_me@postgres:5432"
-    psql_admin() { dc exec -T postgres psql -U adcp_user -d postgres -c "$1" >/dev/null 2>&1 || true; }
+    # stderr is KEPT (only chatter goes to /dev/null): `|| true` here means a
+    # failed CREATE lets the migration below run against a database that does
+    # not exist, and the abort message then blames the migration for it.
+    psql_admin() { dc exec -T postgres psql -U adcp_user -d postgres -c "$1" >/dev/null || true; }
     echo "Provisioning $N per-worker e2e server stacks..."
     psql_admin "DROP DATABASE IF EXISTS adcp_e2e_template"
     psql_admin "CREATE DATABASE adcp_e2e_template"
@@ -240,7 +243,7 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
     # be cloned from an un-migrated template and the whole e2e_rest pass would
     # error confusingly. Surface it here instead.
     if ! dc run --rm --no-deps -e DATABASE_URL="$_admin/adcp_e2e_template?sslmode=disable" \
-            tests python scripts/ops/migrate.py >/dev/null 2>&1; then
+            tests python scripts/ops/migrate.py; then
         echo "ERROR: e2e template migration failed — aborting per-worker provisioning" >&2
         exit 1
     fi
