@@ -419,7 +419,8 @@ def _post_approval_webhook(
     elif outcome.kind == "refused_destination":
         # The URL never left the process. Deliberately opaque: the seam has already
         # logged which policy refused it and why.
-        logger.warning("Approval webhook to %s was refused by egress policy", safe_url)
+        # Severity carried on the outcome, not chosen here (salesagent-pldmk.39).
+        logger.log(outcome.log_level, "Approval webhook to %s was refused by egress policy", safe_url)
     elif outcome.kind != "delivered":
         logger.error(
             "Failed to send approval webhook to %s after %s attempts (last status: %s)",

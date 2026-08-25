@@ -183,7 +183,13 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, Webhook
         # Refused before a connection was opened. attempts=0 is the honest count:
         # nothing was sent. NOTE this bucket also catches an UNRESOLVABLE host,
         # which previously exhausted retries and booked max_retries_exceeded.
-        logger.error("[Webhook Delivery] REFUSED: %s to %s", delivery_id, webhook_url_for_log(delivery.webhook_url))
+        # Severity carried on the outcome, not chosen here (salesagent-pldmk.39).
+        logger.log(
+            outcome.log_level,
+            "[Webhook Delivery] REFUSED: %s to %s",
+            delivery_id,
+            webhook_url_for_log(delivery.webhook_url),
+        )
         return _record_failure(
             delivery,
             delivery_id,

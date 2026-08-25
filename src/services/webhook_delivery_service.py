@@ -620,7 +620,8 @@ class WebhookDeliveryService:
                     outcome.http_status,
                 )
             elif outcome.kind == "refused_destination":
-                logger.warning("Webhook delivery to %s was refused by egress policy", safe_url)
+                # Severity carried on the outcome, not chosen here (salesagent-pldmk.39).
+                logger.log(outcome.log_level, "Webhook delivery to %s was refused by egress policy", safe_url)
             else:
                 cause = f"status {outcome.http_status}" if outcome.http_status is not None else "no response"
                 logger.warning(

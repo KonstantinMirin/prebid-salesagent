@@ -23,6 +23,7 @@ deletes for one pointing the other way.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
@@ -61,6 +62,30 @@ class WebhookDeliveryOutcome:
     payload_size_bytes: int | None = None
     reason: RefusalReason | None = None
     scheme: str | None = None
+
+    @property
+    def log_level(self) -> int:
+        """The severity this outcome is logged at, decided once for every sender.
+
+        Four senders logged the same outcome at two different levels --
+        ``refused_destination`` reached the log as ``warning`` from
+        ``webhook_delivery_service`` and ``order_approval_service`` and as ``error``
+        from ``protocol_webhook_service`` and ``webhook_delivery``. An operator
+        grepping for a refused destination found half of them, and which half
+        depended on which sender happened to fire (salesagent-pldmk.39).
+
+        The level belongs to WHAT HAPPENED, not to who noticed, so it is a property
+        of the outcome. ``client_error`` is the one WARNING: the receiver answered
+        and said no, which is the buyer's configuration to fix and not a fault on
+        this side. Everything that is not a delivery is an ERROR -- a destination
+        that refuses, an authentication this seller cannot send, or retries
+        exhausted all need an operator. A delivery is INFO.
+        """
+        if self.kind == "delivered":
+            return logging.INFO
+        if self.kind == "client_error":
+            return logging.WARNING
+        return logging.ERROR
 
     @classmethod
     def unexpected(cls, exception_type: str) -> WebhookDeliveryOutcome:

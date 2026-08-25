@@ -447,7 +447,8 @@ class ProtocolWebhookService:
             # audit entry — a misconfigured destination that leaves no trace is
             # indistinguishable from one nobody configured. The honest attempt count
             # (0) and the ``refused`` spelling are the recorder's, not this arm's.
-            logger.error(f"Webhook for task {ctx.task_id} was refused by egress policy")
+            # Severity carried on the outcome, not chosen here (salesagent-pldmk.39).
+            logger.log(outcome.log_level, f"Webhook for task {ctx.task_id} was refused by egress policy")
         elif outcome.kind != "delivered":
             logger.error(
                 f"Webhook for task {ctx.task_id} {outcome.detail or f'failed after {outcome.attempts} attempts'}"
