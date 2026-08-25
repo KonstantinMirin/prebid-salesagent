@@ -12,6 +12,7 @@ from unittest.mock import ANY
 
 from a2a.types import Artifact, Message, Part, Role
 from google.protobuf import json_format, struct_pb2
+from pydantic import BaseModel
 
 from src.a2a_server.adcp_a2a_server import restore_a2a_integer_types
 
@@ -67,10 +68,25 @@ def extract_data_from_artifact(artifact: Artifact) -> dict[str, Any]:
     return {}
 
 
+def _json_default(obj: Any) -> Any:
+    """Encode what ``json`` cannot, the way a real A2A client would.
+
+    A pydantic model MUST become its wire shape here. The bare ``default=str``
+    this replaces turned a model into ``repr()`` -- a single opaque string where
+    the server expected an object -- so a scenario that passed a model instance
+    reached the skill with every field gone, and the resulting creative came back
+    as ``creative_id='unknown'`` rather than failing loudly (salesagent-kyc89).
+    No client can put a python object on the wire; it sends the model's JSON.
+    """
+    if isinstance(obj, BaseModel):
+        return obj.model_dump(mode="json")
+    return str(obj)
+
+
 def _dict_to_value(d: dict) -> struct_pb2.Value:
     """Convert a Python dict to a protobuf Value for use in Part.data."""
     val = struct_pb2.Value()
-    json_format.Parse(json.dumps(d, default=str), val)
+    json_format.Parse(json.dumps(d, default=_json_default), val)
     return val
 
 

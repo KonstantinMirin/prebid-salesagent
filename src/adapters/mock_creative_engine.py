@@ -20,6 +20,10 @@ class MockCreativeEngine(CreativeEngineAdapter):
         processed = []
         for creative in creatives:
             # Check if format is auto-approvable
+            # FIXME(#1388): `format_id` is a FormatId model and auto_approve_format_ids
+            # holds config STRINGS, so this membership test is never true and nothing
+            # is ever auto-approved. Fixing it changes mock-adapter behaviour, so it
+            # is tracked rather than folded into an unrelated change.
             is_auto_approvable = creative.format_id in self.auto_approve_format_ids
 
             # Determine status based on format and configuration

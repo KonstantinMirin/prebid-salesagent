@@ -1830,13 +1830,22 @@ class AdCPRequestHandler(RequestHandler):
         # could not express a partial success -- and it was a third construction of
         # a request the other two transports build by one shared path.
         #
-        # The legacy format_id upgrade stays: it is a wire-compatibility rewrite of
-        # a field's shape, not a model construction.
+        # The legacy format_id upgrade stays -- it is a wire-compatibility rewrite of
+        # a field's shape (a bare string, or a dict with no agent_url, both of which
+        # the library CreativeAsset rejects outright) -- but it is dumped straight
+        # back to a wire dict. upgrade_legacy_format_id returns OUR FormatId
+        # subclass, and pydantic does not re-validate a model instance that already
+        # satisfies the annotation, so handing that instance on made A2A the only
+        # transport whose CreativeAsset.format_id was a different CLASS. Pydantic v2
+        # equality is class-sensitive, so the registry match in _processing then
+        # found nothing and every generative creative was written as a plain static
+        # asset with no error (salesagent-kyc89). Dumping keeps the rewrite and
+        # leaves the request identical to the one MCP and REST build.
         from src.core.format_cache import upgrade_legacy_format_id
 
         with adcp_validation_boundary(context="sync_creatives request"):
             creatives = [
-                {**c, "format_id": upgrade_legacy_format_id(c["format_id"])}
+                {**c, "format_id": upgrade_legacy_format_id(c["format_id"]).model_dump(mode="json")}
                 if isinstance(c, dict) and "format_id" in c
                 else c
                 for c in parameters["creatives"]

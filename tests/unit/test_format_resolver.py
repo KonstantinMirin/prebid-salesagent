@@ -34,6 +34,13 @@ not the adcp library Format (which does not).
 #   test_format_id_not_in_overrides_returns_none — locks: None for missing format_id
 #   test_no_format_overrides_key_returns_none — locks: None for missing key
 #
+# DECISION_BACKED, added 2026-08-25 (7 tests, class TestFindFormat):
+#   find_format keys format identity on (agent_url, id, width, height, duration_ms)
+#   rather than pydantic equality — salesagent-kyc89, where a class-sensitive `==`
+#   matched nothing on A2A and demoted every generative creative to a static one.
+#   The parameterized/unparameterized case guards the other direction: class-agnostic
+#   must not become lenient about AdCP 2.5 parameters.
+#
 # SUSPECT (3 tests):
 #   test_base_format_lookup_fails_returns_none — salesagent-z4zl: swallows AdCPNotFoundError silently
 #   test_registry_creation_fails_returns_empty — salesagent-z60b: infrastructure error → []
@@ -455,3 +462,94 @@ class TestListAvailableFormats:
 
         assert len(result) == 2
         assert result[0].name == "Format 1"
+
+
+class TestFindFormat:
+    """find_format decides format identity by VALUE, never by pydantic class.
+
+    salesagent-kyc89: ``FormatId`` exists twice — the library type the AdCP
+    schemas declare and ``src.core.schemas._base.FormatId``, our field-identical
+    subclass. Pydantic v2 equality is class-sensitive, so the ``==`` loop this
+    helper replaced matched nothing whenever the two sides were built by
+    different code paths, and a generative creative was silently written as a
+    plain static asset.
+    """
+
+    def test_matches_across_the_two_format_id_classes(self):
+        """The subclass and the library type name the same format, so they match."""
+        from adcp.types import FormatId as LibraryFormatId
+
+        from src.core.format_resolver import find_format
+        from src.core.schemas import FormatId as OurFormatId
+
+        fmt = _make_format()
+        library_reference = LibraryFormatId(agent_url=str(fmt.format_id.agent_url), id=fmt.format_id.id)
+        our_reference = OurFormatId(agent_url=str(fmt.format_id.agent_url), id=fmt.format_id.id)
+
+        # The precondition that made the bug invisible: these compare UNEQUAL.
+        assert library_reference != our_reference
+
+        assert find_format([fmt], library_reference) is fmt
+        assert find_format([fmt], our_reference) is fmt
+
+    def test_trailing_slash_on_agent_url_does_not_split_identity(self):
+        """A reference built from a str and one built from AnyUrl name one format."""
+        from adcp.types import FormatId as LibraryFormatId
+
+        from src.core.format_resolver import find_format
+
+        fmt = _make_format()
+        bare = str(fmt.format_id.agent_url).rstrip("/")
+        assert find_format([fmt], LibraryFormatId(agent_url=bare, id=fmt.format_id.id)) is fmt
+
+    def test_a_different_id_does_not_match(self):
+        from adcp.types import FormatId as LibraryFormatId
+
+        from src.core.format_resolver import find_format
+
+        fmt = _make_format()
+        other = LibraryFormatId(agent_url=str(fmt.format_id.agent_url), id="video_640x480")
+        assert find_format([fmt], other) is None
+
+    def test_a_different_agent_url_does_not_match(self):
+        from adcp.types import FormatId as LibraryFormatId
+
+        from src.core.format_resolver import find_format
+
+        fmt = _make_format()
+        other = LibraryFormatId(agent_url="https://other-agent.example.com", id=fmt.format_id.id)
+        assert find_format([fmt], other) is None
+
+    def test_parameterized_reference_does_not_match_an_unparameterized_format(self):
+        """Class-agnostic must not mean lenient.
+
+        The AdCP 2.5 parameters are part of a format reference's identity. Dropping
+        them from the comparison would let a 300x250 request resolve to a format
+        that declares no dimensions at all — a spec change, not a bug fix.
+        """
+        from adcp.types import FormatId as LibraryFormatId
+
+        from src.core.format_resolver import find_format
+
+        fmt = _make_format()
+        parameterized = LibraryFormatId(
+            agent_url=str(fmt.format_id.agent_url), id=fmt.format_id.id, width=300, height=250
+        )
+        assert find_format([fmt], parameterized) is None
+
+    def test_returns_none_for_an_empty_listing(self):
+        from adcp.types import FormatId as LibraryFormatId
+
+        from src.core.format_resolver import find_format
+
+        assert find_format([], LibraryFormatId(agent_url="https://a.example.com", id="display")) is None
+
+    def test_returns_the_first_match_in_listing_order(self):
+        from adcp.types import FormatId as LibraryFormatId
+
+        from src.core.format_resolver import find_format
+
+        first = _make_format(name="First")
+        second = _make_format(name="Second")
+        reference = LibraryFormatId(agent_url=str(first.format_id.agent_url), id=first.format_id.id)
+        assert find_format([first, second], reference) is first

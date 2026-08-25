@@ -26,6 +26,7 @@ from src.core.exceptions import (
     AdCPError,
     AdCPServiceUnavailableError,
 )
+from src.core.format_resolver import find_format
 from src.core.helpers import _extract_format_info, _validate_creative_assets
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
 from src.core.schemas import Error as AdCPErrorDetail
@@ -315,14 +316,13 @@ def _update_existing_creative(
     if creative_format:
         try:
             # Use pre-fetched formats (fetched outside transaction at function start)
-            # This avoids async HTTP calls inside savepoint
-
-            # Find matching format
-            format_obj = None
-            for fmt in all_formats:
-                if fmt.format_id == creative_format:
-                    format_obj = fmt
-                    break
+            # This avoids async HTTP calls inside savepoint.
+            #
+            # find_format, not a `==` loop: format references reach this point in
+            # either of two classes and pydantic v2 equality is class-sensitive,
+            # so a raw comparison silently matched NOTHING on A2A and demoted
+            # every generative creative to a static one (salesagent-kyc89).
+            format_obj = find_format(all_formats, creative_format)
 
             if format_obj and format_obj.agent_url:
                 # Check if format is generative (has output_format_ids)
@@ -670,14 +670,13 @@ def _create_new_creative(
     if creative_format:
         try:
             # Use pre-fetched formats (fetched outside transaction at function start)
-            # This avoids async HTTP calls inside savepoint
-
-            # Find matching format
-            format_obj = None
-            for fmt in all_formats:
-                if fmt.format_id == creative_format:
-                    format_obj = fmt
-                    break
+            # This avoids async HTTP calls inside savepoint.
+            #
+            # find_format, not a `==` loop: format references reach this point in
+            # either of two classes and pydantic v2 equality is class-sensitive,
+            # so a raw comparison silently matched NOTHING on A2A and demoted
+            # every generative creative to a static one (salesagent-kyc89).
+            format_obj = find_format(all_formats, creative_format)
 
             if format_obj and format_obj.agent_url:
                 # Check if format is generative (has output_format_ids)
