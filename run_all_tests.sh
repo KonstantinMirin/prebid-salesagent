@@ -105,7 +105,13 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
     echo "Fast bdd path: E2E_WORKERS=$E2E_WORKERS BDD_XDIST_N=$BDD_XDIST_N -> suites=$SUITES"
 fi
 
-RESULTS_DIR="test-results/innet_$(date +%d%m%y_%H%M)"
+# UTC, not local. The name is built by whichever client launches the run while the
+# reports land under the box's UTC clock, so a CEST client produced a directory named
+# two hours ahead of its own payload. That name then sorted lexicographically above
+# every genuinely later run, so `ls -t`-style "newest directory" lookups resolved to it
+# and reported an older run's totals — or an empty husk — under the current run's id.
+# Both clocks agree only in UTC.
+RESULTS_DIR="test-results/innet_$(date -u +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
 
 dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile runner "$@"; }
