@@ -159,7 +159,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 15
+    # 15 was enough while the six storyboard structural guards SKIPPED for want
+    # of a pinned tree. Provisioning the release bundle below un-skips 23 of
+    # them, and they parse all 121 pinned storyboards — the job went 9m38s ->
+    # over 15m and was cancelled at the ceiling. Raised with headroom rather
+    # than trimmed, because the point of provisioning the tree is that these
+    # guards actually run.
+    timeout-minutes: 30
     steps:
       - uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:

@@ -205,6 +205,12 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
     # Grade only what THIS invocation measured. A summary left by an earlier run
     # would otherwise be read as if it were fresh whenever the runner dies before
     # writing one — inferred rather than measured, which is the Core Invariant.
+    # The runner writes the summary here and will NOT create the directory. It is
+    # deliberately not committed (a checked-in results/ was 1.8 MB of stale
+    # host-side captures that nothing read), and it is gitignored, so a fresh
+    # checkout has no results/ at all — create it rather than depending on an
+    # empty directory surviving in git.
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.unlink(missing_ok=True)
     result = subprocess.run(  # noqa: S603
         cmd,
