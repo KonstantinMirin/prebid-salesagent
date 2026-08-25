@@ -104,7 +104,11 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
     echo "Fast bdd path: E2E_WORKERS=$E2E_WORKERS BDD_XDIST_N=$BDD_XDIST_N -> suites=$SUITES"
 fi
 
-RESULTS_DIR="test-results/innet_$(date +%d%m%y_%H%M)"
+# UTC, not local. This runs on the CI box and is read back on a laptop in another
+# zone, so a local timestamp names the directory after a clock the reader does not
+# have -- which is how a finished run looks "missing": you go looking for the hour
+# you polled at, and the results are filed under the hour the box was in.
+RESULTS_DIR="test-results/innet_$(date -u +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
 
 dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile runner "$@"; }
