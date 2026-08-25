@@ -17,6 +17,8 @@ These tests pin three things:
 
 from __future__ import annotations
 
+import collections
+import io
 import json
 import os
 import subprocess
@@ -33,6 +35,14 @@ from tests._xdist_report_safety import make_execnet_safe, sanitize_serialized_re
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+class _WeirdList(list):
+    pass
+
+
+class _WeirdSet(set):
+    pass
+
+
 # ---------------------------------------------------------------------------
 # 1. The walker
 # ---------------------------------------------------------------------------
@@ -45,7 +55,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 )
 def test_already_safe_values_are_returned_unchanged(value):
     """The common path must not rewrite a report that was already fine."""
-    safe, offenders = make_execnet_safe(value)
+    safe, offenders, _changed = make_execnet_safe(value)
     assert offenders == []
     assert safe == value
     assert type(safe) is type(value)
@@ -53,7 +63,7 @@ def test_already_safe_values_are_returned_unchanged(value):
 
 def test_unserializable_leaf_is_replaced_by_its_repr_and_named():
     mock = MagicMock()
-    safe, offenders = make_execnet_safe({"leaked": mock})
+    safe, offenders, _changed = make_execnet_safe({"leaked": mock})
     assert offenders == [".leaked = unittest.mock.MagicMock"]
     assert safe["leaked"] == repr(mock)
 
@@ -61,7 +71,7 @@ def test_unserializable_leaf_is_replaced_by_its_repr_and_named():
 def test_offender_path_locates_the_value_inside_a_nested_report():
     """The reported path is the diagnostic — it must pinpoint the real key."""
     payload = {"_json_report_extra": {"call": {"log": [{"name": "x", "process": MagicMock()}]}}}
-    _, offenders = make_execnet_safe(payload)
+    _, offenders, _changed = make_execnet_safe(payload)
     assert offenders == ["._json_report_extra.call.log[0].process = unittest.mock.MagicMock"]
 
 
@@ -71,27 +81,49 @@ def test_subclasses_of_serializable_types_are_replaced_too():
     class Weird(str):
         pass
 
-    safe, offenders = make_execnet_safe({"k": Weird("v")})
+    safe, offenders, _changed = make_execnet_safe({"k": Weird("v")})
     assert offenders == [f".k = {Weird.__module__}.{Weird.__qualname__}"]
     with pytest.raises(DumpError):
         dumps({"k": Weird("v")})
     dumps(safe)
 
 
-def test_container_subclasses_are_normalised_to_their_base_type():
-    class WeirdList(list):
-        pass
+@pytest.mark.parametrize(
+    "factory",
+    [
+        pytest.param(lambda: collections.OrderedDict(a=1), id="OrderedDict"),
+        pytest.param(lambda: collections.defaultdict(int, a=1), id="defaultdict"),
+        pytest.param(lambda: collections.Counter("ab"), id="Counter"),
+        pytest.param(lambda: collections.namedtuple("Point", "x y")(1, 2), id="namedtuple"),
+        pytest.param(lambda: _WeirdList([1, 2]), id="list-subclass"),
+        pytest.param(lambda: _WeirdSet({1, 2}), id="set-subclass"),
+    ],
+)
+def test_container_subclasses_are_rebuilt_at_the_boundary_the_hook_calls(factory):
+    """Regression: a container subclass produces NO offender, so a gate on
+    ``offenders`` returns the original undumpable object and discards the
+    rebuilt one.
 
-    safe, offenders = make_execnet_safe({"k": WeirdList([1, 2])})
-    assert offenders == []
-    assert type(safe["k"]) is list
-    dumps(safe)
+    This asserts through ``sanitize_serialized_report`` -- the function the
+    conftest hook actually calls -- and against execnet's own ``dumps``. The
+    earlier version of this test called ``make_execnet_safe`` directly and
+    asserted ``offenders == []``, which was true while the shipped path was
+    broken: it graded the inner function instead of the boundary. A plain
+    ``collections.Counter`` in ``extra=`` on one PASSING test then killed a
+    ``-n 2`` session and lost 77 of 85 items with nothing reported.
+    """
+    payload = {"nodeid": "t::x", "_json_report_extra": {"call": {"log": [{"process": 1, "v": factory()}]}}}
+    with pytest.raises(DumpError):
+        dumps(payload)
+    out = sanitize_serialized_report(payload, nodeid="t::x", stream=io.StringIO())
+    assert out is not payload
+    dumps(out)
 
 
 def test_cycles_terminate_instead_of_recursing_forever():
     payload: dict = {"name": "x"}
     payload["self"] = payload
-    safe, offenders = make_execnet_safe(payload)
+    safe, offenders, _changed = make_execnet_safe(payload)
     assert offenders == [".self = <cycle> builtins.dict"]
     assert safe["name"] == "x"
     dumps(safe)
@@ -104,7 +136,7 @@ def test_depth_limit_terminates_a_pathological_structure():
         child: dict = {}
         node["n"] = child
         node = child
-    safe, offenders = make_execnet_safe(payload)
+    safe, offenders, _changed = make_execnet_safe(payload)
     assert any("depth limit" in o for o in offenders)
     dumps(safe)
 
@@ -114,7 +146,7 @@ def test_a_repr_that_raises_does_not_become_a_second_crash():
         def __repr__(self):
             raise ValueError("no repr for you")
 
-    safe, offenders = make_execnet_safe({"k": Hostile()})
+    safe, offenders, _changed = make_execnet_safe({"k": Hostile()})
     assert offenders == [f".k = {Hostile.__module__}.{Hostile.__qualname__}"]
     assert "unreprable" in safe["k"]
     dumps(safe)
@@ -150,9 +182,13 @@ def test_a_realistic_polluted_report_fails_execnet_before_and_passes_after():
         dumps(sanitize_serialized_report(report, nodeid=report["nodeid"], stream=devnull))
 
 
-def test_sanitize_returns_the_same_object_when_nothing_needed_replacing():
-    clean = {"nodeid": "t::x", "outcome": "passed", "sections": [], "user_properties": []}
+def test_sanitize_returns_the_same_object_only_when_nothing_had_to_be_rebuilt():
+    """The fast path is keyed on "did the walk change anything", not on
+    "were there offenders" -- see the subclass regression above."""
+    clean = {"nodeid": "t::x", "outcome": "passed", "sections": [], "user_properties": [], "keywords": {"a": 1}}
     assert sanitize_serialized_report(clean) is clean
+    dirty = {"nodeid": "t::x", "keywords": collections.OrderedDict(a=1)}
+    assert sanitize_serialized_report(dirty, stream=io.StringIO()) is not dirty
 
 
 def test_an_offender_is_announced_and_never_dropped_silently():
@@ -174,6 +210,7 @@ def test_an_offender_is_announced_and_never_dropped_silently():
 # ---------------------------------------------------------------------------
 
 _POLLUTING_SUITE = """
+import collections
 import logging
 from unittest.mock import patch, MagicMock
 
@@ -184,6 +221,14 @@ def test_emits_a_record_while_os_getpid_is_patched():
     # logging.LogRecord.__init__ stores a MagicMock in record.process.
     with patch("os.getpid", MagicMock()):
         log.warning("a message")
+    assert True
+
+def test_logs_a_container_subclass_via_extra():
+    # No mock anywhere -- a plain Counter. execnet dispatches on EXACT type, so a
+    # dict SUBCLASS is refused exactly like a mock, and it produces no "offender"
+    # for a sanitizer to notice. src/adapters/gam/utils/logging.py:351 is one
+    # `defaultdict` away from this shape today.
+    log.warning("counted", extra={"counts": collections.Counter("ab")})
     assert True
 
 def test_second():
@@ -253,5 +298,5 @@ def test_without_the_hook_the_session_is_silently_truncated(tmp_path):
 def test_with_the_hook_every_collected_item_is_reported(tmp_path):
     output, summary = _run_isolated_suite(tmp_path, with_hook=True)
     assert "INTERNALERROR" not in output, output[-3000:]
-    assert summary["collected"] == summary["total"] == 3, summary
-    assert summary["passed"] == 3, summary
+    assert summary["collected"] == summary["total"] == 4, summary
+    assert summary["passed"] == 4, summary

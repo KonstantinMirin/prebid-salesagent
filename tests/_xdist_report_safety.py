@@ -82,81 +82,138 @@ def _type_name(value: Any) -> str:
     return f"{cls.__module__}.{cls.__qualname__}"
 
 
-def make_execnet_safe(value: Any, *, _depth: int = 0, _seen: frozenset[int] = frozenset()) -> tuple[Any, list[str]]:
-    """Return ``(safe_value, offenders)``.
+def make_execnet_safe(
+    value: Any, *, _depth: int = 0, _seen: frozenset[int] = frozenset()
+) -> tuple[Any, list[str], bool]:
+    """Return ``(safe_value, offenders, changed)``.
 
     ``safe_value`` contains only types execnet serializes. ``offenders`` names
-    every value that had to be replaced, as ``"<key path>: <type>"``, so the
-    caller can report rather than silently swallow. An empty list means the
-    input was already safe and ``safe_value`` is equivalent to it.
+    every value that had to be REPLACED (by its repr), so the caller can report
+    it. ``changed`` is True whenever ``safe_value`` differs from the input in any
+    way -- including the silent case where nothing was replaced but a container
+    SUBCLASS had to be normalised to its base type.
+
+    ``changed`` and ``offenders`` are deliberately separate. Collapsing them is a
+    real bug with a live reproduction: a plain ``collections.Counter`` reaching a
+    report normalises cleanly to a ``dict`` and produces no offender, so gating
+    the return on ``offenders`` hands back the ORIGINAL, still-undumpable object
+    and throws the normalised copy away. Measured: one Counter in ``extra=`` on a
+    single PASSING test killed a ``-n 2`` session and lost 77 of 85 items, with
+    the sanitizer reporting nothing.
     """
     if type(value) in _ATOM_TYPES:
-        return value, []
+        return value, [], False
 
     if _depth >= _MAX_DEPTH:
-        return _short_repr(value), [f" = <depth limit {_MAX_DEPTH}> {_type_name(value)}"]
+        return _short_repr(value), [f" = <depth limit {_MAX_DEPTH}> {_type_name(value)}"], True
 
     ident = id(value)
     if ident in _seen:
-        return _short_repr(value), [f" = <cycle> {_type_name(value)}"]
+        return _short_repr(value), [f" = <cycle> {_type_name(value)}"], True
 
     offenders: list[str] = []
 
     if isinstance(value, dict):
         seen = _seen | {ident}
+        # A dict SUBCLASS (OrderedDict, defaultdict, Counter) is refused by
+        # execnet's exact-type dispatch just as a mock is, so rebuilding is a
+        # change even when every element was already fine.
+        changed = type(value) is not dict
         out: dict[Any, Any] = {}
         for key, item in value.items():
-            safe_key, key_offenders = make_execnet_safe(key, _depth=_depth + 1, _seen=seen)
-            safe_item, item_offenders = make_execnet_safe(item, _depth=_depth + 1, _seen=seen)
+            safe_key, key_offenders, key_changed = make_execnet_safe(key, _depth=_depth + 1, _seen=seen)
+            safe_item, item_offenders, item_changed = make_execnet_safe(item, _depth=_depth + 1, _seen=seen)
+            changed = changed or key_changed or item_changed
             offenders.extend(f"<key>{o}" for o in key_offenders)
             offenders.extend(
                 f".{safe_key}{o}" if isinstance(safe_key, str) else f"[{safe_key!r}]{o}" for o in item_offenders
             )
             out[safe_key] = safe_item
-        return out, offenders
+        return (out if changed else value), offenders, changed
 
     if isinstance(value, (list, tuple)):
         seen = _seen | {ident}
+        # Same exact-type rule: a list subclass, or a namedtuple (a tuple
+        # subclass), must be rebuilt as the plain base type.
+        changed = type(value) not in (list, tuple)
         items = []
         for index, item in enumerate(value):
-            safe_item, item_offenders = make_execnet_safe(item, _depth=_depth + 1, _seen=seen)
+            safe_item, item_offenders, item_changed = make_execnet_safe(item, _depth=_depth + 1, _seen=seen)
+            changed = changed or item_changed
             offenders.extend(f"[{index}]{o}" for o in item_offenders)
             items.append(safe_item)
-        # Normalise subclasses (namedtuples included) to the exact base type.
-        return (list(items) if isinstance(value, list) else tuple(items)), offenders
+        if not changed:
+            return value, offenders, False
+        return (list(items) if isinstance(value, list) else tuple(items)), offenders, True
 
     if isinstance(value, (set, frozenset)):
         seen = _seen | {ident}
+        changed = type(value) not in (set, frozenset)
         items = []
         for item in value:
-            safe_item, item_offenders = make_execnet_safe(item, _depth=_depth + 1, _seen=seen)
+            safe_item, item_offenders, item_changed = make_execnet_safe(item, _depth=_depth + 1, _seen=seen)
+            changed = changed or item_changed
             offenders.extend(item_offenders)
             items.append(safe_item)
+        if not changed:
+            return value, offenders, False
         base = set if isinstance(value, set) else frozenset
-        return base(items), offenders
+        return base(items), offenders, True
 
     # Everything else -- including subclasses of the atom types, which execnet's
     # exact-type dispatch refuses just as firmly as it refuses a mock.
-    return _short_repr(value), [f" = {_type_name(value)}"]
+    return _short_repr(value), [f" = {_type_name(value)}"], True
+
+
+# pytest-json-report attaches the SAME `_json_report_extra` object to a test's
+# call report and its teardown report, so an unmodified announcement fires twice
+# per item. Announce each (nodeid, offenders) once per worker process.
+_announced: set[tuple[str, tuple[str, ...]]] = set()
 
 
 def sanitize_serialized_report(data: Any, *, nodeid: str = "<unknown>", stream: Any = None) -> Any:
     """Sanitize one already-serialized report dict, announcing any offender.
 
-    Returns ``data`` unchanged (same object) when nothing had to be replaced, so
-    the common path costs one walk and no allocation of a replacement tree.
+    Returns ``data`` unchanged (the same object) when the walk found nothing to
+    rebuild. The walk still builds a replacement tree and discards it in that
+    case -- measured on the realistic wire shape at 14.7 us for a report with no
+    log records, 26.2 us with one and 69.5 us with five, i.e. under 4 s of CPU
+    across a full unit run's ~17.5k reports x3 phases, spread over N workers.
+    Cheap enough that avoiding the allocation is not worth the branching.
+
+    Note for anyone reading ``unit.json`` downstream: a replaced value lands in
+    the report as a STRING, so a log record whose ``process`` was poisoned reads
+    ``"<MagicMock ...>"`` where an int was expected. That is deliberate -- the
+    alternative is dropping it silently -- but it means the JSON is a faithful
+    record of what happened, not of what the field's type claims.
+
+    Scope: this covers test REPORTS only. xdist also puts ``workerinfo`` and
+    ``workeroutput`` (execnet ``remote.py``) on the same wire without passing
+    them through ``pytest_report_to_serializable``; today those carry only
+    int/bool/str, but ``config.workeroutput`` is a public dict any plugin may
+    write into.
     """
     if not isinstance(data, dict):
         return data
-    safe, offenders = make_execnet_safe(data)
-    if not offenders:
+    safe, offenders, changed = make_execnet_safe(data)
+    if not changed:
         return data
+    if not offenders:
+        # A container subclass was normalised but nothing was replaced. Nothing
+        # to announce -- but the REBUILT value is what must go on the wire.
+        return safe
+
+    unique = tuple(sorted(set(offenders)))
+    if (nodeid, unique) in _announced:
+        return safe
+    _announced.add((nodeid, unique))
+
     out = stream if stream is not None else sys.stderr
     print(
         f"[xdist-report-safety] {nodeid}: {len(offenders)} value(s) in this report cannot cross "
         f"the execnet wire and were replaced by their repr -- "
-        f"{'; '.join(sorted(set(offenders))[:10])}"
-        f"{' ...' if len(set(offenders)) > 10 else ''}",
+        f"{'; '.join(unique[:10])}"
+        f"{' ...' if len(unique) > 10 else ''}",
         file=out,
         flush=True,
     )
