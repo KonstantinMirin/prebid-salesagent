@@ -104,7 +104,11 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
     echo "Fast bdd path: E2E_WORKERS=$E2E_WORKERS BDD_XDIST_N=$BDD_XDIST_N -> suites=$SUITES"
 fi
 
-RESULTS_DIR="test-results/innet_$(date +%d%m%y_%H%M)"
+# UTC, not local: the runner box and the machine reading the reports are in
+# different zones, so a local-time directory name means each side computes a
+# different one and the results cannot be attributed to the run that produced
+# them ("no confirmed run identity to attribute local test-results/ to").
+RESULTS_DIR="test-results/innet_$(date -u +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
 
 dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile runner "$@"; }
