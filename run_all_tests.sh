@@ -104,7 +104,7 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
     echo "Fast bdd path: E2E_WORKERS=$E2E_WORKERS BDD_XDIST_N=$BDD_XDIST_N -> suites=$SUITES"
 fi
 
-RESULTS_DIR="test-results/innet_$(date +%d%m%y_%H%M)"
+RESULTS_DIR="test-results/innet_$(date -u +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
 
 dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile runner "$@"; }
