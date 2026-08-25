@@ -181,28 +181,38 @@ class _TypedPayload(BaseModel):
     adcp_version: str = "3.1.1"
 
 
-class TestUnsetTransportIsNotImpl:
-    """``transport=None`` (unset) must raise loudly, never silently serialize.
+class TestMissingWireRaisesLoudly:
+    """A missing wire raises, whatever the transport — there is no no-wire case.
 
-    The model_dump fallback is legitimate ONLY for an EXPLICIT ``Transport.IMPL``
-    — the caller declaring "there is no wire here, grade the serializer". An
-    unset transport is a non-parametrized caller (transport-tagged BDD scenarios
-    get an empty ctx) that never told the helper whether a real wire must exist;
-    falling back silently turns its wire assertion into a serializer round-trip
-    (GH #1744).
+    This class used to be ``TestUnsetTransportIsNotImpl`` and demanded a message
+    naming ``Transport.IMPL``. Both halves of that premise are gone: the IMPL
+    pseudo-transport is deleted, and so is the ``model_dump`` fallback it was the
+    only legitimate caller of. With no fallback left to take silently, an unset
+    transport and a set one with no captured wire are the SAME defect, and the
+    guard is that neither serializes its way out of it.
+
+    What survives from the original intent (GH #1744) is the part that still
+    holds: a helper must never turn a wire assertion into a serializer
+    round-trip. It now cannot, because the branch that did is deleted.
     """
 
     @pytest.mark.parametrize("base_ctx", [{}, {"transport": None}], ids=["key-absent", "explicit-none"])
     @pytest.mark.parametrize("helper", [wire_field, wire_absent])
-    def test_unset_transport_raises_and_names_the_fix(self, base_ctx, helper):
+    def test_missing_wire_raises_and_names_the_defect(self, base_ctx, helper):
         ctx = {**base_ctx, "response": _TypedPayload()}
-        with pytest.raises(AssertionError, match=r"transport unset.*ctx\['transport'\].*Transport\.IMPL"):
+        with pytest.raises(AssertionError, match=r"wire_response missing.*no no-wire fallback"):
             helper(ctx, "adcp_version")
 
     @pytest.mark.parametrize("base_ctx", [{}, {"transport": None}], ids=["key-absent", "explicit-none"])
-    def test_wire_dict_unset_transport_raises(self, base_ctx):
+    def test_wire_dict_missing_wire_raises(self, base_ctx):
         ctx = {**base_ctx, "response": _TypedPayload()}
-        with pytest.raises(AssertionError, match=r"transport unset.*ctx\['transport'\].*Transport\.IMPL"):
+        with pytest.raises(AssertionError, match=r"wire_response missing.*no no-wire fallback"):
+            wire_dict(ctx)
+
+    def test_a_set_transport_does_not_excuse_a_missing_wire(self):
+        """The guard is about the MISSING wire, not about which transport asked."""
+        ctx = {"transport": Transport.MCP, "response": _TypedPayload()}
+        with pytest.raises(AssertionError, match=r"wire_response missing"):
             wire_dict(ctx)
 
     def test_a_captured_wire_wins_regardless_of_unset_transport(self):

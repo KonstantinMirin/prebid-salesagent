@@ -148,7 +148,11 @@ def _failed_sync_result(creative_id: str, source: AdCPError) -> SyncCreativeResu
         creative_id=creative_id,
         action="failed",
         # structural-guard: advisory per-creative result in SyncCreativeResult.errors[]
-        errors=[AdCPErrorDetail.of(source.error_code, field=source.field, details=source.details)],
+        # from_exception, NOT a hand-rolled decomposition: reading error_code/field/details
+        # off the exception separately re-implemented the conversion and skipped the one
+        # place that renders a details CLASS to its wire dict, so a typed detail shape
+        # reached Error(details=...) as a model and failed validation.
+        errors=[AdCPErrorDetail.from_exception(source)],
         review_feedback=None,
         assigned_to=None,
         assignment_errors=None,

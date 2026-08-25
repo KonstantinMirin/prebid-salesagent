@@ -198,11 +198,8 @@ class TestBaseClassContract:
         rest_id = env.identity_for(Transport.REST)
         assert rest_id.protocol == "rest"
 
-        mcp_id = env.identity_for(Transport.MCP)
-        assert mcp_id.protocol == "mcp"
-
         # All share same principal/tenant
-        for ident in [impl_id, a2a_id, rest_id, mcp_id]:
+        for ident in [mcp_id, a2a_id, rest_id]:
             assert ident.principal_id == "p1"
             assert ident.tenant_id == "t1"
 
