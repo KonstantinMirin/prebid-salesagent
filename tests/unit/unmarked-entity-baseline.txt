@@ -14,6 +14,18 @@
 # decorators read from the AST. These entries are what it found on the first
 # honest run. They are PRE-EXISTING, not newly introduced.
 #
+# CROSS-CHECKED against pytest itself. Defeating the -v in pytest.ini's addopts
+# (`-o addopts=`) makes --collect-only emit node ids again:
+#
+#   pytest tests/unit/ --collect-only -o addopts= -q -m "not (<all entities>)"
+#     -> 685 node ids
+#   collapsing parametrisation ids ("[...]"): 685 -> 613 unique file::class::test
+#   set difference against this file: 0 in BOTH directions
+#
+# So the 613 here and pytest's 685 are the same set; the gap is parametrised
+# cases only. The ratchet is anchored to pytest's own answer, not to an
+# approximation of it.
+#
 # This list may only SHRINK. test_allowed_unmarked_entries_still_unmarked fails on
 # a stale entry. Fix by adding a filename pattern to _ENTITY_PATTERNS in
 # tests/conftest.py, or an explicit @pytest.mark.<entity> on the test.
