@@ -11,7 +11,6 @@ import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from adcp import create_mcp_webhook_payload
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
     NotificationType,
@@ -26,6 +25,7 @@ from src.core.exceptions import AdCPValidationError
 from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.core.utils import utc_flight_start
+from src.core.webhooks.delivery import WebhookTaskContext
 from src.core.webhooks.registration import accept_push_notification_config
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -335,27 +335,40 @@ class DeliveryWebhookScheduler:
             # and is used for DB filtering, while the wire value must be spec-compliant.
             # Renaming the metadata key is not safe without migrating DB records and
             # updating all 6 protocol_webhook_service guard checks.
-            metadata = {
-                "task_type": "media_buy_delivery",
-                "tenant_id": media_buy.tenant_id,
-                "principal_id": media_buy.principal_id,
-                "media_buy_id": media_buy.media_buy_id,
-            }
-
-            # SDK 5.7: returns McpWebhookPayload directly; 3rd arg is task_type.
-            # Delivery reports are status updates on existing media buys,
-            # so we use update_media_buy as the canonical task type.
-            media_buy_delivery_payload = create_mcp_webhook_payload(
+            webhook_task = WebhookTaskContext(
                 task_id=media_buy.media_buy_id,
-                task_type="update_media_buy",
-                result=delivery_response,
-                status=AdcpTaskStatus.completed,
+                task_type="media_buy_delivery",
+                tenant_id=media_buy.tenant_id,
+                principal_id=media_buy.principal_id,
+                media_buy_id=media_buy.media_buy_id,
+                sequence_number=1,
+                notification_type=None,
             )
+
+            # The dialect comes from the REGISTRATION, not from a hardcoded builder.
+            # This job used to call create_mcp_webhook_payload unconditionally, so a
+            # buyer that registered over A2A received an MCP-shaped delivery report.
+            # It had no way to do better until push_notification_configs recorded the
+            # protocol: this job fires long after the request and carries no identity
+            # (salesagent-pldmk.39).
+            #
+            # NULL means a row written before that column existed. Falling back to
+            # "mcp" reproduces exactly the previous behaviour for those rows rather
+            # than guessing a dialect the data never stated.
+            protocol = getattr(push_notification_config, "protocol", None) or "mcp"
 
             # Send webhook notification OUTSIDE the session context
             # This ensures the session is closed before async webhook call
-            await self.webhook_service.send_notification(
-                push_notification_config=push_notification_config, payload=media_buy_delivery_payload, metadata=metadata
+            await self.webhook_service.notify(
+                push_notification_config,
+                task=webhook_task,
+                # Delivery reports are status updates on existing media buys, so the
+                # wire task_type resolves to update_media_buy; the internal label on
+                # the context stays "media_buy_delivery" for the guards and the
+                # delivery-log column.
+                status=AdcpTaskStatus.completed,
+                result=delivery_response,
+                protocol=protocol,
             )
 
             logger.info(f"Sent delivery report webhook for media buy {media_buy.media_buy_id}")

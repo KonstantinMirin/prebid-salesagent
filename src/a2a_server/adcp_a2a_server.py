@@ -1265,6 +1265,8 @@ class AdCPRequestHandler(RequestHandler):
                     config_id=config_id,
                     principal_id=tool_context.principal_id,
                     validation_token=validation_token,
+                    # This IS the A2A server, so the dialect is not in doubt here.
+                    protocol="a2a",
                 )
 
             logger.info(

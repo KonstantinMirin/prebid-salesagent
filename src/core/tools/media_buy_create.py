@@ -2244,6 +2244,10 @@ async def _create_media_buy_impl(
                     registration,
                     config_id=row_id,
                     principal_id=principal_id,
+                    # Recorded so a later delivery knows which dialect to speak.
+                    # The scheduler fires long after this request and has no
+                    # identity of its own (salesagent-pldmk.39).
+                    protocol=identity.protocol if identity else None,
                 )
                 logger.info(
                     "[MCP/A2A] Push notification config %s: %s",

@@ -116,6 +116,7 @@ class PushNotificationConfigRepository:
         principal_id: str,
         validation_token: str | None = None,
         session_id: str | None = None,
+        protocol: str | None = None,
     ) -> tuple[PushNotificationConfig, bool]:
         """Insert or update a config within the (tenant, principal) scope.
 
@@ -153,6 +154,7 @@ class PushNotificationConfigRepository:
             existing.authentication_token = columns["authentication_token"]
             existing.validation_token = validation_token
             existing.session_id = session_id
+            existing.protocol = protocol
             existing.updated_at = now
             existing.is_active = True
             self._session.flush()
@@ -167,6 +169,7 @@ class PushNotificationConfigRepository:
             authentication_type=columns["authentication_type"],
             authentication_token=columns["authentication_token"],
             validation_token=validation_token,
+            protocol=protocol,
             is_active=True,
         )
         self._session.add(config)

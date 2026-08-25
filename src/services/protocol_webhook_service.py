@@ -23,6 +23,7 @@ from adcp import create_a2a_webhook_payload, create_mcp_webhook_payload
 from adcp.types import McpWebhookPayload
 from adcp.webhooks import GeneratedTaskStatus
 from google.protobuf.json_format import MessageToDict
+from pydantic import BaseModel as PydanticBaseModel
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.database_session import get_db_session
@@ -144,7 +145,7 @@ class ProtocolWebhookService:
         *,
         task: WebhookTaskContext,
         status: GeneratedTaskStatus,
-        result: dict[str, Any],
+        result: PydanticBaseModel | dict[str, Any],
         protocol: str,
         context_id: str = "",
     ) -> bool:
