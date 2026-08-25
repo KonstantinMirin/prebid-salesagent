@@ -15,68 +15,95 @@ match any pattern, either:
 
 The _ALLOWED_UNMARKED set is an escape hatch for tests pending classification.
 It must shrink over time — adding new entries is a code smell.
+
+This guard used to answer the question by running `pytest tests/unit/
+--collect-only -m "not (...)"` in a SUBPROCESS with a 60s timeout. That timeout
+was sized against a serial suite and does not survive parallelism: under
+`tox -p` the box runs 16 unit + 16 integration + 16 bdd workers on 16 cores, so
+a nested full-suite collection is starved. Measured on box A at 0ea350f11+:
+
+    subprocess.TimeoutExpired: [... 'pytest','tests/unit/','--collect-only' ...]
+    timed out after 60 seconds
+
+It was also the single largest contributor to the unit suite's floor (21s on the
+16-core box, 28s on the 40-core one). Both problems are the subprocess, not the
+timeout — so the subprocess is gone. The auto-marking rule lives in exactly one
+place (`tests.conftest.entity_markers_for_path`, which collection itself calls),
+and explicit `@pytest.mark.<entity>` decorators are read from the AST. No
+subprocess, no timeout, no full-suite re-collection.
 """
 
-import re
-import subprocess
-import sys
+import ast
 from pathlib import Path
 
 import pytest
 
-from tests.conftest import _ENTITY_MARKERS
+from tests.conftest import _ENTITY_MARKERS, entity_markers_for_path
 from tests.unit._architecture_helpers import assert_violations_match_allowlist
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# Tests here are pending entity classification — list must only shrink.
-# Format: "tests/unit/test_file.py::TestClass::test_name" or "tests/unit/test_file.py::test_name"
-_ALLOWED_UNMARKED: set[str] = set()
+# Tests pending entity classification — the list may only SHRINK.
+#
+# Seeded, not authored. The previous version of this guard was VACUOUS: it
+# shelled out to `pytest --collect-only -q -m "not (...)"` and scanned stdout for
+# lines containing "::", but at this repo's verbosity (pytest.ini's addopts
+# carries -v, which -q reduces to normal) --collect-only prints a module TREE and
+# not node ids -- so the parser matched 0 of 869 output lines and the guard
+# passed unconditionally, on every run, since it was written. Measured: pytest
+# reports "685/5740 tests collected (5055 deselected)" for the guard's own query
+# while the guard reported nothing unmarked.
+#
+# These 613 entries are what the honest, in-process guard finds. They are
+# PRE-EXISTING debt made visible, not new violations, and the sibling
+# stale-entry test enforces that the list only shrinks from here.
+_ALLOWED_UNMARKED_PATH = Path(__file__).with_name("unmarked-entity-baseline.txt")
+_ALLOWED_UNMARKED: set[str] = {
+    line.strip()
+    for line in _ALLOWED_UNMARKED_PATH.read_text(encoding="utf-8").splitlines()
+    if line.strip() and not line.startswith("#")
+}
+
+
+def _explicit_entity_marks(node: ast.AST) -> set[str]:
+    """Entity names in ``@pytest.mark.<entity>`` decorators directly on *node*."""
+    marks: set[str] = set()
+    for decorator in getattr(node, "decorator_list", []):
+        # @pytest.mark.foo  and  @pytest.mark.foo(...)
+        target = decorator.func if isinstance(decorator, ast.Call) else decorator
+        if isinstance(target, ast.Attribute) and target.attr in _ENTITY_MARKERS:
+            value = target.value
+            if isinstance(value, ast.Attribute) and value.attr == "mark":
+                marks.add(target.attr)
+    return marks
 
 
 def _collect_unmarked_tests() -> list[str]:
-    """Run pytest --collect-only with a negated marker expression to find unmarked tests.
+    """Node IDs of unit tests that would carry no entity marker.
 
-    Returns a list of test node IDs that have no entity marker.
+    Mirrors what collection does: a file earns markers from
+    ``entity_markers_for_path`` (the same function ``pytest_collection_modifyitems``
+    calls), and a test can additionally carry an explicit
+    ``@pytest.mark.<entity>`` on itself or on its class.
     """
-    marker_expr = " or ".join(sorted(_ENTITY_MARKERS))
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "tests/unit/",
-            "--collect-only",
-            "-q",
-            "-m",
-            f"not ({marker_expr})",
-            "--no-header",
-        ],
-        capture_output=True,
-        text=True,
-        cwd=str(PROJECT_ROOT),
-        timeout=60,
-    )
-
-    # Parse output lines. pytest -q outputs lines like:
-    #   tests/unit/test_foo.py::test_bar
-    #   tests/unit/test_foo.py::TestClass::test_method
-    # followed by a blank line and summary like "5 tests collected" or
-    # "no tests ran" / "no tests collected"
     unmarked: list[str] = []
-    for line in result.stdout.splitlines():
-        line = line.strip()
-        # Skip empty lines, summary lines, and warnings
-        if not line:
-            continue
-        if line.startswith(("=", "-", "no tests", "ERROR")):
-            continue
-        # Summary line pattern: "N tests collected" or "N deselected"
-        if re.match(r"^\d+ (tests?|deselected|selected|warning)", line):
-            continue
-        # A valid test node ID contains :: separator
-        if "::" in line:
-            unmarked.append(line)
+    for path in sorted((PROJECT_ROOT / "tests" / "unit").rglob("test_*.py")):
+        if entity_markers_for_path(str(path)):
+            continue  # every test in this file is marked by its path alone
+
+        rel = path.relative_to(PROJECT_ROOT).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+                class_marks = _explicit_entity_marks(node)
+                for method in node.body:
+                    if isinstance(method, ast.FunctionDef | ast.AsyncFunctionDef) and method.name.startswith("test_"):
+                        if not (class_marks | _explicit_entity_marks(method)):
+                            unmarked.append(f"{rel}::{node.name}::{method.name}")
+            elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith("test_"):
+                if not _explicit_entity_marks(node):
+                    unmarked.append(f"{rel}::{node.name}")
 
     return unmarked
 

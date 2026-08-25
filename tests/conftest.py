@@ -4,6 +4,7 @@ Global pytest configuration and fixtures for all tests.
 This file provides fixtures available to all test modules.
 """
 
+import functools
 import json
 import multiprocessing
 import os
@@ -932,35 +933,41 @@ _NESTED_PYTEST_MODULES: frozenset[str] = frozenset(
 )
 
 
+@functools.lru_cache(maxsize=4096)
+def entity_markers_for_path(fspath: str) -> frozenset[str]:
+    """Entity markers this path earns from its filename and directory.
+
+    The single definition of the auto-marking rule. `pytest_collection_modifyitems`
+    applies it at collection; `test_architecture_test_marker_coverage` asserts
+    against it WITHOUT re-collecting the suite in a subprocess. Two copies of this
+    logic would drift, and the guard would then grade a rule production does not
+    follow.
+    """
+    filename = Path(fspath).stem  # e.g. "test_delivery_webhook_behavioral"
+    markers: set[str] = set()
+
+    # 1. Match filename against entity patterns (substring match)
+    for entity, patterns in _ENTITY_PATTERNS.items():
+        for pattern in patterns:
+            if pattern in filename:
+                markers.add(entity)
+                break  # one match per entity is enough
+
+    # 2. Match path against directory-based entity map
+    for path_fragment, entity in _PATH_ENTITY_MAP.items():
+        if path_fragment in fspath:
+            markers.add(entity)
+
+    return frozenset(markers)
+
+
 def pytest_collection_modifyitems(config, items):
     """Auto-apply entity markers from filename/path patterns."""
-    # For each test item, check filename and path against entity patterns.
-    # Build a lookup cache: filename → set of entity markers
-    _filename_cache: dict[str, set[str]] = {}
-
     for item in items:
         fspath = str(item.fspath)
-        filename = Path(fspath).stem  # e.g. "test_delivery_webhook_behavioral"
 
-        if filename not in _filename_cache:
-            markers: set[str] = set()
-
-            # 1. Match filename against entity patterns (substring match)
-            for entity, patterns in _ENTITY_PATTERNS.items():
-                for pattern in patterns:
-                    if pattern in filename:
-                        markers.add(entity)
-                        break  # one match per entity is enough
-
-            # 2. Match path against directory-based entity map
-            for path_fragment, entity in _PATH_ENTITY_MAP.items():
-                if path_fragment in fspath:
-                    markers.add(entity)
-
-            _filename_cache[filename] = markers
-
-        for marker_name in _filename_cache[filename]:
+        for marker_name in entity_markers_for_path(fspath):
             item.add_marker(getattr(pytest.mark, marker_name))
 
-        if filename in _NESTED_PYTEST_MODULES:
+        if Path(fspath).stem in _NESTED_PYTEST_MODULES:
             item.add_marker(pytest.mark.xdist_group("nested_pytest"))
