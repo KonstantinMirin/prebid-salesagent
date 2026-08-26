@@ -19,7 +19,7 @@ Runner-reported skips (``missing_test_controller``, ``missing_tool``,
 ``prerequisite_failed``, ...) become native ``pytest.skip()`` calls — they are
 never ledger entries. Only a genuine check FAILURE is ledgered.
 
-Requires a live in-network stack and the runner's npm deps + the pinned 3.1.1
+Requires a live in-network stack and the runner's npm deps + the pinned
 compliance/schema bundle (see ``tests/storyboard/runner/`` and
 ``.claude/notes/storyboard-conformance/sb1b-baseline-report.md``'s Reproduce
 section) — this module cannot be collected meaningfully without that
@@ -37,7 +37,7 @@ from typing import Any
 
 import pytest
 
-from scripts.audit import ledger
+from scripts.audit import ledger, storyboard_spec
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RUNNER_DIR = Path(__file__).parent / "runner"
@@ -71,6 +71,14 @@ _DEFAULT_AGENT_URLS: dict[str, str] = {
 _AUTH_TOKEN_ENV = "STORYBOARD_AUTH_TOKEN"
 _COMPLIANCE_DIR_ENV = "STORYBOARD_COMPLIANCE_DIR"
 _SCHEMA_ROOT_ENV = "STORYBOARD_SCHEMA_ROOT"
+
+# Where each lives INSIDE the extracted bundle. The bundle root comes from
+# storyboard_spec.adcp_home(); only the leaf differs, so neither the version nor
+# the containing path is written down here.
+_BUNDLE_SUBDIR = {
+    _COMPLIANCE_DIR_ENV: Path("compliance"),
+    _SCHEMA_ROOT_ENV: Path("schemas"),
+}
 
 # Webhook receiver. Without one, every expect_webhook* step reports
 # `requirement_unmet: webhook_receiver` and is silently ungraded.
@@ -126,8 +134,14 @@ def _bundle_path(env_name: str) -> str:
 
     Absolute values are passed through untouched.
     """
-    raw = Path(os.environ[env_name])
-    return str(raw if raw.is_absolute() else (_REPO_ROOT / raw).resolve())
+    override = os.environ.get(env_name)
+    if override:
+        raw = Path(override)
+        return str(raw if raw.is_absolute() else (_REPO_ROOT / raw).resolve())
+    # Unset: derive it. adcp_home() owns where the pinned tree lives, so the
+    # version is never spelled outside it. tox.ini used to carry
+    # `adcp-3.1.1/...` defaults, which is a version literal in a third place.
+    return str((storyboard_spec.adcp_home(_REPO_ROOT) / _BUNDLE_SUBDIR[env_name]).resolve())
 
 
 def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:
@@ -189,7 +203,7 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
         auth_token,
         "--allow-http",
         "--compliance-version",
-        "3.1.1",
+        storyboard_spec.pinned_version(_REPO_ROOT),
         "--compliance-dir",
         _bundle_path(_COMPLIANCE_DIR_ENV),
         "--schema-root",

@@ -37,7 +37,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.audit import storyboard_spec  # noqa: E402
 
-ADCP = Path.home() / "projects" / "adcp"
+ADCP = storyboard_spec.adcp_home(REPO_ROOT)
 OUT = Path(__file__).parent / "index.json"
 
 

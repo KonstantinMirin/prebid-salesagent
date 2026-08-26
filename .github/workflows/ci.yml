@@ -175,21 +175,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/_setup-env
-      # The six storyboard structural guards resolve the pinned AdCP tree via
+      # The storyboard structural guards resolve the pinned AdCP tree via
       # storyboard_spec.adcp_home(), which prefers this extracted release
       # bundle. Without it they skip, which silently disabled 23 guards in every
       # unit run — they all pass once a tree is actually resolvable.
-      - name: Download the pinned AdCP compliance bundle
-        working-directory: tests/storyboard/runner
-        run: |
-          version="$(sed -n 's/.*targets \*\*AdCP spec version \([0-9][^*]*\)\*\*.*/\1/p' \
-            "$GITHUB_WORKSPACE/docs/adcp-spec-version.md" | head -1)"
-          gh release download "v${version}" --repo adcontextprotocol/adcp \
-            -p "${version}.tgz" -p "${version}.tgz.sha256"
-          shasum -a 256 -c "${version}.tgz.sha256"
-          tar -xzf "${version}.tgz"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/_adcp-bundle
       - uses: ./.github/actions/_pytest
         with:
           paths: tests/unit/ tests/harness/
@@ -428,22 +418,22 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # The report generators below import `adcp` and `pyyaml`, and the bundle
+      # action resolves the pin from that same installed SDK, so this job needs
+      # the project venv. It did not before: it only ever drove docker compose.
+      - uses: ./.github/actions/_setup-env
       # The pinned compliance/schema bundle is a GitHub release asset, not an npm
       # dependency, so it is fetched host-side into the bind-mounted tree that the
       # runner container sees at /app. npm deps are NOT installed here: the
       # `storyboard` tox env's commands_pre runs `npm ci` inside that container,
       # where the Node that executes the runner actually lives.
-      # The three report generators import `adcp` and `pyyaml`, so this job needs
-      # the project venv. It did not before: it only ever drove docker compose.
-      - uses: ./.github/actions/_setup-env
-      - name: Download pinned 3.1.1 compliance/schema bundle
-        working-directory: tests/storyboard/runner
-        run: |
-          gh release download v3.1.1 --repo adcontextprotocol/adcp -p "3.1.1.tgz" -p "3.1.1.tgz.sha256"
-          shasum -a 256 -c 3.1.1.tgz.sha256
-          tar -xzf 3.1.1.tgz
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      #
+      # Same action as the unit job, so both take the version from ONE source —
+      # the installed SDK. This job hardcoded v3.1.1 while the unit job
+      # regex-parsed it out of the prose of docs/adcp-spec-version.md; the two
+      # could disagree with each other and both could disagree with the wheel.
+      - id: bundle
+        uses: ./.github/actions/_adcp-bundle
       # No host Postgres / host ports: run_all_tests.sh builds the pinned
       # creative agent, brings the stack up, waits for health, and executes tox
       # inside the compose network — the runner reaches the agent at proxy:8000
@@ -480,7 +470,7 @@ jobs:
       - name: Publish storyboard reports to the job summary
         if: always()
         env:
-          ADCP_BUNDLE: tests/storyboard/runner/adcp-3.1.1
+          ADCP_BUNDLE: ${{ steps.bundle.outputs.bundle-dir }}
         run: |
           set -uo pipefail
           emit() {  # $1 = generator stem, $2 = human title

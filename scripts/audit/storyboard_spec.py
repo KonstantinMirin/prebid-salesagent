@@ -905,15 +905,25 @@ def run_cli(
     parser = argparse.ArgumentParser(description=description)
     if configure_args is None:
         parser.add_argument("--repo", type=Path, default=Path.cwd())
-        parser.add_argument("--adcp", type=Path, default=Path.home() / "projects" / "adcp")
+        # Resolved AFTER parsing, from --repo, so it goes through adcp_home():
+        # $ADCP_HOME, then the in-repo release bundle, then a personal clone.
+        # Defaulting to the clone here made the published regeneration command
+        # fail on any machine that has the bundle and no clone — which is every
+        # CI runner and every contributor.
+        parser.add_argument("--adcp", type=Path, default=None)
     else:
         configure_args(parser)
     parser.add_argument("--markdown", action="store_true")
     if jsonl_fn is not None:
         parser.add_argument("--jsonl", action="store_true")
     args = parser.parse_args()
-    call_args = build_args(args) if build_args is not None else (args.repo.resolve(), args.adcp.resolve())
     try:
+        # Inside the try: adcp_home() consults pinned_version(), which reads the
+        # installed SDK and raises the typed error on pin drift. Resolving out
+        # here would traceback instead of the documented "error: ..." exit 1.
+        if getattr(args, "adcp", None) is None and hasattr(args, "repo"):
+            args.adcp = adcp_home(args.repo)
+        call_args = build_args(args) if build_args is not None else (args.repo.resolve(), args.adcp.resolve())
         result = build_fn(*call_args)
     except StoryboardAuditError as exc:
         print(f"error: {exc}", file=sys.stderr)

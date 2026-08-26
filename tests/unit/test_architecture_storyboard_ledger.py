@@ -55,7 +55,7 @@ from scripts.audit import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ADCP_HOME = Path.home() / "projects" / "adcp"
+ADCP_HOME = storyboard_spec.adcp_home(REPO_ROOT)
 
 # A real, currently-ledgered line (tests/storyboard/known_failures.txt:40), also
 # pinned verbatim in tests/unit/test_storyboard_ledger_state.py's EXPECTED_LEDGER

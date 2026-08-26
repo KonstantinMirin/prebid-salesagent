@@ -34,8 +34,9 @@ Bugs pinned here:
 
 Reads the live pinned AdCP compliance tree the way every existing sibling script does
 (``scripts/audit/storyboard_coverage_map.py::pinned_version`` +
-``Path.home() / "projects" / "adcp"``, see ``docs/adcp-spec-version.md``) -- skipped when
-that clone is not present, since these tests pin behavior against real spec content
+``storyboard_spec.adcp_home()``, see ``docs/adcp-spec-version.md``) -- skipped when
+NO tree resolves at all: not $ADCP_HOME, not the in-repo release bundle, and not a
+personal clone. These tests pin behavior against real spec content
 rather than a vendored offline index (that offline contract belongs to
 ``test_architecture_storyboard_binding.py``, which stays on the vendored index.json).
 """
@@ -50,7 +51,7 @@ import pytest
 from scripts.audit import storyboard_spec
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ADCP_HOME = Path.home() / "projects" / "adcp"
+ADCP_HOME = storyboard_spec.adcp_home(REPO_ROOT)
 
 DIST = storyboard_spec.dist_root(ADCP_HOME, storyboard_spec.pinned_version(REPO_ROOT))
 
