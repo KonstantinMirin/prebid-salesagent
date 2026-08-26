@@ -208,8 +208,10 @@ def then_signature_challenge(ctx: dict, code: str) -> None:
     """Grade the ``WWW-Authenticate: Signature error="<code>"`` challenge, byte-exactly.
 
     Through the harness helper, which is the single way a request-signature refusal may
-    be graded: it refuses a code outside the SDK's own ``REQUEST_SIGNATURE_*``
-    vocabulary, and FAILS (rather than passing for want of evidence) on a result that
+    be graded: it refuses a code outside the request-family vocabulary production reads
+    (``REQUEST_TO_WEBHOOK_CODE``, which is wider than a prefix scan of
+    ``adcp.signing.errors`` by ``request_target_uri_malformed``), and FAILS (rather than
+    passing for want of evidence) on a result that
     carries no raw HTTP response. ``status_code == 401`` is deliberately not the
     assertion — see ``TransportResult.assert_signature_challenge``.
 

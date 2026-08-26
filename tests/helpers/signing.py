@@ -752,25 +752,37 @@ def rejection_code(response: Any) -> str | None:
 
 @lru_cache(maxsize=1)
 def request_signature_codes() -> frozenset[str]:
-    """Every ``request_signature_*`` code the verifier can name in a challenge.
+    """Every request-family code the verifier can name in a challenge.
 
-    Read off the SDK module the MIDDLEWARE itself builds the challenge from
-    (``adcp.signing.errors`` -> ``SignatureVerificationError.code`` ->
-    ``unauthorized_response_headers``), never re-listed here: a local copy of the
+    Read off the SAME source production reads — ``REQUEST_TO_WEBHOOK_CODE``, the
+    SDK's own request->webhook translation table, re-exported by
+    ``src.core.signing_contract`` — never re-listed here: a local copy of the
     vocabulary cannot fail when the vocabulary changes, and a grader holding its
     own copy of the thing under test is the defect this epic already found once.
+    ``src/core/metrics.py:126`` derives ``SIGNATURE_ERROR_CODES`` from that table
+    for the reason its own comment gives, and this is that reason applied to the
+    harness.
 
-    The webhook family (``webhook_signature_*``) is deliberately excluded — it is
-    the same shape on a different surface, and a request-signature assertion
-    passing for a webhook code would grade the wrong direction.
+    A PREFIX SCAN OF ``adcp.signing.errors`` IS SUCH A COPY, and it was what stood
+    here. It is a SECOND derivation of the same vocabulary, and it returns a
+    SMALLER answer: the verifier also emits ``request_target_uri_malformed``
+    through ``reject_malformed_target``
+    (``src/core/signing/request_verifier_middleware.py``), and that name carries no
+    ``REQUEST_SIGNATURE_`` prefix, so the scan cannot see it. Measured, the table's
+    key set is EXACTLY the scan's 27 codes plus that one. The consequence was not
+    cosmetic: ``TransportResult.assert_signature_challenge``
+    (``tests/harness/transport.py``) refuses an unknown code UP FRONT, before it
+    reads the wire at all, so the harness vetoed a code production sends and no
+    scenario could grade that refusal.
+
+    The webhook family (``webhook_signature_*``) is still deliberately excluded —
+    it is the same shape on a different surface, and a request-signature assertion
+    passing for a webhook code would grade the wrong direction. The table's KEYS
+    are the request family; its values are the webhook translations.
     """
-    from adcp.signing import errors as _sdk_errors
+    from src.core.signing_contract import REQUEST_TO_WEBHOOK_CODE
 
-    return frozenset(
-        value
-        for name, value in vars(_sdk_errors).items()
-        if name.startswith("REQUEST_SIGNATURE_") and isinstance(value, str)
-    )
+    return frozenset(REQUEST_TO_WEBHOOK_CODE)
 
 
 #: One Prometheus text-format sample line: ``name{a="1",b="2"} 3.0`` (labels optional).

@@ -99,7 +99,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
-from adcp.signing import REQUEST_SIGNATURE_REQUIRED
+from adcp.signing import REQUEST_SIGNATURE_DIGEST_MISMATCH, REQUEST_SIGNATURE_REQUIRED
 
 from tests.harness._base import BareIntegrationEnv
 
@@ -108,16 +108,22 @@ from tests.harness._base import BareIntegrationEnv
 # only what this suite alone uses — the per-transport paths and envelopes.
 from tests.helpers.signing import (
     BODYLESS_ADCP_PATH,
+    COUNTERPARTY_KID,
+    FAILED_METRIC,
     REWRITTEN_ADCP_PATH,
     SIGNING_PRINCIPAL_ID,
     SIGNING_TENANT_ID,
     bucketed_declaration,
     counter_samples,
     counter_total,
+    counterparty_key,
+    keypair_for,
     narrowed_none,
     request_headers,
     samples_with,
     seed_principal,
+    signed_headers,
+    tampered_signing_body,
     unsupported,
 )
 from tests.helpers.signing import (
@@ -152,6 +158,20 @@ _A2A_PATH = "/a2a"
 #: decorative (``src/routes/api_v1.py:332,375``).
 _CREATE_MEDIA_BUY_PATH = "/api/v1/media-buys"
 _UPDATE_MEDIA_BUY_PATH = "/api/v1/media-buys/mb_signature_probe"
+
+#: The AdCP operation :data:`_UPDATE_MEDIA_BUY_PATH` resolves to, so a declaration
+#: can bucket the surface actually under test. Measured through production's own
+#: ``RegistryOperationResolver`` rather than read off the route decorator: PUT on
+#: that path answers ``update_media_buy``, POST on the bare collection answers
+#: ``create_media_buy``, and ``POST /api/v1/accounts/sync`` answers
+#: ``sync_accounts``. Naming any OTHER operation in a declaration leaves this
+#: surface in the ``none`` bucket, where a signed-but-invalid request is waved
+#: through unverified — an arm that reddens under the same mutation while grading
+#: something else entirely, so the slip would be silent. Spelled as a constant
+#: rather than resolved in a test because this module deliberately names no
+#: resolver symbol (module docstring); the wire assertion below is what re-checks
+#: it, off production's own ``operation`` metric label.
+_UPDATE_MEDIA_BUY_OPERATION = "update_media_buy"
 
 #: The second escalation trigger's surface (``accounts[].notification_configs``).
 _SYNC_ACCOUNTS_PATH = "/api/v1/accounts/sync"
@@ -254,11 +274,20 @@ def _json_headers(token: str | None) -> dict[str, str]:
 # --------------------------------------------------------------------------
 
 
-def _assert_rejected(response: Any, why: str) -> None:
-    """The verifier answered the spec's 401 with ``request_signature_required``."""
-    assert _rejection_code(response) == REQUEST_SIGNATURE_REQUIRED, (
+def _assert_rejected(response: Any, why: str, *, code: str = REQUEST_SIGNATURE_REQUIRED) -> None:
+    """The verifier answered the spec's 401 with the challenge *code*.
+
+    *code* is DEFAULTED rather than required so the five unsigned escalation
+    callers keep their exact oracle — ``request_signature_required``, the code an
+    unsigned refusal carries — while the SIGNED case names the one a tampered
+    signature earns inside the checklist. Widening the helper to "any 401"
+    instead would weaken all six at once, and a bare 401 is equally produced by
+    the auth middleware rejecting first and by a 404 wearing a 401
+    (:func:`tests.helpers.signing.rejection_code` is what reads the challenge).
+    """
+    assert _rejection_code(response) == code, (
         f"{why}\nExpected 401 + WWW-Authenticate: Signature "
-        f'error="{REQUEST_SIGNATURE_REQUIRED}"; got status {response.status_code} with '
+        f'error="{code}"; got status {response.status_code} with '
         f"WWW-Authenticate={response.headers.get('WWW-Authenticate')!r}"
     )
 
@@ -838,6 +867,107 @@ class TestWebhookAuthenticationForcesASignature:
                 "after #1291 D1 (the agent-level default is supported=verifier_enabled), so "
                 "accounts[].notification_configs[].authentication must force a signature "
                 "here exactly as it does under an explicitly declared posture",
+            )
+
+    def test_a_signed_but_invalid_registration_under_warn_is_still_refused(self, integration_db):
+        """The SIGNED half of the escalation — the half the five tests above cannot reach.
+
+        Every other test in this class dispatches UNSIGNED, and the promotion has TWO
+        call sites: the resolver (``request_verifier_middleware`` — "``:1375`` regardless
+        of ``required_for`` membership promotes the REQUEST, not one branch of one
+        handler") and ``_handle_unsigned``, which asks
+        ``_credentials_force_a_signature`` again on its own. Disarm the resolver alone
+        and every unsigned test stays green, because the second call site still answers.
+        So the resolver's promotion — the half that governs a request carrying signature
+        headers — is graded by nothing.
+
+        THE BUCKET IS THE VARIABLE, and it has to be ``warn``. Under ``supported`` (the
+        posture the five above use) a signed-but-invalid request is refused on its own
+        merits, promoted or not — pinned at
+        ``test_request_signature_middleware.py::test_invalid_signature_outcome_differs_per_bucket``
+        (``("supported", 401)``) — so the promotion would be a no-op and this case would
+        pass with it deleted, which is the very defect the lane exists to remove. Under
+        ``warn`` the two arms differ: promoted to ``required`` the checklist failure is a
+        refusal, and un-promoted ``warn`` SUPPRESSES that same checklist failure and the
+        request completes. Refusal becomes completion, on one variable.
+
+        The lane grades the weaker of the two un-promoted arms and says so here: the
+        ``none`` bucket — where no checklist runs at all, and where every JSON-RPC method
+        on a signing-capable seller lands, ``tasks/pushNotificationConfig/set`` included
+        — is the channel ``_credentials_force_a_signature``'s own docstring names, and it
+        stays ungraded. ``warn`` is chosen because it is the one bucket with a
+        one-variable neighbour in the BDD feature file, so the two artifacts stay the
+        same experiment.
+
+        THE ORACLE IS THE CHALLENGE, never the status. Un-promoted, this request is
+        waved through the verifier and then refused by the APPLICATION with a 400, so any
+        oracle shaped as "not 200" passes for the wrong reason.
+        """
+        private_key, jwks = keypair_for(COUNTERPARTY_KID)
+        sent_body = self._webhook_body(with_authentication=True)
+
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            token = seed_principal(env)
+            client = _client(env)
+
+            # Signed over DIFFERENT bytes than the ones sent, so the headers are
+            # well-formed and the signature cryptographically real: the verifier gets
+            # past the step-1 pre-check on its merits and reaches the digest mismatch
+            # INSIDE the checklist, which is the arm warn_for governs. A malformed
+            # signature would be refused in every bucket and grade nothing about the
+            # promotion.
+            headers = signed_headers(
+                private_key,
+                token,
+                method="PUT",
+                path=_UPDATE_MEDIA_BUY_PATH,
+                body=tampered_signing_body(sent_body),
+                extra={"Content-Type": "application/json"},
+            )
+
+            before = sum(
+                samples_with(
+                    FAILED_METRIC,
+                    operation=_UPDATE_MEDIA_BUY_OPERATION,
+                    code=REQUEST_SIGNATURE_DIGEST_MISMATCH,
+                ).values()
+            )
+
+            with (
+                _declared_posture(**bucketed_declaration("warn", _UPDATE_MEDIA_BUY_OPERATION)),
+                counterparty_key(jwks),
+            ):
+                response = client.put(_UPDATE_MEDIA_BUY_PATH, content=sent_body, headers=headers)
+
+            _assert_rejected(
+                response,
+                "push_notification_config.authentication is present, so security.mdx :1465 "
+                "promotes this request to required 'regardless of required_for membership' "
+                "(:1375) — and a promoted request runs the checklist, where the tampered "
+                "signature fails. Without the promotion the bucket stays warn, which "
+                "SUPPRESSES exactly this checklist failure, and the registration completes "
+                "with its credentials handed over unverified",
+                code=REQUEST_SIGNATURE_DIGEST_MISMATCH,
+            )
+
+            # PRODUCTION NAMED THE SURFACE, which is what keeps the declaration honest.
+            # bucketed_declaration(warn, X) buckets X as warn for any X, so a declaration
+            # naming an operation this PATH does not resolve to would leave the request in
+            # `none` — waved through unverified, refused for a different reason, and still
+            # red under the mutation. The verifier's own metric label is the non-circular
+            # link between the path and the name the declaration bucketed.
+            after = sum(
+                samples_with(
+                    FAILED_METRIC,
+                    operation=_UPDATE_MEDIA_BUY_OPERATION,
+                    code=REQUEST_SIGNATURE_DIGEST_MISMATCH,
+                ).values()
+            )
+            assert after == before + 1, (
+                f"the verifier recorded {after - before} {REQUEST_SIGNATURE_DIGEST_MISMATCH!r} failure(s) "
+                f"labelled operation={_UPDATE_MEDIA_BUY_OPERATION!r}, expected exactly 1. 0 means this "
+                "declaration bucketed an operation the path does not resolve to, so the surface under "
+                "test sat in the 'none' bucket and no checklist ran"
             )
 
     def test_the_escalation_does_not_fire_under_an_unsupported_posture(self, integration_db):

@@ -302,10 +302,16 @@ class TransportResult:
 
         NON-VACUITY, the same contract ``assert_wire_error`` carries:
 
-        * an unknown ``code`` is refused up front against the SDK's own
-          ``request_signature_*`` vocabulary (``adcp.signing.errors``, the module
-          the middleware builds the challenge from), so a typo or an invented code
-          fails loudly instead of comparing equal to a ``None`` that never arrives;
+        * an unknown ``code`` is refused up front against the request-family
+          vocabulary production itself reads
+          (:func:`tests.helpers.signing.request_signature_codes`, derived from
+          ``REQUEST_TO_WEBHOOK_CODE`` exactly as ``src/core/metrics.py`` derives
+          ``SIGNATURE_ERROR_CODES``), so a typo or an invented code fails loudly
+          instead of comparing equal to a ``None`` that never arrives. That
+          vocabulary is WIDER than a prefix scan of ``adcp.signing.errors``: the
+          verifier also emits ``request_target_uri_malformed``, which carries no
+          ``REQUEST_SIGNATURE_`` prefix, and a scan-derived veto made that refusal
+          ungradeable;
         * a result with NO raw HTTP response FAILS, naming the two things that
           produce one — the env never called ``enable_request_signing()`` (so the
           leg dispatched in-process, where there is no wire and no verifier), or a
@@ -316,8 +322,9 @@ class TransportResult:
         canonical = request_signature_codes()
         assert code in canonical, (
             f"{code!r} is not a request-signature rejection code the verifier can emit "
-            f"(adcp.signing.errors' REQUEST_SIGNATURE_* vocabulary). Did you mean one of: "
-            f"{', '.join(sorted(c for c in canonical if code.split('_')[-1] in c)) or 'see adcp.signing.errors'}?"
+            f"(the request-family vocabulary, src.core.signing_contract.REQUEST_TO_WEBHOOK_CODE). "
+            f"Did you mean one of: "
+            f"{', '.join(sorted(c for c in canonical if code.split('_')[-1] in c)) or 'see tests.helpers.signing.request_signature_codes'}?"
         )
 
         response = self.raw_response

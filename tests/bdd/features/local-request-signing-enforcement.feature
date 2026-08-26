@@ -147,3 +147,32 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # tampered bytes — the bucket. This is the control that makes the warn completion mean
     # something: without it, "the request completed" is equally explained by a verifier that
     # never rejects a digest mismatch at all, and the warn scenario would grade nothing.
+
+  @T-UC-006-local-signing-warn-credentials-escalate @request-signing @error-path @invariant @boundary
+  Scenario: a signed-but-invalid registration carrying credentials is refused under warn
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller places "sync_creatives" in the "warn" request-signature bucket
+    And the Buyer Agent signs a different rendering of the request
+    And the request registers a webhook whose authentication carries credentials
+    When the Buyer Agent syncs the creative
+    Then the seller answers with the request-signature challenge "request_signature_digest_mismatch"
+    # ONE variable apart from "a signed-but-invalid request completes under warn" above: the
+    # same operation, the same key, the same tampered bytes, the same bucket — the request
+    # now hands over webhook CREDENTIALS. That scenario COMPLETES and this one is REFUSED,
+    # and the flip is the whole claim: security.mdx @ v3.1.1 :1462-1465 makes the credentials
+    # force a signature and :1375 says the escalation fires "regardless of `required_for`
+    # membership", so `warn_for` must NOT suppress the checklist failure the way it does for
+    # the neighbour above. Same shape as the malformed row of the Outline, on the other trigger.
+    # THE SIGNED PATH IS WHAT IS NEW. The credential escalation is graded elsewhere only on
+    # UNSIGNED requests ("a registration carrying webhook authentication is refused unless
+    # signed" above, and the five integration cases beside it), and the seller promotes the
+    # bucket in TWO places — once for the whole request, once again inside the unsigned
+    # branch. Disarm the first and every unsigned grader stays green, because the second still
+    # answers. A request that CARRIES signature headers reaches only the first, which is why
+    # this scenario has to be signed: the escalation exists precisely so that ATTACHING a junk
+    # Signature cannot buy what omitting one is refused.
+    # `warn` and not a narrowed `none`: `none` is the purer arm — no checklist runs there at
+    # all — but it has no one-variable neighbour in this file, and every scenario here differs
+    # from its neighbour by exactly one variable. The cost is recorded rather than hidden:
+    # this file grades the WEAKER of the two un-promoted arms.
