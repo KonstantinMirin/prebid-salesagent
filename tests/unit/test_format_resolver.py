@@ -287,7 +287,7 @@ class TestGetFormat:
         the bug put a bare STRING here, with a docstring explaining that a real Format
         would not match; that was a test bent to fit broken code, and it is what kept
         `fmt.format_id == format_id` looking correct while it resolved nothing in
-        production (#1388).
+        production (#2093).
         """
         mock_fmt = MagicMock()
         mock_fmt.format_id = create_test_format_id("display_300x250")

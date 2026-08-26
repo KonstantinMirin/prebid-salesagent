@@ -12,7 +12,7 @@ The same file already reads the id correctly four lines further down
 (``creative.format_id.id if creative.format_id else ""``, used for the video
 adaptation suggestions), which is the shape the membership test needed too.
 
-Part of the #1388 family: format identity decided by comparing whole objects of
+Part of the #2093 family: format identity decided by comparing whole objects of
 differing types rather than by the value that actually identifies the format.
 """
 

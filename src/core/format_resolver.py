@@ -60,7 +60,7 @@ def find_format(formats: Iterable[Format], format_id: LibraryFormatId) -> Format
     exists twice -- the library type the AdCP schemas declare and our subclass --
     and pydantic v2 equality is class-sensitive, so comparing the models matched
     NOTHING whenever the two sides were built by different code paths
-    (the A2A boundary built one, MCP and REST the other; #1388).
+    (the A2A boundary built one, MCP and REST the other; #2093).
 
     Identity is ``format_id_identity``'s ``(canonical agent_url, id)``, the pair the
     graded contract matches on (``core/format-id.json`` requires ``[agent_url, id]``;
@@ -114,7 +114,7 @@ def get_format(
         # `fmt.format_id.id == format_id`, the same component comparison
         # CreativeAgentRegistry.get_format uses, because this parameter is a bare
         # `str`. Comparing it against the FormatId MODEL -- as this line did -- is
-        # False for every format, so the branch resolved nothing at all (#1388).
+        # False for every format, so the branch resolved nothing at all (#2093).
         # An id with no agent_url to namespace it is inherently ambiguous across
         # agents; first in listing order wins, which is what "search all agents"
         # has always meant here.

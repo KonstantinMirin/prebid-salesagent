@@ -1,6 +1,6 @@
 """Guard: a format reference is never identified by comparing ``.format_id`` directly.
 
-Disease (#1388): ``FormatId`` exists twice — the library type the AdCP schemas
+Disease (#2093): ``FormatId`` exists twice — the library type the AdCP schemas
 declare, and ``src.core.schemas._base.FormatId``, a subclass that adds ``__str__``
 and dimension helpers but not a single field. Pydantic v2 equality is
 class-sensitive, so two references naming the very same format compare UNEQUAL
@@ -250,7 +250,7 @@ def test_format_identity_goes_through_the_shared_helper():
         "A format reference is being identified by comparing .format_id directly. "
         "FormatId exists as both the library type and a local subclass, and pydantic v2 "
         "equality is class-sensitive — so this comparison silently matches NOTHING "
-        "whenever the two sides were built by different code paths (#1388). Use "
+        "whenever the two sides were built by different code paths (#2093). Use "
         "src.core.format_resolver.find_format (or format_identity):\n  " + "\n  ".join(violations)
     )
 

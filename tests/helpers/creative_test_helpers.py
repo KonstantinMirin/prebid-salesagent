@@ -113,7 +113,7 @@ def make_format_spec(
     - ``format_id`` as a bare STRING. ``Format.format_id`` is annotated as the library
       FormatId, so a string is a shape production never produces. It made the old
       class-sensitive ``fmt.format_id == creative_format`` match by accident in unit
-      tests while it matched NOTHING in production (#1388) -- the mock was propping up
+      tests while it matched NOTHING in production (#2093) -- the mock was propping up
       the bug it should have caught.
     - ``output_format_ids`` left auto-specced. _processing reads that attribute to
       decide whether a format is generative, and a bare Mock attribute is truthy, so
@@ -143,7 +143,7 @@ def make_registry_mock(
     _processing hands both to ``run_async_in_sync_context``, which rejects anything
     that is not a coroutine, so each copy sat one working format lookup away from
     ``TypeError: Expected coroutine``. They stayed green only because the lookup
-    itself never matched (#1388).
+    itself never matched (#2093).
 
     What each site does DIFFERENTLY -- returning a spec, returning None, raising
     AdCPServiceUnavailableError, branching on the requested id -- stays at that site
