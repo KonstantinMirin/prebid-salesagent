@@ -214,6 +214,13 @@ iterate:
 
         - The prediction is a value. "Fewer errors" is not a prediction; "0
           errors, down from 47" is.
+        - **Measure the number, then write it.** Never the other way round. A
+          count asserted from reading, and checked afterwards, is the most
+          common defect in these designs: one ticket carried four wrong counts,
+          each caught late by a reviewer. Run the command, paste its output,
+          and show the pattern matching a case you know is present before you
+          report how many remain — including, especially, when the number feels
+          obvious.
         - Prefer a command that already exists over one you write. `mypy`,
           `pytest --collect-only -q | wc -l`, `git diff --stat`, and `grep -c`
           are all measurements. Authoring a script adds maintenance.
