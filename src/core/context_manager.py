@@ -23,7 +23,7 @@ from src.core.database.jsonb_append import jsonb_list_append
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
 from src.core.database.repositories.workflow import append_step_comment, build_context, build_workflow_step
-from src.core.exceptions import build_two_layer_error_envelope, normalize_to_adcp_error
+from src.core.exceptions import adcp_error_for, build_two_layer_error_envelope
 from src.core.webhook_validator import (
     validate_webhook_task_type,
     webhook_url_for_log,
@@ -357,7 +357,7 @@ class ContextManager(DatabaseManager):
         so async and sync paths see the same wire shape.
 
         Untyped exceptions are normalized to ``AdCPError`` via
-        ``normalize_to_adcp_error``. Wire-code enforcement ensures webhook
+        ``adcp_error_for``. Wire-code enforcement ensures webhook
         subscribers only see codes the pinned table classifies.
 
         Wraps the ``update_workflow_step`` call in ``try/except`` so a DB
@@ -366,7 +366,7 @@ class ContextManager(DatabaseManager):
         """
 
         try:
-            source = normalize_to_adcp_error(exc)
+            source = adcp_error_for(exc)
 
             response_data = build_two_layer_error_envelope(source)
             error_message = source.message or str(source)

@@ -47,6 +47,7 @@ from pydantic import ValidationError
 
 from src.core.database.models import PricingOption
 from src.core.database.models import Product as ProductModel
+from src.core.exceptions import build_two_layer_error_envelope
 from src.core.product_conversion import convert_product_model_to_schema
 from src.core.schemas import (
     GetProductsResponse,
@@ -474,9 +475,11 @@ class TestPolicyErrorResponseSchema:
         from src.core.exceptions import AdCPValidationError
 
         err = AdCPValidationError()
-        err_dict = err.to_dict()
-        assert "error_code" in err_dict
-        assert "message" in err_dict
+        # The wire envelope, which is what a buyer receives. Note the field is
+        # `code` there, not `error_code`.
+        wire = build_two_layer_error_envelope(err)["errors"][0]
+        assert "code" in wire
+        assert "message" in wire
 
 
 # ---------------------------------------------------------------------------
@@ -495,8 +498,7 @@ class TestAuthErrorResponseSchema:
         from src.core.exceptions import AdCPAuthenticationError
 
         err = AdCPAuthenticationError()
-        err_dict = err.to_dict()
-        assert err_dict["error_code"] == "AUTH_INVALID"
+        assert build_two_layer_error_envelope(err)["errors"][0]["code"] == "AUTH_INVALID"
 
 
 # ---------------------------------------------------------------------------
@@ -1443,8 +1445,7 @@ class TestPostconditionSchema:
         from src.core.exceptions import AdCPValidationError
 
         err = AdCPValidationError()
-        err_dict = err.to_dict()
-        assert err_dict["error_code"] == "VALIDATION_ERROR"
+        assert build_two_layer_error_envelope(err)["errors"][0]["code"] == "VALIDATION_ERROR"
 
 
 # ---------------------------------------------------------------------------

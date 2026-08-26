@@ -70,9 +70,8 @@ def _serialize_context(
 ) -> dict[str, Any] | None:
     """Serialize an AdCP ContextObject (or dict) into a JSON-safe dict.
 
-    Single source of truth for context serialization — used by ``to_dict``,
-    ``to_adcp_error``, and ``build_two_layer_error_envelope`` so all three
-    paths emit byte-identical context payloads.
+    Single source of truth for context serialization, so the envelope builder and
+    every other reader emit byte-identical context payloads.
 
     Behavior:
         - ``None`` → ``None`` (caller decides whether to omit the key).
@@ -84,10 +83,10 @@ def _serialize_context(
           primitives; ``exclude_none=True`` matches the spec's emit-only-
           populated-fields norm.
         - anything else → log a warning and return ``None``. This is reached
-          from ``to_dict``/``to_adcp_error``/``build_two_layer_error_envelope``,
-          all of which run inside exception handlers — raising here would shadow
-          the original exception and the boundary translator would fail open
-          with no envelope. A malformed context drops to ``None`` instead.
+          from ``build_two_layer_error_envelope``, which runs inside exception
+          handlers — raising here would shadow the original exception and the
+          boundary translator would fail open with no envelope. A malformed
+          context drops to ``None`` instead.
     """
     if context is None:
         return None
@@ -171,10 +170,10 @@ class AdCPError[DetailsT: ErrorDetails](Exception):
             request that produced them (spec 3.0.0 normative).
         internal_detail: Optional NON-WIRE diagnostic payload — the raw
             third-party exception (or free text) that caused this error.
-            NEVER serialized: ``to_dict``, ``to_adcp_error`` and
-            ``build_two_layer_error_envelope`` all ignore it. It exists so a
-            raise site has a sanctioned destination for text whose provenance
-            we do not control, instead of interpolating it into ``message``.
+            NEVER serialized: ``build_two_layer_error_envelope`` ignores it. It
+            exists so a raise site has a sanctioned destination for text whose
+            provenance we do not control, instead of interpolating it into
+            ``message``.
             See the class note below.
 
     Message provenance (AdCP 3.1.1 ``transport-errors.mdx`` § Security
@@ -184,7 +183,7 @@ class AdCPError[DetailsT: ErrorDetails](Exception):
     database error text …; stack traces or file paths; upstream API responses
     from internal services; credentials, tokens, or session identifiers."
 
-    ``normalize_to_adcp_error()`` returns an already-typed ``AdCPError``
+    ``adcp_error_for()`` returns an already-typed ``AdCPError``
     unchanged, so for a typed error THE RAISE SITE IS THE WIRE — there is no
     downstream sanitization point. That is why ``message`` is no longer
     authored at all: it is a read-only property returning
@@ -200,7 +199,7 @@ class AdCPError[DetailsT: ErrorDetails](Exception):
     recovery is "re-pin to a release in the returned
     ``error.details.supported_versions``". Structured values in ``details``,
     third-party text in ``internal_detail`` (logged server-side by
-    ``normalize_to_adcp_error()``, never emitted), and nothing at all in
+    ``adcp_error_for()``, never emitted), and nothing at all in
     ``message``.
     """
 
@@ -300,18 +299,18 @@ class AdCPError[DetailsT: ErrorDetails](Exception):
         self.issues = issues
         # The pin's MUST: when issues[] is present, `field` is populated from
         # issues[0].pointer, translated to the JSONPath-lite spelling. Derived
-        # HERE rather than in the envelope builder so to_dict, to_adcp_error and
-        # build_two_layer_error_envelope all see one value -- the same reason
-        # _serialize_context is shared by all three. An explicitly passed field
-        # wins, so a caller can still point at something other than issues[0].
+        # HERE rather than at the emit site, so every reader of the error sees one
+        # value -- the same reason _serialize_context lives in one place. An
+        # explicitly passed field wins, so a caller can still point at something
+        # other than issues[0].
         if field is None and issues:
             field = pointer_to_field(issues[0].pointer)
         self.field = field
         self.retry_after = retry_after
         self.context = context
-        # NON-WIRE. Deliberately absent from to_dict()/to_adcp_error()/
+        # NON-WIRE. Deliberately absent from
         # build_two_layer_error_envelope(); emitted only to the server-side log
-        # by normalize_to_adcp_error(). Never add it to a serializer.
+        # by adcp_error_for(). Never add it to a serializer.
         self.internal_detail = internal_detail
         self.status_code = status_code if status_code is not None else type(self)._default_status_code
         # args stays EMPTY: BaseException.__reduce__ replays ``cls(*args)``, and this
@@ -380,69 +379,6 @@ class AdCPError[DetailsT: ErrorDetails](Exception):
             stack.extend(sub.__subclasses__())
             if not inspect.isabstract(sub):
                 yield sub
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to flat response body dict (legacy format).
-
-        Returns a flat dict with the raw ``error_code``. Transport boundary
-        handlers (FastAPI exception handler, MCP wrapper, A2A wrapper) are
-        responsible for translating to wire-compliant codes via
-        the transport boundary -- the declared code IS the wire code.
-
-        Includes ``context`` when present so callers building advisory
-        payloads (audit logging, retry-loop diagnostics) have the same
-        request-correlation envelope key the two-layer wire shape exposes.
-        """
-        result: dict[str, Any] = {
-            "error_code": self.error_code,
-            "message": self.message,
-            "recovery": self.recovery,
-            "details": _details_to_wire(self.details),
-        }
-        if self.field is not None:
-            result["field"] = self.field
-        # ``suggestion`` is a read-only property over CODE_TABLE, and every
-        # entry carries one, so it is unconditionally present.
-        result["suggestion"] = self.suggestion
-        if self.retry_after is not None:
-            result["retry_after"] = self.retry_after
-        serialized_context = _serialize_context(self.context)
-        if serialized_context is not None:
-            result["context"] = serialized_context
-        return result
-
-    def to_adcp_error(self) -> dict[str, Any]:
-        """Serialize to AdCP spec-compliant ``{"errors": [...]}`` format.
-
-        Uses ``adcp_error()`` from the SDK to produce the canonical error
-        envelope. No translation occurs at the transport boundaries, and this
-        method preserves the raw ``error_code`` so internal callers retain the source classification.
-
-        ``context`` flows into ``details["context"]`` so the SDK helper
-        doesn't drop request-correlation data on the floor.
-
-        .. deprecated::
-            Effectively legacy now that ``build_two_layer_error_envelope()``
-            is the single source of truth for the wire envelope. Prefer the
-            envelope builder for any new code path. This method intentionally
-            differs in shape — ``context`` is nested under ``details`` here
-            but appears at the top level in the two-layer envelope — and is
-            retained only for non-envelope callers (audit logging, SDK
-            interop) that still want the flat ``{"errors": [...]}`` payload.
-        """
-        merged_details = _details_to_wire(self.details) or {}
-        serialized_context = _serialize_context(self.context)
-        if serialized_context is not None:
-            merged_details.setdefault("context", serialized_context)
-        return adcp_error(
-            self.error_code,
-            self.message,
-            recovery=self.recovery,
-            field=self.field,
-            suggestion=self.suggestion,
-            retry_after=self.retry_after,
-            details=merged_details or None,
-        )
 
 
 class AdCPValidationError(AdCPError[ValidationDetails]):
@@ -1160,7 +1096,7 @@ def _log_internal_detail(exc: AdCPError) -> None:
 
     The single emission point for every raise site that hands its raw cause to
     ``internal_detail=`` instead of interpolating it into the buyer-facing
-    ``message``. It lives here because ``normalize_to_adcp_error()`` is the one
+    ``message``. It lives here because ``adcp_error_for()`` is the one
     place every error from every transport (MCP, A2A, REST) passes through, so
     one line replaces a hand-rolled ``logger.error(raw)`` at each raise site —
     and covers the sites that log nothing at all today.
@@ -1176,7 +1112,7 @@ def _log_internal_detail(exc: AdCPError) -> None:
     )
 
 
-def normalize_to_adcp_error(exc: Exception) -> AdCPError:
+def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPError:
     """Normalize untyped exceptions to typed AdCPError subclasses.
 
     Single source of truth for the wrapping applied at all three transport
@@ -1197,9 +1133,12 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
         _log_internal_detail(exc)
         return exc
     if isinstance(exc, ValidationError):
+        # ValidationError is checked BEFORE ValueError deliberately: a pydantic
+        # ValidationError IS a ValueError subclass, so the order decides whether a
+        # buyer gets the field and issues or a bare VALIDATION_ERROR.
         errors = exc.errors()
         return AdCPValidationError(
-            field=first_validation_error_field(exc),
+            field=field if field is not None else first_validation_error_field(exc),
             issues=issues_from_validation_error(errors),
         )
     if isinstance(exc, ValueError):

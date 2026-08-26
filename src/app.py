@@ -42,8 +42,8 @@ from src.core.exceptions import (
     AdCPError,
     AdCPInvalidRequestError,
     AdCPValidationError,
+    adcp_error_for,
     build_two_layer_error_envelope,
-    normalize_to_adcp_error,
 )
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 from src.core.lifecycle import run_all_shutdown_callbacks
@@ -223,7 +223,7 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
     Does NOT catch FastAPI's ``RequestValidationError`` (separate class, not a
     ValueError subclass) — that has its own handler below.
     """
-    return _envelope_response(request, normalize_to_adcp_error(exc))
+    return _envelope_response(request, adcp_error_for(exc))
 
 
 @app.exception_handler(RequestValidationError)
@@ -280,7 +280,7 @@ async def permission_error_handler(request: Request, exc: PermissionError) -> JS
     error instead of the 403 authorization envelope every transport should
     emit for the same condition.
     """
-    return _envelope_response(request, normalize_to_adcp_error(exc))
+    return _envelope_response(request, adcp_error_for(exc))
 
 
 @app.exception_handler(Exception)
@@ -296,7 +296,7 @@ async def untyped_exception_handler(request: Request, exc: Exception) -> JSONRes
     envelope the spec requires on every transport, and (with ``debug=True``,
     not this app's default, but a real deployment misconfiguration risk) a raw
     traceback in the response body — worse than the leak prkv.8 fixes in
-    ``normalize_to_adcp_error``.
+    ``adcp_error_for``.
 
     Registration ORDER is irrelevant here, and it is worth being precise about
     why: Starlette stores handlers in a dict keyed by exception CLASS and
@@ -308,7 +308,7 @@ async def untyped_exception_handler(request: Request, exc: Exception) -> JSONRes
     it last — that would imply an ordering guarantee that does not exist.
     Verified: RuntimeError/KeyError resolve here; the five typed ones do not.
     """
-    return _envelope_response(request, normalize_to_adcp_error(exc), log_as=exc)
+    return _envelope_response(request, adcp_error_for(exc), log_as=exc)
 
 
 @app.exception_handler(ToolError)

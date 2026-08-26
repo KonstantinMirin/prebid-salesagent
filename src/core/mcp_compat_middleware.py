@@ -16,7 +16,7 @@ from fastmcp.tools.tool import ToolResult
 from mcp.types import CallToolRequestParams
 from pydantic import ValidationError
 
-from src.core.exceptions import normalize_to_adcp_error
+from src.core.exceptions import adcp_error_for
 from src.core.request_compat import deep_strip_to_schema, normalize_request_params, strip_unknown_params
 from src.core.tool_error_logging import _translate_to_tool_error, record_boundary_error
 
@@ -118,10 +118,11 @@ class RequestCompatMiddleware(Middleware):
                                 raise
                             exc = retry_exc
 
-            # Normalize once for the audit record, then pass the raw exception to
+            # Convert ONCE. The raw exception still goes to
             # _translate_to_tool_error so the emitted AdCPToolError keeps it as
-            # __cause__. The translator intentionally normalizes it a second time.
-            typed = normalize_to_adcp_error(exc)
+            # __cause__; the converted result rides alongside it so the translator
+            # does not repeat the mapping.
+            typed = adcp_error_for(exc)
             tenant_id = None
             principal_id = None
             if context.fastmcp_context is not None:
@@ -139,7 +140,7 @@ class RequestCompatMiddleware(Middleware):
                 tenant_id=tenant_id,
                 principal_id=principal_id,
             )
-            _translate_to_tool_error(exc)
+            _translate_to_tool_error(exc, typed=typed)
 
     @staticmethod
     def _should_retry(exc: Exception) -> bool:

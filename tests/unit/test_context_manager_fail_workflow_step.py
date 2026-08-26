@@ -55,9 +55,9 @@ def _expected_response_data(exc: AdCPError) -> dict:
 
 def _normalized_for(exc: Exception) -> AdCPError:
     """The typed error production derives from an untyped one, via the same helper."""
-    from src.core.exceptions import normalize_to_adcp_error
+    from src.core.exceptions import adcp_error_for
 
-    return normalize_to_adcp_error(exc)
+    return adcp_error_for(exc)
 
 
 class TestFailWorkflowStepForExceptionWebhookPayload:
@@ -98,7 +98,7 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
         persisted workflow_step.response_data share the same two-layer
         shape"), read back by async webhook subscribers — so it gets the
         SAME provenance protection prkv.8 gives the live transports:
-        ``normalize_to_adcp_error()``'s untyped-Exception fallback uses
+        ``adcp_error_for()``'s untyped-Exception fallback uses
         ``type(exc).__name__``, never the exception's own ``str()``, which
         has no guarantee of being safe to persist/replay to a subscriber
         (a DSN, a stack fragment, an upstream response body).

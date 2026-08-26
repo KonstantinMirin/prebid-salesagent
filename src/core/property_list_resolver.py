@@ -100,7 +100,7 @@ async def resolve_property_list(ref: PropertyListReference) -> list[str]:
     # back discloses nothing the buyer did not send. The third-party exception
     # text does not go on the wire (transport-errors.mdx § Security
     # Considerations); it goes to ``internal_detail``, which
-    # ``normalize_to_adcp_error()`` logs server-side. None of these three arms
+    # ``adcp_error_for()`` logs server-side. None of these three arms
     # logged anything before, so the slot is also their only operator coverage.
     except httpx.HTTPStatusError as exc:
         raise AdCPAdapterError(

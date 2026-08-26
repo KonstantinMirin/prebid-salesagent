@@ -334,7 +334,7 @@ class TestSyncCreativesFormatValidation:
             advisory_missing = response.creatives[0].errors[0]
             # Same obligation as before (the rejected field is identified), asserted where
             # the value now lives rather than inside an English sentence.
-            # The advisory now runs through the SAME normalize_to_adcp_error the
+            # The advisory now runs through the SAME adcp_error_for the
             # request-level boundary uses, so a pydantic failure is VALIDATION_ERROR with
             # its field — not the SERVICE_UNAVAILABLE default it used to inherit.
             assert advisory_missing.code == "VALIDATION_ERROR"

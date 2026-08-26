@@ -2229,7 +2229,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # correctly — FastMCP's TypeAdapter validates the account param against
             # the adcp library's AccountReference oneOf (RootModel,
             # additionalProperties:false per branch) BEFORE the tool body runs,
-            # normalized to VALIDATION_ERROR via the shared normalize_to_adcp_error().
+            # normalized to VALIDATION_ERROR via the shared adcp_error_for().
             _acc_notfound_fail = is_impl and "not found" in nodeid
             if _acc_notfound_fail:
                 item.add_marker(
@@ -2279,7 +2279,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # mcp's "not in AdCP enum" (status_filter="failed") row also now
             # rejects correctly — FastMCP's TypeAdapter validates status_filter
             # against the adcp library's MediaBuyStatus enum before the tool body
-            # runs, same mechanism/normalize_to_adcp_error() path as the account
+            # runs, same mechanism/adcp_error_for() path as the account
             # boundary graduation above.
             # Graduated: e2e_rest invalid status_filter (unknown enum value) now
             # returns 400 INVALID_REQUEST (the RequestValidationError handler in

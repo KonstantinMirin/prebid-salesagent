@@ -46,7 +46,7 @@ _FAKE_DSN_MARKER = "postgres://admin:s3cr3t-security001@10.0.0.9:5432/prod_shado
 class _InjectedUntypedFault(RuntimeError):
     """Distinctively-named untyped exception injected by this scenario.
 
-    Not a bare RuntimeError: production's normalize_to_adcp_error() fallback
+    Not a bare RuntimeError: production's adcp_error_for() fallback
     emits ``type(exc).__name__`` as the wire-safe message, so this class name
     becomes the positive assertion target — pinning the observation to THIS
     injected fault specifically (any unrelated unhandled exception would not

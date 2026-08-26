@@ -10,7 +10,7 @@ Feature: Wire error safety for untyped exceptions
   reach me, per AdCP 3.1.1 transport-errors.mdx Security Considerations.
 
   # CODE REVERSED by salesagent-3dawm.6, from SERVICE_UNAVAILABLE to INTERNAL_ERROR.
-  # SERVICE_UNAVAILABLE was never what the raise site declared: normalize_to_adcp_error turns an
+  # SERVICE_UNAVAILABLE was never what the raise site declared: adcp_error_for turns an
   # untyped exception into INTERNAL_ERROR, and a now-deleted table rewrote it at the boundary.
   # The obligation this scenario grades is UNCHANGED and is not about which code appears — it is
   # that no raw exception TEXT reaches the buyer, asserted by the marker scan and by pinning the

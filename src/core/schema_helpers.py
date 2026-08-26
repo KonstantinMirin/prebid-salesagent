@@ -200,7 +200,7 @@ def coerce_creative_filters(filters: dict[str, Any] | CreativeFilters | None) ->
     a recovery suggestion, so every transport surfaces the spec's two-layer
     ``VALIDATION_ERROR`` envelope (with a suggestion, per POST-F3). Constructing the
     model directly instead (as the ``to_*`` converters above do, via ``Model(**dict)``)
-    surfaces a raw pydantic ``ValidationError`` that ``normalize_to_adcp_error``
+    surfaces a raw pydantic ``ValidationError`` that ``adcp_error_for``
     flattens into a suggestion-less envelope.
 
     Args:

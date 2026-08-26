@@ -67,8 +67,8 @@ from src.core.exceptions import (
     AdCPError,
     AdCPUrlNotAllowedError,
     AdCPValidationError,
+    adcp_error_for,
     build_two_layer_error_envelope,
-    normalize_to_adcp_error,
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import (
@@ -299,13 +299,13 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
 
     Use this helper at every non-skill ``InternalError(...)`` raise site that
     is NOT a deliberate protocol-level convention (see push-notif handlers
-    below). ``message`` is built from ``normalize_to_adcp_error(exc).message``,
+    below). ``message`` is built from ``adcp_error_for(exc).message``,
     NEVER the raw exception's own ``str()`` — the two are only the same value
     when ``exc`` is already a typed ``AdCPError`` (passed through unchanged,
     its message deliberately authored to be buyer-safe) or one of the other
     typed branches (``ValueError``/``PermissionError``, our own deliberately-
     raised validation text). For an arbitrary/untyped exception,
-    ``normalize_to_adcp_error`` itself replaces the message with
+    ``adcp_error_for`` itself replaces the message with
     ``type(exc).__name__`` — the raw text has no provenance guarantee (AdCP
     3.1.1 transport-errors.mdx Security Considerations MUST-NOT list) and must
     not reach the JSON-RPC wire. This keeps ``message`` informative for the
@@ -321,7 +321,7 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     ``except Exception`` branch and be flattened to a bare ``InternalError`` with no
     envelope.
     """
-    typed = normalize_to_adcp_error(exc)
+    typed = adcp_error_for(exc)
     return InternalError(
         message=f"{operation} failed: {typed.message}",
         data=build_two_layer_error_envelope(typed),
@@ -344,7 +344,7 @@ class AdCPRequestHandler(RequestHandler):
         Single source of truth for "wrap-arbitrary-exception → wire envelope"
         used by both the per-skill dispatcher (``_build_failed_skill_result``)
         and the top-level ``on_message_send`` error handler. Delegates to
-        ``normalize_to_adcp_error`` for the type→AdCPError mapping
+        ``adcp_error_for`` for the type→AdCPError mapping
         (``ValueError → AdCPValidationError``, ``PermissionError →
         AdCPAuthorizationError``, arbitrary ``Exception →
         AdCPError(INTERNAL_ERROR)``) so the wire output stays in
@@ -354,7 +354,7 @@ class AdCPRequestHandler(RequestHandler):
         as ``MCP_ERROR``.
         """
 
-        return build_two_layer_error_envelope(normalize_to_adcp_error(exc))
+        return build_two_layer_error_envelope(adcp_error_for(exc))
 
     @staticmethod
     def _build_failed_skill_result(skill_name: str, exc: Exception) -> dict[str, Any]:
@@ -1656,11 +1656,11 @@ class AdCPRequestHandler(RequestHandler):
             raise
         except (AdCPError, ValueError, PermissionError) as e:
             # Normalize ValueError/PermissionError to typed AdCPError via the
-            # shared normalize_to_adcp_error() helper — same mapping the MCP
+            # shared adcp_error_for() helper — same mapping the MCP
             # and REST boundaries apply. The outer dispatcher's `except
             # AdCPError` branch wraps the result into a failed Task with the
             # two-layer envelope.
-            normalized = normalize_to_adcp_error(e)
+            normalized = adcp_error_for(e)
 
             # Defensive about identity shape — test fixtures sometimes pass a
             # string or partially-built identity instead of ResolvedIdentity.

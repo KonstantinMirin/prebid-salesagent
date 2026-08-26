@@ -149,14 +149,16 @@ def _get_error_dict(error: object) -> dict:
     from src.core.exceptions import AdCPError
 
     if isinstance(error, AdCPError):
-        d = error.to_dict()
-        # AdCPError.to_dict() has: error_code, message, recovery, details
-        # Map to the assertion vocabulary used in feature files.
-        # Deliberately NO promotion of details["suggestion"]: error.json places
-        # suggestion at the top level, and to_dict() already carries it there
-        # when the emitter is conformant (#1417).
-        d["code"] = d.get("error_code", "")
-        return d
+        # The wire envelope, not a second serialization of the same object, and
+        # located through the ONE sanctioned locator rather than indexed here --
+        # `locate_envelope_error` is where "which region does the spec put this in"
+        # is answered. The envelope already uses the vocabulary the feature files
+        # read (`code`, not `error_code`), so no remapping is needed.
+        from src.core.exceptions import build_two_layer_error_envelope
+        from tests.helpers.envelope_assertions import locate_envelope_error
+
+        located = locate_envelope_error(build_two_layer_error_envelope(error))
+        return dict(located) if located else {}
     # adcp.types.Error model (from partial success response.errors) — has code,
     # message, suggestion, recovery, field as direct attributes.
     if hasattr(error, "code") and not isinstance(error, Exception):

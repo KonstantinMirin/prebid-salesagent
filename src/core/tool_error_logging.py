@@ -19,8 +19,8 @@ from src.core.errors.codes import CODE_TABLE, AppErrorCode, Recovery
 from src.core.errors.details import ErrorDetails
 from src.core.exceptions import (
     AdCPError,
+    adcp_error_for,
     build_two_layer_error_envelope,
-    normalize_to_adcp_error,
 )
 from src.core.tool_context import ToolContext
 
@@ -270,7 +270,7 @@ def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, pri
     record_boundary_error("mcp", tool_name, error, tenant_id=tenant_id, principal_id=principal_id)
 
 
-def _translate_to_tool_error(error: Exception) -> NoReturn:
+def _translate_to_tool_error(error: Exception, typed: AdCPError | None = None) -> NoReturn:
     """Translate typed exceptions to AdCPToolError at the MCP boundary.
 
     AdCPError → AdCPToolError carrying a two-layer envelope built by
@@ -283,16 +283,18 @@ def _translate_to_tool_error(error: Exception) -> NoReturn:
     bare ``raise``) on the passthrough branches so the function works even if
     the caller is not inside an active ``except`` block.
     """
+    # The ToolError passthrough is keyed on the RAW error and MUST stay ahead of
+    # the `typed` short-circuit: a caller that pre-converted still hands us the
+    # original, and an AdCPToolError arriving here is already in wire shape.
     if isinstance(error, ToolError):
         # Includes AdCPToolError — already in wire shape.
         raise error
-    # Normalize untyped exceptions (ValueError, PermissionError) to typed
-    # AdCPError via the shared normalize_to_adcp_error() helper — same
-    # mapping the A2A and REST boundaries apply. The result is always an
-    # AdCPError; the wrap-vs-passthrough branches produce byte-identical
-    # AdCPToolError values, so the function unconditionally builds the
-    # envelope and chains the original exception for traceback fidelity.
-    typed = normalize_to_adcp_error(error)
+    # `typed` lets a caller that already converted pass the result instead of
+    # making this convert a second time. The mapping is deterministic, so one
+    # conversion or two produced the same AdCPError; doing it once is simply the
+    # truth about how many mappings exist. The RAW error is still what `from`
+    # chains, so __cause__ is unchanged either way.
+    typed = typed if typed is not None else adcp_error_for(error)
     raise AdCPToolError(build_two_layer_error_envelope(typed), status_code=typed.status_code) from error
 
 

@@ -143,7 +143,7 @@ def _failed_sync_result(creative_id: str, source: AdCPError) -> SyncCreativeResu
 
     Provenance-bearing text belongs on ``internal_detail`` at the RAISE site (server log
     only), never in ``details``: a diagnostic in ``details`` is on the buyer's wire, which
-    is the forward ``normalize_to_adcp_error`` exists to prevent.
+    is the forward ``adcp_error_for`` exists to prevent.
     """
     return SyncCreativeResult(
         creative_id=creative_id,

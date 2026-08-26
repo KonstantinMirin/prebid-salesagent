@@ -13,9 +13,8 @@ from contextlib import contextmanager
 
 from pydantic import ValidationError
 
-from src.core.errors.issues import issues_from_validation_error
 from src.core.exceptions import (
-    AdCPValidationError,
+    adcp_error_for,
 )
 from src.core.exceptions import (
     first_validation_error_field as first_validation_error_field,
@@ -32,11 +31,11 @@ def adcp_validation_boundary(context: str = "parameters", field: str | None = No
     boundary. A raw ``ValidationError`` leaking from ``model_validate`` (or a
     typed-model constructor) would surface as an untyped error — and the outer
     dispatcher only builds the two-layer error envelope for ``AdCPError``
-    subclasses, so the buyer would lose the real code/recovery. This boundary is
-    the SINGLE translation point (#1417): every rejection carries the
-    buyer-friendly ``format_validation_error`` message, the structured ``field``
-    path, and error.json's top-level ``suggestion`` — no tool hand-rolls its own
-    try/except copy.
+    subclasses, so the buyer would lose the real code/recovery.
+
+    This is ERGONOMICS over ``adcp_error_for``, not a second translation: wrapping
+    a block is a different job from converting an exception already in hand, and
+    both produce the identical error. There is ONE mapping.
 
     ``context`` names what was invalid in the message (e.g. ``"get_products
     request"``); the default renders the ``Invalid parameters`` prefix existing
@@ -50,11 +49,7 @@ def adcp_validation_boundary(context: str = "parameters", field: str | None = No
     try:
         yield
     except ValidationError as e:
-        errors = e.errors()
-        raise AdCPValidationError(
-            field=field if field is not None else first_validation_error_field(e),
-            issues=issues_from_validation_error(errors),
-        ) from e
+        raise adcp_error_for(e, field=field) from e
 
 
 def run_async_in_sync_context(coroutine):

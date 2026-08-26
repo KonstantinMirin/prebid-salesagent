@@ -1,7 +1,7 @@
 """Reproduction for salesagent-prkv.8: raw exception text reaching the buyer-facing wire.
 
 An untyped exception raised inside a dispatched skill's business logic is
-normalized to a wire-safe ``AdCPError`` by ``normalize_to_adcp_error()``
+normalized to a wire-safe ``AdCPError`` by ``adcp_error_for()``
 (src/core/exceptions.py) — the single chokepoint used by all three transport
 boundaries (A2A, MCP, REST). Its final fallback branch,
 ``return AdCPError(str(exc) or type(exc).__name__)``, uses the raw exception's
@@ -66,13 +66,13 @@ class TestUntypedExceptionDoesNotLeakOntoWire:
 class TestInternalErrorForDoesNotLeakOntoWire:
     """Separate obligation: adcp_a2a_server.py's ``_internal_error_for()`` (the
     ticket's literal WHERE) builds the top-level A2A JSON-RPC ``error.message``
-    field independently of ``normalize_to_adcp_error()`` — it is reachable only
+    field independently of ``adcp_error_for()`` — it is reachable only
     from NON-skill A2A boundary failures (``on_message_send``'s outer
     fallthrough, and the push-notification-config JSON-RPC methods), never from
     a dispatched skill's own per-invocation catch (that goes through
     ``_build_failed_skill_result`` instead, covered by the class above).
     Mutation-verified: this test does NOT fail if only
-    ``normalize_to_adcp_error()``'s fix is reverted — it exercises the OTHER
+    ``adcp_error_for()``'s fix is reverted — it exercises the OTHER
     mechanism specifically, by raising during identity resolution, which runs
     inside ``on_message_send``'s outer try/except, before skill dispatch."""
 

@@ -60,7 +60,7 @@ def test_resolver_crash_is_not_reported_as_the_buyers_validation_error(integrati
             f"{getattr(result, 'wire_response', None) or result.payload!r}"
         )
         # EXPECTATION REVERSED by salesagent-3dawm.6. This asserted SERVICE_UNAVAILABLE,
-        # which was never what the raise site declared: normalize_to_adcp_error turns an
+        # which was never what the raise site declared: adcp_error_for turns an
         # untyped crash into INTERNAL_ERROR, and a now-deleted table rewrote that to
         # SERVICE_UNAVAILABLE at the boundary. With the rewriters gone the buyer sees the
         # code the server actually produced.
