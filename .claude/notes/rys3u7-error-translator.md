@@ -28,6 +28,22 @@ and `build_two_layer_error_envelope` already accepts one.
 
 Four of the five boundaries already do this. The boundary shape does not change.
 
+There are TWO kinds of boundary and both are legitimate callers of the mapper:
+
+  * TRANSPORT boundaries, one per protocol, which shape a response.
+  * PER-ITEM boundaries inside a partial-success loop, which convert one item's
+    failure into that item's advisory and keep going. These need the TOTAL
+    mapper, because the loop catches everything: `src/core/tools/creatives/
+    _sync.py:202` catches `(ValidationError, ValueError)` and `:377` catches
+    `Exception`. `src/core/context_manager.py:369` is the same kind.
+
+A per-item boundary is NOT a misplaced caller. Do not route one through
+`adcp_validation_boundary`: that context manager catches `ValidationError` only,
+so it covers neither of those clauses, and narrowing the catch to make it fit
+would drop the arm the comment at `_sync.py:385-388` exists to preserve
+("anything else becomes INTERNAL_ERROR ... synthesizing a bare INTERNAL_ERROR
+here instead threw away the field the buyer needs").
+
 ## The wrapper stays transport-specific
 
 Do not generify the wrapper into a shared catch-all. `src/a2a_server/
@@ -87,14 +103,7 @@ of operation, not the operation. Reads as what it is at the call site:
 passes the RAW exception to `_translate_to_tool_error`, whose comment states it
 "intentionally normalizes it a second time". Convert once, pass the result.
 
-## Defect 4 — two call sites are not boundaries
-
-`src/core/tools/creatives/_sync.py:218` and `:389` catch a pydantic
-`ValidationError` from `CreativeAsset(**data)` inside `_sync_creatives_impl`. We
-control that construction, so these use the context manager (or raise directly),
-not the boundary mapper.
-
-## Defect 5 — three serializers on AdCPError, two dead
+## Defect 4 — three serializers on AdCPError, two dead
 
   * `to_adcp_error()` (src/core/exceptions.py:414) -- ZERO call sites. Returns
     the flat `{"errors": [...]}` dict; its docstring calls itself legacy,
@@ -118,7 +127,6 @@ shape it produces.
   * Re-express `adcp_validation_boundary` over it; delete the stale docstring
     claims.
   * Convert once in `mcp_compat_middleware`.
-  * Point `_sync.py:218` and `:389` at the context manager.
   * Delete `to_adcp_error()`.
   * Delete `AdCPError.to_dict()`; migrate its four test callers to the wire
     envelope.
@@ -129,7 +137,6 @@ shape it produces.
   * No new carrier type; boundaries read `.status_code` / `.message` off the
     AdCPError.
   * No exception normalized twice on any path.
-  * No call site under `src/core/tools/` uses the boundary mapper directly.
   * `AdCPError` has exactly one serializer.
   * No test asserts on a reconstructed error object where a wire envelope exists.
   * A2A still raises `A2AError` subclasses, so the dispatcher keeps serializing
