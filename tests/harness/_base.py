@@ -1202,13 +1202,16 @@ class BaseTestEnv:
         session.commit()
 
     def _realize_e2e_signature_verifications(self) -> int:
-        """The same claim, read across a process boundary: the scraped counter.
+        """The same claim and the SAME EVENT, read across a process boundary.
 
-        ``verifier_spy`` patches the verifier in THIS process; the live server's
-        verifier runs in another container, so the in-process branch would report 0
-        for a request that WAS verified — the silent false negative this fork exists
-        to prevent. See :func:`tests.helpers.signing.scraped_verified_count` for why
-        the counter is a sound positive oracle and why an empty scrape fails loudly.
+        Both legs now count ``adcp_request_signature_verified_total``; only the
+        reach differs. The in-process branch reads it off the registry it shares
+        with the middleware under test, and this fork scrapes it over HTTP because
+        the live server's verifier increments a counter in another container, where
+        an in-process read would report 0 for a request that WAS verified — the
+        silent false negative this fork exists to prevent. See
+        :func:`tests.helpers.signing.scraped_verified_count` for why the counter is
+        a sound positive oracle and why an empty scrape fails loudly.
         """
         from tests.helpers.signing import scraped_verified_count
 
@@ -1222,23 +1225,36 @@ class BaseTestEnv:
         The positive oracle, and deliberately not a status code: a 200 is equally
         true of a middleware that never looked, and under ``required_for`` an
         unsigned request carrying a valid bearer is a spec-correct 200
-        (security.mdx :1269). ``VerifiedSigner.key_id`` is what says the signature
-        this env produced was actually verified — matching the CAPABILITY'S OWN kid,
-        so the count is a claim about this env's requests and not about any key
-        merely named like it.
+        (security.mdx :1269). The counter's ``keyid`` label is what says the
+        signature this env produced was actually verified — production records it
+        verbatim from the signer the verifier resolved, and it matches the
+        CAPABILITY'S OWN kid, so the count is a claim about this env's requests and
+        not about any key merely named like it.
 
         Counted rather than asserted here because the assertion belongs to the
         scenario: a Then that pins ``== 1`` also rules out a leg that verified twice
         (session frames graded as operations) or zero times.
-        """
-        capability = self.signing
-        from tests.helpers.signing import VERIFIER_RESULT
 
-        return sum(
-            1
-            for call in capability.verifications
-            if getattr(call.get(VERIFIER_RESULT), "key_id", None) == capability.key_id
-        )
+        ONE EVENT SOURCE, both legs. This used to sum ``verifier_spy`` records
+        in-process while the e2e leg scraped the production counter, and those are
+        DIFFERENT EVENTS: the spy wraps ``verify_request_signature``, which runs
+        BEFORE the Tier 3 brand-authorization check, while
+        ``record_signature_verified`` fires only after Tier 3 passes
+        (``request_verifier_middleware.py:565``, the one line reaching
+        ``await self.app``). So three of the four legs counted an event that PRECEDES
+        the acceptance decision, and a scenario grading acceptance passed on a
+        request the verifier refused. Both legs now read the same production counter
+        — in-process off the shared registry, e2e over HTTP — so the oracle cannot
+        disagree with itself by transport.
+
+        An ABSOLUTE read, not a delta: the counter is process-global and monotonic,
+        but ``keyid`` carries this capability's ``unique_run_id()``, so the samples
+        it selects are this env's own. That is the same property the e2e branch has
+        always relied on.
+        """
+        from tests.helpers.signing import VERIFIED_METRIC, samples_with
+
+        return int(sum(samples_with(VERIFIED_METRIC, keyid=self.signing.key_id).values()))
 
     @property
     def signing(self) -> Any:

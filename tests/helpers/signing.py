@@ -831,8 +831,9 @@ def scraped_verified_count(base_url: str, key_id: str, *, when: str = "now") -> 
     """This key's ``adcp_request_signature_verified_total`` total, scraped off a LIVE stack.
 
     The out-of-process oracle for "the verifier ran and ACCEPTED this signature", and
-    the only one available across a container boundary: ``verifier_spy`` patches the
-    verifier in the RUNNER's process while the live server's verifier runs in another.
+    the only one available across a container boundary: the in-process legs read this
+    same counter off the registry they share with the middleware, which the live
+    server's verifier — running in another container — does not touch.
     ``record_signature_verified`` has ONE call site in ``src/``
     (``request_verifier_middleware``), on the branch reached only after the verifier
     returns AND Tier 3 passes, so a non-zero total for a per-capability ``keyid``

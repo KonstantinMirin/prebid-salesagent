@@ -52,7 +52,7 @@ mock identity — one acting identity, recorded where production reads it.
 from __future__ import annotations
 
 from contextlib import ExitStack
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -65,12 +65,19 @@ class SigningCapability:
     when it walks the counterparty's trust root; ``token`` is the bearer that
     ties the request back to the Principal carrying ``agent_url``.
 
-    ``verifications`` is the in-process observation of what the REAL verifier was
-    handed and what it returned (:func:`tests.helpers.signing.verifier_spy`), open
-    from the moment the capability exists so a caller does not have to wrap the
-    dispatch it wants to observe. Empty on the e2e realization, which cannot see
-    another container's verifier and reads the scraped counter instead — the fork
-    lives on :meth:`BaseTestEnv.signature_verifications`, not here.
+    The capability carries no verification record of its own. It used to hold a
+    ``verifications`` list fed by :func:`tests.helpers.signing.verifier_spy`, which
+    :meth:`BaseTestEnv.signature_verifications` summed on the in-process legs — but
+    the spy observes ``verify_request_signature``, which returns BEFORE the Tier 3
+    brand-authorization check, so that made the acceptance oracle count an event
+    preceding the acceptance decision. Both legs now read
+    ``adcp_request_signature_verified_total``, which production emits only after
+    Tier 3 passes.
+
+    ``verifier_spy`` itself stands: it is also the refusal-STEP instrument, and the
+    only one — the verified-total counter records acceptances alone, so nothing else
+    can say WHICH exception the verifier raised. Callers that need that open it
+    themselves around the dispatch they want to observe.
     """
 
     private_key: Any
@@ -78,7 +85,6 @@ class SigningCapability:
     token: str
     key_id: str
     agent_url: str
-    verifications: list[dict[str, Any]] = field(default_factory=list)
 
 
 class _ExitStackPatcher:
@@ -147,7 +153,6 @@ def build_signing_capability(env: Any) -> SigningCapability:
         COUNTERPARTY_KID,
         counterparty_key,
         keypair_for,
-        verifier_spy,
     )
 
     key_id = f"{COUNTERPARTY_KID}-{unique_run_id()}"
@@ -156,12 +161,6 @@ def build_signing_capability(env: Any) -> SigningCapability:
 
     stack = ExitStack()
     stack.enter_context(counterparty_key(jwks))
-    # Opened HERE rather than around a dispatch: the positive oracle
-    # (``VerifiedSigner.key_id``) has to be readable from a Then step that never
-    # saw the When, and a spy is pure observation — the real verifier still runs
-    # and still decides, so leaving it open for the env's life costs nothing and
-    # removes the "wrap the right call" failure mode from every caller.
-    verifications = stack.enter_context(verifier_spy())
     env._patchers.append(_ExitStackPatcher(stack))
 
     return SigningCapability(
@@ -170,7 +169,6 @@ def build_signing_capability(env: Any) -> SigningCapability:
         token=token,
         key_id=key_id,
         agent_url=COUNTERPARTY_AGENT_URL,
-        verifications=verifications,
     )
 
 
