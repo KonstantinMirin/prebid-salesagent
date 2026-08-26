@@ -248,8 +248,14 @@ def _graded_total(summary: dict[str, Any]) -> int:
     Not ``len(failures) + len(skip_causes)``: a protocol whose checks all PASS
     also has an empty failures list, and must not be confused with one where the
     runner never got far enough to grade anything.
+
+    SKIPPED is not graded. Counting it made this function report a nonzero total
+    for a run that graded nothing — 0 passed, 0 failed, any skipped — so
+    :func:`_no_graded_checks` never fired and "measured nothing" read as
+    "measured N". A skip is the runner declining to grade; only a pass or a
+    failure is a verdict.
     """
-    return sum(int(summary.get(key, 0)) for key in ("passed", "failed", "skipped"))
+    return sum(int(summary.get(key, 0)) for key in ("passed", "failed"))
 
 
 def _no_graded_checks(protocol: str, summary: dict[str, Any]) -> dict[str, Any]:

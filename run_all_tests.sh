@@ -271,6 +271,14 @@ echo "Running suites in-network (serial): $SUITES"
 # Capture the suite exit code without aborting under `set -e` — reports must
 # still be extracted and the security audit must still run on a suite failure.
 RC=0
+# Remove any previous run's suite reports BEFORE running. `.tox/` persists
+# between invocations, so a suite that dies before writing leaves the PRIOR
+# report in place — and the copy loop below cannot tell it apart from one this
+# run produced. Deleting them first makes a stale report unrepresentable rather
+# than detectable: after this, a report exists only if THIS run wrote it.
+for _stale in ${SUITES//,/ }; do
+    rm -f ".tox/${_stale}.json"
+done
 # Best-effort backstop, NOT a guarantee: chmod only succeeds on paths this
 # user (the launcher) already owns -- it silently no-ops (EPERM, swallowed by
 # `|| true`) on anything a DIFFERENT uid created, e.g. files adcp-server (uid
@@ -333,9 +341,14 @@ for _suite in ${SUITES//,/ }; do
     fi
 done
 if [ -n "$_missing_reports" ]; then
-    echo "WARNING: no JSON report for suite(s):$_missing_reports" >&2
-    echo "         The suite ran but produced no report -- it likely died before writing one." >&2
-    RC=${RC:-0}
+    echo "ERROR: no JSON report for suite(s):$_missing_reports" >&2
+    echo "       The suite ran but produced no report -- it died before writing one." >&2
+    echo "       Reports are how this run is graded; a suite that produced none was not measured." >&2
+    # The comment above already calls this "an error, not an omission". The code
+    # said RC=${RC:-0}, which leaves the exit code untouched — so a dead suite
+    # produced a GREEN run, and the file that publishes the numbers disagreed
+    # with its own docstring.
+    [ "$RC" -eq 0 ] && RC=1
 fi
 echo "Reports: $RESULTS_DIR/"
 ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
