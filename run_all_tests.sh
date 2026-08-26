@@ -56,6 +56,32 @@ export COMPOSE_PROJECT_NAME="$(printf '%s' "${COMPOSE_PROJECT_NAME:-adcp-innet-$
 # e2e path sets it to 5 via conftest. Mirror that so test_daily_delivery_webhook
 # gets a report. Compose interpolates this into the adcp-server service env.
 export DELIVERY_WEBHOOK_INTERVAL="${DELIVERY_WEBHOOK_INTERVAL:-5}"
+
+# Unit worker count, derived here because compose cannot compute one.
+#
+# tox.ini asks for `-n {env:UNIT_XDIST_N:auto}`, and docker-compose.e2e.yml
+# defaults UNIT_XDIST_N to `auto` -- but xdist resolves `auto` through
+# PYTEST_XDIST_AUTO_NUM_WORKERS, which the same compose file pins to 1. That pin
+# exists for BDD (its workers share one Postgres; see the comment at its
+# definition) and predates unit being parallel at all. The effect is that a bare
+# `./run_all_tests.sh` would run unit on ONE worker and get none of the speedup,
+# while the CI box gets 16 only because cassini exports
+# PYTEST_XDIST_AUTO_NUM_WORKERS=16 of its own accord. A repo default that only
+# works for one caller is not a default.
+#
+# Deriving a real number here sidesteps the shared `auto` entirely, so unit's
+# worker count no longer depends on a knob that belongs to BDD. Unit touches no
+# database (tox.ini's unit env unsets DATABASE_URL), so it has none of the
+# contention that pin was protecting against.
+#
+# Capped at 16: measured on a 14-core laptop the suite is ~5.4x faster at 14
+# workers than serial, but the floor is the xdist_group of nested-pytest modules
+# (86s on the 16-core box), so more workers past that buy nothing and each one
+# costs an interpreter plus an app import. Override by exporting UNIT_XDIST_N.
+if [ -z "${UNIT_XDIST_N:-}" ]; then
+    _cores="$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) )"
+    export UNIT_XDIST_N="$(( _cores > 16 ? 16 : _cores ))"
+fi
 # Argument contract — back-compat with the historical MODE words so the
 # pre-existing callers (Makefile quality-full/test-full, docs) keep working:
 #   (no arg) | ci                 -> all six suites, in-network (the default)
