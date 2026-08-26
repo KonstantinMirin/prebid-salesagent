@@ -37,12 +37,12 @@ from src.admin.app import create_app
 from src.core.auth_middleware import UnifiedAuthMiddleware
 from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
 from src.core.domain_routing import route_landing_page
+from src.core.errors.issues import issues_from_validation_error
 from src.core.exceptions import (
     AdCPError,
     AdCPInvalidRequestError,
     AdCPValidationError,
     build_two_layer_error_envelope,
-    build_validation_error_details,
     normalize_to_adcp_error,
 )
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
@@ -265,7 +265,7 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
         exc_cls = AdCPInvalidRequestError
     adcp_exc = exc_cls(
         field=field,
-        details=build_validation_error_details(errors),
+        issues=issues_from_validation_error(errors),
     )
     return _envelope_response(request, adcp_exc)
 

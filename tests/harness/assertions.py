@@ -60,7 +60,7 @@ def assert_rejected(
     *,
     code: str | None = None,
     field: str | None = None,
-    validation_type: str | None = None,
+    keyword: str | None = None,
 ) -> None:
     """Assert the request was rejected, checking WHAT field and WHY.
 
@@ -71,12 +71,16 @@ def assert_rejected(
         result: TransportResult from env.call_via()
         code: Expected error code (e.g., "VALIDATION_ERROR").
         field: Expected field name (e.g., "max_width", "agent_url"). Matched against the
-            typed ``field`` pointer and the projected pydantic ``loc`` paths in
-            ``details.validation_errors`` — the STRUCTURED carriers, never the sentence.
-        validation_type: Expected pydantic error type (e.g. "missing", "int_parsing",
-            "string_too_short"). Replaces the old ``reason`` substring, and distinguishes
-            "field missing" from "field has the wrong type" on the same field WITHOUT
-            reading prose: the type is a stable machine token, the sentence is not.
+            typed ``field`` pointer and the ``issues[].pointer`` paths — the STRUCTURED
+            carriers, never the sentence.
+        keyword: Expected JSON Schema keyword (e.g. "required", "type", "minLength").
+            Replaces ``validation_type``, which took a PYDANTIC token: the wire now
+            carries the pin's ``issues[].keyword`` vocabulary, so asserting a pydantic
+            token would assert something no longer emitted. Still distinguishes "field
+            missing" (``required``) from "field has the wrong type" (``type``) on the
+            same field without reading prose. Note the vocabulary is coarser by design:
+            ``int_parsing`` and ``string_type`` both surface as ``type``, because JSON
+            Schema draws that line in one place.
 
     The former ``reason`` and ``message_contains`` parameters are GONE. Both pinned the
     buyer-facing sentence, which is a function of the error CODE through CODE_TABLE — so
@@ -101,7 +105,13 @@ def assert_rejected(
         details = getattr(error, "details", None) or {}
         error_code = getattr(error, "error_code", None) or getattr(error, "code", None)
         field_pointer = getattr(error, "field", "") or ""
-    entries = details.get("validation_errors") or [] if isinstance(details, dict) else []
+    # issues[] is the pin's channel for field-level rejections (core/error.json:
+    # "`field` (singular) cannot carry the full pointer map"). It replaced a
+    # hand-rolled details.validation_errors[] carrying loc/msg/type.
+    if wire is not None:
+        entries = wire.get("issues") or []
+    else:
+        entries = [issue.to_wire() for issue in getattr(error, "issues", None) or []]
 
     if code is not None:
         assert error_code == code, f"Expected error code {code!r}, got {error_code!r}"
@@ -109,16 +119,15 @@ def assert_rejected(
     if field is not None:
         carriers = [str(field_pointer)]
         for entry in entries:
-            carriers.extend(str(part) for part in (entry.get("loc") or []))
+            # The pointer is one string, not a loc tuple; its tokens are the carriers.
+            carriers.extend(tok for tok in str(entry.get("pointer", "")).split("/") if tok)
         assert any(field == carrier or field in carrier for carrier in carriers), (
             f"Expected field {field!r} among the structured carriers {carriers!r}"
         )
 
-    if validation_type is not None:
-        types = [str(entry.get("type", "")) for entry in entries]
-        assert any(t == validation_type or t.endswith(validation_type) for t in types), (
-            f"Expected validation type {validation_type!r} among {types!r}"
-        )
+    if keyword is not None:
+        keywords = [str(entry.get("keyword", "")) for entry in entries]
+        assert keyword in keywords, f"Expected issues[].keyword {keyword!r} among {keywords!r}"
 
 
 def assert_payload_field(

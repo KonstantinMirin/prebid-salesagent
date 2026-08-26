@@ -13,9 +13,9 @@ from contextlib import contextmanager
 
 from pydantic import ValidationError
 
+from src.core.errors.issues import issues_from_validation_error
 from src.core.exceptions import (
     AdCPValidationError,
-    build_validation_error_details,
 )
 from src.core.exceptions import (
     first_validation_error_field as first_validation_error_field,
@@ -53,7 +53,7 @@ def adcp_validation_boundary(context: str = "parameters", field: str | None = No
         errors = e.errors()
         raise AdCPValidationError(
             field=field if field is not None else first_validation_error_field(e),
-            details=build_validation_error_details(errors),
+            issues=issues_from_validation_error(errors),
         ) from e
 
 

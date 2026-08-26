@@ -25,9 +25,10 @@ from src.core.errors.details import (
     ProductRefDetails,
     VersionUnsupportedDetails,
 )
+from src.core.errors.issues import ErrorIssue, issues_from_validation_error, pointer_to_field
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping, Sequence
+    from collections.abc import Iterator, Mapping
 
     from adcp.types import ContextObject
 
@@ -263,6 +264,7 @@ class AdCPError[DetailsT: ErrorDetails](Exception):
         error_code: ErrorCodeT | None = None,
         status_code: int | None = None,
         details: DetailsT | None = None,
+        issues: list[ErrorIssue] | None = None,
         field: str | None = None,
         retry_after: int | None = None,
         context: ContextObject | dict[str, Any] | None = None,
@@ -286,6 +288,15 @@ class AdCPError[DetailsT: ErrorDetails](Exception):
                 "name a code the table knows, or add the entry."
             )
         self.details = details
+        self.issues = issues
+        # The pin's MUST: when issues[] is present, `field` is populated from
+        # issues[0].pointer, translated to the JSONPath-lite spelling. Derived
+        # HERE rather than in the envelope builder so to_dict, to_adcp_error and
+        # build_two_layer_error_envelope all see one value -- the same reason
+        # _serialize_context is shared by all three. An explicitly passed field
+        # wins, so a caller can still point at something other than issues[0].
+        if field is None and issues:
+            field = pointer_to_field(issues[0].pointer)
         self.field = field
         self.retry_after = retry_after
         self.context = context
@@ -1086,6 +1097,14 @@ def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
         retry_after=exc.retry_after,
         details=_details_to_wire(exc.details),
     )
+    # issues[] is injected into the payload BEFORE the mirror is copied below.
+    # It cannot ride adcp_error(): that helper has no `issues` parameter, and its
+    # `details` is typed flat-scalars-only, so the array fits through neither.
+    # Injecting after the copy would put issues on errors[0] and NOT on the
+    # envelope-level adcp_error -- the two-layer divergence the comment below
+    # exists to prevent.
+    if exc.issues:
+        payload["errors"][0]["issues"] = [issue.to_wire() for issue in exc.issues]
     # Copy errors[0] for the envelope-level mirror so callers that mutate one
     # layer don't accidentally mutate the other (aliasing footgun once both
     # layers may be mutated independently).
@@ -1125,20 +1144,6 @@ def first_validation_error_field(validation_error: ValidationError) -> str | Non
         else:
             parts.append(str(loc))
     return "".join(parts)
-
-
-def build_validation_error_details(errors: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Project Pydantic errors into the buyer-safe structured detail shape."""
-    return {
-        "validation_errors": [
-            {
-                "loc": list(error.get("loc", ())),
-                "msg": error.get("msg"),
-                "type": error.get("type"),
-            }
-            for error in errors
-        ]
-    }
 
 
 def _log_internal_detail(exc: AdCPError) -> None:
@@ -1186,7 +1191,7 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
         errors = exc.errors()
         return AdCPValidationError(
             field=first_validation_error_field(exc),
-            details=build_validation_error_details(errors),
+            issues=issues_from_validation_error(errors),
         )
     if isinstance(exc, ValueError):
         return AdCPValidationError()

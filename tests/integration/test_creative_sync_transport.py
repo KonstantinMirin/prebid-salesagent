@@ -1067,7 +1067,7 @@ class TestMissingFormatFails:
 
         if result.is_error:
             # MCP: TypeAdapter rejected missing format_id — correct behavior
-            assert_rejected(result, field="format_id", validation_type="missing")
+            assert_rejected(result, field="format_id", keyword="required")
         else:
             # impl/a2a/rest: _impl handled it, returned action=failed
             assert_envelope(result, transport)
@@ -1125,7 +1125,7 @@ class TestStaticPreviewFailed:
             # MCP: TypeAdapter rejects missing assets field — correct schema rejection
             from tests.harness.assertions import assert_rejected
 
-            assert_rejected(result, field="assets", validation_type="missing")
+            assert_rejected(result, field="assets", keyword="required")
         else:
             # impl/a2a/rest: _impl handles it, returns action=failed
             assert_envelope(result, transport)
