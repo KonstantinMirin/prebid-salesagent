@@ -121,6 +121,17 @@ services:
       CREATIVE_AGENT_URL: https://creative-agent.adcp.test:8443/api/creative-agent
       CREATE_DEMO_TENANT: "true"
       DELIVERY_WEBHOOK_INTERVAL: ${DELIVERY_WEBHOOK_INTERVAL:-}
+      # salesagent-pldmk.41: the breaker's RECOVERY timeout only. Reaching
+      # HALF_OPEN honestly means waiting this out inside the server, and 60s per
+      # scenario is wall clock the suite should not spend. This is a VALUE, not a
+      # branch — the server runs the same line of code here and in production,
+      # which is the whole distinction (prebid/salesagent#2094).
+      #
+      # The failure and success THRESHOLDS are deliberately left at their
+      # production defaults (5 and 2): the scenarios assert on those numbers
+      # ("exactly 5 delivery attempts"), so shortening them here would make the
+      # test agree with a policy production does not run.
+      ADCP_WEBHOOK_BREAKER_TIMEOUT_SECONDS: ${ADCP_WEBHOOK_BREAKER_TIMEOUT_SECONDS:-5}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}  # TEST ONLY — never use in production
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}

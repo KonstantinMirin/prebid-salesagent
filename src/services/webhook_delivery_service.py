@@ -45,6 +45,35 @@ DELIVERY_REPORT_TASK_TYPE = "delivery_report"
 _DELIVERY_TIMEOUT_ENV = "ADCP_WEBHOOK_DELIVERY_TIMEOUT_SECONDS"
 _DEFAULT_DELIVERY_TIMEOUT_SECONDS = 10.0
 
+# The breaker's three policy parameters, read at CALL time for the same reason the
+# delivery timeout above is: an import-time read would freeze the first value.
+#
+# These are POLICY, not a test hatch. 5 / 2 / 60s is a default a deployment may
+# legitimately disagree with — a seller with flaky buyers may want to trip later,
+# and one with strict SLOs may want to recover sooner. Until now they were
+# constructor defaults with no reader at all, so no deployment could express that.
+#
+# This is also what lets the e2e stack reach HALF_OPEN without spending 60 real
+# seconds per scenario: docker-compose.e2e.yml supplies a shorter recovery timeout.
+# The code path is identical in both environments — only the VALUE differs, which
+# is the line between configuration and a branch that behaves differently under
+# test. See prebid/salesagent#2094 for the general case.
+_BREAKER_FAILURE_THRESHOLD_ENV = "ADCP_WEBHOOK_BREAKER_FAILURE_THRESHOLD"
+_BREAKER_SUCCESS_THRESHOLD_ENV = "ADCP_WEBHOOK_BREAKER_SUCCESS_THRESHOLD"
+_BREAKER_TIMEOUT_ENV = "ADCP_WEBHOOK_BREAKER_TIMEOUT_SECONDS"
+_DEFAULT_BREAKER_FAILURE_THRESHOLD = 5
+_DEFAULT_BREAKER_SUCCESS_THRESHOLD = 2
+_DEFAULT_BREAKER_TIMEOUT_SECONDS = 60
+
+
+def _configured_breaker() -> "CircuitBreaker":
+    """Build a breaker from the configured policy, falling back to the shipped defaults."""
+    return CircuitBreaker(
+        failure_threshold=int(env_float(_BREAKER_FAILURE_THRESHOLD_ENV, _DEFAULT_BREAKER_FAILURE_THRESHOLD)),
+        success_threshold=int(env_float(_BREAKER_SUCCESS_THRESHOLD_ENV, _DEFAULT_BREAKER_SUCCESS_THRESHOLD)),
+        timeout_seconds=int(env_float(_BREAKER_TIMEOUT_ENV, _DEFAULT_BREAKER_TIMEOUT_SECONDS)),
+    )
+
 
 class CircuitState(Enum):
     """Circuit breaker states."""
@@ -358,7 +387,7 @@ class WebhookDeliveryService:
 
         # Get or create circuit breaker for this endpoint
         if endpoint_key not in self._circuit_breakers:
-            self._circuit_breakers[endpoint_key] = CircuitBreaker()
+            self._circuit_breakers[endpoint_key] = _configured_breaker()
 
         # Get or create queue for this endpoint
         if endpoint_key not in self._queues:
