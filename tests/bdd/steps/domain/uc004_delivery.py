@@ -1045,7 +1045,6 @@ def when_deliver_probe_reports(ctx: dict, n: int) -> None:
 
     delivered = env.delivery_attempts - attempts_before
     assert delivered == n, f"the scenario says {n} reports were delivered; the endpoint saw {delivered}"
-    ctx["probe_count"] = n
 
 
 @when("the system delivers a webhook report with retry")
@@ -1965,36 +1964,44 @@ def then_circuit_transition(ctx: dict, state: str) -> None:
 
 @then("the system should attempt a single probe delivery")
 def then_single_probe(ctx: dict) -> None:
-    """Assert exactly one probe delivery was dispatched in half-open state.
+    """Assert exactly one probe delivery REACHED THE ENDPOINT in half-open state.
 
-    The preceding step already verified the breaker transitioned to half_open.
-    This step verifies the behavioral claim: exactly one probe attempt was
-    made — the POST call count should have increased by exactly 1 since the
-    breaker opened, or the probe_count in ctx should be exactly 1.
+    "A probe delivery was attempted" is a claim about a DELIVERY, so it is graded
+    on the endpoint, the same way ``then_deliveries_resume`` below grades its own.
+
+    What stood here was a three-way branch whose last two arms could not run. It
+    looked for ``env.mock["httpx_post"]`` or ``env.mock["webhook_post"]``; a
+    ``CircuitBreakerEnv`` holds neither, because it delivers over real HTTP to a
+    real origin rather than through a POST mock. So the second arm was dead, and
+    the third arm — a ``pytest.xfail("HARNESS GAP")`` guarded by
+    ``ctx["cb_can_attempt"]``, a key no step in this module writes — was dead
+    twice over. A dormant xfail on a branch that cannot execute grades nothing
+    while reading, in the report, exactly like a scenario that does.
+
+    ``env.delivery_attempts`` is the realize-aware accessor, so the count is a
+    live readback of whichever endpoint this transport actually uses.
+
+    The probe is made HERE, not read from a prior step, because this scenario's
+    When is "the system evaluates the circuit breaker state" — an evaluation, not
+    a delivery. Grading a delivery claim therefore means performing one, exactly
+    as ``then_deliveries_resume`` below does for its own claim. The preceding
+    Then has already asserted the breaker reached HALF_OPEN.
     """
     env = ctx["env"]
-    probe_count = ctx.get("probe_count")
-    if probe_count is not None:
-        # Probe count was explicitly recorded by the When step
-        assert probe_count == 1, f"Expected exactly 1 probe delivery attempt, got {probe_count}"
-    else:
-        # Check mock POST call count as evidence of dispatch
-        mock_post = env.mock.get("httpx_post") or env.mock.get("webhook_post")
-        if mock_post is not None:
-            # Count calls that happened during the half-open phase
-            pre_open_calls = ctx.get("pre_open_call_count", 0)
-            probe_dispatches = mock_post.call_count - pre_open_calls
-            assert probe_dispatches == 1, (
-                f"Expected exactly 1 probe dispatch in half-open state, "
-                f"got {probe_dispatches} (total={mock_post.call_count}, pre-open={pre_open_calls})"
-            )
-        else:
-            # No dispatch mock — verify the CB gate at least allowed the attempt
-            cb_can_attempt = ctx.get("cb_can_attempt")
-            assert cb_can_attempt is True, (
-                f"Circuit breaker did not allow the probe attempt (can_attempt={cb_can_attempt!r})"
-            )
-            pytest.xfail("HARNESS GAP: no webhook POST mock — cannot count probe dispatches")
+
+    attempts_before = env.delivery_attempts
+    admitted = env.call_send()
+
+    delivered = env.delivery_attempts - attempts_before
+    assert delivered == 1, (
+        f"a half-open breaker admits exactly ONE probe; the endpoint saw {delivered}. "
+        "Zero means the breaker is still suppressing and never left OPEN in practice, "
+        "whatever it reports about its own state; more than one means it is not gating."
+    )
+    assert admitted is True, (
+        "the probe reached the endpoint but the sender reported failure — a probe that "
+        "arrives and is then recorded as a failure keeps the breaker open forever"
+    )
 
 
 @then("normal scheduled deliveries should resume")

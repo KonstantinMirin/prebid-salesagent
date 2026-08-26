@@ -337,9 +337,19 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And subsequent scheduled deliveries should be suppressed
     # POST-F2: System knows the webhook is persistently failing
 
+  # LOCALLY CORRECTED (salesagent-sq8ib.10): the first Given was missing, so this
+  # scenario asserted a DELIVERY claim with no webhook registered. Without a
+  # PushNotificationConfig the sender returns False before the breaker is ever
+  # consulted, so "the system should attempt a single probe delivery" could only
+  # ever be graded against a test double -- which is what it was, via a
+  # pytest.xfail on a branch that could not execute. Both siblings
+  # (@T-UC-004-webhook-circuit-open, @T-UC-004-webhook-circuit-recovery) already
+  # carry this Given verbatim; this one was the odd scenario out. Reconcile
+  # upstream in adcp-req.
   @T-UC-004-webhook-circuit-halfopen @async @extension @ext-g @webhook-reliability
   Scenario: Circuit breaker half-open probe attempts recovery
-    Given a media buy "mb-001" with circuit breaker in "OPEN" state
+    Given a media buy "mb-001" with an active reporting_webhook
+    And a media buy "mb-001" with circuit breaker in "OPEN" state
     And the circuit breaker timeout (60s) has elapsed
     When the system evaluates the circuit breaker state
     Then the circuit breaker should transition to "HALF_OPEN"
