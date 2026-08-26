@@ -707,8 +707,22 @@ class TestProtocolWebhookWireFormat:
                 authentication_type=None,
                 authentication_token=None,
             )
+            from src.core.webhooks.delivery import WebhookTaskContext
+
             service = ProtocolWebhookService()
-            sent = asyncio.run(service.send_notification(config, payload, metadata={"task_type": "create_media_buy"}))
+            # The typed task identity, not a loose dict. send_notification used to
+            # take metadata and rebuild a context from it downstream, which reset
+            # sequence_number and notification_type on the way to the delivery row.
+            task = WebhookTaskContext(
+                task_id="task-1",
+                task_type="create_media_buy",
+                tenant_id=None,
+                principal_id=None,
+                media_buy_id=None,
+                sequence_number=1,
+                notification_type=None,
+            )
+            sent = asyncio.run(service.send_notification(config, payload, task=task))
             assert sent is True, "ProtocolWebhookService.send_notification should report success"
 
             received = list(info["received"])

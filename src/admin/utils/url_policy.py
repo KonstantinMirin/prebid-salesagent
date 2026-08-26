@@ -57,8 +57,11 @@ def _is_allowed(url: Any, label: str) -> bool:
     safe absent destination, and a JSON API field can arrive as any type at all.
     Answering both here keeps every call site free of its own shape check.
 
-    The WARNING carries what ``outbound_http._blocked`` cannot see — which form
-    field and which URL — so the two lines together are the whole story.
+    The WARNING carries what the seam's own refusal cannot say — which form field
+    and which URL — so the two lines together are the whole story. The seam's half
+    is ``AdCPBlockedUrlError.REFUSAL_MESSAGE``, the one buyer-facing sentence, and
+    it names neither. (This cited ``outbound_http._blocked``, a symbol with zero
+    occurrences in ``src/``.)
     """
     if not isinstance(url, str) or not url:
         logger.warning("[SECURITY] Rejected %s at ingest: not a usable URL", label)
