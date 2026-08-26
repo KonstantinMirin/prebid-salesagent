@@ -55,7 +55,7 @@ import hashlib
 import logging
 import threading
 from collections.abc import AsyncIterator, Iterator, Mapping
-from contextlib import ExitStack, asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, runtime_checkable
@@ -701,15 +701,23 @@ async def adcp_webhook_sender(
     ``ProtocolWebhookService`` still supplies its pool and therefore still skips the
     SDK check; closing that is the egress-seam work in GH #1802.
     """
-    with ExitStack() as stack:
-        resolved_repo = stack.enter_context(signing_repo(tenant_id))
-        yield build_webhook_sender(
+    # The ``yield`` is OUTSIDE the block on purpose, and moving it back inside restores a
+    # real defect: a generator suspended at a ``yield`` holds every context it entered, so
+    # yielding from in here checks the session out for the whole of the caller's ``async
+    # with`` body — whose one statement is the POST (:741). That is the delivery
+    # ``signing_repo``'s own docstring says its session is never held across. Safe because
+    # ``build_webhook_sender`` consumes the repository EAGERLY on every arm: the RFC 9421
+    # arm reads origin, posture and key material before returning, and the sender it hands
+    # back holds primitives, so nothing lazy survives the close (#1757).
+    with signing_repo(tenant_id) as repo:
+        sender = build_webhook_sender(
             config=config,
             tenant_id=tenant_id,
-            repo=resolved_repo,
+            repo=repo,
             now=now or datetime.now(UTC),
             client=client,
         )
+    yield sender
 
 
 async def deliver_adcp_webhook(
