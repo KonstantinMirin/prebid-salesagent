@@ -1,7 +1,7 @@
 """Emit the scenario-liveness artifact from a real BDD run.
 
-``storyboard_coverage_map.covered_storyboards`` (and the ``storyboard-checks.jsonl``
-built on top of it) derives "covered" from tag presence plus the ``@source``
+``storyboard_coverage_map.covered_storyboards`` (and the check index built on
+top of it) derives "covered" from tag presence plus the ``@source``
 footer alone. Nothing in that path asks whether the scenario actually RUNS —
 and ``tests/bdd/conftest.py``'s own auto-xfail hook converts
 ``StepDefinitionNotFoundError`` into ``xfail``, so a ``@storyboard-v3.1``-tagged

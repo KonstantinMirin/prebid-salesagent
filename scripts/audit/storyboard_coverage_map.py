@@ -194,8 +194,7 @@ def statuses_from_vendored_index(repo: Path, index: dict[str, Any]) -> dict[str,
     :func:`classify_gates` directly rather than re-deriving gates from raw YAML
     text the way :func:`classify` does (see its docstring). The single
     implementation behind both the issue-map guard
-    (``test_architecture_storyboard_issue_map.py``) and the artifact-truth check
-    on ``docs/test-obligations/storyboard-checks.jsonl`` — a fixture-driven
+    (``test_architecture_storyboard_issue_map.py``) and the check index — a fixture-driven
     on-path judgement drifted into two disagreeing implementations before this
     module existed; it does not get a third here.
     """

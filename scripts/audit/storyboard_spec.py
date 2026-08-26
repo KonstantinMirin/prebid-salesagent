@@ -471,8 +471,8 @@ def graded_steps_by_task(text: str) -> list[tuple[str, str, str | None]]:
 def check_inventory(text: str) -> dict[str, int]:
     """Every check type this storyboard grades, counted once — ``{type: count}``.
 
-    The per-storyboard check inventory published by
-    ``docs/test-obligations/storyboard-roadmap.md``. Summing
+    The per-storyboard check inventory published by the storyboard roadmap
+    (``scripts/audit/storyboard_roadmap.py``). Summing
     :func:`checks_for_phase` over :func:`phases` — the obvious spelling, and
     the one that shipped — double-counts every nested check: ``phases()``
     returns ids at ANY depth, and a phase's window already encloses its
@@ -919,9 +919,10 @@ def run_cli(
         print(f"error: {exc}", file=sys.stderr)
         return 1
     # --jsonl and --markdown are INDEPENDENT outputs, not alternatives. The
-    # published regeneration command passes both (see storyboard-check-index.md's
-    # own header), and returning after the JSONL emitted only half the pair —
-    # which is how the committed markdown drifted from its own source of truth.
+    # published regeneration command passes both (see the check index's own
+    # rendered header), and returning after the JSONL emitted only half the pair —
+    # which is how the committed markdown drifted from its own source of truth
+    # back when it WAS committed.
     wrote = False
     if jsonl_fn is not None and getattr(args, "jsonl", False):
         for record in jsonl_fn(result):

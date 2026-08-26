@@ -256,8 +256,8 @@ def _no_graded_checks(protocol: str, summary: dict[str, Any]) -> dict[str, Any]:
     return {
         "protocol": protocol,
         "track": "_runner",
-        "storyboard_id": "agent_reachability",
-        "step_id": "graded_checks_produced",
+        "storyboard_id": ledger.RUNNER_SYNTHETIC_STORYBOARD_ID,
+        "step_id": ledger.RUNNER_SYNTHETIC_STEP_ID,
         "status": "fail",
         "reason": (
             f"runner graded 0 checks against {summary.get('agent_url')} "

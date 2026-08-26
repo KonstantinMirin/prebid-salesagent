@@ -1,6 +1,6 @@
 # Storyboard -> GitHub issue map (AdCP 3.1.1)
 #
-# THE ONE HAND-CURATED INPUT to docs/test-obligations/storyboard-roadmap.md.
+# THE ONE HAND-CURATED INPUT to scripts/audit/storyboard_roadmap.py.
 # Everything else in that table is derived from the pinned compliance tree and
 # this repo's .feature files. This file records the single thing a program
 # cannot derive: whether an existing issue already tracks a storyboard's gap.

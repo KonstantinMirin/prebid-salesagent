@@ -98,6 +98,46 @@ class LedgerCheckId:
 
 LEDGER = Path("tests") / "storyboard" / "known_failures.txt"
 
+# The runner-level synthetic. `test_storyboard_conformance` emits this row when
+# the runner grades zero checks, so it is a real ledger key with no `check:`
+# line behind it and therefore no record in the check index. Named once, here,
+# because both the emitter and the generator's join need it and retyping the
+# strings in either place is how the pair drifts apart.
+RUNNER_SYNTHETIC_STORYBOARD_ID = "agent_reachability"
+RUNNER_SYNTHETIC_STEP_ID = "graded_checks_produced"
+RUNNER_SYNTHETIC_KEY = (RUNNER_SYNTHETIC_STORYBOARD_ID, RUNNER_SYNTHETIC_STEP_ID)
+
+# The storyboard whose steps the runner generates from conformance fixtures
+# rather than from `check:` lines, and where those fixtures live inside the
+# pinned tree. See `vector_step_keys`.
+VECTOR_STORYBOARD_ID = "signed_requests"
+VECTOR_FIXTURE_DIR = Path("compliance") / "test-vectors" / "request-signing"
+
+
+def vector_step_keys(adcp: Path) -> set[tuple[str, str]]:
+    """Ledger keys the `signed_requests` runner generates from pinned fixtures.
+
+    One id per fixture file under ``<adcp>/compliance/test-vectors/request-signing/``,
+    spelled ``<subdir>-<stem>`` — ``positive-001-basic-post``,
+    ``negative-011-malformed-header``. The pinned ``universal/signed-requests.yaml``
+    declares this grading at lines 49-55: the runner replays each vector and
+    compares the response against the vector's ``expected_outcome``.
+
+    DERIVED, never a name list. The set is computed from the checksum-verified
+    release bundle, so a vector added or removed upstream moves it automatically.
+    """
+    if not adcp.is_dir():
+        return set()
+    root = adcp / VECTOR_FIXTURE_DIR
+    if not root.is_dir():
+        return set()
+    return {
+        (VECTOR_STORYBOARD_ID, f"{sub.name}-{fixture.stem}")
+        for sub in root.iterdir()
+        if sub.is_dir()
+        for fixture in sub.glob("*.json")
+    }
+
 
 def load(path: Path) -> list[LedgerCheckId]:
     """Parse every line of a ledger file into ``LedgerCheckId``.

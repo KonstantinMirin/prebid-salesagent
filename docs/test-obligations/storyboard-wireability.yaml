@@ -1,7 +1,7 @@
 # End-to-end wireability of the pinned conformance surface — AdCP 3.1.1
 #
 # CURATED INPUT, like storyboard-issue-map.yaml. Joined per (storyboard, step)
-# into storyboard-checks.jsonl; not derivable from the tree, because it is a
+# into the check index; not derivable from the tree, because it is a
 # judgement about whether a step can be DRIVEN and OBSERVED from outside a
 # running agent.
 #

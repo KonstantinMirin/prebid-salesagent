@@ -1,6 +1,6 @@
 """Controller-ungradable status derives from required_tools.
 
-``docs/test-obligations/storyboard-roadmap.md``'s Status column answers one
+The storyboard roadmap's (``scripts/audit/storyboard_roadmap.py``) Status column answers one
 question objectively: what did the in-network job actually measure. It has
 three answers, and the distinction between the last two is the whole point of
 the column --

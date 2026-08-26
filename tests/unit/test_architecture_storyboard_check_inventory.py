@@ -1,6 +1,6 @@
 """Regression tests for the storyboard check-type inventory.
 
-``docs/test-obligations/storyboard-roadmap.md`` publishes a per-storyboard
+The storyboard roadmap (``scripts/audit/storyboard_roadmap.py``) publishes a per-storyboard
 inventory of graded check types ("Checks" column, plus the per-storyboard
 totals in both summary tables). That inventory was built by iterating
 ``storyboard_spec.phases()`` and summing ``checks_for_phase()`` over each id --

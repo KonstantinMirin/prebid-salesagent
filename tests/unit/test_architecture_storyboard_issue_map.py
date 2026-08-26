@@ -1,6 +1,6 @@
 """Structural guard: every on-path storyboard is triaged in the issue map.
 
-`docs/test-obligations/storyboard-roadmap.md` claims to be *the* record of what AdCP
+The storyboard roadmap (`scripts/audit/storyboard_roadmap.py`) claims to be *the* record of what AdCP
 grades this agent on and what tracks each gap. That claim only holds if no graded
 storyboard is missing from it — and the one input a program cannot derive is whether
 an existing GitHub issue covers a gap. That judgement lives in
@@ -45,10 +45,10 @@ def _on_path() -> set[str]:
     """On-path storyboards, classified from the vendored index.
 
     Delegates to `storyboard_coverage_map.on_path_from_vendored_index` so this guard
-    and every other fixture-driven on-path check (the JSONL artifact-truth guard in
-    `test_architecture_storyboard_check_index_artifact_truth.py`) share the one
-    implementation — the gate logic has been wrong four separate times during this
-    sweep, and a second copy of the offline derivation would be a fifth.
+    and every other fixture-driven on-path check share the one implementation — the
+    gate logic has been wrong four separate times during this sweep, and a second
+    copy of the offline derivation would be a fifth. (The JSONL artifact-truth guard
+    that used to be the other caller went with the committed artifact it graded.)
     """
     index = json.loads(INDEX.read_text(encoding="utf-8"))
     return storyboard_coverage_map.on_path_from_vendored_index(REPO_ROOT, index)

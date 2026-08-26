@@ -6,10 +6,12 @@ storyboard::step]``) was re-derived independently in ``storyboard_roadmap.
 _ledgered_failures`` and ``storyboard_check_index._ledger_steps`` (the latter
 reaching into the former's underscore-private ``_LEDGER_ID_RE`` as a sibling
 module), and ``storyboard_check_index._binding_buckets`` recovered
-``{scenario_id: bucket}`` by regexing the RENDERED markdown table in
-``docs/test-obligations/storyboard-binding-baseline.md`` even though
+``{scenario_id: bucket}`` by regexing a RENDERED markdown table even though
 ``storyboard_binding_sweep.audit()`` already returns that exact join as
-structured data.
+structured data. That markdown (``storyboard-binding-baseline.md``) is no longer
+committed at all, so the regex path is now unreachable by construction rather
+than by assertion -- which is why the structural test that used to guard it was
+deleted alongside the file.
 
 This module pins the new single-owner shape:
 
@@ -23,10 +25,8 @@ This module pins the new single-owner shape:
   loader each input gets.
 * ``scripts.audit.storyboard_check_index.binding_buckets(repo, adcp)`` is a
   PUBLIC function that calls ``storyboard_binding_sweep.audit()`` for its data
-  -- never the rendered markdown -- so "un-bolding
-  storyboard-binding-baseline.md changes no published number" is provable in
-  CI without a live ``~/projects/adcp`` clone and without touching the
-  checked-in artifact.
+  -- never rendered markdown -- so the published numbers depend on structured
+  audit data alone, provable in CI without a live ``~/projects/adcp`` clone.
 * ``storyboard_check_index.build()`` raises ``storyboard_spec.
   StoryboardAuditError`` naming any scenario id an on-path row's
   ``covered_by`` names but the binding-bucket join cannot resolve -- the real
@@ -280,16 +280,6 @@ def test_binding_buckets_is_driven_by_audit_data_not_rendered_markdown(monkeypat
     result = storyboard_check_index.binding_buckets(tmp_path, tmp_path)
 
     assert result == {"some-scenario": "A", "other-scenario": "C"}
-
-
-def test_binding_buckets_source_no_longer_references_the_rendered_baseline():
-    """Structural proof the markdown-regex path is gone entirely, not just
-    behaviorally unreachable -- CI-runnable, reads the source file directly,
-    never mutates the checked-in docs/test-obligations/storyboard-binding-baseline.md.
-    """
-    source = (REPO_ROOT / "scripts" / "audit" / "storyboard_check_index.py").read_text(encoding="utf-8")
-    assert "BINDING_BASELINE" not in source
-    assert "storyboard-binding-baseline.md" not in source
 
 
 # --- Zero-join tripwire: build() raises StoryboardAuditError naming an unresolved scenario id ---

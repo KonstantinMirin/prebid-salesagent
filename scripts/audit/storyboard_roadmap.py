@@ -22,7 +22,7 @@ from storyboard_reconciliation.py. Its rows key by proposal-file slug
 (``uc003-creativefate``), not by T-UC-* scenario id, and there is no existing
 mapping between the two (40 proposals vs the current 21 tagged scenarios) --
 inventing one would violate the Core Invariant ("never re-derived/inferred").
-See docs/test-obligations/storyboard-reconciliation.md directly for that data.
+Run ``scripts/audit/storyboard_reconciliation.py`` directly for that data.
 
 Measured-status join key: the SB-1d runner's ``tested_tracks[].scenarios[].
 scenario`` field is ``"<storyboard_stem>/<sub-scenario-name>"`` in the
@@ -404,7 +404,8 @@ def render(result: dict[str, Any]) -> str:
         f"- gated, not graded: **{result['totals']['gated']}** — listed below the table. A gated "
         "storyboard declares `requires_capability` that the OFFLINE classifier cannot evaluate "
         "(`declared_capabilities()` exposes specialisms and protocols only). It is NOT a claim "
-        "that we lack the capability; per-check detail is in `storyboard-checks.jsonl`, where "
+        "that we lack the capability; per-check detail is in the check index "
+        "(`scripts/audit/storyboard_check_index.py --jsonl`), where "
         "gated checks are indexed with `gate=GATED` rather than dropped.",
         f"- **measured FAILING: {result['totals']['failing']} storyboards, "
         f"{result['totals']['ledgered_checks']} ledgered checks**",
@@ -436,9 +437,9 @@ def render(result: dict[str, Any]) -> str:
         "by real API sequencing instead) — and `UNTRIAGED` where that editorial call has "
         "not been made yet.",
         "",
-        "Scenario-level reconciliation (VERDICT/action per proposal) is a separate artifact — "
-        "see `storyboard-reconciliation.md`; its rows key by proposal-file slug, not by "
-        "scenario id, so it is not joined into this table.",
+        "Scenario-level reconciliation (VERDICT/action per proposal) is a separate report — "
+        "run `scripts/audit/storyboard_reconciliation.py`; its rows key by proposal-file slug, "
+        "not by scenario id, so it is not joined into this table.",
         "",
         "| Storyboard | Citation | Scenario | Required tools | Checks | Status | Divergence | Ticket |",
         "|---|---|---|---|---|---|---|---|",

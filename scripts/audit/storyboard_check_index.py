@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Per-CHECK index of the pinned conformance surface — the source of truth.
 
-``storyboard-roadmap.md`` answers per STORYBOARD: is anything covering it, is
+The storyboard roadmap (``storyboard_roadmap.py``) answers per STORYBOARD: is
+anything covering it, is
 anything tracking it. That is the wrong grain for the questions this PR needs
 answered — which individual graded check is covered by which BDD scenario,
 which is tracked by which ticket, and which is neither — because a storyboard
@@ -59,7 +60,7 @@ CONTROLLER = "comply_test_controller"
 
 @dataclass(frozen=True)
 class CheckRecord:
-    """One graded check — the record published as ``storyboard-checks.jsonl``.
+    """One graded check — one record of this generator's ``--jsonl`` output.
 
     This IS the source of truth the module docstring promises: every markdown
     table in :func:`render` is a rendering of these fields, never a second
@@ -335,6 +336,49 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
             + "\n".join(f"  {s}" for s in unresolved_scenarios)
         )
 
+    # The ledger-to-index join. Until this PR it lived in a guard that compared
+    # the COMMITTED storyboard-checks.jsonl against this ledger; with the
+    # artifact no longer committed there is nothing to go stale, and re-asserting
+    # that equality here would be a tautology — `measured_failing_protocols` is
+    # built from `_ledger_steps()` a few lines above, so it would grade this
+    # function against its own input.
+    #
+    # The invariant that survives is the other direction: every row of the
+    # curated ledger must name a step the PINNED TREE can produce. An orphan row
+    # means the ledger grades something the pin no longer has.
+    #
+    # THE GRAIN RULE (moved here from docs/test-obligations/storyboard-check-index.md,
+    # deleted in this PR, and CORRECTED on the way). The ledger keys on
+    # (storyboard_id, step_id) and takes step_id VERBATIM from the real
+    # @adcp/sdk runner. Two families of step the runner produces at run time have
+    # no `check:` line and therefore no record here:
+    #
+    #   * signed_requests vector steps, one per conformance fixture — the old
+    #     prose said "negative-NNN", which was WRONG: 12 of the 39 are
+    #     positive-NNN, so a reader implementing it verbatim still had 12 orphans.
+    #     Derived by ledger.vector_step_keys() from the pinned bundle, never
+    #     listed by name.
+    #   * the runner-level synthetic (ledger.RUNNER_SYNTHETIC_KEY), emitted when
+    #     the runner grades nothing at all.
+    #
+    # So the join universe is the index keys plus those two families. Measured
+    # when this landed: index-only leaves 40 orphans, this universe leaves 0.
+    known_step_keys = (
+        {(r.storyboard_id, r.step_id) for r in records} | ledger.vector_step_keys(adcp) | {ledger.RUNNER_SYNTHETIC_KEY}
+    )
+    orphan_ledger_rows = sorted(
+        f"{storyboard_id}::{step_id}"
+        for storyboard_id, step_id in {(c.storyboard_key, c.step_id) for c in ledger.load(repo / ledger.LEDGER)}
+        if (storyboard_id, step_id) not in known_step_keys
+    )
+    if orphan_ledger_rows:
+        raise storyboard_spec.StoryboardAuditError(
+            f"{len(orphan_ledger_rows)} ledger row(s) in {ledger.LEDGER} name a step the pinned tree "
+            "does not produce — neither a graded check, nor a request-signing conformance fixture, nor "
+            "the runner synthetic. The ledger grades something the pin no longer has; re-seed it from a "
+            "measured run, or drop the rows:\n" + "\n".join(f"  {row}" for row in orphan_ledger_rows)
+        )
+
     # Every derived metric below is scoped to the GRADED surface (gate="ON-PATH").
     # A gated check has no ledger entry by construction and its BDD/wireability
     # status grades nothing, so folding it into "claimed by a scenario" or
@@ -391,10 +435,11 @@ def render(result: dict[str, Any]) -> str:
     out = [
         f"# Storyboard check index — AdCP {result['pinned_version']}",
         "",
-        "**One row per graded check**, not per storyboard. Generated from "
-        "`storyboard-checks.jsonl`, which is the source of truth — every table below is a "
-        "view of those same records, so they cannot disagree. Regenerate both with "
-        "`scripts/audit/storyboard_check_index.py` (`--jsonl` / `--markdown`).",
+        "**One row per graded check**, not per storyboard. Every table below is a view of "
+        "the same in-memory records, so they cannot disagree. This report is NOT committed: "
+        "it is regenerated on every CI run from the pinned bundle and published to the job "
+        "summary. Reproduce it with `scripts/audit/storyboard_check_index.py --markdown` "
+        "(add `--jsonl` for the per-record stream).",
         "",
         f"- checks the pinned spec defines for storyboards on our protocol: **{totals['checks']}** "
         f"across **{totals['storyboards']}** storyboards",
