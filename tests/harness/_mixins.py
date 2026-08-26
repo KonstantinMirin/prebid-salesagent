@@ -334,7 +334,33 @@ class LocalOriginMixin:
     trusting real public roots too.
     """
 
-    origin: LocalOrigin
+    _origin: LocalOrigin
+
+    @property
+    def origin(self) -> LocalOrigin:
+        """The in-process local origin -- IN-PROCESS ONLY, and it says so.
+
+        This was a bare class annotation, so every read under e2e raised an
+        anonymous ``AttributeError: 'CircuitBreakerEnv' object has no attribute
+        'origin'`` from wherever it happened to be reached. That is how
+        salesagent-sq8ib.12 happened: one step read it, the env then failed to
+        unbind the factory session, and 5 failures became 443.
+
+        A named failure instead. It does not make the attribute REACHABLE over
+        e2e -- programming the capture service's responses is
+        prebid/salesagent#2098's work -- but it removes the anonymous form, and
+        it tells the reader which accessor answers the same question on both
+        transports.
+        """
+        if self.is_e2e:  # type: ignore[attr-defined]
+            raise AttributeError(
+                "env.origin is the IN-PROCESS local origin and does not exist under e2e_rest, "
+                "where the endpoint is the compose stack's webhook-capture service. Read through "
+                "a realize-aware accessor instead (delivery_attempts / delivered_requests / "
+                "last_delivery), or program the endpoint through reject_next. Making the "
+                "response-programming setters work over e2e is prebid/salesagent#2098."
+            )
+        return self._origin
 
     # -- Lifecycle ----------------------------------------------------------
 
@@ -355,7 +381,7 @@ class LocalOriginMixin:
         self._ssl_cert_file = patch.dict(os.environ, {"SSL_CERT_FILE": str(gen_test_tls.COMBINED_CERT)})
         self._ssl_cert_file.start()
         self._origin_ctx = run_local_origin(ssl_context=server_ssl_context(gen_test_tls))
-        self.origin = self._origin_ctx.__enter__()
+        self._origin = self._origin_ctx.__enter__()
         self._egress_hatches = patch.dict(os.environ, egress_hatch_env(private=True))
         self._egress_hatches.start()
         return super().__enter__()  # type: ignore[misc,no-any-return]
@@ -364,9 +390,27 @@ class LocalOriginMixin:
         try:
             return super().__exit__(*exc)  # type: ignore[misc,no-any-return]
         finally:
-            self._egress_hatches.stop()
-            self._origin_ctx.__exit__(None, None, None)
-            self._ssl_cert_file.stop()
+            # Mirror __enter__'s e2e branch exactly. Under e2e none of these
+            # three were ever started -- the endpoint is the compose stack's
+            # capture service, not an in-process origin -- so tearing them down
+            # raised AttributeError, and because that happened in the FINALLY of
+            # a teardown, the base env never unbound the factory session. Every
+            # following scenario on the same xdist worker then errored with
+            # "Factory TenantFactory session already bound". One real failure
+            # became 443. An asymmetric enter/exit pair is the amplifier; this
+            # makes them symmetric.
+            # getattr, not a bare read: __enter__ starts these three in order,
+            # so a failure PART WAY THROUGH it leaves the later ones unset and an
+            # unconditional teardown would raise in a finally -- the same
+            # amplifier, reached by a different path (LR-06).
+            for started in ("_egress_hatches", "_origin_ctx", "_ssl_cert_file"):
+                resource = getattr(self, started, None)
+                if resource is None:
+                    continue
+                if started == "_origin_ctx":
+                    resource.__exit__(None, None, None)
+                else:
+                    resource.stop()
 
     # -- The endpoint under test -------------------------------------------
 

@@ -596,7 +596,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 )
             )
 
-        # FIXME(salesagent-got8): E2E_REST — webhook/circuit assertions observe
+        # FIXME(#2098): E2E_REST — webhook/circuit assertions observe
         # the in-process local origin or CircuitBreaker state, neither of which
         # is reachable from the Docker HTTP path (the origin listens on the
         # runner's loopback, not the container's). Remove when an E2E webhook
@@ -621,8 +621,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-004-webhook-circuit-open",
             "T-UC-004-webhook-circuit-recovery",
             "T-UC-004-webhook-retry-success",
-            # jdy1-M4: retry/sequence observability — assert on the requests the
+            # #1873: retry/sequence observability — assert on the requests the
             # in-process origin received, not visible over the Docker HTTP path.
+            # #1873 is the webhook-capture service that makes them observable.
             "T-UC-004-webhook-retry-5xx",
             "T-UC-004-webhook-retry-network",
             "T-UC-004-webhook-no-retry-4xx",

@@ -441,4 +441,15 @@ class TestApproximatedDomainTenantOwnership:
             f"virtual_host — the gate is refusing its own tenant: {response.get_json()}"
         )
         assert response.get_json()["success"] is True
-        mock_send.assert_called_once()
+
+        # Not a bare assert_called_once: assert WHICH domain was dialled with.
+        # "the seam was reached" alone would also pass if the route carried some
+        # other tenant's domain to the vendor, which is the very thing this pair
+        # grades. status/unregister put the domain in the URL path; register puts
+        # it in the JSON body -- so the assertion looks at the whole call.
+        assert mock_send.call_count == 1, f"expected exactly one vendor dial, got {mock_send.call_count}"
+        call = mock_send.call_args
+        dialled = f"{call.args[0]} {call.kwargs.get('json')}"
+        assert owner.virtual_host in dialled, (
+            f"/{route} reached the vendor without naming {owner.virtual_host}: {dialled!r}"
+        )

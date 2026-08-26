@@ -1025,16 +1025,26 @@ def when_deliver_probe_reports(ctx: dict, n: int) -> None:
 
     The Given has already stood up a real origin returning 200 and left the
     breaker HALF_OPEN, where ``can_attempt()`` allows the probe through.
+
+    Counts through ``env.delivery_attempts``, NOT ``env.origin.hits``.
+    ``origin`` is the in-process local origin, which does not exist under
+    e2e_rest -- the compose stack's webhook-capture service is the endpoint
+    there, and ``__enter__`` deliberately never sets the attribute. Reading it
+    directly raised ``AttributeError`` in env SETUP on the live stack, and
+    because the env then failed to unbind the factory session, every following
+    scenario on that xdist worker errored with "Factory TenantFactory session
+    already bound" -- 5 real failures cascading into 443. ``delivery_attempts``
+    is the realize-aware accessor that answers the same question on both, which
+    is what it exists for.
     """
     env = ctx["env"]
-    origin_hits_before = env.origin.hits
+    attempts_before = env.delivery_attempts
 
     for _ in range(n):
         assert env.call_send(), "a probe report against a 200 origin must be delivered"
 
-    assert env.origin.hits - origin_hits_before == n, (
-        f"the scenario says {n} reports were delivered; the origin saw {env.origin.hits - origin_hits_before}"
-    )
+    delivered = env.delivery_attempts - attempts_before
+    assert delivered == n, f"the scenario says {n} reports were delivered; the endpoint saw {delivered}"
     ctx["probe_count"] = n
 
 

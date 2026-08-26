@@ -1538,7 +1538,7 @@ Source: BR-RULE-026
 
 #### Scenario: MCP Wrapper Serializes AnyUrl to Plain String
 **Obligation ID** UC-002-TRANSPORT-PNC-SERIALIZATION-01
-**Layer** implementation
+**Layer** behavioral
 **Spec** none — AdCP 3.1.1 says nothing about Python types, pydantic models or ORM columns. The pinned `core/push-notification-config.json` constrains this object as `url` (required), `authentication` (optional; requires `schemes` maxItems 1 and `credentials` minLength 32 when present), `operation_id` and `token`. None of that is what this obligation grades.
 **Storyboard** ungraded — no step under `dist/compliance/3.1.1/` grades in-process type shape.
 **Protects** gh-#1377: a pydantic object reaching a SQLAlchemy `String` column raises `StatementError` at flush. That is an implementation regression, not a protocol requirement, and it is labelled as such rather than borrowing protocol authority it does not have.
@@ -1552,14 +1552,14 @@ Source: BR-RULE-026
 
 #### Scenario: A2A Wrapper Serializes AnyUrl to Plain String
 **Obligation ID** UC-002-TRANSPORT-PNC-SERIALIZATION-02
-**Layer** implementation
+**Layer** behavioral
 **Spec** none — AdCP 3.1.1 says nothing about Python types, pydantic models or ORM columns. The pinned `core/push-notification-config.json` constrains this object as `url` (required), `authentication` (optional; requires `schemes` maxItems 1 and `credentials` minLength 32 when present), `operation_id` and `token`. None of that is what this obligation grades.
 **Storyboard** ungraded — no step under `dist/compliance/3.1.1/` grades in-process type shape.
 **Protects** gh-#1377: a pydantic object reaching a SQLAlchemy `String` column raises `StatementError` at flush. That is an implementation regression, not a protocol requirement, and it is labelled as such rather than borrowing protocol authority it does not have.
 **Given** a `create_media_buy` A2A request carrying `push_notification_config` as either a `PushNotificationConfig` model or the buyer's raw wire dict
 **When** the A2A wrapper (`create_media_buy_raw`) coerces it through the pinned model before calling `_impl`
-**Then** the `url` written to persistence
-**And** a raw dict is coerced rather than forwarded unchanged is a plain `str`, not a Pydantic `AnyUrl` object
+**Then** the `url` written to persistence is a plain `str`, not a Pydantic `AnyUrl` object
+**And** a raw wire dict is coerced through the pinned model rather than forwarded unchanged
 **And** enum fields such as `authentication.schemes` become plain `str` values, not `AuthenticationScheme` members
 **And** every value handed to a SQLAlchemy `String` column is a plain Python type
 **Priority:** P0 (regression: gh-#1377)

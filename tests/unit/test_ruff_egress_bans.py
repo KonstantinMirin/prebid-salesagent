@@ -211,22 +211,80 @@ def _files_carrying_noqa() -> set[str]:
     return _files_carrying_marker(_NOQA_MARKER)
 
 
+def _marker_lines(marker: str) -> list[tuple[str, int]]:
+    """Every ``(relpath, 1-based lineno)`` under ``src/`` carrying *marker*.
+
+    The unit of an exemption is a LINE, not a file. Scanning per line is what
+    lets the liveness proof below name the exact suppression it is testing.
+    """
+    repo = repo_root()
+    sites: list[tuple[str, int]] = []
+    for path in src_python_files(repo):
+        rel = str(path.relative_to(repo))
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if marker in line:
+                sites.append((rel, lineno))
+    return sorted(sites)
+
+
+def _strip_one_noqa(source: str, lineno: int, strip_re: re.Pattern[str]) -> str:
+    """Return *source* with the noqa removed from ``lineno`` ONLY."""
+    lines = source.splitlines(keepends=True)
+    lines[lineno - 1] = strip_re.sub("", lines[lineno - 1])
+    return "".join(lines)
+
+
+def _assert_rule_fires_on_line(source: str, stdin_filename: str, label: str, code: str, lineno: int) -> None:
+    """Assert ruff reports *code* at *lineno* exactly, not merely somewhere.
+
+    This is the whole point of the per-line form. ``concise`` output is
+    ``path:line:col: CODE message``, so the line the diagnostic landed on is
+    readable and comparable.
+    """
+    proc = _run_ruff_egress(source, stdin_filename)
+    wanted = f":{lineno}:"
+    hits = [line for line in proc.stdout.splitlines() if code in line and wanted in line]
+    assert hits, (
+        f"[{label}] stripping the {code} suppression at {stdin_filename}:{lineno} did NOT "
+        f"produce a {code} diagnostic on that line -- the suppression is DEAD prose, not a "
+        f"live exemption. Delete it.\n--- ruff stdout ---\n{proc.stdout}\n"
+        f"--- ruff stderr ---\n{proc.stderr}"
+    )
+
+
 class TestExemptionsAreExecutable:
     """(c) Each sanctioned noqa still covers a LIVE violation (never dead prose)."""
 
+    @pytest.mark.parametrize(("rel_path", "lineno"), _marker_lines(_NOQA_MARKER))
+    def test_stripping_one_noqa_makes_that_line_violate(self, rel_path: str, lineno: int) -> None:
+        """Strip ONE suppression and require the diagnostic on THAT line.
+
+        This used to strip every ``# noqa: TID251`` in the file and assert
+        TID251 appeared somewhere in ruff's output. That form cannot detect a
+        DEAD exemption: a file with two suppressions, one live and one long
+        obsolete, passed on the strength of the live one. It asserted "this file
+        still has a banned import", which is not what an exemption claims.
+
+        Latent for TID251 today -- all three seam files carry exactly one marker
+        each, so file-scope and line-scope coincide. It is LIVE for the ANN401
+        twin below, where ``src/adapters/xandr.py`` carries eleven markers and
+        ``broadstreet/client.py`` six: ten of xandr's eleven could be dead right
+        now and the old form would still have passed.
+        """
+        path = repo_root() / rel_path
+        source = path.read_text(encoding="utf-8")
+        stripped = _strip_one_noqa(source, lineno, _NOQA_STRIP_RE)
+        _assert_rule_fires_on_line(stripped, rel_path, f"strip-noqa:{rel_path}:{lineno}", "TID251", lineno)
+
     @pytest.mark.parametrize("rel_path", sorted(SEAM_FILES))
-    def test_stripping_the_noqa_makes_the_file_violate(self, rel_path: str) -> None:
+    def test_every_recorded_seam_file_carries_a_line_scoped_noqa(self, rel_path: str) -> None:
+        """A recorded exemption must exist as a line, not as an entry in a set."""
         path = repo_root() / rel_path
         assert path.is_file(), f"recorded exemption file does not exist: {rel_path}"
-
-        source = path.read_text(encoding="utf-8")
-        assert _NOQA_MARKER in source, (
+        assert _NOQA_MARKER in path.read_text(encoding="utf-8"), (
             f"{rel_path} is recorded as a sanctioned egress-ban exemption but carries "
             f"no line-scoped '{_NOQA_MARKER}' — the exemption must be executable, not prose"
         )
-
-        stripped = _NOQA_STRIP_RE.sub("", source)
-        _assert_tid251_fires(stripped, rel_path, f"strip-noqa:{rel_path}")
 
 
 class TestExemptSetIsClosed:
@@ -296,19 +354,29 @@ class TestAnyExemptionsAreExecutable:
     only owns what the rule cannot check about ITSELF -- our suppressions.
     """
 
+    @pytest.mark.parametrize(("rel_path", "lineno"), _marker_lines(_ANY_NOQA_MARKER))
+    def test_stripping_one_noqa_makes_that_line_violate(self, rel_path: str, lineno: int) -> None:
+        """Strip ONE ANN401 suppression and require the diagnostic on THAT line.
+
+        This is where the old file-scoped form was actually wrong rather than
+        merely weak: ``src/adapters/xandr.py`` carries eleven markers and
+        ``src/adapters/broadstreet/client.py`` six, and one live ``Any`` in each
+        file was enough to certify all seventeen.
+        """
+        path = repo_root() / rel_path
+        source = path.read_text(encoding="utf-8")
+        stripped = _strip_one_noqa(source, lineno, _ANY_NOQA_STRIP_RE)
+        _assert_rule_fires_on_line(stripped, rel_path, f"strip-any-noqa:{rel_path}:{lineno}", "ANN401", lineno)
+
     @pytest.mark.parametrize("rel_path", sorted(ANY_EXEMPT_FILES))
-    def test_stripping_the_noqa_makes_the_file_violate(self, rel_path: str) -> None:
+    def test_every_recorded_any_file_carries_a_line_scoped_noqa(self, rel_path: str) -> None:
+        """A recorded ANN401 exemption must exist as a line, not as an entry in a set."""
         path = repo_root() / rel_path
         assert path.is_file(), f"recorded ANN401 exemption does not exist: {rel_path}"
-
-        source = path.read_text(encoding="utf-8")
-        assert _ANY_NOQA_MARKER in source, (
+        assert _ANY_NOQA_MARKER in path.read_text(encoding="utf-8"), (
             f"{rel_path} is recorded as a sanctioned ANN401 exemption but carries no "
             f"line-scoped '{_ANY_NOQA_MARKER}' — the exemption must be executable, not prose"
         )
-
-        stripped = _ANY_NOQA_STRIP_RE.sub("", source)
-        _assert_rule_fires(stripped, rel_path, f"strip-any-noqa:{rel_path}", "ANN401")
 
 
 class TestAnyExemptSetIsClosed:

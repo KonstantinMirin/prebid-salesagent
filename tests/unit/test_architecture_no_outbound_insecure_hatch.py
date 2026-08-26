@@ -115,3 +115,170 @@ def test_detector_ignores_a_file_that_never_had_the_flag() -> None:
         (tmp_path / marker).write_text("ADCP_OUTBOUND_ALLOW_PRIVATE: 'true'\n")
         hits = find_flag_reintroductions(tmp_path, (marker,))
     assert hits == []
+
+
+# ---------------------------------------------------------------------------
+# The sibling hatch: ADCP_OUTBOUND_ALLOW_PRIVATE, pinned rather than deleted
+# ---------------------------------------------------------------------------
+#
+# ADCP_OUTBOUND_ALLOW_INSECURE was DELETED, and the detector above asks the
+# deletion question. Its sibling was not deleted and should not be: the e2e
+# stack's origins are on a private bridge network by construction, so the flag
+# has legitimate, load-bearing uses. That asymmetry is the finding (#1802
+# review, Chris F1): one hatch got deletion plus a guard, the other got a
+# comment at its read site (`outbound_http.py`) and nothing else.
+#
+# So this half asks the PIN question instead: which files may name the flag at
+# all. A hatch that can disable the address gate is a production concern the
+# moment a file outside the pinned set can set it -- `docker-compose.yml`, the
+# dev/production stack, is one `ADCP_OUTBOUND_ALLOW_PRIVATE: "true"` away from
+# opening it today, and nothing in the tree would notice.
+
+_ALLOW_PRIVATE_FLAG = "ADCP_OUTBOUND_ALLOW_PRIVATE"
+
+# The pinned allowed set, with the reason each entry is here.
+#
+# GRADUATION DISCIPLINE, and it binds: entries leave this set ONE AT A TIME, in
+# the change that removes the flag from that file, with the reason in the commit
+# message -- never in bulk, and never as a side effect of a refactor. An entry
+# is ADDED only as a recorded scope decision, stated at the entry, in the same
+# change. This is the discipline EXPECTED_XFAIL_ROUTES and
+# EXPECTED_E2E_REST_PARAMETRIZE_GATE already carry ("update this pin IN THE SAME
+# CHANGE and say why in the commit"); the flag is a security hatch, so it earns
+# the same treatment rather than a looser one.
+_ALLOWED_ALLOW_PRIVATE_SITES: frozenset[str] = frozenset(
+    {
+        # The ONE seam read site. Every outbound dial consults the address
+        # policy here and nowhere else, so this is where the flag is read.
+        "src/core/security/outbound_http.py",
+        # Every origin in the e2e compose stack is on a private bridge network
+        # by construction, so the address gate would refuse all of them. The
+        # property that matters -- cloud-metadata addresses refused regardless
+        # -- holds with the hatch open, which is why the BDD egress scenarios
+        # pin it open rather than mocking a verdict.
+        "docker-compose.e2e.yml",
+        # pass_env, so the suites that run against that stack inherit it.
+        "tox.ini",
+        # The host runner stands up the same stack outside compose.
+        "run_all_tests_host.sh",
+        # The creative integration matrix group consumes the same private
+        # origins; its own comment records that the compose files and the host
+        # runner already open the hatch and this group needs it too.
+        ".github/workflows/ci.yml",
+    }
+)
+
+# Where a DEPLOYMENT can acquire an environment variable from. `tests/**` is
+# deliberately absent: a test naming the constant is not a deployment setting
+# it, and banning the name there would ban this guard's own vocabulary and the
+# single-spelling helper (`tests/helpers/egress_hatches.py`) that keeps the
+# test side from re-spelling it.
+_ALLOW_PRIVATE_SCAN_GLOBS: tuple[str, ...] = (
+    "src/**/*.py",
+    "docker-compose*.yml",
+    "docker-compose*.yaml",
+    "Dockerfile*",
+    "app.json",
+    "Makefile",
+    "tox.ini",
+    "run_all_tests*.sh",
+    ".github/workflows/*.yml",
+    ".github/workflows/*.yaml",
+    "config/**/*",
+    "scripts/**/*",
+)
+
+
+def find_allow_private_declaring_files(repo_root: Path) -> set[str]:
+    """Return the relpaths, across the scanned surface, that DECLARE the flag.
+
+    Comment lines are skipped for the same reason the sibling detector skips
+    them: prose explaining the hatch is not the hatch. What counts is a line
+    that could put the variable into a process environment or read it out of
+    one -- a YAML key, a shell export, a workflow env entry, a Python read.
+    """
+    hits: set[str] = set()
+    for glob in _ALLOW_PRIVATE_SCAN_GLOBS:
+        for path in sorted(repo_root.glob(glob)):
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text()
+            except (UnicodeDecodeError, OSError):
+                continue
+            for line in text.splitlines():
+                if line.strip().startswith("#"):
+                    continue
+                if _ALLOW_PRIVATE_FLAG in line:
+                    hits.add(str(path.relative_to(repo_root)))
+                    break
+    return hits
+
+
+def test_allow_private_sites_match_the_pin_exactly() -> None:
+    """The files that may name ADCP_OUTBOUND_ALLOW_PRIVATE are exactly the pin.
+
+    Set IDENTITY, not a count: an add-plus-drop must fail, because a count that
+    stays at five while `docker-compose.yml` replaces `tox.ini` is precisely the
+    change this guard exists to refuse.
+    """
+    found = find_allow_private_declaring_files(_REPO_ROOT)
+    unpinned = found - _ALLOWED_ALLOW_PRIVATE_SITES
+    missing = _ALLOWED_ALLOW_PRIVATE_SITES - found
+    assert found == _ALLOWED_ALLOW_PRIVATE_SITES, (
+        f"{_ALLOW_PRIVATE_FLAG} declaration sites drifted from the pin.\n"
+        f"  declared but NOT pinned: {sorted(unpinned)}\n"
+        f"  pinned but no longer declaring: {sorted(missing)}\n"
+        "This flag can disable the outbound address gate. A new site is a scope "
+        "decision recorded at the entry, not a silent addition; a site that no "
+        "longer needs it leaves the pin in the same change that removes it."
+    )
+
+
+def test_allow_private_detector_catches_an_unpinned_site() -> None:
+    """The live detector reports a file outside the pin, synthetically.
+
+    `docker-compose.yml` is the concrete case: the dev/production stack is one
+    line away from opening the hatch, and before this guard nothing noticed.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        (tmp_path / "docker-compose.yml").write_text(f'      {_ALLOW_PRIVATE_FLAG}: "true"\n')
+        # A Dockerfile ENV is the same hatch by another route, and the first
+        # version of this scan missed it entirely -- measured: appending
+        # `ENV ADCP_OUTBOUND_ALLOW_PRIVATE=true` to ./Dockerfile left all eight
+        # tests in this file green.
+        (tmp_path / "Dockerfile").write_text(f"ENV {_ALLOW_PRIVATE_FLAG}=true\n")
+        found = find_allow_private_declaring_files(tmp_path)
+    assert found == {"docker-compose.yml", "Dockerfile"}
+    assert found - _ALLOWED_ALLOW_PRIVATE_SITES == {"docker-compose.yml", "Dockerfile"}
+
+
+def test_allow_private_detector_ignores_prose_and_unrelated_files() -> None:
+    """The live detector does not fire on a comment, or on a file without the flag."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        (tmp_path / "docker-compose.yml").write_text(f"      # {_ALLOW_PRIVATE_FLAG} was removed here\n")
+        (tmp_path / "tox.ini").write_text("[tox]\nenvlist = unit\n")
+        found = find_allow_private_declaring_files(tmp_path)
+    assert found == set()
+
+
+def test_every_pinned_allow_private_site_still_exists() -> None:
+    """The pin is a subject too, and it fails the same silent way.
+
+    A renamed file drops silently out of the scan, and the identity test above
+    would report it as "pinned but no longer declaring" -- which reads like a
+    cleanup rather than a broken guard. Assert the paths resolve.
+    """
+    assert_scanned_paths_exist(
+        tuple(sorted(_ALLOWED_ALLOW_PRIVATE_SITES)),
+        why=(
+            "This guard pins which files may name the private-address hatch. A path it "
+            "cannot read is a file it cannot check."
+        ),
+    )
