@@ -25,9 +25,9 @@
 # Reconcile upstream in adcp-req (a "seller enforces inbound request signatures"
 # storyboard), then retire this file in favor of the regenerated one.
 #
-# @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/by-layer/L1/security.mdx pointer=L1268-L1269
-# @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/by-layer/L1/security.mdx pointer=L1375
-# @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/by-layer/L1/security.mdx pointer=L1462-L1465
+# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1268-L1269
+# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1375
+# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1462-L1465
 # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/test-vectors/request-signing/negative/027-webhook-registration-authentication-unsigned.json pointer=/expected_outcome
 Feature: Inbound request-signature enforcement on an AdCP operation (local)
 

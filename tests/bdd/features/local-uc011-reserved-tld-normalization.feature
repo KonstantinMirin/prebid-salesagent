@@ -19,7 +19,7 @@
 # coincides with it on this input", which is why the divergence survived.
 #
 # Spec grounding for the SET of names (not the normalization, which is ours):
-# @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/creative/canonical-formats.mdx line=222
+# @source repo=adcp ref=v3.1.1 path=docs/creative/canonical-formats.mdx line=222
 #   "resolved hostname MUST NOT land on ... RFC 6761 special-use names
 #    (`.local`, `.localhost`, `.internal`, `.test`, `.example`, `.invalid`)"
 # RESERVED_TLDS (url_validator.py:50) carries four of those six: `.local` and

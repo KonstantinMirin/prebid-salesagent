@@ -10,7 +10,7 @@ the verification oracle are all realized by the ENV
 ``signature_verifications``), which is the one place transport knowledge is allowed.
 
 Spec grounding, pinned AdCP 3.1.1 (``adcp==6.6.0``), all in
-``v3.1.1:dist/docs/3.1.1/building/by-layer/L1/security.mdx``:
+``v3.1.1:docs/building/by-layer/L1/security.mdx``:
 
 * :1268-1269 the composition rule — an unsigned request to a ``required_for``
   operation is refused only when the caller presents no credential the agent accepts;

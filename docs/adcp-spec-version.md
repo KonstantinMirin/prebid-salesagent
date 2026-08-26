@@ -27,8 +27,17 @@ document.
 ```bash
 git -C ~/projects/adcp show v3.1.1:dist/schemas/3.1.1/<path>      # type shapes
 git -C ~/projects/adcp show v3.1.1:dist/compliance/3.1.1/<path>   # graded storyboards
-git -C ~/projects/adcp show v3.1.1:dist/docs/3.1.1/<path>         # prose
+git -C ~/projects/adcp show v3.1.1:docs/<path>                    # prose
 ```
+
+Note the asymmetry in that third line, because it is the one that has been copied
+wrong. Schemas and storyboards live under a version-numbered `dist/` root, and prose
+does not: `dist/docs/` stops at `3.1.0`, so `dist/docs/3.1.1/` resolves at no tag. Prose
+is read from the repository-root `docs/` tree at the pinned ref, which is what makes the
+ref rather than the path carry the version.
+
+Verify a citation resolves before you rely on it — `git cat-file -e v3.1.1:<path>` exits
+non-zero when it does not.
 
 The checked-out working tree of that repo is **not** the pinned version. The
 installed `adcp` SDK is a cross-check, never the authority — it can diverge

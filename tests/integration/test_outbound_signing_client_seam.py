@@ -7,7 +7,7 @@
     origin, or a broken get_adcp_capabilities never breaks a call that works
     unsigned today.
 
-Spec grounding (dist/docs/3.1.1/building/by-layer/L1/security.mdx :1226): a
+Spec grounding (v3.1.1:docs/building/by-layer/L1/security.mdx :1226): a
 verifier MUST NOT accept a malformed/unresolvable signature as if it were
 bearer-only auth. A tenant with an active signing key but NO publishable
 origin (no ``https://`` host a receiver's ``identity.brand_json_url`` could

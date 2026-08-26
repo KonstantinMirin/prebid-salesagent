@@ -46,7 +46,7 @@ BLOCKED_HOSTNAMES = {
 # dependent on whether the local resolver happens to hijack NXDOMAIN.
 #
 # The six names AdCP 3.1.1 enumerates for this refusal, exhaustively:
-# dist/docs/3.1.1/creative/canonical-formats.mdx:222 -- "RFC 6761 special-use names
+# v3.1.1:docs/creative/canonical-formats.mdx:222 -- "RFC 6761 special-use names
 # (`.local`, `.localhost`, `.internal`, `.test`, `.example`, `.invalid`)".
 #
 # This module OWNS the decision; it is not a shared constant callers re-match for

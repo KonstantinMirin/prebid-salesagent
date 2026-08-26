@@ -16,7 +16,7 @@ changes; no env hatch is introduced (pinned separately by
 ``tests/unit/test_architecture_no_private_destinations.py``). The gate's
 documented terms are exhaustively address arithmetic — ``BLOCKED_NETWORKS`` plus
 ``is_loopback``/``is_link_local``/``is_private`` — and the destination genuinely
-satisfies them. Per AdCP 3.1.1 (``dist/docs/3.1.1/creative/canonical-formats.mdx``)
+satisfies them. Per AdCP 3.1.1 (``v3.1.1:docs/creative/canonical-formats.mdx``)
 the forbidden set is RFC1918 / loopback / link-local / CGNAT plus RFC 6761
 special-use NAMES; today's 172.16/12 default bridge is explicitly forbidden and
 192.88.99.0/24 is none of them, so moving the network makes the stack MORE

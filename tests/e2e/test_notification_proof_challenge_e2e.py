@@ -81,7 +81,7 @@ dial the same https origin the success leg proves is reachable.
 
 ## Spec, at the version this repo pins (AdCP 3.1.1 via ``adcp==6.6.0``)
 
-``dist/docs/3.1.1/accounts/tasks/sync_accounts.mdx`` § "Endpoint proof of control":
+``v3.1.1:docs/accounts/tasks/sync_accounts.mdx`` § "Endpoint proof of control":
 
 * :207 — "The challenge POST itself MUST be signed with the seller's RFC 9421 webhook
   profile key even when the candidate config selects legacy delivery auth … The receiver
