@@ -30,7 +30,7 @@ from src.adapters.broadstreet.managers import (
 from src.adapters.broadstreet.schemas import BroadstreetConnectionConfig, BroadstreetProductConfig
 from src.adapters.constants import require_supported_update_action
 from src.core.errors.codes import AppErrorCode
-from src.core.errors.details import AdapterFailureDetails, EntityRefDetails, ErrorProblem
+from src.core.errors.details import AdapterFailureDetails, EntityRefDetails, ErrorProblem, ValidationDetails
 from src.core.exceptions import (
     AdCPBulkUpdateError,
     AdCPPackageNotFoundError,
@@ -349,7 +349,7 @@ class BroadstreetAdapter(AdServerAdapter):
             zone_ids = impl_config.get_zone_ids()
             if not zone_ids:
                 raise AdCPValidationError(
-                    details={"product_id": product_id},
+                    details=ValidationDetails(product_id=product_id),
                 )
             all_zone_ids.update(zone_ids)
 
@@ -701,7 +701,7 @@ class BroadstreetAdapter(AdServerAdapter):
         # Package-level pause/resume
         if action in ("pause_package", "resume_package"):
             if not package_id:
-                raise AdCPValidationError(details={"action": action}, field="package_id")
+                raise AdCPValidationError(details=ValidationDetails(rejected_value=action), field="package_id")
 
             action_verb = "Pausing" if is_pause else "Resuming"
 

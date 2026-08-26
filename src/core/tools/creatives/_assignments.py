@@ -5,7 +5,7 @@ from contextlib import ExitStack
 from typing import Any
 
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.errors.details import CreativeRejectionDetails, EntityRefDetails
+from src.core.errors.details import CreativeRejectionDetails, ValidationDetails
 from src.core.exceptions import (
     AdCPCreativeNotFoundError,
     AdCPCreativeRejectedError,
@@ -369,7 +369,7 @@ def _process_assignments(
                     # ``assignment_errors`` is NOT duplicated into details: the line
                     # below sets it on the result entry, which is the buyer's path to
                     # it. Two copies of one fact is what this migration removes.
-                    details=EntityRefDetails(creative_id=creative_id),
+                    details=ValidationDetails(creative_id=creative_id),
                 ),
             )
             entry.assignment_errors = errors

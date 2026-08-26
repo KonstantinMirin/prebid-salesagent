@@ -18,6 +18,7 @@ from pydantic import Field, RootModel
 from rich.console import Console
 
 from src.core.errors.codes import ErrorCode
+from src.core.errors.details import EntityRefDetails
 from src.core.exceptions import (
     AdCPError,
     AdCPValidationError,
@@ -230,7 +231,7 @@ def _get_media_buy_delivery_impl(
                     not_found_errors.append(
                         Error.of(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
                             ErrorCode.MEDIA_BUY_NOT_FOUND,
-                            details={"media_buy_id": requested_id},
+                            details=EntityRefDetails(media_buy_id=requested_id),
                         )
                     )
 
@@ -351,7 +352,7 @@ def _get_media_buy_delivery_impl(
                                 principal_id=principal_id,
                                 success=False,
                                 error_message=str(e),
-                                details={"media_buy_id": media_buy_id},
+                                details=EntityRefDetails(media_buy_id=media_buy_id),
                             )
                             # FIXME(salesagent-9f2): audit logging should use a repository
                             if uow.session is not None:
@@ -361,7 +362,7 @@ def _get_media_buy_delivery_impl(
                         adapter_errors.append(
                             Error.of(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
                                 ErrorCode.SERVICE_UNAVAILABLE,
-                                details={"media_buy_id": media_buy_id},
+                                details=EntityRefDetails(media_buy_id=media_buy_id),
                             )
                         )
                         continue
@@ -558,7 +559,7 @@ def _get_media_buy_delivery_impl(
                         # above. WHICH buy failed travels in details, not in the
                         # sentence: message is derived from the code.
                         ErrorCode.SERVICE_UNAVAILABLE,
-                        details={"media_buy_id": media_buy_id},
+                        details=EntityRefDetails(media_buy_id=media_buy_id),
                     )
                 )
                 # Skip this media buy and continue with others

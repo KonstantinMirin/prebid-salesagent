@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
+from src.core.errors.details import ConfigurationDetails
+
 if TYPE_CHECKING:
     from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import Idempotency, Idempotency3
 
@@ -59,18 +61,18 @@ class IdempotencyPosture(BaseModel):
             _MIN_REPLAY_TTL_SECONDS <= self.replay_ttl_seconds <= _MAX_REPLAY_TTL_SECONDS
         ):
             raise AdCPConfigurationError(
-                details={
-                    "replay_ttl_seconds": self.replay_ttl_seconds,
-                    "min_replay_ttl_seconds": _MIN_REPLAY_TTL_SECONDS,
-                    "max_replay_ttl_seconds": _MAX_REPLAY_TTL_SECONDS,
-                },
+                details=ConfigurationDetails(
+                    replay_ttl_seconds=self.replay_ttl_seconds,
+                    min_replay_ttl_seconds=_MIN_REPLAY_TTL_SECONDS,
+                    max_replay_ttl_seconds=_MAX_REPLAY_TTL_SECONDS,
+                ),
             )
         if self.in_flight_max_seconds is not None and self.in_flight_max_seconds > self.replay_ttl_seconds:
             raise AdCPConfigurationError(
-                details={
-                    "in_flight_max_seconds": self.in_flight_max_seconds,
-                    "replay_ttl_seconds": self.replay_ttl_seconds,
-                },
+                details=ConfigurationDetails(
+                    in_flight_max_seconds=self.in_flight_max_seconds,
+                    replay_ttl_seconds=self.replay_ttl_seconds,
+                ),
             )
 
     def to_sdk_union(self) -> Idempotency | Idempotency3:

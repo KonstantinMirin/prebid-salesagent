@@ -36,6 +36,7 @@ from sqlalchemy.sql import func
 
 from src.core.billing_policy import BILLING_PARTY_VALUES
 from src.core.database.json_type import JSONType
+from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError
 from src.core.json_validators import JSONValidatorMixin
 
@@ -206,7 +207,7 @@ class Tenant(Base, JSONValidatorMixin):
         try:
             return decrypt_api_key(self._gemini_api_key)
         except ValueError as exc:
-            raise AdCPConfigurationError(details={"tenant_id": self.tenant_id}) from exc
+            raise AdCPConfigurationError(details=ConfigurationDetails(tenant_id=self.tenant_id)) from exc
 
     @gemini_api_key.setter
     def gemini_api_key(self, value: str | None) -> None:
@@ -671,7 +672,7 @@ class TenantAuthConfig(Base):
         try:
             return decrypt_api_key(self.oidc_client_secret_encrypted)
         except ValueError as exc:
-            raise AdCPConfigurationError(details={"tenant_id": self.tenant_id}) from exc
+            raise AdCPConfigurationError(details=ConfigurationDetails(tenant_id=self.tenant_id)) from exc
 
     @oidc_client_secret.setter
     def oidc_client_secret(self, value: str | None) -> None:
@@ -1393,7 +1394,7 @@ class AdapterConfig(Base):
         try:
             return decrypt_api_key(self._gam_service_account_json)
         except ValueError as exc:
-            raise AdCPConfigurationError(details={"tenant_id": self.tenant_id}) from exc
+            raise AdCPConfigurationError(details=ConfigurationDetails(tenant_id=self.tenant_id)) from exc
 
     @gam_service_account_json.setter
     def gam_service_account_json(self, value: str | None) -> None:

@@ -238,7 +238,8 @@ class TestAIServiceFactory:
                 )
             # The provider is the actionable fact, and it is now structured rather than
             # embedded in prose.
-            assert exc_info.value.details["provider"] == "google"
+            assert exc_info.value.details is not None
+        assert exc_info.value.details.provider == "google"
 
     def test_create_model_with_tenant_config(self):
         """Factory uses tenant config over platform defaults."""

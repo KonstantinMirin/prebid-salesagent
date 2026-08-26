@@ -20,7 +20,7 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.codes import ErrorCode
-from src.core.errors.details import ValueRejectionDetails
+from src.core.errors.details import EntityRefDetails, ValidationDetails
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value, log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
@@ -109,7 +109,7 @@ def _build_list_creatives_request(
             created_after_dt = datetime.fromisoformat(created_after.replace("Z", "+00:00"))
         except ValueError:
             raise AdCPValidationError(
-                details=ValueRejectionDetails(rejected_value=str(created_after)),
+                details=ValidationDetails(rejected_value=str(created_after)),
                 field="created_after",
             )
     if created_before:
@@ -117,7 +117,7 @@ def _build_list_creatives_request(
             created_before_dt = datetime.fromisoformat(created_before.replace("Z", "+00:00"))
         except ValueError:
             raise AdCPValidationError(
-                details=ValueRejectionDetails(rejected_value=str(created_before)),
+                details=ValidationDetails(rejected_value=str(created_before)),
                 field="created_before",
             )
 
@@ -394,7 +394,7 @@ def _list_creatives_impl(
                     # on: which creative is affected.
                     Error.of(  # structural-guard: advisory per-creative result in ListCreativesResponse.errors[]
                         ErrorCode.CONFIGURATION_ERROR,
-                        details={"creative_id": db_creative.creative_id},
+                        details=EntityRefDetails(creative_id=db_creative.creative_id),
                     )
                 )
                 status_enum = CreativeStatus.processing

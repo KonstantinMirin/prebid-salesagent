@@ -15,6 +15,7 @@ from sqlalchemy import select
 from src.admin.utils import echo_context, require_auth, require_tenant_access
 from src.core.database.models import PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.errors.details import RejectionReasonDetails
 from src.core.exceptions import AdCPMediaBuyRejectedError
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Error
 from src.core.webhook_validator import validate_webhook_task_type
@@ -604,7 +605,9 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # the buyer MEDIA_BUY_REJECTED *with* the pin's suggestion on the tool path
                     # and *without* it on this webhook -- one code, two behaviours, split by
                     # lane.
-                    rejection = AdCPMediaBuyRejectedError(details={"rejection_reason": reason} if reason else None)
+                    rejection = AdCPMediaBuyRejectedError(
+                        details=RejectionReasonDetails(rejection_reason=reason) if reason else None
+                    )
                     create_media_buy_rejected_result = CreateMediaBuyError(errors=[Error.from_exception(rejection)])
                     metadata = _media_buy_webhook_metadata(step_data, tenant_id, media_buy_id, media_buy_data)
 

@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
+from src.core.errors.details import ValidationDetails
 from src.core.exceptions import AdCPError, normalize_to_adcp_error
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
@@ -35,6 +36,18 @@ def _append_warning(result: SyncCreativeResult, warning: str) -> None:
     before appending rather than assuming a list is present.
     """
     result.warnings = (result.warnings or []) + [warning]
+
+
+def _with_creative(details: ValidationDetails | None, creative_id: str) -> ValidationDetails:
+    """Attach the offending creative to a details block, or start one.
+
+    Both per-creative failure paths need this, so it lives once rather than as
+    two copies of a dict merge. ``model_copy`` rather than assignment because a
+    details block is a value: the caller's instance is not mutated underneath it.
+    """
+    if details is None:
+        return ValidationDetails(creative_id=creative_id)
+    return details.model_copy(update={"creative_id": creative_id})
 
 
 def _sync_creatives_impl(
@@ -204,7 +217,12 @@ def _sync_creatives_impl(
                     # the buyer.
                     typed = normalize_to_adcp_error(validation_error)
                     typed.internal_detail = validation_error
-                    typed.details = {**(typed.details or {}), "creative_id": creative_id}
+                    # A DECLARED field, not a dict poked onto a built error. The
+                    # subject is what `creative_id` names, and ValidationDetails
+                    # carries it (inherited from EntityRefDetails). The pydantic
+                    # field-level detail now travels in issues[], which
+                    # normalize_to_adcp_error already populated.
+                    typed.details = _with_creative(typed.details, creative_id)
                     results.append(_failed_sync_result(creative_id, typed))
                     continue  # Skip to next creative
 
@@ -370,7 +388,7 @@ def _sync_creatives_impl(
                 # here instead threw away the field the buyer needs.
                 typed = normalize_to_adcp_error(e)
                 typed.internal_detail = e
-                typed.details = {**(typed.details or {}), "creative_id": creative_id}
+                typed.details = _with_creative(typed.details, creative_id)
                 results.append(_failed_sync_result(creative_id, typed))
 
         # Archive creatives not in the sync payload when delete_missing=True

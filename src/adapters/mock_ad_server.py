@@ -18,7 +18,13 @@ from src.adapters.base import (
     BaseProductConfig,
     TargetingCapabilities,
 )
-from src.core.errors.details import CapabilityRefusalDetails, CreativeRejectionDetails, EntityRefDetails
+from src.core.errors.details import (
+    CapabilityRefusalDetails,
+    CreativeRejectionDetails,
+    EntityRefDetails,
+    RejectionReasonDetails,
+    ValidationDetails,
+)
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPBudgetExhaustedError,
@@ -384,7 +390,7 @@ class MockAdServer(AdServerAdapter):
         from src.core.exceptions import AdCPMediaBuyRejectedError
 
         reason = test_behavior.get("rejection_reason")
-        raise AdCPMediaBuyRejectedError(details={"rejection_reason": reason} if reason else None)
+        raise AdCPMediaBuyRejectedError(details=RejectionReasonDetails(rejection_reason=reason) if reason else None)
 
     def _validate_targeting(self, targeting_overlay):
         """Mock adapter accepts all targeting."""
@@ -685,7 +691,7 @@ class MockAdServer(AdServerAdapter):
             request, packages, start_time, end_time, package_pricing_info
         )
         if validation_errors:
-            raise AdCPValidationError(details={"validation_errors": validation_errors})
+            raise AdCPValidationError(details=ValidationDetails(reasons=validation_errors))
 
         # If no AI scenario or scenario accepts, proceed with normal flow
         # HITL Mode Processing
@@ -771,7 +777,7 @@ class MockAdServer(AdServerAdapter):
         approved, rejection_reason = self._simulate_approval()
         if not approved:
             self.log(f"❌ Simulated rejection: {rejection_reason}")
-            raise AdCPMediaBuyRejectedError(details={"rejection_reason": rejection_reason})
+            raise AdCPMediaBuyRejectedError(details=RejectionReasonDetails(rejection_reason=rejection_reason))
 
         # Continue with immediate processing
         self.log("✅ SYNC delay completed, proceeding with creation")

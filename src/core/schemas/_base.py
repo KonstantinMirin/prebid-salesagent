@@ -69,6 +69,7 @@ from adcp.types.generated_poc.enums.media_buy_valid_action import (
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.errors.codes import CODE_TABLE, ErrorCodeT
+from src.core.errors.details import ErrorDetails
 from src.core.errors.issues import ErrorIssue, JsonPointer
 from src.core.exceptions import (
     AdCPError,
@@ -206,7 +207,7 @@ class Error(_LibraryError):
         code: ErrorCodeT,
         *,
         field: str | None = None,
-        details: dict[str, Any] | None = None,
+        details: ErrorDetails | None = None,
         retry_after: int | None = None,
     ) -> "Error":
         """Build an advisory. THE construction surface for one.
@@ -228,7 +229,7 @@ class Error(_LibraryError):
         if field is not None:
             payload["field"] = field
         if details is not None:
-            payload["details"] = details
+            payload["details"] = details.to_wire()
         if retry_after is not None:
             payload["retry_after"] = retry_after
         return cls.model_validate(payload)

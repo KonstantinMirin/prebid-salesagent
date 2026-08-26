@@ -112,7 +112,7 @@ def _require_account_access(identity: ResolvedIdentity, account_id: str, repo: A
     principal_id = require_principal_id(identity)
     if not repo.has_access(principal_id, account_id):
         raise AdCPAuthorizationError(
-            details={"principal_id": principal_id, "account_id": account_id},
+            details=EntityRefDetails(principal_id=principal_id, account_id=account_id),
         )
 
 

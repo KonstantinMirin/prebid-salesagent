@@ -149,7 +149,8 @@ class TestBuildPropertyListUnsupportedAdvisories:
         """
         pkgs = [_make_pkg_with_property_list()]
         advisory = build_property_list_unsupported_advisories(pkgs, False)[0]
-        assert advisory.details == {"feature": "property_list_filtering"}
+        # `feature` became `capability`, the one name every capability refusal uses.
+        assert advisory.details == {"capability": "property_list_filtering"}
         assert advisory.field == "packages[0].targeting_overlay.property_list"
 
 

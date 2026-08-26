@@ -46,6 +46,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+from src.core.errors.details import EntityRefDetails, ValidationDetails
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPBudgetExceededError,
@@ -555,8 +556,8 @@ class TestMultipleInvalidCreativesAccumulated:
 
             # The accumulated ids reach the buyer through DETAILS, not the sentence: the
             # sentence is a function of the code through CODE_TABLE and cannot carry them.
-            assert "creative_errors" in exc_info.value.details
-            accumulated = str(exc_info.value.details["creative_errors"])
+            assert exc_info.value.details is not None
+            accumulated = str(exc_info.value.details.reasons)
             assert "creative_1" in accumulated
             assert "creative_2" in accumulated
             assert "creative_3" in accumulated
@@ -1754,8 +1755,9 @@ class TestExtensionObligations:
         Note: Proposal resolution is not yet implemented. This test verifies
         the error code pattern that will be used when it is.
         """
-        error = AdCPNotFoundError(details={"error_code": "PROPOSAL_NOT_FOUND"})
-        assert error.details["error_code"] == "PROPOSAL_NOT_FOUND"
+        error = AdCPNotFoundError(details=EntityRefDetails(context_id="PROPOSAL_NOT_FOUND"))
+        assert error.details is not None
+        assert error.details.context_id == "PROPOSAL_NOT_FOUND"
 
     def test_proposal_expired_error_code(self):
         """PROPOSAL_EXPIRED error code is used for expired proposals.
@@ -1765,8 +1767,9 @@ class TestExtensionObligations:
         Note: Proposal resolution is not yet implemented. This test verifies
         the error code pattern.
         """
-        error = AdCPValidationError(details={"error_code": "PROPOSAL_EXPIRED"})
-        assert error.details["error_code"] == "PROPOSAL_EXPIRED"
+        error = AdCPValidationError(details=ValidationDetails(rejected_value="PROPOSAL_EXPIRED"))
+        assert error.details is not None
+        assert error.details.rejected_value == "PROPOSAL_EXPIRED"
 
     def test_proposal_recovery_via_get_products(self):
         """After proposal failure, buyer can call get_products for fresh proposals.
@@ -1807,8 +1810,9 @@ class TestExtensionObligations:
         Note: Proposal-based currency validation is not yet implemented.
         This test verifies the error code pattern.
         """
-        error = AdCPValidationError(details={"error_code": "CURRENCY_MISMATCH"})
-        assert error.details["error_code"] == "CURRENCY_MISMATCH"
+        error = AdCPValidationError(details=ValidationDetails(rejected_value="CURRENCY_MISMATCH"))
+        assert error.details is not None
+        assert error.details.rejected_value == "CURRENCY_MISMATCH"
 
     def test_product_with_no_pricing_options(self, integration_db):
         """A product carrying no pricing option at all is a CONFIGURATION_ERROR.
@@ -1835,7 +1839,8 @@ class TestExtensionObligations:
         # the code IS the classification now, and details carries the product identity.
         exc = excinfo.value
         assert exc.error_code == "CONFIGURATION_ERROR"
-        assert exc.details["product_id"] is not None
+        assert exc.details is not None
+        assert exc.details.product_id is not None
 
     @pytest.mark.asyncio
     async def test_creative_ids_not_in_database(self):

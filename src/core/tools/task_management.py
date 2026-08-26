@@ -16,7 +16,7 @@ from fastmcp.server.context import Context
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import WorkflowUoW
-from src.core.errors.details import ConflictDetails, ValueRejectionDetails
+from src.core.errors.details import ConflictDetails, ValidationDetails
 from src.core.exceptions import (
     AdCPConflictError,
     AdCPValidationError,
@@ -209,7 +209,7 @@ async def complete_task(
 
     if status not in ["completed", "failed"]:
         raise AdCPValidationError(
-            details=ValueRejectionDetails(rejected_value=str(status)),
+            details=ValidationDetails(rejected_value=str(status)),
             field="status",
         )
 

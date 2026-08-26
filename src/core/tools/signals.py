@@ -10,6 +10,7 @@ import uuid
 
 from fastmcp.server.context import Context
 
+from src.core.errors.details import ValidationDetails
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPError,
@@ -294,7 +295,7 @@ async def _activate_signal_impl(
 
         if requires_approval:
             raise AdCPValidationError(
-                details={"signal_agent_segment_id": signal_agent_segment_id},
+                details=ValidationDetails(signal_agent_segment_id=signal_agent_segment_id),
                 context=context,
             )
         if not activation_success:

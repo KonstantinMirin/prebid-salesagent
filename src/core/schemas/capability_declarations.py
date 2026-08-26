@@ -42,6 +42,8 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import TrustedMatch as LibraryTrustedMatch
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from src.core.errors.details import ConfigurationDetails
+
 # Blocks the AdCP schema defines but this deployment does NOT back, mapped to the
 # GitHub issue that will implement them. Declaring one is rejected by name so the
 # operator gets an actionable error instead of pydantic's generic "extra fields
@@ -144,11 +146,14 @@ def _reject_unbacked[Declared: (SupportedProtocol, AdcpSpecialism)](
     if not unbacked:
         return
     raise AdCPConfigurationError(
-        details={
-            f"unbacked_{field}": unbacked,
-            f"backed_{field}": sorted(b.value for b in backed),
-            **({"tracked_by": tracked_by} if tracked_by else {}),
-        },
+        # The axis name was IN THE KEY (f"unbacked_{field}"), so no single read
+        # found it. It is a value now, like every other capability refusal.
+        details=ConfigurationDetails(
+            capability=field,
+            rejected_value=unbacked,
+            accepted_values=sorted(b.value for b in backed),
+            tracked_by=tracked_by,
+        ),
     )
 
 
@@ -250,7 +255,7 @@ class CapabilityDeclarations(BaseModel):
             return cls()
         if not isinstance(declared, dict):
             raise AdCPConfigurationError(
-                details={"received_type": type(declared).__name__},
+                details=ConfigurationDetails(received_type=type(declared).__name__),
             )
 
         # Name unbacked blocks explicitly, before pydantic's generic extra-field
@@ -259,7 +264,7 @@ class CapabilityDeclarations(BaseModel):
         for block in sorted(_UNBACKED_BLOCKS):
             if block in declared:
                 raise AdCPConfigurationError(
-                    details={"block": block, "tracked_by": _UNBACKED_BLOCKS[block]},
+                    details=ConfigurationDetails(block=block, tracked_by=_UNBACKED_BLOCKS[block]),
                 )
 
         # ValidationError only -- never a broad `except Exception`, which would
@@ -271,7 +276,7 @@ class CapabilityDeclarations(BaseModel):
         except ValidationError as exc:
             raise AdCPConfigurationError(
                 internal_detail=exc,
-                details={"capability_declarations": sorted(declared)},
+                details=ConfigurationDetails(capability="capability_declarations", rejected_value=sorted(declared)),
             ) from exc
 
         parsed.validate_backing()
@@ -319,10 +324,11 @@ class CapabilityDeclarations(BaseModel):
         )
         if orphaned:
             raise AdCPConfigurationError(
-                details={
-                    "orphaned_specialisms": orphaned,
-                    "emitted_protocols": sorted(p.value for p in emitted_protocols),
-                },
+                details=ConfigurationDetails(
+                    capability="specialisms",
+                    rejected_value=orphaned,
+                    accepted_values=sorted(p.value for p in emitted_protocols),
+                ),
             )
 
     def emitted_specialisms(self, defaults: list[AdcpSpecialism]) -> list[AdcpSpecialism]:

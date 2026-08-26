@@ -45,6 +45,10 @@ from src.core.config import get_pydantic_extra_mode
 from src.core.errors.codes import ErrorCodeT
 
 __all__ = [
+    "BillingNotSupportedDetails",
+    "ValidationDetails",
+    "PricingValidationDetails",
+    "ConfigurationDetails",
     "CreativeRejectionDetails",
     "TimeWindowDetails",
     "RejectionReasonDetails",
@@ -328,12 +332,6 @@ class AccountSetupDetails(EntityRefDetails):
     setup_steps: list[str] | None = None
 
 
-class AccountAmbiguousDetails(EntityRefDetails):
-    """A reference that resolved to more than one account."""
-
-    match_count: int | None = None
-
-
 class InvalidStateDetails(EntityRefDetails):
     """The resource's current status, and what that status forbids."""
 
@@ -341,7 +339,7 @@ class InvalidStateDetails(EntityRefDetails):
     disallowed_actions: list[str] | None = None
 
 
-class PolicyViolationDetails(ErrorDetails):
+class PolicyViolationDetails(EntityRefDetails):
     """A policy refusal. Field names from ``policy-violation.json``.
 
     ``violated_rules`` is the pin's name for what this repo called
@@ -367,16 +365,10 @@ class ConflictDetails(EntityRefDetails):
     status: str | None = None
 
 
-class TimeWindowDetails(ErrorDetails):
-    """A start/end pair that is invalid as a pair, not individually.
+class AccountAmbiguousDetails(ConflictDetails):
+    """A reference that resolved to more than one account."""
 
-    Distinct from ``ValueRejectionDetails.rejected_value``: one offending value
-    goes there, but a window is refused for the RELATIONSHIP between two
-    instants, so both have to be readable.
-    """
-
-    start_time: str | None = None
-    end_time: str | None = None
+    match_count: int | None = None
 
 
 class CreativeRejectionDetails(EntityRefDetails, ValueRejectionDetails, ProblemsDetails):
@@ -406,3 +398,105 @@ class CreativeRejectionDetails(EntityRefDetails, ValueRejectionDetails, Problems
     creative_ids: list[str] | None = None
     missing_field: str | None = None
     invalid_field: str | None = None
+
+
+class ConfigurationDetails(CapabilityRefusalDetails):
+    """A seller-side misconfiguration the buyer's request ran into.
+
+    Extends ``CapabilityRefusalDetails`` because several of these ARE capability
+    refusals wearing a different code: ``capability_declarations.py`` built its
+    keys dynamically as ``f"unbacked_{field}"`` / ``f"backed_{field}"``, which is
+    the same defect as the capability family — the axis name in the key, so no
+    single read finds it. Those become ``capability`` plus the canonical
+    requested/supported pair.
+
+    ``CONFIGURATION_ERROR`` has NO pinned details shape (the pin defines one for
+    14 codes and this is not among them), so every field here is local by
+    necessity rather than by divergence.
+    """
+
+    provider: str | None = None
+    block: str | None = None
+    tracked_by: str | None = None
+    missing_tasks: list[str] | None = None
+    setup_checklist_url: str | None = None
+    replay_ttl_seconds: int | None = None
+    min_replay_ttl_seconds: int | None = None
+    max_replay_ttl_seconds: int | None = None
+    in_flight_max_seconds: int | None = None
+
+
+class ValidationDetails(EntityRefDetails, ValueRejectionDetails, ProblemsDetails):
+    """A business-rule rejection. ``VALIDATION_ERROR`` has no pinned shape.
+
+    Composed from the three shared axes rather than restating them: which entity
+    (``EntityRefDetails``), what value was refused (``ValueRejectionDetails``),
+    and the per-item collection (``ProblemsDetails``).
+
+    ``reasons`` absorbs FIVE key names that all held a list of interpolated
+    sentences -- ``validation_errors``, ``adapter_errors``, ``config_errors``,
+    ``creative_errors`` and one of the two ``violations``. One concept, five
+    spellings, and a buyer had to know which one to read.
+
+    ``violations`` was worse than a synonym: it named THREE different shapes.
+    ``raise_if_property_targeting_violations`` passes ``list[str]`` of prose (now
+    ``reasons``), while the two targeting-overlay sites pass the
+    ``dict[str, object]`` that ``collect_targeting_violations`` returns (this
+    field). Nothing distinguished them but the call site.
+
+    FIXME(#2099): ``reasons`` holds PROSE, built by f-string at the raise site,
+    and the fields below it are shaped like things other channels already carry.
+    A list of field names is what ``issues[]`` is for; a diagnostic sentence is
+    what ``internal_detail`` is for. Preserved because removing them changes the
+    wire, which needs the spec-grounding gate.
+    """
+
+    reasons: list[str] | None = None
+    duplicate_product_ids: list[str] | None = None
+    signal_agent_segment_id: str | None = None
+    violations: dict[str, Any] | None = None
+    index: int | None = None
+
+
+class TimeWindowDetails(ValidationDetails):
+    """A start/end pair that is invalid as a pair, not individually.
+
+    Distinct from ``ValueRejectionDetails.rejected_value``: one offending value
+    goes there, but a window is refused for the RELATIONSHIP between two
+    instants, so both have to be readable.
+    """
+
+    start_time: str | None = None
+    end_time: str | None = None
+
+
+class PricingValidationDetails(ValidationDetails):
+    """A pricing refusal, with the numbers and options that decided it.
+
+    A subclass rather than more fields on ``ValidationDetails``: these seven are
+    cohesive and only the pricing sites need them, and ``AdCPError[ValidationDetails]``
+    accepts any subclass, so the precision costs nothing at the other sites.
+
+    Deliberately NOT borrowing ``budget-too-low.json``'s ``minimum_budget``: that
+    shape governs ``BUDGET_TOO_LOW`` and these sites emit ``VALIDATION_ERROR``,
+    so importing its key would claim a pinned shape for the wrong code.
+    """
+
+    pricing_model: str | None = None
+    floor_price: str | None = None
+    bid_price: str | None = None
+    package_budget: str | None = None
+    currency: str | None = None
+    min_spend_per_package: str | None = None
+    available_pricing_options: list[str] | None = None
+
+
+class BillingNotSupportedDetails(ErrorDetails):
+    """``BILLING_NOT_SUPPORTED`` — v3.1.1 ``error-details/billing-not-supported.json``.
+
+    Both fields and both spellings are the pin's, including ``scope``'s closed
+    enum, so a buyer switching on it gets what the schema promises.
+    """
+
+    scope: Literal["capability", "account"] | None = None
+    supported_billing: list[str] | None = None

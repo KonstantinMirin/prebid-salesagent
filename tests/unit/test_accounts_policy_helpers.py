@@ -72,7 +72,10 @@ class TestCheckBillingPolicy:
         identity = _identity_with(supported_billing=["agent", "operator"])
         errors = _check_billing_policy("prepaid", identity)
         assert errors is not None
-        assert errors[0].details == {"scope": "capability", "supported_billing": ["agent", "operator"]}
+        # to_wire() is the wire shape; the details block itself is a declared class
+        # now, so a misspelled key is a typecheck failure rather than a silent absence.
+        assert errors[0].details is not None
+        assert errors[0].details.to_wire() == {"scope": "capability", "supported_billing": ["agent", "operator"]}
 
     def test_failure_names_the_code_and_the_one_supported_model(self):
         """The suggestion is a function of the code (ADR-010), so it is asserted
@@ -82,7 +85,8 @@ class TestCheckBillingPolicy:
         errors = _check_billing_policy("operator", identity)
         assert errors is not None
         assert _FAILURE_CLASS_TO_CODE[errors[0].failure_class] == "BILLING_NOT_SUPPORTED"
-        assert errors[0].details["supported_billing"] == ["agent"]
+        assert errors[0].details is not None
+        assert errors[0].details.supported_billing == ["agent"]
 
     def test_empty_supported_list_rejects_all(self):
         identity = _identity_with(supported_billing=[])

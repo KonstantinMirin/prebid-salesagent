@@ -20,6 +20,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.core.context_manager import ContextManager
+from src.core.errors.details import ValidationDetails
 from src.core.exceptions import AdCPError, AdCPValidationError
 
 
@@ -66,7 +67,7 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
         cm, mock_update = _new_ctx_manager_with_mocked_update()
         exc = AdCPValidationError(
             field="packages[].budget",
-            details={"violations": ["below minimum"]},
+            details=ValidationDetails(reasons=["below minimum"]),
         )
 
         cm.audit_workflow_step_failure("step_abc", exc)

@@ -59,6 +59,7 @@ from src.core.database.models import PushNotificationConfig as DBPushNotificatio
 from src.core.database.repositories import PushNotificationConfigUoW
 from src.core.domain_config import get_a2a_server_url
 from src.core.errors.codes import AppErrorCode
+from src.core.errors.issues import ErrorIssue, JsonPointer
 from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthRequiredError,
@@ -135,7 +136,10 @@ def _require_params(params: dict, required: list[str], *, field: str | None = No
     """
     missing = [p for p in required if p not in params]
     if missing:
-        raise AdCPValidationError(details={"missing_params": missing}, field=field)
+        raise AdCPValidationError(
+            issues=[ErrorIssue.of(pointer=JsonPointer.of(name).pointer, keyword="required") for name in missing],
+            field=field,
+        )
 
 
 def _invalid_params_from_ssrf_error(exc: Exception) -> InvalidParamsError:

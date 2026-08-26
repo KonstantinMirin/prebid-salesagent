@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.errors.codes import ErrorCode
+from src.core.errors.details import ValidationDetails
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
@@ -249,11 +250,11 @@ def _get_media_buys_impl(
                         Error.of(  # structural-guard: advisory per-package result in GetMediaBuysResponse.errors[]
                             ErrorCode.SERVICE_UNAVAILABLE,
                             field=f"media_buys[].packages[{pkg_id}].targeting_overlay",
-                            details={
-                                "reason": "targeting_rehydration_failed",
-                                "package_id": pkg_id,
-                                "media_buy_id": buy.media_buy_id,
-                            },
+                            details=ValidationDetails(
+                                reasons=["targeting_rehydration_failed"],
+                                package_id=pkg_id,
+                                media_buy_id=buy.media_buy_id,
+                            ),
                         )
                     )
                     targeting_overlay = None

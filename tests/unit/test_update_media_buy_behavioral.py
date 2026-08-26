@@ -1789,7 +1789,9 @@ class TestUC003UpdateTargetingOverlay:
             # parameter. Which packages violated travels in details (salesagent-rfxfu).
             assert exc.field == "packages"
             assert exc.details is not None
-            assert "violations" in exc.details
+            # `violations` here was list[str] of prose; it is `reasons` now, the one
+            # field every prose list uses.
+            assert exc.details.reasons
 
             # The outer ``audit_workflow_step_failure_ctx(lambda: step)`` context manager
             # marks the workflow step failed BEFORE re-raising, which fires the

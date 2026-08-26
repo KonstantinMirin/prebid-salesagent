@@ -80,6 +80,7 @@ from src.core.errors.details import (
     EntityRefDetails,
     ErrorProblem,
     InvalidStateDetails,
+    ValidationDetails,
 )
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
@@ -333,7 +334,7 @@ def _verify_principal(
             reason=f"Principal does not own media buy (owner: {media_buy.principal_id})",
         )
         raise AdCPAuthorizationError(
-            details={"principal_id": principal_id, "media_buy_id": media_buy_id},
+            details=EntityRefDetails(principal_id=principal_id, media_buy_id=media_buy_id),
         )
 
 
@@ -485,7 +486,7 @@ def _update_media_buy_impl(
                     # @*-targeting-overlay both grade targeting validation as INVALID_REQUEST);
                     # converges with the create path (#1417).
                     raise AdCPInvalidRequestError(
-                        details=overlay_violations,
+                        details=ValidationDetails(violations=overlay_violations),
                         field="targeting_overlay",
                     )
 

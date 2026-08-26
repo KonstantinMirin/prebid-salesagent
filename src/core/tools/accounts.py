@@ -46,6 +46,7 @@ from src.core.database.repositories.account import AccountRepository, NaturalKey
 from src.core.database.repositories.account_serialization import as_json_dict
 from src.core.database.repositories.uow import AccountUoW
 from src.core.errors.codes import ErrorCode, ErrorCodeT
+from src.core.errors.details import BillingNotSupportedDetails, ConfigurationDetails, ErrorDetails, ValidationDetails
 from src.core.exceptions import AdCPConfigurationError, AdCPValidationError
 from src.core.helpers import enum_value
 from src.core.helpers.brand_key import brand_key_parts
@@ -621,7 +622,7 @@ class GateFailure:
 
     failure_class: FailureClass
     field: str | None = None
-    details: dict[str, object] | None = None
+    details: ErrorDetails | None = None
 
 
 def _gate_failures_to_errors(failures: list[GateFailure]) -> list["Error"]:
@@ -1023,13 +1024,13 @@ def _check_billing_policy(
         # billing-not-supported.json: supported_billing minItems 1, "Sellers MAY
         # omit this field" -- an empty resolved policy must omit the key entirely,
         # never emit a schema-invalid empty array (salesagent-hh1f review MEDIUM #1).
-        details: dict[str, object] = {"scope": "capability"}
-        if supported:
-            details["supported_billing"] = supported
+        # billing-not-supported.json declares both keys and `scope`'s enum, so the
+        # shape carries the pin's spelling. to_wire() drops supported_billing when
+        # unset, which is what the "omit the key entirely" rule asks for.
         return [
             GateFailure(
                 failure_class="billing_not_supported",
-                details=details,
+                details=BillingNotSupportedDetails(scope="capability", supported_billing=supported or None),
             )
         ]
     return None
@@ -1203,7 +1204,7 @@ def _unmatched_settings_update_result(ref: AccountRef) -> SyncResponseAccount:
         errors=[
             Error.of(  # structural-guard: advisory per-account result in SyncAccountsResponse.errors[]
                 ErrorCode.UNSUPPORTED_PROVISIONING,
-                details={"reason": "settings_update_never_provisions"},
+                details=ValidationDetails(reasons=["settings_update_never_provisions"]),
             )
         ],
     )
@@ -1252,7 +1253,7 @@ def _process_settings_update_entry(
         # Whatever the seller does about its own inconsistent row, the RESPONSE
         # must still be a conformant error object.
         raise AdCPConfigurationError(
-            details={"account_id": existing.account_id},
+            details=ConfigurationDetails(account_id=existing.account_id),
         )
 
     # notification_configs (shared with the provisioning arm) -> rejected-field
@@ -1594,7 +1595,7 @@ async def _sync_accounts_impl(
                 entry.brand is not None or entry.operator is not None or entry.billing is not None
             ):
                 raise AdCPValidationError(
-                    details={"index": index},
+                    details=ValidationDetails(index=index),
                     field=f"accounts[{index}]",
                 )
 
@@ -1748,7 +1749,7 @@ async def _sync_accounts_impl(
                         # Same seller-side inconsistency as the settings-update
                         # arm: a NULLABLE column the buyer cannot fix.
                         raise AdCPConfigurationError(
-                            details={"account_id": db_acct.account_id},
+                            details=ConfigurationDetails(account_id=db_acct.account_id),
                         )
                     results.append(
                         _build_sync_result(

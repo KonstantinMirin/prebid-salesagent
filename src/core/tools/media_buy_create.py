@@ -1402,7 +1402,7 @@ def _validate_pricing_model_selection(
 
     # All products must have pricing_options
     if not product.pricing_options or len(product.pricing_options) == 0:
-        raise AdCPConfigurationError(details={"product_id": product.product_id})
+        raise AdCPConfigurationError(details=ConfigurationDetails(product_id=product.product_id))
 
     # Determine which pricing option to use
     # Priority: pricing_option_id (AdCP spec) > pricing_model (legacy)
@@ -1457,13 +1457,14 @@ def _validate_pricing_model_selection(
         # below (bid_price/floor_price) already relocates the same way.
         raise AdCPValidationError(
             field="pricing_option_id" if pricing_option_id else "pricing_model",
-            details={
-                "product_id": product.product_id,
-                "available_pricing_options": available_options,
-                **({"requested_pricing_option_id": pricing_option_id} if pricing_option_id else {}),
-                **({"requested_pricing_model": str(pricing_model_fallback)} if pricing_model_fallback else {}),
-                **({"requested_currency": campaign_currency} if campaign_currency else {}),
-            },
+            # The three conditional spreads named one fact three ways -- which
+            # requested value was not found. `rejected_value` is that fact, and
+            # to_wire() drops it when unset, so the conditionals are unnecessary.
+            details=PricingValidationDetails(
+                product_id=product.product_id,
+                available_pricing_options=available_options,
+                rejected_value=str(pricing_option_id or pricing_model_fallback or campaign_currency or ""),
+            ),
         )
 
     # Validate auction pricing
@@ -1471,13 +1472,13 @@ def _validate_pricing_model_selection(
         if not package.bid_price:
             raise AdCPValidationError(
                 field="bid_price",
-                details={
-                    "product_id": product.product_id,
-                    "pricing_model": str(selected_option.pricing_model),
-                    "floor_price": (
+                details=PricingValidationDetails(
+                    product_id=product.product_id,
+                    pricing_model=str(selected_option.pricing_model),
+                    floor_price=(
                         str(selected_option.price_guidance.get("floor")) if selected_option.price_guidance else None
                     ),
-                },
+                ),
             )
 
         floor_price = (
@@ -1489,16 +1490,16 @@ def _validate_pricing_model_selection(
 
         if bid_decimal < floor_price:
             raise AdCPValidationError(
-                details={
-                    "bid_price": str(package.bid_price),
-                    "floor_price": str(floor_price),
-                    "pricing_model": str(selected_option.pricing_model),
-                },
+                details=PricingValidationDetails(
+                    bid_price=str(package.bid_price),
+                    floor_price=str(floor_price),
+                    pricing_model=str(selected_option.pricing_model),
+                ),
             )
 
     # Validate fixed pricing has rate
     if selected_option.is_fixed and not selected_option.rate:
-        raise AdCPConfigurationError(details={"product_id": product.product_id})
+        raise AdCPConfigurationError(details=ConfigurationDetails(product_id=product.product_id))
 
     # Validate minimum spend per package
     if selected_option.min_spend_per_package:
@@ -1509,12 +1510,12 @@ def _validate_pricing_model_selection(
 
         if package_budget and package_budget < Decimal(str(selected_option.min_spend_per_package)):
             raise AdCPValidationError(
-                details={
-                    "package_budget": package_budget,
-                    "currency": selected_option.currency,
-                    "min_spend_per_package": selected_option.min_spend_per_package,
-                    "pricing_model": selected_option.pricing_model,
-                },
+                details=PricingValidationDetails(
+                    package_budget=str(package_budget),
+                    currency=selected_option.currency,
+                    min_spend_per_package=str(selected_option.min_spend_per_package),
+                    pricing_model=str(selected_option.pricing_model),
+                ),
             )
 
     # Return validated pricing information
@@ -1575,24 +1576,29 @@ async def _validate_and_convert_format_ids(
 
         # STRICT ENFORCEMENT: Reject plain strings
         if isinstance(fmt_id, str):
-            raise AdCPValidationError(field=field, details={**where, "received": fmt_id, "expected": "FormatId object"})
+            raise AdCPValidationError(
+                field=field,
+                details=ValidationDetails(**where, rejected_value=str(fmt_id), received_type="FormatId object"),
+            )
 
         # Coerce to FormatId via Pydantic validation (handles dicts and FormatId objects)
         try:
             validated_fmt = FormatId.model_validate(fmt_id, from_attributes=True)
         except (ValueError, ValidationError) as e:
-            raise AdCPValidationError(field=field, details=dict(where), internal_detail=e) from e
+            raise AdCPValidationError(field=field, details=ValidationDetails(**where), internal_detail=e) from e
         agent_url = canonical_agent_url(validated_fmt.agent_url)
         format_id = validated_fmt.id
 
         if not agent_url or not format_id:
-            raise AdCPValidationError(field=field, details={**where, "agent_url": agent_url, "format_id": format_id})
+            raise AdCPValidationError(
+                field=field, details=ValidationDetails(**where, agent_url=agent_url, format_id=format_id)
+            )
 
         # VALIDATION: Check agent is registered
         # Normalize incoming agent_url for comparison (strips /mcp, /a2a, /.well-known/*, trailing slashes)
         normalized_agent_url = normalize_agent_url(agent_url)
         if normalized_agent_url not in registered_agent_urls:
-            raise AdCPAuthorizationError(field=field, details={**where, "agent_url": agent_url})
+            raise AdCPAuthorizationError(field=field, details=EntityRefDetails(**where, agent_url=agent_url))
 
         # VALIDATION: Verify format exists on agent
         try:
@@ -1621,11 +1627,13 @@ async def _validate_and_convert_format_ids(
 from src.core.errors.details import (
     AdapterFailureDetails,
     CapabilityRefusalDetails,
+    ConfigurationDetails,
     CreativeRejectionDetails,
     EntityRefDetails,
+    PricingValidationDetails,
     ProductRefDetails,
     TimeWindowDetails,
-    ValueRejectionDetails,
+    ValidationDetails,
 )
 from src.services.setup_checklist_service import SetupIncompleteError, validate_setup_complete
 from src.services.slack_notifier import get_slack_notifier
@@ -2064,10 +2072,10 @@ async def _create_media_buy_impl(
         except SetupIncompleteError as e:
             # Return helpful error with missing tasks
             raise AdCPConfigurationError(
-                details={
-                    "missing_tasks": [t["name"] for t in e.missing_tasks],
-                    "setup_checklist_url": f"/tenant/{tenant['tenant_id']}/setup-checklist",
-                }
+                details=ConfigurationDetails(
+                    missing_tasks=[t["name"] for t in e.missing_tasks],
+                    setup_checklist_url=f"/tenant/{tenant['tenant_id']}/setup-checklist",
+                )
             )
 
     # Validate principal exists BEFORE creating context (foreign key constraint).
@@ -2212,7 +2220,7 @@ async def _create_media_buy_impl(
             else:
                 # StartTiming that wasn't unwrapped - this shouldn't happen but handle gracefully
                 raise AdCPValidationError(
-                    details={"received_type": type(raw_start_time).__name__},
+                    details=ValidationDetails(received_type=type(raw_start_time).__name__),
                     field="start_time",
                 )
             if computed_start_time.tzinfo is None:
@@ -2224,7 +2232,7 @@ async def _create_media_buy_impl(
                 # renders "root=datetime.datetime(...)" — the rendering defect the wire-safety
                 # marker check grades. The unwrapped value renders as "2020-01-01 00:00:00+00:00".
                 raise AdCPInvalidRequestError(
-                    details=ValueRejectionDetails(rejected_value=str(computed_start_time)),
+                    details=ValidationDetails(rejected_value=str(computed_start_time)),
                     field="start_time",
                 )
 
@@ -2281,7 +2289,7 @@ async def _create_media_buy_impl(
             duplicate_products = [pid for pid, count in product_id_counts.items() if count > 1]
             if duplicate_products:
                 raise AdCPValidationError(
-                    details={"duplicate_product_ids": sorted(duplicate_products)},
+                    details=ValidationDetails(duplicate_product_ids=sorted(duplicate_products)),
                 )
 
         # 4. Currency-specific budget validation
@@ -2617,7 +2625,7 @@ async def _create_media_buy_impl(
                     violations = collect_targeting_violations(pkg.targeting_overlay)
                     if violations:
                         raise AdCPInvalidRequestError(
-                            details=violations,
+                            details=ValidationDetails(violations=violations),
                             field="targeting_overlay",
                         )
 
@@ -3135,7 +3143,7 @@ async def _create_media_buy_impl(
 
             if config_errors:
                 raise AdCPValidationError(
-                    details={"config_errors": config_errors},
+                    details=ValidationDetails(reasons=config_errors),
                     context=req.context,
                 )
 
@@ -3229,7 +3237,7 @@ async def _create_media_buy_impl(
 
             if not pkg_product_id:
                 raise AdCPValidationError(
-                    details={"package_index": idx},
+                    details=ValidationDetails(package_index=idx),
                     field=package_field_path("product_id", pkg_index),
                 )
 
@@ -3509,7 +3517,7 @@ async def _create_media_buy_impl(
                 )
             # The adapter's own constraint list is machine-readable buyer detail — the
             # sibling at the config-error branch already relocates its list the same way.
-            raise AdCPValidationError(details={"adapter_errors": pre_creation_errors})
+            raise AdCPValidationError(details=ValidationDetails(reasons=pre_creation_errors))
 
         # Dry-run mode: skip adapter call entirely, return simulated response
         # All validation (products, pricing, budgets, creatives) has passed above.
@@ -3777,7 +3785,7 @@ async def _create_media_buy_impl(
                         # CREATIVE_NOT_FOUND uniformity MUST — deferred pending
                         # upstream reconciliation.
                         raise AdCPCreativeRejectedError(
-                            details={"creative_ids": sorted(missing_ids)},
+                            details=CreativeRejectionDetails(creative_ids=sorted(missing_ids)),
                         )
 
                     # Validate creative formats against product formats BEFORE creating assignments
@@ -3904,9 +3912,7 @@ async def _create_media_buy_impl(
                                     )
                                     if build_err:
                                         raise AdCPValidationError(
-                                            details={
-                                                "creative_errors": [build_err],
-                                            },
+                                            details=ValidationDetails(reasons=[build_err]),
                                         )
                                     assert asset is not None
 

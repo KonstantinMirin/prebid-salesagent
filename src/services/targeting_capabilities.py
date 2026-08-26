@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
+from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas import Error, Targeting, TargetingCapability
 from src.core.validation_helpers import PACKAGES_FIELD
@@ -247,7 +248,7 @@ def build_property_list_unsupported_advisories(
             Error.of(
                 ErrorCode.UNSUPPORTED_FEATURE,
                 field=f"packages[{index}].targeting_overlay.property_list",
-                details={"feature": "property_list_filtering"},
+                details=CapabilityRefusalDetails(capability="property_list_filtering"),
             )
         )
     return advisories
@@ -315,7 +316,9 @@ def raise_if_property_targeting_violations(violations: list[str]) -> None:
         # (salesagent-rfxfu).
         raise AdCPValidationError(
             field=PACKAGES_FIELD,
-            details={"violations": violations},
+            # list[str] of prose -> reasons. The dict-shaped `violations` the two
+            # overlay sites pass is a different shape under the same old name.
+            details=ValidationDetails(reasons=violations),
         )
 
 

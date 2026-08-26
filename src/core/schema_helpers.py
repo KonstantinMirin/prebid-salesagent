@@ -29,7 +29,7 @@ from adcp.types import (
 )
 from pydantic import BaseModel, ValidationError
 
-from src.core.errors.details import ValueRejectionDetails
+from src.core.errors.details import ValidationDetails
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas.product import GetProductsRequest
 from src.core.validation_helpers import adcp_validation_boundary
@@ -120,14 +120,14 @@ def _coerce_domain_or_raise(raw: str) -> str:
     domain = brand_shorthand_to_domain(raw)
     if not domain:
         raise AdCPValidationError(
-            details=ValueRejectionDetails(rejected_value=str(raw)),
+            details=ValidationDetails(rejected_value=str(raw)),
             field="brand",
         )
     try:
         BrandReference(domain=domain)
     except ValidationError as e:
         raise AdCPValidationError(
-            details={"domain": domain},
+            details=ValidationDetails(rejected_value=domain),
             field="brand",
         ) from e
     return domain
@@ -171,7 +171,7 @@ def to_brand_reference(brand: dict[str, Any] | BrandReference | str | None) -> B
             ref_data["domain"] = _coerce_domain_or_raise(domain_raw)
             return BrandReference(**ref_data)
         raise AdCPValidationError(
-            details={"received_type": type(brand).__name__},
+            details=ValidationDetails(received_type=type(brand).__name__),
             field="brand",
         )
 

@@ -19,16 +19,26 @@ from pydantic import BaseModel, ValidationError
 
 from src.core.errors.codes import CODE_TABLE, AppErrorCode, ErrorCodeT, Recovery
 from src.core.errors.details import (
+    AccountSetupDetails,
     AdapterFailureDetails,
+    BudgetDetails,
+    CapabilityRefusalDetails,
+    ConfigurationDetails,
+    ConflictDetails,
+    CreativeRejectionDetails,
     EntityRefDetails,
     ErrorDetails,
+    InvalidStateDetails,
     ProductRefDetails,
+    RejectionReasonDetails,
+    ValidationDetails,
+    ValueRejectionDetails,
     VersionUnsupportedDetails,
 )
 from src.core.errors.issues import ErrorIssue, issues_from_validation_error, pointer_to_field
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
+    from collections.abc import Iterator
 
     from adcp.types import ContextObject
 
@@ -101,23 +111,22 @@ def _rebuild_error(cls: type[AdCPError], code: ErrorCodeT) -> AdCPError:
     return cls() if hasattr(cls, "_code") else cls(error_code=code)
 
 
-def _details_to_wire(details: ErrorDetails | Mapping[str, Any] | None) -> dict[str, Any] | None:
+def _details_to_wire(details: ErrorDetails | None) -> dict[str, Any] | None:
     """Render a details block for the wire.
 
-    The construction API is a class; the wire slot is an object. This is the
-    one place that conversion happens, so no caller reaches for
-    ``model_dump()`` on its own and no raise site has to think about it.
+    The construction API is a class; the wire slot is an object. This is the one
+    place that conversion happens, so no caller reaches for ``model_dump()`` on
+    its own and no raise site has to think about it.
 
-    The ``Mapping`` branch is migration scaffolding: error classes convert to
-    declared detail classes one at a time, and until the last one lands some
-    ``self.details`` values are still plain dicts. Delete the branch, and this
-    union, when salesagent-rys3u.2 finishes converting all 177 sites.
+    The ``Mapping`` branch that used to be here was migration scaffolding, for
+    the window where some ``self.details`` were still plain dicts. All 177 sites
+    now pass a declared class, so the branch is gone and a dict no longer has a
+    path to the wire: ``AdCPError`` is generic in its detail type, so mypy
+    refuses one at the raise site.
     """
     if details is None:
         return None
-    if isinstance(details, ErrorDetails):
-        return details.to_wire()
-    return dict(details)
+    return details.to_wire()
 
 
 class AdCPError[DetailsT: ErrorDetails](Exception):
@@ -436,7 +445,7 @@ class AdCPError[DetailsT: ErrorDetails](Exception):
         )
 
 
-class AdCPValidationError(AdCPError):
+class AdCPValidationError(AdCPError[ValidationDetails]):
     """Invalid parameters or request data (400)."""
 
     _default_status_code: ClassVar[int] = 400
@@ -508,7 +517,7 @@ class AdCPAuthRequiredError(AdCPAuthenticationError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.AUTH_MISSING
 
 
-class AdCPAuthorizationError(AdCPError):
+class AdCPAuthorizationError(AdCPError[EntityRefDetails]):
     """Authenticated but not authorized for this resource (403).
 
     Emits ``PERMISSION_DENIED`` with ``correctable`` recovery per the v3.1.1
@@ -569,7 +578,7 @@ class AdCPAccountNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_NOT_FOUND
 
 
-class AdCPAccountSetupRequiredError(AdCPError):
+class AdCPAccountSetupRequiredError(AdCPError[AccountSetupDetails]):
     """Account exists but requires setup before use (422, ACCOUNT_SETUP_REQUIRED)."""
 
     _default_status_code: ClassVar[int] = 422
@@ -601,7 +610,7 @@ class AdCPAccountPaymentRequiredError(AdCPError[EntityRefDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_PAYMENT_REQUIRED
 
 
-class AdCPConflictError(AdCPError):
+class AdCPConflictError(AdCPError[ConflictDetails]):
     """Resource conflict, e.g. duplicate idempotency key (409).
 
     Recovery=transient per the pinned error-code.json enumMetadata (CONFLICT):
@@ -623,7 +632,7 @@ class AdCPAccountAmbiguousError(AdCPConflictError):
     # an explicit account_id) — override the transient CONFLICT parent (#1417).
 
 
-class AdCPGoneError(AdCPError):
+class AdCPGoneError(AdCPError[InvalidStateDetails]):
     """Resource previously existed but is no longer available (410).
 
     Recovery=correctable: the resource itself is gone, but the buyer can
@@ -635,7 +644,7 @@ class AdCPGoneError(AdCPError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.INVALID_STATE
 
 
-class AdCPBudgetExhaustedError(AdCPError):
+class AdCPBudgetExhaustedError(AdCPError[BudgetDetails]):
     """Budget or spend limit has been reached (422).
 
     Recovery=terminal per the pinned error-code.json enumMetadata (BUDGET_EXHAUSTED):
@@ -661,7 +670,7 @@ class AdCPAdapterError(AdCPError[AdapterFailureDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.SERVICE_UNAVAILABLE
 
 
-class AdCPConfigurationError(AdCPError):
+class AdCPConfigurationError(AdCPError[ConfigurationDetails]):
     """Server-side configuration is broken (500).
 
     Raised when encrypted secrets cannot be decrypted (key rotation,
@@ -707,7 +716,7 @@ class AdCPInternalError(AdCPError[EntityRefDetails]):
     _code: ClassVar[ErrorCodeT] = AppErrorCode.INTERNAL_ERROR
 
 
-class AdCPUrlNotAllowedError(AdCPError):
+class AdCPUrlNotAllowedError(AdCPError[ValueRejectionDetails]):
     """A buyer-supplied URL names a host this seller will not contact (400).
 
     Emits the PUBLISHED ``VALIDATION_ERROR``, not a platform code. This class briefly
@@ -869,14 +878,14 @@ class AdCPTaskNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.REFERENCE_NOT_FOUND
 
 
-class AdCPBudgetTooLowError(AdCPError):
+class AdCPBudgetTooLowError(AdCPError[BudgetDetails]):
     """Requested budget falls below product minimum (422, BUDGET_TOO_LOW)."""
 
     _default_status_code: ClassVar[int] = 422
     _code: ClassVar[ErrorCodeT] = ErrorCode.BUDGET_TOO_LOW
 
 
-class AdCPCapabilityNotSupportedError(AdCPError):
+class AdCPCapabilityNotSupportedError(AdCPError[CapabilityRefusalDetails]):
     """Requested capability is not supported by this seller (422, UNSUPPORTED_FEATURE).
 
     .. note::
@@ -940,14 +949,14 @@ class AdCPIdempotencyExpiredError(AdCPConflictError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.IDEMPOTENCY_EXPIRED
 
 
-class AdCPCreativeRejectedError(AdCPError):
+class AdCPCreativeRejectedError(AdCPError[CreativeRejectionDetails]):
     """Creative failed policy or technical validation (422, CREATIVE_REJECTED)."""
 
     _default_status_code: ClassVar[int] = 422
     _code: ClassVar[ErrorCodeT] = ErrorCode.CREATIVE_REJECTED
 
 
-class AdCPBudgetExceededError(AdCPError):
+class AdCPBudgetExceededError(AdCPError[BudgetDetails]):
     """Requested budget exceeds tenant or product ceiling (422, BUDGET_EXCEEDED)."""
 
     _default_status_code: ClassVar[int] = 422
@@ -1042,7 +1051,7 @@ class AdCPGamUpdateError(AdCPAdapterError):
     _code: ClassVar[ErrorCodeT] = AppErrorCode.AD_SERVER_UPDATE_FAILED
 
 
-class AdCPMediaBuyRejectedError(AdCPError):
+class AdCPMediaBuyRejectedError(AdCPError[RejectionReasonDetails]):
     """The seller declined the media buy (422 → POLICY_VIOLATION).
 
     A business rejection, not a server failure: recovery=correctable so the

@@ -50,9 +50,10 @@ from src.core.errors.details import (
     AdapterFailureDetails,
     BudgetDetails,
     CapabilityRefusalDetails,
+    ConfigurationDetails,
     EntityRefDetails,
     ErrorProblem,
-    ValueRejectionDetails,
+    ValidationDetails,
 )
 from src.core.exceptions import (
     AdCPActivationWorkflowError,
@@ -162,7 +163,7 @@ class GoogleAdManager(AdServerAdapter):
                 int(advertiser_id)
             except (ValueError, TypeError) as e:
                 raise AdCPConfigurationError(
-                    details=ValueRejectionDetails(rejected_value=str(advertiser_id)),
+                    details=ConfigurationDetails(rejected_value=str(advertiser_id)),
                     field="advertiser_id",
                 ) from e
 
@@ -1387,7 +1388,7 @@ class GoogleAdManager(AdServerAdapter):
                 self.log(f"[red]Invalid budget value: {budget} (must be positive)[/red]")
                 raise AdCPValidationError(
                     field="budget",
-                    details=ValueRejectionDetails(rejected_value=str(budget)),
+                    details=ValidationDetails(rejected_value=str(budget)),
                 )
 
             self.log(f"[GAM] Updating package {package_id} budget to {budget} (with delivery validation)")
@@ -1428,7 +1429,7 @@ class GoogleAdManager(AdServerAdapter):
                 if not platform_line_item_id:
                     self.log(f"[red]Package {package_id} has no platform_line_item_id - cannot sync to GAM[/red]")
                     raise AdCPValidationError(
-                        details={"package_id": package_id},
+                        details=ValidationDetails(package_id=package_id),
                     )
 
                 # Get pricing model from package config for budget calculation
@@ -1481,7 +1482,7 @@ class GoogleAdManager(AdServerAdapter):
                 if not package_id:
                     raise AdCPValidationError(
                         field="package_id",
-                        details={"action": action},
+                        details=ValidationDetails(rejected_value=action),
                     )
 
                 with get_db_session() as session:
@@ -1495,7 +1496,7 @@ class GoogleAdManager(AdServerAdapter):
                     platform_line_item_id = media_package.package_config.get("platform_line_item_id")
                     if not platform_line_item_id:
                         raise AdCPValidationError(
-                            details={"package_id": package_id},
+                            details=ValidationDetails(package_id=package_id),
                         )
 
                     # Update status in GAM
