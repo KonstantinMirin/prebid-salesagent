@@ -70,6 +70,65 @@ def _e2e_reject_next(env: Any, count: int, status: int = 418) -> None:
     program_rejections(env._capture_key, status=status, count=count)
 
 
+# Long enough to outlast any scenario's retry schedule (3 attempts x a handful of
+# deliveries), short enough to stay a number rather than a promise.
+_E2E_UNBOUNDED_RUN = 1000
+
+
+def _e2e_set_http_status(env: Any, code: int, text: str = "") -> None:
+    """E2E realization of :meth:`LocalOriginMixin.set_http_status`.
+
+    The capture service's control plane speaks a rejection RUN -- ``status`` for
+    the next ``count`` deliveries, then 200 again -- so the two answers this
+    method's callers actually ask for are both expressible:
+
+    * a healthy endpoint (``2xx``) is a run of length ZERO;
+    * a failing endpoint is a run long enough to outlast the scenario. The
+      in-process meaning is "every attempt, forever"; over e2e that is a finite
+      but generous run, because the control plane counts.
+
+    ``text`` is dropped: the capture service answers a status, not a body, and no
+    scenario asserts on that body over e2e.
+    """
+    from tests.e2e._webhook_capture import program_rejections
+
+    program_rejections(env._capture_key, status=code, count=0 if 200 <= code < 300 else _E2E_UNBOUNDED_RUN)
+
+
+def _e2e_set_http_sequence(env: Any, responses: list) -> None:
+    """E2E realization of :meth:`LocalOriginMixin.set_http_sequence`.
+
+    Only the shape the control plane can express: ``N`` copies of one failing
+    status followed by a success, which is what every scenario using this step
+    asks for ("fails on first attempt but succeeds on second"). A sequence with
+    two DIFFERENT failure statuses, or one ending in a failure, is a genuinely
+    different program and raises rather than being approximated -- an approximated
+    endpoint would grade a scenario nobody wrote.
+    """
+    from tests.e2e._webhook_capture import program_rejections
+
+    statuses = [item[0] if isinstance(item, tuple) else None for item in responses]
+    if None in statuses:
+        raise NotImplementedError(
+            "set_http_sequence over e2e_rest accepts (status, text) pairs only; a full "
+            "OriginResponse (hangs_up / malformed body / delay) has no control-plane "
+            "expression on the capture service. See prebid/salesagent#2098."
+        )
+    failing = [code for code in statuses if not 200 <= code < 300]
+    if len(set(failing)) > 1:
+        raise NotImplementedError(
+            f"set_http_sequence over e2e_rest expresses ONE failing status repeated, then "
+            f"success; this sequence mixes {sorted(set(failing))}. See prebid/salesagent#2098."
+        )
+    if failing and not 200 <= statuses[-1] < 300:
+        raise NotImplementedError(
+            "set_http_sequence over e2e_rest expresses a run of failures FOLLOWED BY success; "
+            "this sequence ends on a failure, which the control plane cannot hold open. "
+            "See prebid/salesagent#2098."
+        )
+    program_rejections(env._capture_key, status=failing[0] if failing else 200, count=len(failing))
+
+
 def _e2e_delivery_attempts(env: Any) -> int:
     """E2E realization of :attr:`LocalOriginMixin.delivery_attempts`.
 
@@ -444,10 +503,12 @@ class LocalOriginMixin:
 
     # -- Programming the endpoint ------------------------------------------
 
+    @realize_e2e(_e2e_set_http_status)
     def set_http_status(self, code: int, text: str = "") -> None:
         """Answer every attempt with ``code`` and ``text`` as the body."""
         self.origin.respond_with(code, body=(text or f"Status {code}").encode())
 
+    @realize_e2e(_e2e_set_http_sequence)
     def set_http_sequence(self, responses: list[tuple[int, str] | OriginResponse]) -> None:
         """Answer each attempt with the next entry; the last entry repeats.
 

@@ -23,6 +23,7 @@ Multi-transport support (subclasses may also override):
 from __future__ import annotations
 
 import os
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1200,24 +1201,65 @@ class BaseTestEnv:
             for f in ALL_FACTORIES:
                 f._meta.sqlalchemy_session = self._session
 
-        # 2. Start patches
-        for name, target in self.EXTERNAL_PATCHES.items():
-            if name in self.ASYNC_PATCHES:
-                patcher = patch(target, new_callable=AsyncMock)
-            else:
-                patcher = patch(target)
-            self.mock[name] = patcher.start()
-            self._patchers.append(patcher)
+        # Everything past the binding unwinds itself on failure. Python does NOT
+        # call __exit__ when __enter__ raises, and the factory binding is GLOBAL
+        # to the process -- so a failure here (or in a subclass's __enter__ after
+        # its super() call) left every factory bound for the rest of that xdist
+        # worker, and every following scenario died on the nested-env guard
+        # above. Measured: two real setup failures produced 350 further errors in
+        # one bdd_e2e run, and the two causes were indistinguishable in the report.
+        # A partially-entered env now cleans up after itself and the original
+        # exception is what the reader sees.
+        try:
+            # 2. Start patches
+            for name, target in self.EXTERNAL_PATCHES.items():
+                if name in self.ASYNC_PATCHES:
+                    patcher = patch(target, new_callable=AsyncMock)
+                else:
+                    patcher = patch(target)
+                self.mock[name] = patcher.start()
+                self._patchers.append(patcher)
 
-        self._configure_mocks()
+            self._configure_mocks()
 
-        # 3. E2E discovery-path seeding: the live server authenticates against
-        #    its own DB, so seed tenant/principal even for scenarios that never
-        #    run a tenant-creating Given step. Idempotent; no-op in-process.
-        if self.use_real_db and self.is_e2e:
-            self._seed_e2e_identity()
+            # 3. E2E discovery-path seeding: the live server authenticates against
+            #    its own DB, so seed tenant/principal even for scenarios that never
+            #    run a tenant-creating Given step. Idempotent; no-op in-process.
+            if self.use_real_db and self.is_e2e:
+                self._seed_e2e_identity()
+        except BaseException:
+            self._unwind_partial_enter()
+            raise
 
         return self
+
+    def _unwind_partial_enter(self) -> None:
+        """Release whatever ``__enter__`` had acquired before it failed.
+
+        Best-effort and silent by design: the caller is already raising, and an
+        error raised from here would replace the real cause with a cleanup
+        detail. The GLOBAL state -- the factory session binding -- is what must
+        not survive, so it is released last and unconditionally.
+        """
+        for patcher in reversed(self._patchers):
+            with suppress(Exception):
+                patcher.stop()
+        self._patchers.clear()
+        self.mock.clear()
+
+        if self.use_real_db:
+            from tests.factories import ALL_FACTORIES
+
+            for f in ALL_FACTORIES:
+                f._meta.sqlalchemy_session = None
+            if self._session is not None:
+                with suppress(Exception):
+                    self._session.close()
+                self._session = None
+            if getattr(self, "_e2e_engine", None) is not None:
+                with suppress(Exception):
+                    self._e2e_engine.dispose()
+                self._e2e_engine = None
 
     def __exit__(self, *exc: object) -> bool:
         errors: list[Exception] = []
