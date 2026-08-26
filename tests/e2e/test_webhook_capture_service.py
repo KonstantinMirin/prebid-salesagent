@@ -227,3 +227,121 @@ class TestThreadSafetyUnderConcurrentWriters:
             _, body = _get(capture_service, key)
             assert len(body["received"]) == 5
             assert all(entry["tag"] == key for entry in body["received"])
+
+
+class TestProgrammedRejections:
+    """POST /control/{key} makes the service reject the next N deliveries to that key.
+
+    THIS IS A SUB-CLAIM, NOT THE REGRESSION TEST FOR salesagent-pldmk.41. It grades
+    the INSTRUMENT — whether the capture service can be made to fail on demand — and
+    an instrument that works is not evidence that the thing it measures works. It
+    earns its place for the opposite reason: a BROKEN instrument manufactures false
+    greens, which is the exact disease this ticket exists to kill, so the instrument
+    is pinned before anything is measured with it.
+
+    What the circuit breaker actually does on the deployed server is graded by the
+    e2e_rest leg of @T-UC-004-webhook-circuit-open, and whether that grading is real
+    is settled by scripts/mutation-check-webhook-breaker.sh. Nothing in this file
+    speaks to either.
+
+    salesagent-pldmk.41 plan step 2. Nothing in the compose stack can currently
+    make the deployed server's webhook delivery FAIL: this service answers every
+    delivery 200, so the server's circuit breaker never records a failure and the
+    two circuit-breaker scenarios have no way to open it for real. A per-key
+    failure programme is what turns "the endpoint has failed 5 consecutive
+    delivery attempts" from a dictionary seeded in the test process into
+    something the deployed server actually experiences.
+
+    Two invariants are load-bearing for the scenarios that will use it, and both
+    are graded below:
+
+    * A REJECTED request is still RECORDED. The Then steps count what the
+      endpoint received; a rejection that vanished from the captures would make
+      the five real failures indistinguishable from five suppressed deliveries.
+    * The programme is CONSUMED PER REQUEST, so the key falls back to 200 once
+      it is spent. That fallback is what "the webhook endpoint has recovered and
+      returns 200" becomes.
+
+    The status used here is 418 rather than a 5xx on purpose (plan step 3): a
+    terminal 4xx costs exactly one request per breaker failure, while a
+    retryable 5xx multiplies the count by the attempt schedule and adds seconds
+    of backoff per failure (``_RETRYABLE_STATUSES``,
+    ``src/core/security/egress/attempts.py``). The route itself takes whatever
+    status it is given -- the choice belongs to the caller.
+    """
+
+    def _control(self, base_url: str, key: str, *, status: int, count: int) -> tuple[int, dict]:
+        return _request(base_url, "POST", f"/control/{key}", body={"status": status, "count": count})
+
+    def test_programmed_status_is_answered_exactly_count_times_then_200(self, capture_service):
+        key = uuid.uuid4().hex
+
+        control_status, _ = self._control(capture_service, key, status=418, count=3)
+        answers = [_post(capture_service, key, {"n": i})[0] for i in range(5)]
+
+        assert control_status == 200
+        assert answers == [418, 418, 418, 200, 200]
+
+    def test_a_rejected_delivery_is_still_recorded_as_a_capture(self, capture_service):
+        key = uuid.uuid4().hex
+        self._control(capture_service, key, status=418, count=2)
+
+        answers = [_post(capture_service, key, {"n": n})[0] for n in (1, 2, 3)]
+
+        # Both halves are asserted together on purpose: "everything was recorded"
+        # is trivially true of a service that rejected nothing.
+        assert answers == [418, 418, 200]
+        _, body = _get(capture_service, key)
+        assert body["received"] == [{"n": 1}, {"n": 2}, {"n": 3}]
+
+    def test_one_keys_programme_never_answers_for_another_key(self, capture_service):
+        programmed = uuid.uuid4().hex
+        untouched = uuid.uuid4().hex
+        self._control(capture_service, programmed, status=418, count=2)
+
+        programmed_answers = [_post(capture_service, programmed, {"for": "programmed"})[0] for _ in range(2)]
+        untouched_answers = [_post(capture_service, untouched, {"for": "untouched"})[0] for _ in range(2)]
+
+        assert programmed_answers == [418, 418]
+        assert untouched_answers == [200, 200]
+
+    def test_the_control_request_is_not_itself_recorded_as_a_capture(self, capture_service):
+        """``do_POST`` routes every POST to the webhook handler; the control route must be matched first.
+
+        Otherwise ``POST /control/<key>`` lands in the store as a delivery and
+        corrupts the very count the circuit-breaker Then steps read back.
+        """
+        key = uuid.uuid4().hex
+
+        control_status, _ = self._control(capture_service, key, status=418, count=1)
+        _, body = _get(capture_service, key)
+
+        # The 200 is asserted here too: an unrouted control POST answers 404 and
+        # records nothing either, which would let this pass while proving nothing.
+        assert control_status == 200
+        assert body["received"] == []
+
+    def test_reprogramming_a_key_replaces_the_remaining_programme(self, capture_service):
+        """A scenario that opens the breaker and then lets the endpoint recover reprograms the same key."""
+        key = uuid.uuid4().hex
+        self._control(capture_service, key, status=418, count=5)
+        spent_under_the_first_programme, _ = _post(capture_service, key, {"n": 1})
+
+        self._control(capture_service, key, status=200, count=0)
+        answers = [_post(capture_service, key, {"n": i})[0] for i in range(2)]
+
+        # Without the first assertion, a service that never rejected anything
+        # would satisfy "the replacement programme answers 200".
+        assert spent_under_the_first_programme == 418
+        assert answers == [200, 200]
+
+    def test_a_drained_key_keeps_its_unspent_programme(self, capture_service):
+        """DELETE drains captures. It is a readback of what arrived, not a reset of how the endpoint answers."""
+        key = uuid.uuid4().hex
+        self._control(capture_service, key, status=418, count=3)
+        _post(capture_service, key, {"n": 1})
+
+        _delete(capture_service, key)
+        answers = [_post(capture_service, key, {"n": i})[0] for i in range(3)]
+
+        assert answers == [418, 418, 200]

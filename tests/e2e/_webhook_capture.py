@@ -55,14 +55,39 @@ def _readback_base_url() -> str:
     return f"http://{host}:{port}"
 
 
-def _readback_request(method: str, path: str) -> dict:
+def _readback_request(method: str, path: str, body: dict | None = None) -> dict:
     url = f"{_readback_base_url()}{path}"
-    req = Request(url, method=method)
+    data = json.dumps(body).encode() if body is not None else None
+    headers = {"Content-Type": "application/json"} if data is not None else {}
+    req = Request(url, method=method, data=data, headers=headers)
     try:
         with urlopen(req, timeout=_READBACK_TIMEOUT_SECONDS) as resp:  # noqa: S310 - test-only, own compose network
             return json.loads(resp.read())
     except URLError as exc:
         raise WebhookReadbackError(f"webhook-capture readback {method} {url} failed: {exc}") from exc
+
+
+def delivery_url_for(key: str) -> str:
+    """The URL a sender POSTs to for ``key`` — through the shared TLS front.
+
+    One template, one caller-visible spelling. A second copy is how the harness
+    and the e2e fixtures would drift onto different hosts.
+    """
+    return _DELIVERY_URL_TEMPLATE.format(key=key)
+
+
+def program_rejections(key: str, *, status: int, count: int) -> None:
+    """Make the capture service answer ``status`` for ``key``'s next ``count`` deliveries.
+
+    Rides the plain-HTTP readback port, never the TLS front: this is test
+    control-plane, the same side of the house as reading captures back. Delivery
+    is the only traffic the front terminates.
+
+    Without this the compose stack has no way to make the deployed server's
+    delivery FAIL — the capture service answers every delivery 200 — so the
+    server's circuit breaker could never record a real failure.
+    """
+    _readback_request("POST", f"/control/{key}", body={"status": status, "count": count})
 
 
 def _assert_own_stack() -> None:
@@ -109,6 +134,21 @@ class ReceivedView:
         _readback_request("DELETE", f"/webhook/{self._key}")
 
 
+def register_capture_key() -> tuple[str, ReceivedView]:
+    """Claim a fresh per-scenario capture key, drained and ready.
+
+    Fails loudly first if the service is unreachable or belongs to a different
+    compose stack, rather than handing back a key whose captures would silently
+    never arrive. Shared by the e2e fixture below and by the BDD harness's e2e
+    realization of the webhook endpoint, so both claim keys the same way.
+    """
+    _assert_own_stack()
+    key = uuid.uuid4().hex
+    received = ReceivedView(key)
+    received.clear()
+    return key, received
+
+
 @contextlib.contextmanager
 def run_webhook_capture_server() -> Iterator[dict]:
     """Register a fresh per-test capture key and yield its webhook handle.
@@ -120,11 +160,8 @@ def run_webhook_capture_server() -> Iterator[dict]:
     service is unreachable or belongs to a different compose stack, rather
     than yielding a handle whose captures would silently never arrive.
     """
-    _assert_own_stack()
-    key = uuid.uuid4().hex
-    received = ReceivedView(key)
-    received.clear()
+    key, received = register_capture_key()
     try:
-        yield {"url": _DELIVERY_URL_TEMPLATE.format(key=key), "received": received}
+        yield {"url": delivery_url_for(key), "received": received}
     finally:
         received.clear()

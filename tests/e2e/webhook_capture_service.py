@@ -56,21 +56,57 @@ from http.server import BaseHTTPRequestHandler
 from tests.helpers.local_http_origin import serve_in_thread
 
 _WEBHOOK_PATH_RE = re.compile(r"^/webhook/(?P<key>[^/]+)/?$")
+_CONTROL_PATH_RE = re.compile(r"^/control/(?P<key>[^/]+)/?$")
 
 
 class _CaptureStore:
-    """Thread-safe, per-key capture storage — a dict-of-lists, never one global list."""
+    """Thread-safe, per-key capture storage — a dict-of-lists, never one global list.
+
+    Also holds each key's REJECTION PROGRAMME (salesagent-pldmk.41): how many of
+    the next deliveries to that key answer a non-200 status. Nothing else in the
+    compose stack can make the deployed server's delivery path fail, so without
+    this the server's circuit breaker never records a real failure.
+
+    Programmes live in their own dict, deliberately: ``DELETE`` drains a key's
+    captures as a READBACK of what arrived, and must not double as a reset of how
+    the endpoint answers. A scenario that opens the breaker, drains, then keeps
+    delivering depends on the unspent programme surviving the drain.
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._captures: dict[str, list[dict]] = {}
+        self._programmes: dict[str, tuple[int, int]] = {}
 
-    def append(self, key: str, payload: dict) -> list[dict]:
-        """Record ``payload`` under ``key`` and return the key's captures so far."""
+    def program(self, key: str, status: int, count: int) -> None:
+        """Answer ``status`` for ``key``'s next ``count`` deliveries, then 200 again.
+
+        Replaces any programme still unspent on that key — a scenario that lets a
+        failing endpoint recover reprograms the same key rather than a fresh one.
+        """
+        with self._lock:
+            self._programmes[key] = (status, count)
+
+    def append(self, key: str, payload: dict) -> tuple[int, list[dict]]:
+        """Record ``payload`` under ``key``; return the status to answer and the captures so far.
+
+        Recording and consuming the programme happen under ONE lock hold, so two
+        concurrent deliveries can never both spend the same remaining rejection.
+
+        A rejected delivery is still recorded. The scenarios count what the
+        endpoint received, and a rejection that vanished from the captures would
+        be indistinguishable from a delivery the breaker suppressed — which is
+        the one distinction those scenarios exist to make.
+        """
         with self._lock:
             bucket = self._captures.setdefault(key, [])
             bucket.append(payload)
-            return list(bucket)
+            status, remaining = self._programmes.get(key, (200, 0))
+            if remaining > 0:
+                self._programmes[key] = (status, remaining - 1)
+            else:
+                status = 200
+            return status, list(bucket)
 
     def get(self, key: str) -> list[dict]:
         with self._lock:
@@ -114,7 +150,8 @@ class _CaptureRequestHandler(BaseHTTPRequestHandler):
 
         if method == "POST":
             payload = self._read_json_body()
-            self._write_json(200, {"received": store.append(key, payload)})
+            status, received = store.append(key, payload)
+            self._write_json(status, {"received": received})
         elif method == "GET":
             self._write_json(200, {"received": store.get(key)})
         elif method == "DELETE":
@@ -126,7 +163,27 @@ class _CaptureRequestHandler(BaseHTTPRequestHandler):
         else:
             self._handle_webhook("GET")
 
+    def _handle_control(self, match: re.Match[str]) -> None:
+        """Program ``key``'s rejection run: ``{"status": int, "count": int}``."""
+        body = self._read_json_body()
+        try:
+            status = int(body["status"])
+            count = int(body["count"])
+        except (KeyError, TypeError, ValueError):
+            self._write_json(400, {"error": 'expected {"status": <int>, "count": <int>}'})
+            return
+        store: _CaptureStore = self.server.store  # type: ignore[attr-defined]
+        store.program(match.group("key"), status, count)
+        self._write_json(200, {"programmed": {"status": status, "count": count}})
+
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler name
+        # Matched BEFORE the webhook fallthrough. Every POST used to route to the
+        # capture handler, so an unmatched control POST would land in the store as
+        # a delivery and corrupt the very count the circuit-breaker Then steps read.
+        control = _CONTROL_PATH_RE.match(self.path)
+        if control:
+            self._handle_control(control)
+            return
         self._handle_webhook("POST")
 
     def do_DELETE(self) -> None:  # noqa: N802 - stdlib handler name

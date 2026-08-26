@@ -46,6 +46,42 @@ from tests.helpers.local_http_origin import (
 from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
 
 
+def _e2e_capture_url(env: Any) -> str:
+    """E2E realization of :attr:`LocalOriginMixin.webhook_url` (salesagent-pldmk.41).
+
+    In process the endpoint is a loopback origin on the runner. The Docker server
+    cannot reach that, so under e2e the endpoint is the compose stack's
+    long-lived ``webhook-capture`` service, addressed through the shared TLS
+    front exactly as a production receiver would be.
+    """
+    from tests.e2e._webhook_capture import delivery_url_for
+
+    return delivery_url_for(env._capture_key)
+
+
+def _e2e_reject_next(env: Any, count: int, status: int = 418) -> None:
+    """E2E realization of :meth:`LocalOriginMixin.reject_next`.
+
+    Programs the capture service's per-key rejection run over its plain-HTTP
+    control plane, the same side of the house as reading captures back.
+    """
+    from tests.e2e._webhook_capture import program_rejections
+
+    program_rejections(env._capture_key, status=status, count=count)
+
+
+def _e2e_delivery_attempts(env: Any) -> int:
+    """E2E realization of :attr:`LocalOriginMixin.delivery_attempts`.
+
+    Counts what the capture service actually received. A rejected delivery is
+    still recorded, so this counts ATTEMPTS the server made — which is what
+    "and no further attempt arrives" needs in order to mean anything.
+    """
+    from tests.e2e._webhook_capture import ReceivedView
+
+    return len(ReceivedView(env._capture_key))
+
+
 def _persist_simulation_config(env: Any, resp: AdapterGetMediaBuyDeliveryResponse) -> Any:
     """E2E realization of a delivery-poll adapter response (#1418).
 
@@ -303,6 +339,17 @@ class LocalOriginMixin:
     # -- Lifecycle ----------------------------------------------------------
 
     def __enter__(self) -> Self:
+        if self.is_e2e:  # type: ignore[attr-defined]
+            # No local origin under e2e: it would listen on the runner's loopback,
+            # which the Docker server cannot reach — that unreachability is the
+            # whole defect salesagent-pldmk.41 exists to fix. The endpoint is the
+            # compose stack's webhook-capture service instead, addressed by a
+            # fresh per-scenario key so concurrent scenarios never share captures.
+            from tests.e2e._webhook_capture import register_capture_key
+
+            self._capture_key, _ = register_capture_key()
+            return super().__enter__()  # type: ignore[misc,no-any-return]
+
         gen_test_tls = load_gen_test_tls()
         gen_test_tls.ensure_test_tls()
         self._ssl_cert_file = patch.dict(os.environ, {"SSL_CERT_FILE": str(gen_test_tls.COMBINED_CERT)})
@@ -324,9 +371,32 @@ class LocalOriginMixin:
     # -- The endpoint under test -------------------------------------------
 
     @property
+    @realize_e2e(_e2e_capture_url)
     def webhook_url(self) -> str:
-        """The URL of the running origin — the endpoint every webhook test targets."""
+        """The endpoint every webhook test targets.
+
+        In process, the running local origin. Over e2e, the compose stack's
+        webhook-capture service — the only endpoint the Docker server can reach.
+        """
         return f"{self.origin.base_url}/webhook"
+
+    # -- Programming the endpoint to FAIL ------------------------------------
+
+    @realize_e2e(_e2e_reject_next)
+    def reject_next(self, count: int, status: int = 418) -> None:
+        """Answer the next ``count`` deliveries with ``status``, then 200 again.
+
+        The one way a scenario makes deliveries fail for real, on every
+        transport. In process the origin answers a sequence whose last entry
+        repeats; over e2e the capture service is programmed with the same run.
+
+        ``status`` defaults to a terminal, non-retryable 4xx on purpose. A
+        retryable 5xx (``_RETRYABLE_STATUSES``, src/core/security/egress/attempts.py)
+        multiplies the request count by the attempt schedule and adds seconds of
+        real backoff per failure, so "the endpoint received exactly 5 attempts"
+        would stop being countable.
+        """
+        self.set_http_sequence([(status, "")] * count + [(200, "")])
 
     # -- Programming the endpoint ------------------------------------------
 
@@ -356,8 +426,14 @@ class LocalOriginMixin:
     # -- Observing what actually arrived ------------------------------------
 
     @property
+    @realize_e2e(_e2e_delivery_attempts)
     def delivery_attempts(self) -> int:
-        """How many requests the endpoint actually received."""
+        """How many requests the endpoint actually received.
+
+        Over e2e this is a fresh readback of the capture service on every access,
+        so a count that has stopped growing is a live observation rather than a
+        cached one.
+        """
         return self.origin.hits
 
     @property

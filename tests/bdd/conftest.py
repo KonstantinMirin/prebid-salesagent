@@ -606,6 +606,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-004-webhook-hmac",
             "T-UC-004-webhook-notification-type",
             "T-UC-004-webhook-no-aggregated",
+            # DEFERRED to prebid/salesagent#2060, which owns both halves of the
+            # breaker's missing coverage. These two were briefly un-routed while
+            # salesagent-pldmk.41 attempted the rewrite; they are RESTORED here
+            # because #2060's Conditions are explicit that the routing stays until
+            # the scenario actually grades the live server. Un-routed, the leg
+            # reports a plain PASS, which reads as real coverage — strictly worse
+            # than an XPASS, which at least records that nothing is being graded.
+            #
+            # Measured, not assumed: deleting circuit_breaker.record_failure() from
+            # the server and re-running in-network leaves this leg passing
+            # (test-results/innet_260826_1216 vs _1221, byte-identical counts).
+            # Re-run it yourself with `make mutation-check-breaker`.
             "T-UC-004-webhook-circuit-open",
             "T-UC-004-webhook-circuit-recovery",
             "T-UC-004-webhook-retry-success",
