@@ -129,6 +129,56 @@ def _e2e_set_http_sequence(env: Any, responses: list) -> None:
     program_rejections(env._capture_key, status=failing[0] if failing else 200, count=len(failing))
 
 
+class _CapturedDelivery:
+    """One delivery the compose stack's capture service received.
+
+    The capture service stores the parsed JSON PAYLOAD and nothing else -- no
+    headers, no raw bytes -- so this exposes ``.json()`` and refuses the rest BY
+    NAME rather than returning an empty dict that a signature assertion would
+    read as "no signature header". An assertion that cannot run over e2e must say
+    so; one that quietly passes on absent evidence is worse than one that errors.
+    """
+
+    __slots__ = ("_payload",)
+
+    def __init__(self, payload: dict) -> None:
+        self._payload = payload
+
+    def json(self) -> dict:
+        return self._payload
+
+    @property
+    def headers(self) -> Any:
+        raise AttributeError(
+            "the webhook-capture service records the delivery PAYLOAD only, not its headers, "
+            "so header assertions (signature, auth) cannot run over e2e_rest. Grade them "
+            "in-process, or give the capture service header storage (prebid/salesagent#2098)."
+        )
+
+    @property
+    def body(self) -> bytes:
+        raise AttributeError(
+            "the webhook-capture service records the PARSED payload, not the raw bytes on the "
+            "wire, so byte-equality assertions (HMAC over the exact body) cannot run over "
+            "e2e_rest. Grade them in-process (prebid/salesagent#2098)."
+        )
+
+
+def _e2e_delivered_requests(env: Any) -> list[_CapturedDelivery]:
+    """E2E realization of :attr:`LocalOriginMixin.delivered_requests`."""
+    from tests.e2e._webhook_capture import ReceivedView
+
+    return [_CapturedDelivery(payload) for payload in ReceivedView(env._capture_key)]
+
+
+def _e2e_last_delivery(env: Any) -> _CapturedDelivery:
+    """E2E realization of :attr:`LocalOriginMixin.last_delivery`."""
+    delivered = _e2e_delivered_requests(env)
+    if not delivered:
+        raise AssertionError("no webhook delivery reached the capture service")
+    return delivered[-1]
+
+
 def _e2e_delivery_attempts(env: Any) -> int:
     """E2E realization of :attr:`LocalOriginMixin.delivery_attempts`.
 
@@ -542,11 +592,13 @@ class LocalOriginMixin:
         return self.origin.hits
 
     @property
+    @realize_e2e(_e2e_delivered_requests)
     def delivered_requests(self) -> list[OriginRequest]:
         """Every request the endpoint received, oldest first."""
         return self.origin.requests
 
     @property
+    @realize_e2e(_e2e_last_delivery)
     def last_delivery(self) -> OriginRequest:
         """The most recent request the endpoint received."""
         return self.origin.last_request
