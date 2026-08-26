@@ -56,7 +56,12 @@ from urllib.parse import urlparse
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import _require, error_envelope_or_none, payload_or_none, require_payload
+from tests.bdd.steps._outcome_helpers import (
+    _require,
+    error_envelope_or_none,
+    payload_or_none,
+    wire_dict,
+)
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.helpers.webhook_credential_refusal import SHORT_CREDENTIAL
 
@@ -471,19 +476,30 @@ def then_creative_rejected_per_item(ctx: dict, field: str) -> None:
     the destination (L1 point 6), so it is the only channel that can tell a
     buyer WHICH of up to 100 creatives to fix.
     """
-    response = require_payload(ctx)
-    creatives = response["creatives"] if isinstance(response, dict) else response.creatives
+    # wire_dict, not require_payload: the buyer's own view of the response, so
+    # the assertion is graded at the level it CLAIMS to grade. require_payload
+    # hands back a dict on some transports and a typed model on others, which is
+    # why every read below used to re-decide the shape for itself -- six
+    # dict-vs-model ladders in one step, each a private opinion about what the
+    # harness happened to return.
+    response = wire_dict(ctx)
+    creatives = response["creatives"]
     assert creatives, f"expected a per-creative result, got {response!r}"
     entry = creatives[0]
-    action = entry["action"] if isinstance(entry, dict) else getattr(entry.action, "value", entry.action)
+    # .get with a named assert, not a subscript: a missing key on the wire is a
+    # real outcome (the seller omitted the field), and a bare KeyError two frames
+    # up says nothing about which field the buyer did not get.
+    action = entry.get("action")
     assert str(action) == "failed", f"a creative whose agent_url egress refused must not sync; action={action!r}"
 
-    errors = entry["errors"] if isinstance(entry, dict) else entry.errors
+    errors = entry.get("errors")
     assert errors, f"a failed creative must carry an error; got {entry!r}"
     error = errors[0]
-    code = error["code"] if isinstance(error, dict) else error.code
-    recovery = error["recovery"] if isinstance(error, dict) else error.recovery
-    got_field = error["field"] if isinstance(error, dict) else error.field
+    for key in ("code", "recovery", "field"):
+        assert key in error, f"the per-item error omits {key!r}, which the buyer needs to act: {error!r}"
+    code = error["code"]
+    recovery = error["recovery"]
+    got_field = error["field"]
     assert code == "VALIDATION_ERROR", f"errors[0].code={code!r} — a buyer-supplied URL is buyer-correctable"
     assert recovery == "correctable", f"errors[0].recovery={recovery!r}"
     assert got_field == field, f"errors[0].field={got_field!r}, expected {field!r}"

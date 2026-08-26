@@ -121,6 +121,22 @@ class TestOnlyTheTransportWithNoWireMaySynthesize:
 
     @pytest.mark.parametrize("dispatcher", [A2ADispatcher, McpDispatcher, RestDispatcher])
     def test_a_transport_that_has_a_wire_never_synthesizes(self, dispatcher):
+        """BOTH fields, not just the private one (Chris SF3, #1802 review).
+
+        Asserting only ``_synthesized_error_envelope is None`` grades the
+        channel that was already closed and leaves the one that matters open.
+        The deleted fallback at ``tests/harness/dispatchers.py:78`` did not put
+        a rebuilt envelope in the private field -- it handed it back under
+        ``wire_error_envelope``, the name of the thing it was impersonating. So
+        re-introducing that line left this case green: the private field stayed
+        None either way. Probed on the pre-fix tree, exactly as the review
+        describes.
+
+        ``wire_error_envelope is None`` is the assertion that reddens. It is the
+        A2A twin of what ``TestMcpNoCapture`` one class up already asserts for
+        MCP, and its absence is what that file's own docstring named as the gap.
+        """
         result = dispatcher().dispatch(_raising_env(_an_error()))
 
         assert result._synthesized_error_envelope is None
+        assert result.wire_error_envelope is None
