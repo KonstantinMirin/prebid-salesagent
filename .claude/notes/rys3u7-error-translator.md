@@ -4,7 +4,7 @@ Frozen copy of the ticket's design, verbatim. The molecule's solution-review
 grades fidelity to THIS file, which is why it lives outside the bead.
 
 One implementation of exception -> AdCPError, named for what it does, and one
-serializer on AdCPError. Five concrete defects, all in the error path.
+serializer on AdCPError. Four concrete defects, all in the error path.
 
 ## The model, which is already correct
 
