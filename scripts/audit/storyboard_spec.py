@@ -32,6 +32,7 @@ import json
 import os
 import re
 import sys
+import textwrap
 from collections import Counter
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -39,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 import adcp
+import yaml
 
 
 class StoryboardAuditError(Exception):
@@ -225,7 +227,47 @@ def storyboard_tier(rel_path: str) -> str:
 # ── Gate fields: required_tools / requires_capability / requires_scenarios ─
 
 _TOOLS_BLOCK_RE = re.compile(r"^required_tools:\n((?:\s+-\s+\S+\n)+)", re.M)
-_CAPABILITY_RE = re.compile(r"requires_capability:\s*\n\s*path:\s*(\S+)\s*\n\s*equals:\s*(\S+)")
+# ANCHORED to column 0: a storyboard-level gate only. The pinned schema
+# (universal/storyboard-schema.yaml:259-279) also allows requires_capability on a
+# PHASE, where it "skips only that phase" — 8 such declarations exist across 3
+# files. The previous pattern was unanchored, so once the matcher understood
+# more than `equals` it would have attributed a phase gate to its whole
+# storyboard: universal/deterministic-testing.yaml has no storyboard-level gate
+# and six phase-level `contains:` ones.
+#
+# All THREE matchers the schema defines, not just `equals`. Measured at the pin,
+# counting STORYBOARD-LEVEL declarations only: 54 declaring files — 26 `equals`,
+# 16 `contains`, 12 `present`. The equals-only pattern returned None for 28 of
+# them, and every one of those was published as fully graded.
+#
+# (26/17/12 = 55 is the UNANCHORED count. It includes
+# universal/deterministic-testing.yaml, whose only gates are phase-level — the
+# very file the anchor exists to exclude. Counting the thing you are about to
+# exclude is how the wrong number gets written down.)
+# Locate the storyboard-level block; PARSE its body rather than pattern-matching
+# the keys. Anchored to column 0 on purpose — the pinned schema
+# (universal/storyboard-schema.yaml:259-279) also allows requires_capability on a
+# PHASE, where it "skips only that phase". 8 such declarations exist across 3
+# files, and universal/deterministic-testing.yaml has ONLY phase-level ones, so
+# an unanchored pattern would attribute a phase gate to its whole storyboard.
+#
+# Matching the keys positionally is what the first version did, and it was
+# fragile in four ways that legal YAML permits and the tree merely does not use
+# today: the matcher declared before `path:`, a comment between the keys, the
+# inline flow form `{path: a, equals: b}`, and quoted values (which came back
+# WITH their quotes). At the next pin any of those returns None, and a None gate
+# is exactly the silent misgrade this change exists to remove — so the block is
+# handed to the YAML parser instead.
+#
+# Whole-file `yaml.safe_load` stays out: one pinned file
+# (universal/runner-output-contract.yaml) is not valid plain YAML. It is already
+# excluded by the `track:` predicate in storyboards() before any consumer sees
+# it, but parsing one small block is narrower than parsing the file regardless.
+_CAPABILITY_BLOCK_RE = re.compile(
+    r"^requires_capability:[ \t]*(?P<inline>\{.*\})?[ \t]*\n(?P<body>(?:(?:[ \t]+.*)?\n)*)",
+    re.M,
+)
+_CAPABILITY_MATCHERS = ("equals", "contains", "present")
 _REQUIRES_SCENARIOS_RE = re.compile(r"^requires_scenarios:\n((?:\s+-\s+\S+\n)+)", re.M)
 
 
@@ -237,10 +279,54 @@ def required_tools(text: str) -> set[str]:
     return {line.strip().lstrip("- ") for line in block.group(1).splitlines()}
 
 
-def requires_capability(text: str) -> tuple[str, str] | None:
-    """The ``requires_capability: {path, equals}`` gate, or None."""
-    match = _CAPABILITY_RE.search(text)
-    return (match.group(1), match.group(2)) if match else None
+def requires_capability(text: str) -> tuple[str, str, str] | None:
+    """The storyboard-level ``requires_capability`` gate as (path, matcher, value).
+
+    Carries the MATCHER, because the three the schema defines mean different
+    things and a caller that assumes ``equals`` publishes a false predicate for
+    the other two. Callers render it with :func:`capability_predicate`.
+
+    Returns None when the storyboard declares no storyboard-level gate. A
+    phase-level gate is deliberately not returned: the schema scopes it to its
+    phase, so it is not a property of the storyboard.
+    """
+    match = _CAPABILITY_BLOCK_RE.search(text)
+    if not match:
+        return None
+    fragment = match.group("inline") or textwrap.dedent(match.group("body"))
+    try:
+        gate = yaml.safe_load(fragment)
+    except yaml.YAMLError as exc:  # a malformed gate must not read as "no gate"
+        raise StoryboardAuditError(f"requires_capability block is not parseable YAML: {exc}") from exc
+    if not isinstance(gate, dict) or "path" not in gate:
+        raise StoryboardAuditError(f"requires_capability declares no `path`: {gate!r}")
+    declared = [m for m in _CAPABILITY_MATCHERS if m in gate]
+    if len(declared) != 1:
+        # The schema says exactly one of equals/contains/present SHOULD be
+        # declared, and that runners MAY fail-load otherwise. Failing loudly
+        # beats returning None, which would silently grade the storyboard as
+        # ungated — the defect this whole change removes.
+        raise StoryboardAuditError(
+            f"requires_capability must declare exactly one of {list(_CAPABILITY_MATCHERS)}, got {declared or 'none'}"
+        )
+    matcher = declared[0]
+    return (
+        str(gate["path"]),
+        matcher,
+        str(gate[matcher]).lower() if isinstance(gate[matcher], bool) else str(gate[matcher]),
+    )
+
+
+def capability_predicate(gate: tuple[str, str, str]) -> str:
+    """Render a gate as the predicate the schema defines, e.g. ``a.b contains x``.
+
+    One renderer, so no call site re-spells it — the reason string in
+    ``storyboard_coverage_map`` hardcoded ``==`` and would have published
+    ``path == value`` for 29 storyboards that declare ``contains`` or ``present``.
+    """
+    path, matcher, value = gate
+    symbol = {"equals": "==", "contains": "contains", "present": "present:"}[matcher]
+    return f"{path} {symbol} {value}"
 
 
 def requiring_indexes(dist: Path) -> dict[str, list[str]]:

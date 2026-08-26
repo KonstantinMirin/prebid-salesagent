@@ -253,7 +253,11 @@
         "get_media_buy_delivery",
         "get_products",
         "sync_audiences"
-      ]
+      ],
+      "requires_capability": {
+        "path": "media_buy.audience_targeting",
+        "present": "true"
+      }
     },
     "protocols/media-buy/scenarios/available_actions.yaml": {
       "phases": [
@@ -351,7 +355,11 @@
         "create_media_buy",
         "get_media_buy_delivery",
         "get_products"
-      ]
+      ],
+      "requires_capability": {
+        "contains": "clicks",
+        "path": "media_buy.supported_optimization_metrics"
+      }
     },
     "protocols/media-buy/scenarios/completed_views_buy_flow.yaml": {
       "phases": [
@@ -375,7 +383,11 @@
         "create_media_buy",
         "get_media_buy_delivery",
         "get_products"
-      ]
+      ],
+      "requires_capability": {
+        "contains": "completed_views",
+        "path": "media_buy.supported_optimization_metrics"
+      }
     },
     "protocols/media-buy/scenarios/create_media_buy_async.yaml": {
       "phases": [
@@ -500,7 +512,11 @@
         "list_creatives",
         "sync_creatives",
         "update_media_buy"
-      ]
+      ],
+      "requires_capability": {
+        "contains": "snapshot",
+        "path": "media_buy.propagation_surfaces"
+      }
     },
     "protocols/media-buy/scenarios/dependency_impairment_cardinality.yaml": {
       "phases": [
@@ -543,7 +559,11 @@
         "list_creatives",
         "sync_creatives",
         "update_media_buy"
-      ]
+      ],
+      "requires_capability": {
+        "contains": "snapshot",
+        "path": "media_buy.propagation_surfaces"
+      }
     },
     "protocols/media-buy/scenarios/event_dedup_flow.yaml": {
       "phases": [
@@ -598,7 +618,11 @@
         "create_media_buy",
         "get_media_buy_delivery",
         "get_products"
-      ]
+      ],
+      "requires_capability": {
+        "path": "media_buy.frequency_capping",
+        "present": "true"
+      }
     },
     "protocols/media-buy/scenarios/get_products_async.yaml": {
       "phases": [
@@ -967,7 +991,11 @@
         "get_products",
         "log_event",
         "sync_event_sources"
-      ]
+      ],
+      "requires_capability": {
+        "path": "media_buy.conversion_tracking",
+        "present": "true"
+      }
     },
     "protocols/media-buy/scenarios/performance_buy_flow_roas.yaml": {
       "phases": [
@@ -996,7 +1024,11 @@
         "get_products",
         "log_event",
         "sync_event_sources"
-      ]
+      ],
+      "requires_capability": {
+        "contains": "per_ad_spend",
+        "path": "media_buy.conversion_tracking.supported_targets"
+      }
     },
     "protocols/media-buy/scenarios/pricing_currency_filter.yaml": {
       "phases": [
@@ -1032,7 +1064,11 @@
         "get_media_buys",
         "get_products",
         "get_signals"
-      ]
+      ],
+      "requires_capability": {
+        "path": "signals.discovery_modes",
+        "present": "true"
+      }
     },
     "protocols/media-buy/scenarios/proposal_finalize.yaml": {
       "phases": [
@@ -1208,7 +1244,11 @@
         "create_media_buy",
         "get_media_buy_delivery",
         "get_products"
-      ]
+      ],
+      "requires_capability": {
+        "contains": "reach",
+        "path": "media_buy.supported_optimization_metrics"
+      }
     },
     "protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml": {
       "phases": [
@@ -1293,7 +1333,11 @@
         "comply_test_controller",
         "create_media_buy",
         "sync_accounts"
-      ]
+      ],
+      "requires_capability": {
+        "path": "media_buy.vendor_metric_optimization",
+        "present": "true"
+      }
     },
     "protocols/media-buy/scenarios/vendor_metric_optimization_flow.yaml": {
       "phases": [
@@ -1318,7 +1362,11 @@
         "comply_test_controller",
         "create_media_buy",
         "get_products"
-      ]
+      ],
+      "requires_capability": {
+        "path": "media_buy.vendor_metric_optimization",
+        "present": "true"
+      }
     },
     "protocols/media-buy/state-machine.yaml": {
       "phases": [
@@ -2188,6 +2236,10 @@
       "required_tools": [
         "get_products"
       ],
+      "requires_capability": {
+        "contains": "wholesale",
+        "path": "media_buy.buying_modes"
+      },
       "universal": true
     },
     "universal/get-signals-pagination-integrity.yaml": {
@@ -2486,6 +2538,10 @@
       "required_tools": [
         "sync_accounts"
       ],
+      "requires_capability": {
+        "contains": "wholesale_feed.bulk_change",
+        "path": "wholesale_feed_webhooks.event_types"
+      },
       "universal": true
     },
     "universal/wholesale-feed-product-webhooks.yaml": {
@@ -2496,6 +2552,10 @@
       "required_tools": [
         "sync_accounts"
       ],
+      "requires_capability": {
+        "contains": "product.priced",
+        "path": "wholesale_feed_webhooks.event_types"
+      },
       "universal": true
     },
     "universal/wholesale-feed-products.yaml": {
@@ -2522,6 +2582,10 @@
       "required_tools": [
         "sync_accounts"
       ],
+      "requires_capability": {
+        "contains": "signal.priced",
+        "path": "wholesale_feed_webhooks.event_types"
+      },
       "universal": true
     },
     "universal/wholesale-feed-signals.yaml": {

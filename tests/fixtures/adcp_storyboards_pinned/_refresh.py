@@ -53,7 +53,12 @@ def build() -> dict[str, object]:
     for sb in storyboard_spec.storyboards(dist):
         entry: dict[str, object] = {"phases": sorted(storyboard_spec.phases(sb.text))}
         if capability := storyboard_spec.requires_capability(sb.text):
-            entry["requires_capability"] = {"path": capability[0], "equals": capability[1]}
+            # Keyed by the MATCHER the storyboard declared. Writing "equals"
+            # unconditionally is what made the index a third copy of the
+            # equals-only assumption: 28 of 54 declaring storyboards use
+            # `contains` or `present` and were transcribed as ungated.
+            path, matcher, value = capability
+            entry["requires_capability"] = {"path": path, matcher: value}
         if tools := storyboard_spec.required_tools(sb.text):
             entry["required_tools"] = sorted(tools)
         if owners := required_by.get(sb.stem):

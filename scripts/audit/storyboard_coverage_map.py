@@ -125,7 +125,7 @@ def classify(
 def classify_gates(
     rel: str,
     required_tools: set[str],
-    requires_capability: tuple[str, str] | None,
+    requires_capability: tuple[str, str, str] | None,
     decl: dict[str, set[str]],
     tools: set[str],
     required_by: dict[str, list[str]] | None = None,
@@ -163,24 +163,62 @@ def classify_gates(
             return "OFF-PATH", f"advertises none of required_tools {sorted(required_tools)}"
         return None
 
+    # The tier dispatch decides OFF-PATH ONLY. It cannot return ON-PATH or
+    # GATED, so no tier can reach a positive verdict without passing the shared
+    # epilogue below — which is what makes "this tier never consulted the
+    # capability gate" unrepresentable rather than merely guarded against.
+    #
+    # Before this, `universal/` and `specialisms/` returned ON-PATH directly and
+    # never read requires_capability at all: 64 records from 6 universal
+    # storyboards were published as fully graded with an empty gate_reason.
     if rel.startswith("universal/"):
-        return tool_gate() or ("ON-PATH", "universal — applies to every agent")
-
-    if rel.startswith("specialisms/"):
+        tier_reason = "universal — applies to every agent"
+    elif rel.startswith("specialisms/"):
         name = rel.split("/")[1]
         if name not in decl["specialisms"]:
             return "OFF-PATH", f"specialism {name!r} not declared"
-        return tool_gate() or ("ON-PATH", f"specialism {name!r} declared")
-
-    if rel.startswith(("protocols/", "domains/")):
+        tier_reason = f"specialism {name!r} declared"
+    elif rel.startswith(("protocols/", "domains/")):
         protocol = rel.split("/")[1]
         if protocol not in decl["protocols"]:
             return "OFF-PATH", f"protocol {protocol!r} not declared"
-        if requires_capability:
-            return "GATED", f"requires_capability {requires_capability[0]} == {requires_capability[1]}"
-        return tool_gate() or ("ON-PATH", f"protocol {protocol!r}, required_tools advertised")
+        tier_reason = f"protocol {protocol!r}, required_tools advertised"
+    else:
+        return "UNKNOWN", "unclassified tier"
 
-    return "UNKNOWN", "unclassified tier"
+    # Shared epilogue. The capability gate is consulted BEFORE tool_gate(),
+    # matching the precedence `protocols/` already had — it was the only tier
+    # that consulted the gate at all, so its order is the one with precedent.
+    #
+    # This precedence is UNOBSERVABLE at the current pin but not inert forever.
+    # A `universal/` or `specialisms/` storyboard that declares a capability gate
+    # AND advertises none of its required_tools used to be OFF-PATH (tool gate
+    # first, and the capability gate never read); it is now GATED, which means it
+    # ENTERS the index. Measured at 3.1.1 that class is empty: 0 of 54 declaring
+    # storyboards fail their tool gate, and 0 declare in `specialisms/`. A future
+    # pin can populate it — if the gated count jumps on a repin, look here first.
+    if requires_capability:
+        return "GATED", f"requires_capability {storyboard_spec.capability_predicate(requires_capability)}"
+    return tool_gate() or ("ON-PATH", tier_reason)
+
+
+def _index_capability(entry: dict[str, Any] | None) -> tuple[str, str, str] | None:
+    """A vendored-index capability entry as (path, matcher, value), or None.
+
+    The index used to store only ``{path, equals}`` because it was transcribed by
+    the equals-only regex, and this consumer subscripted ``["equals"]`` directly.
+    Refreshing the index with the `contains` and `present` shapes the schema
+    defines would have raised KeyError here — a crash rather than a misgrade.
+    """
+    if not entry:
+        return None
+    for matcher in ("equals", "contains", "present"):
+        if matcher in entry:
+            return (entry["path"], matcher, str(entry[matcher]))
+    raise storyboard_spec.StoryboardAuditError(
+        f"vendored index capability entry declares no known matcher: {entry!r} "
+        "(expected one of equals / contains / present)"
+    )
 
 
 def statuses_from_vendored_index(repo: Path, index: dict[str, Any]) -> dict[str, str]:
@@ -212,7 +250,7 @@ def statuses_from_vendored_index(repo: Path, index: dict[str, Any]) -> dict[str,
         status, _ = classify_gates(
             rel,
             required_tools=set(entry.get("required_tools", [])),
-            requires_capability=(capability["path"], capability["equals"]) if capability else None,
+            requires_capability=_index_capability(capability),
             decl=declared,
             tools=ADVERTISED_TOOLS,
             required_by=required_by,
