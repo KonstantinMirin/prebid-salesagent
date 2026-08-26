@@ -390,7 +390,7 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
                         {"status": "error", "is_verified": False, "error": "Request timed out", "context": None},
                     )
                 except AdagentsValidationError as e:
-                    logger.error(f"Invalid adagents.json for {domain}: {e}")
+                    logger.error("Invalid adagents.json for %r: %s", domain, e)
                     return (
                         domain,
                         {
@@ -548,7 +548,7 @@ def get_publisher_properties(tenant_id: str, partner_id: int) -> Response | tupl
             except AdagentsTimeoutError:
                 return jsonify({"error": "Request timed out", "is_authorized": False}), 200
             except AdagentsValidationError as e:
-                logger.error(f"Invalid adagents.json: {e}")
+                logger.error("Invalid adagents.json: %s", e)
                 return jsonify({"error": describe_adagents_error(e), "is_authorized": False}), 200
 
     except Exception as e:

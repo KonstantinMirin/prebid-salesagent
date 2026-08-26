@@ -177,7 +177,7 @@ async def _deliver_sync_creatives_webhook(
 
         return True
     except Exception as send_e:
-        logger.error(f"Failed to send protocol webhook for creative {creative_id}: {send_e}")
+        logger.error("Failed to send protocol webhook for creative %r: %s", creative_id, send_e)
         return False
 
 
@@ -294,8 +294,9 @@ async def _call_webhook_for_creative_status(
                 # A workflow-completion path, outside any request context: a refusal is
                 # a logged non-delivery, not an exception that breaks the sync.
                 logger.error(
-                    f"Refusing to send completion webhook for creative {creative_id}: "
-                    f"its push_notification_config is invalid ({exc})"
+                    "Refusing to send completion webhook for creative %r: its push_notification_config is invalid (%s)",
+                    creative_id,
+                    exc,
                 )
                 return False
 

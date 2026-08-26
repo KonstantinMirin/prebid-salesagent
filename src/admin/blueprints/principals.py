@@ -17,6 +17,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, Principal, PushNotificationConfig, Tenant
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 from src.core.exceptions import AdCPValidationError
+from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_primitives
 
 # The form's "no authentication" choice. Defined ONCE and handed to the template
@@ -634,7 +635,6 @@ def manage_webhooks(tenant_id, principal_id):
 def register_webhook(tenant_id, principal_id):
     """Register a new webhook for a principal."""
     try:
-        url = request.form.get("url")
         auth_type = request.form.get("auth_type", "none")
 
         # ONE gate, not two. This route used to run redirect_if_url_blocked here
@@ -667,7 +667,7 @@ def register_webhook(tenant_id, principal_id):
         # columns — so every registration raised TypeError and the broad except
         # below rendered it as a validation-looking flash.
         registration = accept_push_notification_primitives(
-            url,
+            request.form.get("url"),
             scheme,
             credentials,
             field_prefix="webhook",
@@ -713,7 +713,25 @@ def register_webhook(tenant_id, principal_id):
             )
             db_session.commit()
 
-            logger.info(f"Registered webhook {url} for principal {principal_id} in tenant {tenant_id}")
+            # registration.url through webhook_url_for_log, not the form value:
+            # two separate rules, both already written down elsewhere in the tree.
+            # (1) What is STORED is the normalized AnyUrl, so the raw string is
+            # not what an operator would be reading back. The form value has no
+            # name in this handler at all now -- it is consumed by the gate.
+            # (2) A webhook URL is rendered into a log record in exactly ONE way,
+            # by webhook_url_for_log (scheme+host+path, never credentials). The
+            # sibling registration path already logs this same attribute of this
+            # same type that way (media_buy_create.py:2231-2234), and the type
+            # uses it in its own __repr__. AnyUrl normalization strips a newline
+            # but PRESERVES ?token=... and user:pw@ -- so without this call an
+            # operator-registered webhook carrying a bearer token in its query
+            # string would write that token into the admin log at INFO.
+            logger.info(
+                "Registered webhook %s for principal %r in tenant %r",
+                webhook_url_for_log(registration.url),
+                principal_id,
+                tenant_id,
+            )
             flash("Webhook registered successfully", "success")
 
         return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
@@ -723,7 +741,7 @@ def register_webhook(tenant_id, principal_id):
     # a broad `except Exception` here is what let a route that never persisted a
     # single row look like a validation problem for months.
     except AdCPValidationError as e:
-        logger.warning(f"Rejected webhook registration for principal {principal_id}: {e}")
+        logger.warning("Rejected webhook registration for principal %r: %s", principal_id, e)
         flash(f"Error registering webhook: {str(e)}", "error")
         return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
 
@@ -754,7 +772,7 @@ def delete_webhook(tenant_id, principal_id, config_id):
         db_session.delete(webhook)
         db_session.commit()
 
-        logger.info(f"Deleted webhook {config_id} for principal {principal_id} in tenant {tenant_id}")
+        logger.info("Deleted webhook %r for principal %r in tenant %r", config_id, principal_id, tenant_id)
         flash("Webhook deleted successfully", "success")
 
     return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
@@ -783,7 +801,10 @@ def toggle_webhook(tenant_id, principal_id, config_id):
         db_session.commit()
 
         logger.info(
-            f"Toggled webhook {config_id} to {'active' if webhook.is_active else 'inactive'} for principal {principal_id}"
+            "Toggled webhook %r to %s for principal %r",
+            config_id,
+            "active" if webhook.is_active else "inactive",
+            principal_id,
         )
 
         return jsonify({"success": True, "is_active": webhook.is_active})
