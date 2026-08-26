@@ -657,6 +657,17 @@ class TestConcurrentBumps:
     row as committed by A, so B lands on top: start + 2. A Python read-modify-write
     writes the absolute value B read in step 2, so A's bump is overwritten and the
     token moves by one for two mutations.
+
+    The ordering above is asserted, not assumed. Nothing in the arithmetic
+    distinguishes "B blocked on A's lock" from "B ran after A had already
+    committed": in the sequential case a read-modify-write reads the
+    already-incremented row and produces start + 2 by accident, so the mutation
+    this class exists to kill passes. (Measured: delaying B past
+    ``_LOCK_HOLD_SECONDS`` leaves the read-modify-write green.) So writer B times
+    its own ``update_fields`` call — which ends in ``flush()``, hence emits the
+    UPDATE inside the timed region — and the block is asserted against a floor
+    derived from A's hold. A harness that stops overlapping the two transactions
+    now fails on the overlap rather than passing on the arithmetic.
     """
 
     def test_overlapping_transactions_do_not_lose_a_bump(self, integration_db, bound_factory_session):
@@ -676,6 +687,10 @@ class TestConcurrentBumps:
         engine = get_engine()
         a_holds_lock = threading.Event()
         errors: list[BaseException] = []
+        # Wall time writer B spent inside its own update_fields call. Appended by
+        # the thread, read after join — the only cross-thread channel this test
+        # needs, and a list append is atomic under the GIL.
+        b_blocked_seconds: list[float] = []
 
         def writer_a() -> None:
             try:
@@ -702,7 +717,11 @@ class TestConcurrentBumps:
                     a_holds_lock.wait(timeout=10)
                     # SELECT sees the old committed value (A is uncommitted); the
                     # UPDATE then blocks on A's row lock until A commits.
+                    # update_fields ends in session.flush(), so the UPDATE that
+                    # blocks is emitted inside this timed region.
+                    started = time.monotonic()
                     MediaBuyRepository(session, tenant_id).update_fields(media_buy_id, budget=22000)
+                    b_blocked_seconds.append(time.monotonic() - started)
                     session.commit()
             except BaseException as exc:  # noqa: BLE001 - surfaced below
                 errors.append(exc)
@@ -715,6 +734,27 @@ class TestConcurrentBumps:
 
         assert not errors, f"a writer raised: {errors!r}"
         assert not any(thread.is_alive() for thread in threads), "a writer deadlocked"
+
+        # The overlap is graded FIRST. If B never queued behind A, the revision
+        # arithmetic below is not evidence about concurrency at all — a
+        # read-modify-write reaches start + 2 by re-reading A's committed row —
+        # so a green arithmetic assertion on a non-overlapping run is exactly the
+        # vacuous pass this assertion exists to convert into a failure.
+        assert b_blocked_seconds, "writer B never reached its update_fields call, so nothing was measured"
+        blocked = b_blocked_seconds[0]
+        # Half of A's hold. A sets the event, then holds for _LOCK_HOLD_SECONDS, so
+        # a genuinely queued B blocks for nearly the whole hold; a B that ran after
+        # A committed returns in milliseconds. Half leaves room for scheduling
+        # jitter without admitting the sequential case.
+        overlap_floor = _LOCK_HOLD_SECONDS / 2
+        assert blocked >= overlap_floor, (
+            f"writer B's update_fields returned in {blocked:.3f}s, under the {overlap_floor:.3f}s floor "
+            f"(half of A's {_LOCK_HOLD_SECONDS:.3f}s lock hold): the two transactions DID NOT OVERLAP. "
+            f"B's UPDATE was never queued behind A's row lock, so the revision assertion below grades "
+            f"two sequential writes and passes under a read-modify-write _bump_revision — the exact "
+            f"implementation this class exists to discriminate. Fix the interleaving in the harness; "
+            f"do not relax this floor."
+        )
 
         with SASession(engine) as reader:
             final = reader.get(MediaBuy, media_buy_id).revision

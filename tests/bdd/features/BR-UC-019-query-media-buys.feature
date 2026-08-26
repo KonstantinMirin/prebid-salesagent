@@ -44,6 +44,24 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-envelope-status @envelope @schema @v3-1
   Scenario: A get_media_buys response carries the spec-required envelope status
+    # HAND-EDITED, and the COMMENT form deliberately rather than the @hand-edited tag.
+    # This scenario currently has an upstream twin in adcp-req, so the pair classifies
+    # NO-OP and is preserved — the marker changes nothing today. It exists for the day
+    # the twin is removed upstream: without it the pair becomes `target is None` and
+    # compile_bdd.py:1028 classifies LEGACY-DELETE, silently dropping this PR's principal
+    # envelope oracle on a regeneration nobody is watching. Measured against the real
+    # adcp-req checkout: with the twin stripped, the scenario is DELETED from the merged
+    # output, not failed.
+    #
+    # The tag form would earn the same marker and break the present: local tags are
+    # compared by _tags_match_ignoring_id, so an extra @hand-edited desynchronises
+    # legacy.tags from target.tags and flips a clean NO-OP into NEEDS-SEMANTIC-MERGE on
+    # EVERY regeneration. The tag is right for a scenario with no twin -- see
+    # @T-UC-019-listing-omits-unrenderable-row and
+    # @T-UC-019-confirmed-at-null-survives-exclude-none, cited by TAG rather than by
+    # line because this very comment shifted both of them when it was inserted;
+    # it is wrong for this one. Same marker, opposite correct form, decided by whether a
+    # twin exists.
     Given the principal "buyer-001" owns media buy "mb-001" with start_date "2026-03-01" and end_date "2026-03-31"
     And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with no filters
