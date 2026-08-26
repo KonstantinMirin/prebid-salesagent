@@ -9,13 +9,8 @@ For every ON-PATH storyboard (from storyboard_coverage_map.build()), attaches:
     (per-STEP passed/failed counts — never a per-check-type breakdown, which
     the runner's free-text step details cannot support soundly; see the
     "measured status" note below),
-  * the comply_test_controller divergence tag for the 20 storyboards
-    sb5d-comply-test-controller-divergence.md already triaged as deliberate
-    (not a plain gap),
-  * a best-effort GitHub-issue cross-reference, joined per-SCENARIO through
-    sb5c-issue-drafts.md's "Blocked BDD scenarios" sections (present on only
-    25 of 49 items) — left blank where no such section names the scenario,
-    never inferred.
+  * the comply_test_controller divergence tag for the 20 storyboards triaged
+    as deliberate (not a plain gap),
 
 Explicitly NOT joined here: scenario-level reconciliation (VERDICT/action)
 from storyboard_reconciliation.py. Its rows key by proposal-file slug
@@ -41,7 +36,6 @@ Read-only. Emits JSON, or ``--markdown`` for the checked-in artifact.
 from __future__ import annotations
 
 import json
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -66,9 +60,8 @@ COMPLY_TEST_CONTROLLER = "comply_test_controller"
 # What survives is the judgement no structure carries: DETERMINISTIC INJECTION
 # storyboards stay dormant by design; PRIOR STATE ONLY storyboards are reachable
 # via real API sequencing instead of the missing tool. Keyed by storyboard stem
-# (matches storyboard_coverage_map's `stem`). Source:
-# .claude/notes/storyboard-conformance/sb5d-comply-test-controller-divergence.md
-# "Part 2 -- triage of the 20". Storyboards requiring the tool with no entry
+# (matches storyboard_coverage_map's `stem`). Each entry's kind was triaged by
+# hand; the triage notes are not committed. Storyboards requiring the tool with no entry
 # here render UNTRIAGED, which is a real answer: ungradable, kind not yet
 # triaged. Guarded by tests/unit/test_architecture_storyboard_controller_
 # divergence.py, which fails on a stem the pinned tree does not gate.
@@ -94,54 +87,6 @@ _COMPLY_TEST_CONTROLLER_DIVERGENCE: dict[str, str] = {
     "comply-controller-mode-gate": "DETERMINISTIC INJECTION",
     "deterministic-testing": "DETERMINISTIC INJECTION",
 }
-
-_ITEM_HEADER_RE = re.compile(r"^### ([A-Z]+-\d+)\b.*$", re.M)
-_BLOCKED_SCENARIOS_HEADER_RE = re.compile(r"^## Blocked BDD scenarios\s*$", re.M)
-_NEXT_HEADER_RE = re.compile(r"^#{1,3} ", re.M)
-_DISPOSITION_LINE_RE = re.compile(r"^\*\*Disposition:\s*(.+?)\*\*", re.M)
-_SUMMARY_ROW_RE = re.compile(r"^\|\s*([A-Z]+-\d+)\s*\|.*\|\s*(.+?)\s*\|\s*$", re.M)
-
-
-def _gh_issue_cross_reference(repo: Path) -> dict[str, str]:
-    """Best-effort T-UC-* scenario -> GH-issue-disposition map.
-
-    Only scenarios literally named inside a "## Blocked BDD scenarios"
-    section are joined -- present on 25 of the 49 sb5c items. Everything
-    else is left unjoined (the caller renders it blank), never inferred.
-    Each item is a "### <ID> -- <title>" (H3) section; its disposition is
-    stated as "**Disposition: ...**" prose right after the header (falling
-    back to the "0. Disposition summary" table's row when absent from the
-    item body), and its blocked-scenario list sits inside a "## Blocked BDD
-    scenarios" sub-header nested in the item's body (itself inside a fenced
-    gh-issue-body block, which this parser does not need to respect since it
-    only reads text between two header markers).
-    """
-    sb5c = repo / ".claude" / "notes" / "storyboard-conformance" / "sb5c-issue-drafts.md"
-    if not sb5c.is_file():
-        return {}
-    text = sb5c.read_text(encoding="utf-8")
-
-    summary_dispositions = dict(_SUMMARY_ROW_RE.findall(text))
-
-    item_headers = list(_ITEM_HEADER_RE.finditer(text))
-    result: dict[str, str] = {}
-    for i, match in enumerate(item_headers):
-        item_id = match.group(1)
-        item_start = match.end()
-        item_end = item_headers[i + 1].start() if i + 1 < len(item_headers) else len(text)
-        item_text = text[item_start:item_end]
-
-        disposition_match = _DISPOSITION_LINE_RE.search(item_text)
-        disposition = disposition_match.group(1) if disposition_match else summary_dispositions.get(item_id, "?")
-
-        blocked = _BLOCKED_SCENARIOS_HEADER_RE.search(item_text)
-        if not blocked:
-            continue
-        blocked_end = _NEXT_HEADER_RE.search(item_text, blocked.end())
-        blocked_text = item_text[blocked.end() : (blocked_end.start() if blocked_end else len(item_text))]
-        for ident in re.findall(r"\bT-UC-[A-Za-z0-9\-]+\b", blocked_text):
-            result.setdefault(ident, f"{item_id} ({disposition})")
-    return result
 
 
 def check_issue_map_complete(repo: Path, on_path: list[str]) -> list[str]:
@@ -283,7 +228,6 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     dist = storyboard_spec.dist_root(adcp, coverage["pinned_version"])
     runner_results_dir = repo / "tests" / "storyboard" / "runner" / "results"
     runner_scenarios, runner_summary = _load_runner_scenarios(runner_results_dir)
-    gh_issues = _gh_issue_cross_reference(repo)
     issue_map = ledger.load_issue_map(repo)
     ledgered = _ledgered_failures(repo)
 
@@ -312,7 +256,6 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         if measured is not None:
             joined += 1
 
-        gh_refs = sorted({gh_issues[ident] for ident in row["covered_by"] if ident in gh_issues})
         tracking = issue_map.get(row["storyboard"])
 
         rows.append(
@@ -325,7 +268,6 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
                 "checks": checks,
                 "measured": measured or {"status": "not_yet_run"},
                 **build_row_status_fields(stem=row["stem"], text=text),
-                "gh_issues": gh_refs,
                 "tracking": _render_issue_cell(tracking),
                 "tracking_issues": (tracking or {}).get("issues") or [],
                 "tracking_coverage": (tracking or {}).get("coverage", "untriaged"),

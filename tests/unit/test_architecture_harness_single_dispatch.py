@@ -1,7 +1,6 @@
 """Guard: the harness has ONE dispatch mechanism, and it lives on the base.
 
-Lane B's Core Invariant (the task, ``.claude/notes/
-pr1858-round2-remediation.md`` § "Lane B"): ``AdCPTestClient`` is the
+The invariant: ``AdCPTestClient`` is the
 implementation ``call_via``/``call_mcp``/``call_a2a`` delegate to, **not** a
 peer beside them. Today the harness carries two live dispatch mechanisms — the
 generic ``AdCPTestClient`` (``tests/harness/client.py``) and the hand-written

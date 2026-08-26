@@ -20,9 +20,8 @@ Runner-reported skips (``missing_test_controller``, ``missing_tool``,
 never ledger entries. Only a genuine check FAILURE is ledgered.
 
 Requires a live in-network stack and the runner's npm deps + the pinned
-compliance/schema bundle (see ``tests/storyboard/runner/`` and
-``.claude/notes/storyboard-conformance/sb1b-baseline-report.md``'s Reproduce
-section) — this module cannot be collected meaningfully without that
+compliance/schema bundle (see ``tests/storyboard/runner/``; CI downloads it via
+``.github/actions/_adcp-bundle``) — this module cannot be collected meaningfully without that
 environment, matching how ``tests/bdd``'s e2e_rest transport and ``tests/e2e``
 already require a live stack to collect.
 """
@@ -67,7 +66,7 @@ _DEFAULT_AGENT_URLS: dict[str, str] = {
 
 # Env vars the CI job (SB-4b Implementation Plan step 6) must set. No defaults
 # for the compliance/schema paths — those come from a pinned GitHub release
-# asset (sb1b-baseline-report.md Reproduce step 2), never guessed at.
+# asset (see .github/actions/_adcp-bundle), never guessed at.
 _AUTH_TOKEN_ENV = "STORYBOARD_AUTH_TOKEN"
 _COMPLIANCE_DIR_ENV = "STORYBOARD_COMPLIANCE_DIR"
 _SCHEMA_ROOT_ENV = "STORYBOARD_SCHEMA_ROOT"
@@ -184,10 +183,10 @@ def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:
 def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
     """Shell out to the real @adcp/sdk storyboard runner once, return its summary JSON.
 
-    Mirrors the invocation documented in sb1b-baseline-report.md's Reproduce
-    step 5, pointed at the in-network agent instead of the host-port smoke
-    setup that report used, and forced onto ``protocol`` so the SAME compliance
-    checks grade both of the agent's protocol surfaces.
+    Uses the pinned bundle CI downloads via ``.github/actions/_adcp-bundle``,
+    pointed at the in-network agent rather than a host port, and forced onto
+    ``protocol`` so the SAME compliance checks grade both of the agent's
+    protocol surfaces.
     """
     agent_url = os.environ.get(_agent_url_env(protocol), _DEFAULT_AGENT_URLS[protocol])
     auth_token = os.environ.get(_AUTH_TOKEN_ENV, "ci-test-token")

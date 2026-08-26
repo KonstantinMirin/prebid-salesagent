@@ -21,9 +21,9 @@ validated against live registration by tests (see
 ``tests/harness/test_address_table.py::TestRestAliasesAndAbsence``). A REST
 handler name that matches neither a known tool name, a declared
 ``operation_id``, nor an alias raises :class:`UnresolvedRestHandlerName` at
-table-build time — it is NEVER silently registered under the wrong name. See
-``.claude/notes/storyboard-conformance/sb2a-transport-generic-client-design.md``
-§4 for the design this implements.
+table-build time — it is NEVER silently registered under the wrong name. The
+design this implements is stated in ``tests/harness/client.py``'s module
+docstring.
 
 Usage::
 
@@ -116,7 +116,7 @@ class UnresolvedRestHandlerName(RuntimeError):
     If the route is legitimately NOT an AdCP tool (e.g. a future webhook
     receiver or internal helper mounted under ``/api/v1``), it is out of
     this indexer's scope; consult the design doc
-    (``sb2a-transport-generic-client-design.md`` §4) before adding
+    (see ``tests/harness/client.py``) before adding
     a broad exclusion, since ``/api/v1`` is documented as the AdCP tool
     surface.
     """

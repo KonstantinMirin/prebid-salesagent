@@ -1,24 +1,24 @@
 """Transport-generic AdCP test client — one ``call()``, all transports.
 
-Implements the design at ``.claude/notes/storyboard-conformance/
-sb2a-transport-generic-client-design.md`` (beads this file, this
-file is SB-2b). ``AdCPTestClient.call(tool, payload,
+One ``call()`` reaches every transport, so a scenario is written once and
+graded on all of them; the per-transport shaping lives behind this seam rather
+than in each env. ``AdCPTestClient.call(tool, payload,
 transport)`` replaces the per-tool ``call_a2a``/``call_mcp``/
 ``build_rest_body``/``parse_rest_response`` quartet that today is
 hand-written on every one of the 33 ``tests/harness/*.py`` env classes
-(``MediaBuyDualEnv`` is the worst offender — see design doc §1).
+(``MediaBuyDualEnv`` is the worst offender).
 
 ADDRESS (tool -> address) is fully derived — see ``tests/harness/
 address_table.py``. WRAP (payload -> transport envelope) and UNWRAP
 (transport envelope -> normalized ``TransportResult``) are the only
 per-transport code, and are transport-**family** functions: the same
 function object serves both an in-process transport and its E2E sibling
-(design doc §5), because the wire format is identical either way — only
+for the reason given below, because the wire format is identical either way — only
 DELIVER (how bytes reach the server) differs.
 
 DELIVER reuses the SAME env primitives ``_run_mcp_client`` /
 ``_run_a2a_handler`` / ``_prepare_rest_request`` that the per-env dispatch
-methods already call (design doc §5 table) — this is deliberate: those
+methods already call — this is deliberate: those
 methods own the real auth-chain / factory-commit / FastMCP-middleware
 plumbing, and duplicating that here would violate this project's DRY
 invariant for no benefit. ``client.py`` only adds the tool-name-generic
@@ -38,7 +38,7 @@ matching DELIVER function instead of duplicating it, so there is one
 implementation per transport, not two. Auth-header construction is shared
 across all three via ``e2e_identity_headers`` below (this project's DRY
 invariant, CLAUDE.md) — WRAP/UNWRAP were already written per transport
-*family* (design doc §5), so each of these follow-ups only needed to add a
+*family*, so each of these follow-ups only needed to add a
 DELIVER function; ADDRESS and WRAP needed no changes.
 
 Usage::
@@ -76,7 +76,7 @@ if TYPE_CHECKING:
     from tests.harness._base import BaseTestEnv
 
 # NoAddressForTransport re-exported here for callers that only import
-# tests.harness.client (design doc §3 cites both this module and
+# tests.harness.client (both this module and
 # address_table.py as "new files, SB-2b builds it" — callers should not
 # need to know the map lives in a separate module).
 from tests.harness.address_table import NoAddressForTransport  # noqa: F401  (re-export)
@@ -112,7 +112,7 @@ def flatten_payload(req: Any, **kwargs: Any) -> dict[str, Any]:
 
 # -- WRAP: payload (flat AdCP request dict) -> transport envelope -----------
 #
-# One function per transport FAMILY (design doc §5) — MCP/A2A/REST all
+# One function per transport FAMILY — MCP/A2A/REST all
 # accept the same flat dict shape on the wire (FastMCP call_tool arguments,
 # A2A skill parameters, REST JSON body), so WRAP for the in-process transport
 # and its E2E sibling is the literal same function object.
@@ -126,7 +126,7 @@ def _wrap_mcp(address: ToolAddress, payload: dict[str, Any]) -> dict[str, Any]:
 def _wrap_a2a(address: ToolAddress, payload: dict[str, Any]) -> dict[str, Any]:
     """A2A WRAP: no transformation — payload becomes the skill ``parameters`` dict.
 
-    Limitation (design doc §7 "A2A push-notification injection"): production's
+    Limitation, A2A push-notification injection: production's
     ``_handle_explicit_skill`` (``src/a2a_server/adcp_a2a_server.py:1491``)
     injects ``push_notification_config`` from the A2A protocol-layer
     ``SendMessageConfiguration``, not from the skill ``parameters`` dict — a
@@ -145,10 +145,10 @@ def _wrap_rest(address: ToolAddress, payload: dict[str, Any]) -> dict[str, Any]:
 
     Generalizes what ``MediaBuyDualEnv._run_update_rest_request`` hand-codes
     for exactly one route (``media_buy_id``) into one rule that covers every
-    path-parameterized route (design doc §4). The remaining payload keys
+    path-parameterized route. The remaining payload keys
     become the JSON body — sent as-is; production's per-route Pydantic
     ``Body`` class (not this WRAP function) is what validates/rejects fields
-    that drift from the AdCP request schema (design doc §7 "REST body != raw
+    that drift from the AdCP request schema (see "REST body != raw
     request model 1:1"), surfacing as a real 422, not a client-side KeyError.
 
     Returns ``{"url": concrete_path, "body": remaining_payload}`` — ``method``
@@ -174,7 +174,7 @@ WRAP: dict[Transport, Callable[[ToolAddress, dict[str, Any]], Any]] = {
 
 # -- DELIVER: wrapped request -> raw transport response (or raise) ----------
 #
-# In-process DELIVER reuses the env primitives cited in the design doc §5
+# In-process DELIVER reuses the env primitives named in the transport-family
 # table verbatim (``_run_mcp_client``, ``_run_a2a_handler``,
 # ``_prepare_rest_request``) — these already own auth-chain / factory-commit
 # / middleware plumbing; DELIVER only adds the tool-name-generic call shape.
@@ -264,7 +264,7 @@ def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str,
     The single implementation of e2e_rest delivery (SB-3a)
     — ``RestE2EDispatcher`` (``tests/harness/dispatchers.py``) delegates
     here instead of hand-rolling its own header-building/httpx-client
-    construction, matching the design doc §5 DELIVER-function split: WRAP
+    construction, matching the DELIVER-function split: WRAP
     (``_wrap_rest`` above) and UNWRAP already serve both ``Transport.REST``
     and ``Transport.E2E_REST`` unchanged; only DELIVER differed, and now it
     is one function reused by both the generic client and the dispatcher.
@@ -344,7 +344,7 @@ def _deliver_e2e_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
 # -- E2E_A2A DELIVER: real JSON-RPC message/send over HTTP ------------------
 #
 # SB-3c. Same message shape ``_run_a2a_handler`` builds
-# in-process (design doc §5 table row) — only how it reaches the server
+# in-process — only how it reaches the server
 # differs: a real ``POST /a2a`` JSON-RPC 2.0 request instead of a direct
 # ``AdCPRequestHandler().on_message_send()`` call. The route is mounted at
 # ``rpc_url="/a2a"`` by ``create_jsonrpc_routes`` (``src/app.py``), and
@@ -703,7 +703,7 @@ def _dispatch_core(
 
 
 class AdCPTestClient:
-    """One client, all transports, in-process and e2e (design doc §5).
+    """One client, all transports, in-process and e2e.
 
     Constructed per-env — it needs the env's identity resolution + factory-
     bound session + e2e_config, exactly what ``BaseTestEnv`` already carries.

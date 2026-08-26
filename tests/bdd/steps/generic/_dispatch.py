@@ -110,9 +110,8 @@ def dispatch_via_client(ctx: dict, tool: str, payload: dict[str, Any], *, identi
     """Dispatch through ``AdCPTestClient.call`` instead of ``env.call_via``.
 
     Additive alternative to ``dispatch_request`` for scenarios wired onto the
-    transport-generic ``AdCPTestClient`` (``tests/harness/client.py``, design
-    doc ``.claude/notes/storyboard-conformance/sb2a-transport-generic-client-
-    design.md`` §6). Populates the identical ctx contract via
+    transport-generic ``AdCPTestClient`` (``tests/harness/client.py``, whose
+    module docstring states the design). Populates the identical ctx contract via
     ``_populate_ctx_from_result`` so every existing wire-first Then step works
     unmodified regardless of dispatch path.
 

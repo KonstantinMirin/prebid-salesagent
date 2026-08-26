@@ -164,8 +164,7 @@ class RestE2EDispatcher:
     that to the generic ``tests.harness.client._wrap_rest`` would require
     rewriting each env's bespoke request-shaping (e.g. ``MediaBuyDualEnv``'s
     create/update routing), an explicit non-goal of the transport-generic
-    client design (``.claude/notes/storyboard-conformance/
-    sb2a-transport-generic-client-design.md`` §6).
+    client design (see ``tests/harness/client.py``).
 
     DELIVER (the actual httpx call) is NOT hand-rolled here — it delegates to
     ``tests.harness.client._deliver_e2e_rest``, the single delivery
@@ -287,7 +286,7 @@ class A2AE2EDispatcher:
                 "AdCPTestClient — pass tool_name=... to env.call_via(Transport.E2E_A2A, ...) (or "
                 "declare env.A2A_SKILL), or call AdCPTestClient(env).call(tool, payload, "
                 "Transport.E2E_A2A) directly instead — the primary path this design promotes "
-                "(sb2a-transport-generic-client-design.md §6 'Migration story')."
+                "(see tests/harness/client.py — rewriting per-env shaping is a non-goal)."
             )
 
         req = kwargs.pop("req", None)
