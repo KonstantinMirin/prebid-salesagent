@@ -641,7 +641,7 @@ def _accumulate(body: bytearray, chunk: bytes, attempts: Attempts, status: int) 
 def _record_transport_failure(attempts: Attempts, attempt: int, exc: BaseException) -> None:
     """Log and record one transport-level failure. Shared wording, one home."""
     logger.warning("Outbound attempt %d failed at the transport level: %s", attempt, exc)
-    attempts.record_transport_failure(exc)
+    attempts.record_transport_failure()
 
 
 def _conclude_attempt(

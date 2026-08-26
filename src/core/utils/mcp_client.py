@@ -269,7 +269,7 @@ async def call_mcp_tool(
                         f"The agent may need to upgrade their FastMCP version to match the client."
                     ) from e
 
-                attempts.record_transport_failure(e)
+                attempts.record_transport_failure()
 
                 # Log and retry for this candidate
                 logger.warning(

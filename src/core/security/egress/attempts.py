@@ -215,13 +215,18 @@ class Attempts:
             self.attempt = n
             yield n
 
-    def record_transport_failure(self, exc: BaseException) -> None:
+    def record_transport_failure(self) -> None:
         """Absorbs the ``except _RETRYABLE_EXCEPTIONS`` arm's bookkeeping.
 
         Resets ``last_status``/``last_retry_after`` to ``None`` — nothing to
         read off a transport exception. Logging stays at the call site: it
         names the exception and the attempt number in a format string, which
         is not this pure class's business.
+
+        Takes no exception, deliberately. It used to accept one and never read
+        it, which reads at the call site as "the exception is recorded" while
+        recording nothing — a third thing, neither used nor absent. The caller
+        that has the exception logs it.
         """
         self.last_status = None
         self.last_retry_after = None

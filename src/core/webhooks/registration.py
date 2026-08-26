@@ -208,7 +208,13 @@ class ValidatedWebhookRegistration:
     @classmethod
     def from_stash(
         cls,
-        stashed: Any,
+        # `object`, not `Any`. The value is read off a JSONType column, so it
+        # genuinely can be anything -- but `Any` says "I decline to type this"
+        # and lets a caller subscript it unchecked, while `object` says "anything,
+        # and you must narrow it first". The isinstance below is that narrowing,
+        # and it is load-bearing: its refusal is what a buyer sees when a stored
+        # registration is unreadable. It stays.
+        stashed: object,
         *,
         field_prefix: str = "push_notification_config",
         context: ContextObject | dict[str, Any] | None = None,
@@ -458,7 +464,12 @@ def _coerce_primitives_to_config(
 
 
 def accept_push_notification_config(
-    config: Any,
+    # The two shapes the tool surfaces actually hold, named: create had a
+    # dict, update a typed model, sync either. The signature said `Any`,
+    # which is why each surface grew its own destructuring branch before
+    # this funnel existed -- a caller cannot normalize what the type will
+    # not describe.
+    config: dict[str, Any] | PushNotificationConfig | None,
     *,
     field_prefix: str = "push_notification_config",
     context: ContextObject | dict[str, Any] | None = None,

@@ -51,7 +51,7 @@ class DomainNotOwned(Exception):
     """
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class OwnedDomain:
     """A domain PROVEN to belong to the tenant acting on it.
 
@@ -89,7 +89,7 @@ def tenant_owns_domain(tenant: Tenant, domain: str | None) -> OwnedDomain:
     return OwnedDomain(domain=domain)
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class DomainStatus:
     """The outcome of checking a domain's Approximated registration.
 
@@ -129,7 +129,7 @@ def get_domain_status(owned: OwnedDomain, api_key: str) -> DomainStatus:
     )
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class RegisterResult:
     """The outcome of registering a domain with Approximated."""
 
@@ -157,7 +157,7 @@ def register_domain(owned: OwnedDomain, backend_url: str, api_key: str) -> Regis
     return RegisterResult(already_registered=False)
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class UnregisterResult:
     """The outcome of unregistering a domain from Approximated."""
 
@@ -179,7 +179,7 @@ def unregister_domain(owned: OwnedDomain, api_key: str) -> UnregisterResult:
     return UnregisterResult(already_unregistered=False)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DnsToken:
     """The outcome of requesting an Approximated DNS widget token.
 

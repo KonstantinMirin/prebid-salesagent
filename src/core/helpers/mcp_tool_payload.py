@@ -11,12 +11,15 @@ guarded creative-format/signals fetch paths (salesagent-4n88).
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.core.utils.mcp_client import MCPCompatibilityError
 
+if TYPE_CHECKING:
+    from fastmcp.client.client import CallToolResult
 
-def extract_tool_payload(result: Any) -> dict[str, Any]:
+
+def extract_tool_payload(result: CallToolResult) -> dict[str, Any]:
     """Return the tool's JSON payload, or ``{}`` if neither shape is present.
 
     Raises ``MCPCompatibilityError`` when the extracted payload is not a JSON
@@ -28,13 +31,17 @@ def extract_tool_payload(result: Any) -> dict[str, Any]:
     ``json.JSONDecodeError`` — neither is a typed AdCP failure a caller's
     seam-error mapper can classify.
     """
-    structured = getattr(result, "structured_content", None)
+    structured = result.structured_content
     if structured:
         if not isinstance(structured, dict):
             raise MCPCompatibilityError(f"Expected a JSON object from the tool result, got {type(structured).__name__}")
         return structured
 
-    for item in getattr(result, "content", None) or []:
+    # `text` stays a getattr: ContentBlock is a UNION (TextContent, ImageContent,
+    # EmbeddedResource, ...) and only some members carry `.text`, so this probe is
+    # about the MCP wire type, not about a signature that declined to say what it
+    # takes. The two probes above were the latter, and are gone.
+    for item in result.content or []:
         text = getattr(item, "text", None)
         if text:
             try:

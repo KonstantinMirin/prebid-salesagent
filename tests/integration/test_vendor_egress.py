@@ -62,6 +62,7 @@ import requests
 
 from src.core.exceptions import AdCPError
 from src.core.schemas import Principal, ReportingPeriod
+from src.core.security.egress.attempts import OutboundDeliveryFailed
 from src.core.security.outbound_http import OutboundError
 from tests.harness._base import IntegrationEnv
 from tests.helpers.local_http_origin import LocalOrigin, OriginResponse
@@ -449,12 +450,24 @@ def test_gam_report_download_does_not_retry_a_failing_origin(local_origin_tls, m
 
     service = _gam_reporting_service(local_origin_tls)
 
-    # ``_run_report`` wraps every failure in a bare ``Exception`` of its own, so
-    # the message is the only thing there is to assert on. It is written in
-    # ``gam_reporting_service`` and the migration does not touch it.
-    with pytest.raises(Exception, match="Error running GAM report"):
+    # The TYPED error reaches the caller. `_run_report` used to catch it and
+    # rewrap it as `Exception("Error running GAM report: ...")`, so the only thing
+    # to assert on was that relabelled string -- and the download branch's
+    # migration onto `raise_mapped_outbound_error` bought nothing observable,
+    # because this outer handler swallowed the classification on the way out.
+    # An `except AdCPError: raise` arm ahead of the catch-all is what changed, and
+    # this is where it shows: the seam's own class, its attempt count, and its
+    # fixed message survive to the caller.
+    with pytest.raises(OutboundDeliveryFailed) as raised:
         service._run_report({"reportQuery": {}})
 
+    assert raised.value.attempts == 1, (
+        f"a report download must not retry a failing origin; the error records {raised.value.attempts} attempts"
+    )
+    assert raised.value.http_status == 500, (
+        f"the last observed status is part of what the typed error carries and the "
+        f"bare rewrap lost; got {raised.value.http_status!r}"
+    )
     assert local_origin_tls.hits == 1
 
 
