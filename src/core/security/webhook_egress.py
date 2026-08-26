@@ -7,7 +7,7 @@ bytes via ``content=`` through :mod:`src.core.security.outbound_http`. No
 webhook sender may reach ``json=`` on the egress seam.
 
 Spec grounding: pinned AdCP 3.1.1,
-``dist/docs/3.1.0/building/by-layer/L3/webhooks.mdx:404-418`` — the legacy
+``docs/building/by-layer/L3/webhooks.mdx:404-418`` — the legacy
 HMAC-SHA256 fallback signs ``{unix_timestamp}.{raw_body_bytes}`` and requires
 ``X-ADCP-Signature: sha256=<hex digest>`` / ``X-ADCP-Timestamp: <unix
 seconds>`` on compact-separator JSON. ``adcp.sign_legacy_webhook`` (the
@@ -19,7 +19,7 @@ egress policy (what bytes represent a payload, and how those bytes are
 authenticated), not business logic.
 
 Signer-side duplicate-object-key MUST (salesagent-47n9.19; pinned AdCP 3.1.1,
-``dist/docs/3.1.0/building/by-layer/L1/security.mdx`` §Duplicate object keys):
+``docs/building/by-layer/L1/security.mdx`` §Duplicate object keys):
 signers MUST reject duplicate-key input before signing. ``prepare_signed_request``
 takes ``payload: dict[str, Any]`` — a Python ``dict`` cannot represent a
 duplicate key, so this MUST is satisfied *by construction*: there is no

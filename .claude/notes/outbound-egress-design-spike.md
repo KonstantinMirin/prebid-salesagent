@@ -25,7 +25,7 @@ It targets **3.1.1 via `adcp==6.6.0`** (`docs/adcp-spec-version.md`,
 ## 2. Spec grounding (satisfies the CLAUDE.md spec-grounding gate)
 
 Authoritative: **AdCP 3.1.1**, the pinned version.
-Source: `dist/docs/3.1.0/building/by-layer/L1/security.mdx`, §"Webhook URL
+Source: `docs/building/by-layer/L1/security.mdx`, §"Webhook URL
 validation (SSRF)" (docs dir tops out at 3.1.0; 3.1.1 is a patch release).
 
 > Before any outbound fetch to a counterparty-controlled URL, fetchers MUST:

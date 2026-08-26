@@ -1529,7 +1529,7 @@ class AdCPRequestHandler(RequestHandler):
         # InvalidRequestError (the skill never dispatches, so this is a
         # transport-channel rejection) but carry the two-layer envelope in
         # ``data``, which AdCP 3.1.1 names as the binding for a request rejected
-        # before dispatch — dist/docs/3.1.1/building/operating/transport-errors
+        # before dispatch — docs/building/operating/transport-errors
         # .mdx, "Transport-Level Errors", and position 4 of its client detection
         # order (``error.data.adcp_error``). Without it the A2A wire carried a
         # bare JSON-RPC error and the buyer-facing code and suggestion that REST

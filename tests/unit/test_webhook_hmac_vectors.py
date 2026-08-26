@@ -225,7 +225,7 @@ class TestVerifierRejectsDuplicateObjectKeys:
     """Our verifier must reject a duplicate-object-key body AFTER the HMAC verifies,
     with a malformed-body error that is a DISTINCT class from a signature failure.
 
-    Spec basis (pinned AdCP 3.1.1): ``dist/docs/3.1.0/building/by-layer/L1/security.mdx``
+    Spec basis (pinned AdCP 3.1.1): ``docs/building/by-layer/L1/security.mdx``
     §Duplicate object keys -- "Verifiers MUST reject bodies containing duplicate
     object keys after HMAC verification succeeds, returning a structured
     malformed-body error, distinct from a signature-mismatch error" ("the

@@ -27,7 +27,7 @@ Spec grounding — AdCP 3.1.1, the version this repo PINS (``adcp==6.6.0``,
    back to the RFC 9421 profile, because the block's PRESENCE already selected
    legacy. The registration is unservable and the only honest answer is to
    refuse it while the buyer is still on the phone.
-3. ``dist/docs/3.1.0/building/by-layer/L3/error-handling.mdx`` § "Request
+3. ``docs/building/by-layer/L3/error-handling.mdx`` § "Request
    Validation" (``VALIDATION_ERROR | correctable``): the buyer is the only
    party who can supply the secret, and supplying it makes the identical
    request succeed — so ``correctable``, not ``terminal``.

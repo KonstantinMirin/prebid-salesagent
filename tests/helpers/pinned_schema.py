@@ -218,6 +218,26 @@ def recovery_by_code() -> dict[str, str]:
     return {code: entry["recovery"] for code, entry in meta.items() if isinstance(entry, dict) and "recovery" in entry}
 
 
+@cache
+def auth_scheme_values() -> frozenset[str]:
+    """The pinned ``enums/auth-scheme.json`` ``enum`` — the wire spellings a
+    webhook ``authentication.schemes`` entry may legally carry.
+
+    The ONE test-side reader of that enum, for the same reason
+    ``recovery_by_code`` is the one reader of ``enumMetadata``: the value under
+    test is ``adcp.types.AuthenticationScheme``, and a test that read the
+    spelling off the SDK would agree with the thing it grades instead of
+    grading it. This module reads the SDK's pinned SCHEMA tree, which is
+    generated from the spec rather than hand-maintained alongside the Python
+    enum, so the two can disagree — and that disagreement is exactly what the
+    conformance test in ``tests/unit/test_auth_scheme_pin_conformance.py``
+    exists to catch.
+
+    Cached: a pure function of the installed SDK's pinned tree.
+    """
+    return frozenset(load("enums/auth-scheme.json")["enum"])
+
+
 def _canonicalize_refs(node: Any, *, file_dir: Path, root: Path) -> Any:
     """Recursively rewrite every "$ref" string in *node* from a path relative
     to file_dir (the schema file's own directory — the plain tree's ``$ref``

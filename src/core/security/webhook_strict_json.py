@@ -6,7 +6,7 @@ primitive, built on the stdlib ``object_pairs_hook`` the spec itself
 prescribes, never a hand-rolled recursive walker, and never re-decided at a
 call site.
 
-Spec grounding: pinned AdCP 3.1.1, ``dist/docs/3.1.0/building/by-layer/L1/security.mdx``
+Spec grounding: pinned AdCP 3.1.1, ``docs/building/by-layer/L1/security.mdx``
 §Duplicate object keys — the legacy HMAC-SHA256 fallback's signer and verifier
 MUSTs, and step 14a: *"stdlib ``json.loads(..., object_pairs_hook=...)`` —
 detect duplicates inside the hook and raise. Satisfies the check."* The

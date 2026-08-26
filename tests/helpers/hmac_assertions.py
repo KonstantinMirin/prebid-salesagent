@@ -16,7 +16,7 @@ import hmac
 from typing import Any
 
 # The two header names AdCP 3.1.1 pins for the legacy HMAC-SHA256 fallback
-# (``dist/docs/3.1.0/building/by-layer/L3/webhooks.mdx:404-418``). Named
+# (``docs/building/by-layer/L3/webhooks.mdx:404-418``). Named
 # constants rather than inline defaults because tests that grade the ABSENCE of
 # a signature need the same name this module verifies against: a second string
 # literal spelled somewhere else would keep passing after a header rename, which

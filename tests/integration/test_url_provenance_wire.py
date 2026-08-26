@@ -3,7 +3,7 @@
 The egress seam reports a refusal the same way whatever it refused
 (``src/core/security/outbound_http.py``, ``_BLOCKED_MESSAGE``): opaque, because
 "a refusal must not disclose network topology" is a spec obligation, not a
-courtesy (AdCP 3.1.1, ``dist/docs/3.1.0/building/by-layer/L1/security.mdx``
+courtesy (AdCP 3.1.1, ``docs/building/by-layer/L1/security.mdx``
 point 6, read at tag ``v3.1.1``). What the refusal is ALLOWED to say beyond that
 depends entirely on WHOSE address it was:
 

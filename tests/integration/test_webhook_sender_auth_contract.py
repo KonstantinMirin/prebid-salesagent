@@ -25,10 +25,12 @@ The contract, stated once, is the one ``order_approval_service`` already keeps
    ``AuthenticationScheme = ["Bearer", "HMAC-SHA256"]`` @ AdCP 3.1.1), which is
    why the refusal is graded rather than assumed impossible.
 
-Every case here was RED until each sender routed its decision through
-``webhook_auth_for`` (salesagent-47n9.24). They went green by CONVERGING on that
-resolver, not by repairing the inline copies — repairing them in place would have
-made each the fourth divergent copy, which is the disease itself.
+Every case here was RED until each sender routed its decision through the egress
+seam — ``deliver_webhook``/``adeliver_webhook`` in
+``src.core.security.webhook_egress`` (salesagent-47n9.24). They went green by
+CONVERGING on that seam, not by repairing the inline copies — repairing them in
+place would have made each the fourth divergent copy, which is the disease
+itself.
 
 Why zero-hits is the discriminating assertion and not merely a small number:
 each origin below is programmed to answer 200. A destination that would have

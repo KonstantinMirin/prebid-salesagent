@@ -19,14 +19,26 @@ lane moved no ratchet.
 | C901 (complexity) | 178 | `.pre-commit-hooks/check_ruff_complexity_count.py` |
 | PLR0912 (branches) | 131 | same |
 | PLR0915 (statements) | 103 | same |
-| `EXPECTED_UNSUPPORTED_DECLARATIONS` | 6 | `tests/unit/test_architecture_e2e_rest_escape_hatches.py` |
+| `EXPECTED_UNSUPPORTED_DECLARATIONS` | 5 (was 3 at base) | `tests/unit/test_architecture_e2e_rest_escape_hatches.py` |
 | live `# noqa: TID251` in `src/` | 3 | the three below; pinned by `SEAM_FILES` in `tests/unit/test_ruff_egress_bans.py` |
 
-`EXPECTED_UNSUPPORTED_DECLARATIONS` is 6 and stays 6 in this PR. The path to 5
-and then to 3 is recorded on `salesagent-pldmk.33` and `salesagent-pldmk.10`:
-one entry retires with the egress-Given change, two more only once
-`salesagent-pldmk.7` gives the verdict a wire projection, and the remaining
-three are pre-existing and untouched here.
+`EXPECTED_UNSUPPORTED_DECLARATIONS` is the one pin this PR MOVED: 3 at the merge
+base `eccc45a766`, 5 at head. Counted from the frozenset itself, not carried
+forward. The two additions are both `tests/harness/_mixins.py` and both were
+made by `salesagent-47n9.3`, which replaced a silent `_NO_E2E_REST_TAGS`
+parametrize-drop (invisible to either detector in that module) with reviewable,
+pinned declarations:
+
+| added entry | why it has no wire surface |
+|---|---|
+| `assert_no_retry_schedule_entered` | the BR-RULE-029 retry-schedule sleep count is process-local (`env.mock["sleep"]`), not observable across the Docker HTTP boundary |
+| `assert_circuit_breaker_failure_recorded` | `get_service()` builds a fresh in-process `WebhookDeliveryService` under `e2e_rest`, disconnected from the live server's real breaker state |
+
+Net visibility improves — the drop these replace hid whole scenarios, while a
+pinned declaration narrows exactly one assertion and fails the build if it
+drifts. Both entries retire once the breaker verdict gets a wire projection;
+that is `salesagent-pldmk.7`, deferred (see `salesagent-sq8ib.10`). The
+remaining three entries are pre-existing and untouched here.
 
 ## The three sanctioned egress exemptions
 

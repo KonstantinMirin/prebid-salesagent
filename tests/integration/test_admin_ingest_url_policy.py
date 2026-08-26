@@ -531,7 +531,7 @@ def test_register_webhook_stores_a_row_when_the_url_is_admitted(
 #     authentication.required: ["schemes", "credentials"], additionalProperties: false
 #
 # Unconditional in the pin — no transport discriminator, no if/then, no
-# per-surface relaxation (dist/docs/3.1.1/building/by-layer/L3/webhooks.mdx:62,
+# per-surface relaxation (docs/building/by-layer/L3/webhooks.mdx:62,
 # "the object's contents are identical"). UNGRADED by the conformance
 # storyboard: nothing in dist/compliance/3.1.1/ sends a short credential, so
 # grading cannot be cited either way and the schema is the only authority in

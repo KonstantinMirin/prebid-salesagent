@@ -402,7 +402,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # The pin is unconditional and admits no transport discriminator:
   #   git -C ~/projects/adcp show v3.1.1:dist/schemas/3.1.1/core/push-notification-config.json
   #     authentication.credentials: {"type": "string", "minLength": 32}
-  #   git -C ~/projects/adcp show v3.1.1:dist/docs/3.1.1/building/by-layer/L3/webhooks.mdx
+  #   git -C ~/projects/adcp show v3.1.1:docs/building/by-layer/L3/webhooks.mdx
   #     :62 "For A2A, the A2A protocol wraps it in a `configuration` envelope
   #          using camelCase — but the object's contents are identical."
   # UNGRADED BY STORYBOARD, same standing as every other scenario in this file:

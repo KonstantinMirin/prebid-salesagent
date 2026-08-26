@@ -2111,7 +2111,7 @@ def then_hmac_header(ctx: dict, header: str) -> None:
 def then_timestamp_header(ctx: dict, header: str) -> None:
     """Assert timestamp header is present and contains a unix-seconds integer.
 
-    Per AdCP 3.1.1 (dist/docs/3.1.1/building/by-layer/L3/webhooks.mdx:404-418):
+    Per AdCP 3.1.1 (docs/building/by-layer/L3/webhooks.mdx:404-418):
     ``X-ADCP-Timestamp: <unix timestamp in seconds>``, an exact ASCII integer.
     """
     headers = _get_last_webhook_headers(ctx)

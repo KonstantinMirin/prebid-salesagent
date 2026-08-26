@@ -3,7 +3,7 @@
 Delegates entirely to ``adcp.webhook_receiver.verify_webhook_hmac`` (the
 installed ``adcp==6.6.0`` SDK), which verifies the HMAC over the RAW body
 bytes as received — never a re-serialization of a parsed payload. Per AdCP
-3.1.1 (``dist/docs/3.1.0/building/by-layer/L3/webhooks.mdx:404-418``):
+3.1.1 (``docs/building/by-layer/L3/webhooks.mdx:404-418``):
 "Verifiers MUST use the raw HTTP body bytes as received on the wire,
 captured before any JSON parse or re-serialize." A verifier that
 re-serializes a parsed dict (this module's own prior implementation)
