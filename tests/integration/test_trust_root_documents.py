@@ -69,6 +69,7 @@ import pytest
 from adcp import get_adcp_spec_version
 
 from tests.harness._base import BareIntegrationEnv
+from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION
 from tests.helpers.pinned_schema import validate_against_pinned_schema
 from tests.helpers.signing import REQUEST_SIGNING
 from tests.helpers.signing import get_trust_root_document as _get_document
@@ -80,8 +81,8 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # ``now``, never against wall-clock time.
 _NOW = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
 
-_BRAND_SCHEMA = "3.1.1/brand.json"
-_ADAGENTS_SCHEMA = "3.1.1/adagents.json"
+_BRAND_SCHEMA = f"{EXPECTED_SPEC_VERSION}/brand.json"
+_ADAGENTS_SCHEMA = f"{EXPECTED_SPEC_VERSION}/adagents.json"
 
 _BRAND_PATH = "/.well-known/brand.json"
 _ADAGENTS_PATH = "/.well-known/adagents.json"

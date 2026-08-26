@@ -83,14 +83,14 @@ normalizes to release-precision on the wire.
 6. Re-vendor the request-signing conformance vectors and their `MANIFEST.json`:
 
    ```bash
-   uv run python tests/fixtures/adcp_schemas_pinned/_refresh.py
+   uv run python -m tests.fixtures.adcp_schemas_pinned._refresh
    ```
 
-   Update `VECTORS_REV` / `VECTORS_SPEC_VERSION` / `VECTORS_SRC` in that script
-   first. `tests/unit/test_adcp_conformance_vectors_pin.py` ties the vendored
-   snapshot to `adcp.get_adcp_spec_version()`, so skipping this step fails CI
-   rather than silently grading the verifier against the previous version's
-   conformance data.
+   Nothing to edit in that script first: `VECTORS_REV`, `VECTORS_SPEC_VERSION`,
+   `VECTORS_SRC` and the root sets all derive from `EXPECTED_SPEC_VERSION` and
+   `SPEC_REV`, so step 4 already moved them. `tests/unit/test_adcp_conformance_vectors_pin.py`
+   ties the vendored snapshot to the pin, so skipping the re-vendor fails CI rather
+   than silently grading the verifier against the previous version's conformance data.
 7. Update this document.
 8. Run `make quality` and address Pydantic field/type changes.
 

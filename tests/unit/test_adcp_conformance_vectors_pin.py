@@ -21,7 +21,7 @@ What each assertion buys:
 
 Refresh command (also listed in ``docs/adcp-spec-version.md``'s bump list)::
 
-    uv run python tests/fixtures/adcp_schemas_pinned/_refresh.py
+    uv run python -m tests.fixtures.adcp_schemas_pinned._refresh
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ import hashlib
 
 import adcp
 
+from tests.helpers.adcp_pin import SPEC_REV
 from tests.helpers.signing_vectors import (
     VECTORS_DIR,
     load_canonicalization_cases,
@@ -68,7 +69,7 @@ EXPECTED_L1_SET = frozenset(
     }
 )
 
-_REFRESH_HINT = "Re-run: uv run python tests/fixtures/adcp_schemas_pinned/_refresh.py"
+_REFRESH_HINT = "Re-run: uv run python -m tests.fixtures.adcp_schemas_pinned._refresh"
 
 
 def test_manifest_spec_version_matches_the_adcp_pin() -> None:
@@ -78,7 +79,7 @@ def test_manifest_spec_version_matches_the_adcp_pin() -> None:
         f"Vendored conformance vectors target spec {manifest['spec_version']}, but the "
         f"adcp SDK targets {adcp.get_adcp_spec_version()}. {_REFRESH_HINT}"
     )
-    assert manifest["source_tag"] == "v3.1.1"
+    assert manifest["source_tag"] == SPEC_REV
 
 
 def test_vendored_file_set_matches_the_manifest() -> None:

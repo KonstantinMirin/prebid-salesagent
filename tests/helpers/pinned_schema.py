@@ -185,7 +185,7 @@ def _vendored_source(version: str) -> _PinnedSource:
     if not root.is_dir():
         raise PinnedSchemaError(
             f"No vendored AdCP schema tree for spec version {version!r}: {root} does not exist. "
-            "Vendor it with tests/fixtures/adcp_schemas_pinned/_refresh.py, or drop the version "
+            "Vendor it with `uv run python -m tests.fixtures.adcp_schemas_pinned._refresh`, or drop the version "
             "prefix to resolve the ref against the installed SDK's tree."
         )
     return _PinnedSource(label=f"vendored {version}", root=root, ref_base=_VENDORED_DIR, uri_prefix=_SITE_ROOT_PREFIX)

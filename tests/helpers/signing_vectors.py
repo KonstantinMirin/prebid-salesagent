@@ -37,8 +37,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION
+
 VECTORS_DIR = (
-    Path(__file__).resolve().parent.parent / "fixtures" / "adcp_conformance_vectors" / "3.1.1" / "request-signing"
+    Path(__file__).resolve().parent.parent
+    / "fixtures"
+    / "adcp_conformance_vectors"
+    / EXPECTED_SPEC_VERSION
+    / "request-signing"
 )
 
 #: The one label the AdCP profile mandates a verifier process. ``positive/004``
@@ -57,7 +63,7 @@ def _read(relpath: str) -> str:
     if not path.exists():
         raise AssertionError(
             f"Conformance vector not vendored: {relpath} -> {path}. "
-            "Re-run tests/fixtures/adcp_schemas_pinned/_refresh.py to vendor it."
+            "Re-run uv run python -m tests.fixtures.adcp_schemas_pinned._refresh to vendor it."
         )
     return path.read_text()
 

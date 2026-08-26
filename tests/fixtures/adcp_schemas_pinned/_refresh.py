@@ -104,7 +104,7 @@ Enforced offline by tests/unit/test_pinned_fixture_id_convention.py.
 
 To refresh (e.g. to advance a pin — a deliberate, reviewed change that for (1)
 must also re-check the recovery/suggestion divergence against the SDK):
-    uv run python tests/fixtures/adcp_schemas_pinned/_refresh.py
+    uv run python -m tests.fixtures.adcp_schemas_pinned._refresh
 
 It reads from a local clone at ~/projects/adcp if present (faster), else GitHub raw.
 """
@@ -117,6 +117,8 @@ import re
 import subprocess
 import urllib.request
 from pathlib import Path
+
+from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION, SPEC_REV
 
 PINNED_SHA = "04f59d2d56d3d77033162c310e99a1188e4eb419"
 REPO = "adcontextprotocol/adcp"
@@ -134,20 +136,20 @@ ROOTS = [
 # Root set 2: the explicitly-versioned trust-root documents (#1291 A3,
 # salesagent-z6nr.9 step 7). Not covered by the SDK-tree migration — see the
 # module docstring's section 2 for why these stay vendored and version-namespaced.
-V311_REV = "v3.1.1"
+V311_REV = SPEC_REV
 V311_SRC_PREFIX = "dist/schemas"  # backs the `/schemas/...` namespace at this revision
 V311_ROOTS = [
-    "/schemas/3.1.1/brand.json",
-    "/schemas/3.1.1/adagents.json",
-    "/schemas/3.1.1/core/agent-signing-key.json",
+    f"/schemas/{EXPECTED_SPEC_VERSION}/brand.json",
+    f"/schemas/{EXPECTED_SPEC_VERSION}/adagents.json",
+    f"/schemas/{EXPECTED_SPEC_VERSION}/core/agent-signing-key.json",
 ]
 
 # Root set 3: request-signing conformance vectors (#1291 B3, salesagent-z6nr.14).
 # Not schemas and not $ref-walked — a whole upstream directory, byte-verbatim.
-VECTORS_REV = "v3.1.1"
-VECTORS_SPEC_VERSION = "3.1.1"
-VECTORS_SRC = "dist/compliance/3.1.1/test-vectors/request-signing"
-VECTORS_DIR = Path(__file__).parent.parent / "adcp_conformance_vectors" / "3.1.1" / "request-signing"
+VECTORS_REV = SPEC_REV
+VECTORS_SPEC_VERSION = EXPECTED_SPEC_VERSION
+VECTORS_SRC = f"dist/compliance/{EXPECTED_SPEC_VERSION}/test-vectors/request-signing"
+VECTORS_DIR = Path(__file__).parent.parent / "adcp_conformance_vectors" / EXPECTED_SPEC_VERSION / "request-signing"
 
 
 def _read_local(rev: str, src_prefix: str, rel: str) -> str | None:
