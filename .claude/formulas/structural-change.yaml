@@ -33,8 +33,8 @@ variables:
   TASK_IDS:
     description: "Space-separated step IDs in the parent epic's dependency order. Structural steps are sequential: each one narrows a type the next one depends on."
     required: true
-  PLAN_DOC:
-    description: "Path to the git-tracked design note that is the scope authority. The baseline atom records its SHA. Required, because solution-review grades the design's fidelity to this document, which means nothing when the referee lives inside the task the design came from."
+  PLAN_ISSUE:
+    description: "Issue ID of the bead holding the plan, normally the parent epic. The baseline atom hashes its text so a later edit is visible. It must not be the step under review: solution-review grades a step's design against the plan, which means nothing when the referee lives inside the task the design came from. A parent epic satisfies that, and keeps the plan beside the work instead of on a disk that no bead reader can see."
     required: true
 
 labels:
@@ -58,7 +58,9 @@ setup:
       cassini status <id>        # poll until 'finished'; pulls test-results/<latest>/
       ls tests/unit/test_architecture_*.py tests/unit/test_guards*.py | wc -l
       git rev-parse HEAD         # base for the no-new-test check
-      sha256sum {PLAN_DOC}
+      bd show {PLAN_ISSUE} --json | python3 -c \
+        'import json,sys; r=json.load(sys.stdin); r=r[0] if isinstance(r,list) else r; \
+         print((r.get("description") or "") + (r.get("design") or ""))' | shasum -a 256
       ```
 
       Read the per-suite pass counts and the xpassed node IDs from
@@ -67,7 +69,7 @@ setup:
 
       Record the guard file count, the total allowlist entry count, and the
       full-suite pass counts. Later atoms compare against these values.
-    acceptance: "Baseline recorded in the epic notes: suite pass counts, xpassed node IDs, guard file count, allowlist total, base commit SHA, plan SHA."
+    acceptance: "Baseline recorded in the epic notes: suite pass counts, xpassed node IDs, guard file count, allowlist total, base commit SHA, plan text hash."
     labels: ["atom:baseline"]
 
 iterate:
@@ -88,7 +90,7 @@ iterate:
 
         1. `bd show {TASK_ID}` — the step body and every correction note
            appended to it. Later notes override earlier text.
-        2. `{PLAN_DOC}` — this step's section.
+        2. `bd show {PLAN_ISSUE}` — the plan, and this step's clause in it.
         3. `ast-grep` or `.agent-index/` to confirm the cited symbols still
            match the tree. Reconcile a drifted line number; keep the intent.
 
@@ -208,9 +210,33 @@ iterate:
         | Field | Content |
         |-------|---------|
         | `measure_cmd` | A single command that prints one number or one list. It must be deterministic and runnable from a clean tree. |
-        | `before` | What that command prints before the change. Run it and paste the output. |
+        | `before` | What that command prints before the change. Take it the same way `verify-prediction` takes the after value, so the two are comparable. |
         | `predicted` | What it prints after the step. A specific value, not a direction. |
         | `deletes` | The files, tables, constants, and allowlist entries from the design's deletion list, as paths and names a command can check. |
+
+        ## Where to run the measurement
+
+        Take `before` on the same host that `verify-prediction` uses, or the two
+        numbers describe different machines. This epic exists because host state
+        changes the measurement: a personal specification clone, a liveness
+        artifact that only a full BDD run produces, and joins that fail closed
+        all move the number without failing.
+
+        For a whole-suite or guard-count measurement, run it on the box:
+
+        ```bash
+        # REMOTE_TEST_HOST must be on EVERY cassini call (run/status/kill/fetch) --
+        # without it status and kill target the default box and report a phantom run.
+        export REMOTE_TEST_HOST=noetis-b-vm
+        cassini run --detach       # returns a run id; exit 0 means LAUNCHED, not passed
+        cassini status <id>        # poll until 'finished'; pulls test-results/<latest>/
+        ```
+
+        For a narrow slice, use `REMOTE_TEST_HOST=noetis-b-vm cassini test <files>`.
+
+        A measurement that reads only committed files, such as a `git grep` count
+        or a byte total, runs anywhere. Say which kind it is in the bead, because
+        a reviewer cannot tell from the number.
 
         ## Rules
 
