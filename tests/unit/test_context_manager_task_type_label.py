@@ -39,10 +39,8 @@ def _capture_send(tool_name: str):
     Returns the (payload, metadata) the webhook service was invoked with, or
     ``None`` if it was never called (e.g. the payload builder raised).
     """
-    mapping = SimpleNamespace(object_type="media_buy", object_id="mb_1", action="create")
-    context = SimpleNamespace(tenant_id="tenant_1", principal_id="principal_1")
     webhook = SimpleNamespace(id="pnc_1")
-    session = session_returning([mapping], context, [webhook])
+    session = session_returning([webhook])
 
     captured: dict[str, object] = {}
 

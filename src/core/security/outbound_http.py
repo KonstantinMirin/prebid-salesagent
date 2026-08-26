@@ -421,7 +421,7 @@ def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").lower() == "true"
 
 
-def wire_field(provenance: UrlProvenance | None) -> str | None:
+def refusal_field(provenance: UrlProvenance | None) -> str | None:
     """The buyer-visible field *provenance* contributes to a refusal, if any.
 
     Only :class:`CounterpartyUrl` contributes one (its ``field``, which may
@@ -441,7 +441,7 @@ def wire_field(provenance: UrlProvenance | None) -> str | None:
 def is_counterparty(provenance: UrlProvenance | None) -> TypeIs[CounterpartyUrl]:
     """Whether *provenance* names a URL the counterparty (buyer) supplied.
 
-    The counterpart to :func:`wire_field`, for call sites that need the
+    The counterpart to :func:`refusal_field`, for call sites that need the
     CounterpartyUrl-vs-everything-else predicate itself rather than the field it
     carries — e.g. deciding whether a URL is eligible for a testing
     short-circuit that must never apply to a buyer-controlled destination. Kept
@@ -476,7 +476,7 @@ def _checked_field(provenance: UrlProvenance | None, url: str) -> str | None:
     means to name a field and instead names a URL has a bug, and swallowing it
     would ship the bug with a quietly fieldless envelope.
     """
-    field = wire_field(provenance)
+    field = refusal_field(provenance)
     if field is None:
         return None
     if "://" in field or url in field:

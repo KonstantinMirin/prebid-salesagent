@@ -42,7 +42,7 @@ from src.core.security.outbound_http import (
     UrlProvenance,
     asend,
     is_counterparty,
-    wire_field,
+    refusal_field,
 )
 from src.core.utils.operator_mcp import ProbeResult, call_operator_mcp_tool, probe_failure
 
@@ -326,29 +326,11 @@ class CreativeAgentRegistry:
             stmt = select(CreativeAgentModel).filter_by(tenant_id=tenant_id, enabled=True)
             db_agents = session.scalars(stmt).all()
 
-            for db_agent in db_agents:
-                # Parse auth credentials if present
-                auth = None
-                if db_agent.auth_type and db_agent.auth_credentials:
-                    auth = {
-                        "type": db_agent.auth_type,
-                        "credentials": db_agent.auth_credentials,
-                    }
-                    # Add auth_header if present (e.g., "Authorization", "x-api-key")
-                    if db_agent.auth_header:
-                        auth["header"] = db_agent.auth_header
-
-                agents.append(
-                    CreativeAgent(
-                        agent_url=db_agent.agent_url,
-                        name=db_agent.name,
-                        enabled=db_agent.enabled,
-                        priority=db_agent.priority,
-                        auth=auth,
-                        auth_header=db_agent.auth_header,
-                        timeout=db_agent.timeout,
-                    )
-                )
+            # config_for, not a second mapping: the inline block here also wrote an
+            # auth["header"] key with ZERO readers in src/, while auth_header was
+            # already carried as its own named field on both sides. Adopting the one
+            # mapping deletes the dead key for free.
+            agents.extend(self.config_for(db_agent) for db_agent in db_agents)
 
         # Sort by priority (lower number = higher priority)
         agents.sort(key=lambda a: a.priority)
@@ -522,7 +504,7 @@ class CreativeAgentRegistry:
         except OutboundError as exc:
             raise_mapped_outbound_error(exc, provenance=provenance, logger=logger)
 
-        field = wire_field(provenance)
+        field = refusal_field(provenance)
 
         # Parse SSE or JSON response
         content_type = result.headers.get("content-type", "")

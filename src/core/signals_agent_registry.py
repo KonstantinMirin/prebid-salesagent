@@ -83,7 +83,10 @@ class SignalsAgentRegistry:
         Returns:
             List of SignalsAgent instances (tenant-specific only)
         """
-        agents = []
+        # Annotated because the list is now filled by extend() from a generator:
+        # the old append-in-a-loop gave mypy an element type to infer, and extend
+        # does not.
+        agents: list[SignalsAgent] = []
 
         # Load tenant-specific agents from database
         from sqlalchemy import select
@@ -95,26 +98,7 @@ class SignalsAgentRegistry:
             stmt = select(SignalsAgentModel).filter_by(tenant_id=tenant_id, enabled=True)
             db_agents = session.scalars(stmt).all()
 
-            for db_agent in db_agents:
-                # Parse auth credentials if present
-                auth = None
-                if db_agent.auth_type and db_agent.auth_credentials:
-                    auth = {
-                        "type": db_agent.auth_type,
-                        "credentials": db_agent.auth_credentials,
-                    }
-
-                agents.append(
-                    SignalsAgent(
-                        agent_url=db_agent.agent_url,
-                        name=db_agent.name,
-                        enabled=db_agent.enabled,
-                        auth=auth,
-                        auth_header=db_agent.auth_header,
-                        forward_promoted_offering=db_agent.forward_promoted_offering,
-                        timeout=db_agent.timeout,
-                    )
-                )
+            agents.extend(self.config_for(db_agent) for db_agent in db_agents)
 
         # Sort by name for consistent ordering
         agents.sort(key=lambda a: a.name)
@@ -239,6 +223,13 @@ class SignalsAgentRegistry:
             enabled=db_agent.enabled,
             auth=auth,
             auth_header=db_agent.auth_header,
+            # Was passed by _get_tenant_agents' inline mapping and omitted here, so
+            # the two disagreed for any row where an operator turned it off: this
+            # function fell back to the field default (True). Nothing in src/ reads
+            # the field yet, so no dial behaviour differed -- the inline block was
+            # the ONLY carrier of the stored value, and dropping it without adding
+            # it here would have lost the column's meaning entirely.
+            forward_promoted_offering=db_agent.forward_promoted_offering,
             timeout=db_agent.timeout,
         )
 

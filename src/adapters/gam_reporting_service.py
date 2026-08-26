@@ -19,7 +19,8 @@ from urllib.parse import urlparse
 
 import pytz
 
-from src.core.security.outbound_http import OutboundError, send
+from src.core.exceptions import AdCPError
+from src.core.security.outbound_http import OperatorEndpoint, OutboundError, send
 
 logger = logging.getLogger(__name__)
 
@@ -373,7 +374,17 @@ class GAMReportingService:
                     max_attempts=1,
                 )
             except OutboundError as e:
-                raise Exception(f"Failed to download GAM report: {str(e)}") from e
+                # Delegates instead of rewrapping, the same way kevel.py:782 and
+                # triton_digital.py:707 did at this migration. The bare Exception
+                # here was this branch's one holdout from its own mapping rule: it
+                # lost `attempts`/`last_status` and the operator-endpoint terminal
+                # classification, and interpolated the seam's fixed message into a
+                # message of its own. Imported locally for the same reason the two
+                # siblings do: src.core.helpers.__init__ pulls in adapter_helpers,
+                # which imports the adapters.
+                from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
+
+                raise_mapped_outbound_error(e, provenance=OperatorEndpoint("Google Ad Manager"), logger=logger)
 
             # Parse the CSV data directly from the response with memory limits
             try:
@@ -400,6 +411,15 @@ class GAMReportingService:
                 logger.warning("GAM report returned no data rows")
 
             return data
+
+        except AdCPError:
+            # The typed error IS the answer. Without this arm the catch-all below
+            # re-wraps whatever `raise_mapped_outbound_error` just classified back
+            # into a bare Exception, and the download branch's migration off
+            # `raise Exception(...)` buys nothing observable -- the buyer sees the
+            # same relabelled string either way, minus `attempts`, `last_status`
+            # and the operator-endpoint terminal classification.
+            raise
 
         except Exception as e:
             raise Exception(f"Error running GAM report: {str(e)}")

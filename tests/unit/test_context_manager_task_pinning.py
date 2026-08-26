@@ -48,10 +48,8 @@ def _drive(send_notification_side):
     controls when/how the scheduled coroutine completes. Returns nothing —
     callers inspect async_utils._pinned_tasks.
     """
-    mapping = SimpleNamespace(object_type="media_buy", object_id="mb_1", action="create")
-    context = SimpleNamespace(tenant_id="tenant_1", principal_id="principal_1")
     webhook = SimpleNamespace(id="pnc_1")
-    session = session_returning([mapping], context, [webhook])
+    session = session_returning([webhook])
 
     # A REAL service with only the wire call stubbed. _send_push_notifications
     # dispatches through notify() now (salesagent-pldmk.39); a MagicMock service

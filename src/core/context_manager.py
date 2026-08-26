@@ -794,19 +794,18 @@ class ContextManager(DatabaseManager):
             session: Active database session
         """
         try:
-            from src.core.database.models import PushNotificationConfig
+            from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
 
-            # Get object mappings for this step
-            stmt = select(ObjectWorkflowMapping).filter_by(step_id=step.step_id)
-            mappings = session.scalars(stmt).all()
+            # step.object_mappings and step.context, not two hand-written selects:
+            # both relationships already exist on WorkflowStep and express exactly
+            # these two queries, keyed on the same columns.
+            mappings = step.object_mappings
 
             if not mappings:
                 console.print(f"[yellow]No object mappings found for step {step.step_id}[/yellow]")
                 return
 
-            # Get context to find tenant_id
-            context_stmt = select(Context).filter_by(context_id=step.context_id)
-            context = session.scalars(context_stmt).first()
+            context = step.context
             if not context:
                 console.print(f"[yellow]No context found for step {step.step_id}[/yellow]")
                 return
@@ -814,15 +813,11 @@ class ContextManager(DatabaseManager):
             tenant_id = context.tenant_id
             principal_id = context.principal_id
 
-            # Find registered webhooks for this principal
-            # NOTE: PushNotificationConfig doesn't have object_type/object_id columns
-            # Those are in ObjectWorkflowMapping which we already have via 'mappings'
-            webhook_stmt = select(PushNotificationConfig).filter_by(
-                tenant_id=tenant_id,
-                principal_id=principal_id,
-                is_active=True,
-            )
-            webhooks = session.scalars(webhook_stmt).all()
+            # Through the repository, which owns the (tenant, principal) scope this
+            # hand-written filter_by was retyping. NOTE: PushNotificationConfig has
+            # no object_type/object_id columns -- those are on ObjectWorkflowMapping,
+            # which `mappings` already holds.
+            webhooks = PushNotificationConfigRepository(session, tenant_id).list_active_by_principal(principal_id)
 
             console.print(f"[cyan]🔍 Found {len(webhooks)} active webhook configs for principal {principal_id}[/cyan]")
 
