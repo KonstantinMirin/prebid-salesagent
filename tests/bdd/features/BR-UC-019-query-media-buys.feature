@@ -933,6 +933,24 @@ Feature: BR-UC-019 Query Media Buys
     # backwards row, retired one lane later because the state it graded stopped
     # existing.
     #
+    # "STOPPED EXISTING" IS NOW MEASURED, not asserted. It was written unchecked, and a
+    # factory build (MediaBuyFactory.build(status="active", confirmed_at=None)) proves
+    # only that the TEST HARNESS can construct the state — a different population from
+    # the one this claim is about. Production measured directly:
+    #   - two src/ writers of MediaBuy.status, both in repositories/media_buy.py, and
+    #     both followed by _stamp_confirmation_if_needed
+    #   - ZERO core-DML writes to media_buys anywhere in src/, so nothing bypasses the
+    #     ORM stamp
+    #   - MediaBuy.__init__ refuses a preset confirmed_at, so a row cannot be born
+    #     stamped-wrong
+    #   - the backfill migration matches lower(status), so the later lowercase
+    #     normalisation cannot strand a row, and its COALESCE(approved_at, created_at)
+    #     predicate is always satisfied because created_at is NOT NULL with a default
+    # So a seller running this code cannot produce a committed buy with a null
+    # confirmed_at. The limit: that covers src/ and the migration chain AS THEY STAND,
+    # not a future core-DML status write — the write-seam guard's GUARDED_FIELDS does
+    # not include `status`.
+    #
     # The original demanded SCHEMA_VIOLATION for an active buy with a null
     # confirmed_at. That graded a BUG's presence: the pinned item schema
     # (media-buy/get-media-buys-response.json) types confirmed_at [string, null] and

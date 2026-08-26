@@ -467,12 +467,22 @@ class MediaBuyRepository:
         is the buyer's optimistic-concurrency token — it MUST strictly increase on
         every successful mutation, including two landing in the same clock tick.
 
-        The attribute holds a SQL expression until the next refresh. A caller that
-        reads ``media_buy.revision`` between this call and the flush gets that
-        expression object, not an int — so arithmetic or comparison on it raises
-        ``TypeError`` rather than returning a wrong number. The invariant announces
-        itself on any exercised path, which is why there is no guard here: an
-        AST read-scanner would be more machinery than the failure mode needs.
+        The attribute holds a SQL expression until the next refresh, so a caller
+        reading ``media_buy.revision`` between this call and the flush gets that
+        expression object rather than an int.
+
+        That does NOT announce itself. Measured across ten read shapes, only two raise
+        — ``int(x)`` and ``bool(x)``. Arithmetic and comparison, the two an earlier
+        version of this docstring named as the raising cases, silently build a further
+        SQL expression: ``x + 1`` and ``x > 2`` both succeed and return an object, not a
+        number.
+
+        The ground that actually holds the invariant is the call sites, not the type.
+        Four of the five direct callers flush on the very next line, and the fifth is
+        ``_bump_parent_revision``, whose own two callers both flush on their next line.
+        So no exercised path reads the attribute while it holds an expression. There is
+        no guard here because the window is closed by construction rather than detected
+        — but if a future caller stops flushing, nothing will raise.
         """
         media_buy.revision = MediaBuy.revision + 1
 

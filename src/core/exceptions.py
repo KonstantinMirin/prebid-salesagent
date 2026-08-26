@@ -664,8 +664,15 @@ class AdCPPersistedStateError(AdCPConfigurationError):
     the buyer cannot act on for data it does not own, and an invitation to retry a
     call that will fail identically.
 
-    The message names the buy, the column and the legal member set, because the
-    person who can act on it is an operator reading a log, not the caller.
+    The message names the buy, the column and the legal member set, because that is
+    what makes the defect actionable for the seller's operator, who is the only party
+    who can fix it.
+
+    It does NOT say the buyer never sees it — this docstring said that twelve lines
+    above its own statement that the message reaches the buyer in both envelope
+    layers. Both are true of the same string: it is written for the operator and it is
+    delivered to the buyer, which is exactly why it names a column rather than a
+    stack frame.
     """
 
 

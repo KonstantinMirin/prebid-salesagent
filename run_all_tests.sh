@@ -162,8 +162,7 @@ for f in audit.log error.log structured.jsonl security.jsonl; do
     # taking every per-worker server container unhealthy with it.
     # The setgid bit set on the directory above does not rescue this either: it
     # controls the GROUP of new files, not their write bit.
-    # 666 is also consistent with the rest of a run directory, which is already
-    # world-writable; these are ephemeral per-run test logs, not durable state.
+    # These are ephemeral per-run test logs, not durable state.
     chmod 666 "logs/$f"
 done
 

@@ -1,13 +1,28 @@
-"""What status a media buy's flight window implies — one domain owner.
+"""What status a media buy's flight window implies.
+
+One domain owner for the RULE, but not one granularity: the write side
+(``resolve_flight_window_status``) takes a ``datetime`` and the read side
+(``_media_buy_status.resolve_canonical_status``) takes a ``date``, so the two
+disagree about a buy whose window opens or closes part-way through a day. Calling
+this "one domain owner" without that qualification invites a reader to assume the
+two agree on every input; they agree on whole days only.
 
 This is a DOMAIN rule, not presentation: "given this buy's flight window, and whether
 its creatives are approved, what lifecycle state is it in?" The answer is written to
 the ``media_buys.status`` column, so it belongs beside the vocabulary rather than
 inside whichever route happened to need it.
 
-It was implemented three times — the scheduler (``media_buy_status_scheduler``), the
-operations blueprint, and the creatives blueprint — and the copies had DIVERGED, which
-is the argument for this module existing:
+It was implemented FOUR times — the scheduler (``media_buy_status_scheduler``), the
+operations blueprint, the creatives blueprint, and
+``admin/services/media_buy_readiness_service._compute_state`` — and the copies had
+DIVERGED, which is the argument for this module existing.
+
+Measured, so the next reader does not overestimate what has been absorbed:
+``resolve_flight_window_status`` has TWO callers, ``media_buy_create`` and the
+scheduler. Of the four implementations above, this module replaced ONE. The
+operations blueprint, the creatives blueprint and ``_compute_state`` still
+open-code it, and ``_compute_state`` is what the admin UI displays — so the
+divergence this module exists to end is still live on the surface a human looks at.
 
 * the creatives-blueprint copy returned only ``active`` or ``scheduled``, so a buy
   approved AFTER its flight end was stamped ``scheduled``: a finished campaign

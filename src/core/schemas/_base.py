@@ -830,9 +830,14 @@ class UpdateMediaBuySuccess(CompletedTaskStatusMixin, AdCPUpdateMediaBuySuccess)
 
         An adapter's ``update_media_buy`` returns this type, but what it returns is not
         an envelope: the tool builds a fresh one for the buyer after the row is written.
-        Verified across every read site — ``adapter.update_media_buy`` is called at three
-        places in ``media_buy_update``, and each reads only ``result.errors``. Nothing
-        reads the Success arm's fields.
+        Measured across every read site. On the error arm each call reads only
+        ``result.errors``. On the success arm exactly two fields are read, both in
+        ``media_buy_update`` and both through ``getattr`` with a fallback:
+        ``media_buy_id`` (defaulting to the request's) and ``affected_packages``
+        (defaulting to ``[]``). So an adapter that omits either is not a broken read.
+
+        ``revision`` — the field this constructor exists to justify omitting — is read
+        **zero** times off an adapter result.
 
         So ``revision`` is meaningless here, and an adapter has no row to read it from
         (adapters do not touch the database — that is the boundary). The same is true of
