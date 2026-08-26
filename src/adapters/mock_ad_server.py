@@ -18,7 +18,7 @@ from src.adapters.base import (
     BaseProductConfig,
     TargetingCapabilities,
 )
-from src.core.errors.details import EntityRefDetails
+from src.core.errors.details import CapabilityRefusalDetails, EntityRefDetails
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPBudgetExhaustedError,
@@ -646,19 +646,37 @@ class MockAdServer(AdServerAdapter):
             if targeting:
                 # Mock adapter mirrors GAM behavior - these targeting types are not supported
                 if getattr(targeting, "device_type_any_of", None):
-                    raise AdCPCapabilityNotSupportedError(details={"device_type_any_of": targeting.device_type_any_of})
+                    raise AdCPCapabilityNotSupportedError(
+                        details=CapabilityRefusalDetails(
+                            capability="device_type_any_of", rejected_value=targeting.device_type_any_of
+                        )
+                    )
 
                 if getattr(targeting, "os_any_of", None):
-                    raise AdCPCapabilityNotSupportedError(details={"os_any_of": targeting.os_any_of})
+                    raise AdCPCapabilityNotSupportedError(
+                        details=CapabilityRefusalDetails(capability="os_any_of", rejected_value=targeting.os_any_of)
+                    )
 
                 if getattr(targeting, "browser_any_of", None):
-                    raise AdCPCapabilityNotSupportedError(details={"browser_any_of": targeting.browser_any_of})
+                    raise AdCPCapabilityNotSupportedError(
+                        details=CapabilityRefusalDetails(
+                            capability="browser_any_of", rejected_value=targeting.browser_any_of
+                        )
+                    )
 
                 if getattr(targeting, "content_cat_any_of", None):
-                    raise AdCPCapabilityNotSupportedError(details={"content_cat_any_of": targeting.content_cat_any_of})
+                    raise AdCPCapabilityNotSupportedError(
+                        details=CapabilityRefusalDetails(
+                            capability="content_cat_any_of", rejected_value=targeting.content_cat_any_of
+                        )
+                    )
 
                 if getattr(targeting, "keywords_any_of", None):
-                    raise AdCPCapabilityNotSupportedError(details={"keywords_any_of": targeting.keywords_any_of})
+                    raise AdCPCapabilityNotSupportedError(
+                        details=CapabilityRefusalDetails(
+                            capability="keywords_any_of", rejected_value=targeting.keywords_any_of
+                        )
+                    )
 
         # GAM-like validation (based on real GAM behavior)
         validation_errors = self.validate_media_buy_request(

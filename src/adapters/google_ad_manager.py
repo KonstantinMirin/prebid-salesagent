@@ -46,7 +46,13 @@ from src.adapters.gam.pricing_compatibility import PricingCompatibility
 from src.adapters.gam_data_freshness import validate_and_log_freshness
 from src.core.audit_logger import AuditLogger
 from src.core.errors.codes import AppErrorCode
-from src.core.errors.details import AdapterFailureDetails, EntityRefDetails, ErrorProblem
+from src.core.errors.details import (
+    AdapterFailureDetails,
+    CapabilityRefusalDetails,
+    EntityRefDetails,
+    ErrorProblem,
+    ValueRejectionDetails,
+)
 from src.core.exceptions import (
     AdCPActivationWorkflowError,
     AdCPAdapterError,
@@ -155,7 +161,7 @@ class GoogleAdManager(AdServerAdapter):
                 int(advertiser_id)
             except (ValueError, TypeError) as e:
                 raise AdCPConfigurationError(
-                    details={"advertiser_id": advertiser_id},
+                    details=ValueRejectionDetails(rejected_value=str(advertiser_id)),
                     field="advertiser_id",
                 ) from e
 
@@ -1380,7 +1386,7 @@ class GoogleAdManager(AdServerAdapter):
                 self.log(f"[red]Invalid budget value: {budget} (must be positive)[/red]")
                 raise AdCPValidationError(
                     field="budget",
-                    details={"budget": budget},
+                    details=ValueRejectionDetails(rejected_value=str(budget)),
                 )
 
             self.log(f"[GAM] Updating package {package_id} budget to {budget} (with delivery validation)")
@@ -1597,10 +1603,11 @@ class GoogleAdManager(AdServerAdapter):
         # Explicit failure for unsupported actions (no silent success)
         self.log(f"[red]Unsupported action '{action}' for GAM adapter[/red]")
         raise AdCPCapabilityNotSupportedError(
-            details={
-                "action": action,
-                "supported_actions": ["approve_order", "activate_order", "update_package_budget"],
-            },
+            details=CapabilityRefusalDetails(
+                capability="update_action",
+                rejected_value=action,
+                accepted_values=["approve_order", "activate_order", "update_package_budget"],
+            ),
         )
 
     def update_media_buy_performance_index(self, media_buy_id: str, package_performance: list) -> bool:

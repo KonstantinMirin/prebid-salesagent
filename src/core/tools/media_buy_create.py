@@ -1618,7 +1618,13 @@ async def _validate_and_convert_format_ids(
     return validated_format_ids
 
 
-from src.core.errors.details import AdapterFailureDetails, EntityRefDetails, ProductRefDetails
+from src.core.errors.details import (
+    AdapterFailureDetails,
+    CapabilityRefusalDetails,
+    EntityRefDetails,
+    ProductRefDetails,
+    ValueRejectionDetails,
+)
 from src.services.setup_checklist_service import SetupIncompleteError, validate_setup_complete
 from src.services.slack_notifier import get_slack_notifier
 
@@ -2216,7 +2222,7 @@ async def _create_media_buy_impl(
                 # renders "root=datetime.datetime(...)" — the rendering defect the wire-safety
                 # marker check grades. The unwrapped value renders as "2020-01-01 00:00:00+00:00".
                 raise AdCPInvalidRequestError(
-                    details={"start_time": str(computed_start_time)},
+                    details=ValueRejectionDetails(rejected_value=str(computed_start_time)),
                     field="start_time",
                 )
 
@@ -2410,7 +2416,7 @@ async def _create_media_buy_impl(
                 # Currency support is a seller capability, not a malformed request:
                 # emit UNSUPPORTED_FEATURE (matches the update path and UC-002 ext-d).
                 raise AdCPCapabilityNotSupportedError(
-                    details={"request_currency": request_currency},
+                    details=CapabilityRefusalDetails(capability="currency", rejected_value=request_currency),
                     context=req.context,
                 )
 

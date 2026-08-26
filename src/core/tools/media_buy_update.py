@@ -73,7 +73,7 @@ from src.core.database.models import (
     Product as DBProduct,
 )
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
-from src.core.errors.details import AdapterFailureDetails, EntityRefDetails, ErrorProblem
+from src.core.errors.details import AdapterFailureDetails, CapabilityRefusalDetails, EntityRefDetails, ErrorProblem
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -611,7 +611,7 @@ def _update_media_buy_impl(
 
                     if not currency_limit:
                         raise AdCPCapabilityNotSupportedError(
-                            details={"request_currency": request_currency},
+                            details=CapabilityRefusalDetails(capability="currency", rejected_value=request_currency),
                             context=req.context,
                         )
 
@@ -1068,7 +1068,7 @@ def _update_media_buy_impl(
                                 elif product_obj and not product_obj.placements:
                                     # Product doesn't define placements, so placement targeting not supported
                                     raise AdCPCapabilityNotSupportedError(
-                                        details={"product_id": product_id},
+                                        details=CapabilityRefusalDetails(product_id=product_id),
                                         context=req.context,
                                     )
 

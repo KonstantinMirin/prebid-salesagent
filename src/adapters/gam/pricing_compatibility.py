@@ -14,6 +14,7 @@ Source: https://developers.google.com/ad-manager/api/reference/ForecastService.C
 
 from typing import Literal
 
+from src.core.errors.details import CapabilityRefusalDetails
 from src.core.exceptions import AdCPCapabilityNotSupportedError
 
 # Type aliases for clarity
@@ -148,7 +149,9 @@ class PricingCompatibility:
         """
         cost_type = cls.ADCP_TO_GAM_COST_TYPE.get(pricing_model)
         if not cost_type:
-            raise AdCPCapabilityNotSupportedError(details={"pricing_model": pricing_model})
+            raise AdCPCapabilityNotSupportedError(
+                details=CapabilityRefusalDetails(capability="pricing_model", rejected_value=pricing_model)
+            )
         return cost_type
 
     @classmethod

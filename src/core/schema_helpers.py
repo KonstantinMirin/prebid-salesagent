@@ -29,6 +29,7 @@ from adcp.types import (
 )
 from pydantic import BaseModel, ValidationError
 
+from src.core.errors.details import ValueRejectionDetails
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas.product import GetProductsRequest
 from src.core.validation_helpers import adcp_validation_boundary
@@ -119,7 +120,7 @@ def _coerce_domain_or_raise(raw: str) -> str:
     domain = brand_shorthand_to_domain(raw)
     if not domain:
         raise AdCPValidationError(
-            details={"brand": raw},
+            details=ValueRejectionDetails(rejected_value=str(raw)),
             field="brand",
         )
     try:

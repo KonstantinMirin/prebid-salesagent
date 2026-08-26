@@ -7,6 +7,7 @@ from typing import Any
 
 from adcp.types import CreativeAsset
 
+from src.core.errors.details import ValueRejectionDetails
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas import Creative, CreativePolicy, CreativeStatusEnum
 
@@ -102,7 +103,7 @@ def _validate_creative_input(
 
     if format_value is None:
         raise AdCPValidationError(
-            details={"format_id": creative.format_id},
+            details=ValueRejectionDetails(rejected_value=str(creative.format_id)),
             field="format_id",
         )
 

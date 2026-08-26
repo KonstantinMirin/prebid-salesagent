@@ -6,7 +6,7 @@ import requests
 
 from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import require_supported_update_action
-from src.core.errors.details import EntityRefDetails
+from src.core.errors.details import CapabilityRefusalDetails, EntityRefDetails
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
@@ -162,7 +162,7 @@ class TritonDigital(AdServerAdapter):
         if unsupported_features:
             error_msg = f"Unsupported targeting features for Triton Digital: {'; '.join(unsupported_features)}"
             self.log(f"[red]Error: {error_msg}[/red]")
-            raise AdCPCapabilityNotSupportedError(details={"features": unsupported_features})
+            raise AdCPCapabilityNotSupportedError(details=CapabilityRefusalDetails(rejected_value=unsupported_features))
 
         # Generate a media buy ID
         media_buy_id = (

@@ -46,12 +46,14 @@ from src.core.errors.codes import ErrorCodeT
 
 __all__ = [
     "AdapterFailureDetails",
+    "CapabilityRefusalDetails",
     "EntityRefDetails",
     "ErrorDetails",
     "ErrorProblem",
     "ProblemsDetails",
     "ProductRefDetails",
     "UpstreamCallDetails",
+    "ValueRejectionDetails",
     "VersionUnsupportedDetails",
 ]
 
@@ -241,3 +243,40 @@ class AdapterFailureDetails(EntityRefDetails, UpstreamCallDetails, ProblemsDetai
     is why ``AdCPAdapterError`` needs no type parameter of its own -- its five
     taxonomy subclasses all draw from the same three axes.
     """
+
+
+class ValueRejectionDetails(ErrorDetails):
+    """A value the buyer supplied was refused, and optionally what is accepted.
+
+    ``rejected_value`` and ``accepted_values`` are the pin's canonical
+    rejection-set keys (v3.1.1 ``core/error.json``, the ``details`` description),
+    named there explicitly "rather than seller-specific variants observed in the
+    wild (``available``, ``allowed`` ...)".
+
+    This replaces eight sites whose detail key merely REPEATED the field name —
+    ``field='brand'`` beside ``details={'brand': raw}``, ``field='status'``
+    beside ``details={'status': status}``. Eight key names for one concept, none
+    of which a buyer could read without first reading ``field``.
+
+    ``rejected_value`` admits a list because a list-valued field's offending
+    value IS the list; splitting it into a second ``rejected_values`` field would
+    be two channels for one fact.
+    """
+
+    rejected_value: str | list[str] | None = None
+    accepted_values: list[str] | None = None
+    received_type: str | None = None
+
+
+class CapabilityRefusalDetails(EntityRefDetails, ValueRejectionDetails):
+    """A capability the buyer asked for that this seller does not support.
+
+    One shape for 28 sites that previously used 18 different key names, because
+    they put the CAPABILITY NAME IN THE KEY: ``{"device_type_any_of": [...]}``,
+    ``{"os_any_of": [...]}``, ``{"geo_system": ..., "supported_systems": [...]}``.
+    A buyer had to know every key name in advance to find out which capability
+    was refused. Naming it in ``capability`` makes one read work for all of them,
+    and the requested/supported pair uses the pin's canonical keys.
+    """
+
+    capability: str | None = None

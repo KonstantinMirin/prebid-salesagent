@@ -20,6 +20,7 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.codes import ErrorCode
+from src.core.errors.details import ValueRejectionDetails
 from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value, log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
@@ -108,7 +109,7 @@ def _build_list_creatives_request(
             created_after_dt = datetime.fromisoformat(created_after.replace("Z", "+00:00"))
         except ValueError:
             raise AdCPValidationError(
-                details={"created_after": created_after},
+                details=ValueRejectionDetails(rejected_value=str(created_after)),
                 field="created_after",
             )
     if created_before:
@@ -116,7 +117,7 @@ def _build_list_creatives_request(
             created_before_dt = datetime.fromisoformat(created_before.replace("Z", "+00:00"))
         except ValueError:
             raise AdCPValidationError(
-                details={"created_before": created_before},
+                details=ValueRejectionDetails(rejected_value=str(created_before)),
                 field="created_before",
             )
 
