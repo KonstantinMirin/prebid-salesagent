@@ -385,7 +385,7 @@ def _validate_creatives_before_adapter_call(
         # BR-UC-003 ext-i storyboard cell grades it) — deferred pending
         # upstream reconciliation.
         raise AdCPCreativeRejectedError(
-            details={"creative_ids": sorted(missing_ids)},
+            details=CreativeRejectionDetails(creative_ids=sorted(missing_ids)),
         )
 
     # Validate each creative has required fields
@@ -496,7 +496,7 @@ def _validate_creatives_before_adapter_call(
         )
         logger.error(f"[PRE-VALIDATION] {error_msg}")
         raise AdCPCreativeRejectedError(
-            details={"creative_errors": validation_errors},
+            details=CreativeRejectionDetails(reasons=validation_errors),
         )
 
 
@@ -1621,8 +1621,10 @@ async def _validate_and_convert_format_ids(
 from src.core.errors.details import (
     AdapterFailureDetails,
     CapabilityRefusalDetails,
+    CreativeRejectionDetails,
     EntityRefDetails,
     ProductRefDetails,
+    TimeWindowDetails,
     ValueRejectionDetails,
 )
 from src.services.setup_checklist_service import SetupIncompleteError, validate_setup_complete
@@ -2239,10 +2241,10 @@ async def _create_media_buy_impl(
             # computed_* are the UNWRAPPED, tz-normalized values — see the start_time branch
             # above for why req.start_time must never be stringified into details.
             raise AdCPInvalidRequestError(
-                details={
-                    "start_time": str(computed_start_time),
-                    "end_time": str(computed_end_time),
-                },
+                details=TimeWindowDetails(
+                    start_time=str(computed_start_time),
+                    end_time=str(computed_end_time),
+                ),
                 field="end_time",
             )
 
@@ -3832,7 +3834,9 @@ async def _create_media_buy_impl(
                                             # validation failure — matching the sibling pre-adapter
                                             # validation raise. Carry a remediation suggestion (POST-F3).
                                             raise AdCPCreativeRejectedError(
-                                                details={"creative_id": creative_id, "product_id": package.product_id},
+                                                details=CreativeRejectionDetails(
+                                                    creative_id=creative_id, product_id=package.product_id
+                                                ),
                                             )
 
                                         logger.info(

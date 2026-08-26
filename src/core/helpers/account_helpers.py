@@ -11,7 +11,7 @@ from __future__ import annotations
 from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey
 
 from src.core.database.repositories.account import AccountRepository
-from src.core.errors.details import EntityRefDetails
+from src.core.errors.details import AccountAmbiguousDetails, AccountSetupDetails, EntityRefDetails
 from src.core.exceptions import (
     AdCPAccountAmbiguousError,
     AdCPAccountNotFoundError,
@@ -80,9 +80,15 @@ def _check_account_status(account_id: str, status: str | None) -> None:
     if status == "pending_approval":
         # BR-UC-002 ext-s grades BOTH the top-level suggestion (POST-F3) and a
         # details payload carrying the setup instructions (POST-F2).
-        setup_instructions = "Complete billing configuration before use."
+        # `setup_steps` is account-setup-required.json's own property name; the
+        # local `setup_instructions` was a synonym for it, so the pin's spelling wins.
+        # FIXME(#2099): account_id is not in the pinned shape. It may belong on the
+        # error's field pointer or nowhere, rather than in details.
         raise AdCPAccountSetupRequiredError(
-            details={"setup_instructions": setup_instructions, "account_id": account_id},
+            details=AccountSetupDetails(
+                setup_steps=["Complete billing configuration before use."],
+                account_id=account_id,
+            ),
         )
     if status == "suspended":
         raise AdCPAccountSuspendedError(
@@ -162,7 +168,7 @@ def _resolve_by_natural_key(
             principal_id=principal_id,
         )
         raise AdCPAccountAmbiguousError(
-            details={"match_count": total, "brand_domain": brand_domain, "operator": ref.operator},
+            details=AccountAmbiguousDetails(match_count=total, brand_domain=brand_domain, operator=ref.operator),
         )
 
     account = matches[0] if matches else None

@@ -18,7 +18,7 @@ from src.adapters.base import (
     BaseProductConfig,
     TargetingCapabilities,
 )
-from src.core.errors.details import CapabilityRefusalDetails, EntityRefDetails
+from src.core.errors.details import CapabilityRefusalDetails, CreativeRejectionDetails, EntityRefDetails
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPBudgetExhaustedError,
@@ -348,9 +348,11 @@ class MockAdServer(AdServerAdapter):
             return
         from src.core.exceptions import AdCPAdapterError
 
-        details = test_behavior.get("error_details")
         raise AdCPAdapterError(
-            details=details or None,
+            # The injected error_details rode `details` while this comment said it
+            # belongs server-side. It does: internal_detail below carries the injected
+            # text, and a fault-injection knob has no business shaping a buyer's
+            # details block.
             # A fault-injection knob must still DO something (CLAUDE.md: no quiet
             # failures). The injected text is a server-side diagnostic, so it rides
             # internal_detail rather than being dropped or put on the buyer's wire.
@@ -1079,7 +1081,10 @@ class MockAdServer(AdServerAdapter):
         if rejected_assets and not approved_assets:
             # All rejected
             raise AdCPCreativeRejectedError(
-                details={"rejection_reasons": [reason if reason else "unknown" for _, reason in rejected_assets]}
+                # `reasons` is creative-rejected.json's own name for this.
+                details=CreativeRejectionDetails(
+                    reasons=[reason if reason else "unknown" for _, reason in rejected_assets]
+                )
             )
         elif rejected_assets:
             # Some rejected - log warnings but continue with approved ones

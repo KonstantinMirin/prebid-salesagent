@@ -16,7 +16,7 @@ from fastmcp.server.context import Context
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import WorkflowUoW
-from src.core.errors.details import ValueRejectionDetails
+from src.core.errors.details import ConflictDetails, ValueRejectionDetails
 from src.core.exceptions import (
     AdCPConflictError,
     AdCPValidationError,
@@ -219,7 +219,10 @@ async def complete_task(
         task = uow.workflows.get_by_step_id_or_raise(task_id)
 
         if task.status not in ["pending", "in_progress", "requires_approval"]:
-            raise AdCPConflictError(details={"task_id": task_id, "status": task.status})
+            # `resource_id` is conflict.json's own name; `task_id` was a local synonym.
+            # FIXME(#2099): `status` is not in the pinned shape -- the pin models a
+            # conflict as expected_version vs current_version, not a status string.
+            raise AdCPConflictError(details=ConflictDetails(resource_id=task_id, status=task.status))
 
         completed_time = datetime.now(UTC)
 

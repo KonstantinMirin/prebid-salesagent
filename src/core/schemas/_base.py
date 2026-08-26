@@ -69,6 +69,7 @@ from adcp.types.generated_poc.enums.media_buy_valid_action import (
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.errors.codes import CODE_TABLE, ErrorCodeT
+from src.core.errors.issues import ErrorIssue, JsonPointer
 from src.core.exceptions import (
     AdCPError,
     AdCPInvalidRequestError,
@@ -2136,9 +2137,14 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
                 raise AdCPInvalidRequestError(field="package_id")
             present = sorted(f for f in cls._IMMUTABLE_PACKAGE_FIELDS if f in data)
             if present:
+                # A list of field names beside `field=present[0]` IS the pin's
+                # "populate field from issues[0]" MUST, written out by hand. issues[]
+                # is the channel for a multi-field rejection, and `field` now derives
+                # from issues[0].pointer instead of being indexed here.
                 raise AdCPInvalidRequestError(
-                    details={"immutable_fields": present},
-                    field=present[0],
+                    issues=[
+                        ErrorIssue.of(pointer=JsonPointer.of(name).pointer, keyword="readOnly") for name in present
+                    ],
                 )
         return data
 

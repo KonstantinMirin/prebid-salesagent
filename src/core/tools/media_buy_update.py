@@ -73,7 +73,14 @@ from src.core.database.models import (
     Product as DBProduct,
 )
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
-from src.core.errors.details import AdapterFailureDetails, CapabilityRefusalDetails, EntityRefDetails, ErrorProblem
+from src.core.errors.details import (
+    AdapterFailureDetails,
+    CapabilityRefusalDetails,
+    CreativeRejectionDetails,
+    EntityRefDetails,
+    ErrorProblem,
+    InvalidStateDetails,
+)
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -230,7 +237,7 @@ def _validate_creatives_for_assignment(
         # CREATIVE_NOT_FOUND uniformity MUST — the BR-UC-003 ext-i storyboard
         # cell grades CREATIVE_REJECTED; deferred pending upstream reconciliation.
         raise AdCPCreativeRejectedError(
-            details={"creative_ids": missing_ids},
+            details=CreativeRejectionDetails(creative_ids=missing_ids),
             context=context,
         )
 
@@ -239,7 +246,13 @@ def _validate_creatives_for_assignment(
     if bad_state:
         raise AdCPCreativeRejectedError(
             # The STATE per creative, not a joined sentence duplicating creative_ids.
-            details={"creatives": [{"creative_id": c.creative_id, "status": c.status} for c in bad_state]},
+            # Per-creative outcomes are per-ENTITY problems, not fields.
+            details=CreativeRejectionDetails(
+                problems=[
+                    ErrorProblem(subject_type="creative", subject_id=c.creative_id, rejected_value=c.status)
+                    for c in bad_state
+                ]
+            ),
             context=context,
         )
 
@@ -274,7 +287,9 @@ def _validate_creatives_for_assignment(
             f"{url}/{fmt_id}" if url else fmt_id for url, fmt_id in sorted(supported_formats, key=lambda p: p[1])
         )
         raise AdCPCreativeRejectedError(
-            details={"supported_formats": supported_display, "product": display_name},
+            # FIXME(#2099): the product's DISPLAY NAME is prose, and product_id already
+            # identifies it. Preserved for now because removing it changes the wire.
+            details=CreativeRejectionDetails(accepted_values=[supported_display], product_id=display_name),
             context=context,
         )
 
@@ -390,7 +405,7 @@ def _update_media_buy_impl(
             _current_status = _current_mb.status if _current_mb else ""
             if is_terminal_status(_current_status):
                 raise AdCPGoneError(
-                    details={"current_status": _current_status},
+                    details=InvalidStateDetails(current_status=_current_status),
                     field="media_buy_id",
                 )
 
@@ -403,7 +418,7 @@ def _update_media_buy_impl(
                 _disallowed = [a for a in _requested if a not in _allowed]
                 if _requested and _disallowed:
                     raise AdCPGoneError(
-                        details={"disallowed_actions": _disallowed, "current_status": _current_status},
+                        details=InvalidStateDetails(disallowed_actions=_disallowed, current_status=_current_status),
                         field="media_buy_id",
                     )
 

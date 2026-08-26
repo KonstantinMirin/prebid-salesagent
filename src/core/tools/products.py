@@ -20,6 +20,7 @@ from pydantic import Field
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object, require_identity, require_tenant
+from src.core.errors.details import PolicyViolationDetails
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthorizationError,
@@ -338,7 +339,9 @@ async def _get_products_impl(
 
         # Raise error for policy violations - explicit failure, not silent return
         raise AdCPPolicyViolationError(
-            details={"restrictions": policy_result.restrictions if policy_result.restrictions else []}
+            # `violated_rules` is policy-violation.json's own name for what this
+            # called `restrictions` -- same fact, so the pinned spelling wins.
+            details=PolicyViolationDetails(violated_rules=policy_result.restrictions or [])
         )
 
     # Resolve adapter type for delivery_measurement defaults

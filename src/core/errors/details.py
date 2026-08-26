@@ -45,6 +45,15 @@ from src.core.config import get_pydantic_extra_mode
 from src.core.errors.codes import ErrorCodeT
 
 __all__ = [
+    "CreativeRejectionDetails",
+    "TimeWindowDetails",
+    "RejectionReasonDetails",
+    "PolicyViolationDetails",
+    "InvalidStateDetails",
+    "ConflictDetails",
+    "BudgetDetails",
+    "AccountSetupDetails",
+    "AccountAmbiguousDetails",
     "AdapterFailureDetails",
     "CapabilityRefusalDetails",
     "EntityRefDetails",
@@ -280,3 +289,120 @@ class CapabilityRefusalDetails(EntityRefDetails, ValueRejectionDetails):
     """
 
     capability: str | None = None
+
+
+class BudgetDetails(EntityRefDetails):
+    """A budget refusal, with the numbers that decided it.
+
+    Deliberately NOT borrowing ``budget-too-low.json``'s ``minimum_budget`` /
+    ``currency``: that shape governs ``BUDGET_TOO_LOW``, and importing its key
+    names under ``BUDGET_EXCEEDED`` would claim a pinned shape for a code the pin
+    does not associate with it.
+    """
+
+    requested_budget: str | None = None
+    current_spend: str | None = None
+    budget_limit: str | None = None
+
+
+class RejectionReasonDetails(ErrorDetails):
+    """A seller's own reason for declining, as configured by that seller.
+
+    ``rejection_reason`` is OPERATOR data, not a buyer-facing sentence this repo
+    authored: it comes from the seller's approval configuration, and the buyer
+    genuinely needs it to know why the decline happened. It stays free text for
+    that reason, and only that reason.
+    """
+
+    rejection_reason: str | None = None
+
+
+class AccountSetupDetails(EntityRefDetails):
+    """An account that needs work before it can be used.
+
+    ``setup_url`` and ``setup_steps`` are ``account-setup-required.json``'s own
+    property names, so this uses them rather than a local synonym.
+    """
+
+    setup_url: str | None = None
+    setup_steps: list[str] | None = None
+
+
+class AccountAmbiguousDetails(EntityRefDetails):
+    """A reference that resolved to more than one account."""
+
+    match_count: int | None = None
+
+
+class InvalidStateDetails(EntityRefDetails):
+    """The resource's current status, and what that status forbids."""
+
+    current_status: str | None = None
+    disallowed_actions: list[str] | None = None
+
+
+class PolicyViolationDetails(ErrorDetails):
+    """A policy refusal. Field names from ``policy-violation.json``.
+
+    ``violated_rules`` is the pin's name for what this repo called
+    ``restrictions`` — the same fact, so the pinned spelling wins.
+    """
+
+    policy_id: str | None = None
+    policy_url: str | None = None
+    violated_rules: list[str] | None = None
+
+
+class ConflictDetails(EntityRefDetails):
+    """A conflicting resource. ``resource_id`` is ``conflict.json``'s own name.
+
+    ``expected_version`` / ``current_version`` are declared because the pin
+    declares them, even though no site populates them yet: a buyer reading the
+    pinned shape should find the keys where the pin says they are.
+    """
+
+    resource_id: str | None = None
+    expected_version: str | None = None
+    current_version: str | None = None
+    status: str | None = None
+
+
+class TimeWindowDetails(ErrorDetails):
+    """A start/end pair that is invalid as a pair, not individually.
+
+    Distinct from ``ValueRejectionDetails.rejected_value``: one offending value
+    goes there, but a window is refused for the RELATIONSHIP between two
+    instants, so both have to be readable.
+    """
+
+    start_time: str | None = None
+    end_time: str | None = None
+
+
+class CreativeRejectionDetails(EntityRefDetails, ValueRejectionDetails, ProblemsDetails):
+    """A creative this seller will not accept.
+
+    ``policy_id``, ``policy_url`` and ``reasons`` are ``creative-rejected.json``'s
+    own properties, so they carry the pin's spelling. Sixteen sites previously
+    used eleven key names, several of which were synonyms for one of those three:
+    ``rejection_reasons`` and ``creative_errors`` are both ``reasons``, and
+    ``supported_formats`` is the pin-canonical ``accepted_values`` this shape
+    inherits.
+
+    The fields below the FIXME are NOT in the pinned shape. They are conformant
+    (``additionalProperties: true``) and they preserve what each site emits
+    today, which is this migration's rule. Whether they belong in ``details`` at
+    all is the open question: ``missing_field`` / ``invalid_field`` name a field,
+    which is what the top-level ``field`` pointer and ``issues[]`` exist for, and
+    ``creative_ids`` identifies subjects, which ``problems[].subject_id`` already
+    carries per item.
+    """
+
+    policy_id: str | None = None
+    policy_url: str | None = None
+    reasons: list[str] | None = None
+
+    # FIXME(#2099): not declared by creative-rejected.json. See the docstring.
+    creative_ids: list[str] | None = None
+    missing_field: str | None = None
+    invalid_field: str | None = None

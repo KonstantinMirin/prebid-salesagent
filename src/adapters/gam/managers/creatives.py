@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
+from src.core.errors.details import CreativeRejectionDetails
 from src.core.exceptions import AdCPCreativeRejectedError, AdCPError
 from src.core.schemas import AssetStatus
 
@@ -707,7 +708,7 @@ class GAMCreativesManager:
         if not url:
             raise AdCPCreativeRejectedError(
                 field="url",
-                details={"creative_id": asset.get("creative_id"), "missing_field": "url"},
+                details=CreativeRejectionDetails(creative_id=asset.get("creative_id"), missing_field="url"),
             )
 
         # Determine asset type
@@ -724,14 +725,14 @@ class GAMCreativesManager:
             if not click_url:
                 raise AdCPCreativeRejectedError(
                     field="click_url",
-                    details={"creative_id": asset.get("creative_id"), "missing_field": "click_url"},
+                    details=CreativeRejectionDetails(creative_id=asset.get("creative_id"), missing_field="click_url"),
                 )
 
             # Validate that image URL is an actual URL, not binary data
             if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
                 raise AdCPCreativeRejectedError(
                     field="url",
-                    details={"creative_id": asset.get("creative_id"), "invalid_field": "url"},
+                    details=CreativeRejectionDetails(creative_id=asset.get("creative_id"), invalid_field="url"),
                 )
 
             creative = {
@@ -750,7 +751,7 @@ class GAMCreativesManager:
             if not duration:
                 raise AdCPCreativeRejectedError(
                     field="duration",
-                    details={"creative_id": asset.get("creative_id"), "missing_field": "duration"},
+                    details=CreativeRejectionDetails(creative_id=asset.get("creative_id"), missing_field="duration"),
                 )
 
             creative = {

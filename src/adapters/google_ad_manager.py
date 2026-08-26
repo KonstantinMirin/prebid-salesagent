@@ -48,6 +48,7 @@ from src.core.audit_logger import AuditLogger
 from src.core.errors.codes import AppErrorCode
 from src.core.errors.details import (
     AdapterFailureDetails,
+    BudgetDetails,
     CapabilityRefusalDetails,
     EntityRefDetails,
     ErrorProblem,
@@ -1413,12 +1414,13 @@ class GoogleAdManager(AdServerAdapter):
                         f"for package {package_id}[/red]"
                     )
                     raise AdCPBudgetExceededError(
-                        details={
-                            "requested_budget": budget,
-                            "current_spend": current_spend,
-                            "package_id": package_id,
-                            "budget": budget,
-                        },
+                        # "budget" and "requested_budget" were the same value under two
+                        # names; one channel per fact.
+                        details=BudgetDetails(
+                            requested_budget=str(budget),
+                            current_spend=str(current_spend),
+                            package_id=package_id,
+                        ),
                     )
 
                 # Get platform line item ID from package config

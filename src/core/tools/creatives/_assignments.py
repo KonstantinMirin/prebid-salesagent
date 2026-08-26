@@ -5,7 +5,7 @@ from contextlib import ExitStack
 from typing import Any
 
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.errors.details import EntityRefDetails
+from src.core.errors.details import CreativeRejectionDetails, EntityRefDetails
 from src.core.exceptions import (
     AdCPCreativeNotFoundError,
     AdCPCreativeRejectedError,
@@ -235,7 +235,8 @@ def _process_assignments(
                                     # creative-format-incompatible-with-product is CREATIVE_REJECTED,
                                     # the canonical code for a rejected creative (#1417).
                                     raise AdCPCreativeRejectedError(
-                                        details={"supported_formats": supported_formats_display},
+                                        # `supported_formats` is the pin-canonical `accepted_values`.
+                                        details=CreativeRejectionDetails(accepted_values=supported_formats_display),
                                     )
                                 else:
                                     logger.warning(

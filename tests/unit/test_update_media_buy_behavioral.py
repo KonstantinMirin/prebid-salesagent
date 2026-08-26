@@ -2402,7 +2402,7 @@ class TestUC003ExtJ:
             # Both offending creatives reported together in the rejection.
             assert exc_info.value.error_code == "CREATIVE_REJECTED"
             # details carries the state per creative, not a bare id list plus joined prose.
-            assert {c["creative_id"] for c in exc_info.value.details["creatives"]} == {"C1", "C2"}
+            assert {p.subject_id for p in exc_info.value.details.problems or []} == {"C1", "C2"}
 
 
 # ---------------------------------------------------------------------------
@@ -2782,7 +2782,7 @@ class TestUC003StateMachine:
 
             assert exc_info.value.error_code == "INVALID_STATE"
             # The status is structured now, not embedded in a sentence.
-            assert exc_info.value.details["current_status"] == terminal_status
+            assert exc_info.value.details.current_status == terminal_status
             # No adapter call when precondition rejects
             env.mock["adapter"].return_value.update_media_buy.assert_not_called()
 

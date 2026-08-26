@@ -885,7 +885,7 @@ class TestCreateMediaBuyCreativeValidation:
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
-            assert "creative_errors" in exc_info.value.details
+            assert exc_info.value.details.reasons is not None
 
     def test_creative_error_state_rejected(self):
         """UC-002-C02: creative with status=error rejected.
@@ -915,7 +915,7 @@ class TestCreateMediaBuyCreativeValidation:
         with pytest.raises(AdCPCreativeRejectedError) as exc_info:
             _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
-        assert "creative_errors" in exc_info.value.details
+        assert exc_info.value.details.reasons is not None
 
     def test_creative_rejected_state_rejected(self):
         """UC-002-C03: creative with status=rejected rejected.
@@ -945,7 +945,7 @@ class TestCreateMediaBuyCreativeValidation:
         with pytest.raises(AdCPCreativeRejectedError) as exc_info:
             _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
-        assert "creative_errors" in exc_info.value.details
+        assert exc_info.value.details.reasons is not None
 
     def test_creative_format_mismatch_rejected(self):
         """UC-002-C04: creative format not matching product format rejected.
@@ -997,7 +997,7 @@ class TestCreateMediaBuyCreativeValidation:
             with pytest.raises(AdCPCreativeRejectedError) as exc_info:
                 _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
-            assert "creative_errors" in exc_info.value.details
+            assert exc_info.value.details.reasons is not None
 
     def test_generative_creatives_skip_validation(self):
         """UC-002-C05: generative formats (with output_format_ids) not pre-validated.
@@ -1076,8 +1076,8 @@ class TestCreateMediaBuyCreativeValidation:
                 _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
             # Both errors should be accumulated in a single exception
-            assert "creative_errors" in exc_info.value.details
-            creative_errors = exc_info.value.details.get("creative_errors", [])
+            assert exc_info.value.details.reasons is not None
+            creative_errors = exc_info.value.details.reasons or []
             assert len(creative_errors) >= 2
 
 

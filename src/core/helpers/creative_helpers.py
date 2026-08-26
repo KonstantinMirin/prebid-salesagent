@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from src.core.schemas import Creative, FormatId, PackageRequest, Product
     from src.core.testing_context import TestingContext
 
+from src.core.errors.details import CreativeRejectionDetails
 from src.core.schemas import Creative
 
 logger = logging.getLogger(__name__)
@@ -584,7 +585,8 @@ def process_and_upload_package_creatives(
                 error_msg = "Creative validation failed:\n" + "\n".join(f"  • {m}" for m in detail_msgs)
                 logger.error(error_msg)
                 raise AdCPCreativeRejectedError(
-                    details={"creative_errors": detail_msgs},
+                    # `creative_errors` was a synonym for the pin's `reasons`.
+                    details=CreativeRejectionDetails(reasons=detail_msgs),
                 )
 
             # Extract creative IDs from successfully synced creatives only.

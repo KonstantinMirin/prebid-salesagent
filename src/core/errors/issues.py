@@ -63,6 +63,7 @@ JsonSchemaKeyword = Literal[
     "multipleOf",
     "oneOf",
     "pattern",
+    "readOnly",
     "required",
     "type",
 ]
@@ -272,6 +273,7 @@ _KEYWORD_SENTENCES: dict[JsonSchemaKeyword, str] = {
     "multipleOf": "This field must be a multiple of the required step.",
     "oneOf": "This field does not match any accepted variant.",
     "pattern": "This field does not match the required pattern.",
+    "readOnly": "This field cannot be changed.",
     "required": "This field is required.",
     "type": "This field is the wrong type.",
 }
