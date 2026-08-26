@@ -65,7 +65,7 @@ def _call_via(
             kwargs["req"] = req
     kwargs.update(extra)
 
-    # Route through the SHARED populator (Lane B, change-set B5). The hand-rolled
+    # Route through the SHARED populator. The hand-rolled
     # version here set only error/response/wire_response, omitting ctx["result"]
     # (the key with exactly one producer) plus the two error-envelope keys — which
     # silently downgraded the wire-first Then steps to the lossy reconstructed

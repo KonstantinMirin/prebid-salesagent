@@ -1,4 +1,4 @@
-"""Guard: the tests/ <-> scripts/audit liveness contract has ONE owner (Lane F).
+"""Guard: the tests/ <-> scripts/audit liveness contract has ONE owner.
 
 A real layering constraint — a pytest plugin must not import a CLI, and
 ``scripts/audit`` (imported *by* tests) cannot depend on ``tests/helpers`` — was

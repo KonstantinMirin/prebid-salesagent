@@ -48,7 +48,7 @@ class LedgerCheckId:
     protocol: str
     # ``str | None``, not ``str``: one call site constructs this with no track,
     # and the narrow annotation let that None render as the literal string
-    # "None" in a ledger id (Lane F, F4).
+    # "None" in a ledger id.
     track: str | None
     storyboard_id: str
     step_id: str

@@ -2,8 +2,8 @@
 
 Two grader modules send `account` on a real `get_products` call
 (`test_spec_request_fields_accepted.py` and
-`test_raw_wrapper_spec_fields_accepted.py`). Since Lane A made `get_products`
-actually HONOR that field instead of accepting-and-dropping it, both must seed a
+`test_raw_wrapper_spec_fields_accepted.py`). Because `get_products` now
+HONORS that field instead of accepting-and-dropping it, both must seed a
 matching account or resolution correctly raises ACCOUNT_NOT_FOUND — so both need
 the same natural key AND the same seeding steps.
 
@@ -64,7 +64,7 @@ def spec_field_product_env(tenant_id: str) -> Iterator[Any]:
     * the pricing option — a product with none fails to serialize at all, and
       `get_products` answers SERVICE_UNAVAILABLE, so every case would fail for a
       reason unrelated to request fields;
-    * `seed_sample_account` — since Lane A made `get_products` HONOR `account`,
+    * `seed_sample_account` — because `get_products` HONORS `account`,
       an unseeded account makes ACCOUNT_NOT_FOUND the CORRECT answer, and the
       graders would be measuring a missing fixture instead of field honoring
       (while the field was silently dropped, they passed with no seed at all —

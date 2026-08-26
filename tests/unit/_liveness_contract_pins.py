@@ -1,4 +1,4 @@
-"""The pinned Lane F contract, shared by its two graders.
+"""The pinned shared liveness contract, shared by its two graders.
 
 One place, so the structural guard
 (``tests/unit/test_architecture_liveness_contract_owner.py``) and the behavioral
@@ -79,8 +79,7 @@ ABSORBED_HELPERS = frozenset(
 )
 
 FIX_HINT = (
-    "Lane F : the shared contract has ONE stdlib-only owner both "
-    f"sides import ({OWNER}) — never copied, never re-implemented."
+    f"The shared contract has ONE stdlib-only owner both sides import ({OWNER}) — never copied, never re-implemented."
 )
 
 

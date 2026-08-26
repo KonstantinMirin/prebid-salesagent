@@ -379,7 +379,7 @@ class BaseTestEnv:
     REST_ENDPOINT: str = ""  # Override in subclass for REST dispatch
     # The tool/skill this env dispatches. Declaring these is what lets the base
     # own call_mcp/call_a2a instead of every env re-implementing the same
-    # one-line delegation (Lane B, change-set B1). REST_METHOD's de-facto
+    # one-line delegation. REST_METHOD's de-facto
     # contract lives at dispatchers.py's getattr(env, "REST_METHOD", "post").
     MCP_TOOL: str = ""
     A2A_SKILL: str = ""
@@ -647,7 +647,7 @@ class BaseTestEnv:
     def _deliver_via_client(self, transport: Any, tool: str, kwargs: dict[str, Any]) -> DeliverResult:
         """Dispatch through THE one client core, then parse with this env's parser.
 
-        This is Lane B's Core Invariant made literal: ``AdCPTestClient`` is the
+        This is The harness's single-dispatch invariant, made literal: ``AdCPTestClient`` is the
         implementation the env dispatch methods DELEGATE TO, not a peer beside
         them. Routing here means address resolution, request wrapping, delivery
         and error unwrapping have exactly one implementation for both the client

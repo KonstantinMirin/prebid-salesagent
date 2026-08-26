@@ -1,14 +1,14 @@
-"""RED grader for Lane C: UC-006 storyboard Thens must grade the WIRE.
+"""RED grader: UC-006 storyboard Thens must grade the WIRE.
 
 Core Invariant under grade (lane plan, verbatim): *every storyboard ``Then``
 asserts a transport-observable signal, on every transport, through the guarded
 accessors (``wire_dict``/``wire_field``/``assert_wire_error``); setup goes
 through the env's per-transport primitive, never a direct ``_impl`` call.*
 
-**Why this module exists rather than the liveness artifact.** Lane C's §5
+**Why this module exists rather than the liveness artifact.** The wire-grading §5
 declares two graders: the per-scenario ledgered/live partition pinned in
 ``tests/integration/test_bdd_scenario_liveness_real_run.py:99-125`` — which
-solution-review pass 3 (P4) assigns to **Lane D**, and which Lane C **must not
+solution-review pass 3 (P4) defers, and which the wire-grading work **must not
 modify** — and the REVERSION TEST, which pass-3 finding (d) requires to be *an
 EXECUTED step in the grader, not a prose procedure*. This module is that
 executed grader, plus the per-item mutations for C3 and C4 that the partition
@@ -44,7 +44,7 @@ exercised.
 POPULATED, so a C2 implementation that keeps ``_response_or_xfail(ctx, ...)``
 ahead of the wire read — which pass-3 CB1 makes BINDING — passes these graders
 unchanged. Nothing here requires or rewards deleting that guard; deleting it is
-Lane D's step, one commit later.
+a later step, one commit later.
 
 **Out of scope, deliberately.** C6 (the phantom-transport assertion) is graded by
 the transport-set assertion already living in the Lane-D-owned liveness block;
@@ -54,7 +54,7 @@ compared against the captured wire) is a test-side assertion-source obligation o
 ``tests/unit/test_architecture_context_echo_wire_grading.py`` — a behavioral
 byte-for-byte echo test would redden for a PRODUCTION normalization defect
 (measured: ``context={"trace_id": "t1", "channel": None}`` comes back
-``{"trace_id": "t1"}`` on the mcp and a2a wire alike), which Lane C does not own.
+``{"trace_id": "t1"}`` on the mcp and a2a wire alike), which wire grading does not own.
 """
 
 from __future__ import annotations
@@ -201,7 +201,7 @@ def test_reverting_the_a2a_wire_capture_makes_the_envelope_schema_then_fail_loud
     Executed, not prose (pass-3 finding (d)). The reversion is applied at the
     single observable the A2A wire capture produces — ``_run_a2a_handler``'s
     ``env._last_wire_response`` stash — rather than by name-patching the env's A2A
-    primitive, because Lane B renames that primitive in the commit immediately
+    primitive, because that primitive is renamed in the commit immediately
     before this lane. Clearing the stash reproduces exactly the pre-C1 observable
     that the ``sync_creatives_raw`` bypass produces: a real typed response, and no
     wire (measured above: ``wire_response=None`` on a2a today, a real dict on
@@ -434,9 +434,9 @@ def test_error_envelope_carries_a_derived_status_on_every_transport(
 ) -> None:
     """``TransportResult.envelope['status']`` must be derived on mcp/a2a/rest, on BOTH paths.
 
-    Measured before Lane C: ``envelope`` was ``{}`` on mcp, ``{'transport':
+    Measured before the wire-grading fix: ``envelope`` was ``{}`` on mcp, ``{'transport':
     'a2a'}`` on a2a, and carried a real ``status_code`` only on rest. Measured
-    after the first Lane C pass: derived on the ``call_via`` path only, still
+    after the first wire-grading pass: derived on the ``call_via`` path only, still
     ``{}`` on mcp and a2a through ``AdCPTestClient.call`` — the path the graded
     storyboard scenarios take. Hence the ``dispatch_path`` parametrization: this
     obligation is about the signal existing everywhere a scenario can observe it,

@@ -12,7 +12,7 @@ This module is that join:
 * ``registry_wired`` — a DATA LOOKUP against the declarative
   ``tests.bdd.conftest.ENV_ROUTES`` registry, never
   reason-text matching. A scenario is registry-wired when its own ``T-*`` tag is a
-  row (the SB-4a per-scenario demonstrator), or the ``UC-<n>`` bucket its
+  row (the per-scenario demonstrator), or the ``UC-<n>`` bucket its
   ``T-UC-<n>...`` tag derives — the same derivation ``conftest._detect_uc`` uses
   for a tag matching that pattern — is a row, and that row isn't a placeholder
   (``EnvRoute.xfail_reason`` unset). The registry only covers a subset of UCs

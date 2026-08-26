@@ -258,7 +258,7 @@ class TestBaseClassContract:
 
         class _TestEnv(BaseTestEnv):
             # Test double: overrides the DELIVER point, which is what the
-            # dispatchers call (Lane B, binding input R1).
+            # dispatchers call.
             def deliver_mcp(self, **kwargs):
                 return DeliverResult(payload=_Resp(), wire_response=None)
 

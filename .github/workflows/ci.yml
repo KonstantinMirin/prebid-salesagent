@@ -381,7 +381,7 @@ jobs:
         run: docker compose -f docker-compose.e2e.yml down -v 2>/dev/null || true
 
   storyboard-conformance:
-    # SB-4b (#1858): grades a MEASURED run of the real @adcp/sdk
+    # (#1858) Grades a MEASURED run of the real @adcp/sdk
     # storyboard runner as ordinary parametrized pytest tests
     # (tests/storyboard/), reusing the e2e_rest ledger/xfail/lock-test
     # discipline instead of a new comparator. The ledger

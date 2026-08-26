@@ -1,4 +1,4 @@
-"""Fitness function for the storyboard-conformance ledger (Lane E3).
+"""Fitness function for the storyboard-conformance ledger.
 
 ``tests/bdd/e2e_rest_known_failures.txt`` has one
 (``tests/unit/test_e2e_rest_ledger_fitness.py::

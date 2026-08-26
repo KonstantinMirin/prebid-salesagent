@@ -1,7 +1,7 @@
-"""Lock test for the storyboard-conformance known-failures ledger (SB-4b).
+"""Lock test for the storyboard-conformance known-failures ledger (the storyboard-conformance job).
 
 Mirrors ``tests/unit/test_e2e_rest_ledger_state.py`` verbatim in shape: the storyboard
-CI job (SB-4b) grades a MEASURED run of the real ``@adcp/sdk`` storyboard runner through
+CI job (the storyboard-conformance job) grades a MEASURED run of the real ``@adcp/sdk`` storyboard runner through
 pytest as ordinary parametrized tests -- one per ``(protocol, track, storyboard_id,
 step_id)``, the runner being executed once per protocol (mcp, a2a) against the same
 agent -- reusing the exact ledger/xfail/lock-test discipline already established by
@@ -13,18 +13,18 @@ known-failing storyboard test ids, and this lock test pinning the ledger's exact
 contents so it cannot silently drift -- the same triad as the e2e_rest precedent.
 
 Per the Core Invariant, the ledger must be seeded from a MEASURED in-network CI run,
-never re-derived/inferred (the architect review's HIGH finding: SB-1d's host-side
-numbers do not carry over to the in-network receiver topology). Until SB-4b lands the
-The triad now exists (ledger file, loader, pytest module) and has been measured
-through a real in-network run: 75 ledgered checks (43 mcp + 32 a2a), read through
-the ledger's own loader rather than counted by hand. The "pinned empty, nothing
-measured yet" state this paragraph used to describe is history.
+never re-derived/inferred (the architect review's HIGH finding: the runner's host-side
+numbers do not carry over to the in-network receiver topology).
 
-When the storyboard-conformance pytest module lands and its first in-network CI run
-seeds real entries, update the ledger file AND ``EXPECTED_LEDGER`` below in the same
-change (same discipline as the e2e_rest docstring: a removed entry that creeps back is
-a graduation regression; a genuine-gap entry deleted without landing the underlying fix
-is a silent gap-hiding regression).
+All three parts exist — the ledger file, its loader, and the pytest module — and the
+ledger IS seeded from a real in-network run. The count below is read through the
+loader rather than counted by hand, so this docstring cannot drift from the file.
+
+RE-SEEDING is a standing rule, not a one-off: whenever a run seeds or retires
+entries, update the ledger file AND ``EXPECTED_LEDGER`` below in the same change.
+Same discipline as the e2e_rest docstring — a removed entry that creeps back is a
+graduation regression; a genuine-gap entry deleted without landing the underlying fix
+is a silent gap-hiding regression.
 """
 
 from __future__ import annotations

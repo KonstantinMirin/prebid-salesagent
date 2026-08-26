@@ -1257,7 +1257,7 @@ def seed_error_test_tenant(
 def live_media_buy_env(integration_db):
     """A ``MediaBuyDualEnv`` holding one ACTIVE, mid-flight media buy.
 
-    Shared by the two Lane A honor-side graders
+    Shared by the two honor-side graders
     (``test_spec_request_fields_accepted.py`` on the MCP path,
     ``test_raw_wrapper_spec_fields_accepted.py`` on the raw A2A/REST path), so
     the "a live buy that a cancellation must actually cancel" setup exists

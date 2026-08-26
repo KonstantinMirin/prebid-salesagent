@@ -175,7 +175,7 @@ class TestUc006StoryboardDispatchFaultIsNotXfail:
         conftest_src = (repo_root / "tests" / "bdd" / "conftest.py").read_text()
         e2e_ledger = (repo_root / "tests" / "bdd" / "e2e_rest_known_failures.txt").read_text()
 
-        # Match a ledger KEY, never a bare substring, for two reasons Lane D hit
+        # Match a ledger KEY, never a bare substring, for two reasons the split hit
         # in one change:
         #   1. `tag in source` reports "...-multi-format-sync" as ledgered the
         #      moment a DIFFERENT scenario "...-multi-format-sync-status" is

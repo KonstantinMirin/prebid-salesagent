@@ -1,4 +1,4 @@
-"""Storyboard-conformance grading via pytest (SB-4b).
+"""Storyboard-conformance grading via pytest (the storyboard-conformance job).
 
 Grades a MEASURED run of the real ``@adcp/sdk`` storyboard runner (never
 re-derived/inferred) as ordinary parametrized pytest tests, one per
@@ -64,7 +64,7 @@ _DEFAULT_AGENT_URLS: dict[str, str] = {
     "a2a": "http://proxy:8000",
 }
 
-# Env vars the CI job (SB-4b Implementation Plan step 6) must set. No defaults
+# Env vars the CI job (the storyboard-conformance job Implementation Plan step 6) must set. No defaults
 # for the compliance/schema paths — those come from a pinned GitHub release
 # asset (see .github/actions/_adcp-bundle), never guessed at.
 _AUTH_TOKEN_ENV = "STORYBOARD_AUTH_TOKEN"
@@ -361,7 +361,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     # byte-for-byte unchanged.
     ids = [ledger.LedgerCheckId(c["protocol"], c["track"], c["storyboard_id"], c["step_id"]).format() for c in checks]
 
-    # LEDGER FITNESS, computed IN-SESSION (Lane E, E3). Every ledger entry must
+    # LEDGER FITNESS, computed IN-SESSION. Every ledger entry must
     # resolve to a check this session actually collected. A ledgered check that
     # starts passing simply VANISHES from `ids` — it produces no test item at all,
     # so without this join neither "graduation fails CI" nor "regression fails CI"

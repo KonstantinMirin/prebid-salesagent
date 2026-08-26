@@ -5,7 +5,7 @@ For every ON-PATH storyboard (from storyboard_coverage_map.build()), attaches:
 
   * the 3.1.1 citation (the storyboard's own pinned-tree path + pinned_version()),
   * required_tools and a static, YAML-derived check-type inventory,
-  * real measured status where the SB-1d runner executed this storyboard
+  * real measured status where the runner executed this storyboard
     (per-STEP passed/failed counts — never a per-check-type breakdown, which
     the runner's free-text step details cannot support soundly; see the
     "measured status" note below),
@@ -19,7 +19,7 @@ mapping between the two (40 proposals vs the current 21 tagged scenarios) --
 inventing one would violate the Core Invariant ("never re-derived/inferred").
 Run ``scripts/audit/storyboard_reconciliation.py`` directly for that data.
 
-Measured-status join key: the SB-1d runner's ``tested_tracks[].scenarios[].
+Measured-status join key: the runner's ``tested_tracks[].scenarios[].
 scenario`` field is ``"<storyboard_stem>/<sub-scenario-name>"`` in the
 runner's own underscore-cased spelling (e.g. ``capability_discovery/...``),
 while coverage_map's stems are hyphenated for universal/ storyboards
@@ -181,7 +181,7 @@ def _ledgered_failures(repo: Path) -> dict[str, list[str]]:
 
 
 def _load_runner_scenarios(results_dir: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Load SB-1d's real per-step results, preferring it over the older SB-1b run."""
+    """Load the runner's real per-step results, preferring them over the older run."""
     for name in ("sb1d-full.json", "sb1b-full.json"):
         path = results_dir / name
         if path.is_file():

@@ -29,9 +29,8 @@ parses that dict into ``tool_name``'s pinned SDK response model via
 need a ``response_cls`` parameter — see the "typed payload" docstring note
 on ``TransportResult.payload`` below for the no-pinned-model case.
 
-All three E2E transports are now implemented — ``_deliver_e2e_rest``
-(/SB-3a), ``_deliver_e2e_mcp`` (/SB-3b), and
-``_deliver_e2e_a2a`` (/SB-3c) below, each real HTTP through
+All three E2E transports are now implemented — ``_deliver_e2e_rest``,
+``_deliver_e2e_mcp`` and ``_deliver_e2e_a2a`` below, each real HTTP through
 nginx to the live Docker stack. ``RestE2EDispatcher`` and
 ``A2AE2EDispatcher`` (``tests/harness/dispatchers.py``) delegate to the
 matching DELIVER function instead of duplicating it, so there is one
@@ -77,7 +76,7 @@ if TYPE_CHECKING:
 
 # NoAddressForTransport re-exported here for callers that only import
 # tests.harness.client (both this module and
-# address_table.py as "new files, SB-2b builds it" — callers should not
+# address_table.py as "new files, the transport-generic client builds it" — callers should not
 # need to know the map lives in a separate module).
 from tests.harness.address_table import NoAddressForTransport  # noqa: F401  (re-export)
 
@@ -261,7 +260,7 @@ def e2e_identity_headers(identity: Any) -> dict[str, str]:
 def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> Any:
     """E2E_REST DELIVER: real HTTP through nginx to the live Docker stack.
 
-    The single implementation of e2e_rest delivery (SB-3a)
+    The single implementation of e2e_rest delivery (the wire-grading work)
     — ``RestE2EDispatcher`` (``tests/harness/dispatchers.py``) delegates
     here instead of hand-rolling its own header-building/httpx-client
     construction, matching the DELIVER-function split: WRAP
@@ -295,7 +294,7 @@ def _deliver_e2e_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
     """E2E MCP DELIVER: real HTTP via ``fastmcp.Client`` against the live Docker
     stack — the transport ``runStoryboard`` (the real AdCP conformance runner)
     actually speaks (``request_signing.transport = 'mcp'``, agent URLs ending
-    ``/mcp``), see the task (SB-3b).
+    ``/mcp``), see the task (the wire-grading work).
 
     Same call shape as ``_run_mcp_client`` (``tests/harness/_base.py:754``) —
     ``call_tool`` -> ``structured_content`` -> returned on the ``DeliverResult``
@@ -343,7 +342,7 @@ def _deliver_e2e_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
 
 # -- E2E_A2A DELIVER: real JSON-RPC message/send over HTTP ------------------
 #
-# SB-3c. Same message shape ``_run_a2a_handler`` builds
+# the wire-grading work. Same message shape ``_run_a2a_handler`` builds
 # in-process — only how it reaches the server
 # differs: a real ``POST /a2a`` JSON-RPC 2.0 request instead of a direct
 # ``AdCPRequestHandler().on_message_send()`` call. The route is mounted at
@@ -439,7 +438,7 @@ def _deliver_e2e_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
     with httpx.Client(base_url=env.e2e_config.base_url, timeout=30) as http_client:
         response = http_client.post("/a2a", json=rpc_body, headers=headers)
 
-    # PARSE BEFORE raise_for_status (Lane B, change-set B4), matching the REST
+    # PARSE BEFORE raise_for_status, matching the REST
     # sibling's >=400 handling. raise_for_status() first threw away the response
     # BODY on any 4xx/5xx — and that body is where the AdCP two-layer error
     # envelope lives, so every error-path Then that asserts on
@@ -605,7 +604,7 @@ def unwrap_rest_response(
             )
             non_json_error.status_code = raw_response.status_code
             # No JSON body means no AdCP envelope was produced at all — the
-            # request died as a transport fault (Lane C, C4).
+            # request died as a transport fault.
             return TransportResult(
                 envelope={**envelope, "status": derive_error_status(None)},
                 error=non_json_error,
@@ -764,7 +763,7 @@ def unwrap_mcp_error(exc: Exception, transport: Transport = Transport.MCP) -> Tr
     error = _unwrap_mcp_tool_error(exc) if raw_tool_error_envelope is not None else exc
     return TransportResult(
         error=error,
-        # Derived per-transport status (Lane C, C4): MCP's authentic evidence is
+        # Derived per-transport status: MCP's authentic evidence is
         # whether a structured AdCP envelope was recoverable from the ToolError,
         # rather than a fault that produced no envelope at all.
         envelope={"transport": transport.value, "status": derive_error_status(wire)},
@@ -787,7 +786,7 @@ def unwrap_a2a_error(exc: Exception, transport: Transport = Transport.A2A) -> Tr
     wire = _wire_envelope_from_exception(exc)
     return TransportResult(
         error=exc,
-        # Derived per-transport status (Lane C, C4): the A2A evidence is whether
+        # Derived per-transport status: the A2A evidence is whether
         # a failed Task carried an AdCP envelope in its artifact DataPart.
         envelope={"transport": transport.value, "status": derive_error_status(wire)},
         wire_error_envelope=wire,

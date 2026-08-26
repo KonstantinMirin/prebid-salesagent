@@ -40,7 +40,7 @@ def _error_messages(errors: list | None) -> list[str]:
 ALL_TRANSPORTS = [Transport.IMPL, Transport.A2A, Transport.REST, Transport.MCP]
 
 # Same four transports, but the A2A leg is LEDGERED against a named production
-# defect rather than silently green. Until Lane C, CreativeSyncEnv's "a2a"
+# defect rather than silently green. Before the wire-grading fix, CreativeSyncEnv's "a2a"
 # parametrization called sync_creatives_raw directly — it never touched
 # on_message_send — so these cases were passing without exercising A2A at all.
 # Routing them through the real pipeline reveals that

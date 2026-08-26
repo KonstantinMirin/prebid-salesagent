@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 # The MCP/A2A/REST error-path unwraps themselves are NOT re-implemented here:
 # this module delegates to client.py's unwrap_mcp_error / unwrap_a2a_error /
 # unwrap_rest_error, so there is one error unwrap per transport family for both
-# dispatch paths (CLAUDE.md DRY invariant; Lane C remediation finding 1).
+# dispatch paths (CLAUDE.md DRY invariant; remediation finding 1).
 
 
 class ImplDispatcher:
@@ -89,7 +89,7 @@ class A2ADispatcher:
         # Real A2A wire: the artifact DataPart dict, carried back on the SAME
         # return value as the payload. It used to be read off env._last_wire_response
         # — one object reaching into another's private attribute, which is what
-        # allowed a second writer and a stale wire (Lane B, change-set B2).
+        # allowed a second writer and a stale wire.
         return TransportResult(
             payload=delivered.payload,
             envelope={"transport": "a2a"},
@@ -169,7 +169,7 @@ class RestE2EDispatcher:
     DELIVER (the actual httpx call) is NOT hand-rolled here — it delegates to
     ``tests.harness.client._deliver_e2e_rest``, the single delivery
     implementation also used by ``AdCPTestClient.call(..., Transport.E2E_REST)``
-    (SB-3a; design doc §5).
+    (the wire-grading work; design doc §5).
 
     UNWRAP (the status-code/envelope handling) delegates to
     ``tests.harness.client.unwrap_rest_response`` —
@@ -209,7 +209,7 @@ class McpE2EDispatcher:
     """Dispatch via real HTTP through nginx to the Docker stack's MCP endpoint.
 
     Delegates to ``AdCPTestClient`` (``tests/harness/client.py``,
-    SB-3b) instead of duplicating the
+    the wire-grading work) instead of duplicating the
     ADDRESS/WRAP/DELIVER/UNWRAP logic here a second time — ``client.call()``
     already builds the real ``fastmcp.Client`` against
     ``env.e2e_config.base_url`` and unwraps the response identically to the
@@ -254,7 +254,7 @@ class A2AE2EDispatcher:
     Unlike ``RestE2EDispatcher`` (which reuses each env's hand-written
     ``REST_ENDPOINT``/``build_rest_body``/``parse_rest_response`` overrides),
     this delegates entirely to ``AdCPTestClient``/``_deliver_e2e_a2a``
-    (``tests/harness/client.py``, SB-3c) — the address,
+    (``tests/harness/client.py``, the wire-grading work) — the address,
     JSON-RPC envelope construction, and Task-state handling all live there,
     derived from the live ``create_agent_card()`` registration
     (``tests/harness/address_table.py``), not re-implemented per-env.
@@ -269,7 +269,7 @@ class A2AE2EDispatcher:
     dispatcher must call the generic client instead of an env override, the
     caller supplies the tool name explicitly via a ``tool_name=`` kwarg (or
     an ``env.A2A_SKILL`` class attribute, for envs that want to declare it
-    once) — same open question SB-3b's ``McpE2EDispatcher`` faces for
+    once) — same open question the wire-grading work's ``McpE2EDispatcher`` faces for
     ``Transport.E2E_MCP``, resolved independently here since neither
     dispatcher's fix depends on the other's.
     """

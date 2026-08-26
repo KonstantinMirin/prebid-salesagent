@@ -149,10 +149,10 @@ def test_scenario_liveness_to_dict_shape() -> None:
         "ledgered": False,
         # The scenario's own tags, carried as DATA. The provenance tag used to be
         # a collection FILTER, so a retag could delete a scenario from the
-        # measurement entirely (Lane E).
+        # measurement entirely.
         "tags": [],
         # The routing contract's marker set, persisted so the audit join can
-        # resolve the SAME route the conftest did (Lane F). Both are empty here
+        # resolve the SAME route the conftest did. Both are empty here
         # because this record was built directly, not through
         # pytest_bdd_before_scenario.
         "marker_names": [],

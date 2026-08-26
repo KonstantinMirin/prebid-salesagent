@@ -32,7 +32,7 @@
 #
 # Runner-reported SKIPS (missing_test_controller, missing_tool, prerequisite_failed)
 # are NOT ledgered here — they map to a native pytest.skip() in the test module
-# instead (SB-4b Core Invariant). Only genuine check FAILURES belong in this file.
+# instead (the conformance job's Core Invariant). Only genuine check FAILURES belong in this file.
 #
 # comply_test_controller/pagination-integrity is the sole PERMANENT won't-fix
 # family (missing_test_controller — no test controller wired for these checks).

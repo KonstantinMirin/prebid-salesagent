@@ -1052,7 +1052,7 @@ class TestPaginatedDiscoverySchema:
         `len(products) >= 1`, which any non-empty catalog satisfies. It therefore
         graded neither the bound nor pagination, and only appeared meaningful
         until `_impl` started refusing the unimplemented `pagination` control
-        (PR #1858 Lane A), which is a behavioral concern this schema-layer
+        (#1858), which is a behavioral concern this schema-layer
         obligation does not reach. Bound: adcp 6.6.0 core/pagination-request.json
         `max_results.minimum: 1`.
         """

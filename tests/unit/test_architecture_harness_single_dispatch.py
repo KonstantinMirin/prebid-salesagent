@@ -53,7 +53,7 @@ _BASE_MODULE = "tests/harness/_base.py"
 # Roots of the harness env hierarchy (declared in _BASE_MODULE).
 _ENV_ROOTS = frozenset({"BaseTestEnv", "IntegrationEnv", "BareIntegrationEnv"})
 
-# The old quartet's transport entry points. After Lane B these exist ONLY on
+# The old quartet's transport entry points. After the single-dispatch change these exist ONLY on
 # BaseTestEnv, as ``return self.deliver_*(**kwargs).payload``.
 _LEGACY_DISPATCH_METHODS = frozenset({"call_mcp", "call_a2a"})
 
@@ -64,12 +64,12 @@ _DELIVER_METHODS = frozenset({"deliver_mcp", "deliver_a2a"})
 _WIRE_STASH_ATTR = "_last_wire_response"
 
 # Shrink-only allowlist of JUSTIFIED deliver_* overrides, as
-# ``(repo_relative_path, class_name, method_name)``. Seeded once by the Lane B
+# ``(repo_relative_path, class_name, method_name)``. Seeded once by the single-dispatch
 # implement atom from its B1 JUSTIFIED-OVERRIDE enumeration (each entry
 # carrying a one-line reason at the source site); it only shrinks afterwards.
 # An env that can delegate to the base MUST NOT appear here.
 _KNOWN_DELIVER_OVERRIDES: set[tuple[str, str, str]] = {
-    # Seeded ONCE from Lane B's B1 JUSTIFIED-OVERRIDE enumeration. Every entry
+    # Seeded ONCE from the B1 JUSTIFIED-OVERRIDE enumeration. Every entry
     # is an env that CANNOT delegate to the base, with the reason. Shrink-only:
     # an env that can delegate must not be added here.
     #
@@ -86,7 +86,7 @@ _KNOWN_DELIVER_OVERRIDES: set[tuple[str, str, str]] = {
     # Commits factory data, defaults creatives=[], and JSON-normalizes kwargs
     # through build_rest_body before dispatch, so it cannot delegate to the base.
     # (The previous reason — "deliberate raw-wrapper bypass ... LANE C owns
-    # replacing the bypass" — is stale: Lane C DID replace it in dc280c5ee, and
+    # replacing the bypass" — is stale: it WAS replaced in dc280c5ee, and
     # deliver_a2a now calls the real _run_a2a_handler. The entry stays because of
     # the setup above, not because of a bypass that no longer exists; an allowlist
     # whose recorded reasons drift false cannot be audited.)
@@ -216,7 +216,7 @@ def _scan_wire_stash_references() -> set[tuple[str, int]]:
     """``(path, lineno)`` for every attribute access named ``_last_wire_response``.
 
     Reads AND writes: R3 verified the tree-wide reader set is fully
-    dispositioned by the change-set, so after Lane B neither may remain — an
+    dispositioned by the change-set, so afterwards neither may remain — an
     orphaned reader is how the attribute grows a second writer back.
     """
     found: set[tuple[str, int]] = set()

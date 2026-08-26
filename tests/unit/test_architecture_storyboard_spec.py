@@ -1,4 +1,4 @@
-"""Regression tests for scripts/audit/storyboard_spec.py (SB-5b).
+"""Regression tests for scripts/audit/storyboard_spec.py (the reconciliation pass).
 
 ``storyboard_spec.py`` is the new shared L0 parsing module that
 ``scripts/audit/storyboard_coverage_map.py``, ``scripts/audit/storyboard_binding_sweep.py``,
@@ -207,7 +207,7 @@ def test_storyboard_key_does_not_collapse_index_files_onto_index():
 def test_storyboards_excludes_non_gradable_universal_files():
     """storyboards() must exclude universal/ files lacking a top-level track:
     (fictional-entities.yaml, runner-output-contract.yaml, storyboard-schema.yaml)
-    -- confirmed against the SB-1b real-runner baseline, neither ever appears in
+    -- confirmed against a real-runner baseline, neither ever appears in
     storyboards_executed or storyboards_missing_tools.
     """
     from scripts.audit import storyboard_spec

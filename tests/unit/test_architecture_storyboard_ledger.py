@@ -120,7 +120,7 @@ def test_parse_returns_none_on_a_non_matching_line(line):
 def test_load_skips_comments_and_blanks_but_raises_on_an_unparsable_line(tmp_path):
     """Comments and blanks are skipped; a line the grammar rejects RAISES.
 
-    The silent-skip behaviour this used to assert is gone (Lane F): a typo'd
+    The silent-skip behaviour this used to assert is gone: a typo'd
     entry that is quietly dropped stops grading its check with nothing to
     notice, so an unparsable ledger line is now a loud ValueError naming the
     file and line number.

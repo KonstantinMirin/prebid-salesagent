@@ -1,4 +1,4 @@
-"""Guard: production modules must not carry test-only exports (Lane A / A7).
+"""Guard: production modules must not carry test-only exports.
 
 `spec_response_model` resolved a tool's pinned SDK RESPONSE model. It had ZERO
 production callers — its only consumers were the harness client and its tests —

@@ -9,7 +9,7 @@ A storyboard is on our path unless a gate the spec defines excludes it:
 
   * ``universal/``            — applies to every agent type, but is NOT
                                 exempt from ``required_tools`` (see below).
-                                Confirmed against SB-1b's real-runner baseline
+                                Confirmed against a real-runner baseline
                                : the SDK's capability-driven
                                 selection put every one of the 35 real,
                                 gradable ``universal/`` storyboards through the
@@ -40,7 +40,7 @@ required only by two specialisms we do not declare.
 UNRESOLVED: whether a scenario in no ``requires_scenarios`` list at all is
 reachable standalone on its own ``required_tools``, or is simply orphaned. This
 classifier assumes the former. ``provenance_enforcement`` is the case that
-decides it, and settling it needs the compliance runner's source. SB-1b's real
+decides it, and settling it needs the compliance runner's source. The measured baseline's real
 run does NOT settle this: its capability probe (``get_adcp_capabilities``)
 was itself rejected by our agent (``VALIDATION_ERROR: Unexpected keyword
 argument``), so ``resolveStoryboardsForCapabilities`` never got far enough to
@@ -49,7 +49,7 @@ attempt selecting anything under ``protocols/`` or ``specialisms/`` —
 executed nor missing-tools nor observations. The 35 storyboards the run did
 select are exactly (byte-for-byte) the ``universal/`` tier's real, gradable
 files gated by ``required_tools`` — see the ``universal/`` note above. This
-remains open; do not treat SB-1b as evidence either way for
+remains open; do not treat that baseline as evidence either way for
 ``requires_scenarios`` reachability.
 
 Uncovered on-path storyboards are conformance gaps with no test. Covered
@@ -143,7 +143,7 @@ def classify_gates(
     * ``specialisms/`` / ``protocols/`` — the declared-gate tiers
     * ``required_tools`` — LENIENT any-of; per storyboard-schema.yaml, only
       "missing **all** listed tools triggers a coverage-gap skip". Applies to
-      EVERY tier, including ``universal/`` — confirmed against SB-1b's real
+      EVERY tier, including ``universal/`` — confirmed against a real
       runner baseline, which graded 10 ``universal/`` storyboards fully
       skipped (``not_applicable``) purely on this gate.
 

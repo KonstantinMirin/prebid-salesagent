@@ -199,7 +199,7 @@ class CreativeSyncEnv(IntegrationEnv):
         ``_run_a2a_handler``) was that the A2A leg produced no wire at all — so
         every storyboard Then on this transport had nothing transport-observable
         to assert and fell back to reading an in-memory object. That is the
-        defect Lane C exists to remove, so the bypass is replaced rather than
+        defect this module exists to remove, so the bypass is replaced rather than
         worked around.
 
         kwargs are JSON-normalized through ``build_rest_body`` — the SAME

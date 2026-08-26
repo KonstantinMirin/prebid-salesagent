@@ -22,8 +22,8 @@ class TaskManagementEnv(IntegrationEnv):
     No patches -- list_tasks reads real WorkflowStep rows via WorkflowUoW.
     """
 
-    # Dispatch declaration: the base owns call_mcp/call_a2a (Lane B, B1).
-    # Dispatch declaration: the base owns call_mcp/call_a2a (Lane B, B1), and
+    # Dispatch declaration: the base owns call_mcp/call_a2a.
+    # Dispatch declaration: the base owns call_mcp/call_a2a, and
     # this env now JOINS the client core — production's list_tasks emits the
     # pinned-required query_summary + pagination, so the core's pinned parse
     # succeeds. list_tasks is MCP-only (no A2A skill, no REST route).

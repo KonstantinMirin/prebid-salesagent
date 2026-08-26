@@ -1,4 +1,4 @@
-"""Storyboard-conformance test configuration (SB-4b).
+"""Storyboard-conformance test configuration (the storyboard-conformance job).
 
 Grades a MEASURED run of the real ``@adcp/sdk`` storyboard runner through pytest
 as ordinary parametrized tests — one per ``(protocol, track, storyboard_id,

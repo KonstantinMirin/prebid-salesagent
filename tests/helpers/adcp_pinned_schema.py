@@ -1,12 +1,17 @@
 """Pure, stdlib-only resolution primitives for the AdCP pinned JSON schema tree
 shipped inside the installed ``adcp`` SDK.
 
-This module is the PRODUCTION half of what used to be a single test-only
-module (``tests/helpers/pinned_schema.py``). It carries only path/file
-resolution — no ``jsonschema``/``referencing`` dependency — so production code
-(e.g. ``src/core/version_compat.py``'s per-tool accepted-field resolution) can
-read the pinned request/response schemas without importing test-only code or
-pulling in the validation-only dependency stack.
+This module is the DEPENDENCY-FREE half of what used to be a single module
+(``tests/helpers/pinned_schema.py``). It carries only path/file resolution — no
+``jsonschema``/``referencing`` import — so a caller that needs to locate and read
+a pinned schema does not pull in the validation-only dependency stack.
+
+It lives under ``tests/helpers/`` and has no consumer under ``src/``. This
+docstring used to claim otherwise, naming ``src/core/version_compat.py`` as a
+reader; that module does not import it, no module under ``src/`` imports
+anything from ``tests/``, and one that did would break the layering this
+repository enforces. The split is real and useful, but it is a dependency
+split, not a production/test split.
 
 ``tests/helpers/pinned_schema.py`` re-exports every name here and adds the
 jsonschema-validation-specific pieces (``validator_for``,

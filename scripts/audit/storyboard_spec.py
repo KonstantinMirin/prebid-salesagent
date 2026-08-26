@@ -194,7 +194,7 @@ def storyboards(dist: Path) -> Iterator[Storyboard]:
     ``universal/`` file lacking a top-level ``track:`` (``fictional-
     entities.yaml`` is a shared data catalog; ``runner-output-contract.yaml``
     describes runner OUTPUT shape and is not valid plain YAML). Every real
-    storyboard declares ``track:``; confirmed against the SB-1b real-runner
+    storyboard declares ``track:``; confirmed against a real-runner
     baseline — neither exclusion ever appears in ``storyboards_executed`` or
     ``storyboards_missing_tools``.
     """
@@ -610,7 +610,7 @@ def phase_is_graded(text: str, phase_id: str) -> str | None:
 
 # ── @source footers + tagged scenarios ──────────────────────────────────────
 
-# ── THE SHARED LIVENESS CONTRACT (PR #1858 Lane F, the task) ───
+# ── THE SHARED LIVENESS CONTRACT (#1858) ───
 #
 # This module is the ONE owner of the constants and lookups that tests/bdd and
 # scripts/audit both need. It is stdlib-only and imports no pytest and no
@@ -983,10 +983,12 @@ def run_cli(
     A :class:`StoryboardAuditError` raised by ``build_fn`` (a data problem
     the pipeline itself detected — a broken join, a malformed pinned file, an
     unresolvable citation) is caught here, printed to stderr, and turned into
-    exit code 1. This is the ONLY place in the audit pipeline allowed to turn
-    a caught error into a process exit — every library function raises the
-    typed error and lets its caller decide, so importing these functions from
-    a test or a sibling script never risks killing the importing process.
+    exit code 1. Turning a caught error into a process exit belongs to CLI
+    entry points only — every library function raises the typed error and lets
+    its caller decide, so importing these functions from a test or a sibling
+    script never risks killing the importing process. This is one of two such
+    entry points; ``build_review_report.main`` supplies its own argument parser
+    and repeats the same catch.
     """
     parser = argparse.ArgumentParser(description=description)
     if configure_args is None:

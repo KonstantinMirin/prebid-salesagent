@@ -70,7 +70,7 @@ if TYPE_CHECKING:
     from _pytest.fixtures import FixtureRequest
     from pytest_bdd.parser import Feature, Scenario
 
-# IMPORTED, not re-declared (Lane F). The previous comment here forbade this
+# IMPORTED, not re-declared. The previous comment here forbade this
 # import "so this pytest plugin has no import-time dependency on the audit CLI
 # toolchain" — but importing a module that DEFINES an entry point does not
 # EXECUTE one: storyboard_spec's module-level imports are stdlib-only and it
@@ -127,7 +127,7 @@ class ScenarioLiveness:
     #: The scenario's marker set, as the ROUTING CONTRACT derives it. Persisted
     #: because the audit join has no other marker source and now resolves the
     #: route with the same resolver the conftest uses — routing on the scenario
-    #: id alone was blind to every marker-predicate branch (Lane F).
+    #: id alone was blind to every marker-predicate branch.
     marker_names: list[str] = field(default_factory=list)
     observations: list[Observation] = field(default_factory=list)
 
@@ -221,7 +221,7 @@ def pytest_bdd_before_scenario(request: FixtureRequest, feature: Feature, scenar
     on the scenario that is about to run.
     """
     tags = scenario.tags | feature.tags
-    # MEMBERSHIP IS IDENTITY, NOT PROVENANCE (Lane E, E2). This used to be
+    # MEMBERSHIP IS IDENTITY, NOT PROVENANCE. This used to be
     # `if _TAG not in tags: return` — so retagging a scenario @schema-v3.1
     # deleted it from the artifact entirely, and the instrument reported on a
     # population a tag edit could silently shrink. A scenario is measured if it
@@ -307,7 +307,7 @@ def _merge_record(into: dict[str, Any], other: dict[str, Any]) -> dict[str, Any]
     """Merge one scenario's shard into another. The rule is stated, not implied.
 
     ``record_observation``'s precedence is NOT associative across shards, so each
-    field's combine is named explicitly (Lane E, E1 decision 3):
+    field's combine is named explicitly:
 
     * ``observations``  — concatenated; every transport a shard saw is real.
     * ``steps_bound``   — AND. One shard finding an unbound step is decisive.

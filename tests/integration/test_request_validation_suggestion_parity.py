@@ -428,7 +428,7 @@ class TestSyncCreativesA2ASuggestionParity:
 
         class _RealA2AWireCreativeSyncEnv(CreativeSyncEnv):
             # Overrides the DELIVER point; _run_a2a_handler already returns a
-            # DeliverResult carrying the real artifact wire (Lane B, B2).
+            # DeliverResult carrying the real artifact wire.
             def deliver_a2a(self, **kwargs):
                 return self._run_a2a_handler("sync_creatives", SyncCreativesResponse, **kwargs)
 

@@ -25,7 +25,7 @@ Needs a real Postgres reachable via ``DATABASE_URL`` (the harness these scenario
 exercise creates tenants/principals/products for real) — skipped otherwise, same as
 every other ``requires_db`` test in this suite.
 
-Two further obligations are graded here (Lane E steps 1-2),
+Two further obligations are graded here (steps 1-2),
 because neither is observable from the pure-logic unit tests:
 
 * **The artifact must survive xdist.** ``tox.ini`` runs the bdd env under
@@ -110,7 +110,7 @@ def _run_bdd_slice(tmp_path: Path, test_file: str, marker_expr: str, *, extra_ar
     # exactly what a ledgered scenario carries — so without this the artifact
     # would record one observation for every ledgered scenario and the
     # "not silently zero, not silently one" assertion below would be measuring
-    # the optimization rather than the scenario. Lane D moved these gaps from
+    # the optimization rather than the scenario. A later split moved these gaps from
     # inline pytest.xfail() (invisible to that optimization) to ledger tags,
     # which is what surfaced it.
     env["BDD_ALL_TRANSPORTS"] = "1"
@@ -172,7 +172,7 @@ def test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live(tmp_pat
     # latter would satisfy the letter of the assertion while destroying its
     # regression-detecting power.
     #
-    # TWO live members since Lane D split @T-UC-006-storyboard-multi-format-sync.
+    # TWO live members since the split of @T-UC-006-storyboard-multi-format-sync.
     # Its ACTION obligations were dead code — the status gap's xfail aborted the
     # scenario before they ran — so the split left them live here and moved the
     # status obligations to their own ledgered scenario. A single live id was
@@ -233,7 +233,7 @@ def test_provenance_tag_is_a_recorded_field_not_a_collection_filter(tmp_path: Pa
     ``scenario_liveness._TAG`` is used at ``pytest_bdd_before_scenario`` as an
     early-``return`` COLLECTION FILTER, so the two UC-006 scenarios retagged
     ``@schema-v3.1`` are invisible to the artifact — the instrument reports on a
-    population that a tag edit can silently shrink. Lane E converts that filter
+    population that a tag edit can silently shrink. A later change converts that filter
     into a recorded field: membership is the scenario's ``@T-*`` identity tag
     (which a provenance retag cannot move), and the provenance tags are carried
     on the record as data.

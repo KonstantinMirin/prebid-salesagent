@@ -1,6 +1,6 @@
 """BDD step definitions for UC-003 storyboard scenarios wired onto AdCPTestClient.
 
-SB-4a demonstrator: dispatches through the transport-generic
+Demonstrator: dispatches through the transport-generic
 ``AdCPTestClient`` (``tests/harness/client.py``) via ``dispatch_via_client``
 instead of ``MediaBuyDualEnv``/``dispatch_request``. Additive only — see
 ``tests/bdd/conftest.py``'s ``_UC003_STORYBOARD_GENERIC_CLIENT`` branch.
@@ -50,7 +50,7 @@ def when_update_media_buy_recancel(ctx: dict) -> None:
 
     Sends the buyer's literal payload — ``canceled: true`` included — through
     ``AdCPTestClient`` so the request-field normalization seam is what decides
-    whether ``canceled`` is honored or refused (Lane A).
+    whether ``canceled`` is honored or refused.
     Deliberately NOT ``dispatch_request`` on ``MediaBuyDualEnv``: that env's
     ``_flatten_update_request`` pops ``canceled``/``cancellation_reason``
     (``_WRAPPER_UNSUPPORTED_FIELDS``) before the wire, so the scenario would
@@ -117,8 +117,8 @@ def then_response_not_500_or_non_adcp_shape(ctx: dict) -> None:
     and correct means a dispatch path that stops reporting it reddens here
     instead of going quiet.
 
-    "Not a 500 or non-AdCP shape" is graded by the derived status (Lane C,
-    change-set C4) rather than by a synthesized ``status_code``: inventing an
+    "Not a 500 or non-AdCP shape" is graded by the derived status rather
+    than by a synthesized ``status_code``: inventing an
     integer for MCP/A2A and asserting it is != 500 would trade a silent no-op for
     a loud tautology. Each transport reports its own evidence instead — REST's
     real HTTP body, A2A's failed-Task artifact, MCP's ToolError. The REST

@@ -47,7 +47,7 @@ requires_clone = pytest.mark.skipif(
 
 
 class _Route:
-    """A stand-in EnvRoute row. Since Lane F the join resolves through
+    """A stand-in EnvRoute row. The join resolves through
     ``storyboard_spec.resolve_env_route``, which reads ``when``/``uc`` off a row."""
 
     def __init__(self, xfail_reason: str | None = None, *, uc: str | None = None, when=None) -> None:
@@ -92,7 +92,7 @@ def test_registry_wired_scenario_grades_its_claimed_checks(monkeypatch, tmp_path
                         "scenario_id": scenario_id,
                         "steps_bound": True,
                         "ledgered": False,
-                        # Lane F: routing keys on the MARKER SET, and the artifact
+                        # Routing keys on the MARKER SET, and the artifact
                         # record is the join's only source for it.
                         "marker_names": [scenario_id],
                     }
@@ -128,7 +128,7 @@ def test_steps_bound_without_registry_row_does_not_grade(monkeypatch, tmp_path: 
                         "scenario_id": scenario_id,
                         "steps_bound": True,
                         "ledgered": False,
-                        # Lane F: routing keys on the MARKER SET, and the artifact
+                        # Routing keys on the MARKER SET, and the artifact
                         # record is the join's only source for it.
                         "marker_names": [scenario_id],
                     }

@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 # object wearing the canonical name, and `identity is not NO_IDENTITY_OVERRIDE`
 # would then compare against the local one — so a caller passing the harness's
 # real sentinel (meaning "no override") would be misread as HAVING overridden
-# identity. One object, one name (Lane B, change-set B6).
+# identity. One object, one name.
 
 
 def _populate_ctx_from_result(ctx: dict, result: TransportResult) -> None:

@@ -1673,7 +1673,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # against its format spec independently and returns per-creative action plus status.
     # This half grades the ACTION obligations; the per-creative STATUS obligations are
     # graded by the sibling scenario below, split out because their known production gap
-    # aborted this scenario and left these assertions dead (PR #1858 Lane D).
+    # aborted this scenario and left these assertions dead (#1858).
     # sync_multiple: bulk multi-format validation returns per-creative action+status
     # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/index.yaml phase=creative_sync step=sync_creatives
 

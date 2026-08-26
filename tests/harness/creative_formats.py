@@ -81,7 +81,7 @@ class CreativeFormatsEnv(IntegrationEnv):
     The format processing logic runs for real.
     """
 
-    # Dispatch declaration: the base owns call_mcp/call_a2a (Lane B, B1).
+    # Dispatch declaration: the base owns call_mcp/call_a2a.
     RESPONSE_MODEL = ListCreativeFormatsResponse
 
     # JUSTIFIED OVERRIDE — does NOT declare MCP_TOOL/A2A_SKILL, so it does not

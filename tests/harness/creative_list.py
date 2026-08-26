@@ -39,7 +39,7 @@ class CreativeListEnv(IntegrationEnv):
     - Real query building, filtering, pagination
     """
 
-    # Dispatch declaration: the base owns call_mcp/call_a2a (Lane B, B1).
+    # Dispatch declaration: the base owns call_mcp/call_a2a.
     MCP_TOOL = "list_creatives"
     A2A_SKILL = "list_creatives"
     RESPONSE_MODEL = ListCreativesResponse

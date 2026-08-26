@@ -48,7 +48,7 @@ class AccountSyncEnv(IntegrationEnv):
     on the identity (BR-RULE-059).
     """
 
-    # Dispatch declaration: the base owns call_mcp/call_a2a (Lane B, B1).
+    # Dispatch declaration: the base owns call_mcp/call_a2a.
     MCP_TOOL = "sync_accounts"
     A2A_SKILL = "sync_accounts"
     RESPONSE_MODEL = SyncAccountsResponse

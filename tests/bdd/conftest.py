@@ -42,7 +42,7 @@ from tests.helpers.marker_names import derive_marker_names
 _E2E_REST_KNOWN_FAILURES: frozenset[str] = load_ledger_nodeids(Path(__file__).parent / "e2e_rest_known_failures.txt")
 
 if TYPE_CHECKING:
-    # Real types for the EnvRoute callbacks (Lane F, F4). Under TYPE_CHECKING so
+    # Real types for the EnvRoute callbacks. Under TYPE_CHECKING so
     # the annotations stay honest without importing the harness at conftest
     # import time.
     from tests.harness._base import BaseTestEnv
@@ -1030,7 +1030,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Production uses generic error codes / plain-string errors where the spec
         # demands specific codes and structured AdCPError with suggestion fields.
         _UC006_SPECGAP_XFAIL_TAGS: dict[str, str] = {
-            # Split out of @T-UC-006-storyboard-multi-format-sync (Lane D, D2).
+            # Split out of @T-UC-006-storyboard-multi-format-sync.
             # While the status obligation shared a scenario with the action
             # obligations, its xfail ABORTED the scenario and the sibling
             # action-value assertion never ran on any transport. It now owns a
@@ -1049,7 +1049,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "SPEC-PRODUCTION GAP: SyncCreativeResult.status is never populated by production; "
                 "every per-creative status is None on the wire, not a creative-status enum value"
             ),
-            # ── Storyboard provenance scenarios (PR #1858 Lane D) ──────────────
+            # ── Storyboard provenance scenarios (#1858) ──────────────
             # These carried per-assertion pytest.xfail() calls inside the step
             # bodies, which turned ANY failure (a 401, a 500, a timeout) into a
             # green "known gap". The gaps are real, so they are registered here
@@ -3179,7 +3179,7 @@ class EnvRoute:
     ``_harness_env``, invisible to ``scripts/audit``'s join — which knew only
     about the buckets and therefore reported every predicate-routed scenario as
     dormant. Moving them into rows is what lets ONE resolver answer for both
-    sides (Lane F, the task).
+    sides.
 
     ``uc`` is the coarse bucket this row serves, matched against
     ``storyboard_spec.detect_uc``. A row sets ``when`` or ``uc``, not both.
@@ -3196,7 +3196,7 @@ class EnvRoute:
 def _seed_uc003_storyboard_generic_client(ctx: dict, env: object) -> None:
     """Seed ctx for the UC-003 storyboard scenarios that dispatch via AdCPTestClient.
 
-    SB-4a demonstrator: dispatches through the transport-
+    Demonstrator: dispatches through the transport-
     generic ``AdCPTestClient`` (``tests/harness/client.py``) instead of
     ``MediaBuyDualEnv``/``dispatch_request`` — see
     ``tests/bdd/steps/domain/uc003_storyboard_generic_client.py``. Background
@@ -3282,7 +3282,7 @@ def _seed_uc019(ctx: dict, env: object) -> None:
     ctx["principal"] = principal
 
 
-# ── Seeds extracted from the former _harness_env elif chain (Lane F, F1c) ────
+# ── Seeds extracted from the former _harness_env elif chain ────
 # Each was an inline body inside a marker-keyed branch. As rows they are visible
 # to storyboard_spec.resolve_env_route, which is what lets scripts/audit resolve
 # the SAME route instead of re-implementing a coarser lookup.
@@ -3436,7 +3436,7 @@ def _run_env_route(
         # Build the client ONCE, here, for every row — it used to be constructed
         # inside a single hand-wired seed callback, so only that one row could
         # dispatch via the client and any new row wanting it had to remember to
-        # repeat the line (Lane B, change-set B8). Construction is cheap and
+        # repeat the line. Construction is cheap and
         # side-effect-free; a row that never dispatches via the client simply
         # does not read the key.
         ctx["client"] = AdCPTestClient(env)
@@ -3453,7 +3453,7 @@ _UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
     ),
     # Same env + same seed as the row above: the re-cancel scenario also needs
     # the Background's "mb_existing" buy plus a client that sends the buyer's
-    # literal payload (Lane A — `canceled` must reach the
+    # literal payload (`canceled` must reach the
     # seller rather than being dropped by a harness flattener).
     "T-UC-003-storyboard-not-cancellable-on-recancel": EnvRoute(
         tag="T-UC-003-storyboard-not-cancellable-on-recancel",
@@ -3681,7 +3681,7 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
       That is a bug, not intended behavior: widen ``_detect_uc`` instead of
       relying on this fixture to paper over it.
     """
-    # ONE derivation, ONE routing call (Lane F). The marker set comes from the
+    # ONE derivation, ONE routing call. The marker set comes from the
     # shared accessor so the conftest and the liveness plugin cannot narrow it
     # differently, and the route comes from the shared resolver so scripts/audit
     # answers the same question the same way.

@@ -162,7 +162,14 @@ to all factories automatically. Just use factories inside a `with env:` block.
 
 ## Obligation Tests
 
-Tests tagged with `Covers: <obligation-id>` verify behavioral contracts from `docs/test-obligations/`.
+Tests tagged with `Covers: <obligation-id>` verify behavioral contracts.
+
+The obligation DOCUMENTS these ids referred to are no longer committed: they were
+generated reports, and a generated report kept in the tree drifts from its
+generator. `docs/test-obligations/` now holds only curated inputs
+(`storyboard-issue-map.yaml`, `storyboard-wireability.yaml`,
+`bdd-traceability.yaml`). The rules below still bind any test carrying a
+`Covers:` tag; do not add new tags against a document that no longer exists.
 
 ### Six hard rules
 

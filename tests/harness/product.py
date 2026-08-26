@@ -64,7 +64,7 @@ class ProductEnv(ProductMixin, IntegrationEnv):
         call_impl(brief, **kw)           -- call _get_products_impl
     """
 
-    # Dispatch declaration: the base owns call_mcp/call_a2a (Lane B, B1).
+    # Dispatch declaration: the base owns call_mcp/call_a2a.
     MCP_TOOL = "get_products"
     A2A_SKILL = "get_products"
     RESPONSE_MODEL = GetProductsResponse

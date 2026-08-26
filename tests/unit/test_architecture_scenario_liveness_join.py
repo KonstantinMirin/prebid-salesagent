@@ -19,7 +19,7 @@ from scripts.audit import scenario_liveness_join as slj
 def _route(xfail_reason: str | None = None, *, uc: str | None = None, when=None) -> object:
     """A minimal stand-in for tests.bdd.conftest.EnvRoute.
 
-    Since Lane F the join resolves through ``storyboard_spec.resolve_env_route``,
+    The join resolves through ``storyboard_spec.resolve_env_route``,
     which reads ``when`` and ``uc`` off a row (and the caller reads
     ``xfail_reason``), so a stand-in carries all three.
     """
@@ -132,7 +132,7 @@ def test_build_index_scenario_absent_from_artifact_is_conservative() -> None:
     fact = index["T-UC-005-x"]
     assert fact.measured_this_run is False
     assert fact.steps_bound is False
-    # NOT wired. Routing keys on the MARKER SET since Lane F, and an unmeasured
+    # NOT wired. Routing keys are on the MARKER SET, and an unmeasured
     # scenario has no record to carry one — so there is nothing to route on and
     # reporting it wired would be a guess. Consistent either way, because
     # graded_by_live_scenario already ANDs measured_this_run.
@@ -150,7 +150,7 @@ def test_build_index_joins_artifact_and_registry(tmp_path: Path) -> None:
                         "scenario_id": "T-UC-005-x",
                         "steps_bound": True,
                         "ledgered": False,
-                        # The record carries the marker set: since Lane F the join
+                        # The record carries the marker set: since the shared-contract change the join
                         # routes on markers (the conftest's predicates key on them),
                         # and the artifact is its only marker source.
                         "marker_names": ["T-UC-005-x"],

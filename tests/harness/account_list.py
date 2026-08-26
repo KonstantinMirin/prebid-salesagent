@@ -42,7 +42,7 @@ class AccountListEnv(IntegrationEnv):
     - Real query building, filtering, pagination
     """
 
-    # Dispatch declaration: the base owns call_mcp/call_a2a (Lane B, B1).
+    # Dispatch declaration: the base owns call_mcp/call_a2a.
     MCP_TOOL = "list_accounts"
     A2A_SKILL = "list_accounts"
     RESPONSE_MODEL = ListAccountsResponse

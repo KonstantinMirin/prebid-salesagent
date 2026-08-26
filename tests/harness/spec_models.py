@@ -3,7 +3,7 @@
 Lives under ``tests/`` on purpose. ``spec_response_model`` is a response-side
 parse-back helper for :mod:`tests.harness.client`; it never had a production
 caller, and keeping it in ``src/core/version_compat.py`` meant a production
-module carried a test-only export (Lane A / A7).
+module carried a test-only export.
 
 The REQUEST-side sibling, ``spec_request_model``, stays in production: the
 acceptance seam itself depends on it.

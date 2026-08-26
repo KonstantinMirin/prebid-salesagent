@@ -22,7 +22,7 @@ class CapabilitiesEnv(IntegrationEnv):
     gracefully (try/except) around the optional adapter channel lookup.
     """
 
-    # Dispatch declaration: the base owns call_mcp/call_a2a (Lane B, B1).
+    # Dispatch declaration: the base owns call_mcp/call_a2a.
     MCP_TOOL = "get_adcp_capabilities"
     A2A_SKILL = "get_adcp_capabilities"
     RESPONSE_MODEL = GetAdcpCapabilitiesResponse

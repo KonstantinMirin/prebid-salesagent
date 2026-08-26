@@ -219,7 +219,7 @@ def strip_a2a_protocol_fields(data: dict[str, Any]) -> dict[str, Any]:
 # The two values TransportResult.envelope["status"] may take. A DERIVED enum,
 # never a synthesized HTTP status_code: fabricating an integer for MCP/A2A would
 # turn today's silent no-op into a loud tautology — the harness asserting != 500
-# against a number the harness itself invented (Lane C, change-set C4).
+# against a number the harness itself invented.
 DERIVED_STATUS_ADCP_ERROR = "adcp_error"
 DERIVED_STATUS_TRANSPORT_FAULT = "transport_fault"
 
@@ -257,7 +257,7 @@ class DeliverResult:
     where the dispatch path does not observe one (the legacy
     ``_run_mcp_wrapper``).
 
-    Lane B of the PR #1858 round-2 remediation (change-set B2, binding input R3);
+    The #1858 round-2 remediation;
     pinned by ``test_architecture_harness_single_dispatch``.
     """
 

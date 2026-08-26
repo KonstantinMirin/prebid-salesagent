@@ -319,7 +319,7 @@ def _require_response(ctx: dict, expectation: str) -> object:
 def _first_creative_result(ctx: dict, expectation: str) -> object:
     """Return the first per-creative result off ``ctx['response'].creatives``.
 
-    ASSERTS on absence rather than xfailing it (Lane C): an empty ``creatives``
+    ASSERTS on absence rather than xfailing it: an empty ``creatives``
     list means the seller returned no per-creative result at all, which is a
     failure of the obligation, not a known gap to be tolerated.
     """
@@ -343,7 +343,7 @@ def then_response_envelope_schema_valid(ctx: dict) -> None:
     CreativeSyncEnv's A2A dispatch bypassed ``_run_a2a_handler`` and so stashed
     no A2A wire — meaning the step graded a fresh serialization of an in-process
     object rather than anything the buyer received, and could not have caught a
-    transport that mangled the envelope. Lane C removed that bypass (the env now
+    transport that mangled the envelope. That bypass is gone (the env now
     routes through the real A2A pipeline), so the wire exists on every transport
     and the fallback is deleted rather than kept as a quiet escape hatch.
 
@@ -464,7 +464,7 @@ def then_creatives_array_one_result_per_submitted(ctx: dict) -> None:
 def then_every_result_exposes_action(ctx: dict) -> None:
     """Assert every per-creative result carries a non-None action field.
 
-    DECOMPOSED from a compound "action and status" step (Lane D, change-set D2).
+    DECOMPOSED from a compound "action and status" step.
     While the two obligations shared one step, the status half — a known
     production gap — aborted the scenario, which made the sibling
     action-value assertion below DEAD CODE on all three transports. Splitting

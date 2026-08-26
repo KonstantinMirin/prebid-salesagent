@@ -29,7 +29,7 @@ class PerformanceEnv(IntegrationEnv):
     No patches — the adapter call runs for real against the mock adapter.
     """
 
-    # Dispatch declaration: the base owns call_mcp/call_a2a (Lane B, B1).
+    # Dispatch declaration: the base owns call_mcp/call_a2a.
     MCP_TOOL = "update_performance_index"
     A2A_SKILL = "update_performance_index"
     RESPONSE_MODEL = UpdatePerformanceIndexResponse

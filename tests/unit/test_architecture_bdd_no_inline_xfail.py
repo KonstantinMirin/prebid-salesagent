@@ -16,7 +16,7 @@ tag, no ledger equality test can see it, and because ``pytest.xfail()`` raises
 immediately it also ABORTS the scenario, silently killing every later
 assertion in the same scenario as dead code.
 
-Core invariant (PR #1858 round-2, Lane D): **a "known gap" is registered
+Core invariant (#1858 round-2): **a "known gap" is registered
 exactly ONE way in this repo — a scenario/Examples-row tag in the ratcheted
 ledger — never as a per-assertion escape hatch inside a step body.**
 
@@ -127,7 +127,7 @@ def _scan_bdd_steps() -> set[XfailSite]:
 # The pin. Allowlists can only SHRINK — never add a new triple, fix it instead.
 # ---------------------------------------------------------------------------
 # FIXME(#1858): 101 pre-existing inline-xfail sites (135 calls across 10 files)
-# predate Lane D's Core Invariant. They are PINNED here, not swept: each must
+# predate that Core Invariant. They are PINNED here, not swept: each must
 # migrate to a ledger tag (tests/bdd/conftest.py's *_XFAIL_TAGS maps, or
 # tests/bdd/e2e_rest_known_failures.txt) as its use case is next touched.
 # One reference for the whole set — deliberately NOT 101 annotated call sites.

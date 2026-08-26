@@ -1,4 +1,4 @@
-"""Grader: the two env-route resolvers must agree, per COLLECTED scenario (Lane F).
+"""Grader: the two env-route resolvers must agree, per COLLECTED scenario.
 
 The structural half of this lane — one owner, one routing call, the four routing
 helpers absorbed — lives in ``test_architecture_liveness_contract_owner.py``.

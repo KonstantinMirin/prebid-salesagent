@@ -1,4 +1,4 @@
-"""Meta-tests for AdCPTestClient — the transport-generic dispatch core (SB-2b).
+"""Meta-tests for AdCPTestClient — the transport-generic dispatch core (the transport-generic client).
 
 ``AdCPTestClient.call(tool, payload, transport)`` bypasses every env's
 hand-written ``call_a2a``/``call_mcp``/``build_rest_body``/``parse_rest_response``
@@ -263,7 +263,7 @@ class TestUnwrapRestResponse:
 
 
 class TestClientE2eRestDelivery:
-    """E2E_REST DELIVER (``_deliver_e2e_rest``, SB-3a) — real
+    """E2E_REST DELIVER (``_deliver_e2e_rest``, the wire-grading work) — real
     HTTP through nginx to a live Docker stack. Mocks ``httpx.Client`` so
     coverage does not require a live server; genuine e2e-with-real-server
     verification happens in ``tests/e2e/``."""
@@ -489,7 +489,7 @@ class TestRestE2EDispatcherIdentityDefault:
 
 
 class TestClientE2eMcpDelivery:
-    """Real e2e MCP DELIVER (/SB-3b) — mocks the fastmcp
+    """Real e2e MCP DELIVER — mocks the fastmcp
     ``Client``/HTTP transport layer for unit-level coverage. Genuine
     e2e-with-a-real-server verification happens in ``tests/e2e/`` via
     ``./run_all_tests.sh`` (no Docker stack available in this worktree)."""
@@ -622,7 +622,7 @@ class TestClientE2eMcpDelivery:
 
 
 class TestClientE2eA2aDelivery:
-    """``_deliver_e2e_a2a`` (SB-3c) — real JSON-RPC
+    """``_deliver_e2e_a2a`` (the wire-grading work) — real JSON-RPC
     ``message/send`` HTTP delivery, HTTP layer mocked (unit-level; genuine
     e2e-with-real-server verification happens in tests/e2e/ against a live
     Docker stack, per this task's scope)."""
@@ -824,7 +824,7 @@ class TestClientE2eA2aDelivery:
     def test_http_error_status_still_surfaces_the_wire_error_envelope(self):
         """An A2A response with an HTTP error status must NOT discard its body.
 
-        Lane B change-set B4 : ``_deliver_e2e_a2a``
+        change-set B4 : ``_deliver_e2e_a2a``
         calls ``response.raise_for_status()`` BEFORE ``response.json()``, so on
         any >=400 the JSON-RPC error body — the only place the AdCP two-layer
         envelope exists on this leg — is thrown away and the caller gets a bare
@@ -917,7 +917,7 @@ class TestClientE2eA2aDelivery:
 
 
 class TestA2AE2EDispatcher:
-    """``A2AE2EDispatcher`` (SB-3c) — the legacy
+    """``A2AE2EDispatcher`` (the wire-grading work) — the legacy
     ``env.call_via(Transport.E2E_A2A, ...)`` entry point, delegating to
     ``AdCPTestClient``/``_deliver_e2e_a2a`` under the hood."""
 

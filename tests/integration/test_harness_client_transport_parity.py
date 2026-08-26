@@ -48,7 +48,7 @@ def _assert_error_equivalent(via, client_result, code: str) -> None:
     # SEPARATE copies of each transport's error unwrap, which is how the derived
     # `status` came to exist on the dispatcher path and not on the client path
     # while every wire_error_envelope assertion stayed green. Comparing the
-    # envelope makes that divergence observable here (Lane C remediation).
+    # envelope makes that divergence observable here (wire-grading remediation).
     assert via.envelope == client_result.envelope, (
         f"env.call_via and AdCPTestClient.call disagree on the error envelope: "
         f"{via.envelope!r} vs {client_result.envelope!r}"
@@ -57,7 +57,7 @@ def _assert_error_equivalent(via, client_result, code: str) -> None:
 
 def _dispatch_via_env_pinning_one_dispatch_core(env, transport: Transport, tool: str, **kwargs):
     """``env.call_via(transport, **kwargs)``, pinning that it went through the
-    ONE dispatch core — Lane B's Core Invariant made runtime-observable.
+    ONE dispatch core — the single-dispatch invariant made runtime-observable.
 
     ``AdCPTestClient`` must be the implementation ``call_via``/``call_mcp``/
     ``call_a2a`` delegate to, not a peer beside them (beads). Structurally that is graded by
@@ -96,14 +96,14 @@ def _dispatch_via_env_pinning_one_dispatch_core(env, transport: Transport, tool:
     assert seen == [(transport, tool)], (
         f"{type(env).__name__}.call_via({transport}) must dispatch through the one "
         f"tests.harness.client._dispatch_core with tool {tool!r} — recorded {seen!r} instead. "
-        f"Two live dispatch mechanisms in the harness is exactly what Lane B "
+        f"Two live dispatch mechanisms in the harness is exactly what the single-dispatch invariant "
         f"removes: BaseTestEnv.deliver_mcp/deliver_a2a delegate to the client's "
         f"core, and call_mcp/call_a2a are `deliver_*(...).payload` on the base only."
     )
     return via
 
 
-# ``(module, class, tool, payload, transports)`` for the envs Lane B converts
+# ``(module, class, tool, payload, transports)`` for the converted envs
 # from a hand-written call_mcp/call_a2a pair to base-class delegation. Each
 # one's current override is a bare ``return self._run_mcp_client(<tool>, <Model>,
 # **kwargs)`` / ``_run_a2a_handler(...)`` — no request-content routing, no
@@ -357,7 +357,7 @@ class TestEnvVsClientEquivalence:
 @pytest.mark.integration
 @pytest.mark.requires_db
 class TestNewlyDelegatingEnvEquivalence:
-    """``TestEnvVsClientEquivalence`` extended to the envs Lane B converts
+    """``TestEnvVsClientEquivalence`` extended to the converted envs
     (the task change-set §5: "EXTEND its coverage to the
     newly-delegating envs").
 
@@ -417,7 +417,7 @@ class TestNewlyDelegatingEnvEquivalence:
         that parse raises ``ValidationError``. The env's own ``call_mcp``
         never noticed because it passes ``dict`` as the response class and
         validates nothing. That is a ``list_tasks``-vs-pinned-schema
-        conformance gap, NOT a Lane B dispatch defect, so it is graded
+        conformance gap, NOT a dispatch defect, so it is graded
         elsewhere and not smuggled into this lane's gate — but it does mean
         B7's "route its scenarios through the client" needs that gap resolved
         (or an explicit env ``response_parser`` override) to land.

@@ -23,7 +23,7 @@ class AuthorizedPropertiesEnv(IntegrationEnv):
     No patches — discovery is read-only, no external service calls.
     """
 
-    # Dispatch declaration: the base owns call_mcp/call_a2a (Lane B, B1).
+    # Dispatch declaration: the base owns call_mcp/call_a2a.
     MCP_TOOL = "list_authorized_properties"
     A2A_SKILL = "list_authorized_properties"
     RESPONSE_MODEL = ListAuthorizedPropertiesResponse
