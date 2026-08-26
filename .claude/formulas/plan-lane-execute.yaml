@@ -141,7 +141,7 @@ iterate:
 
         ## Precondition (gate hard-check)
         ```bash
-        bd show {TASK_ID} | grep -q "^## Change-set (design atom)" || { echo "GATE FAIL: the design atom did not record a change-set on {TASK_ID}"; exit 1; }
+        bd show {TASK_ID} | grep -qE "^[[:space:]]*## Change-set \(design atom\)" || { echo "GATE FAIL: the design atom did not record a change-set on {TASK_ID}"; exit 1; }
         ```
 
         ## Inputs
@@ -288,7 +288,7 @@ iterate:
 
         ## Precondition (gate hard-check)
         ```bash
-        bd show {TASK_ID} | grep -q "^## RED evidence (write-test atom)" || { echo "GATE FAIL: no RED evidence recorded on {TASK_ID}"; exit 1; }
+        bd show {TASK_ID} | grep -qE "^[[:space:]]*## RED evidence \(write-test atom\)" || { echo "GATE FAIL: no RED evidence recorded on {TASK_ID}"; exit 1; }
         ```
 
         ## Rules
@@ -333,7 +333,7 @@ iterate:
 
         ## Precondition
         ```bash
-        bd show {TASK_ID} | grep -q "^## Implemented (implement atom)" || { echo "GATE FAIL: the implement atom did not record its diff on {TASK_ID}"; exit 1; }
+        bd show {TASK_ID} | grep -qE "^[[:space:]]*## Implemented \(implement atom\)" || { echo "GATE FAIL: the implement atom did not record its diff on {TASK_ID}"; exit 1; }
         ```
 
         ## What to grade (the lane diff ONLY)
