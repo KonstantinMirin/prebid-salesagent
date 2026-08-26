@@ -118,9 +118,18 @@ def _record_credential_registrations(ctx: dict, transport: Any, result: Any, kwa
     """
     if not ctx.get(GRADE_EVERY_CREDENTIAL_LOCATION):
         return
+    # The REALIZATION, verbatim — never ``bool(...)``. ``signed`` is not a flag: it is
+    # one of False / True / "malformed" / "tampered"
+    # (tests.helpers.signing.SIGNATURE_REALIZATIONS), and ``bool("malformed")`` is
+    # True, so collapsing it here would hand this frame a WELL-FORMED signature while
+    # the operation dispatch above carried the malformed one. The scenario would then
+    # grade an acceptance at the credential location it exists to grade a refusal at,
+    # and pass. A second credential location is the epic's headline bypass surface, so
+    # these are the frames that can least afford the collapse. WHICH transport has one
+    # stays the env's business, here too: this comment names the hazard, not the leg.
     ctx[CREDENTIAL_REGISTRATIONS] = ctx["env"].credential_registrations(
         transport,
         kwargs.get("push_notification_config"),
         result,
-        signed=bool(kwargs.get("signed", False)),
+        signed=kwargs.get("signed", False),
     )

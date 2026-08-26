@@ -58,6 +58,7 @@ from typing import Any
 
 import httpx
 import pytest
+from adcp.signing import REQUEST_SIGNATURE_HEADER_MALFORMED
 from adcp.types import GetAdcpCapabilitiesResponse
 
 from tests.harness._base import BareIntegrationEnv
@@ -65,6 +66,7 @@ from tests.harness.transport import E2EConfig, Transport, TransportResult
 from tests.helpers.signing import (
     BODYLESS_ADCP_PATH,
     LADDER_OPERATIONS,
+    SIGNATURE_REALIZATIONS,
     SIGNING_AGENT_HOST,
     SIGNING_PRINCIPAL_ID,
     SIGNING_TENANT_ID,
@@ -294,6 +296,149 @@ def test_refusal_is_graded_by_the_challenge_not_by_the_status(integration_db):
         )
         with pytest.raises(AssertionError, match="request_signature_required"):
             accepted.assert_signature_challenge("request_signature_required")
+
+
+# ---------------------------------------------------------------------------
+# Two REGRESSION LOCKS on the seams salesagent-nx8jp.9 widened
+# ---------------------------------------------------------------------------
+#
+# Neither of these is a RED grader and neither could be. A lock says "this holds,
+# and HERE IS WHAT BREAKS IT"; a red grader says "this fails until I fix it". The
+# behaviours below hold on the tree that introduces them, so each is stated together
+# with the NAMED MUTATION it was checked against — recording a lock without one is
+# the false claim about coverage this epic's standard forbids.
+
+#: Every realization that puts something signature-shaped on the wire. DERIVED rather
+#: than listed, so a fifth realization added to the type is locked by construction
+#: instead of silently inheriting the ``impl`` exemption the epic exists to close.
+_WIRE_REALIZATIONS = tuple(r for r in SIGNATURE_REALIZATIONS if r is not False)
+
+
+@pytest.mark.requires_db
+@pytest.mark.parametrize("signed", _WIRE_REALIZATIONS, ids=[str(r) for r in _WIRE_REALIZATIONS])
+def test_impl_refuses_every_signature_realization(integration_db, signed):
+    """LOCK 1 — ``impl`` refuses ANY realization, not just ``signed=True``.
+
+    THE CONTRACT'S FIRST ASSERTION. ``_refuse_signed_impl``
+    (``tests/harness/dispatchers.py``) has exactly two references — its definition
+    and the single ``if signed:`` call above it — and :data:`IN_PROCESS_LEGS`
+    excludes ``IMPL`` permanently, so until now NOTHING graded it. It was believed
+    by reading, which is the epic's own headline failure mode.
+
+    It has to be re-stated the moment ``signed`` stops being a bool: ``impl`` is a
+    direct in-process function call with nothing between the caller and ``_impl``,
+    so a MALFORMED signature has exactly as little meaning there as a valid one, and
+    a leg that ignored the realization would run the scenario unsigned and let it
+    pass having signed nothing.
+
+    PINNED AS ``pytest.raises(NotImplementedError)`` WITH THE MESSAGE, not as
+    ``result.is_error``: ``ImplDispatcher.dispatch`` wraps its ``call_impl`` in
+    ``except Exception`` and hands back ``TransportResult(error=exc)``, so an
+    is_error-shaped assertion is satisfied by ANY failure inside the call — this env
+    does not implement ``call_impl`` at all, and its own ``NotImplementedError``
+    would keep such a lock green forever. Only the refusal ESCAPES ``call_via``,
+    because it is raised before the try.
+
+    NAMED MUTATION (checked, salesagent-rt8ht.4): ``if signed:`` -> ``if signed is
+    True:`` at ``dispatchers.py``. ``"malformed"`` and ``"tampered"`` then fall
+    through to ``call_impl``, whose failure is swallowed into the result, and this
+    test reddens with DID NOT RAISE for both — while the ``True`` parameter stays
+    green, which is what says the mutation was the realization arm and not the
+    refusal itself.
+    """
+    with _SignedDispatchEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+        with pytest.raises(NotImplementedError, match="has no meaning on transport 'impl'"):
+            env.call_via(Transport.IMPL, signed=signed)
+
+        # The control: the refusal is attributable to the REALIZATION, not to
+        # dispatching on ``impl`` at all. Unsigned, the same call returns a result
+        # (this env implements no ``call_impl``, so that result carries an error —
+        # which is precisely why the assertion above cannot be an is_error check).
+        unsigned = env.call_via(Transport.IMPL, signed=False)
+        assert "has no meaning on transport 'impl'" not in str(unsigned.error), (
+            f"an UNSIGNED impl dispatch was refused as if it carried a signature: {unsigned.error!r}"
+        )
+
+
+def _refused_frame(result: TransportResult) -> tuple[str, str | None]:
+    """WHICH MCP frame the verifier refused: its JSON-RPC method and session id.
+
+    Read off the httpx request the refusing response answers, so the attribution is
+    made from the bytes the harness actually sent rather than from anything the
+    harness reports about itself. ``mcp-session-id`` is present only on a frame sent
+    AFTER ``initialize`` minted one, which makes it the wire's own evidence that the
+    session was established.
+
+    Exists because the two things a scenario needs to tell apart here are
+    indistinguishable everywhere else: see :func:`test_a_failure_realization_reaches_
+    the_operation_frame_not_the_handshake`.
+    """
+    import json
+
+    response = result.raw_response
+    assert response is not None, (
+        f"expected a refusing HTTP response to attribute to a frame, got none "
+        f"(is_error={result.is_error}, error={result.error!r}, payload={result.payload!r})"
+    )
+    request = response.request
+    method = json.loads(request.content)["method"]
+    return method, request.headers.get("mcp-session-id")
+
+
+@pytest.mark.requires_db
+def test_a_failure_realization_reaches_the_operation_frame_not_the_handshake(integration_db):
+    """LOCK 2 — the graded-frame rule: MCP opens its session CLEANLY, then 401s.
+
+    An MCP dispatch is THREE frames — ``initialize``, ``notifications/initialized``,
+    ``tools/call`` — and only the last is the operation the scenario named. The
+    realization must therefore attach to the last one alone: a session-wide
+    realization 401s the ``initialize``, the operation frame is never sent, and the
+    scenario grades a refusal of a frame it never mentioned.
+
+    WHY THE OBVIOUS ASSERTION WOULD BE VACUOUS, and why this test is shaped the way
+    it is. ``assert_signature_challenge`` grades the challenge header byte-exactly
+    and DELIBERATELY not the status code. Both refusals are step-1 pre-check
+    failures, which reject in every bucket, so both answer 401 with the IDENTICAL
+    ``WWW-Authenticate: Signature error="request_signature_header_malformed"``; both
+    arrive as a :class:`~tests.harness._base.WireRefusal` that ``McpDispatcher``
+    surfaces as ``raw_response``. The challenge assertion below therefore passes
+    under this test's own mutation. It is kept as SHAPE DOCUMENTATION — it says the
+    refusal is the one the realization asks for — and it is explicitly NOT the
+    discriminator.
+
+    THE DISCRIMINATOR is the frame attribution, which is the only thing that differs:
+    the refused request is the ``tools/call``, and it carries an ``mcp-session-id``,
+    which exists only because ``initialize`` answered with one.
+
+    NAMED MUTATION (checked, salesagent-rt8ht.4): make ``_mcp_open_session`` pass the
+    realization through to its two ``_mcp_send`` calls instead of
+    ``bool(self._signed_dispatch)``. The refused frame becomes ``initialize``, which
+    carries no session id, and BOTH assertions in the lock redden while
+    ``assert_signature_challenge`` stays green.
+    """
+    with _SignedDispatchEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+        env.enable_request_signing()
+
+        with declared_posture(**bucketed_declaration("required", *LADDER_OPERATIONS)):
+            refused = env.call_via(Transport.MCP, signed="malformed")
+
+        # Shape documentation, not the discriminator — see the docstring.
+        refused.assert_signature_challenge(REQUEST_SIGNATURE_HEADER_MALFORMED)
+
+        method, session_id = _refused_frame(refused)
+        assert method == "tools/call", (
+            f"the malformed signature was refused on the {method!r} frame, not on the operation "
+            "frame the scenario named. A handshake frame carrying the realization 401s before "
+            "the operation is ever sent, and its challenge is byte-identical to the operation "
+            "frame's — so every scenario asserting 'a malformed signature is refused' would pass "
+            "having graded a frame it never mentioned. Handshake frames sign CORRECTLY whenever "
+            "signing is on at all (BaseTestEnv._mcp_open_session)."
+        )
+        assert session_id is not None, (
+            "the refused frame carried no mcp-session-id, so no session was ever established — "
+            "the 401 came from the handshake and the operation frame was never sent. A session "
+            "that cannot be opened has graded nothing."
+        )
 
 
 # ---------------------------------------------------------------------------

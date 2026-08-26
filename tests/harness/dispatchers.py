@@ -26,6 +26,7 @@ from tests.harness.transport import Transport, TransportResult
 
 if TYPE_CHECKING:
     from tests.harness._base import BaseTestEnv
+    from tests.helpers.signing import SignatureRealization
 
 
 def _envelope_from_adcp_error(exc: Exception) -> dict[str, Any] | None:
@@ -133,8 +134,18 @@ def _non_json_error_result(response: Any, envelope: dict[str, Any]) -> Transport
     return TransportResult(payload=None, envelope=envelope, error=error, raw_response=response)
 
 
-def _refuse_signed_impl() -> None:
-    """Fail loudly when ``signed=True`` reaches ``impl``, which has no wire.
+def _refuse_signed_impl(signed: SignatureRealization) -> None:
+    """Fail loudly when ANY signature realization reaches ``impl``, which has no wire.
+
+    ANY, not only ``signed=True``: since ``signed`` widened to carry failure
+    realizations (``"malformed"`` / ``"tampered"``,
+    :data:`tests.helpers.signing.SIGNATURE_REALIZATIONS`) the caller above refuses on
+    TRUTHINESS, which is what keeps that widening from re-opening this hole — a
+    malformed signature has exactly as little meaning on a direct function call as a
+    valid one. Graded, at last, by
+    ``tests/integration/test_harness_signed_dispatch.py``
+    ``test_impl_refuses_every_signature_realization``: this function had two
+    references and no test until salesagent-nx8jp.9.
 
     All four WIRE legs — ``rest``, ``a2a``, ``mcp`` and ``e2e_rest`` — realize a
     real signature over the real HTTP path (``salesagent-n78j0.1.1``). ``IMPL``
@@ -149,9 +160,10 @@ def _refuse_signed_impl() -> None:
     asserted by code shape and never observed).
     """
     raise NotImplementedError(
-        "call_via(signed=True) has no meaning on transport 'impl': a direct _impl call "
+        f"call_via(signed={signed!r}) has no meaning on transport 'impl': a direct _impl call "
         "puts nothing on a wire, so there is nothing for RequestSignatureMiddleware to "
-        "verify. Dispatch the scenario over rest, a2a, mcp or e2e_rest. Refusing rather "
+        "verify — a malformed or tampered signature has exactly as little meaning there as a "
+        "valid one. Dispatch the scenario over rest, a2a, mcp or e2e_rest. Refusing rather "
         "than running unsigned, which would make a signing scenario pass without a signature."
     )
 
@@ -169,9 +181,9 @@ class ImplDispatcher:
     in-memory exception). Use A2A, REST, or MCP for wire-shape coverage.
     """
 
-    def dispatch(self, env: BaseTestEnv, *, signed: bool = False, **kwargs: Any) -> TransportResult:
+    def dispatch(self, env: BaseTestEnv, *, signed: SignatureRealization = False, **kwargs: Any) -> TransportResult:
         if signed:
-            _refuse_signed_impl()
+            _refuse_signed_impl(signed)
         try:
             payload = env.call_impl(**kwargs)
         except Exception as exc:
@@ -236,7 +248,7 @@ class A2ADispatcher:
     ``enable_request_signing()``.
     """
 
-    def dispatch(self, env: BaseTestEnv, *, signed: bool = False, **kwargs: Any) -> TransportResult:
+    def dispatch(self, env: BaseTestEnv, *, signed: SignatureRealization = False, **kwargs: Any) -> TransportResult:
         # Real A2A wire on success: the artifact DataPart dict stashed by
         # _run_a2a_handler (declared on BaseTestEnv, reset per call_via — read
         # directly so a missed capture surfaces as None against a known
@@ -257,7 +269,7 @@ class RestDispatcher:
     (status_code, content_type) since tests may assert on these.
     """
 
-    def dispatch(self, env: BaseTestEnv, *, signed: bool = False, **kwargs: Any) -> TransportResult:
+    def dispatch(self, env: BaseTestEnv, *, signed: SignatureRealization = False, **kwargs: Any) -> TransportResult:
         try:
             endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
             response = env._run_rest_request(endpoint, signed=signed, **kwargs)
@@ -310,7 +322,7 @@ class McpDispatcher:
     streams, which carry no headers and never reach the ASGI verifier.
     """
 
-    def dispatch(self, env: BaseTestEnv, *, signed: bool = False, **kwargs: Any) -> TransportResult:
+    def dispatch(self, env: BaseTestEnv, *, signed: SignatureRealization = False, **kwargs: Any) -> TransportResult:
         try:
             payload = env.call_mcp(**kwargs)
         except Exception as exc:
@@ -383,7 +395,7 @@ class RestE2EDispatcher:
     pass-through wearing a 200. ``wire_request`` now sets it for all four legs.
     """
 
-    def dispatch(self, env: BaseTestEnv, *, signed: bool = False, **kwargs: Any) -> TransportResult:
+    def dispatch(self, env: BaseTestEnv, *, signed: SignatureRealization = False, **kwargs: Any) -> TransportResult:
         import httpx
 
         if signed and not env.can_sign:
@@ -509,7 +521,7 @@ class RestE2EDispatcher:
 class McpE2EDispatcher:
     """Placeholder for real MCP E2E dispatch (not yet implemented)."""
 
-    def dispatch(self, env: BaseTestEnv, *, signed: bool = False, **kwargs: Any) -> TransportResult:
+    def dispatch(self, env: BaseTestEnv, *, signed: SignatureRealization = False, **kwargs: Any) -> TransportResult:
         raise NotImplementedError(
             "E2E_MCP dispatcher is not yet implemented. Use Transport.MCP for in-process MCP dispatch."
         )
@@ -518,7 +530,7 @@ class McpE2EDispatcher:
 class A2AE2EDispatcher:
     """Placeholder for real A2A E2E dispatch (not yet implemented)."""
 
-    def dispatch(self, env: BaseTestEnv, *, signed: bool = False, **kwargs: Any) -> TransportResult:
+    def dispatch(self, env: BaseTestEnv, *, signed: SignatureRealization = False, **kwargs: Any) -> TransportResult:
         raise NotImplementedError(
             "E2E_A2A dispatcher is not yet implemented. Use Transport.A2A for in-process A2A dispatch."
         )

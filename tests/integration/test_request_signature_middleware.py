@@ -156,11 +156,14 @@ from tests.helpers.signing import (
     bucketed_declaration,
     counterparty_key,
     keypair_for,
+    narrowed_none,
     registry_entry,
     request_headers,
     seed_principal,
     signed_headers,
     signed_probe,
+    tampered_signing_body,
+    unsupported,
 )
 from tests.helpers.signing import (
     counter_samples as _counter_samples,
@@ -255,30 +258,13 @@ from tests.helpers.signing import (
 # --------------------------------------------------------------------------
 
 
-def _unsupported() -> dict[str, Any]:
-    """The default posture: the ``none`` bucket for every operation."""
-    return {"supported": False}
-
-
-def _narrowed_none() -> dict[str, Any]:
-    """``supported: true``, narrowed so the surface under test lands in ``none``.
-
-    The OTHER half of the ``none`` bucket, and the one every row below exists to
-    separate from :func:`_unsupported`. Both bucket ``get_adcp_capabilities`` as
-    ``none``, and ``bucket_for`` cannot tell them apart afterwards — but the
-    declarations differ on ``supported``, which is the field the spec's pre-check
-    obligation is scoped by: the signed-requests storyboard gates all 28 negative
-    vectors on ``request_signing.supported: true`` alone, so a seller advertising
-    ``supported: false`` is outside the rule while a seller advertising
-    ``supported: true`` is inside it however narrowly it declared its buckets.
-
-    Naming ``create_media_buy`` (a real operation on another route) rather than
-    leaving ``supported_for`` absent is what does the narrowing: a NULL
-    ``supported_for`` means "verify wherever signatures appear"
-    (``src/core/signing/posture.py`` ``_bucket_for``), i.e. ``supported``, not
-    ``none``.
-    """
-    return bucketed_declaration("supported", "create_media_buy")
+# ``unsupported()`` and ``narrowed_none()`` — the two halves of the ``none`` bucket —
+# were defined here and are now imported from tests/helpers/signing.py
+# (salesagent-nx8jp.9). They moved for the reason the import block above gives: a
+# realization whose home is a test module cannot be reached by the harness at all
+# (``test_architecture_no_cross_test_module_imports``), so
+# ``declare_request_signing(bucket="narrowed_none")`` could only have been served by a
+# THIRD copy. There were already two.
 
 
 #: The bucket dimension of the malformed-signature rule (security.mdx :1226/:1271),
@@ -317,8 +303,8 @@ _BUCKET_DIMENSION = pytest.mark.parametrize(
             REQUEST_SIGNATURE_HEADER_MALFORMED,
             id="warn",
         ),
-        pytest.param(_narrowed_none(), 401, REQUEST_SIGNATURE_HEADER_MALFORMED, id="narrowed-none"),
-        pytest.param(_unsupported(), 200, None, id="unsupported-none"),
+        pytest.param(narrowed_none(), 401, REQUEST_SIGNATURE_HEADER_MALFORMED, id="narrowed-none"),
+        pytest.param(unsupported(), 200, None, id="unsupported-none"),
     ],
 )
 
@@ -634,7 +620,7 @@ class TestNoneBucketCostsNothing:
             token = seed_principal(env)
             client = env.get_rest_client()
 
-            with _declared_posture(**_unsupported()), _verifier_spy() as calls:
+            with _declared_posture(**unsupported()), _verifier_spy() as calls:
                 response = client.post(
                     BODYLESS_ADCP_PATH,
                     json=body,
@@ -690,7 +676,7 @@ class TestNoneBucketCostsNothing:
             token = seed_principal(env)
             client = env.get_rest_client()
 
-            with _declared_posture(**_narrowed_none()), _verifier_spy() as calls:
+            with _declared_posture(**narrowed_none()), _verifier_spy() as calls:
                 client.post(
                     BODYLESS_ADCP_PATH,
                     json=body,
@@ -845,7 +831,7 @@ class TestTheNarrowedNoneBucketRecordsTheRightOutcome:
                     "key-resolution failures in the same series",
                 ),
                 _assert_ignored_recorded(_BODYLESS_OPERATION),
-                _declared_posture(**_narrowed_none()),
+                _declared_posture(**narrowed_none()),
                 counterparty_key(jwks),
                 _verifier_spy() as calls,
             ):
@@ -896,7 +882,7 @@ class TestTheNarrowedNoneBucketRecordsTheRightOutcome:
                     why="a genuine step-1 header malformation under narrowed none is rejected, "
                     "and a rejection nothing counts is a 401 with no operational signal at all",
                 ),
-                _declared_posture(**_narrowed_none()),
+                _declared_posture(**narrowed_none()),
             ):
                 response = client.post(
                     BODYLESS_ADCP_PATH,
@@ -953,7 +939,7 @@ class TestANarrowedNoneRequestThatNeverFinishesArriving:
 
             with (
                 _assert_ignored_recorded(_BODYLESS_OPERATION),
-                _declared_posture(**_narrowed_none()),
+                _declared_posture(**narrowed_none()),
                 start_blocking_portal("asyncio") as portal,
             ):
                 response = send_wire_messages(
@@ -997,22 +983,32 @@ class TestShadowModeLadder:
     dropped (counter).
 
     The signature used is WELL-FORMED and cryptographically real — signed with
-    the counterparty's actual key, then the body is mutated in flight, so the
-    verifier reaches ``request_signature_digest_mismatch`` on its merits rather
-    than short-circuiting at the header parse.
+    the counterparty's actual key, then the body is mutated in flight
+    (:func:`~tests.helpers.signing.tampered_signing_body`, this class's own
+    realization since promoted and generalized to any body, salesagent-nx8jp.9), so
+    the verifier reaches ``request_signature_digest_mismatch`` on its merits rather
+    than short-circuiting at the header parse. The harness reaches the same
+    realization as ``call_via(..., signed="tampered")``, over the same helper, so a
+    scenario and this ladder cannot drift on what "tampered" means.
     """
 
     @staticmethod
     def _tampered_signed_request(private_key: Any, token: str) -> tuple[dict[str, str], bytes]:
-        """Headers signed over one body, plus the DIFFERENT body actually sent."""
-        signed_body = json.dumps({"context": {"request_id": "as-signed"}}).encode()
-        sent_body = json.dumps({"context": {"request_id": "as-sent-DIFFERENT"}}).encode()
+        """Headers signed over one body, plus the DIFFERENT body actually sent.
+
+        The MUTATION is :func:`~tests.helpers.signing.tampered_signing_body`'s; what
+        stays here is only this suite's own request document and surface. Sending the
+        UNMUTATED bytes (and signing the mutated ones) rather than the reverse keeps
+        the sent body a valid AdCP document, so nothing downstream of the verifier can
+        reject it for a reason other than the digest.
+        """
+        sent_body = json.dumps({"context": {"request_id": "as-sent"}}).encode()
         headers = signed_headers(
             private_key,
             token,
             method="POST",
             path=BODYLESS_ADCP_PATH,
-            body=signed_body,
+            body=tampered_signing_body(sent_body),
             extra={"Content-Type": "application/json"},
         )
         return headers, sent_body
@@ -1205,7 +1201,7 @@ class TestVerifierSitsOutsideBodyRewriter:
             token = seed_principal(env)
             client = env.get_rest_client()
 
-            with _declared_posture(**_unsupported()):
+            with _declared_posture(**unsupported()):
                 response = client.post(
                     REWRITTEN_ADCP_PATH,
                     json={

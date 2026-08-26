@@ -26,7 +26,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import patch
 
 from adcp import get_adcp_spec_version
@@ -921,6 +921,41 @@ def samples_with(sample_name: str, **labels: str) -> dict[tuple[tuple[str, str],
 # ---------------------------------------------------------------------------
 
 
+def unsupported() -> dict[str, Any]:
+    """The default posture: the ``none`` bucket for every operation.
+
+    Promoted out of ``tests/integration/test_request_signature_middleware.py``
+    (salesagent-nx8jp.9) so ``BaseTestEnv.declare_request_signing(bucket=...)``
+    can reach it: ``tests/unit/test_architecture_no_cross_test_module_imports.py``
+    makes a ``test_*.py`` module unimportable, so a realization stranded in one is
+    reachable only by copying it — which is how ``_NARROWED_NONE`` came to exist
+    twice. Same promotion :func:`signed_probe` went through, for the same reason.
+    """
+    return {"supported": False}
+
+
+def narrowed_none() -> dict[str, Any]:
+    """``supported: true``, narrowed so the surface under test lands in ``none``.
+
+    The OTHER half of the ``none`` bucket, and the one every caller exists to
+    separate from :func:`unsupported`. Both bucket the operation under test as
+    ``none``, and ``bucket_for`` cannot tell them apart afterwards — but the
+    declarations differ on ``supported``, which is the field the spec's pre-check
+    obligation is scoped by: the signed-requests storyboard gates all 28 negative
+    vectors on ``request_signing.supported: true`` alone, so a seller advertising
+    ``supported: false`` is outside the rule while a seller advertising
+    ``supported: true`` is inside it however narrowly it declared its buckets.
+
+    Naming ``create_media_buy`` (a real operation on another route) rather than
+    leaving ``supported_for`` absent is what does the narrowing: a NULL
+    ``supported_for`` means "verify wherever signatures appear"
+    (``src/core/signing/posture.py`` ``_bucket_for``), i.e. ``supported``, not
+    ``none``. Callers whose surface under test IS ``create_media_buy`` must narrow
+    to some other real operation instead of reusing this one.
+    """
+    return bucketed_declaration("supported", "create_media_buy")
+
+
 def bucketed_declaration(bucket: str, *operations: str) -> dict[str, Any]:
     """A ``request_signing`` declaration putting *operations* in exactly one bucket.
 
@@ -995,6 +1030,92 @@ MALFORMED_SIGNATURE_HEADERS = {
     "Signature-Input": "sig1=this-is-not-an-rfc8941-inner-list",
     "Signature": "sig1=:AAAA:",
 }
+
+#: What a harness leg can put on the wire in place of a correct signature.
+#:
+#: ``False`` sends no signature headers at all and ``True`` sends a real RFC 9421
+#: signature over the exact bytes sent. The two strings are FAILURE realizations, and
+#: they are two rather than one because the verifier's own phase boundary is drawn
+#: between them (``_handle_rejection``, ``request_verifier_middleware``):
+#:
+#: * ``"malformed"`` — :data:`MALFORMED_SIGNATURE_HEADERS`, a step-1 PRE-CHECK failure
+#:   that rejects in EVERY bucket, warn included (security.mdx :1226/:1271);
+#: * ``"tampered"`` — a cryptographically real signature over a DIFFERENT rendering of
+#:   the same request, so the verifier reaches ``request_signature_digest_mismatch`` on
+#:   its merits inside the checklist, where ``warn_for`` does suppress it (:1273).
+#:
+#: Collapsing the two would make the (code, step) predicate lane .1 turns on
+#: unrepresentable from a scenario.
+SIGNATURE_REALIZATIONS: tuple[Any, ...] = (False, True, "malformed", "tampered")
+
+#: The type every seam that carries a realization is annotated with.
+SignatureRealization = bool | Literal["malformed", "tampered"]
+
+
+def realization(signed: Any) -> SignatureRealization:
+    """*signed*, refused unless it is one of :data:`SIGNATURE_REALIZATIONS`.
+
+    A typo'd ``signed="malfromed"`` must RAISE, not silently sign correctly.
+    Without this the widening from ``bool`` is a trapdoor: every consumer branches
+    on the exact strings and falls through to the correct-signature arm for
+    anything else, so the scenario would send a well-formed signature, be
+    accepted, and grade the acceptance as if it had graded a refusal. That is the
+    same failure the epic fixed at the settings boundary for
+    ``counterparty_agent_type`` — an unrecognized value reaching a default arm
+    instead of a raise.
+
+    Identity comparison for the booleans on purpose: ``1`` and ``0`` are equal to
+    ``True``/``False`` but are not realizations, and a caller that produced an int
+    where a realization belongs has a bug worth surfacing.
+    """
+    if signed is True or signed is False or signed in ("malformed", "tampered"):
+        return signed
+    raise ValueError(
+        f"signed={signed!r} is not a signature realization. Pass one of "
+        f"{SIGNATURE_REALIZATIONS!r}: False (no signature headers), True (a real signature over "
+        "the exact bytes sent), 'malformed' (unparseable headers — a step-1 pre-check failure), "
+        "or 'tampered' (a real signature over a different body — a checklist digest mismatch). "
+        "Refusing rather than falling through to a correct signature, which would make a "
+        "scenario grading a refusal pass on an acceptance."
+    )
+
+
+def tampered_signing_body(raw: bytes) -> bytes:
+    """The body to SIGN so that sending *raw* is a checklist digest mismatch.
+
+    Generalized out of ``TestShadowModeLadder._tampered_signed_request``
+    (salesagent-nx8jp.9), which hardcoded one request document. The caller signs
+    over what this returns and sends its OWN bytes, so ``Signature-Input`` and
+    ``Signature`` stay WELL-FORMED and the signature is cryptographically real:
+    the verifier gets past step 1 on its merits and fails at
+    ``request_signature_digest_mismatch`` inside the checklist. That is what makes
+    it a checklist failure rather than a header rejection — the distinction the
+    (code, step) predicate in ``_handle_rejection`` turns on, and the reason
+    ``warn_for`` suppresses this one and not ``"malformed"``.
+
+    A TRAILING SPACE rather than an edited field: ``content-digest`` covers the raw
+    bytes, so any byte-level difference produces the mismatch, and appending one
+    keeps the mutation independent of what the caller's document happens to
+    contain (the hardcoded version could only tamper with a body it had written
+    itself).
+
+    PER-TRANSPORT LIMIT, stated rather than worked around: a BODYLESS request
+    (``body=None`` — the e2e ``GET /api/v1/capabilities`` leg) has nothing to
+    mutate, so this refuses instead of returning something that would sign and
+    send identical bytes and be ACCEPTED. A tampered realization is not
+    expressible on a bodyless surface; dispatch it on a body-carrying one.
+    """
+    if not raw:
+        raise ValueError(
+            "signed='tampered' needs a request BODY to mutate: the tamper is a "
+            "content-digest mismatch, and a bodyless request (body=None — e.g. the e2e "
+            "bodyless GET on /api/v1/capabilities) has no bytes to differ in. Signing and "
+            "sending identical zero bytes would be ACCEPTED, so a scenario grading a "
+            "digest mismatch would pass on an acceptance. Dispatch the tampered "
+            "realization on a body-carrying surface, or use signed='malformed', which "
+            "needs no body."
+        )
+    return raw + b" "
 
 
 def request_headers(token: str | None, extra: dict[str, str] | None = None) -> dict[str, str]:

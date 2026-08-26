@@ -50,6 +50,7 @@ if TYPE_CHECKING:
 
     from src.core.resolved_identity import ResolvedIdentity
     from tests.harness.transport import E2EConfig, Transport, TransportResult
+    from tests.helpers.signing import SignatureRealization
 
 
 def _adcp_error_from_code(
@@ -684,15 +685,23 @@ class BaseTestEnv:
         # with NO artifacts — and the synthesized submitted wire above cannot
         # prove artifact absence, so guards assert on this captured Task.
         self._last_a2a_task: Any = None
-        # Whether the dispatch currently in flight asked for a signature. It
-        # travels on the env rather than as a kwarg because A2A and MCP dispatch
+        # WHICH signature realization the dispatch currently in flight carries —
+        # not whether it asked for one. It holds one of False / True /
+        # ``"malformed"`` / ``"tampered"``
+        # (:data:`tests.helpers.signing.SIGNATURE_REALIZATIONS`), and two GRADED
+        # frames read the realization back out of it verbatim (the A2A frame and
+        # ``_mcp_post``). Anything that narrows it to a bool here hands those
+        # frames a well-formed signature for ``"malformed"``, because
+        # ``bool("malformed")`` is True.
+        #
+        # It travels on the env rather than as a kwarg because A2A and MCP dispatch
         # through env-owned ``call_a2a``/``call_mcp`` OVERRIDES whose signatures
         # the harness does not control — a ``signed=`` kwarg would have to be
         # forwarded by every subclass or it would arrive as a skill parameter.
         # ``call_via`` sets it for exactly one dispatch, next to the wire capture
         # those same two methods already stash here. REST needs none of this: its
         # dispatcher calls ``_run_rest_request`` directly and passes ``signed=``.
-        self._signed_dispatch: bool = False
+        self._signed_dispatch: SignatureRealization = False
 
     # -- Transport mode -----------------------------------------------------
 
@@ -856,7 +865,7 @@ class BaseTestEnv:
 
     # -- Transport dispatch -------------------------------------------------
 
-    def call_via(self, transport: Transport, *, signed: bool = False, **kwargs: Any) -> TransportResult:
+    def call_via(self, transport: Transport, *, signed: SignatureRealization = False, **kwargs: Any) -> TransportResult:
         """Dispatch through *transport* and return normalized TransportResult.
 
         Injects the correct identity for the transport into kwargs (unless
@@ -870,8 +879,30 @@ class BaseTestEnv:
         BDD step) stay transport-blind. A transport that cannot yet sign REFUSES
         rather than silently sending an unsigned request — see
         ``tests/harness/signing_capability.py``.
+
+        ``signed`` also takes a FAILURE realization — ``"malformed"`` or
+        ``"tampered"`` (:data:`tests.helpers.signing.SIGNATURE_REALIZATIONS`) — so a
+        scenario can send a signature the verifier must refuse without knowing which
+        bytes any transport puts on the wire. Anything else RAISES here
+        (:func:`tests.helpers.signing.realization`) rather than falling through to a
+        correct signature: this is the earliest seam every dispatch crosses, so a
+        typo is caught before it can be graded as an acceptance.
+
+        WHICH FRAME CARRIES THE REALIZATION is the rule the legs below obey, and it
+        is not "all of them": a HANDSHAKE frame the harness sends to make the
+        operation reachable at all (MCP's ``initialize`` /
+        ``notifications/initialized``) signs CORRECTLY whenever signing is on,
+        because a session that cannot be established has graded nothing. Every frame
+        the SCENARIO put under test carries the realization — including A2A's second
+        credential location (``credential_registrations``), which is a credential
+        registration in its own right and the epic's headline bypass surface, not a
+        harness enabling frame. Locked by
+        ``tests/integration/test_harness_signed_dispatch.py``.
         """
         from tests.harness.dispatchers import DISPATCHERS
+        from tests.helpers.signing import realization
+
+        signed = realization(signed)
 
         # Inject transport-correct identity
         kwargs.setdefault("identity", self.identity_for(transport))
@@ -966,7 +997,7 @@ class BaseTestEnv:
         config: Any,
         operation_result: TransportResult,
         *,
-        signed: bool = False,
+        signed: SignatureRealization = False,
     ) -> tuple[tuple[str, TransportResult], ...]:
         """Every place *transport* let this buyer hand the seller webhook credentials.
 
@@ -1003,7 +1034,14 @@ class BaseTestEnv:
         carried; ``None`` means the caller registered no credentials, so there is
         nothing to send anywhere else and only the operation entry comes back.
         *signed* must match the operation dispatch's own, or the extra locations
-        would be a different experiment from the one the scenario set up.
+        would be a different experiment from the one the scenario set up. That
+        includes a FAILURE realization: this frame is a credential registration the
+        SCENARIO put under test, not a harness enabling frame, so a ``"malformed"``
+        or ``"tampered"`` realization reaches it VERBATIM. Signing it correctly
+        because it is "not the operation frame" would sign the one surface a
+        credential-location scenario most needs to grade with a failure realization
+        — the A2A credential-location bypass ``_refuse_signed_impl``'s own docstring
+        cites as the reason refusing beats ignoring.
         """
         location = _OPERATION_CREDENTIAL_LOCATION.get(transport.value, _UNSTATED_CREDENTIAL_LOCATION)
         registrations: list[tuple[str, TransportResult]] = [(location, operation_result)]
@@ -1046,7 +1084,13 @@ class BaseTestEnv:
             self.__dict__["_signing"] = build_signing_capability(self)
         return self.__dict__["_signing"]
 
-    def declare_request_signing(self, *, required_for: Sequence[str] = ()) -> None:
+    def declare_request_signing(
+        self,
+        *,
+        required_for: Sequence[str] = (),
+        bucket: str | None = None,
+        operations: Sequence[str] = (),
+    ) -> None:
         """Store this seller's REAL ``request_signing`` declaration on its tenant.
 
         The Given side of every enforcement scenario: production then does the rest
@@ -1054,7 +1098,34 @@ class BaseTestEnv:
         the document, ``posture_for_tenant`` reads it, ``bucket_for`` applies the
         ``required_for > warn_for > supported_for`` precedence.
 
-        TWO DECLARATIONS, and the difference between them is the whole point:
+        THREE SHAPES, and the third is the one that must not be collapsed into the
+        others:
+
+        * ``bucket="required" | "warn" | "supported"`` with *operations* — delegates to
+          :func:`~tests.helpers.signing.bucketed_declaration`, which names those
+          operations in the bucket AND in ``supported_for`` (an operation cannot be
+          required without being supported) and so leaves every other operation in
+          ``none``. ``bucket="narrowed_none"`` and ``bucket="unsupported"`` are the two
+          halves of ``none``, delegating to
+          :func:`~tests.helpers.signing.narrowed_none` /
+          :func:`~tests.helpers.signing.unsupported`; they take no operations because
+          what they mean is "this surface is in no bucket";
+        * ``required_for=("op",)`` — today's behaviour, unchanged;
+        * NO ARGUMENT — ``{"supported": true, "required_for": []}``, and it is
+          deliberately NOT ``bucket="supported"`` with no operations. That would write
+          ``supported_for: []``, and a null ``supported_for`` is not an empty one: null
+          means "verify wherever a signature appears" (every operation ``supported``),
+          ``[]`` means every operation ``none``. Delegating would silently move
+          ``tests/bdd/steps/domain/signing_enforcement.py``'s no-argument caller — the
+          pinned vector 027 shape — into the bucket where nothing is verified, and its
+          scenario would pass having graded a pass-through.
+
+        The two ways of naming a bucket are mutually exclusive rather than merged: a
+        call passing both would have to pick a precedence, and a silent precedence over
+        two declarations is how a scenario ends up grading a posture it did not
+        declare.
+
+        The two pre-existing shapes, in the detail the third must not erase:
 
         * ``required_for=("op",)`` narrows ``supported_for`` to the same names
           (:func:`~tests.helpers.signing.bucketed_declaration`), so every OTHER
@@ -1085,11 +1156,40 @@ class BaseTestEnv:
         """
         from src.core.database.models import Tenant
         from tests.harness.signing_capability import ensure_declarable_identity_host
-        from tests.helpers.signing import bucketed_declaration, posture_declaration_document
-
-        declaration = (
-            bucketed_declaration("required", *required_for) if required_for else {"supported": True, "required_for": []}
+        from tests.helpers.signing import (
+            bucketed_declaration,
+            narrowed_none,
+            posture_declaration_document,
+            unsupported,
         )
+
+        assert not (bucket and required_for), (
+            f"declare_request_signing() takes bucket= OR required_for=, not both "
+            f"(got bucket={bucket!r}, required_for={list(required_for)!r}). Name the posture once."
+        )
+        assert not (operations and not bucket), (
+            f"declare_request_signing(operations={list(operations)!r}) needs a bucket= to put them in; "
+            "required_for= already names its own operations."
+        )
+        assert not (operations and bucket in ("narrowed_none", "unsupported")), (
+            f"declare_request_signing(bucket={bucket!r}, operations={list(operations)!r}) cannot place those "
+            f"operations: both halves of the none bucket are fixed declarations that name no operation of the "
+            f"caller's, so {bucket!r} would DROP them silently. narrowed_none() narrows around a hardcoded "
+            "decoy (create_media_buy); if that decoy IS your surface under test, narrow around a different real "
+            'operation with bucket="supported", operations=(<other operation>,) — which is the same declaration '
+            "with a decoy you chose. Dropping them would put your surface in the OPPOSITE bucket and grade the "
+            "wrong arm green."
+        )
+        if bucket == "narrowed_none":
+            declaration = narrowed_none()
+        elif bucket == "unsupported":
+            declaration = unsupported()
+        elif bucket is not None:
+            declaration = bucketed_declaration(bucket, *operations)
+        elif required_for:
+            declaration = bucketed_declaration("required", *required_for)
+        else:
+            declaration = {"supported": True, "required_for": []}
         session = self._session
         assert session is not None, "declare_request_signing() must be called inside the env's `with` block"
         ensure_declarable_identity_host(self)
@@ -1485,7 +1585,7 @@ class BaseTestEnv:
             response_cls=response_cls,
         )
 
-    def _a2a_credential_registration(self, config: Any, *, signed: bool) -> TransportResult:
+    def _a2a_credential_registration(self, config: Any, *, signed: SignatureRealization) -> TransportResult:
         """A2A's SECOND credential location, dispatched and wrapped like any other.
 
         Wrapped through ``a2a_transport_result`` — the same wrapper
@@ -1500,7 +1600,7 @@ class BaseTestEnv:
 
         return a2a_transport_result(lambda: self._run_a2a_push_config_set(config, signed=signed))
 
-    def _run_a2a_push_config_set(self, config: Any, *, signed: bool) -> Any:
+    def _run_a2a_push_config_set(self, config: Any, *, signed: SignatureRealization) -> Any:
         """POST ``tasks/pushNotificationConfig/set`` to ``/a2a`` on ``src.app.app``.
 
         Same route, same middleware chain and the same ``wire_request`` seam as
@@ -1755,9 +1855,21 @@ class BaseTestEnv:
         initialization was complete"), so both are mandatory — and both are
         signed, because once the env can sign every byte it puts on this wire
         carries a signature.
+
+        SIGNED CORRECTLY WHENEVER SIGNING IS ON AT ALL — ``bool(self._signed_dispatch)``,
+        never the realization itself. These two frames are the harness's own enabling
+        frames: the scenario named an OPERATION, and neither of these is it. A
+        ``"malformed"`` realization here would 401 the ``initialize``, leave no
+        ``mcp-session-id`` to read, and raise :class:`WireRefusal` carrying a 401 whose
+        challenge code is IDENTICAL to the one the ``tools/call`` would have produced —
+        so a scenario asserting "a malformed signature is refused" would PASS having
+        graded a frame it never named, and the operation frame would never have been
+        sent. A session that cannot be established has graded nothing. Locked by
+        ``tests/integration/test_harness_signed_dispatch.py``.
         """
         from mcp import types as mcp_types
 
+        handshake_signed = bool(self._signed_dispatch)
         response = self._mcp_send(
             client,
             _mcp_jsonrpc_request(
@@ -1772,6 +1884,7 @@ class BaseTestEnv:
                 },
             ),
             credentialed=credentialed,
+            signed=handshake_signed,
         )
         session_id = response.headers.get("mcp-session-id")
         if not session_id:
@@ -1794,6 +1907,7 @@ class BaseTestEnv:
             initialized.model_dump(by_alias=True, mode="json", exclude_none=True),
             session_id=session_id,
             credentialed=credentialed,
+            signed=handshake_signed,
         )
         if acknowledged.status_code >= 400:
             raise WireRefusal(
@@ -1804,23 +1918,46 @@ class BaseTestEnv:
         return session_id
 
     def _mcp_send(
-        self, client: Any, body: dict[str, Any], *, session_id: str | None = None, credentialed: bool = True
+        self,
+        client: Any,
+        body: dict[str, Any],
+        *,
+        session_id: str | None = None,
+        credentialed: bool = True,
+        signed: SignatureRealization,
     ) -> Any:
-        """POST one MCP frame, signed-or-not by the SAME rules every other leg obeys."""
+        """POST one MCP frame, signed-or-not by the SAME rules every other leg obeys.
+
+        *signed* is a PARAMETER rather than a read of ``self._signed_dispatch``, and
+        that is the whole graded-frame rule in one line: this method is the only seam
+        the MCP session's three frames share, so a session-wide read would put the
+        scenario's realization on the handshake as well as on the operation. Each
+        caller states what ITS frame carries — see :meth:`_mcp_open_session` for why
+        the handshake always says ``bool(...)``.
+        """
         extra = {"Accept": _MCP_ACCEPT}
         if session_id:
             extra["mcp-session-id"] = session_id
         raw, headers = self.wire_request(
-            path=_MCP_PATH, body=body, signed=self._signed_dispatch, extra=extra, credentialed=credentialed
+            path=_MCP_PATH, body=body, signed=signed, extra=extra, credentialed=credentialed
         )
         return client.post(_MCP_PATH, content=raw, headers=headers)
 
     def _mcp_post(
         self, client: Any, body: dict[str, Any], *, session_id: str | None = None, credentialed: bool = True
     ) -> dict[str, Any]:
-        """POST one MCP frame and return its JSON-RPC envelope."""
+        """POST one MCP frame and return its JSON-RPC envelope.
+
+        THE GRADED FRAME: the realization reaches the wire VERBATIM here
+        (``self._signed_dispatch``, not ``bool(...)``). ``_run_mcp_over_http`` sends
+        the ``tools/call`` — the frame the scenario named — through this method and
+        nothing else through it.
+        """
         return _jsonrpc_body(
-            self._mcp_send(client, body, session_id=session_id, credentialed=credentialed), surface=_MCP_PATH
+            self._mcp_send(
+                client, body, session_id=session_id, credentialed=credentialed, signed=self._signed_dispatch
+            ),
+            surface=_MCP_PATH,
         )
 
     def _run_mcp_wrapper(
@@ -1917,7 +2054,7 @@ class BaseTestEnv:
             app.dependency_overrides[_require_auth_dep] = lambda: identity
             app.dependency_overrides[_resolve_auth_dep] = lambda: identity
 
-    def _run_rest_request(self, endpoint: str, *, signed: bool = False, **kwargs: Any) -> Any:
+    def _run_rest_request(self, endpoint: str, *, signed: SignatureRealization = False, **kwargs: Any) -> Any:
         """Shared REST dispatch: configure auth → build body → POST → return Response.
 
         Symmetric with ``_run_mcp_wrapper``. Handles the full REST lifecycle:
@@ -1967,7 +2104,7 @@ class BaseTestEnv:
         *,
         path: str,
         body: Any,
-        signed: bool,
+        signed: SignatureRealization,
         extra: dict[str, str] | None = None,
         origin: str | None = None,
         credentialed: bool = True,
@@ -2030,12 +2167,45 @@ class BaseTestEnv:
         about the request (the path, the body, the tenant hint) stays identical,
         so the challenge is attributable to the missing credential.
 
+        *signed* is a REALIZATION, not a flag
+        (:data:`tests.helpers.signing.SIGNATURE_REALIZATIONS`). This is the one place
+        any leg signs, so it is the one place the four realizations are spelled out,
+        and every leg gets all four for free:
+
+        * ``False`` — no signature headers at all;
+        * ``True`` — a real signature over exactly the bytes returned;
+        * ``"malformed"`` — :data:`~tests.helpers.signing.MALFORMED_SIGNATURE_HEADERS`
+          and NO real signature: both headers present, neither parseable, which is the
+          verifier's step-1 pre-check failure and rejects in every bucket;
+        * ``"tampered"`` — a real signature over
+          :func:`~tests.helpers.signing.tampered_signing_body` of those bytes, with the
+          ORIGINAL bytes returned. Well-formed headers, real crypto, and a
+          ``content-digest`` that covers a body the wire does not carry: a CHECKLIST
+          failure rather than a header rejection, which is the distinction ``warn_for``
+          turns on.
+
+        Rule 2 above holds for all four: the credential and the tenant hint are carried
+        whether or not a signature is, so a realization is the ONLY variable.
+        Everything else about the request is byte-identical to the ``True`` control.
+
         Returns ``(raw_bytes, headers)``; the caller owns the verb and the client.
         """
         import json as _json
 
-        from tests.helpers.signing import WIRE_ORIGIN, request_headers, signed_headers
+        from tests.helpers.signing import (
+            MALFORMED_SIGNATURE_HEADERS,
+            WIRE_ORIGIN,
+            realization,
+            request_headers,
+            signed_headers,
+            tampered_signing_body,
+        )
 
+        # Re-checked here rather than trusted from ``call_via``: this seam is also
+        # reached directly (``_a2a_credential_registration``, the e2e dispatcher), and a
+        # realization that arrived by one of those paths must not fall through to the
+        # correct-signature arm below.
+        signed = realization(signed)
         capability = self.signing
         token = capability.token if credentialed else None
         # ``body=None`` is a BODYLESS request (a GET with no parameters), not an
@@ -2050,8 +2220,20 @@ class BaseTestEnv:
         # once here rather than per-leg, so no leg can forget it (``RestE2EDispatcher``
         # used to carry its own copy).
         merged = {"Content-Type": "application/json", "x-adcp-tenant": self._tenant_id, **(extra or {})}
-        if not signed:
+        if signed is False:
             return raw, request_headers(token, merged)
+        if signed == "malformed":
+            # No real signature is computed at all: the shape under test is headers
+            # that cannot be PARSED, and a parseable one beside them would be graded
+            # instead. Merged onto the same base every other realization carries, so
+            # the malformed request differs from the True control by the signature
+            # headers alone.
+            return raw, {**request_headers(token, merged), **MALFORMED_SIGNATURE_HEADERS}
+        # ``"tampered"`` signs over a MUTATED COPY and sends the caller's own bytes;
+        # ``True`` signs over exactly what it sends. One call, because everything else
+        # about the two — key, kid, origin, method, header set — must be identical or
+        # the mismatch would not be attributable to the body.
+        signed_over = tampered_signing_body(raw) if signed == "tampered" else raw
         return raw, signed_headers(
             capability.private_key,
             token,
@@ -2059,7 +2241,7 @@ class BaseTestEnv:
             # POST and sent as GET is refused as request_signature_invalid.
             method=method,
             path=path,
-            body=raw,
+            body=signed_over,
             extra=merged,
             key_id=capability.key_id,
             origin=origin or WIRE_ORIGIN,

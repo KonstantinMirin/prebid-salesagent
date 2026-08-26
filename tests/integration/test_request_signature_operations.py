@@ -114,9 +114,11 @@ from tests.helpers.signing import (
     bucketed_declaration,
     counter_samples,
     counter_total,
+    narrowed_none,
     request_headers,
     samples_with,
     seed_principal,
+    unsupported,
 )
 from tests.helpers.signing import (
     declared_posture as _declared_posture,
@@ -1192,16 +1194,6 @@ class TestTheOperationLabelCannotBeMintedByACaller:
 # The SIGNED over-cap 413, and which half of `none` it reaches
 # --------------------------------------------------------------------------
 
-#: ``supported: true`` narrowed so that the surface these rows drive
-#: (``POST /api/v1/capabilities`` = ``get_adcp_capabilities``) falls in ``none``,
-#: while the seller still advertises that it verifies signatures.
-#:
-#: The narrowing is what makes this the OTHER half of ``none``: a null
-#: ``supported_for`` means "verify wherever signatures appear"
-#: (``src/core/signing/posture.py`` ``_bucket_for``), so the bucket has to be
-#: narrowed by naming a different real operation rather than by omission.
-_NARROWED_NONE = bucketed_declaration("supported", "create_media_buy")
-
 
 @pytest.mark.requires_db
 class TestASignedOverCapBodyIsGradedByTheDeclaration:
@@ -1228,8 +1220,15 @@ class TestASignedOverCapBodyIsGradedByTheDeclaration:
     @pytest.mark.parametrize(
         ("declaration", "expected_status"),
         [
-            pytest.param(_NARROWED_NONE, 413, id="narrowed-none"),
-            pytest.param({"supported": False}, 200, id="unsupported-none"),
+            # The two halves of ``none``, both from their single home
+            # (``tests/helpers/signing.py``). This module used to carry its own
+            # ``_NARROWED_NONE`` — a verbatim second copy of the same
+            # ``bucketed_declaration("supported", "create_media_buy")``, with the
+            # reasoning re-typed above it — which is the duplication the DRY invariant
+            # exists to stop: a narrowing fixed in one copy and not the other silently
+            # buckets one suite's surface differently from the other's.
+            pytest.param(narrowed_none(), 413, id="narrowed-none"),
+            pytest.param(unsupported(), 200, id="unsupported-none"),
         ],
     )
     def test_a_signed_over_cap_body_is_413_only_where_the_seller_verifies(
