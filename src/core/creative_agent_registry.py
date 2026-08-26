@@ -320,15 +320,7 @@ class CreativeAgentRegistry:
             for agent in agents
         ]
 
-        if tenant_id is None:
-            return build_adcp_multi_agent_client(aliased_agents, tenant_id=None)
-
-        from src.core.database.database_session import get_db_session
-        from src.core.database.repositories.signing_key import SigningKeyRepository
-
-        with get_db_session() as session:
-            repo = SigningKeyRepository(session, tenant_id)
-            return build_adcp_multi_agent_client(aliased_agents, tenant_id=tenant_id, repo=repo)
+        return build_adcp_multi_agent_client(aliased_agents, tenant_id=tenant_id)
 
     def _get_tenant_agents(self, tenant_id: str | None) -> list[CreativeAgent]:
         """Get list of creative agents for a tenant.
@@ -435,23 +427,17 @@ class CreativeAgentRegistry:
             # Call agent using adcp library. RFC 9421 outbound signing (#1291 C3):
             # ADCPClient's own auto-signing is a verified no-op on MCP transport
             # (adcontextprotocol/adcp-client-python#1017) unless the ENTIRE call
-            # -- including the lazy session connect -- is scoped inside
-            # sign_scoped_mcp_call. Only pay for the bootstrap+wrap when this
-            # agent's client actually has signing configured.
+            # -- including the lazy session connect -- is scoped inside the signing
+            # operation. signed_agent_call owns that ordering and the
+            # only-pay-when-signing check, so this call site states WHAT it wants
+            # signed and never HOW to sign it.
             logger.info(f"_fetch_formats_from_agent: Calling {agent.name} at {agent.agent_url}")
             sub_client = client.agent(agent.name)
-            if sub_client.signing is not None:
-                from src.core.signing import (
-                    bootstrap_capabilities_for_signed_call,
-                    sign_scoped_mcp_call,
-                )
+            from src.core.signing import signed_agent_call
 
-                await bootstrap_capabilities_for_signed_call(sub_client, sub_client.agent_config)
-                result = await sign_scoped_mcp_call(
-                    "list_creative_formats", lambda: sub_client.list_creative_formats(request)
-                )
-            else:
-                result = await sub_client.list_creative_formats(request)
+            result = await signed_agent_call(
+                sub_client, "list_creative_formats", lambda: sub_client.list_creative_formats(request)
+            )
             logger.info(f"_fetch_formats_from_agent: Got result status={result.status}, type={type(result)}")
 
             # Handle response based on status

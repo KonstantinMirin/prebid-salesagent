@@ -112,11 +112,19 @@ _TIMEOUT_SECONDS = 10.0
 #: signature.
 _LEGACY_HMAC_KEY_ID = "adcp-legacy-hmac"
 
-#: Tenants already warned about having no signing key. security.mdx obliges an
-#: honest posture, not a log line per webhook: without this the WARNING fires on
-#: EVERY delivery for every keyless tenant, which today is all of them.
-_keyless_warned: set[str] = set()
-_keyless_lock = threading.Lock()
+#: (warning id, tenant) pairs already warned about. security.mdx obliges an honest
+#: posture, not a log line per webhook: without this the WARNING fires on EVERY delivery
+#: for every keyless tenant, which today is all of them.
+#:
+#: KEYED BY PAIR, NOT BY TENANT. This set replaced two caches guarding two DISTINCT
+#: conditions — deliveries going out unsigned, and a proof-of-control challenge that
+#: cannot be signed at all. Under a tenant-only key whichever condition fired first would
+#: permanently suppress the other, so an operator seeing "delivered unsigned" would never
+#: learn that subscriber activation is also going to fail. The pair keeps one suppression
+#: domain per warning, and a third warning gets its own for free instead of inheriting a
+#: neighbour's.
+_warned: set[tuple[str, str]] = set()
+_warn_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -348,25 +356,43 @@ def _log_legacy_registration(config: WebhookAuthConfig, mode: str) -> None:
     )
 
 
+def _warn_once(warning_id: str, tenant_id: str | None) -> bool:
+    """Claim the right to warn about *warning_id* for this tenant, once per process.
+
+    True the first time a (warning, tenant) pair is seen and False afterwards, so each
+    caller keeps its own message next to its own condition rather than routing every
+    warning through one formatter.
+    """
+    key = (warning_id, tenant_id or "<unknown-tenant>")
+    with _warn_lock:
+        if key in _warned:
+            return False
+        _warned.add(key)
+    return True
+
+
+def reset_warning_state() -> None:
+    """Forget every warning already emitted. For rotation tooling and test isolation.
+
+    The seam this module previously only claimed to have: ``reset_keyless_warning_state``
+    existed but no caller in ``src/`` or ``tests/`` invoked it, and the second cache had
+    no reset at all. A process-level signing cache with no reset has already produced
+    order-dependent failures in this layer.
+    """
+    with _warn_lock:
+        _warned.clear()
+
+
 def _warn_keyless_once(tenant_id: str | None) -> None:
     """WARN once per tenant per process that deliveries are going out unsigned."""
-    key = tenant_id or "<unknown-tenant>"
-    with _keyless_lock:
-        if key in _keyless_warned:
-            return
-        _keyless_warned.add(key)
+    if not _warn_once("keyless", tenant_id):
+        return
     logger.warning(
         "Tenant %s has no ACTIVE signing key, so its outbound AdCP webhooks are delivered "
         "UNSIGNED. This is the honest posture only while webhook_signing.supported is false; "
         "provision a request-signing key to enable the RFC 9421 profile (#1291).",
-        key,
+        tenant_id or "<unknown-tenant>",
     )
-
-
-def reset_keyless_warning_state() -> None:
-    """Forget which tenants have been warned. For rotation tooling and test isolation."""
-    with _keyless_lock:
-        _keyless_warned.clear()
 
 
 def _unauthenticated_sender(client: httpx.AsyncClient | None) -> WebhookSender:
@@ -380,7 +406,7 @@ def _unauthenticated_sender(client: httpx.AsyncClient | None) -> WebhookSender:
     )
 
 
-def _agent_origin(repo: SigningKeyRepository, tenant_id: str) -> str | None:
+def _agent_origin(repo: SigningKeyRepository) -> str | None:
     """This tenant's canonical origin, read on the session *repo* already holds.
 
     ``canonical_agent_url`` (``src/core/agent_identity.py``) is the ONE agent-URL
@@ -422,7 +448,7 @@ def _rfc9421_sender(
         _warn_keyless_once(tenant_id)
         return _unauthenticated_sender(client)
 
-    origin = _agent_origin(repo, tenant_id)
+    origin = _agent_origin(repo)
     posture = webhook_signing_posture(repo, now=now, origin=origin)
     if not posture.supported:
         _warn_keyless_once(tenant_id)
@@ -523,10 +549,8 @@ def adcp_challenge_signer(*, tenant_id: str, repo: SigningKeyRepository, now: da
     """
     from adcp.webhook_auth import JwkSignerStrategy
 
-    from src.core.agent_identity import canonical_agent_url
-
-    if not webhook_signing_posture(repo, now=now, origin=_agent_origin(repo, tenant_id)).supported:
-        _warn_unsignable_challenge(tenant_id, canonical_agent_url)
+    if not webhook_signing_posture(repo, now=now, origin=_agent_origin(repo)).supported:
+        _warn_unsignable_challenge(tenant_id)
         return None
 
     material = resolve_signing_material(repo, tenant_id=tenant_id, now=now)
@@ -595,23 +619,19 @@ async def send_signed_challenge(
         return await owned.post(url, content=body, headers=headers)
 
 
-#: Tenants already warned that they cannot sign a challenge. Once per tenant per process,
-#: for the same reason as :data:`_keyless_warned`: the alternative is a log line per
-#: activation attempt.
-_unsignable_warned: set[str] = set()
-
-
-def _warn_unsignable_challenge(tenant_id: str, _canonical: Any) -> None:
+def _warn_unsignable_challenge(tenant_id: str) -> None:
     """WARN once that this tenant cannot prove endpoint control, and how to fix it.
 
     Names the provisioning path, because "no signing key" is an operator action and not a
     dead end — an activation that fails with no actionable log is the quiet failure this
     project bans even when the OUTCOME is correct.
+
+    Its own suppression domain, distinct from the keyless-delivery warning: this condition
+    means an activation WILL FAIL, which an operator needs to hear even after already being
+    told that deliveries go out unsigned.
     """
-    with _keyless_lock:
-        if tenant_id in _unsignable_warned:
-            return
-        _unsignable_warned.add(tenant_id)
+    if not _warn_once("unsignable-challenge", tenant_id):
+        return
     logger.warning(
         "Tenant %s cannot sign a notification proof-of-control challenge: it has no ACTIVE "
         "signing key this deployment can open on an https origin it can publish a trust root "
@@ -622,7 +642,7 @@ def _warn_unsignable_challenge(tenant_id: str, _canonical: Any) -> None:
 
 
 @contextmanager
-def _signing_repo(tenant_id: str | None) -> Iterator[SigningKeyRepository | None]:
+def signing_repo(tenant_id: str | None) -> Iterator[SigningKeyRepository | None]:
     """The tenant-scoped signing repository, on a session THIS function owns.
 
     It always opens its own and takes none from a caller. A ``repo=`` parameter used to
@@ -682,7 +702,7 @@ async def adcp_webhook_sender(
     SDK check; closing that is the egress-seam work in GH #1802.
     """
     with ExitStack() as stack:
-        resolved_repo = stack.enter_context(_signing_repo(tenant_id))
+        resolved_repo = stack.enter_context(signing_repo(tenant_id))
         yield build_webhook_sender(
             config=config,
             tenant_id=tenant_id,

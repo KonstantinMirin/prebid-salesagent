@@ -112,3 +112,28 @@ async def bootstrap_capabilities_for_signed_call(client: ADCPClient, agent_confi
 
     client._capabilities = caps
     client._capabilities_fetched_at = time.monotonic()
+
+
+async def signed_agent_call[T](client: ADCPClient, operation: str, call: Callable[[], Awaitable[T]]) -> T:
+    """Run *call* against *client*, signed when the client has a signing config.
+
+    THE ONE OPERATION this module exports. It composes what were two exported halves
+    plus a prose ordering contract, because a caller that composed them in the wrong
+    order signed nothing and raised nothing — and both call sites re-assembled the same
+    four steps (the ``client.signing is None`` check, the bootstrap, the wrap, the
+    unsigned else branch), so a third call site written from either one inherited the
+    chance to get the order wrong.
+
+    The ordering the module docstring mandates is now structural: the bootstrap happens
+    before the wrap because this function does it in that order, not because a caller
+    read a paragraph. ``client.signing`` is re-read AFTER the bootstrap, since the
+    bootstrap clears it when a counterparty's capabilities cannot be fetched — signing
+    is strictly additive, so that degrades to an unsigned call rather than raising.
+    """
+    if client.signing is None:
+        return await call()
+
+    await bootstrap_capabilities_for_signed_call(client, client.agent_config)
+    if client.signing is None:
+        return await call()
+    return await sign_scoped_mcp_call(operation, call)

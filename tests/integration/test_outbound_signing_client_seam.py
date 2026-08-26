@@ -73,6 +73,14 @@ def _seed_tenant_with_key(env: BareIntegrationEnv, *, virtual_host: str | None) 
 
     repo = signing_key_repo(env, env.tenant_id)
     provision_key(repo, env.tenant_id, _KID, alg="ed25519")
+    # COMMITTED, not just flushed. ``provision_key`` add+flushes, which used to be enough
+    # because these tests DONATED this very repository to the seam and so shared its
+    # transaction. The seam now opens its own session, and an uncommitted key is invisible
+    # to it: the publishable-origin test would go red and the non-publishable one would
+    # keep passing for the wrong reason -- ``signing is None`` because no key resolved,
+    # not because the origin was unpublishable. That is the vacuous pass this pair exists
+    # to rule out, so the seed has to outlive the seeding transaction.
+    env.get_session().commit()
     return _Seeded(repo=repo, tenant=tenant)
 
 
@@ -94,7 +102,7 @@ class TestBuildAdcpMultiAgentClientPublishabilityGate:
         seeded = _seed_tenant_with_key(signing_env, virtual_host=None)
         agent = _one_creative_agent()
 
-        client = build_adcp_multi_agent_client(agents=[agent], tenant_id=seeded.tenant.tenant_id, repo=seeded.repo)
+        client = build_adcp_multi_agent_client(agents=[agent], tenant_id=seeded.tenant.tenant_id)
 
         sub_client = client.agents[agent.name]
         assert sub_client.signing is None, (
@@ -116,7 +124,7 @@ class TestBuildAdcpMultiAgentClientPublishabilityGate:
         seeded = _seed_tenant_with_key(signing_env, virtual_host=_PUBLISHABLE_HOST)
         agent = _one_creative_agent()
 
-        client = build_adcp_multi_agent_client(agents=[agent], tenant_id=seeded.tenant.tenant_id, repo=seeded.repo)
+        client = build_adcp_multi_agent_client(agents=[agent], tenant_id=seeded.tenant.tenant_id)
 
         sub_client = client.agents[agent.name]
         assert isinstance(sub_client.signing, SigningConfig), (

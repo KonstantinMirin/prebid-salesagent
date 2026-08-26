@@ -20,7 +20,7 @@ long-running multi-tenant process:
   the three transports (an MCP ``tools/call``'s ``params.name``, an A2A
   ``message/send``'s ``data.skill``). Recorded raw, one anonymous POST per distinct
   value mints one series per request. :func:`sanitize_operation` bounds it against
-  :func:`~src.core.signing.resolved_operation_names` — the closed set DERIVED from
+  :func:`~src.core.signing_contract.resolved_operation_names` — the closed set DERIVED from
   the transport registries, never hand-listed here.
 - **``reason``** (unsigned verdicts) is the closed set :data:`UNSIGNED_REASONS` via
   :func:`sanitize_unsigned_reason`.
@@ -56,8 +56,7 @@ from src.core.exceptions import (
     AdCPServiceUnavailableError,
     AdCPValidationError,
 )
-from src.core.signing_contract import REQUEST_TO_WEBHOOK_CODE
-from src.core.signing_contract.vocabulary import resolved_operation_names
+from src.core.signing_contract import REQUEST_TO_WEBHOOK_CODE, resolved_operation_names
 
 # ---------------------------------------------------------------------------
 # Bounded label vocabularies
@@ -147,7 +146,7 @@ def sanitize_operation(operation: str | None) -> str:
     authentication, and on two of the three transports the value is lifted verbatim
     out of the request body (``params.name``, ``data.skill``), so an anonymous caller
     chooses it. The closed set comes from
-    :func:`~src.core.signing.resolved_operation_names`, which DERIVES it from the
+    :func:`~src.core.signing_contract.resolved_operation_names`, which DERIVES it from the
     SDK definitions, the registered MCP tools, the ``/api/v1`` route table and the A2A
     skill table — the same registries the resolver names requests from. Re-listing
     those names here would create a second source of truth that silently demotes a

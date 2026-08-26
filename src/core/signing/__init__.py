@@ -25,8 +25,7 @@ thing. Alias at any import site that touches both.
 """
 
 from src.core.signing._mcp_client_signing_shim import (
-    bootstrap_capabilities_for_signed_call,
-    sign_scoped_mcp_call,
+    signed_agent_call,
 )
 
 # These thirteen were resolved LAZILY (PEP 562) until salesagent-n78j0.3. They are eager
@@ -96,6 +95,7 @@ from src.core.signing.webhook_sender_factory import (
     deliver_adcp_webhook_sync,
     delivery_auth_mode,
     send_signed_challenge,
+    signing_repo,
 )
 from src.core.signing_contract import (
     CACHE_MAX_AGE_SECONDS,
@@ -133,7 +133,6 @@ __all__ = [
     "WEBHOOK_TARGET_URI_MALFORMED",
     "WebhookSigningPosture",
     "adcp_challenge_signer",
-    "bootstrap_capabilities_for_signed_call",
     "bucket_names",
     "build_adagents_json",
     "build_brand_json",
@@ -166,7 +165,8 @@ __all__ = [
     "sdk_operation_names",
     "send_signed_challenge",
     "sign_revocation_list",
-    "sign_scoped_mcp_call",
+    "signed_agent_call",
+    "signing_repo",
     "signing_config_from_material",
     "signing_key_backed",
     "unsupported_webhook_signing_posture",

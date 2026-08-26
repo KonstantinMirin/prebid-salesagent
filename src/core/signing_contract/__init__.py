@@ -52,6 +52,7 @@ from src.core.signing_contract.canonical import (
     malformed_authority_reason,
     reject_malformed_target,
 )
+from src.core.signing_contract.vocabulary import resolved_operation_names
 
 __all__ = [
     "CACHE_MAX_AGE_SECONDS",
@@ -71,6 +72,7 @@ __all__ = [
     "narrow_alg",
     "narrow_purpose",
     "reject_malformed_target",
+    "resolved_operation_names",
     "signing_alg_check_clause",
     "signing_purpose_check_clause",
     "sql_value_list",

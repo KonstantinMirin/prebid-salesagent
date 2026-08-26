@@ -440,7 +440,7 @@ class WebhookDeliveryService:
                     # THE SIGNING REPOSITORY USED TO RIDE ALONG FOR THE SAME STATED
                     # REASON, and that was the fault: a repository carries a SESSION, so
                     # the entry carried a pooled connection into a loop that sleeps and
-                    # POSTs to a buyer-supplied URL. ``_signing_repo`` now opens its own
+                    # POSTs to a buyer-supplied URL. ``signing_repo`` now opens its own
                     # short session, so there is nothing left to hand over (#1757).
                     # Projected off the ORM row HERE, while the session is open — that
                     # read is legitimate and stays inside the block. What LEAVES the
@@ -467,7 +467,7 @@ class WebhookDeliveryService:
             # retries and POSTs to a buyer-supplied URL, so a connection held here would
             # be parked on a third party's latency: a hanging receiver would consume a
             # pooled connection for the whole backoff. Nothing below needs a session —
-            # the queue carries primitives (``QueuedWebhook``) and ``_signing_repo``
+            # the queue carries primitives (``QueuedWebhook``) and ``signing_repo``
             # opens its own short one for the key read (#1757, salesagent-n78j0.4).
             sent_count = 0
             for endpoint_key, circuit_breaker, queue in pending:

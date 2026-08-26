@@ -441,7 +441,7 @@ def _post_approval_webhook_with_retries(
     Serialization, authentication and the POST are ONE act at the signing
     boundary (#1441), so the bytes signed are the bytes sent; ``config`` selects
     the arm. No ``repo`` is passed: this caller holds no session, and
-    ``webhook_sender_factory._signing_repo`` opens a short-lived one per
+    ``webhook_sender_factory.signing_repo`` opens a short-lived one per
     delivery precisely so senders don't each grow their own.
 
     Redirects are still never followed — the boundary's ``httpx`` client keeps

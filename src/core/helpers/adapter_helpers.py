@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from src.adapters import AdServerAdapter
     from src.adapters.base import TargetingCapabilities
     from src.core.database.models import Tenant as DBTenant
-    from src.core.database.repositories.signing_key import SigningKeyRepository
     from src.core.tenant_context import TenantContext
     from src.core.testing_hooks import TestingContext
 
@@ -62,9 +61,7 @@ def build_agent_config(agent: _HasAgentFields) -> AgentConfig:
     )
 
 
-def build_adcp_multi_agent_client(
-    agents: Sequence[_HasAgentFields], *, tenant_id: str | None, repo: SigningKeyRepository | None = None
-) -> ADCPMultiAgentClient:
+def build_adcp_multi_agent_client(agents: Sequence[_HasAgentFields], *, tenant_id: str | None) -> ADCPMultiAgentClient:
     """The ONE seam that builds an outbound ``ADCPMultiAgentClient``, signed or not.
 
     This is the ONLY place in ``src/`` that may construct an
@@ -74,7 +71,7 @@ def build_adcp_multi_agent_client(
     ever names ``SigningConfig`` or ``resolve_signing_material`` directly, and a
     future new call site cannot silently skip RFC 9421 request signing (#1291 C3).
 
-    ``tenant_id``/``repo`` are ``None`` for callers with no tenant in scope yet
+    ``tenant_id`` is ``None`` for callers with no tenant in scope yet
     (e.g. a connectivity smoke-check against an as-yet-unsaved agent config) --
     those calls stay unsigned, same as before this seam existed.
 
@@ -93,7 +90,7 @@ def build_adcp_multi_agent_client(
     """
     from adcp import ADCPMultiAgentClient as _ADCPMultiAgentClient
 
-    if tenant_id is None or repo is None:
+    if tenant_id is None:
         return _ADCPMultiAgentClient(agents=[build_agent_config(agent) for agent in agents])
 
     from datetime import UTC, datetime
@@ -104,18 +101,21 @@ def build_adcp_multi_agent_client(
         origin_is_publishable,
         resolve_signing_material,
         signing_config_from_material,
+        signing_repo,
     )
 
     signing = None
-    try:
-        material = resolve_signing_material(repo, tenant_id=tenant_id, purpose=REQUEST_SIGNING, now=datetime.now(UTC))
-    except AdCPConfigurationError:
-        material = None
+    with signing_repo(tenant_id) as repo:
+        if repo is not None:
+            try:
+                material = resolve_signing_material(
+                    repo, tenant_id=tenant_id, purpose=REQUEST_SIGNING, now=datetime.now(UTC)
+                )
+            except AdCPConfigurationError:
+                material = None
 
-    if material is not None:
-        origin = repo.canonical_origin()
-        if origin_is_publishable(origin):
-            signing = signing_config_from_material(material)
+            if material is not None and origin_is_publishable(repo.canonical_origin()):
+                signing = signing_config_from_material(material)
 
     return _ADCPMultiAgentClient(agents=[build_agent_config(agent) for agent in agents], signing=signing)
 

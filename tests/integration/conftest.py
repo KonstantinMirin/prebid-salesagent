@@ -1257,3 +1257,24 @@ def seed_error_test_tenant(
         "principal_id": principal_id,
         "access_token": access_token,
     }
+
+
+@pytest.fixture(autouse=True)
+def _reset_signing_warning_state():
+    """Clear the webhook sender factory's warn-once cache between tests.
+
+    The cache is process-level and its entries outlive the per-test database, so a
+    tenant warned in one test stays warned in the next — and a test asserting that a
+    keyless tenant IS warned then passes or fails on the order it ran in. This layer
+    has already produced order-dependent failures of exactly that shape.
+
+    Autouse rather than opt-in: the seam it exercises was previously a reset function
+    with no caller anywhere in ``src/`` or ``tests/``, which is indistinguishable from
+    no reset at all. A fixture every test in this suite loads cannot fall into that
+    state again.
+    """
+    from src.core.signing.webhook_sender_factory import reset_warning_state
+
+    reset_warning_state()
+    yield
+    reset_warning_state()

@@ -133,11 +133,20 @@ def _published_jwk(key: SigningKey) -> dict[str, Any]:
 
     The marker is present only for a key inside its grace window, which is the
     only way a revoked key reaches this function at all.
+
+    VALIDATED HERE, once. One projection carries one validation point: every
+    route from a key to a published document goes through this function, so a
+    JWKS entry and the same key's ``adagents.json`` entry cannot drift apart.
+    They did before — ``build_jwks`` validated inline WITHOUT ``by_alias`` and
+    ``build_adagents_json`` emitted this projection raw, which put three
+    validation postures on one value inside one module and left a drift in the
+    adagents copy invisible until a counterparty rejected a document this seller
+    published.
     """
     jwk = dict(key.public_jwk)
     if key.revoked_at is not None:
         jwk["revoked_at"] = rfc3339(key.revoked_at)
-    return jwk
+    return _validated(PublishedSigningKey, jwk)
 
 
 def _last_updated(keys: Sequence[SigningKey]) -> str | None:
@@ -157,12 +166,7 @@ def build_jwks(keys: Sequence[SigningKey]) -> dict[str, Any]:
     Authoritative for request-signature verification: this is where the
     brand.json hop lands.
     """
-    return {
-        "keys": [
-            PublishedSigningKey.model_validate(_published_jwk(key)).model_dump(mode="json", exclude_none=True)
-            for key in keys
-        ]
-    }
+    return {"keys": [_published_jwk(key) for key in keys]}
 
 
 def build_brand_json(tenant: Tenant, keys: Sequence[SigningKey]) -> dict[str, Any]:

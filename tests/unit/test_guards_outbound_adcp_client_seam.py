@@ -87,7 +87,7 @@ def test_outbound_adcp_client_only_constructed_through_the_seam():
         "Outbound ADCPMultiAgentClient/ADCPClient constructed outside "
         "build_adcp_multi_agent_client (src/core/helpers/adapter_helpers.py): "
         f"{sorted(violations)}. Route the call through "
-        "build_adcp_multi_agent_client(agents, tenant_id=..., repo=...) instead of "
+        "build_adcp_multi_agent_client(agents, tenant_id=...) instead of "
         "constructing the client directly -- that seam is what resolves RFC 9421 "
         "request signing for the tenant (#1291 C3)."
     )

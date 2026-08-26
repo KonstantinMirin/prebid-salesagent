@@ -93,9 +93,14 @@ def _in_layer(rel: str) -> bool:
     return any(rel.startswith(prefix) for prefix in LAYER_PREFIXES)
 
 
-#: The facade module path. ``from src.core.signing import <exported name>`` is the one
-#: sanctioned import shape for callers.
-FACADE = "src.core.signing"
+#: The facade module paths, DERIVED from the layer inventory rather than named. ``from
+#: <facade> import <exported name>`` is the one sanctioned import shape for callers.
+#:
+#: Derived, because the singular ``FACADE`` this replaces named only the first of the two
+#: packages ``LAYER_PREFIXES`` already lists, so every reach-through into the second was
+#: invisible to Rule B while ``_layer_submodules()`` walked both. A third layer package
+#: now extends Rule B without an edit, exactly as ``_layer_submodules()`` already does.
+FACADES = tuple(prefix.rstrip("/").replace("/", ".") for prefix in LAYER_PREFIXES)
 
 #: Rule A allowlist — (relative path, dotted import reference). EMPTY by design: the two
 #: leaks that motivated the rule are fixed in the same change that lands this guard.
@@ -174,14 +179,17 @@ def _submodule_reach_through_violations(
     found: set[tuple[str, str]] = set()
     for rel, tree in files:
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                module = node.module or ""
-                if module.startswith(f"{FACADE}."):
-                    found.update((rel, f"{module}.{alias.name}") for alias in node.names)
-                elif module == FACADE:
-                    found.update((rel, f"{FACADE}.{alias.name}") for alias in node.names if alias.name in submodules)
-            elif isinstance(node, ast.Import):
-                found.update((rel, alias.name) for alias in node.names if alias.name.startswith(f"{FACADE}."))
+            for facade in FACADES:
+                if isinstance(node, ast.ImportFrom):
+                    module = node.module or ""
+                    if module.startswith(f"{facade}."):
+                        found.update((rel, f"{module}.{alias.name}") for alias in node.names)
+                    elif module == facade:
+                        found.update(
+                            (rel, f"{facade}.{alias.name}") for alias in node.names if alias.name in submodules
+                        )
+                elif isinstance(node, ast.Import):
+                    found.update((rel, alias.name) for alias in node.names if alias.name.startswith(f"{facade}."))
     return found
 
 
@@ -223,9 +231,12 @@ class TestSigningLayerBoundary:
             _submodule_reach_through_violations(files, _layer_submodules()),
             set(SUBMODULE_REACH_THROUGH_ALLOWLIST),
             fix_hint=(
-                "Import the name from src.core.signing (the facade). Submodules under "
-                "src/core/signing/ are private to the layer; if a needed name is not on the "
-                "facade, add it to src/core/signing/__init__.py's explicit exports."
+                "Import the name from its package's facade — src.core.signing or "
+                "src.core.signing_contract. Submodules under either are private to the layer; "
+                "if a needed name is not on the facade, add it to THAT package's __init__.py "
+                "explicit exports. The remedy names the package the violation is in: this "
+                "detector covers every package in LAYER_PREFIXES, so a hint naming only the "
+                "first would send the reader to the wrong __init__.py."
             ),
         )
 
@@ -248,11 +259,23 @@ _REACH_THROUGH_FROM = "from src.core.signing.posture import posture_for_tenant\n
 _REACH_THROUGH_VIA_PACKAGE = "from src.core.signing import posture\n"
 _REACH_THROUGH_PLAIN_IMPORT = "import src.core.signing.posture\n"
 
+#: The SAME three shapes against the LEAF package. Rule B was blind to every one of them
+#: while ``FACADE`` was a single value, and a live violation sat at ``src/core/metrics.py``
+#: unreported. Probing only the first package is what let that happen, so the probes are
+#: paired with the detector's own domain rather than sampled from it.
+_LEAF_REACH_THROUGH_FROM = "from src.core.signing_contract.vocabulary import resolved_operation_names\n"
+_LEAF_REACH_THROUGH_VIA_PACKAGE = "from src.core.signing_contract import vocabulary\n"
+_LEAF_REACH_THROUGH_PLAIN_IMPORT = "import src.core.signing_contract.vocabulary\n"
+
 #: Rule B negative — the sanctioned facade import shape.
 _FACADE_IMPORT = "from src.core.signing import canonical_target_uri\n"
 
 #: Submodule names for the synthetic tree (mirrors a slice of the real layer).
-_PROBE_SUBMODULES = frozenset({"posture", "canonical"})
+#: The submodule names the Rule B probes reach through, one per layer package. A probe
+#: whose submodule is missing here reports NOTHING and passes as a negative, which is how
+#: ``vocabulary`` — the leaf package's own module, and the one carrying the live violation
+#: — could have been probed and still looked clean.
+_PROBE_SUBMODULES = frozenset({"posture", "canonical", "vocabulary"})
 
 
 @pytest.mark.arch_guard
@@ -298,6 +321,12 @@ class TestSigningBoundaryDetectors:
             (_REACH_THROUGH_FROM, "src.core.signing.posture.posture_for_tenant"),
             (_REACH_THROUGH_VIA_PACKAGE, "src.core.signing.posture"),
             (_REACH_THROUGH_PLAIN_IMPORT, "src.core.signing.posture"),
+            (
+                _LEAF_REACH_THROUGH_FROM,
+                "src.core.signing_contract.vocabulary.resolved_operation_names",
+            ),
+            (_LEAF_REACH_THROUGH_VIA_PACKAGE, "src.core.signing_contract.vocabulary"),
+            (_LEAF_REACH_THROUGH_PLAIN_IMPORT, "src.core.signing_contract.vocabulary"),
         ],
     )
     def test_rule_b_detector_finds_reach_through(self, tmp_path, source, expected):

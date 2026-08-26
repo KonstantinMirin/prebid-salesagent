@@ -133,15 +133,7 @@ class SignalsAgentRegistry:
         """
         from src.core.helpers.adapter_helpers import build_adcp_multi_agent_client
 
-        if tenant_id is None:
-            return build_adcp_multi_agent_client(agents, tenant_id=None)
-
-        from src.core.database.database_session import get_db_session
-        from src.core.database.repositories.signing_key import SigningKeyRepository
-
-        with get_db_session() as session:
-            repo = SigningKeyRepository(session, tenant_id)
-            return build_adcp_multi_agent_client(agents, tenant_id=tenant_id, repo=repo)
+        return build_adcp_multi_agent_client(agents, tenant_id=tenant_id)
 
     async def _get_signals_from_agent(
         self,
@@ -186,16 +178,9 @@ class SignalsAgentRegistry:
 
             # Call agent
             sub_client = client.agent(agent.name)
-            if sub_client.signing is not None:
-                from src.core.signing import (
-                    bootstrap_capabilities_for_signed_call,
-                    sign_scoped_mcp_call,
-                )
+            from src.core.signing import signed_agent_call
 
-                await bootstrap_capabilities_for_signed_call(sub_client, sub_client.agent_config)
-                result = await sign_scoped_mcp_call("get_signals", lambda: sub_client.get_signals(request))
-            else:
-                result = await sub_client.get_signals(request)
+            result = await signed_agent_call(sub_client, "get_signals", lambda: sub_client.get_signals(request))
 
             call_duration = time.time() - call_start
             logger.info(f"[TIMING] Agent call completed in {call_duration:.2f}s, status: {result.status}")

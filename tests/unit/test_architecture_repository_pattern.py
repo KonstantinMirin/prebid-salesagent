@@ -1479,7 +1479,7 @@ class TestRepositoriesDoNotImportProtocolResponseTypes:
 
 
 # ---------------------------------------------------------------------------
-# The webhook delivery path owns its connection — enforced by SHAPE, not by scan
+# Signed outbound work owns its connection — enforced by SHAPE, not by scan
 # ---------------------------------------------------------------------------
 #
 # These two grade the same fault from opposite ends: a POOLED DB CONNECTION HELD ACROSS
@@ -1508,12 +1508,15 @@ class TestRepositoriesDoNotImportProtocolResponseTypes:
 #: shape of the same mistake is covered rather than only the one we removed.
 _DONATED_SESSION_PARAMS = frozenset({"repo", "session", "db", "db_session", "uow"})
 
-#: The delivery boundary: the functions a caller reaches to send a webhook.
+#: The connection-lifetime boundary: the functions a caller reaches to do signed outbound
+#: work. Named for the INVARIANT rather than for the webhook path, because the outbound
+#: client seam joined it and sends no webhook.
 _DELIVERY_BOUNDARY = (
     ("src/core/signing/webhook_sender_factory.py", "deliver_adcp_webhook"),
     ("src/core/signing/webhook_sender_factory.py", "deliver_adcp_webhook_sync"),
     ("src/core/signing/webhook_sender_factory.py", "adcp_webhook_sender"),
-    ("src/core/signing/webhook_sender_factory.py", "_signing_repo"),
+    ("src/core/signing/webhook_sender_factory.py", "signing_repo"),
+    ("src/core/helpers/adapter_helpers.py", "build_adcp_multi_agent_client"),
 )
 
 #: The queued-delivery entry, which the retry loop is the sole consumer of.
@@ -1531,8 +1534,9 @@ def _function_def(rel_path: str, name: str) -> ast.FunctionDef | ast.AsyncFuncti
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name:
             return node
     raise AssertionError(
-        f"{rel_path} defines no top-level function {name!r} — this guard grades the webhook "
-        "delivery boundary and cannot silently stop grading it because something was renamed."
+        f"{rel_path} defines no top-level function {name!r} — this guard grades the "
+        "connection-lifetime boundary and cannot silently stop grading it because something "
+        "was renamed."
     )
 
 
@@ -1546,7 +1550,7 @@ def _class_def(rel_path: str, name: str) -> ast.ClassDef:
 
 
 class TestDeliveryBoundaryTakesNoDonatedSession:
-    """(i) No delivery entry point accepts a caller's session, repository or UoW.
+    """(i) No boundary entry point accepts a caller's session, repository or UoW.
 
     ``deliver_adcp_webhook*`` used to take ``repo=``, and the webhook delivery service
     passed one built on ITS OWN open session. That is how a pooled connection came to be
@@ -1554,10 +1558,11 @@ class TestDeliveryBoundaryTakesNoDonatedSession:
     connection's lifetime belonged to the caller, not to the work.
 
     The parameter is gone, so the defect is unrepresentable at this boundary —
-    ``_signing_repo`` always opens its own short session.
+    ``signing_repo`` always opens its own short session, and
+    ``build_adcp_multi_agent_client`` now enters it rather than taking one.
 
-    MUTATION: add ``repo: SigningKeyRepository | None = None`` back to any of the four
-    signatures and this goes RED.
+    MUTATION: add ``repo: SigningKeyRepository | None = None`` back to any signature in
+    ``_DELIVERY_BOUNDARY`` and this goes RED.
     """
 
     @pytest.mark.arch_guard
@@ -1570,11 +1575,11 @@ class TestDeliveryBoundaryTakesNoDonatedSession:
                 if arg.arg in _DONATED_SESSION_PARAMS:
                     found.add((f"{rel_path}::{name}", arg.arg))
         assert found == set(), (
-            "the webhook delivery boundary must not accept a caller's connection "
+            "the connection-lifetime boundary must not accept a caller's connection "
             f"lifetime; found {sorted(found)}. A donated session is held for the whole "
-            "retry loop — across time.sleep and a POST to a buyer-supplied URL — so a "
-            "hanging receiver consumes a database connection. The callee opens its own "
-            "short session instead (_signing_repo)."
+            "retry loop — for a delivery, across time.sleep and a POST to a buyer-supplied "
+            "URL — so a hanging receiver consumes a database connection. The callee opens its own "
+            "short session instead (signing_repo)."
         )
 
 
