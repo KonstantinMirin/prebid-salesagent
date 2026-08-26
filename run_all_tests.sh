@@ -181,6 +181,23 @@ fi
 RESULTS_DIR="test-results/innet_$(date -u +%d%m%y_%H%M)"
 mkdir -p "$RESULTS_DIR"
 
+# Per-worker timing profile, ON by default and written INTO the results dir so it
+# travels with the run's JSON reports and is fetched alongside them.
+#
+# It was originally opt-in via a bare PYTEST_WORKER_PROFILE, which does not work
+# for the caller that matters: cassini forwards a hardcoded 9-variable
+# FORWARD_ENV tuple to the box, and any variable outside it is silently dropped.
+# Measured -- a sweep launched with PYTEST_WORKER_PROFILE set produced no profile
+# directory at all on the remote. A knob that only works locally cannot answer a
+# question about the CI box, which is the only place the worker counts are
+# interesting.
+#
+# Cost is a handful of time.time() calls plus one small JSON write per worker at
+# session end; the per-report hook is a single float addition. Cheap enough to be
+# unconditional, and unconditional is what makes it there when a slow run needs
+# explaining after the fact rather than only when someone predicted it.
+export PYTEST_WORKER_PROFILE="${PYTEST_WORKER_PROFILE:-/app/$RESULTS_DIR/worker-profile}"
+
 dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile runner "$@"; }
 
 cleanup() {
