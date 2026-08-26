@@ -93,6 +93,13 @@ iterate:
         3. `ast-grep` or `.agent-index/` to confirm the cited symbols still
            match the tree. Reconcile a drifted line number; keep the intent.
 
+        If `ast-grep` is not installed — it is absent on this box, where
+        `/usr/bin/sg` is the setgid binary and not ast-grep — do not fall back to a
+        bare text sweep. Use Python's own `ast` module for the structural query, or
+        `grep` WITH A POSITIVE CONTROL: show the pattern matching a case you know is
+        present before reporting how many remain. An empty result and a broken
+        pattern are indistinguishable from the output alone.
+
         ## Record in the design field
 
         - Each file and the exact edit, traceable to a plan clause.

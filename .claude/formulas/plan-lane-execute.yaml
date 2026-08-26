@@ -331,6 +331,13 @@ iterate:
         this") use **`ast-grep`**, never a text `grep` sweep; `grep` only for
         plain strings.
 
+        If `ast-grep` is not installed — it is absent on this box, where
+        `/usr/bin/sg` is the setgid binary and not ast-grep — do not fall back to a
+        bare text sweep. Use Python's own `ast` module for the structural query, or
+        `grep` WITH A POSITIVE CONTROL: show the pattern matching a case you know is
+        present before reporting how many remain. An empty result and a broken
+        pattern are indistinguishable from the output alone.
+
         ## Precondition
         ```bash
         bd show {TASK_ID} | grep -qE "^[[:space:]]*## Implemented \(implement atom\)" || { echo "GATE FAIL: the implement atom did not record its diff on {TASK_ID}"; exit 1; }
