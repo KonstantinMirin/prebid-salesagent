@@ -57,31 +57,63 @@ export COMPOSE_PROJECT_NAME="$(printf '%s' "${COMPOSE_PROJECT_NAME:-adcp-innet-$
 # gets a report. Compose interpolates this into the adcp-server service env.
 export DELIVERY_WEBHOOK_INTERVAL="${DELIVERY_WEBHOOK_INTERVAL:-5}"
 
-# Unit worker count, derived here because compose cannot compute one.
+# Parallelism defaults, sized against DOCKER'S memory rather than the host's.
 #
-# tox.ini asks for `-n {env:UNIT_XDIST_N:auto}`, and docker-compose.e2e.yml
-# defaults UNIT_XDIST_N to `auto` -- but xdist resolves `auto` through
-# PYTEST_XDIST_AUTO_NUM_WORKERS, which the same compose file pins to 1. That pin
-# exists for BDD (its workers share one Postgres; see the comment at its
-# definition) and predates unit being parallel at all. The effect is that a bare
-# `./run_all_tests.sh` would run unit on ONE worker and get none of the speedup,
-# while the CI box gets 16 only because cassini exports
-# PYTEST_XDIST_AUTO_NUM_WORKERS=16 of its own accord. A repo default that only
-# works for one caller is not a default.
+# Every knob below feeds processes that each import the whole application, so the
+# binding constraint is RAM inside the Docker VM -- not host cores and not host
+# RAM. On a Mac those differ wildly: 48GB host / 14 cores, but Docker Desktop
+# defaults its VM to ~16GB. Sizing from `nproc` alone is what produced this,
+# measured on exactly that machine with E2E_WORKERS=4 + unit=14 + integration=4:
 #
-# Deriving a real number here sidesteps the shared `auto` entirely, so unit's
-# worker count no longer depends on a knob that belongs to BDD. Unit touches no
-# database (tox.ini's unit env unsets DATABASE_URL), so it has none of the
-# contention that pin was protecting against.
+#     bdd_inprocess: FAIL code -9      <- SIGKILL, the VM OOM-killer
+#     e2e:           FAIL code -9
+#     unit.json:        collected 5894 but reported 0
+#     integration.json: collected 2324 but reported 0
 #
-# Capped at 16: measured on a 14-core laptop the suite is ~5.4x faster at 14
-# workers than serial, but the floor is the xdist_group of nested-pytest modules
-# (86s on the 16-core box), so more workers past that buy nothing and each one
-# costs an interpreter plus an app import. Override by exporting UNIT_XDIST_N.
-if [ -z "${UNIT_XDIST_N:-}" ]; then
-    _cores="$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) )"
-    export UNIT_XDIST_N="$(( _cores > 16 ? 16 : _cores ))"
+# (The truncation check further down is what surfaced that as a failure rather
+# than a green run with two silently empty suites.)
+#
+# tox -p runs the suites CONCURRENTLY, so the peak is the SUM of every suite's
+# workers plus the per-worker server stacks -- which is why each knob cannot be
+# chosen in isolation. Tiers are keyed on the Docker VM's MemTotal, with the
+# CI-box tier matching what is measured green in-network (16/16/8 at 86-196GB).
+_docker_mem_gb="$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)"
+_docker_mem_gb=$(( _docker_mem_gb / 1073741824 ))
+_cores="$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) )"
+
+if [ "$_docker_mem_gb" -ge 64 ]; then
+    # CI box. Per-worker e2e stacks are affordable; cores are the ceiling again.
+    _unit=$(( _cores > 16 ? 16 : _cores )); _integration=8; _e2e_workers=8
+elif [ "$_docker_mem_gb" -ge 32 ]; then
+    _unit=$(( _cores > 8 ? 8 : _cores )); _integration=4; _e2e_workers=2
+else
+    # Developer laptop (a default Docker Desktop VM lands here). No per-worker
+    # server stacks: four app-loading containers alongside the suites is what
+    # OOM-killed the run above. Unit still parallelises -- it has no database and
+    # is the largest suite -- but at half the cores, since it shares the VM with
+    # every other suite tox -p starts at the same time.
+    _unit=$(( _cores / 2 )); [ "$_unit" -lt 2 ] && _unit=2
+    _integration=4; _e2e_workers=0
 fi
+
+export UNIT_XDIST_N="${UNIT_XDIST_N:-$_unit}"
+# Integration is safe to parallelise at any tier: tests/conftest_db.py's
+# `integration_db` fixture creates a uuid-named database PER TEST, so workers
+# never share rows, and tox.ini runs this env with `--dist loadfile`.
+export INTEGRATION_XDIST_N="${INTEGRATION_XDIST_N:-$_integration}"
+# BDD parallelism comes from E2E_WORKERS, NOT from BDD_XDIST_N directly.
+# docker-compose.e2e.yml sets BDD_E2E_ENABLED=true, and tests/bdd/conftest.py
+# raises a UsageError for that together with -n>0 unless E2E_PER_WORKER=1 --
+# because under xdist the e2e_rest transport is silently dropped at collection and
+# the suite would go green without ever having run it. Setting E2E_WORKERS>0 takes
+# the fast path below, which splits `bdd` into `bdd_inprocess` (e2e disabled,
+# freely parallel) plus `bdd_e2e`, and provisions N per-worker server+DB stacks so
+# e2e_rest can run in parallel legally.
+export E2E_WORKERS="${E2E_WORKERS:-$_e2e_workers}"
+# stderr, not stdout: RUN_ALL_TESTS_RESOLVE_ONLY makes stdout a machine-read
+# contract (tests/unit/test_run_all_tests_contract.py parses it), so diagnostics
+# must not land there.
+echo "Parallelism: docker_mem=${_docker_mem_gb}GB cores=${_cores} -> unit=$UNIT_XDIST_N integration=$INTEGRATION_XDIST_N e2e_workers=$E2E_WORKERS" >&2
 # Argument contract — back-compat with the historical MODE words so the
 # pre-existing callers (Makefile quality-full/test-full, docs) keep working:
 #   (no arg) | ci                 -> all six suites, in-network (the default)
@@ -124,9 +156,14 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
     SUITES="${SUITES#,}"; SUITES="${SUITES%,}"
     # bdd_inprocess reads BDD_XDIST_N (compose pins it to 0 = serial by default),
     # so the in-process bulk only parallelizes if we export a worker count here.
-    # Default to `auto` (PYTEST_XDIST_AUTO_NUM_WORKERS) so the swap is actually
-    # fast on its own — without this the ~23m->~3.5m in-process win never lands.
-    export BDD_XDIST_N="${BDD_XDIST_N:-auto}"
+    #
+    # A REAL NUMBER, not `auto`. `auto` resolves through
+    # PYTEST_XDIST_AUTO_NUM_WORKERS, which docker-compose.e2e.yml pins to 1 for
+    # BDD's own benefit -- so `auto` here meant ONE worker for every caller that
+    # does not separately export that variable, and the ~23m->~3.5m in-process win
+    # silently never landed. Matching E2E_WORKERS keeps the two halves of the split
+    # in proportion; both are overridable.
+    export BDD_XDIST_N="${BDD_XDIST_N:-$E2E_WORKERS}"
     echo "Fast bdd path: E2E_WORKERS=$E2E_WORKERS BDD_XDIST_N=$BDD_XDIST_N -> suites=$SUITES"
 fi
 
@@ -377,9 +414,16 @@ for f in sorted(glob.glob(os.path.join(sys.argv[1], "*.json"))):
     collected, total = summary.get("collected"), summary.get("total")
     if collected is None or total is None:
         continue
-    if total < collected:
-        print(f"  {os.path.basename(f)}: collected {collected} but reported {total} "
-              f"-- {collected - total} item(s) never reported (summary claims "
+    # Subtract deselection. pytest-json-report's `collected` counts what
+    # collection FOUND, before -m/-k filtering; `total` counts what ran. A suite
+    # with a marker expression is legitimately short by exactly `deselected`, and
+    # treating that as truncation is a false positive -- measured on the plain
+    # `bdd` env, which reports collected 9895 / deselected 323 / total 9572.
+    expected = collected - summary.get("deselected", 0)
+    if total < expected:
+        print(f"  {os.path.basename(f)}: collected {collected} (minus {summary.get('deselected', 0)} "
+              f"deselected = {expected} expected) but reported {total} "
+              f"-- {expected - total} item(s) never reported (summary claims "
               f"{summary.get('failed', 0)} failed)")
 PYEOF
 )"
