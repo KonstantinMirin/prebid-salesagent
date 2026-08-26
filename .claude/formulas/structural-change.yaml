@@ -178,6 +178,23 @@ iterate:
         test file. This atom replaces the TDD red atom, which has nothing to
         assert when a step changes no behavior.
 
+        ## Precondition (gate hard-check)
+
+        ```bash
+        bd show {TASK_ID} | grep -q "Overall: PROCEED" \
+          || { echo "GATE FAIL: the solution review has not returned PROCEED on {TASK_ID}"; exit 1; }
+        ```
+
+        The solution review names four verdicts and states that PROCEED is
+        required to continue. Until this check existed, no atom enforced that,
+        so a DEEPEN or NARROW verdict stopped nothing and the chain walked on.
+        A rule that only reads as binding is the defect this formula exists to
+        remove.
+
+        On DEEPEN or NARROW, return to design, revise, and re-run the review.
+        The later verdict is the one this gate reads, so a revised design needs
+        a fresh PROCEED rather than an argument that the finding is addressed.
+
         ## Record four fields in the bead
 
         Write them under a heading spelled exactly `## Prediction (predict
