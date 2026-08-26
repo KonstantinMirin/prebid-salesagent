@@ -337,7 +337,8 @@ class TestCreativeMissingUrl:
                     [mock_package], "test_tenant", "test_principal", session=session
                 )
 
-            assert "creative_errors" in exc_info.value.details
+            assert exc_info.value.details is not None
+            assert exc_info.value.details.reasons
             assert exc_info.value.error_code == "CREATIVE_REJECTED"
 
     def test_creative_missing_dimensions_raises_invalid_creatives(self):
@@ -375,7 +376,8 @@ class TestCreativeMissingUrl:
                     [mock_package], "test_tenant", "test_principal", session=session
                 )
 
-            assert "creative_errors" in exc_info.value.details
+            assert exc_info.value.details is not None
+            assert exc_info.value.details.reasons
             assert exc_info.value.error_code == "CREATIVE_REJECTED"
 
 

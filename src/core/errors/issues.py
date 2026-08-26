@@ -313,6 +313,13 @@ class ErrorIssue(LibraryIssue):
     rejected_value: str | None = None
     accepted_values: list[str] | None = None
 
+    # The CONSTRAINT the keyword refers to -- in JSON Schema terms, the keyword's
+    # value in the schema: 32 for `minLength`, the pattern for `pattern`. It was
+    # previously readable only inside pydantic's authored sentence ("String should
+    # have at least 32 characters"), which meant a buyer had to parse English for
+    # a number. Structural here, and strictly more than the prose carried.
+    keyword_value: str | None = None
+
     _AUTHORED: ClassVar[str] = (
         "ErrorIssue takes no `message`: the item's sentence is a function of its "
         "keyword, exactly as the error-level sentence is a function of its code. "
@@ -342,6 +349,7 @@ class ErrorIssue(LibraryIssue):
         keyword: JsonSchemaKeyword,
         rejected_value: str | None = None,
         accepted_values: list[str] | None = None,
+        keyword_value: str | None = None,
     ) -> ErrorIssue:
         """Build an issue. THE construction surface for one.
 
@@ -359,6 +367,8 @@ class ErrorIssue(LibraryIssue):
             payload["rejected_value"] = rejected_value
         if accepted_values is not None:
             payload["accepted_values"] = accepted_values
+        if keyword_value is not None:
+            payload["keyword_value"] = keyword_value
         return cls.model_validate(payload)
 
     def to_wire(self) -> dict[str, Any]:
@@ -378,6 +388,28 @@ def issues_from_validation_error(errors: typing.Sequence[typing.Mapping[str, Any
     return [issue for e in errors if (issue := issue_from_pydantic_error(e)) is not None]
 
 
+_KEYWORD_CTX_KEY: dict[JsonSchemaKeyword, str] = {
+    "minLength": "min_length",
+    "maxLength": "max_length",
+    "minItems": "min_length",
+    "maxItems": "max_length",
+    "minimum": "ge",
+    "exclusiveMinimum": "gt",
+    "maximum": "le",
+    "exclusiveMaximum": "lt",
+    "multipleOf": "multiple_of",
+    "pattern": "pattern",
+    "enum": "expected",
+}
+"""Where pydantic keeps the constraint value for each keyword.
+
+pydantic puts it in the error's ``ctx`` under its own name; JSON Schema names the
+same thing after the keyword. Keywords absent from this table have no constraint
+value to carry (``required`` and ``type`` are not parameterized), so they emit
+none rather than an invented one.
+"""
+
+
 def issue_from_pydantic_error(error: typing.Mapping[str, Any]) -> ErrorIssue | None:
     """Convert one ``ValidationError.errors()`` entry, or None if unattributable.
 
@@ -388,9 +420,13 @@ def issue_from_pydantic_error(error: typing.Mapping[str, Any]) -> ErrorIssue | N
     keyword = PYDANTIC_KEYWORD_MAP.get(str(error.get("type")))
     if keyword is None:
         return None
+    ctx = error.get("ctx") or {}
+    ctx_key = _KEYWORD_CTX_KEY.get(keyword)
+    raw = ctx.get(ctx_key) if ctx_key else None
     return ErrorIssue.of(
         pointer=JsonPointer.from_pydantic_loc(error.get("loc", ())).pointer,
         keyword=keyword,
+        keyword_value=None if raw is None else str(raw),
     )
 
 

@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from src.core.errors.details import AdapterFailureDetails
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.creatives import _sync_creatives_impl
 from tests.factories.creative_asset import build_assets, image_spec
@@ -154,7 +155,7 @@ class TestSyncCreativesFormatValidation:
                 return []
 
             async def mock_get_format(agent_url, format_id):
-                raise AdCPServiceUnavailableError(details={"failure_mode": "Connection failed"})
+                raise AdCPServiceUnavailableError(details=AdapterFailureDetails(status="Connection failed"))
 
             mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
             mock_registry_getter.return_value = mock_registry
@@ -377,7 +378,7 @@ class TestSyncCreativesFormatValidation:
 
             async def mock_get_format(agent_url, format_id):
                 if "offline.example.com" in agent_url:
-                    raise AdCPServiceUnavailableError(details={"failure_mode": "Connection failed"})
+                    raise AdCPServiceUnavailableError(details=AdapterFailureDetails(status="Connection failed"))
 
             mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
             mock_registry_getter.return_value = mock_registry

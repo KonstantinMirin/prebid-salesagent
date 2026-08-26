@@ -37,6 +37,7 @@ from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock
 
+from src.core.errors.details import EntityRefDetails
 from tests.harness._base import BaseTestEnv
 
 _MODULE = "src.core.tools.media_buy_update"
@@ -142,7 +143,7 @@ class MediaBuyUpdateEnv(BaseTestEnv):
             if media_buy is None:
                 from src.core.exceptions import AdCPMediaBuyNotFoundError
 
-                raise AdCPMediaBuyNotFoundError(details={"media_buy_id": media_buy_id}, context=context)
+                raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id), context=context)
             return media_buy
 
         def _get_package_or_raise(media_buy_id: str, package_id: str, *, context: Any = None) -> Any:

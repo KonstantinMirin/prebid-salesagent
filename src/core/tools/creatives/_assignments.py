@@ -236,7 +236,9 @@ def _process_assignments(
                                     # the canonical code for a rejected creative (#1417).
                                     raise AdCPCreativeRejectedError(
                                         # `supported_formats` is the pin-canonical `accepted_values`.
-                                        details=CreativeRejectionDetails(accepted_values=supported_formats_display),
+                                        # supported_formats_display is a JOINED string, not a list -- wrap it so the
+                                        # canonical accepted_values stays an array as the pin declares.
+                                        details=CreativeRejectionDetails(accepted_values=[supported_formats_display]),
                                     )
                                 else:
                                     logger.warning(

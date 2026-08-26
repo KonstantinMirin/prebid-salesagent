@@ -2232,7 +2232,8 @@ async def _create_media_buy_impl(
                 # renders "root=datetime.datetime(...)" — the rendering defect the wire-safety
                 # marker check grades. The unwrapped value renders as "2020-01-01 00:00:00+00:00".
                 raise AdCPInvalidRequestError(
-                    details=ValidationDetails(rejected_value=str(computed_start_time)),
+                    # BR-UC-002 grades `start_time` in details by name, so the key stays.
+                    details=TimeWindowDetails(start_time=str(computed_start_time)),
                     field="start_time",
                 )
 
@@ -2625,7 +2626,7 @@ async def _create_media_buy_impl(
                     violations = collect_targeting_violations(pkg.targeting_overlay)
                     if violations:
                         raise AdCPInvalidRequestError(
-                            details=ValidationDetails(violations=violations),
+                            details=ValidationDetails(**violations),
                             field="targeting_overlay",
                         )
 

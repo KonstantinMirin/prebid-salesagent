@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from pytest_bdd import given, parsers, then
 
+from src.core.errors.details import RejectionReasonDetails
+
 # Surfaced to the buyer in the rejection details by the mock adapter.
 _REJECTION_REASON = "Budget too low for this campaign"
 
@@ -68,7 +70,7 @@ def given_seller_will_reject(ctx: dict) -> None:
     # In-process arm.
     mock_adapter = env.mock["adapter"].return_value
     mock_adapter.create_media_buy.side_effect = AdCPMediaBuyRejectedError(
-        details={"rejection_reason": _REJECTION_REASON}
+        details=RejectionReasonDetails(rejection_reason=_REJECTION_REASON)
     )
 
     # Live-server arm: the sanctioned injection channel, keyed on the env's own tenant.

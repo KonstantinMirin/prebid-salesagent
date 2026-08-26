@@ -125,7 +125,7 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
     # element.
     assert exc.field == "packages"
     assert exc.details is not None
-    assert "violations" in exc.details
+    assert exc.details.reasons
 
 
 @pytest.mark.requires_db
@@ -254,7 +254,8 @@ def test_update_rejects_property_list_when_product_disallows(property_targeting_
     # (salesagent-rfxfu). The old "packages[]" prefix named neither the array nor an
     # element.
     assert exc.field == "packages"
-    assert exc.details is not None and "violations" in exc.details
+    assert exc.details is not None
+    assert exc.details.reasons
 
 
 @pytest.mark.requires_db

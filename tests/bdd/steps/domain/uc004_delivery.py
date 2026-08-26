@@ -1925,44 +1925,44 @@ def then_config_rejected(ctx: dict) -> None:
     (Authentication.credentials MinLen=32) — assert the real two-layer AdCP
     wire envelope, not a reconstructed/hand-built exception.
 
-    Graded STRUCTURALLY: the code plus the projected Pydantic entry
-    (build_validation_error_details -> validation_errors[].type), never a substring
-    of the buyer-facing sentence, which is derived from the code through CODE_TABLE.
+    Graded STRUCTURALLY on the pin's own channel: `issues[].keyword` carries the
+    JSON Schema keyword that rejected the payload, never a substring of the
+    buyer-facing sentence, which is derived from the code through CODE_TABLE.
+
+    This read `details.validation_errors[].type` and pydantic's own error token
+    (`string_too_short`). The wire now carries `issues[].keyword` = `minLength`,
+    which is what core/error.json asks for -- "drawn from the JSON Schema
+    vocabulary ... Matches the keyword names emitted by JSON Schema validators".
     """
-    details = ctx["result"].wire_error_details("VALIDATION_ERROR", recovery="correctable")
-    entries = details.get("validation_errors") or []
-    # pydantic v2 emits "string_too_short" for a MinLen violation on a str. Matched by
-    # suffix so a sibling constraint type (e.g. too_short on a collection) still reads.
-    assert any(str(e.get("type", "")).endswith("too_short") for e in entries), (
-        f"expected a too_short validation entry, got {entries!r}"
-    )
+    issues = ctx["result"].wire_error_issues("VALIDATION_ERROR", recovery="correctable")
+    assert any(i.get("keyword") == "minLength" for i in issues), f"expected a minLength issue, got {issues!r}"
 
 
 @then("the error should indicate minimum credential length is 32 characters")
 def then_error_min_credential_length(ctx: dict) -> None:
     """Assert the wire envelope names the 32-character minimum on the credentials field.
 
-    The boundary VALUE lives only inside the projected Pydantic entry's ``msg``
-    ("String should have at least 32 characters"): build_validation_error_details
-    projects loc/msg/type and drops Pydantic's ``ctx``, so ``min_length`` is not
-    available structurally. Reading it through wire_error_details is the sanctioned
-    path — errors[0].details is a channel this suite keeps, and the text there is
-    PYDANTIC's, not the CODE_TABLE sentence, so pinning it is not a tautology
-    against the code. Pinned to the credentials entry specifically, which the old
-    envelope-wide substring was not.
+    The boundary VALUE used to live ONLY inside pydantic's authored sentence
+    ("String should have at least 32 characters"), because the old projection kept
+    loc/msg/type and dropped pydantic's ``ctx``. So this step had to read prose for
+    a number.
+
+    It is structural now: ``issues[].keyword_value`` carries the constraint the
+    keyword refers to -- in JSON Schema terms, the keyword's value in the schema.
+    Pinned to the credentials pointer specifically, as before.
     """
-    details = ctx["result"].wire_error_details("VALIDATION_ERROR", recovery="correctable")
-    entries = details.get("validation_errors") or []
+    issues = ctx["result"].wire_error_issues("VALIDATION_ERROR", recovery="correctable")
     credentials_entry = next(
-        (e for e in entries if "credentials" in [str(part) for part in (e.get("loc") or [])]),
+        (i for i in issues if "credentials" in str(i.get("pointer", ""))),
         None,
     )
-    assert credentials_entry is not None, f"no validation entry names the credentials field; entries were {entries!r}"
-    assert str(credentials_entry.get("type", "")).endswith("too_short"), (
-        f"expected a too_short constraint on credentials, got {credentials_entry!r}"
+    assert credentials_entry is not None, f"no issue names the credentials field; issues were {issues!r}"
+    assert credentials_entry.get("keyword") == "minLength", (
+        f"expected a minLength constraint on credentials, got {credentials_entry!r}"
     )
-    assert "32" in (credentials_entry.get("msg") or ""), (
-        f"expected the 32-character minimum on the credentials entry, got {credentials_entry!r}"
+    # The NUMBER, read as a number's own field rather than found inside a sentence.
+    assert credentials_entry.get("keyword_value") == "32", (
+        f"expected the 32-character minimum on the credentials issue, got {credentials_entry!r}"
     )
 
 

@@ -486,7 +486,7 @@ def _update_media_buy_impl(
                     # @*-targeting-overlay both grade targeting validation as INVALID_REQUEST);
                     # converges with the create path (#1417).
                     raise AdCPInvalidRequestError(
-                        details=ValidationDetails(violations=overlay_violations),
+                        details=ValidationDetails(**overlay_violations),
                         field="targeting_overlay",
                     )
 

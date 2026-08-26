@@ -94,7 +94,7 @@ class TestDuplicateProductValidation:
             exc = excinfo.value
             assert exc.error_code == "VALIDATION_ERROR"
             # WHICH products collided travels structurally, not in the sentence.
-            assert exc.details == {"duplicate_product_ids": ["prod_test_1"]}
+            assert exc.details is not None and exc.details.duplicate_product_ids == ["prod_test_1"]
 
     @pytest.mark.asyncio
     async def test_multiple_duplicate_products_all_listed(self, integration_db):
@@ -172,7 +172,7 @@ class TestDuplicateProductValidation:
             exc = excinfo.value
             assert exc.error_code == "VALIDATION_ERROR"
             # Sorted by production, so the oracle is deterministic.
-            assert exc.details == {"duplicate_product_ids": ["prod_test_1", "prod_test_2"]}
+            assert exc.details is not None and exc.details.duplicate_product_ids == ["prod_test_1", "prod_test_2"]
 
     @pytest.mark.asyncio
     async def test_no_duplicates_validation_passes(self):

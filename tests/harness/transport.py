@@ -233,6 +233,26 @@ class TransportResult:
         )
         return details
 
+    def wire_error_issues(self, code: str, *, recovery: str | None = None) -> list[Mapping[str, Any]]:
+        """The ``errors[0].issues`` array, AFTER asserting the envelope carries ``code``.
+
+        Sibling of :meth:`wire_error_details`, for the channel the pin defines for
+        field-level rejection: "``field`` (singular) cannot carry the full pointer
+        map" (v3.1.1 core/error.json). Takes the expected ``code`` for the same
+        reason -- an issues array from the wrong error is unreadable.
+
+        Required-not-optional: raises when the array is absent, so a caller never
+        None-checks a channel the scenario says must be there.
+        """
+        self.assert_wire_error(code, recovery=recovery)
+        error = self.wire_error_object() or {}
+        issues = error.get("issues")
+        assert isinstance(issues, list) and issues, (
+            f"expected a non-empty issues array at errors[0].issues for {code}, "
+            f"got {issues!r}: {self.wire_error_envelope}"
+        )
+        return issues
+
     def assert_wire_error(
         self,
         code: str,
