@@ -19,7 +19,14 @@ Spec grounding, pinned AdCP 3.1.1 (``adcp==6.6.0``), all in
   "regardless of ``required_for`` membership";
 * graded by ``dist/compliance/3.1.1/test-vectors/request-signing/negative/
   027-webhook-registration-authentication-unsigned.json``, whose
-  ``verifier_capability`` is ``{supported: true, required_for: []}``.
+  ``verifier_capability`` is ``{supported: true, required_for: []}``;
+* :1226 the pre-check — a verifier MUST NOT fall back to bearer-only auth when a
+  MALFORMED signature is present, "even for operations not in ``required_for``", which
+  is a quantifier over BUCKETS and is graded as one only by declaring each in turn;
+* :1273 the contrast — ``warn_for`` is scoped to signed-but-INVALID requests, so it
+  suppresses a checklist failure and not a pre-check one. Ungraded upstream: ``warn_for``
+  is this repo's extension, absent from the SDK's ``VerifierCapability`` and appearing
+  zero times in the 40 conformance vectors.
 """
 
 from __future__ import annotations
@@ -99,6 +106,60 @@ def given_buyer_signs_the_request(ctx: dict) -> None:
     ctx["signed"] = True
 
 
+@given(parsers.parse('the seller places "{operation}" in the "{bucket}" request-signature bucket'))
+def given_seller_buckets_operation(ctx: dict, operation: str, bucket: str) -> None:
+    """Declare the seller's REAL posture with *operation* in exactly one bucket.
+
+    The generalization of the two Givens above, and the one the bucket-quantified
+    scenarios need: ``required_for > warn_for > supported_for`` is a PRECEDENCE, so a
+    claim quantified over buckets can only be graded by declaring each of them in turn
+    through the same seam. The env writes the declaration onto the tenant and production
+    reads it back (``CapabilityDeclarations.from_tenant`` -> ``posture_for_tenant`` ->
+    ``bucket_for``); nothing here patches a posture in.
+
+    Naming the operation is what leaves every OTHER operation in the ``none`` bucket, so
+    the outcome is attributable to this declaration
+    (:func:`tests.helpers.signing.bucketed_declaration`).
+    """
+    ctx["env"].declare_request_signing(bucket=bucket, operations=[operation])
+
+
+@given("the Buyer Agent sends a signature the seller cannot parse")
+def given_buyer_sends_malformed_signature(ctx: dict) -> None:
+    """Ask for the MALFORMED realization: both headers present, neither parseable.
+
+    The realization travels VERBATIM (never ``bool(...)``): ``bool("malformed")`` is
+    True, so a collapse here would put a WELL-FORMED signature on the wire and the
+    scenario would grade an acceptance while claiming to grade a refusal
+    (:func:`tests.helpers.signing.realization` refuses anything else for the same
+    reason).
+
+    What the malformation IS — which headers, which bytes, on which surface — belongs to
+    the env (:data:`tests.helpers.signing.MALFORMED_SIGNATURE_HEADERS`, placed by
+    ``BaseTestEnv.wire_request``). The scenario states only that the seller cannot parse
+    what it was sent. This is the seller's checklist STEP 1, which is what makes it a
+    PRE-CHECK failure rather than a verdict about the signature's validity.
+    """
+    ctx["signed"] = "malformed"
+
+
+@given("the Buyer Agent signs a different rendering of the request")
+def given_buyer_signs_different_bytes(ctx: dict) -> None:
+    """Ask for the TAMPERED realization: a real signature over different bytes.
+
+    The contrast to the Given above, and the whole reason the two are separate
+    realizations: the signature is cryptographically REAL and the headers are
+    well-formed, so the verifier gets past the pre-check on its merits and reaches
+    ``request_signature_digest_mismatch`` inside the checklist — the arm ``warn_for``
+    governs (security.mdx @ v3.1.1 :1273).
+
+    Verbatim for the same reason as above. WHICH bytes differ is the env's business
+    (:func:`tests.helpers.signing.tampered_signing_body`); the scenario says only that
+    the buyer signed a different rendering of what it sent.
+    """
+    ctx["signed"] = "tampered"
+
+
 @given("the request registers a webhook whose authentication carries credentials")
 def given_request_registers_authenticated_webhook(ctx: dict) -> None:
     """Attach a ``push_notification_config`` carrying an ``authentication`` block.
@@ -173,6 +234,40 @@ def then_signature_challenge(ctx: dict, code: str) -> None:
     raise AssertionError(
         f"The seller did not answer {code!r} at {len(accepted)} of the credential "
         f"location(s) this transport carries.\n\n" + "\n\n".join(f"AT {location}:\n{exc}" for location, exc in accepted)
+    )
+
+
+@then(parsers.parse('the seller recorded exactly {count:d} suppressed "{code}" signature failure'))
+def then_seller_recorded_suppressed_failure(ctx: dict, count: int, code: str) -> None:
+    """Pin how many checklist failures carrying *code* THIS seller recorded.
+
+    The negative oracle, and half of the pair that grades a warn completion — the other
+    half is the completion itself, asserted by its own Then, because a step asserts one
+    claim. Neither half grades the arm alone: a completion is equally true of a
+    middleware that never looked at the request, and a recorded failure is equally true
+    of the refusal the ``supported`` control asserts. Together they say the verifier ran
+    the checklist, recorded exactly one failure, and served the request anyway.
+
+    ``== count`` rather than "at least one": zero means the checklist never ran (the
+    posture collapsed, or the leg put no bytes on a wire) and more than one means frames
+    that are not the graded operation were verified as if they were.
+
+    CODE-SCOPED, because the code is the attribution: a key-resolution flake surfacing at
+    checklist step 7 is also a warn-suppressed failure and also leaves a completion
+    behind, so a code-blind count would pass on a run where the tamper did nothing.
+
+    Counted by the ENV (``BaseTestEnv.signature_failures``), never off the metrics
+    registry here: an in-process registry read is a correct number on three transports
+    and a silent 0 on the fourth, where production increments the counter in another
+    container. A step that reads it names no transport in its SPELLING while depending
+    on one in its SEMANTICS, which is the failure this module exists to avoid.
+    """
+    recorded = ctx["env"].signature_failures(code)
+    assert recorded == count, (
+        f"the seller recorded {recorded} {code!r} signature failure(s) since it declared its posture, "
+        f"expected {count}. 0 means the verifier never reached the checklist — the signature was waved "
+        "through unverified, or it was refused earlier at the pre-check, which is a different arm of the "
+        "rule; more than expected means requests other than the graded operation failed the same way."
     )
 
 

@@ -840,14 +840,31 @@ def scraped_verified_count(base_url: str, key_id: str, *, when: str = "now") -> 
     (``signing_capability.unique_run_id``) is a claim about THIS env's requests rather
     than about the server's cumulative session.
 
-    Both guards are load-bearing rather than defensive: a 404 scrape and an empty
-    exposition each yield "no samples", which reads exactly like "the mechanism did not
-    run" — the one thing this grading exists to tell apart. They FAIL, naming *when* the
-    scrape was taken, instead of returning a vacuous 0.
+    The scrape and its two guards live in :func:`scraped_metrics_text`, which the failure
+    counter's out-of-process reader shares: an unreachable endpoint and an empty
+    exposition both FAIL there rather than reaching this sum as a vacuous 0.
 
     One definition, two callers (the e2e leg of ``env.signature_verifications()`` and
     ``tests/integration/test_harness_signed_dispatch.py``'s live-stack pair), so the two
     cannot drift into two ways of reading the same counter.
+    """
+    return sum(
+        scraped_counter_samples(scraped_metrics_text(base_url, when=when), VERIFIED_METRIC, keyid=key_id).values()
+    )
+
+
+def scraped_metrics_text(base_url: str, *, when: str = "now") -> str:
+    """The live stack's Prometheus exposition text, or a failure naming *when*.
+
+    Extracted from :func:`scraped_verified_count` when the FAILURE counter gained an
+    out-of-process reader too (``BaseTestEnv.signature_failures``'s e2e branch): the
+    scrape and its two guards are the same operation for either counter, and a second
+    copy of them is the duplication the DRY invariant treats as a defect.
+
+    Both guards are load-bearing rather than defensive: a 404 scrape and an empty
+    exposition each yield "no samples", which reads exactly like "the mechanism did not
+    run" — the one thing this grading exists to tell apart. They FAIL, naming *when* the
+    scrape was taken, instead of returning a vacuous 0.
     """
     import httpx
 
@@ -861,7 +878,7 @@ def scraped_verified_count(base_url: str, key_id: str, *, when: str = "now") -> 
         f"the {when} metrics scrape returned HTTP 200 but no Prometheus exposition text, so a zero count "
         f"would mean nothing. Body: {response.text[:300]!r}"
     )
-    return sum(scraped_counter_samples(response.text, VERIFIED_METRIC, keyid=key_id).values())
+    return response.text
 
 
 def _unescape_label_value(value: str) -> str:

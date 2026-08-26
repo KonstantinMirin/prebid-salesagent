@@ -357,6 +357,32 @@ _OPERATION_CREDENTIAL_LOCATION: dict[str, str] = {
 #: failure message may name precisely.
 _UNSTATED_CREDENTIAL_LOCATION = "the operation request's own payload"
 
+#: Where ``declare_request_signing`` parks the signature-failure counts it saw
+#: BEFORE this seller had a posture. ``BaseTestEnv.signature_failures`` subtracts
+#: them, which is what makes its answer a claim about THIS env's requests: the
+#: failure counter carries no run-identifying label, so nothing else can scope it.
+_SIGNATURE_FAILURE_WINDOW = "_signature_failure_window"
+
+
+def _by_signature_code(samples: dict[tuple[tuple[str, str], ...], float]) -> dict[str, float]:
+    """Counter samples keyed by their ``code`` label, SUMMED rather than overwritten.
+
+    One code appears under several label sets — the same rule refuses several
+    operations — so keeping the last one seen would silently drop every earlier
+    sample and report a delta of zero for a mechanism that ran.
+
+    Shared by both branches of ``_signature_failure_counts``: the in-process registry
+    read and the scraped exposition return the same shape by design
+    (:func:`tests.helpers.signing.scraped_counter_samples`), and folding them the same
+    way is what keeps the two branches answering the same question.
+    """
+    out: dict[str, float] = {}
+    for labels, value in samples.items():
+        code = dict(labels).get("code", "")
+        out[code] = out.get(code, 0.0) + value
+    return out
+
+
 #: The A2A JSON-RPC method a buyer registers webhook credentials with WITHOUT
 #: invoking any skill — the SECOND credential location this transport carries.
 #: Served by the pinned a2a SDK's v0.3 compat adapter
@@ -1200,6 +1226,12 @@ class BaseTestEnv:
         )
         tenant.capability_declarations = posture_declaration_document(tenant, declaration)
         session.commit()
+        # OPENS THE FAILURE WINDOW (:meth:`signature_failures`). Here rather than at env
+        # entry because this is the last moment before a scenario can dispatch, and the
+        # counter it reads is process-global with no run-identifying label: anything the
+        # previous leg recorded is already in the baseline, and only what THIS seller
+        # refuses lands after it.
+        self.__dict__[_SIGNATURE_FAILURE_WINDOW] = self._signature_failure_counts()
 
     def _realize_e2e_signature_verifications(self) -> int:
         """The same claim and the SAME EVENT, read across a process boundary.
@@ -1255,6 +1287,79 @@ class BaseTestEnv:
         from tests.helpers.signing import VERIFIED_METRIC, samples_with
 
         return int(sum(samples_with(VERIFIED_METRIC, keyid=self.signing.key_id).values()))
+
+    def _realize_e2e_signature_failure_counts(self) -> dict[str, float]:
+        """The same claim and the SAME EVENT, read across a process boundary.
+
+        The negative twin of :meth:`_realize_e2e_signature_verifications`, forking on
+        REACH for the same reason: the live server's verifier records its failures on a
+        counter in ANOTHER CONTAINER, where an in-process read returns 0 for a request
+        that really was checked — the silent false negative the fork exists to prevent.
+        :func:`tests.helpers.signing.scraped_counter_samples` is the cross-container
+        analogue of ``samples_with`` and parses the exposition the guarded scrape
+        returns.
+        """
+        from tests.helpers.signing import FAILED_METRIC, scraped_counter_samples, scraped_metrics_text
+
+        assert self.e2e_config is not None, "signature_failures()'s e2e branch needs env.e2e_config"
+        return _by_signature_code(
+            scraped_counter_samples(scraped_metrics_text(self.e2e_config.base_url), FAILED_METRIC)
+        )
+
+    @realize_e2e(_realize_e2e_signature_failure_counts)
+    def _signature_failure_counts(self) -> dict[str, float]:
+        """Every ``adcp_request_signature_failed_total`` sample right now, summed per code.
+
+        THE FORK IS HERE, on the read, rather than on :meth:`signature_failures` above
+        it: the measurement is a before and an after, and forking only the public method
+        would leave the two ends of it free to cross different boundaries — a baseline
+        off this process compared against a count off the server's, which is not a delta
+        of anything.
+
+        Per CODE rather than per label set, because the label set is
+        ``(operation, keyid, code)`` and ``keyid`` is pinned to ``unresolved``
+        (``src/core/metrics.py:325``): a failure is recorded before any key is resolved,
+        so the code is the only label that says WHICH rule refused.
+        """
+        from tests.helpers.signing import FAILED_METRIC, counter_samples
+
+        return _by_signature_code(counter_samples(FAILED_METRIC))
+
+    def signature_failures(self, code: str) -> int:
+        """How many failures carrying *code* were recorded since this seller declared its posture.
+
+        The negative oracle, and the twin of :meth:`signature_verifications` — one
+        question, one number. It is a DELTA where its twin is an absolute read, and that
+        difference is forced rather than stylistic: ``record_signature_verified`` labels
+        its counter with a ``keyid`` carrying this capability's ``unique_run_id()``, so
+        an absolute read there selects this env's own samples, while
+        ``record_signature_failed`` pins ``keyid=UNRESOLVED_KEYID``
+        (``src/core/metrics.py:325``) and its label set therefore carries NO run
+        identity at all. ``prometheus_client.REGISTRY`` is process-global and never
+        reset, and ``tox.ini``'s ``--dist loadfile`` puts every transport leg of a
+        scenario in ONE worker process, so an absolute read here is satisfied on the
+        a2a and mcp legs by the rest leg's own increment — the two legs the warn
+        contrast exists for. That is a cross-transport claim graded at one transport,
+        which is the defect this seam was added to avoid rather than reproduce.
+
+        THE WINDOW OPENS when the seller declares its posture
+        (:meth:`declare_request_signing`), which every enforcement scenario does in a
+        Given, strictly before it dispatches anything. So the number is scoped to this
+        env's own requests without depending on a label production does not emit.
+
+        SINGLE-PURPOSE, deliberately. It answers about this one counter and this one
+        label; it is not a metrics accessor on the env, and widening it into one would
+        put the choice of what to measure back in the step layer, where transport
+        knowledge is not allowed.
+        """
+        baseline = self.__dict__.get(_SIGNATURE_FAILURE_WINDOW)
+        assert baseline is not None, (
+            "signature_failures() is a delta and no window is open: the seller has not declared a "
+            "request-signing posture on this env. Call declare_request_signing() (the Given that "
+            "names the bucket) BEFORE dispatching — an absolute read cannot answer this, because "
+            "the failure counter carries no run identity and another leg's increment would satisfy it."
+        )
+        return int(self._signature_failure_counts().get(code, 0.0) - baseline.get(code, 0.0))
 
     @property
     def signing(self) -> Any:

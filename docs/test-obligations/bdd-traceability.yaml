@@ -4898,6 +4898,29 @@ mappings:
       upstream_refs: ["BR-UC-006-main"]
       business_rules: []
       status: new
+    # Locally added (salesagent-nx8jp.10): the bucket quantifier. security.mdx @ v3.1.1
+    # :1226 refuses a malformed signature "even for operations not in required_for", and
+    # :1273 scopes warn_for to signed-but-invalid requests. Unreachable from any upstream
+    # artifact: warn_for is this repo's extension, absent from the SDK's VerifierCapability
+    # and appearing zero times in the 40 conformance vectors.
+    - adcp_scenario_id: "T-UC-006-local-signing-malformed-every-bucket"
+      adcp_feature: "local-request-signing-enforcement.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-local-signing-warn-suppresses-checklist"
+      adcp_feature: "local-request-signing-enforcement.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main"]
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-006-local-signing-supported-refuses-checklist"
+      adcp_feature: "local-request-signing-enforcement.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-006-main"]
+      business_rules: []
+      status: new
   UC-007:
     - adcp_scenario_id: "T-UC-007-main-rest"
       adcp_feature: "BR-UC-007-list-authorized-properties.feature"

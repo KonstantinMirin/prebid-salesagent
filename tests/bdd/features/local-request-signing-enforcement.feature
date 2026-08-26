@@ -12,9 +12,15 @@
 # the property "a signed request accepted, an unsigned one refused, IDENTICALLY on every
 # transport" is a CROSS-transport property, and nothing cross-transport graded it.
 #
-# These three scenarios are that grading. Each differs from the others by exactly ONE
-# variable, and all three run on the same operation through the same env, so a
+# These scenarios are that grading. Each differs from its neighbour by exactly ONE
+# variable, and all of them run on the same operation through the same env, so a
 # difference in outcome is attributable to the variable and not to the setup.
+#
+# The last three add the BUCKET as that variable (salesagent-nx8jp.10). `warn_for` is
+# this repo's extension — the SDK's VerifierCapability drops it, and the string appears
+# zero times in the 40 conformance vectors — so the one rule that separates a pre-check
+# failure (refused in EVERY bucket, warn included) from a checklist failure (suppressed
+# by warn alone) is reachable from no upstream artifact at all.
 #
 # Reconcile upstream in adcp-req (a "seller enforces inbound request signatures"
 # storyboard), then retire this file in favor of the regenerated one.
@@ -80,3 +86,64 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # WHERE the credential travels is the TRANSPORT's business, not this scenario's, and it
     # is not the same place on every transport: the env puts it where each transport's
     # production code READS it. That difference is the point — see the a2a result.
+
+  @T-UC-006-local-signing-malformed-every-bucket @request-signing @error-path @invariant @boundary
+  Scenario Outline: a present-but-malformed signature is refused in every bucket the seller declares
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller places "sync_creatives" in the "<bucket>" request-signature bucket
+    And the Buyer Agent sends a signature the seller cannot parse
+    When the Buyer Agent syncs the creative
+    Then the seller answers with the request-signature challenge "request_signature_header_malformed"
+    # security.mdx @ v3.1.1 :1226 — a verifier MUST NOT fall back to bearer-only auth when a
+    # malformed signature is present, "even for operations not in `required_for`". That "even
+    # for" is a QUANTIFIER OVER BUCKETS, and a quantifier graded at one bucket is not graded:
+    # the Examples table below is the quantifier, three rows on every wire transport.
+    # The bucket is the ONLY variable between the rows — same operation, same key, same
+    # malformed headers — so a row that answers differently is attributable to the bucket.
+    # The WARN row is the sentinel. `warn_for` suppresses a CHECKLIST failure (:1273) and
+    # must NOT suppress this one, which fails the pre-check at checklist step 1, above the
+    # bucket; `required` and `supported` refuse signed-but-invalid requests anyway, so they
+    # would keep answering this challenge even if the pre-check phase were removed.
+
+    Examples:
+      | bucket    |
+      | required  |
+      | warn      |
+      | supported |
+
+  @T-UC-006-local-signing-warn-suppresses-checklist @request-signing @invariant
+  Scenario: a signed-but-invalid request completes under warn
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller places "sync_creatives" in the "warn" request-signature bucket
+    And the Buyer Agent signs a different rendering of the request
+    When the Buyer Agent syncs the creative
+    Then the creative should be processed successfully
+    And the seller recorded exactly 1 suppressed "request_signature_digest_mismatch" signature failure
+    # security.mdx @ v3.1.1 :1273 scopes `warn_for` to signed-but-invalid requests — the
+    # verifier runs its checklist, FAILS, and serves the request anyway. "Signed-but-invalid"
+    # is a cryptographically REAL signature over a different rendering of the body, so the
+    # verifier gets past the pre-check on its merits and reaches the digest mismatch INSIDE
+    # the checklist, which is the arm `warn_for` governs.
+    # THE PAIR IS THE ORACLE, and neither half grades this alone. A completion alone is
+    # equally true of a middleware that never looked at the request; a recorded failure alone
+    # is equally true of the 401 the `supported` scenario below asserts. Together they say the
+    # middleware ran the checklist, recorded exactly one failure, and continued.
+    # Body replay is what /mcp and /a2a add here: the verifier consumed the request body to
+    # compute the digest, so a warn continuation has to hand the SAME bytes to the
+    # application. The REST shadow-mode ladder cannot reach that — it runs on a bodyless
+    # path — so this claim is graded on those two transports for the first time.
+
+  @T-UC-006-local-signing-supported-refuses-checklist @request-signing @error-path @invariant
+  Scenario: the same signed-but-invalid request is refused under supported
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller places "sync_creatives" in the "supported" request-signature bucket
+    And the Buyer Agent signs a different rendering of the request
+    When the Buyer Agent syncs the creative
+    Then the seller answers with the request-signature challenge "request_signature_digest_mismatch"
+    # ONE variable apart from the scenario above: the same operation, the same key, the same
+    # tampered bytes — the bucket. This is the control that makes the warn completion mean
+    # something: without it, "the request completed" is equally explained by a verifier that
+    # never rejects a digest mismatch at all, and the warn scenario would grade nothing.
