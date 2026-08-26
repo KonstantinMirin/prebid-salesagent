@@ -206,6 +206,13 @@ class TestASuccessIsWrittenDownByBothSenders:
                     }
                 ),
                 media_buy_id=buy.media_buy_id,
+                # STATED, not scraped off the payload. The sender used to rebuild
+                # its task context from the payload's result, so declaring these
+                # in the payload alone was enough to reach the row. It reaches the
+                # row now because the CALLER says so, which is the only way a
+                # caller with no such values in its payload can get them right.
+                notification_type=_PROTOCOL_NOTIFICATION_TYPE,
+                sequence_number=_PROTOCOL_SEQUENCE_NUMBER,
             )
 
             assert delivered is True
@@ -286,6 +293,13 @@ class TestARefusalIsWrittenDownIdenticallyByBothSenders:
                     }
                 ),
                 media_buy_id=buy.media_buy_id,
+                # STATED, not scraped off the payload. The sender used to rebuild
+                # its task context from the payload's result, so declaring these
+                # in the payload alone was enough to reach the row. It reaches the
+                # row now because the CALLER says so, which is the only way a
+                # caller with no such values in its payload can get them right.
+                notification_type=_PROTOCOL_NOTIFICATION_TYPE,
+                sequence_number=_PROTOCOL_SEQUENCE_NUMBER,
             )
 
             assert delivered is False

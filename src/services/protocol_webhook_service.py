@@ -189,14 +189,14 @@ class ProtocolWebhookService:
         return await self.send_notification(
             push_notification_config=push_notification_config,
             payload=payload,
-            metadata=task.as_metadata(),
+            task=task,
         )
 
     async def send_notification(
         self,
         push_notification_config: DeliverableWebhookTarget,
         payload: Task | TaskStatusUpdateEvent | McpWebhookPayload,
-        metadata: dict[str, Any],
+        task: WebhookTaskContext,
     ) -> bool:
         """
         Send a protocol-level push notification to the configured webhook.
@@ -205,7 +205,11 @@ class ProtocolWebhookService:
             push_notification_config: Push notification configuration from protocol layer
             payload: For A2A it can be Task or TaskStatusUpdateEvent types for MCP it wil be McpWebhookPayload.
                 Use create_a2a_webhook_payload or create_mcp_webhook_payload from adcp's official python client to get the payload for particular task and status
-            metadata: Contains app specific metadata's such as task_type, tenant_id, principal_id
+            task: The delivery's task identity, typed. Threaded through to the
+                logger unchanged -- it used to be flattened to a loose dict here
+                and rebuilt from the PAYLOAD downstream, which silently reset
+                sequence_number to 1 and notification_type to None on every row
+                the payload did not happen to carry them in.
 
         Returns:
             True if notification sent successfully, False otherwise
@@ -265,7 +269,7 @@ class ProtocolWebhookService:
             url=url,
             payload=payload_dict,
             headers=headers,
-            metadata=metadata,
+            task=task,
             scheme=push_notification_config.authentication_type,
             credentials=push_notification_config.authentication_token,
         )
@@ -341,7 +345,7 @@ class ProtocolWebhookService:
         url: str,
         payload: dict[str, Any],
         headers: dict,
-        metadata: dict[str, Any],
+        task: WebhookTaskContext,
         scheme: str | None = None,
         credentials: str | None = None,
         max_attempts: int = 3,
@@ -354,7 +358,16 @@ class ProtocolWebhookService:
         this function does not call ``json.dumps`` on ``payload`` itself, so
         there is no second serialization that could disagree with the first.
         """
-        ctx = WebhookTaskContext.from_metadata(metadata, payload)
+        # The caller's typed context, used as given. It used to be rebuilt here
+        # from a four-key dict plus the payload, and the rebuild was lossy in both
+        # directions that mattered: as_metadata never emitted sequence_number or
+        # notification_type, and from_metadata recovered them from the PAYLOAD's
+        # result -- so a payload that did not carry them yielded 1 and None, and
+        # those were the values PERSISTED to webhook_delivery_log. A buyer reading
+        # the log saw a webhook claiming to be first in its sequence and carrying
+        # no notification type, when the server had sent the seventh and marked it
+        # final.
+        ctx = task
 
         # Create webhook delivery log entry
         log_id = str(uuid4())

@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from src.core.webhooks.delivery import WebhookDeliveryOutcome
+from src.core.webhooks.delivery import WebhookDeliveryOutcome, WebhookTaskContext
 from src.services.protocol_webhook_service import ProtocolWebhookService
 
 # Verbatim shape of adcp.signing.IpPinnedTransport's wrong-host guard message.
@@ -48,7 +48,15 @@ PINNED_TRANSPORT_ERROR = RuntimeError(
 # No ``tenant_id``: ``WebhookTaskContext.records_delivery_log`` is then False and
 # no audit logger is built, so this test needs neither a database nor an audit
 # backend to reach the arm. The arm is what is under test, not the epilogue.
-METADATA = {"task_type": "create_media_buy"}
+TASK = WebhookTaskContext(
+    task_id="task-1",
+    task_type="create_media_buy",
+    tenant_id=None,
+    principal_id=None,
+    media_buy_id=None,
+    sequence_number=1,
+    notification_type=None,
+)
 PAYLOAD = {"task_id": "t1", "status": "completed"}
 
 
@@ -79,7 +87,7 @@ async def _outcome_from_the_unexpected_arm() -> WebhookDeliveryOutcome:
             "https://buyer.example.com/hook",
             PAYLOAD,
             {"Content-Type": "application/json"},
-            METADATA,
+            TASK,
         )
 
     assert len(captured) == 1, f"the arm concluded {len(captured)} times, expected exactly 1"

@@ -379,6 +379,12 @@ class TestRefusedDestinationRow:
                         }
                     ),
                     media_buy_id=buy.media_buy_id,
+                    # Stated on the context as well as in the payload result. The
+                    # sender used to rebuild its context FROM the payload, so the
+                    # result alone reached the row; the typed context is the source
+                    # now, and a caller that knows these values says them.
+                    notification_type=_REFUSAL_NOTIFICATION_TYPE,
+                    sequence_number=_REFUSAL_SEQUENCE_NUMBER,
                 )
 
             assert delivered is False
@@ -628,3 +634,54 @@ class TestBuyerUrlIsDeliveredVerbatim:
                     f"the delivery log recorded {rows[0].webhook_url!r} — the operator-readable "
                     "record must name the URL the buyer registered, not a rewritten destination"
                 )
+
+
+class TestTaskIdentityReachesThePersistedRow:
+    """The delivery row carries the sequence number and notification type the SENDER used.
+
+    Not a style finding: both values were CORRUPTED on the way to the database.
+    ``notify`` built a typed ``WebhookTaskContext``, ``send_notification`` flattened
+    it to a four-key dict (``as_metadata`` emitted ``task_type``, ``tenant_id``,
+    ``principal_id``, ``media_buy_id`` and nothing else), and
+    ``_send_with_retry_and_logging`` rebuilt a context from that dict plus the
+    PAYLOAD -- recovering ``sequence_number`` and ``notification_type`` from the
+    payload's result, or falling back to ``1`` and ``None`` when it did not carry
+    them. Those fallbacks were what got persisted.
+
+    So a buyer reading ``webhook_delivery_log`` saw a webhook claiming to be the
+    first in its sequence and carrying no notification type, when the server had
+    sent the seventh and marked it final.
+
+    Graded against the PERSISTED ROW, not against the encoder. The corruption
+    happened on the persistence path, so a unit test of ``as_metadata`` would have
+    asserted that it correctly emits four keys -- which it did -- and proved
+    nothing about the two it dropped.
+    """
+
+    async def test_the_row_carries_the_sequence_number_and_notification_type_sent(self, integration_db):
+        """Send the seventh, final notification; read back seven and "final"."""
+        with ProtocolWebhookEnv() as env:
+            buy = env.make_media_buy()
+            env.set_http_status(200)
+
+            delivered = await env.send(
+                media_buy_id=buy.media_buy_id,
+                sequence_number=7,
+                notification_type="final",
+            )
+
+            assert delivered is True
+
+            rows = env.delivery_logs(buy.media_buy_id)
+            assert len(rows) == 1, f"expected exactly one delivery row, got {len(rows)}"
+            row = rows[0]
+
+            assert row.sequence_number == 7, (
+                f"the sender sent sequence #7; the persisted row says #{row.sequence_number}. "
+                "A buyer reconciling the log against what it received cannot tell a resend "
+                "from a first delivery."
+            )
+            assert row.notification_type == "final", (
+                f"the sender marked this delivery {'final'!r}; the persisted row says "
+                f"{row.notification_type!r}. A buyer cannot tell the series ended."
+            )

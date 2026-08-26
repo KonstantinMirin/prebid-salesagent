@@ -51,6 +51,7 @@ from adcp import create_mcp_webhook_payload
 from adcp.types import McpWebhookPayload
 
 from src.core.database.models import PushNotificationConfig, WebhookDeliveryLog
+from src.core.webhooks.delivery import WebhookTaskContext
 from src.services.protocol_webhook_service import ProtocolWebhookService
 from tests.factories import PushNotificationConfigFactory
 from tests.harness._base import IntegrationEnv
@@ -77,6 +78,13 @@ DELIVERY_PAYLOAD_TASK_TYPE = "update_media_buy"
 
 # The logger production's audit entries go to (``src/core/audit_logger.py``).
 AUDIT_LOGGER_NAME = "adcp.audit"
+
+
+# The task id the payload and the task context share by default. They used to be
+# able to disagree: the sender scraped the id off the PAYLOAD, so whatever the
+# context said was ignored. It is the context's value that reaches the audit
+# trail and the delivery row now, so one default serves both.
+_DEFAULT_TASK_ID = "task_001"
 
 
 class ProtocolWebhookEnv(WebhookOutcomeRowsMixin, LocalOriginMixin, IntegrationEnv):
@@ -158,7 +166,7 @@ class ProtocolWebhookEnv(WebhookOutcomeRowsMixin, LocalOriginMixin, IntegrationE
     def make_payload(
         self,
         *,
-        task_id: str = "task_001",
+        task_id: str = _DEFAULT_TASK_ID,
         result: dict[str, Any] | None = None,
     ) -> McpWebhookPayload:
         """Build the real SDK webhook payload production sends for a delivery report.
@@ -183,23 +191,35 @@ class ProtocolWebhookEnv(WebhookOutcomeRowsMixin, LocalOriginMixin, IntegrationE
         payload: McpWebhookPayload | None = None,
         media_buy_id: str | None = None,
         task_type: str = DELIVERY_METADATA_TASK_TYPE,
+        task_id: str = _DEFAULT_TASK_ID,
+        sequence_number: int = 1,
+        notification_type: str | None = None,
     ) -> bool:
         """Call the real ``send_notification`` and return what production returned.
 
         ``config`` defaults to an unauthenticated config for the running origin.
-        ``media_buy_id`` rides in the metadata: it is one of the four values the
-        service requires before it writes a delivery-log row at all.
+        ``media_buy_id`` is one of the four values the service requires before it
+        writes a delivery-log row at all.
+
+        ``sequence_number`` and ``notification_type`` are parameters because they
+        are the two fields the delivery row carries that a caller can get WRONG.
+        They used to be unreachable from here: ``send_notification`` took a loose
+        dict, and the two were re-derived downstream from the PAYLOAD, so no
+        caller could state them and no test could catch them being reset.
         """
         self._commit_factory_data()
         return await self.service.send_notification(
             push_notification_config=config if config is not None else self.make_config(),
             payload=payload if payload is not None else self.make_payload(),
-            metadata={
-                "task_type": task_type,
-                "tenant_id": self._tenant_id,
-                "principal_id": self._principal_id,
-                "media_buy_id": media_buy_id,
-            },
+            task=WebhookTaskContext(
+                task_id=task_id,
+                task_type=task_type,
+                tenant_id=self._tenant_id,
+                principal_id=self._principal_id,
+                media_buy_id=media_buy_id,
+                sequence_number=sequence_number,
+                notification_type=notification_type,
+            ),
         )
 
     # -- Observing what production recorded ----------------------------------

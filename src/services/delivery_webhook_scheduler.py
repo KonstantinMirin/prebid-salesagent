@@ -335,14 +335,24 @@ class DeliveryWebhookScheduler:
             # and is used for DB filtering, while the wire value must be spec-compliant.
             # Renaming the metadata key is not safe without migrating DB records and
             # updating all 6 protocol_webhook_service guard checks.
+            # sequence_number and notification_type are NAMED here, from the values
+            # this function computed above (:251-259 and :269), not left at 1/None.
+            # They used to be hardcoded, and it did not show: the sender flattened
+            # this context to a four-key dict and then re-derived both from the
+            # PAYLOAD, which carries the same two values. Now that the typed context
+            # travels the whole way to `webhook_delivery_log`, a hardcoded value here
+            # would BE the persisted value -- so the caller that knows them states
+            # them, which is the point of taking a typed context at all.
             webhook_task = WebhookTaskContext(
                 task_id=media_buy.media_buy_id,
                 task_type="media_buy_delivery",
                 tenant_id=media_buy.tenant_id,
                 principal_id=media_buy.principal_id,
                 media_buy_id=media_buy.media_buy_id,
-                sequence_number=1,
-                notification_type=None,
+                sequence_number=sequence_number,
+                notification_type=delivery_response.notification_type.value
+                if delivery_response.notification_type is not None
+                else None,
             )
 
             # The dialect comes from the REGISTRATION, not from a hardcoded builder.

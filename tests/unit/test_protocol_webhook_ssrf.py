@@ -42,6 +42,7 @@ from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.creatives._sync import _sync_creatives_impl
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.webhook_validator import WEBHOOK_SSRF_SUGGESTION, reject_unsafe_webhook_registration_url
+from src.core.webhooks.delivery import WebhookTaskContext
 from src.services.protocol_webhook_service import ProtocolWebhookService
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
@@ -57,7 +58,19 @@ _METADATA_URL = "http://169.254.169.254/latest/meta-data/"
 # them is about the payload: ``task_type`` deliberately stays outside the
 # delivery-report pair so no case touches the database.
 _PAYLOAD = {"task_id": "t1", "status": "completed"}
-_METADATA = {"task_type": "create_media_buy", "tenant_id": "t1"}
+# The delivery's task identity, typed. `send_notification` used to take a loose
+# four-key dict and rebuild a context from it downstream; the rebuild reset
+# sequence_number to 1 and notification_type to None, and those were the values
+# persisted. Naming the fields here is the point of the change these tests follow.
+_TASK = WebhookTaskContext(
+    task_id="task-1",
+    task_type="create_media_buy",
+    tenant_id="t1",
+    principal_id=None,
+    media_buy_id=None,
+    sequence_number=1,
+    notification_type=None,
+)
 
 
 class _RecordingTransport(httpx.AsyncBaseTransport):
@@ -172,7 +185,7 @@ async def test_send_notification_rejects_metadata_url_without_post() -> None:
     service = ProtocolWebhookService()
 
     with _egress_hatches(private=True), _dispatched_hops() as hops:
-        sent = await service.send_notification(_config(_METADATA_URL), payload=_PAYLOAD, metadata=_METADATA)
+        sent = await service.send_notification(_config(_METADATA_URL), payload=_PAYLOAD, task=_TASK)
 
     assert sent is False
     assert hops == [], f"a request was dispatched towards a cloud-metadata address: {hops}"
@@ -195,9 +208,7 @@ async def test_send_notification_rejects_localhost_without_post() -> None:
         origin.respond_with(200)
 
         with _egress_hatches(private=False), _dispatched_hops() as hops:
-            sent = await service.send_notification(
-                _config(f"{origin.base_url}/webhook"), payload=_PAYLOAD, metadata=_METADATA
-            )
+            sent = await service.send_notification(_config(f"{origin.base_url}/webhook"), payload=_PAYLOAD, task=_TASK)
 
         assert sent is False
         assert origin.hits == 0, f"the loopback endpoint was reached anyway: {origin.requests}"
@@ -226,9 +237,7 @@ async def test_send_notification_posts_when_url_is_public(monkeypatch) -> None:
         origin.respond_with(200)
 
         with _egress_hatches(private=True):
-            sent = await service.send_notification(
-                _config(f"{origin.base_url}/webhook"), payload=_PAYLOAD, metadata=_METADATA
-            )
+            sent = await service.send_notification(_config(f"{origin.base_url}/webhook"), payload=_PAYLOAD, task=_TASK)
 
         assert sent is True
         assert origin.hits == 1, f"the endpoint served {origin.hits} requests for one notification"
@@ -265,7 +274,7 @@ async def test_send_notification_does_not_follow_redirect_to_metadata(monkeypatc
         webhook_url = f"{origin.base_url}/webhook"
 
         with _egress_hatches(private=True), _dispatched_hops() as hops:
-            sent = await service.send_notification(_config(webhook_url), payload=_PAYLOAD, metadata=_METADATA)
+            sent = await service.send_notification(_config(webhook_url), payload=_PAYLOAD, task=_TASK)
 
         assert sent is False
         assert origin.hits == 1, f"the 302 was retried: {origin.paths}"
