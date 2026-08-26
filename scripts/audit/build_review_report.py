@@ -206,11 +206,14 @@ def build(repo: Path, proposals: Path, consolidated: Path) -> str:
 
     parts: list[str] = []
     A = parts.append
+    # The pinned version is READ, never typed: these strings are published, so a
+    # hardcoded version publishes a claim about a pin the code may not be on.
+    pinned = storyboard_spec.pinned_version(repo)
 
     A("<h1>Storyboard re-grounding — review</h1>")
     A(
         '<p class="sub">All 40 <code>@storyboard-v3.1</code> BDD scenarios re-grounded against '
-        "AdCP <b>3.1.1</b> (the pinned version) and the storyboards that grade them. "
+        f"AdCP <b>{pinned}</b> (the pinned version) and the storyboards that grade them. "
         "Branch <code>test/storyboard-binding-baseline</code>.</p>"
     )
 
@@ -308,7 +311,7 @@ def build(repo: Path, proposals: Path, consolidated: Path) -> str:
 
     A("<h3>Production disagrees with the spec</h3>")
     A(
-        "<p>Our implementation does not do what AdCP 3.1.1 requires. These are conformance gaps: "
+        f"<p>Our implementation does not do what AdCP {pinned} requires. These are conformance gaps: "
         "a scenario asserting the correct behaviour would go red today, which is why they are tickets "
         "rather than scenario edits.</p><ul>"
     )
@@ -337,7 +340,7 @@ def build(repo: Path, proposals: Path, consolidated: Path) -> str:
     A("</ul>")
 
     A("<h3>The spec disagrees with itself</h3>")
-    A("<p>Defects in AdCP 3.1.1 itself — these belong upstream, not in our tree.</p><ul>")
+    A(f"<p>Defects in AdCP {pinned} itself — these belong upstream, not in our tree.</p><ul>")
     for s_ in by_cls.get("UPSTREAM", []):
         A(f"<li>{html.escape(s_['title'])}</li>")
     A("</ul>")

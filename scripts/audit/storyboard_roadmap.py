@@ -390,9 +390,9 @@ def render(result: dict[str, Any]) -> str:
     out = [
         f"# Storyboard roadmap — AdCP {result['pinned_version']}",
         "",
-        "**What AdCP 3.1.1 grades this agent on, what we test, and what is tracked.**",
+        f"**What AdCP {result['pinned_version']} grades this agent on, what we test, and what is tracked.**",
         "",
-        "One row per on-path storyboard: the 3.1.1 clause, the BDD scenario that claims it (or "
+        f"One row per on-path storyboard: the {result['pinned_version']} clause, the BDD scenario that claims it (or "
         "**TO WRITE**), the static check-type inventory, the MEASURED status from the "
         "in-network Storyboard Conformance CI job, and the ticket to reuse (or **TO FILE**). "
         "Generated — do not hand-edit; regenerate with `scripts/audit/storyboard_roadmap.py`. "

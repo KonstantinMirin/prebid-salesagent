@@ -29,7 +29,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.audit import storyboard_spec  # noqa: E402
 
@@ -165,12 +166,15 @@ def build(proposals_dir: Path, expected: int) -> dict[str, Any]:
         "by_action": by_action,
         "ticket_items_total": sum(r["ticket_items"] for r in rows),
         "rows": sorted(rows, key=lambda r: (r["status"], r["scenario"])),
+        # Carried so render() never types the version. The sibling generators
+        # already publish it this way; this one hardcoded it in its header.
+        "pinned_version": storyboard_spec.pinned_version(REPO_ROOT),
     }
 
 
 def render(result: dict[str, Any]) -> str:
     out = [
-        "# Storyboard scenario reconciliation — AdCP 3.1.1",
+        f"# Storyboard scenario reconciliation — AdCP {result['pinned_version']}",
         "",
         f"**{result['assessed']} of {result['expected']} scenarios assessed**"
         + (f" — {result['outstanding']} outstanding." if result["outstanding"] else " — complete."),

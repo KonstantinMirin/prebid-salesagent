@@ -585,7 +585,8 @@ def render(result: dict[str, Any]) -> str:
         "",
         "## 6. Neither scenario nor ticket",
         "",
-        "The list to take to triage: 3.1.1 grades these, we do not test them, and nothing in the tracker names them.",
+        f"The list to take to triage: {result['pinned_version']} grades these, we do not test them, "
+        "and nothing in the tracker names them.",
         "",
         "| Check | Storyboard | Required tools |",
         "|---|---|---|",
