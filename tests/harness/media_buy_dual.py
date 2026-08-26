@@ -30,8 +30,24 @@ _UPDATE_PATCHES = {
 
 
 def _is_update_request(kwargs: dict[str, Any]) -> bool:
+    """Route to the update wrappers for a typed request OR a RAW flat update body.
+
+    ``req=UpdateMediaBuyRequest(...)`` is the typed dispatch every UC-003/UC-026
+    scenario uses. The RAW form (flat kwargs, no ``req``) exists for scenarios
+    whose payload the LOCAL ``UpdateMediaBuyRequest`` must reject: constructing
+    the model in the test process would raise inside the step, so the rejection
+    would never reach a wire and could not be graded as an envelope. Dispatching
+    the flat body sends it through the real route + production Pydantic instead,
+    mirroring the create side's ``dispatch_mode="create_raw"``.
+
+    ``media_buy_id`` is the discriminator: it identifies the buy being updated and
+    is absent from every create request (the seller assigns it), so a flat body
+    carrying it is unambiguously an update.
+    """
     req = kwargs.get("req")
-    return isinstance(req, UpdateMediaBuyRequest)
+    if isinstance(req, UpdateMediaBuyRequest):
+        return True
+    return req is None and "media_buy_id" in kwargs
 
 
 class MediaBuyDualEnv(MediaBuyCreateEnv):

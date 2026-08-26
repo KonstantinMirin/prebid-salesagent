@@ -192,7 +192,10 @@ class TestNonListRestRoutingIsPreserved:
 
     def test_create_request_still_routes_to_the_create_collection(self):
         env = MediaBuyCreateUpdateListEnv()
-        body = env.build_rest_body(brand={"domain": "testbrand.com"}, packages=[])
+        body = env.build_rest_body(
+            brand={"domain": "testbrand.com"},
+            packages=[{"product_id": "prod_1", "budget": 1000, "pricing_option_id": "po_1"}],
+        )
 
         assert body["brand"] == {"domain": "testbrand.com"}
         assert env.REST_ENDPOINT == "/api/v1/media-buys"

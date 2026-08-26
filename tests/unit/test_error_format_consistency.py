@@ -44,7 +44,7 @@ class TestMCPErrorShapes:
 
         req = CreateMediaBuyRequest(
             brand={"domain": "test.com"},
-            packages=[],
+            packages=[{"product_id": "prod_1", "budget": 1000, "pricing_option_id": "po_1"}],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
             idempotency_key="unit-test-key-errfmt-001",
@@ -92,7 +92,7 @@ class TestMCPErrorShapes:
         # Build a minimal valid request
         req = CreateMediaBuyRequest(
             brand={"domain": "testbrand.com"},
-            packages=[],
+            packages=[{"product_id": "prod_1", "budget": 1000, "pricing_option_id": "po_1"}],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
             idempotency_key="unit-test-key-errfmt-002",
@@ -115,7 +115,7 @@ class TestMCPErrorShapes:
 
         req = CreateMediaBuyRequest(
             brand={"domain": "testbrand.com"},
-            packages=[],
+            packages=[{"product_id": "prod_1", "budget": 1000, "pricing_option_id": "po_1"}],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
             idempotency_key="unit-test-key-errfmt-003",
@@ -359,7 +359,7 @@ class TestCrossTransportErrorConsistency:
 
         req = CreateMediaBuyRequest(
             brand={"domain": "testbrand.com"},
-            packages=[],
+            packages=[{"product_id": "prod_1", "budget": 1000, "pricing_option_id": "po_1"}],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
             idempotency_key="unit-test-key-errfmt-004",
@@ -410,7 +410,7 @@ class TestCrossTransportErrorConsistency:
         try:
             CreateMediaBuyRequest(
                 brand={"invalid_key": "no_domain"},  # Missing required 'domain' field triggers ValidationError
-                packages=[],
+                packages=[{"product_id": "prod_1", "budget": 1000, "pricing_option_id": "po_1"}],
                 start_time="2026-01-01T00:00:00Z",
                 end_time="2026-02-01T00:00:00Z",
             )
@@ -459,7 +459,7 @@ class TestCrossTransportErrorConsistency:
 
         req = CreateMediaBuyRequest(
             brand={"domain": "testbrand.com"},
-            packages=[],
+            packages=[{"product_id": "prod_1", "budget": 1000, "pricing_option_id": "po_1"}],
             start_time="2026-01-01T00:00:00Z",
             end_time="2026-02-01T00:00:00Z",
             idempotency_key="unit-test-key-errfmt-005",

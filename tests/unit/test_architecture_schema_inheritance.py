@@ -375,11 +375,9 @@ class TestSchemaInheritance:
         KNOWN_OVERRIDES: set[tuple[str, str]] = {
             # Nested serialization overrides (Critical Pattern #4) —
             # Parent models re-declare list fields to use local subclass types
-            ("CreateMediaBuyRequest", "packages"),
             ("GetMediaBuyDeliveryResponse", "media_buy_deliveries"),
             ("GetSignalsResponse", "signals"),
             ("ListCreativesResponse", "query_summary"),
-            ("PackageRequest", "impressions"),
             ("PackageRequest", "creatives"),
             # Mirror of PackageRequest.targeting_overlay for the update path —
             # makes collection_list typed at the request boundary instead of
@@ -432,7 +430,6 @@ class TestSchemaInheritance:
             ("GetProductsRequest", "buying_mode"),
             ("SyncCreativesRequest", "account"),  # optional override (library requires it)
             ("UpdateMediaBuyRequest", "end_time"),  # datetime|None (library uses AwareDatetime)
-            ("UpdateMediaBuyRequest", "packages"),  # list[AdCPPackageUpdate] (local subclass type)
             ("UpdateMediaBuyRequest", "start_time"),  # datetime|Literal["asap"]|None (wider type)
             # adcp 4.3 field overrides — library made these required; we keep them
             # optional because identity is resolved at the transport boundary, and
@@ -487,8 +484,6 @@ class TestSchemaInheritance:
             # never reached. Rowed rather than admitted
             # so the relaxation stays visible until it is fixed; DO NOT resolve this
             # by relaxing the admissibility predicate.
-            ("CreateMediaBuySuccess", "revision"),
-            ("UpdateMediaBuySuccess", "revision"),
         }
 
         found: set[tuple[str, str]] = set()

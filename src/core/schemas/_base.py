@@ -532,7 +532,11 @@ class CreateMediaBuySuccess(CompletedTaskStatusMixin, AdCPCreateMediaBuySuccess)
     # a type-checker suppression against the SDK's non-nullable parent (the ratchet
     # this PR exists to bring back to 63).
     confirmed_at: AwareDatetime
-    revision: int
+    # revision is INHERITED. It was redeclared here as a bare ``int`` -- no Field, no
+    # description -- against a parent typed int/required/[Ge(ge=1)], so the redeclaration
+    # dropped the pinned minimum and nothing else. Deleting it restores the bound by
+    # inheritance rather than hand-copying it, which is what _pinned_fields.py exists to
+    # prevent: a bound written in a second place is a bound that can drift from the pin.
 
     @classmethod
     def sync_success(cls, **kwargs: Any) -> "CreateMediaBuySuccess":
@@ -809,7 +813,9 @@ class UpdateMediaBuySuccess(CompletedTaskStatusMixin, AdCPUpdateMediaBuySuccess)
     #
     # Mirrors CreateMediaBuySuccess: the buyer's envelope uses sync_success() and passes
     # the row's value; a construction that is NOT that envelope uses carrier().
-    revision: int
+    #
+    # revision is INHERITED, for the same reason as CreateMediaBuySuccess: the bare
+    # redeclaration dropped the parent's Ge(ge=1) and added nothing.
 
     @classmethod
     def sync_success(cls, **kwargs: Any) -> "UpdateMediaBuySuccess":
@@ -1881,11 +1887,19 @@ class PackageRequest(LibraryPackageRequest):
         exclude=True,
     )
 
-    impressions: float | None = Field(None, description="Legacy: Impression goal (use budget instead)", exclude=True)
+    # RE-STATED rather than inherited. Deleting this would restore the parent's
+    # Ge(ge=0.0) but would also silently UN-DEPRECATE the field: the parent describes it
+    # as "Impression goal for this package" while this declaration marks it Legacy, and
+    # that description is buyer-visible in the tool schema.
+    impressions: float | None = Field(
+        None, ge=0.0, description="Legacy: Impression goal (use budget instead)", exclude=True
+    )
     # Override creatives type: parent expects CreativeAsset, we use our extended Creative
     # Pydantic validates at runtime but mypy sees type mismatch
     creatives: list["Creative"] | None = Field(  # type: ignore[assignment]
         None,
+        min_length=1,
+        max_length=100,
         description="Full creative objects to upload and assign at creation time (alternative to creative_ids)",
     )
     # V3: creative_ids moved to local extension for backward compatibility with internal code
@@ -2004,7 +2018,11 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
     # Override packages to use our PackageRequest (which overrides targeting_overlay
     # to Targeting instead of library TargetingOverlay, enabling the legacy normalizer).
     # extra='forbid' prevents arbitrary field injection at buyer boundary.
-    packages: list[PackageRequest] | None = None
+    # RE-STATED: the parent carries MinLen(1) and this redeclaration dropped it, so an
+    # empty array was accepted and travelled downstream. Restored by hand because the
+    # element type is the local PackageRequest, not the parent's — deleting the
+    # declaration would change the element type as well as the bound.
+    packages: list[PackageRequest] | None = Field(None, min_length=1)
 
     @model_validator(mode="after")
     def _check_idempotency_key(self):
@@ -2304,7 +2322,10 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     start_time: datetime | Literal["asap"] | None = None  # type: ignore[assignment]
     end_time: datetime | None = None
     # Override packages to use our extended type with creative_ids
-    packages: list[AdCPPackageUpdate] | None = None
+    # RE-STATED, same reason as the create side: the local element type is
+    # AdCPPackageUpdate, so the declaration must stay and the parent's MinLen(1) has to be
+    # restored on it rather than inherited.
+    packages: list[AdCPPackageUpdate] | None = Field(None, min_length=1)
     # Campaign-level budget (not in library spec — convenience field)
     # Bare float is accepted so transport wrappers can preserve existing DB currency
     # when the caller updates only the amount.
@@ -2626,7 +2647,9 @@ class Signal(LibrarySignal):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     # Override types that differ from library
-    deployments: list[SignalDeployment] = Field(..., description="Array of platform deployments")  # type: ignore[assignment]
+    deployments: list[SignalDeployment] = Field(  # type: ignore[assignment]
+        ..., min_length=1, description="Array of platform deployments"
+    )
 
     # Internal fields (not in AdCP spec, excluded from serialization)
     tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)

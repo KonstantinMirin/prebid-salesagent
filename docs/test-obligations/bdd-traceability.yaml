@@ -1038,6 +1038,26 @@ mappings:
       upstream_refs: ["BR-UC-002-ext-v"]
       business_rules: []
       status: new
+    # Locally-added: the storyboard has no scenario sending a
+    # value that violates a LENGTH/RANGE bound the pinned request schema declares.
+    - adcp_scenario_id: "T-UC-002-ext-bounds-impressions"
+      adcp_feature: "local-constraint-relaxation-rejections.feature"
+      obligation_id: null
+      upstream_refs: []  # locally-added; no upstream storyboard scenario yet
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-002-ext-bounds-packages"
+      adcp_feature: "local-constraint-relaxation-rejections.feature"
+      obligation_id: null
+      upstream_refs: []  # locally-added; no upstream storyboard scenario yet
+      business_rules: []
+      status: new
+    - adcp_scenario_id: "T-UC-002-ext-bounds-creatives"
+      adcp_feature: "local-constraint-relaxation-rejections.feature"
+      obligation_id: null
+      upstream_refs: []  # locally-added; no upstream storyboard scenario yet
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-002-ext-webhook-ssrf"
       adcp_feature: "BR-UC-002-create-media-buy.feature"
       obligation_id: null
@@ -2573,6 +2593,13 @@ mappings:
       adcp_feature: "BR-UC-003-update-media-buy.feature"
       obligation_id: null
       upstream_refs: ["BR-UC-003-ext-u"]
+      business_rules: []
+      status: new
+    # Locally-added — see the UC-002 bounds rows above.
+    - adcp_scenario_id: "T-UC-003-ext-bounds-packages"
+      adcp_feature: "local-constraint-relaxation-rejections.feature"
+      obligation_id: null
+      upstream_refs: []  # locally-added; no upstream storyboard scenario yet
       business_rules: []
       status: new
     - adcp_scenario_id: "T-UC-003-new-packages-add"

@@ -112,7 +112,7 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
 
 def _make_success(**overrides) -> CreateMediaBuySuccess:
     """Build a minimal valid CreateMediaBuySuccess response."""
-    defaults = {"media_buy_id": "mb_1", "packages": []}
+    defaults = {"media_buy_id": "mb_1", "packages": [{"package_id": "pkg_1"}]}
     defaults.update(overrides)
     return CreateMediaBuySuccess.carrier(**defaults)
 
@@ -1314,7 +1314,7 @@ class TestIdempotencyKeyRequired:
     def _kwargs(self, **overrides):
         base = {
             "brand": {"domain": "key-test.example.com"},
-            "packages": [],
+            "packages": [{"product_id": "prod_1", "budget": 1000, "pricing_option_id": "po_1"}],
             "start_time": datetime(2026, 6, 1, tzinfo=UTC),
             "end_time": datetime(2026, 6, 30, tzinfo=UTC),
         }
@@ -1688,7 +1688,7 @@ class TestUpdateMediaBuySchemaCompliance:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-request.json
         Covers: UC-003-MAIN-01
         """
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", packages=[])
+        req = UpdateMediaBuyRequest(media_buy_id="mb_1", packages=[{"package_id": "pkg_1"}])
         assert req.media_buy_id == "mb_1"
 
     def test_update_request_parses_iso_datetime_strings(self):
@@ -2853,7 +2853,7 @@ class TestUpdateMediaBuyIdentification:
         # media_buy_id is now the sole identifier; omitting it is rejected
         with pytest.raises(ValidationError, match="media_buy_id"):
             UpdateMediaBuyRequest(
-                packages=[],
+                packages=[{"package_id": "pkg_1"}],
             )
 
     def test_neither_id_rejected(self):
@@ -2869,7 +2869,7 @@ class TestUpdateMediaBuyIdentification:
         # Per AdCP spec, media_buy_id is required for update
         with pytest.raises(ValidationError):
             UpdateMediaBuyRequest(
-                packages=[],
+                packages=[{"package_id": "pkg_1"}],
             )
 
     def test_media_buy_id_not_found(self):
@@ -2884,7 +2884,7 @@ class TestUpdateMediaBuyIdentification:
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(media_buy_id="mb_nonexistent", packages=[])
+        req = UpdateMediaBuyRequest(media_buy_id="mb_nonexistent", packages=[{"package_id": "pkg_1"}])
         identity = _make_identity()
 
         with (
@@ -2927,7 +2927,7 @@ class TestUpdateMediaBuyIdentification:
         Covers: UC-003-EXT-B-02
         """
         with pytest.raises(ValidationError, match="media_buy_id"):
-            UpdateMediaBuyRequest(packages=[])
+            UpdateMediaBuyRequest(packages=[{"package_id": "pkg_1"}])
 
 
 class TestUpdateMediaBuyOwnership:
@@ -2944,7 +2944,7 @@ class TestUpdateMediaBuyOwnership:
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", packages=[])
+        req = UpdateMediaBuyRequest(media_buy_id="mb_1", packages=[{"package_id": "pkg_1"}])
         identity = _make_identity(principal_id="different_principal")
 
         with (

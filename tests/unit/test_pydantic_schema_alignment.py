@@ -19,6 +19,7 @@ import pkgutil
 from collections.abc import Iterator
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -37,6 +38,7 @@ from src.core.schemas import (
     ListCreativesRequest,
     ListCreativesResponse,
     Product,
+    Signal,
     SyncAccountsResponse,
     SyncCreativesRequest,
     SyncCreativesResponse,
@@ -1837,6 +1839,148 @@ class TestResponseAlignmentCoverage:
             f"library-grounded response models the enumeration failed to admit: "
             f"{sorted(m.__name__ for m in unadmitted)} — their registry rows are unprotected, so "
             f"deleting one leaves the coverage gate green"
+        )
+
+
+def _pinned_constraint(ref: str, node_path: tuple[str | int, ...], field: str, keyword: str) -> Any:
+    """Read one JSON-Schema keyword off a field in the PINNED schema tree.
+
+    ``node_path`` walks to the object that declares ``properties`` — the pins
+    below put the field under ``oneOf/0`` (a response union arm) or under
+    ``$defs/signal`` — so the caller names the node instead of a search guessing
+    which of several same-named fields it found.
+
+    The keyword must be PRESENT: a pin that silently stopped declaring the bound
+    would otherwise make the caller assert against ``None`` and pass.
+    """
+    node: Any = pinned_schema.load(ref)
+    for step in node_path:
+        node = node[step]
+    spec = node["properties"][field]
+    assert keyword in spec, f"{ref} {'/'.join(map(str, node_path))}.properties.{field} declares no {keyword!r}: {spec}"
+    return spec[keyword]
+
+
+class TestPinnedBoundsUnreachableFromAnyRequest:
+    """Bounds the pin declares that NO request payload can drive production across.
+
+    Seven local fields redeclared an adcp parent
+    field and drop the bound the pin carries. Four are reachable from a request
+    and are graded behaviourally, cross-transport, in
+    tests/bdd/features/local-constraint-relaxation-rejections.feature. These three
+    are not reachable, for reasons measured per field and recorded in each test —
+    so they are graded here, at the model, which is the only place the value can
+    be presented at all. A behavioural row for any of them would have to fake the
+    payload it claims a buyer could send.
+
+    Each test reads the bound from the pinned schema rather than restating it, so
+    a spec change moves the test instead of silently invalidating it.
+    """
+
+    def test_create_media_buy_success_refuses_a_revision_below_the_pinned_minimum(self):
+        """revision=0 must not be constructible on the create success envelope.
+
+        Not behaviourally reachable: ``media_buys.revision`` is NOT NULL DEFAULT 1
+        (src/core/database/models.py:1116), so no persisted row can carry 0 and no
+        request can steer production into emitting one. The bound protects the
+        buyer's optimistic-concurrency token against a SELLER-side defect — a
+        response fabricated or migrated with a zero revision — which is why the
+        model is the grading locus.
+        """
+        minimum = _pinned_constraint("media-buy/create-media-buy-response.json", ("oneOf", 0), "revision", "minimum")
+
+        with pytest.raises(ValidationError):
+            CreateMediaBuySuccess(
+                media_buy_id="mb_bounds_probe",
+                confirmed_at=datetime(2026, 1, 1, tzinfo=UTC),
+                revision=minimum - 1,
+                packages=[],
+            )
+
+    def test_update_media_buy_success_refuses_a_revision_below_the_pinned_minimum(self):
+        """revision=0 must not be constructible on the update success envelope.
+
+        Same unreachability as the create sibling, and graded separately rather
+        than parametrized with it: they are two independently-declared local
+        fields, and one grader standing in for both is the substitution this epic
+        exists to remove. The update envelope's revision is the value the buyer
+        feeds back into the NEXT conditional update, so a zero here is the one
+        that would strand a buyer mid-sequence.
+        """
+        minimum = _pinned_constraint("media-buy/update-media-buy-response.json", ("oneOf", 0), "revision", "minimum")
+
+        with pytest.raises(ValidationError):
+            UpdateMediaBuySuccess(media_buy_id="mb_bounds_probe", revision=minimum - 1)
+
+    def test_signal_refuses_an_empty_deployments_list(self):
+        """A Signal must carry at least one deployment.
+
+        No behavioural row is authorable, and faking one would be the dishonest
+        move: ``_get_signals_impl`` is an explicit mock whose only producers are
+        six hardcoded ``Signal(...)`` literals at src/core/tools/signals.py:90-155,
+        each passing exactly one ``SignalDeployment`` (lines 98/109/120/131/142/153).
+        No request parameter reaches the deployments list, so no scenario can
+        present an empty one — the model is the whole surface.
+
+        The pin is ``core/wholesale-feed-event.json#/$defs/signal``, which is what
+        ``src.core.schemas.Signal`` extends. Deliberately NOT
+        ``signals/get-signals-response.json``: that sibling types the SAME
+        deployments array with no minItems at all, so a reader who checks only the
+        tool's own response schema would conclude this bound is unfounded. The
+        bound belongs to the entity, and the entity's pin declares it.
+        """
+        min_items = _pinned_constraint("core/wholesale-feed-event.json", ("$defs", "signal"), "deployments", "minItems")
+        assert min_items == 1, f"pin changed: $defs.signal.deployments.minItems is {min_items}, not 1"
+
+        with pytest.raises(ValidationError):
+            Signal(
+                name="bounds probe",
+                description="a signal presented with no deployment",
+                signal_agent_segment_id="seg_bounds_probe",
+                signal_type="marketplace",
+                deployments=[],
+            )
+
+    def test_package_request_creatives_bounds_match_the_pin(self):
+        """``PackageRequest.creatives`` carries the pin's minItems AND maxItems.
+
+        This one needs its own grader, and the reason is structural rather than
+        incidental. The other four hand-restated bounds are protected by the
+        inheritance guard's metadata-superset arm: if the pin moves, the parent's
+        metadata stops being a subset of the local field's and the guard reddens.
+
+        That arm is only reached for fields the guard finds ADMISSIBLE. This field
+        fails the SHAPE clause — ``issubclass(schemas.creative.Creative,
+        adcp...CreativeAsset)`` is False, because the local element type is a
+        substitution rather than a narrowing — so it keeps its KNOWN_OVERRIDES row,
+        and **a row absorbs any later metadata divergence silently**. The drift
+        protection the rest of the change-set relies on is dead here.
+
+        ``max_length=100`` in particular was graded by nothing at all: every
+        behavioural row exercises the lower bound.
+        """
+        # Read from package-request.json directly, not through
+        # create-media-buy-request.json: that schema's packages.items is a bare
+        # {"$ref": "package-request.json"}, so the bounds are not there to read. The
+        # entity's own schema is both the reachable location and the correct citation
+        # — the same package type is referenced by update-media-buy-request.json's
+        # packages AND new_packages, and all three carry these bounds because they all
+        # point here.
+        min_items = _pinned_constraint("media-buy/package-request.json", (), "creatives", "minItems")
+        max_items = _pinned_constraint("media-buy/package-request.json", (), "creatives", "maxItems")
+
+        assert (min_items, max_items) == (1, 100), (
+            f"pin changed: packages.items.creatives bounds are ({min_items}, {max_items}), not (1, 100)"
+        )
+
+        from src.core.schemas import PackageRequest
+
+        declared = {type(m).__name__: m for m in PackageRequest.model_fields["creatives"].metadata}
+        assert getattr(declared.get("MinLen"), "min_length", None) == min_items, (
+            f"local min_length does not match the pin's minItems={min_items}: {declared}"
+        )
+        assert getattr(declared.get("MaxLen"), "max_length", None) == max_items, (
+            f"local max_length does not match the pin's maxItems={max_items}: {declared}"
         )
 
 

@@ -70,6 +70,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_brand_shorthand",
     "tests.bdd.steps.domain.compat_normalization",
+    "tests.bdd.steps.domain.local_constraint_relaxations",
 ]
 
 # ---------------------------------------------------------------------------

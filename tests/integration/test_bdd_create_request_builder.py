@@ -127,13 +127,22 @@ class TestCallerBehavioursThatDelegationMustNotEat:
         has already shaped the request would silently discard that shaping.
         """
         ctx = dict(seeded_ctx)
-        ctx["request_kwargs"] = {"brand": {"domain": "already-set.example"}, "packages": [], "po_number": "PO-EARLIER"}
+        ctx["request_kwargs"] = {
+            "brand": {"domain": "already-set.example"},
+            "packages": [{"product_id": "prod_1", "budget": 1000, "pricing_option_id": "po_1"}],
+            "po_number": "PO-EARLIER",
+        }
 
         result = given_media_buy._ensure_request_defaults(ctx)
 
-        assert result["brand"] == {"domain": "already-set.example"}
-        assert result["packages"] == []
-        assert result["po_number"] == "PO-EARLIER"
+        # Each assertion compares against the INPUT, not against a literal. An earlier
+        # version asserted `result["packages"] == []` — a constant that happened to equal
+        # the input, so it graded nothing about pass-through and silently survived a
+        # fixture change to the input alone. This test is named for the caller's shaping
+        # NOT being eaten; comparing to the input is the only form that grades that.
+        assert result["brand"] == ctx["request_kwargs"]["brand"]
+        assert result["packages"] == ctx["request_kwargs"]["packages"]
+        assert result["po_number"] == ctx["request_kwargs"]["po_number"]
 
     def test_missing_seed_data_falls_back_instead_of_raising(self):
         """No ``default_product`` on ctx resolves to the documented fallback ids.
