@@ -6,9 +6,11 @@ Covers the security-sensitive slice of src/admin/blueprints/settings.py:
   - /approximated-token            — DNS widget token generation (external API)
 
 Does NOT yet cover: /general, /adapter, /slack, /ai, /ai/test, /ai/models,
-/business-rules, /approximated-domain-status|register|unregister. Those
-routes mix tenant config saves + external API calls and warrant their
-own test file with richer mocking.
+/business-rules. Those routes mix tenant config saves + external API calls
+and warrant their own test file with richer mocking. Of
+/approximated-domain-status|register|unregister only the tenant-ownership
+refusal is covered here (see TestApproximatedDomainTenantOwnership); their
+success paths still belong to that future file.
 
 Uses factory-boy factories per tests/CLAUDE.md.
 """
@@ -340,3 +342,103 @@ class TestApproximatedToken:
         assert response.status_code == 401
         body = response.get_json()
         assert body["success"] is False
+
+
+class TestApproximatedDomainTenantOwnership:
+    """The three Approximated domain routes must refuse a domain the tenant does not own.
+
+    Root B / SF4 (CodeQL 909, 910, 911): the ownership predicate lives inside ONE
+    handler (``register_approximated_domain``), so the sibling handlers omit it and
+    dial the vendor with an attacker-named domain. Parametrized over all three
+    routes because the gap is per-route: a grader that covered only ``unregister``
+    would let the identical hole in ``/approximated-domain-status`` stay open, and
+    would not grade that the two ungated routes answer with the SAME 400 shape the
+    register route already returns.
+
+    Both halves are asserted, per the lane: the 400 + the existing message
+    contract, AND that the egress seam was never touched. Status-code-only would
+    pass against a route that refuses AFTER dialling the vendor — which is the
+    exact defect (the domain reaches Approximated in the URL path / request body
+    before anything checks who owns it).
+    """
+
+    ROUTES = [
+        "approximated-domain-status",
+        "approximated-register-domain",
+        "approximated-unregister-domain",
+    ]
+
+    @pytest.mark.parametrize("route", ROUTES)
+    def test_refuses_domain_owned_by_another_tenant_without_dialling_vendor(
+        self, client, factory_session, monkeypatch, route
+    ):
+        monkeypatch.setenv("APPROXIMATED_API_KEY", "fake-api-key")
+
+        victim = TenantFactory(virtual_host="victim.example.com")
+        attacker = TenantFactory(virtual_host="attacker.example.com")
+        factory_session.commit()
+        _auth_session(client, attacker.tenant_id)
+
+        # Patch the SEAM (same idiom as TestApproximatedToken above): every
+        # Approximated call goes through src.services.approximated_client.send,
+        # so "was never called" is the whole-vendor-silence assertion. A vendor
+        # response is stocked deliberately — if a route DOES dial, it succeeds
+        # and answers 200, so this test fails on the contract, not on a crash.
+        vendor_response = MagicMock()
+        vendor_response.json.return_value = {
+            "data": {"status": "ACTIVE_SSL", "has_ssl": True, "target_address": "adcp-sales-agent.fly.dev"}
+        }
+
+        with patch("src.services.approximated_client.send", return_value=vendor_response) as mock_send:
+            response = client.post(
+                f"/tenant/{attacker.tenant_id}/settings/{route}",
+                json={"domain": victim.virtual_host},
+            )
+
+        assert response.status_code == 400, (
+            f"/{route} accepted {victim.virtual_host}, which belongs to tenant "
+            f"{victim.tenant_id}, from tenant {attacker.tenant_id} "
+            f"(virtual_host={attacker.virtual_host})"
+        )
+        assert response.get_json() == {
+            "success": False,
+            "error": "Domain must match tenant's virtual_host",
+        }
+        mock_send.assert_not_called()
+
+    @pytest.mark.parametrize("route", ROUTES)
+    def test_permits_the_tenants_own_domain_and_dials_the_vendor(self, client, factory_session, monkeypatch, route):
+        """The permit leg, which the refusal test alone cannot grade.
+
+        Without this, a predicate mutated to refuse EVERYTHING leaves the whole
+        repo green: the refusal test passes harder, and nothing anywhere asserts
+        that a tenant can still operate on its own domain. A gate that refuses
+        every request is as broken as one that refuses none, and it is the
+        failure mode a security fix actually tends to ship.
+
+        Asserts the seam WAS reached, which is the same observation the refusal
+        test makes in the negative, off the same patch point.
+        """
+        monkeypatch.setenv("APPROXIMATED_API_KEY", "fake-api-key")
+
+        owner = TenantFactory(virtual_host="owner.example.com")
+        factory_session.commit()
+        _auth_session(client, owner.tenant_id)
+
+        vendor_response = MagicMock()
+        vendor_response.json.return_value = {
+            "data": {"status": "ACTIVE_SSL", "has_ssl": True, "target_address": "adcp-sales-agent.fly.dev"}
+        }
+
+        with patch("src.services.approximated_client.send", return_value=vendor_response) as mock_send:
+            response = client.post(
+                f"/tenant/{owner.tenant_id}/settings/{route}",
+                json={"domain": owner.virtual_host},
+            )
+
+        assert response.status_code == 200, (
+            f"/{route} refused {owner.virtual_host}, which IS tenant {owner.tenant_id}'s "
+            f"virtual_host — the gate is refusing its own tenant: {response.get_json()}"
+        )
+        assert response.get_json()["success"] is True
+        mock_send.assert_called_once()

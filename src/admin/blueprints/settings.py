@@ -25,9 +25,11 @@ from src.core.database.repositories.tenant_config import TenantConfigRepository
 from src.core.security.outbound_http import OutboundError
 from src.services.ai.config import uses_legacy_gemini_api_key
 from src.services.approximated_client import (
+    DomainNotOwned,
     get_dns_token,
     get_domain_status,
     register_domain,
+    tenant_owns_domain,
     unregister_domain,
 )
 
@@ -1266,11 +1268,20 @@ def check_approximated_domain_status(tenant_id):
         if not approximated_api_key:
             return jsonify({"success": False, "error": "Approximated not configured"}), 500
 
+        # Inside the session block: tenant_owns_domain reads tenant.virtual_host,
+        # and a detached instance would raise here rather than refusing.
+        with get_db_session() as db_session:
+            tenant = TenantConfigRepository(db_session, tenant_id).get_tenant()
+            if not tenant:
+                return jsonify({"success": False, "error": "Tenant not found"}), 404
+
+            owned = tenant_owns_domain(tenant, domain)
+
         # Check domain registration status via the Approximated service. A
         # not-registered domain is a meaningful result the service already
         # translated from the vendor's 404 -- not an error this route interprets.
         try:
-            domain_status = get_domain_status(domain, approximated_api_key)
+            domain_status = get_domain_status(owned, approximated_api_key)
         except OutboundError as exc:
             logger.error("Approximated API error: %s", exc)
             return jsonify({"success": False, "error": "API error"}), 500
@@ -1288,6 +1299,12 @@ def check_approximated_domain_status(tenant_id):
                 "target_address": domain_status.target_address,
             }
         )
+
+    except DomainNotOwned as e:
+        # Ahead of the broad handler on purpose: caught below it, an ownership
+        # refusal would answer 500 with exception text instead of the 400 the
+        # three routes agree on.
+        return jsonify({"success": False, "error": str(e)}), 400
 
     except Exception as e:
         logger.error(f"Error checking domain status: {e}", exc_info=True)
@@ -1314,8 +1331,11 @@ def register_approximated_domain(tenant_id):
             if not tenant:
                 return jsonify({"success": False, "error": "Tenant not found"}), 404
 
-            if tenant.virtual_host != domain:
-                return jsonify({"success": False, "error": "Domain must match tenant's virtual_host"}), 400
+            # The ownership rule used to be written HERE, inside this one handler,
+            # which is precisely why the two sibling routes never had it. It now
+            # lives in front of the operation, and the operation will not accept
+            # anything else.
+            owned = tenant_owns_domain(tenant, domain)
 
         # Get backend target address from environment
         backend_url = os.getenv("APPROXIMATED_BACKEND_URL", "adcp-sales-agent.fly.dev")
@@ -1324,7 +1344,7 @@ def register_approximated_domain(tenant_id):
         # is a meaningful result the service already translated from the
         # vendor's 409 -- not an error this route interprets.
         try:
-            result = register_domain(domain, backend_url, approximated_api_key)
+            result = register_domain(owned, backend_url, approximated_api_key)
         except OutboundError as exc:
             logger.error("Approximated API error registering %s: %s", domain, exc)
             return jsonify({"success": False, "error": "Approximated API error"}), 502
@@ -1335,6 +1355,9 @@ def register_approximated_domain(tenant_id):
 
         logger.info("✅ Registered domain with Approximated: %s", domain)
         return jsonify({"success": True, "message": f"Domain {domain} registered successfully"})
+
+    except DomainNotOwned as e:
+        return jsonify({"success": False, "error": str(e)}), 400
 
     except Exception as e:
         logger.error(f"Error registering domain: {e}", exc_info=True)
@@ -1356,11 +1379,18 @@ def unregister_approximated_domain(tenant_id):
         if not approximated_api_key:
             return jsonify({"success": False, "error": "Approximated not configured"}), 500
 
+        with get_db_session() as db_session:
+            tenant = TenantConfigRepository(db_session, tenant_id).get_tenant()
+            if not tenant:
+                return jsonify({"success": False, "error": "Tenant not found"}), 404
+
+            owned = tenant_owns_domain(tenant, domain)
+
         # Unregister the domain via the Approximated service.
         # Already-unregistered is a meaningful result the service already
         # translated from the vendor's 404 -- not an error this route interprets.
         try:
-            result = unregister_domain(domain, approximated_api_key)
+            result = unregister_domain(owned, approximated_api_key)
         except OutboundError as exc:
             logger.error("Approximated API error unregistering %s: %s", domain, exc)
             return jsonify({"success": False, "error": "Approximated API error"}), 502
@@ -1371,6 +1401,9 @@ def unregister_approximated_domain(tenant_id):
 
         logger.info("✅ Unregistered domain from Approximated: %s", domain)
         return jsonify({"success": True, "message": f"Domain {domain} unregistered successfully"})
+
+    except DomainNotOwned as e:
+        return jsonify({"success": False, "error": str(e)}), 400
 
     except Exception as e:
         logger.error(f"Error unregistering domain: {e}", exc_info=True)

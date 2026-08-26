@@ -17,7 +17,6 @@ from adcp.webhooks import GeneratedTaskStatus
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
-from src.core.webhook_validator import validate_webhook_task_type
 from src.core.webhooks.delivery import WebhookTaskContext
 from src.core.webhooks.registration import accept_push_notification_config
 from src.services.protocol_webhook_service import get_protocol_webhook_service
@@ -137,11 +136,6 @@ async def _deliver_sync_creatives_webhook(
         # Create appropriate webhook payload based on protocol
         # Convert result to dict for webhook payload functions
         result_dict = complete_result.model_dump(mode="json")
-
-        # step_tool_name is untrusted (workflow_steps DB column). Validate a
-        # COPY for the SDK payload; keep the original label for metadata
-        # (salesagent-yi3s, salesagent-yk7o).
-        wire_task_type = validate_webhook_task_type(step_tool_name or "sync_creatives")
 
         # The dialect fork used to live here, and the metadata was a hand-built
         # dict carrying task_type alone. Both are now notify()'s job: it selects
