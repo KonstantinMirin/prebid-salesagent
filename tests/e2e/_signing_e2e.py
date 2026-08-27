@@ -779,28 +779,35 @@ def revoke_signing_key_via_admin(base_url: str, *, tenant_id: str, kid: str) -> 
     )
 
 
-def signing_declarations(operation: str) -> Callable[[Any], dict[str, Any]]:
-    """A ``declarations_from_tenant`` callback declaring *operation* as ``supported_for``.
+def signing_declarations(operation: str, *more: str, bucket: str = "supported") -> Callable[[Any], dict[str, Any]]:
+    """A ``declarations_from_tenant`` callback declaring *operation* in *bucket*.
 
-    Generalizes ``test_jwks_publication_e2e.py``'s former module-private
-    ``_signing_declarations`` (#1291 mp53.6) into a reusable factory: every
-    signing e2e module that needs "declare a request_signing posture, own no
-    key yet" wants the SAME shape with a different operation name.
-    ``brand_json_url`` is DERIVED from the tenant rather than literalled
-    because the capabilities read path cross-checks the declared pointer
-    against the one it actually serves (``validate_signing_platform_backing``)
-    and refuses a mismatch.
+    Delegates TWICE rather than building a document: ``bucketed_declaration`` owns the
+    ``required_for > warn_for > supported_for`` precedence and the "required implies
+    supported" relation, and ``posture_declaration_document`` owns the document shape.
+    Its docstring says why that matters — "One document shape, two writers — never two
+    shapes" — and this callback is the second writer it names.
+
+    WHY THE CALLBACK EXISTS AT ALL, moved here from the three module-private closures it
+    replaces. The e2e path cannot use a ``TenantConfigUoW`` write from the test body: that
+    opens ``get_db_session()``'s own engine against the runner's ``DATABASE_URL``, a
+    DIFFERENT SQLAlchemy engine object than ``live_db_env``'s ``create_engine(
+    live_server["postgres"])`` even when both resolve to the same physical database.
+    Empirically that second write was NOT visible to the live server's read — measured in
+    ``test_request_signature_required_e2e``, which served ``required_for == []`` instead
+    of the declared bucket. Writing through ``provisioned_trust_root_tenant``'s own
+    session avoids the second session entirely.
+
+    ``operation`` is positional and required: ``signing_declarations()`` with no operation
+    would build an empty bucket list, which ``bucket_for`` reads as ``none`` for every
+    operation — a posture that grades nothing while the scenario reads as though it
+    declared one.
     """
 
     def _declarations(tenant: Any) -> dict[str, Any]:
-        from src.core.agent_identity import brand_json_url
+        from tests.helpers.signing import bucketed_declaration, posture_declaration_document
 
-        return {
-            # ``supported`` is a required member of the block; the non-empty
-            # bucket beside it is what actually fires ``requires_trust_root``.
-            "request_signing": {"supported": True, "supported_for": [operation]},
-            "identity": {"brand_json_url": brand_json_url(tenant)},
-        }
+        return posture_declaration_document(tenant, bucketed_declaration(bucket, operation, *more))
 
     return _declarations
 

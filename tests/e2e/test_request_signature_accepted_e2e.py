@@ -163,13 +163,13 @@ from tests.e2e._signing_e2e import (
     netloc,
     origin,
     provisioned_trust_root_tenant,
+    signing_declarations,
     tls_base_url,
 )
 from tests.helpers.signing import (
     BODYLESS_ADCP_PATH,
     LADDER_OPERATIONS,
     VERIFIED_METRIC,
-    bucketed_declaration,
     keypair_for,
     rejection_code,
     scraped_counter_samples,
@@ -322,20 +322,6 @@ async def test_a_signed_request_from_a_walked_counterparty_is_accepted_and_count
     unlisted_key, unlisted_jwks = keypair_for(_UNLISTED_KID)
     published_jwks = {"keys": accepted_jwks["keys"] + tampered_jwks["keys"] + unlisted_jwks["keys"]}
 
-    def _declarations_from_tenant(tenant: object) -> dict:
-        # Written through provisioned_trust_root_tenant's own live_db_env session: a
-        # second TenantConfigUoW write from the test body opens get_db_session()'s own
-        # engine and is empirically NOT visible to the live server's read (measured in
-        # test_request_signature_required_e2e.py). brand_json_url is DERIVED rather than
-        # literalled because validate_signing_platform_backing cross-checks the declared
-        # pointer against the served one.
-        from src.core.agent_identity import brand_json_url
-
-        return {
-            "request_signing": bucketed_declaration("required", *LADDER_OPERATIONS),
-            "identity": {"brand_json_url": brand_json_url(tenant)},
-        }
-
     def _sign(private_key, token: str, kid: str) -> dict[str, str]:
         return signed_headers(
             private_key,
@@ -359,7 +345,7 @@ async def test_a_signed_request_from_a_walked_counterparty_is_accepted_and_count
         slug=_SLUG,
         host=netloc(base_url),
         mint_key=False,
-        declarations_from_tenant=_declarations_from_tenant,
+        declarations_from_tenant=signing_declarations(*LADDER_OPERATIONS, bucket="required"),
         counterparty_principals={
             _LISTED_TOKEN: _LISTED_AGENT_URL,
             _UNLISTED_TOKEN: _UNLISTED_AGENT_URL,

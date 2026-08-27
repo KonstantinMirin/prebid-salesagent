@@ -19,7 +19,7 @@ mechanism ``test_jwks_publication_e2e.py`` uses — a second, separate
 NOT visible to the live server's read: it opens its own ``get_db_session()``
 engine, a different SQLAlchemy engine object than ``live_db_env``'s
 ``create_engine(live_server["postgres"])``, see the local comment on
-``_declarations_from_tenant``), on BOTH REST and MCP naming surfaces (the
+``signing_declarations``), on BOTH REST and MCP naming surfaces (the
 ticket's own motivating gap). The declaration is also proven to be one
 production would actually SERVE — not merely one the middleware happens to
 read — by an anonymous ``fetch_capabilities()`` call that forces
@@ -90,12 +90,12 @@ from tests.e2e._signing_e2e import (
     fetch_capabilities,
     netloc,
     provisioned_trust_root_tenant,
+    signing_declarations,
     tls_base_url,
 )
 from tests.helpers.signing import (
     BODYLESS_ADCP_PATH,
     REWRITTEN_ADCP_PATH,
-    bucketed_declaration,
     rejection_code,
 )
 
@@ -154,33 +154,13 @@ async def test_unsigned_unauthenticated_request_to_required_operation_is_refused
     base_url = tls_base_url(live_server)
     verify = ca_verified_ssl_context()
 
-    def _declarations_from_tenant(tenant: object) -> dict:
-        # Written through provisioned_trust_root_tenant's own live_db_env session
-        # (proven in this exact e2e context by test_jwks_publication_e2e.py), not a
-        # second declared_posture()/TenantConfigUoW write: a separate TenantConfigUoW
-        # session opened from inside the test body uses get_db_session()'s own engine,
-        # which is a DIFFERENT SQLAlchemy engine object than live_db_env's
-        # create_engine(live_server["postgres"]) even when both resolve to the same
-        # physical database — empirically, that second write was not visible to the
-        # live server's read (measured: served required_for == [] instead of the
-        # declared bucket). declarations_from_tenant avoids the second session
-        # entirely; the anonymous fetch_capabilities() check below still forces
-        # validate_signing_platform_backing to run, which is what ties "what the
-        # buyer was told" to "what gets enforced."
-        from src.core.agent_identity import brand_json_url
-
-        return {
-            "request_signing": bucketed_declaration("required", _REQUIRED_OPERATION),
-            "identity": {"brand_json_url": brand_json_url(tenant)},
-        }
-
     with provisioned_trust_root_tenant(
         live_server,
         tenant_id=_TENANT_ID,
         slug=_SLUG,
         host=netloc(base_url),
         mint_key=False,
-        declarations_from_tenant=_declarations_from_tenant,
+        declarations_from_tenant=signing_declarations(_REQUIRED_OPERATION, bucket="required"),
     ) as (tenant, key):
         assert key is None, "this tenant must own no signing key — the refused leg needs no key at all"
 

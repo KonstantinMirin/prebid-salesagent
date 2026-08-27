@@ -24,7 +24,7 @@ discovery. Nor that any INBOUND verifier accepts a counterparty's signature (B1)
 **"No ``src`` import" — the narrowing, stated so a later grader reads it as deliberate.**
 The blanket form ("no ``src`` import in the verifying process") is unsatisfiable: an e2e
 runner imports ``src`` for the factories and ``live_db_env``, and the sibling module's
-``_signing_declarations`` imports ``src.core.agent_identity`` ON PURPOSE, to DERIVE
+``signing_declarations`` imports ``src.core.agent_identity`` ON PURPOSE, to DERIVE
 ``brand_json_url`` rather than literal it. The property that is real, and that this
 module holds, is narrower: **no ``src`` import on the VERIFY path**.
 :func:`tests.helpers.signing.verify_as_conformant_receiver` reaches only into
@@ -65,6 +65,7 @@ from tests.e2e._signing_e2e import (
     netloc,
     post_a2a,
     provision_signing_key_via_admin,
+    signing_declarations,
     tls_base_url,
 )
 from tests.e2e._webhook_capture import (
@@ -114,23 +115,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _signing_declarations(tenant: Any) -> dict[str, Any]:
-    """The capability declaration that makes an ``identity`` block owed.
-
-    ``identity`` is emitted only when ``requires_trust_root`` fires, which a non-empty
-    ``request_signing`` bucket does. ``brand_json_url`` is DERIVED from the tenant rather
-    than literalled because the capabilities read path cross-checks the declared pointer
-    against the one it serves (``validate_signing_platform_backing``) and refuses a
-    mismatch. This import is on the SETUP path, never the verify path.
-    """
-    from src.core.agent_identity import brand_json_url
-
-    return {
-        "request_signing": {"supported": True, "supported_for": [_DECLARED_OPERATION]},
-        "identity": {"brand_json_url": brand_json_url(tenant)},
-    }
-
-
 @pytest.fixture
 def signing_capable_tenant(live_server):
     """A tenant that DECLARES a signing posture, owns NO key, and CAN be bought from.
@@ -145,7 +129,7 @@ def signing_capable_tenant(live_server):
         live_server,
         tenant_id=_TENANT_ID,
         slug=_SLUG,
-        declarations_from_tenant=_signing_declarations,
+        declarations_from_tenant=signing_declarations(_DECLARED_OPERATION),
         buyer_access_token=_BUYER_TOKEN,
     ) as provision:
         yield provision
