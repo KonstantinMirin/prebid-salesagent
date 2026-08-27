@@ -191,7 +191,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # integer min/max (both minimum 0). Production does not emit audience_targeting yet (#1855).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/audience_targeting/required
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/uid-type.json pointer=/enum
-    # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/get_adcp_capabilities.mdx (L183: flag replaced by object presence)
+    # @source repo=adcp ref=v3.1.1 path=docs/protocol/get_adcp_capabilities.mdx (L183: flag replaced by object presence)
 
   @T-UC-010-conversion-caps @main-flow @post-s13
   Scenario: Capabilities response includes conversion tracking capabilities when supported
@@ -222,7 +222,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/uid-type.json pointer=/enum
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/action-source.json pointer=/enum
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/duration.json pointer=/required
-    # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/get_adcp_capabilities.mdx (L184: flag replaced by object presence)
+    # @source repo=adcp ref=v3.1.1 path=docs/protocol/get_adcp_capabilities.mdx (L184: flag replaced by object presence)
 
   @T-UC-010-creative-caps @main-flow @post-s14
   Scenario: Capabilities response includes creative protocol when supported
@@ -295,7 +295,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # INV-4: Unauthenticated and authenticated callers receive identical data — the response
     # is the seller's surface, not caller-scoped (get_adcp_capabilities.mdx L23).
     # Comparison excludes volatile fields (last_updated, context echo) to avoid flake.
-    # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/get_adcp_capabilities.mdx (L23)
+    # @source repo=adcp ref=v3.1.1 path=docs/protocol/get_adcp_capabilities.mdx (L23)
 
   @T-UC-010-ext-a @extension @ext-a @degradation @partition @boundary
   Scenario: no_tenant — tenant absent, minimal capabilities
@@ -465,7 +465,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # missing-credential wording ("authentication required"), the deprecated 3.x alias.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/error.json pointer=/properties/message (free string — content pinned to production)
-    # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/get_adcp_capabilities.mdx (error table L1083-1084)
+    # @source repo=adcp ref=v3.1.1 path=docs/protocol/get_adcp_capabilities.mdx (error table L1083-1084)
 
   # Deliberately MCP-specific: this scenario IS the MCP auth policy (treat-invalid-as-absent).
   @T-UC-010-ext-c-mcp @extension @ext-c @auth @mcp @degradation
@@ -489,7 +489,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # token must not degrade adapter-derived data (channels). Graduated: MCP ToolResult now
     # pre-serializes via model_dump(mode="json"), so audience_targeting is correctly omitted
     # instead of serialized as null.
-    # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/get_adcp_capabilities.mdx (L23)
+    # @source repo=adcp ref=v3.1.1 path=docs/protocol/get_adcp_capabilities.mdx (L23)
 
   @T-UC-010-ext-d-filter @extension @ext-d @boundary @partition
   Scenario: media_buy (first enum value) — protocol filter honored, response filtered to requested domain
