@@ -11,16 +11,15 @@ from typing import Any
 import requests
 from requests.exceptions import RequestException
 
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPAdapterResourceNotFoundError,
+    AdCPAuthorizationError,
+    AdCPRateLimitError,
+    AdCPServiceUnavailableError,
+)
+
 logger = logging.getLogger(__name__)
-
-
-class BroadstreetAPIError(Exception):
-    """Exception raised for Broadstreet API errors."""
-
-    def __init__(self, message: str, status_code: int | None = None, response_body: Any = None):
-        super().__init__(message)
-        self.status_code = status_code
-        self.response_body = response_body
 
 
 class BroadstreetClient:
@@ -87,39 +86,38 @@ class BroadstreetClient:
             Parsed JSON response body
 
         Raises:
-            BroadstreetAPIError: If response indicates an error
+            AdCPError: The subclass for the upstream status (see the mapping below).
         """
         try:
             body = response.json() if response.content else None
         except ValueError:
             body = response.text
 
+        # HTTP status to AdCP code. AdCP 3.1.1 transport-errors.mdx Rule 1 mandates
+        # this translation and names the 429 row itself: "An HTTP 429 from a
+        # seller's internal API becomes RATE_LIMITED."
+        #
+        # The upstream ``body`` never reaches the buyer. It goes to
+        # ``internal_detail``, which is non-wire by construction, because a third
+        # party's response body has no provenance guarantee (Security
+        # Considerations MUST-NOT list).
+        upstream = f"broadstreet HTTP {response.status_code}: {str(body)[:500]}"
+
         if response.status_code == 403:
-            raise BroadstreetAPIError(
-                "Broadstreet API Auth Denied (HTTP 403)",
-                status_code=403,
-                response_body=body,
-            )
+            raise AdCPAuthorizationError(internal_detail=upstream)
 
         if response.status_code == 404:
-            raise BroadstreetAPIError(
-                "Resource not found (HTTP 404)",
-                status_code=404,
-                response_body=body,
-            )
+            raise AdCPAdapterResourceNotFoundError(internal_detail=upstream)
+
+        if response.status_code == 429:
+            raise AdCPRateLimitError(internal_detail=upstream)
 
         if response.status_code >= 500:
-            raise BroadstreetAPIError(
-                f"Broadstreet API server error (HTTP {response.status_code})",
-                status_code=response.status_code,
-                response_body=body,
-            )
+            raise AdCPServiceUnavailableError(internal_detail=upstream)
 
         if response.status_code >= 400:
-            raise BroadstreetAPIError(
-                f"Broadstreet API error (HTTP {response.status_code}): {body}",
-                status_code=response.status_code,
-                response_body=body,
+            raise AdCPAdapterError(
+                internal_detail=upstream,
             )
 
         return body
@@ -143,7 +141,7 @@ class BroadstreetClient:
             Parsed response body
 
         Raises:
-            BroadstreetAPIError: If request fails
+            AdCPError: The subclass for the upstream failure.
         """
         url = self._build_url(path, query_params)
 
@@ -156,7 +154,8 @@ class BroadstreetClient:
             )
             return self._handle_response(response)
         except RequestException as e:
-            raise BroadstreetAPIError(f"Request failed: {e}") from e
+            # The request never completed. Transient by nature: retry with backoff.
+            raise AdCPServiceUnavailableError(internal_detail=f"broadstreet request failed: {e}") from e
 
     def get(self, path: str, query_params: dict[str, Any] | None = None) -> Any:
         """Make a GET request."""

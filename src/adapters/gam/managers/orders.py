@@ -12,8 +12,9 @@ from typing import Any
 
 from googleads import ad_manager
 
+from src.adapters.gam.utils.error_handler import map_gam_exception
 from src.adapters.gam.utils.timeout_handler import timeout
-from src.core.exceptions import AdCPAdapterError, AdCPNotFoundError
+from src.core.exceptions import AdCPAdapterError, AdCPError, AdCPNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -115,13 +116,29 @@ class GAMOrdersManager:
             return f"dry_run_order_{int(datetime.now(UTC).timestamp())}"
         else:
             order_service = self.client_manager.get_service("OrderService")
-            created_orders = order_service.createOrders([order])
+            try:
+                created_orders = order_service.createOrders([order])
+            except AdCPError:
+                # Already classified by a lower layer; that decision stands.
+                raise
+            except Exception as fault:
+                # The ad server refused. Classify the SOAP fault into the code the
+                # buyer should act on -- a quota is not a permission problem is not
+                # a missing ad unit. AdCP 3.1.1 transport-errors.mdx Rule 1:
+                # "Translate upstream errors into AdCP error codes. Do not pass
+                # through raw upstream errors."
+                #
+                # Without this the raw googleads fault propagated uncaught to the
+                # tool layer, whose catch-all reported SERVICE_UNAVAILABLE for
+                # every refusal alike.
+                raise map_gam_exception(fault) from fault
             if created_orders:
                 order_id = str(created_orders[0]["id"])
                 logger.info(f"✓ Created GAM Order ID: {order_id}")
                 return order_id
             else:
-                raise Exception("Failed to create order - no orders returned")
+                # An empty result is an upstream fault, not a bad request.
+                raise AdCPAdapterError(internal_detail="GAM createOrders returned no orders")
 
     @timeout(seconds=30)  # 30 seconds timeout for status check
     def get_order_status(self, order_id: str) -> str:

@@ -16,7 +16,8 @@ from typing import Any
 
 from googleads import ad_manager
 
-from .error_handler import GAMAuthenticationError
+from src.core.exceptions import AdCPConfigurationError
+
 from .logging import logger
 
 
@@ -106,7 +107,7 @@ class GAMHealthChecker:
 
         try:
             if not self.client and not self._init_client():
-                raise GAMAuthenticationError("Failed to initialize client")
+                raise AdCPConfigurationError(internal_detail="failed to initialize GAM client")
 
             # Try a simple API call to verify auth
             assert self.client is not None  # Type narrowing for mypy
@@ -154,7 +155,7 @@ class GAMHealthChecker:
 
         try:
             if not self.client:
-                raise GAMAuthenticationError("Client not initialized")
+                raise AdCPConfigurationError(internal_detail="GAM client not initialized")
 
             assert self.client is not None  # Type narrowing for mypy
             permissions_ok = True
@@ -282,7 +283,7 @@ class GAMHealthChecker:
 
         try:
             if not self.client:
-                raise GAMAuthenticationError("Client not initialized")
+                raise AdCPConfigurationError(internal_detail="GAM client not initialized")
 
             assert self.client is not None  # Type narrowing for mypy
             inventory_service = self.client.GetService("InventoryService")
@@ -362,7 +363,7 @@ class GAMHealthChecker:
 
         try:
             if not self.client:
-                raise GAMAuthenticationError("Client not initialized")
+                raise AdCPConfigurationError(internal_detail="GAM client not initialized")
 
             assert self.client is not None  # Type narrowing for mypy
             # Test key services

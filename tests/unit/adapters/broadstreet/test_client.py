@@ -4,7 +4,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.adapters.broadstreet.client import BroadstreetAPIError, BroadstreetClient
+from src.adapters.broadstreet.client import BroadstreetClient
+from src.core.exceptions import (
+    AdCPAdapterResourceNotFoundError,
+    AdCPAuthorizationError,
+    AdCPServiceUnavailableError,
+)
 
 
 class TestBroadstreetClient:
@@ -134,10 +139,12 @@ class TestBroadstreetClient:
             network_id="12345",
         )
 
-        with pytest.raises(BroadstreetAPIError) as exc_info:
+        with pytest.raises(AdCPAuthorizationError) as exc_info:
             client.get_network()
 
-        assert exc_info.value.status_code == 403
+        # Asserting the CLASS, not the upstream status: the class is what decides
+        # the code the buyer reads. HTTP 403 -> PERMISSION_DENIED.
+        assert exc_info.value.error_code == "PERMISSION_DENIED"
 
     @patch("src.adapters.broadstreet.client.requests.request")
     def test_handle_404_error(self, mock_request):
@@ -153,10 +160,10 @@ class TestBroadstreetClient:
             network_id="12345",
         )
 
-        with pytest.raises(BroadstreetAPIError) as exc_info:
+        with pytest.raises(AdCPAdapterResourceNotFoundError) as exc_info:
             client.get_advertiser("nonexistent")
 
-        assert exc_info.value.status_code == 404
+        assert exc_info.value.error_code == "REFERENCE_NOT_FOUND"
 
     @patch("src.adapters.broadstreet.client.requests.request")
     def test_handle_500_error(self, mock_request):
@@ -172,7 +179,9 @@ class TestBroadstreetClient:
             network_id="12345",
         )
 
-        with pytest.raises(BroadstreetAPIError) as exc_info:
+        with pytest.raises(AdCPServiceUnavailableError) as exc_info:
             client.get_network()
 
-        assert exc_info.value.status_code == 500
+        # Asserting the CLASS, not the upstream status: the class is what decides
+        # the code the buyer reads. HTTP 500 -> SERVICE_UNAVAILABLE.
+        assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"

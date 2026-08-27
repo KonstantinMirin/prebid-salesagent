@@ -22,24 +22,11 @@ from .constants import (
     GAMTargetingType,
 )
 from .error_handler import (
-    GAMAuthenticationError,
-    GAMConfigurationError,
-    GAMDuplicateResourceError,
-    GAMError,
-    GAMErrorType,
-    GAMNetworkError,
     GAMOperationTracker,
-    GAMPermissionError,
-    GAMQuotaError,
-    GAMResourceNotFoundError,
-    GAMTimeoutError,
     RetryConfig,
     map_gam_exception,
     validate_gam_response,
     with_retry,
-)
-from .error_handler import (
-    GAMValidationError as GAMErrorValidationError,
 )
 from .formatters import (
     format_currency,
@@ -77,17 +64,6 @@ __all__ = [
     "GAMValidationError",
     "validate_gam_creative",
     # Error handling
-    "GAMError",
-    "GAMErrorType",
-    "GAMAuthenticationError",
-    "GAMPermissionError",
-    "GAMErrorValidationError",
-    "GAMQuotaError",
-    "GAMNetworkError",
-    "GAMTimeoutError",
-    "GAMResourceNotFoundError",
-    "GAMDuplicateResourceError",
-    "GAMConfigurationError",
     "RetryConfig",
     "GAMOperationTracker",
     "map_gam_exception",

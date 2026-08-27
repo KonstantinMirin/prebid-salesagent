@@ -503,6 +503,24 @@ class AdCPNotFoundError[D: ErrorDetails](AdCPError[D]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.REFERENCE_NOT_FOUND
 
 
+class AdCPAdapterResourceNotFoundError(AdCPNotFoundError[AdapterFailureDetails]):
+    """An ad server says a resource it owns does not exist (404, REFERENCE_NOT_FOUND).
+
+    A GAM ad unit, order or line item; a Broadstreet advertiser or campaign. The
+    resource belongs to the SELLER's ad server, so none of the entity-specific
+    not-found codes (account, media buy, package, product, creative, format, task)
+    describes it and the pin forbids minting a new one: error-handling.mdx says a
+    type "without a dedicated code" MUST fall back to ``REFERENCE_NOT_FOUND``.
+
+    Distinct from the base ``AdCPNotFoundError`` only in carrying a typed identity,
+    which is what the no-base-raise guard exists to require, and in taking
+    ``AdapterFailureDetails`` so the failing upstream call is nameable.
+
+    Inherits ``REFERENCE_NOT_FOUND`` and recovery=correctable from the base: the
+    buyer CAN act, by correcting the reference they supplied.
+    """
+
+
 class AdCPAccountNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     """Account not found by ID or natural key (404, ACCOUNT_NOT_FOUND).
 

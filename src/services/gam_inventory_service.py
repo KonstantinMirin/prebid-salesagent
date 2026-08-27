@@ -721,7 +721,8 @@ class GAMInventoryService:
         """
         from sqlalchemy.exc import DBAPIError, OperationalError
 
-        from src.adapters.gam.utils.timeout_handler import TimeoutError, timeout
+        from src.adapters.gam.utils.timeout_handler import timeout
+        from src.core.exceptions import AdCPServiceUnavailableError
 
         @timeout(seconds=120)  # 2 minute timeout for database operations
         def _commit_with_timeout():
@@ -742,14 +743,19 @@ class GAMInventoryService:
             logger.info("💾 Committing batch transaction (120s timeout)...")
             _commit_with_timeout()
             logger.info("✅ Batch committed successfully")
-        except TimeoutError as e:
+        except AdCPServiceUnavailableError as e:
             logger.error(f"⏰ Database commit timed out after 120s: {e}")
             logger.error(f"   Insert count: {len(to_insert)}, Update count: {len(to_update)}")
             logger.error("   This usually indicates: lost connection, lock contention, or large transaction")
             self.db.rollback()
-            raise TimeoutError(
-                "Database commit timed out after 120s - possible lost connection, lock contention, or large transaction"
-            )
+            # A DB commit timeout is SERVICE_UNAVAILABLE, per AdCP 3.1.1
+            # transport-errors.mdx Rule 1, which names this exact translation.
+            raise AdCPServiceUnavailableError(
+                internal_detail=(
+                    "database commit timed out after 120s - possible lost connection, "
+                    "lock contention, or large transaction"
+                )
+            ) from e
         except (OperationalError, DBAPIError) as e:
             # Connection errors - log and re-raise with context
             logger.error(f"❌ Database connection error during batch write: {e}")
