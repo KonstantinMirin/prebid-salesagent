@@ -111,7 +111,7 @@ def _record_degradation(advisories: list[Error], what: str, exc: Exception) -> N
     )
 
 
-def _build_adcp_block(tenant: Mapping | None) -> Adcp:
+def _build_adcp_block(tenant: Mapping[str, object] | None) -> Adcp:
     """Build the top-level adcp.* envelope -- single source for both the
     no-tenant minimal response and the tenant-resolved full response
     (salesagent-rldj DRY fix; the two literal Adcp(...) constructions this
@@ -247,7 +247,7 @@ def _resolve_signing_blocks(
     )
 
 
-def _build_account_block(tenant: Mapping) -> Account:
+def _build_account_block(tenant: Mapping[str, object]) -> Account:
     """Build the account block from real tenant config -- never fabricated.
 
     supported_billing derives from resolve_supported_billing (src/core/billing_policy.py),
