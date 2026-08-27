@@ -173,6 +173,7 @@ from tests.helpers.signing import (
     keypair_for,
     rejection_code,
     scraped_counter_samples,
+    scraped_metrics_text_async,
     signed_headers,
 )
 
@@ -224,10 +225,6 @@ _ACCEPTED_KID = "acptsig-e2e-accepted-1"
 _TAMPERED_KID = "acptsig-e2e-tampered-1"
 _UNLISTED_KID = "acptsig-e2e-unlisted-1"
 
-#: Flask's admin app is mounted at ``/`` as well as ``/admin`` (``src/app.py``), in the
-#: same process as the ASGI middleware, and the route carries no ``@require_auth``.
-_METRICS_PATH = "/metrics"
-
 
 def _tamper(headers: dict[str, str]) -> dict[str, str]:
     """Flip one byte INSIDE the ``Signature`` value, leaving every other header intact.
@@ -263,20 +260,12 @@ async def _scrape_metrics(client: httpx.AsyncClient, when: str) -> str:
     — so the route this test actually takes is not proven until it runs. A routing
     surprise must fail here and say so, rather than yielding two empty scrapes and a
     vacuous 0-vs-0 delta that reads as "the mechanism did not run".
+
+    The guards themselves live in :func:`tests.helpers.signing.assert_metrics_scrape`,
+    which this shares with the runner-side scrape. Only the FETCH differs, because only
+    this caller needs the TLS front.
     """
-    response = await client.get(_METRICS_PATH)
-    assert response.status_code == 200, (
-        f"the {when} metrics scrape must reach the Prometheus endpoint through the TLS front; "
-        f"GET {_METRICS_PATH} returned HTTP {response.status_code}. A 404 means the root admin "
-        f"mount is shadowed or the tenant's virtual_host routing swallowed it — STOP and fix the "
-        f"scrape rather than falling back to the controls, which do not grade the same thing. "
-        f"Body: {response.text[:300]!r}"
-    )
-    assert "# HELP" in response.text, (
-        f"the {when} metrics scrape returned HTTP 200 but no Prometheus exposition text, so a "
-        f"zero delta would mean nothing. Body: {response.text[:300]!r}"
-    )
-    return response.text
+    return await scraped_metrics_text_async(client, when=when)
 
 
 async def _counterparty_get(client: httpx.AsyncClient, method: str, path: str, **kwargs) -> httpx.Response:

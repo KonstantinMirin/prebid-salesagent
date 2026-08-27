@@ -852,45 +852,75 @@ def scraped_verified_count(base_url: str, key_id: str, *, when: str = "now") -> 
     (``signing_capability.unique_run_id``) is a claim about THIS env's requests rather
     than about the server's cumulative session.
 
-    The scrape and its two guards live in :func:`scraped_metrics_text`, which the failure
-    counter's out-of-process reader shares: an unreachable endpoint and an empty
-    exposition both FAIL there rather than reaching this sum as a vacuous 0.
+    The two guards live in :func:`assert_metrics_scrape` and the fetch in
+    :func:`scraped_metrics_text`: an unreachable endpoint and an empty exposition both FAIL
+    there rather than reaching this sum as a vacuous 0.
 
-    One definition, two callers (the e2e leg of ``env.signature_verifications()`` and
-    ``tests/integration/test_harness_signed_dispatch.py``'s live-stack pair), so the two
-    cannot drift into two ways of reading the same counter.
+    One definition of the SCRAPE GUARDS, shared with the e2e accepted-leg reader through
+    :func:`assert_metrics_scrape`. The fetch and the label filter are deliberately NOT
+    shared: that reader goes through a TLS front with an async client, and it sums the
+    ``{operation, keyid}`` series rather than this function's ``{keyid}``. Stating which
+    half is shared matters — an earlier version of this docstring claimed the whole
+    function had one definition while a second one existed.
     """
     return sum(
         scraped_counter_samples(scraped_metrics_text(base_url, when=when), VERIFIED_METRIC, keyid=key_id).values()
     )
 
 
+def assert_metrics_scrape(*, status_code: int, text: str, when: str) -> str:
+    """*text* is a real Prometheus scrape, or a loud failure naming *when*.
+
+    THE ONE DEFINITION of what makes a scrape valid. Both guards are load-bearing rather
+    than defensive: a non-200 and an empty exposition each yield "no samples", which reads
+    exactly like "the mechanism did not run" — the one thing this grading exists to tell
+    apart. They FAIL, naming when the scrape was taken, instead of returning a vacuous 0.
+
+    Callers differ in HOW they fetch — sync ``httpx.get`` from the runner, async through a
+    TLS front inside the compose network — and that difference is real. What they must not
+    differ on is what counts as a scrape, so the predicate lives here and the fetch does
+    not. Keyword-only because ``(200, text)`` and ``(text, 200)`` are both plausible at a
+    call site and nothing type-checks this file: ``make quality-ci`` runs mypy over ``src/``
+    alone. There is no ``path`` parameter for the same reason — both fetchers append
+    :data:`METRICS_PATH`, so a caller that could NAME a path would be able to name one
+    nothing fetched, and the message would describe a request that never happened.
+    """
+    assert status_code == 200, (
+        f"the {when} metrics scrape must reach the Prometheus endpoint; GET {METRICS_PATH} returned HTTP "
+        f"{status_code}. A 404 means the route is shadowed or a tenant virtual_host swallowed it. "
+        f"STOP and fix the scrape rather than falling back to the other assertions — they do not "
+        f"grade the same thing. Body: {text[:300]!r}"
+    )
+    assert "# HELP" in text, (
+        f"the {when} metrics scrape returned HTTP 200 but no Prometheus exposition text, so a zero "
+        f"count would mean nothing. Body: {text[:300]!r}"
+    )
+    return text
+
+
 def scraped_metrics_text(base_url: str, *, when: str = "now") -> str:
-    """The live stack's Prometheus exposition text, or a failure naming *when*.
+    """The live stack's Prometheus exposition text, fetched from the runner.
 
-    Extracted from :func:`scraped_verified_count` when the FAILURE counter gained an
-    out-of-process reader too (``BaseTestEnv.signature_failures``'s e2e branch): the
-    scrape and its two guards are the same operation for either counter, and a second
-    copy of them is the duplication the DRY invariant treats as a defect.
-
-    Both guards are load-bearing rather than defensive: a 404 scrape and an empty
-    exposition each yield "no samples", which reads exactly like "the mechanism did not
-    run" — the one thing this grading exists to tell apart. They FAIL, naming *when* the
-    scrape was taken, instead of returning a vacuous 0.
+    The sync fetch. :func:`scraped_metrics_text_async` is the sibling for callers already
+    holding an ``httpx.AsyncClient`` wired through the TLS front; both delegate their
+    validity check to :func:`assert_metrics_scrape`, which is the one thing they must agree
+    on.
     """
     import httpx
 
     response = httpx.get(f"{base_url}{METRICS_PATH}", timeout=30)
-    assert response.status_code == 200, (
-        f"the {when} metrics scrape must reach the Prometheus endpoint; GET {METRICS_PATH} returned HTTP "
-        f"{response.status_code}. STOP and fix the scrape rather than falling back to the other "
-        f"assertions — they do not grade the same thing. Body: {response.text[:300]!r}"
-    )
-    assert "# HELP" in response.text, (
-        f"the {when} metrics scrape returned HTTP 200 but no Prometheus exposition text, so a zero count "
-        f"would mean nothing. Body: {response.text[:300]!r}"
-    )
-    return response.text
+    return assert_metrics_scrape(status_code=response.status_code, text=response.text, when=when)
+
+
+async def scraped_metrics_text_async(client: Any, *, when: str = "now") -> str:
+    """The same text, fetched through a caller's already-wired async client.
+
+    Exists because the e2e accepted-leg test must reach ``/metrics`` through the TLS front
+    with a ``Host`` matching a tenant ``virtual_host`` — a route that is not proven until
+    it runs, and one the sync fetch above cannot take.
+    """
+    response = await client.get(METRICS_PATH)
+    return assert_metrics_scrape(status_code=response.status_code, text=response.text, when=when)
 
 
 def _unescape_label_value(value: str) -> str:
