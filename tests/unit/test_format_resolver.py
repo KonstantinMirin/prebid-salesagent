@@ -461,57 +461,17 @@ class TestListAvailableFormats:
 
         assert result == []
 
-    def test_typed_transient_propagates_instead_of_an_empty_catalog(self):
-        """A rate-limited agent must not read as "this seller carries no formats".
+    def test_failure_still_degrades_to_empty(self):
+        """The degradation stays, for EVERY failure -- typed or not.
 
-        Covers salesagent-w4x1. The two arms above return [] for an UNTYPED failure,
-        which is a deliberate degradation and stays. A typed transient is different in
-        kind: returning [] for it puts a claim about this seller's inventory on the
-        wire, with HTTP success and no error anywhere for the buyer to contradict it.
-        The buyer cannot tell "we have no formats" from "the agent said 429".
-
-        The two SUSPECT(salesagent-z60b) markers above ask exactly this question. This
-        answers the typed half of it and deliberately leaves the untyped half alone --
-        widening the degradation to every exception is a separate decision.
-        """
-        from src.core.exceptions import AdCPRateLimitError
-
-        with (
-            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,  # noqa: F841
-            patch(
-                "src.core.format_resolver.run_async_in_sync_context",
-                side_effect=AdCPRateLimitError(retry_after=30),
-            ),
-            pytest.raises(AdCPRateLimitError) as exc_info,
-        ):
-            from src.core.format_resolver import list_available_formats
-
-            list_available_formats(tenant_id="t1")
-
-        assert exc_info.value.error_code == "RATE_LIMITED"
-        assert exc_info.value.retry_after == 30
-
-    def test_typed_transient_from_registry_creation_also_propagates(self):
-        """Same rule at the sibling arm, so the two cannot drift apart."""
-        from src.core.exceptions import AdCPServiceUnavailableError
-
-        with (
-            patch(
-                "src.core.creative_agent_registry.get_creative_agent_registry",
-                side_effect=AdCPServiceUnavailableError(),
-            ),
-            pytest.raises(AdCPServiceUnavailableError),
-        ):
-            from src.core.format_resolver import list_available_formats
-
-            list_available_formats(tenant_id="t1")
-
-    def test_untyped_failure_still_degrades_to_empty(self):
-        """The degradation this change deliberately did NOT widen.
-
-        Pinned so a later sweep does not "finish the job" by propagating everything:
-        an untyped crash keeps returning [], which is what the two arms above have
-        always done and what the SUSPECT markers leave open.
+        salesagent-w4x1 proposed propagating a typed transient here so a
+        rate-limited agent would not read as an empty catalog. That defect is real
+        but is not at this site: the only caller is the admin UI
+        (src/admin/blueprints/products.py:156), which catches the SDK's
+        ``adcp.exceptions.ADCPError`` -- a different class tree from
+        ``src.core.exceptions.AdCPError`` -- so propagating would have 500'd an admin
+        page rather than informed a buyer. Pinned here so the next attempt reads this
+        before repeating it.
         """
         with patch(
             "src.core.creative_agent_registry.get_creative_agent_registry",

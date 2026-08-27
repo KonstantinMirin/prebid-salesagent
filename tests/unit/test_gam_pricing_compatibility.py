@@ -3,7 +3,7 @@
 import pytest
 
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
-from src.core.exceptions import AdCPCapabilityNotSupportedError
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPConfigurationError
 
 
 class TestCompatibilityMatrix:
@@ -96,12 +96,16 @@ class TestLineItemTypeSelection:
         assert result == "NETWORK"
 
     def test_override_incompatible_type_rejected(self):
-        """Override with incompatible type is refused as an unsupported capability.
+        """Override with incompatible type is refused as SELLER configuration.
 
-        EXPECTATION REVERSED by salesagent-7et3j: a GAM constraint the buyer cannot
-        satisfy is UNSUPPORTED_FEATURE, not the buyer mis-typing their request.
+        EXPECTATION REVERSED by salesagent-7et3j, then CORRECTED by review.
+        It first became UNSUPPORTED_FEATURE (buyer-correctable), which was wrong:
+        ``override_type`` comes from PRODUCT CONFIG, per this method's own docstring,
+        and the only production caller passes no override at all. The buyer never
+        sent it, so there is nothing for them to correct. CONFIGURATION_ERROR is the
+        honest code, and the pinned enum makes it terminal.
         """
-        with pytest.raises(AdCPCapabilityNotSupportedError):
+        with pytest.raises(AdCPConfigurationError):
             PricingCompatibility.select_line_item_type(
                 "flat_rate",
                 is_guaranteed=False,
@@ -110,7 +114,7 @@ class TestLineItemTypeSelection:
 
     def test_override_vcpm_with_incompatible_rejected(self):
         """Override VCPM with non-STANDARD type should be rejected."""
-        with pytest.raises(AdCPCapabilityNotSupportedError):
+        with pytest.raises(AdCPConfigurationError):
             PricingCompatibility.select_line_item_type(
                 "vcpm",
                 is_guaranteed=False,
@@ -136,7 +140,6 @@ class TestGAMCostTypeMapping:
         into SERVICE_UNAVAILABLE / transient ("retry the unretryable") by the
         impl's generic handler (salesagent-rdrs; se18 targeting precedent).
         """
-        from src.core.exceptions import AdCPCapabilityNotSupportedError
 
         for unsupported in ["cpcv", "cpv", "cpp", "invalid"]:
             with pytest.raises(AdCPCapabilityNotSupportedError):

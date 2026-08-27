@@ -13,7 +13,6 @@ from typing import Any
 from src.core.errors.details import CapabilityRefusalDetails
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPAdapterResourceNotFoundError,
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
     AdCPError,
@@ -274,10 +273,12 @@ class GAMTargetingManager:
             The GAM key ID as a string
 
         Raises:
-            ValueError: If key name not found in mapping
+            AdCPConfigurationError: If the key is absent from this seller's GAM
+                key mapping. Seller-side: the buyer never supplied this name, and
+                the remedy is running sync_custom_targeting_keys().
         """
         if key_name not in self.custom_targeting_key_ids:
-            raise AdCPAdapterResourceNotFoundError()
+            raise AdCPConfigurationError()
 
         return self.custom_targeting_key_ids[key_name]
 
@@ -828,8 +829,8 @@ class GAMTargetingManager:
                     key_id = self.resolve_custom_targeting_key_id(key_name)
                     custom_targeting[key_id] = value
                     logger.info(f"  {key_name} (ID: {key_id}): {value}")
-                except ValueError as e:
-                    logger.error(f"Failed to resolve custom targeting key '{key_name}': {e}")
+                except AdCPConfigurationError:
+                    logger.error(f"Failed to resolve custom targeting key '{key_name}'")
                     raise
 
         # AXE segment targeting (AdCP pre-3.0 axe_include_segment/axe_exclude_segment;
@@ -847,9 +848,9 @@ class GAMTargetingManager:
                 logger.info(
                     f"Adding AXE include segment targeting: {self.axe_include_key} (ID: {key_id})={targeting_overlay.axe_include_segment}"
                 )
-            except ValueError as e:
-                logger.error(f"Failed to resolve AXE include key '{self.axe_include_key}': {e}")
-                raise AdCPConfigurationError(internal_detail=e) from e
+            except AdCPConfigurationError:
+                logger.error(f"Failed to resolve AXE include key '{self.axe_include_key}'")
+                raise
 
         if targeting_overlay.axe_exclude_segment:
             if not self.axe_exclude_key:
@@ -865,9 +866,9 @@ class GAMTargetingManager:
                 logger.info(
                     f"Adding AXE exclude segment targeting: {self.axe_exclude_key} (ID: {key_id}, negated)={targeting_overlay.axe_exclude_segment}"
                 )
-            except ValueError as e:
-                logger.error(f"Failed to resolve AXE exclude key '{self.axe_exclude_key}': {e}")
-                raise AdCPConfigurationError(internal_detail=e) from e
+            except AdCPConfigurationError:
+                logger.error(f"Failed to resolve AXE exclude key '{self.axe_exclude_key}'")
+                raise
 
         if custom_targeting:
             # Convert simple dict to GAM CustomCriteria structure

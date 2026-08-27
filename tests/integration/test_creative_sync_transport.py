@@ -832,7 +832,13 @@ class TestTypedTransientSurvivesCreativeBuild:
         assert creative_result.action == "failed"
 
         codes = _error_codes(creative_result.errors)
-        # The exact regression: this read SERVICE_UNAVAILABLE before the typed arm.
+        # POSITIVE first: the agent's own code must survive. A negative-only check
+        # ("not SERVICE_UNAVAILABLE") passes for any other wrong code too, which is
+        # most of the ways this can regress.
+        assert "RATE_LIMITED" in codes, (
+            f"[{transport.value}] the agent's own code did not survive the build path: {codes}"
+        )
+        # And the exact regression: this read SERVICE_UNAVAILABLE before the typed arm.
         assert "SERVICE_UNAVAILABLE" not in codes, (
             f"[{transport.value}] a typed transient was degraded to a generic outage: {codes}"
         )

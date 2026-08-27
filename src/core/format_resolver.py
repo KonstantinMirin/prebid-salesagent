@@ -266,8 +266,6 @@ def list_available_formats(
 
     try:
         registry = get_creative_agent_registry()
-    except AdCPError:
-        raise
     except Exception as e:
         logger.error(f"[list_available_formats] Failed to get creative agent registry: {e}", exc_info=True)
         return []
@@ -286,12 +284,14 @@ def list_available_formats(
                 name_search=name_search,
             )
         )
-    except AdCPError:
-        # An empty catalog is a claim about this seller's inventory. Returning it
-        # for an agent that answered 429 tells the buyer we carry no formats,
-        # with no error anywhere on the wire to contradict it.
-        raise
     except Exception as e:
+        # Deliberately still degrades to [] for EVERY failure, typed or not. The
+        # only caller is the admin UI (src/admin/blueprints/products.py:156), which
+        # catches the SDK's adcp.exceptions.ADCPError -- a different class tree from
+        # src.core.exceptions.AdCPError -- so propagating a typed error here does not
+        # reach a buyer, it 500s an admin page that used to degrade. salesagent-w4x1's
+        # defect ("buyer sees empty catalog SUCCESS on an agent 429") is real but is
+        # NOT at this site; wiring this path to a buyer is what would create it.
         logger.error(f"[list_available_formats] Error fetching formats: {e}", exc_info=True)
         return []
 

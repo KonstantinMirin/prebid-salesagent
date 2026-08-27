@@ -12,8 +12,8 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
-from src.core.errors.details import CapabilityRefusalDetails, CreativeRejectionDetails
-from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPCreativeRejectedError, AdCPError
+from src.core.errors.details import CreativeRejectionDetails
+from src.core.exceptions import AdCPCreativeRejectedError, AdCPError, AdCPInternalError
 from src.core.schemas import AssetStatus
 
 from ..utils.validation import GAMValidator
@@ -765,10 +765,10 @@ class GAMCreativesManager:
             }
         else:
             # Internal invariant, not buyer input: _determine_asset_type only
-            # returns "image" or "video".
-            raise AdCPCapabilityNotSupportedError(
-                details=CapabilityRefusalDetails(capability="asset_type", rejected_value=str(asset_type))
-            )
+            # returns "image" or "video", so reaching here is OUR bug. It was
+            # briefly UNSUPPORTED_FEATURE, which is buyer-correctable ("remove the
+            # unsupported field") -- but there is no field for the buyer to remove.
+            raise AdCPInternalError()
 
         self._add_tracking_urls_to_creative(creative, asset)
         return creative

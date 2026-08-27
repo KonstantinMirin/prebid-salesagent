@@ -14,8 +14,8 @@ Source: https://developers.google.com/ad-manager/api/reference/ForecastService.C
 
 from typing import Literal
 
-from src.core.errors.details import CapabilityRefusalDetails
-from src.core.exceptions import AdCPCapabilityNotSupportedError
+from src.core.errors.details import CapabilityRefusalDetails, ConfigurationDetails
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPConfigurationError
 
 # Type aliases for clarity
 PricingModel = Literal["cpm", "vcpm", "cpc", "flat_rate"]  # AdCP pricing models only
@@ -100,13 +100,17 @@ class PricingCompatibility:
             Recommended line item type
 
         Raises:
-            ValueError: If override_type is incompatible with pricing_model
+            AdCPConfigurationError: If ``override_type`` is incompatible with
+                ``pricing_model``. SELLER-side: the override comes from product
+                config (see the arg above), not from the request, so the buyer has
+                nothing to correct. It was briefly UNSUPPORTED_FEATURE, which tells
+                the buyer to change something they never sent.
         """
         # Validate override if provided
         if override_type:
             if not cls.is_compatible(override_type, pricing_model):
-                raise AdCPCapabilityNotSupportedError(
-                    details=CapabilityRefusalDetails(
+                raise AdCPConfigurationError(
+                    details=ConfigurationDetails(
                         capability=f"line_item_type_for:{pricing_model}",
                         rejected_value=override_type,
                         accepted_values=sorted(cls.get_compatible_line_item_types(pricing_model)),
