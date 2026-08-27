@@ -69,6 +69,19 @@ def mock_gam_client():
 # running past the end of the test, where it reached the real DB and fired a webhook
 # into whatever test ran next (found and fixed in GH #1941). Replaced by the real-DB path in
 # tests/integration/test_order_approval_background.py, which joins the thread.
+#
+# Retained from the parallel fix on main (#2091), because the diagnosis is recorded
+# nowhere else and explains why a leaked worker is not merely untidy: the stray thread
+# ran the true retry path -- order_approval_service.py:406 `time.sleep(2**attempt)`
+# behind httpx POSTs at timeout=10.0 -- so it called sleep(1), sleep(2), sleep(4) from
+# inside whatever test was running by then. Measured: still alive ~1500 tests later,
+# during test_performance_index_behavioral and test_policy_typed_models, and it
+# intermittently broke TestWebhookDelivery::test_exponential_backoff_timing, whose
+# class-level patch of `src.core.webhook_delivery.time.sleep` is PROCESS-GLOBAL (that
+# module does `import time`, so the patch lands on the time module itself and is visible
+# to every module and every thread). The stray sleeps inflated mock_sleep.call_count
+# past 2. main's fix patched `_run_approval_thread` so the thread never spawns; this
+# branch deleted the test instead, because its assertions read a mock rather than a row.
 
 
 def test_start_approval_rejects_duplicate(mock_db_session):
@@ -89,7 +102,12 @@ def test_start_approval_rejects_duplicate(mock_db_session):
     )
     mock_db_session.scalars.return_value.all.return_value = [existing_approval]
 
-    with pytest.raises(ValueError, match="Approval already running for order 12345"):
+    # Patched for the same reason as the test above -- an unpatched call leaks a
+    # live daemon thread into the rest of the session.
+    with (
+        patch("src.services.order_approval_service._run_approval_thread"),
+        pytest.raises(ValueError, match="Approval already running for order 12345"),
+    ):
         start_order_approval_background(
             order_id="12345",
             media_buy_id="mb_123",
