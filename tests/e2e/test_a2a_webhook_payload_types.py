@@ -25,6 +25,7 @@ from tests.e2e.adcp_request_builder import (
     parse_tool_result,
 )
 from tests.e2e.utils import make_mcp_client, set_live_adapter_behavior, wait_until
+from tests.factories import WebhookTaskContextFactory
 
 
 async def _discover_product_and_pricing(live_server: dict, test_auth_token: str) -> tuple[str, str]:
@@ -707,21 +708,12 @@ class TestProtocolWebhookWireFormat:
                 authentication_type=None,
                 authentication_token=None,
             )
-            from src.core.webhooks.delivery import WebhookTaskContext
 
             service = ProtocolWebhookService()
             # The typed task identity, not a loose dict. send_notification used to
             # take metadata and rebuild a context from it downstream, which reset
             # sequence_number and notification_type on the way to the delivery row.
-            task = WebhookTaskContext(
-                task_id="task-1",
-                task_type="create_media_buy",
-                tenant_id=None,
-                principal_id=None,
-                media_buy_id=None,
-                sequence_number=1,
-                notification_type=None,
-            )
+            task = WebhookTaskContextFactory()
             sent = asyncio.run(service.send_notification(config, payload, task=task))
             assert sent is True, "ProtocolWebhookService.send_notification should report success"
 

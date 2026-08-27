@@ -51,9 +51,8 @@ from adcp import create_mcp_webhook_payload
 from adcp.types import McpWebhookPayload
 
 from src.core.database.models import PushNotificationConfig, WebhookDeliveryLog
-from src.core.webhooks.delivery import WebhookTaskContext
 from src.services.protocol_webhook_service import ProtocolWebhookService
-from tests.factories import PushNotificationConfigFactory
+from tests.factories import PushNotificationConfigFactory, WebhookTaskContextFactory
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import LocalOriginMixin, WebhookOutcomeRowsMixin
 
@@ -211,7 +210,7 @@ class ProtocolWebhookEnv(WebhookOutcomeRowsMixin, LocalOriginMixin, IntegrationE
         return await self.service.send_notification(
             push_notification_config=config if config is not None else self.make_config(),
             payload=payload if payload is not None else self.make_payload(),
-            task=WebhookTaskContext(
+            task=WebhookTaskContextFactory(
                 task_id=task_id,
                 task_type=task_type,
                 tenant_id=self._tenant_id,

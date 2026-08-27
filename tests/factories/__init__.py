@@ -39,7 +39,7 @@ from tests.factories.targeting import (
     TargetingFactory,
 )
 from tests.factories.user import TenantAuthConfigFactory, UserFactory
-from tests.factories.webhook import PushNotificationConfigFactory
+from tests.factories.webhook import PushNotificationConfigFactory, WebhookTaskContextFactory
 
 ALL_FACTORIES = [
     TenantFactory,
@@ -100,4 +100,5 @@ __all__ = [
     "TenantAuthConfigFactory",
     "TenantFactory",
     "UserFactory",
+    "WebhookTaskContextFactory",
 ]

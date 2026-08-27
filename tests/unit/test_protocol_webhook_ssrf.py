@@ -42,8 +42,8 @@ from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.creatives._sync import _sync_creatives_impl
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.webhook_validator import WEBHOOK_SSRF_SUGGESTION, reject_unsafe_webhook_registration_url
-from src.core.webhooks.delivery import WebhookTaskContext
 from src.services.protocol_webhook_service import ProtocolWebhookService
+from tests.factories import WebhookTaskContextFactory
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
 from tests.helpers.adcp_factories import create_test_media_buy_request_dict, valid_reporting_webhook
@@ -62,15 +62,7 @@ _PAYLOAD = {"task_id": "t1", "status": "completed"}
 # four-key dict and rebuild a context from it downstream; the rebuild reset
 # sequence_number to 1 and notification_type to None, and those were the values
 # persisted. Naming the fields here is the point of the change these tests follow.
-_TASK = WebhookTaskContext(
-    task_id="task-1",
-    task_type="create_media_buy",
-    tenant_id="t1",
-    principal_id=None,
-    media_buy_id=None,
-    sequence_number=1,
-    notification_type=None,
-)
+_TASK = WebhookTaskContextFactory(tenant_id="t1")
 
 
 class _RecordingTransport(httpx.AsyncBaseTransport):

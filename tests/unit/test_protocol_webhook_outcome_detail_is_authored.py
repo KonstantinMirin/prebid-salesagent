@@ -33,8 +33,9 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from src.core.webhooks.delivery import WebhookDeliveryOutcome, WebhookTaskContext
+from src.core.webhooks.delivery import WebhookDeliveryOutcome
 from src.services.protocol_webhook_service import ProtocolWebhookService
+from tests.factories import WebhookTaskContextFactory
 
 # Verbatim shape of adcp.signing.IpPinnedTransport's wrong-host guard message.
 PINNED_HOST = "a.example"
@@ -48,15 +49,7 @@ PINNED_TRANSPORT_ERROR = RuntimeError(
 # No ``tenant_id``: ``WebhookTaskContext.records_delivery_log`` is then False and
 # no audit logger is built, so this test needs neither a database nor an audit
 # backend to reach the arm. The arm is what is under test, not the epilogue.
-TASK = WebhookTaskContext(
-    task_id="task-1",
-    task_type="create_media_buy",
-    tenant_id=None,
-    principal_id=None,
-    media_buy_id=None,
-    sequence_number=1,
-    notification_type=None,
-)
+TASK = WebhookTaskContextFactory()
 PAYLOAD = {"task_id": "t1", "status": "completed"}
 
 
