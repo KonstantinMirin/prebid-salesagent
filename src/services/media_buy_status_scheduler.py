@@ -108,7 +108,20 @@ class MediaBuyStatusScheduler:
                         # keeps every write inside the isolation the class enforces
                         # rather than widening it with a cross-tenant write method.
                         updated = MediaBuyRepository(session, media_buy.tenant_id).update_status(
-                            media_buy.media_buy_id, new_status
+                            media_buy.media_buy_id,
+                            new_status,
+                            # The sweep does not itself commit anything -- commitment
+                            # happened earlier, at the synchronous create or at approval,
+                            # and confirmed_at is write-once so a stamped row is untouched.
+                            # ACTIVE is passed as committing anyway, and the PIN is the
+                            # reason: create-media-buy-response.json @ 3.1.1 constrains
+                            # confirmed_at in exactly one direction -- a null value forbids
+                            # status "active". This sweep is the last writer before a buyer
+                            # can observe that combination, so it must not be able to
+                            # produce it. Any row reaching ACTIVE unstamped is already a
+                            # defect upstream; stamping here keeps the defect from becoming
+                            # a schema-invalid document on the wire.
+                            seller_committed=new_status == PersistedMediaBuyStatus.ACTIVE,
                         )
                         if updated is None:
                             # Unreachable: media_buy_id is the sole primary key and the

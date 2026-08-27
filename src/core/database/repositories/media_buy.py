@@ -23,7 +23,6 @@ from src.core.database.models import (
     MediaBuy,
     MediaPackage,
     PersistedMediaBuyStatus,
-    is_media_buy_seller_confirmed,
 )
 
 if TYPE_CHECKING:
@@ -337,6 +336,7 @@ class MediaBuyRepository:
     def create_from_request(
         self,
         *,
+        seller_committed: bool = False,
         media_buy_id: str,
         req: Any,
         principal_id: str,
@@ -422,12 +422,12 @@ class MediaBuyRepository:
             kwargs["account_id"] = account_id
 
         media_buy = MediaBuy(**kwargs)
-        self._stamp_confirmation_if_needed(media_buy)
+        self._stamp_confirmation_if_needed(media_buy, seller_committed=seller_committed)
         self._session.add(media_buy)
         self._session.flush()
         return media_buy
 
-    def create(self, media_buy: MediaBuy) -> MediaBuy:
+    def create(self, media_buy: MediaBuy, *, seller_committed: bool = False) -> MediaBuy:
         """Persist a new media buy within this tenant.
 
         The media_buy.tenant_id must match the repository's tenant_id.
@@ -451,7 +451,7 @@ class MediaBuyRepository:
         # The caller built this row itself, so its status column is still a raw
         # string; parse it at the door like any other untyped input.
         media_buy.status = PersistedMediaBuyStatus.parse(media_buy.status, media_buy_id=media_buy.media_buy_id)
-        self._stamp_confirmation_if_needed(media_buy)
+        self._stamp_confirmation_if_needed(media_buy, seller_committed=seller_committed)
         self._session.add(media_buy)
         self._session.flush()
         return media_buy
@@ -487,16 +487,51 @@ class MediaBuyRepository:
         media_buy.revision = MediaBuy.revision + 1
 
     @staticmethod
-    def _stamp_confirmation_if_needed(media_buy: MediaBuy) -> bool:
-        """Write ``confirmed_at`` the first time the buy reaches a committed status.
+    def _stamp_confirmation_if_needed(media_buy: MediaBuy, *, seller_committed: bool) -> bool:
+        """Write ``confirmed_at`` the first time the seller actually commits.
 
         Write-once by design: ``confirmed_at`` is the instant the seller committed to
         running the buy, so it must stay stable across every later transition rather
         than tracking the most recent one. Returns whether it stamped.
+
+        ``seller_committed`` is passed by the caller and is NOT inferred from status.
+        It used to be ``is_media_buy_seller_confirmed(media_buy.status)``, and that
+        proxy is lossy at exactly one member: ``media_buy_create._compute_status``
+        returns PENDING_CREATIVES for ``not has_creatives or not creatives_approved``,
+        which is two different states wearing one name --
+
+          * ``not has_creatives``     an auto-approved buy with nothing supplied yet.
+                                      The adapter WAS contacted; the seller committed.
+          * ``not creatives_approved`` a buy held on creative review. The hold returns
+                                      before the adapter is ever reached; no commitment.
+
+        A status-keyed rule must be wrong about one of them, whichever way it is set:
+        including the member minted a commitment for a held buy that a later failure
+        carried to its grave, and excluding it dropped the commitment an auto-approved
+        buy had genuinely earned.
+
+        Commitment is an EVENT, so it is recorded where it happens. The two writers
+        that know are the synchronous create after the adapter returns, and the single
+        post-adapter approval writer. Every other caller leaves the default and cannot
+        mint one by accident -- fail-closed, because a false commitment instant is
+        buyer-visible and write-once, while a missing one is corrected by the next
+        genuine commit.
+
+        Pinned contract: ``create-media-buy-response.json`` @ 3.1.1 arm0 types
+        ``confirmed_at`` ["string","null"], lists it in ``required``, and describes it
+        as "the moment the seller committed... May be null in deferred or
+        manual-approval flows until seller commitment occurs" -- an event, in the
+        spec's own words. Its one hard constraint is that a null value forbids
+        ``status == "active"``, which holds: ACTIVE is only ever reached through a
+        writer that commits.
+
+        Graded by @T-UC-002-v31-success-revision-and-actions (the auto-approval arm,
+        which requires a timestamp) and by the approval-route integration tests (the
+        held arm, which requires NULL). Settles the question filed as #2116.
         """
         if media_buy.confirmed_at is not None:
             return False
-        if not is_media_buy_seller_confirmed(media_buy.status):
+        if not seller_committed:
             return False
         media_buy.confirmed_at = datetime.datetime.now(datetime.UTC)
         return True
@@ -506,6 +541,7 @@ class MediaBuyRepository:
         media_buy_id: str,
         status: PersistedMediaBuyStatus,
         *,
+        seller_committed: bool = False,
         approved_at: datetime.datetime | None = None,
         approved_by: str | None = None,
     ) -> MediaBuy | None:
@@ -535,12 +571,12 @@ class MediaBuyRepository:
         # Stamp before bumping: _bump_revision leaves revision holding a SQL
         # expression, and reading any attribute after that can trigger a refresh
         # mid-mutation. The stamp reads status and confirmed_at, so it goes first.
-        self._stamp_confirmation_if_needed(media_buy)
+        self._stamp_confirmation_if_needed(media_buy, seller_committed=seller_committed)
         self._bump_revision(media_buy)
         self._session.flush()
         return media_buy
 
-    def update_fields(self, media_buy_id: str, **kwargs: Any) -> MediaBuy | None:
+    def update_fields(self, media_buy_id: str, *, seller_committed: bool = False, **kwargs: Any) -> MediaBuy | None:
         """Update arbitrary fields on a media buy within this tenant.
 
         Only updates fields that are valid MediaBuy column attributes.
@@ -566,7 +602,7 @@ class MediaBuyRepository:
             setattr(media_buy, key, value)
         # Same ordering rule as update_status: stamp (which reads attributes) before
         # the bump (which replaces one with a SQL expression).
-        self._stamp_confirmation_if_needed(media_buy)
+        self._stamp_confirmation_if_needed(media_buy, seller_committed=seller_committed)
         self._bump_revision(media_buy)
         self._session.flush()
         return media_buy

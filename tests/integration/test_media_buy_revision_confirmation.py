@@ -131,6 +131,7 @@ def _make_request(idempotency_key: str) -> CreateMediaBuyRequest:
 def _create_from_request(repo: MediaBuyRepository, media_buy: MediaBuy) -> MediaBuy:
     """The async/create_media_buy path: the repository builds the row from the request model."""
     return repo.create_from_request(
+        seller_committed=True,
         media_buy_id="mb_create_from_request",
         req=_make_request("revision-confirmation-create-from-request"),
         principal_id=media_buy.principal_id,
@@ -149,7 +150,8 @@ def _create_prebuilt(repo: MediaBuyRepository, media_buy: MediaBuy) -> MediaBuy:
     from tests.factories import MediaBuyFactory
 
     return repo.create(
-        MediaBuyFactory.build(
+        seller_committed=True,
+        media_buy=MediaBuyFactory.build(
             tenant=media_buy.tenant,
             principal=media_buy.principal,
             media_buy_id="mb_create_prebuilt",
@@ -163,7 +165,7 @@ def _create_prebuilt(repo: MediaBuyRepository, media_buy: MediaBuy) -> MediaBuy:
             # would then grade the FACTORY's value and stay green even with
             # create()'s stamp deleted. Opt out so the oracle keeps its subject.
             confirmed_at=None,
-        )
+        ),
     )
 
 
@@ -326,7 +328,7 @@ class TestConfirmedAtStamp:
         repo, media_buy = repo_env
 
         t0 = datetime.datetime.now(datetime.UTC)
-        repo.update_status(media_buy.media_buy_id, "active")
+        repo.update_status(media_buy.media_buy_id, "active", seller_committed=True)
         t1 = datetime.datetime.now(datetime.UTC)
 
         _assert_stamped_between(_confirmed_at(repo, media_buy.media_buy_id), t0, t1)
@@ -351,13 +353,15 @@ class TestConfirmedAtStamp:
         """The commitment instant must not track the most recent transition."""
         repo, media_buy = repo_env
 
-        repo.update_status(media_buy.media_buy_id, "active")
+        repo.update_status(media_buy.media_buy_id, "active", seller_committed=True)
         stamped = _confirmed_at(repo, media_buy.media_buy_id)
         # Pin that the first transition actually persisted a stamp. Without this the
         # equality below is satisfied by None == None, i.e. by a stamp that never
         # reached the row at all.
         assert stamped is not None, "the committing transition did not persist a stamp"
 
+        # Deliberately WITHOUT seller_committed: a later transition is not a new
+        # commitment, and must not move the instant even if it were passed one.
         repo.update_status(media_buy.media_buy_id, "completed")
 
         assert _confirmed_at(repo, media_buy.media_buy_id) == stamped
@@ -482,22 +486,32 @@ class TestConfirmedAtStamp:
         assert is_media_buy_seller_confirmed(_UNRECOGNISED_STATUS) is False
         assert is_media_buy_seller_confirmed(None) is False
 
-    def test_status_matching_is_case_insensitive(self, repo_env):
-        """A committed status stamps regardless of the column's casing.
+    def test_mixed_case_status_is_normalised_and_still_commits(self, repo_env):
+        """A mixed-case status is folded at the write boundary, and the commit still stamps.
 
-        The lookup is documented case-insensitive and rows written by earlier code
-        are not guaranteed lower-cased. Pinned here because the fail-closed
-        direction above and this one pull opposite ways: a membership test that
-        drops the case fold turns every mixed-case committed row into a silent
-        not-committed, which is the same missing-``confirmed_at`` defect arriving
-        from the other side.
+        REPOINTED, not deleted. This used to grade case-insensitivity INSIDE the stamp
+        decision, because the stamp asked ``is_media_buy_seller_confirmed(status)`` and a
+        membership test that dropped the fold turned every mixed-case committed row into a
+        silent not-committed. The stamp no longer reads status at all — commitment is
+        passed by the writer that knows — so that failure mode cannot occur and a test
+        asserting it would grade nothing.
+
+        What still exists, and is what this now pins: the fold lives at the write boundary
+        in ``PersistedMediaBuyStatus.parse``, so ``"ACTIVE"`` must persist as ``"active"``
+        rather than being refused or stored verbatim. Both halves are asserted, because a
+        row stored as ``"ACTIVE"`` would be invisible to every lower-cased query
+        downstream even though the stamp landed correctly.
         """
         repo, media_buy = repo_env
 
         t0 = datetime.datetime.now(datetime.UTC)
-        repo.update_status(media_buy.media_buy_id, "ACTIVE")
+        repo.update_status(media_buy.media_buy_id, "ACTIVE", seller_committed=True)
         t1 = datetime.datetime.now(datetime.UTC)
 
+        assert _reread(repo, media_buy.media_buy_id).status == "active", (
+            "the write boundary must fold the casing; a row persisted as 'ACTIVE' is "
+            "invisible to every lower-cased query downstream"
+        )
         _assert_stamped_between(_confirmed_at(repo, media_buy.media_buy_id), t0, t1)
 
     @pytest.mark.parametrize(
@@ -542,7 +556,7 @@ class TestConfirmedAtStamp:
         already non-NULL — the guarantee would be bypassable by name.
         """
         repo, media_buy = repo_env
-        repo.update_status(media_buy.media_buy_id, "active")
+        repo.update_status(media_buy.media_buy_id, "active", seller_committed=True)
         stamped = _confirmed_at(repo, media_buy.media_buy_id)
         # Same guard as the write-once test: a never-persisted stamp would make the
         # post-rejection equality vacuous.

@@ -22,6 +22,7 @@ from src.core.database.models import (
     CreativeAssignment,
     CurrencyLimit,
     MediaBuy,
+    PersistedMediaBuyStatus,
     Principal,
     PropertyTag,
     Tenant,
@@ -679,7 +680,10 @@ async def test_sweep_does_not_count_a_write_the_repository_declined(integration_
         await scheduler._update_statuses()
 
     # The sweep did reach the write — otherwise the rest of this test is vacuous.
-    mock_update.assert_called_once_with(media_buy_id, "active")
+    # seller_committed=True is asserted, not tolerated: the pin forbids a null
+    # confirmed_at on an "active" item, so a sweep that activated a row WITHOUT
+    # claiming the commitment could put a schema-invalid document on the wire.
+    mock_update.assert_called_once_with(media_buy_id, PersistedMediaBuyStatus.ACTIVE, seller_committed=True)
 
     messages = [record.getMessage() for record in caplog.records]
 

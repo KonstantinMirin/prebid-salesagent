@@ -218,6 +218,12 @@ class TestExecuteApprovedStatusUpdate:
         mock_repo_3.update_status.assert_called_once_with(
             "mb_test_001",
             PersistedMediaBuyStatus.SCHEDULED,
+            # Asserted, not tolerated. This call is reached only AFTER the adapter
+            # created the order, which is the moment the seller commits — so it is
+            # also the write that must claim the commitment. The creative-review hold
+            # returns before the adapter and leaves the default, so pinning the flag
+            # here is what keeps the two paths distinguishable at the single writer.
+            seller_committed=True,
             approved_at=_APPROVED_AT,
             approved_by=_APPROVED_BY,
         )

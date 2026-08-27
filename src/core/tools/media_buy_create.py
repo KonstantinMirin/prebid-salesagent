@@ -1376,6 +1376,11 @@ def execute_approved_media_buy(
             written = uow3.media_buys.update_status(
                 media_buy_id,
                 resolved,
+                # Reached only after the adapter created the order, so this is the
+                # commitment instant for every buy that arrives through approval.
+                # The creative-review HOLD returns above this line, before the
+                # adapter, and so leaves the default and stamps nothing.
+                seller_committed=True,
                 approved_at=approved_at,
                 approved_by=approved_by,
             )
@@ -3793,6 +3798,12 @@ async def _create_media_buy_impl(
             with MediaBuyUoW(tenant["tenant_id"]) as create_uow:
                 assert create_uow.media_buys is not None
                 created_row = create_uow.media_buys.create_from_request(
+                    # The adapter has already returned by this point (`response` is
+                    # its reply), so the seller HAS committed -- including when the
+                    # resolved status is pending_creatives because the buyer has not
+                    # supplied creatives yet. That is the auto-approval arm the v3.1
+                    # sync-success scenario grades.
+                    seller_committed=True,
                     media_buy_id=response.media_buy_id,
                     req=req,
                     principal_id=principal_id,
