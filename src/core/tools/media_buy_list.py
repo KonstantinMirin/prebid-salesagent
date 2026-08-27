@@ -238,17 +238,24 @@ def _get_media_buys_impl(
                         pkg_id,
                         exc,
                     )
-                    # Seller-side data-integrity failure (the buyer can't fix it),
-                    # surfaced with the standard ``SERVICE_UNAVAILABLE`` wire code —
-                    # matching the sibling per-creative advisory in
-                    # creatives/_processing.py. The discriminator is
-                    # ``details["reason"]``, NOT the message: ``Error.of()`` derives
-                    # message from CODE_TABLE, so no raise site can stamp a
-                    # ``TARGETING_REHYDRATION_FAILED:`` prefix into it any more
-                    # (salesagent-3dawm). Callers route on ``details.reason``.
+                    # CONFIGURATION_ERROR, not SERVICE_UNAVAILABLE. This is a stored
+                    # package_config the buyer neither owns nor can repair, and the
+                    # comment here previously said "the buyer can't fix it" while the
+                    # code said transient — telling them to retry a request that fails
+                    # identically until someone at the seller fixes the row. The pinned
+                    # enum classifies CONFIGURATION_ERROR terminal.
+                    #
+                    # It was chosen "matching the sibling per-creative advisory in
+                    # creatives/_processing.py" — copied rather than reasoned
+                    # (salesagent-tay20). Recovery still comes from CODE_TABLE via
+                    # Error.of; only the code was wrong.
+                    #
+                    # The discriminator is ``details.reasons``, NOT the message:
+                    # message is derived from CODE_TABLE, so no site can stamp a
+                    # ``TARGETING_REHYDRATION_FAILED:`` prefix into it (salesagent-3dawm).
                     hydration_errors.append(
                         Error.of(  # structural-guard: advisory per-package result in GetMediaBuysResponse.errors[]
-                            ErrorCode.SERVICE_UNAVAILABLE,
+                            ErrorCode.CONFIGURATION_ERROR,
                             field=f"media_buys[].packages[{pkg_id}].targeting_overlay",
                             details=ValidationDetails(
                                 reasons=["targeting_rehydration_failed"],

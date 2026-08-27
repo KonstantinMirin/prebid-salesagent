@@ -632,8 +632,9 @@ class TestTargetingOverlayRoundTrip:
     def test_corrupted_targeting_surfaces_via_errors_channel(self, patched_internals):
         """A single bad package_config row must not crash the response.
 
-        Corrupted row → targeting_overlay=None for THAT package + one
-        ``TARGETING_REHYDRATION_FAILED`` entry on ``response.errors``. The
+        Corrupted row → targeting_overlay=None for THAT package + one advisory on
+        ``response.errors`` whose ``details.reasons`` carries
+        ``targeting_rehydration_failed``. The
         rest of the buy still renders (round-trip resilience). Catches only
         ``TypeError`` (real corruption) — pydantic ``ValidationError`` is
         intentionally NOT caught so dev/CI canary fires on field-declaration
@@ -666,13 +667,23 @@ class TestTargetingOverlayRoundTrip:
         assert good_response_pkg.targeting_overlay.property_list.list_id == "v1"
 
         # Failure surfaced via the response errors channel — buyer can reconcile.
-        # Uses the standard ``SERVICE_UNAVAILABLE`` wire code (seller-side data
-        # integrity, matching the sibling per-creative advisory) with the
-        # rehydration detail in the message.
+        #
+        # EXPECTATION REVERSED by salesagent-tay20. This asserted
+        # SERVICE_UNAVAILABLE, and its own comment gave the reason as "matching
+        # the sibling per-creative advisory" — a code copied from a neighbour
+        # rather than chosen. SERVICE_UNAVAILABLE is pinned TRANSIENT, so it told
+        # the buyer to retry a request that fails identically until someone at the
+        # seller repairs the row. A corrupted package_config is stored data the
+        # buyer neither owns nor can fix, which is what CONFIGURATION_ERROR says,
+        # and the pinned enum classifies it terminal: "surface to a human at the
+        # seller".
+        #
+        # Everything else this test asserts is unchanged.
         assert response.errors is not None
         assert len(response.errors) == 1
         err = response.errors[0]
-        assert err.code == "SERVICE_UNAVAILABLE"
+        assert err.code == "CONFIGURATION_ERROR"
+        assert err.recovery == "terminal", "a row the buyer cannot repair must not invite a retry"
         assert err.field is not None and "targeting_overlay" in err.field
 
 
