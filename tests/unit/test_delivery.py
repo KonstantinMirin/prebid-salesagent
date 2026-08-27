@@ -1652,11 +1652,26 @@ class TestDeliveryAdapterError:
 
         Regression (#1545 K2): the outer per-buy handler logged and continued with
         no errors[] advisory, so a failure in the status/model-construction path made
-        the buy vanish from the response with no signal. It must now append a
-        SERVICE_UNAVAILABLE advisory, mirroring the adapter handler. The code is the
-        wire-compliant SERVICE_UNAVAILABLE (not the internal-only INTERNAL_ERROR):
-        advisory errors[] entries serialize verbatim and are normalized through
-        emitted as declared at response assembly.
+        the buy vanish from the response with no signal. It must append an advisory.
+
+        EXPECTATION REVERSED by salesagent-tay20, on the strength of this test's own
+        name. The advisory was SERVICE_UNAVAILABLE "mirroring the adapter handler" --
+        the copied justification that ticket exists to remove -- and the adapter
+        handler cannot be the model here, because the adapter cannot reach this arm:
+        its call has its OWN try whose handler advises and `continue`s. What reaches
+        here is a crash in our per-buy processing, exactly as this test's name says,
+        and SERVICE_UNAVAILABLE is pinned transient -- it tells the buyer to retry
+        something no retry fixes.
+
+        The stated reason for preferring it was that INTERNAL_ERROR is "internal-only".
+        That is no longer true: INTERNAL_ERROR is in CODE_TABLE, resolves to
+        recovery=transient with a buyer-facing sentence, and production already emits
+        it on the wire (salesagent-45d27, graded across mcp/a2a/rest). A platform code
+        reaching the buyer untranslated is what this epic established.
+
+        Everything else this test asserts -- the surviving buy still reported, the
+        failed buy surfacing rather than vanishing, one advisory naming which buy --
+        is unchanged.
         """
         good = _make_mock_media_buy(media_buy_id="mb_good")
         bad = _make_mock_media_buy(media_buy_id="mb_bad")
@@ -1681,9 +1696,11 @@ class TestDeliveryAdapterError:
         assert [d.media_buy_id for d in result.media_buy_deliveries] == ["mb_good"]
         # Failed buy surfaces an advisory instead of vanishing.
         assert result.errors is not None
-        advisory_errors = [e for e in result.errors if e.code == "SERVICE_UNAVAILABLE"]
+        advisory_errors = [e for e in result.errors if e.code == "INTERNAL_ERROR"]
         assert len(advisory_errors) == 1
         assert advisory_errors[0].details == {"media_buy_id": "mb_bad"}
+        # The adapter's own code must NOT be borrowed for our crash.
+        assert not [e for e in result.errors if e.code == "SERVICE_UNAVAILABLE"]
 
     def test_advisory_normalization_carries_the_declared_code_verbatim(self):
         """A hand-built advisory reaches the buyer carrying the code its author declared.

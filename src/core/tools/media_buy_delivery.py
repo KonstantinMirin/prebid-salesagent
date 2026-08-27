@@ -17,7 +17,7 @@ from fastmcp.server.context import Context
 from pydantic import Field, RootModel
 from rich.console import Console
 
-from src.core.errors.codes import ErrorCode
+from src.core.errors.codes import AppErrorCode, ErrorCode
 from src.core.errors.details import EntityRefDetails
 from src.core.exceptions import (
     AdCPError,
@@ -552,13 +552,20 @@ def _get_media_buy_delivery_impl(
                 logger.error("Error processing delivery for %s: %s", media_buy_id, e)
                 adapter_errors.append(
                     Error.of(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
-                        # SERVICE_UNAVAILABLE names what actually happened here: the
-                        # ADAPTER was unreachable. Codes now reach the buyer verbatim, so
-                        # this is a deliberate choice of code, not a stand-in for one that
-                        # would have been rewritten. Matches the sibling adapter handler
-                        # above. WHICH buy failed travels in details, not in the
+                        # INTERNAL_ERROR, not SERVICE_UNAVAILABLE. This arm said the
+                        # latter because "the ADAPTER was unreachable ... matches the
+                        # sibling adapter handler above" -- but the adapter cannot reach
+                        # here. Its call at :313 sits in its OWN try whose handler
+                        # (:343) catches Exception and `continue`s, so an adapter
+                        # failure is advised there and never arrives at this outer arm.
+                        # What does arrive is a crash in OUR per-buy processing, which
+                        # is not a downstream outage and which retrying cannot fix.
+                        # The reasoning was copied from the sibling along with the code
+                        # (salesagent-tay20).
+                        #
+                        # WHICH buy failed still travels in details, not in the
                         # sentence: message is derived from the code.
-                        ErrorCode.SERVICE_UNAVAILABLE,
+                        AppErrorCode.INTERNAL_ERROR,
                         details=EntityRefDetails(media_buy_id=media_buy_id),
                     )
                 )
