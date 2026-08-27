@@ -22,10 +22,10 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import get_principal_object, require_identity, require_tenant
 from src.core.errors.details import PolicyViolationDetails
 from src.core.exceptions import (
-    AdCPAdapterError,
     AdCPAuthorizationError,
     AdCPAuthRequiredError,
     AdCPError,
+    AdCPInternalError,
     AdCPPolicyViolationError,
     AdCPValidationError,
 )
@@ -372,7 +372,7 @@ async def _get_products_impl(
                     f"This indicates data corruption or migration issue. Error: {e}"
                 )
                 logger.error(error_msg)
-                raise AdCPAdapterError() from e
+                raise AdCPInternalError() from e
 
     logger.info(f"[GET_PRODUCTS] Got {len(products)} products from database for tenant {tenant['tenant_id']}")
 

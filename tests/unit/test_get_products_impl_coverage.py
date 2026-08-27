@@ -151,8 +151,8 @@ class TestProductConversionError:
 
     @pytest.mark.asyncio
     async def test_convert_failure_raises_adapter_error_with_product_id(self):
-        """convert_product_model_to_schema raises → AdCPAdapterError with product_id."""
-        from src.core.exceptions import AdCPAdapterError
+        """convert_product_model_to_schema raises → AdCPInternalError with product_id."""
+        from src.core.exceptions import AdCPInternalError
 
         tenant = _make_tenant()
         identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
@@ -173,14 +173,22 @@ class TestProductConversionError:
         ):
             from src.core.tools.products import _get_products_impl
 
-            with pytest.raises(AdCPAdapterError) as exc_info:
+            # EXPECTATION REVERSED by salesagent-45d27. This asserted AdCPAdapterError,
+            # whose code is SERVICE_UNAVAILABLE -- a claim that a dependency is temporarily
+            # out and that retrying helps. A product row that will not convert is corrupt
+            # stored data: the identical request fails identically until someone fixes the
+            # row, so the retry the old code invited could never work. AdCPInternalError
+            # says what actually happened -- "an invariant this seller relies on did not
+            # hold". The test's own intent (fatal, not silently skipped, product identified)
+            # is unchanged.
+            with pytest.raises(AdCPInternalError) as exc_info:
                 await _get_products_impl(req, identity)
             # The identifier is STRUCTURED now: it lives in details/field, not in prose.
 
     @pytest.mark.asyncio
     async def test_convert_failure_is_not_silently_swallowed(self):
         """Unlike get_product_catalog, _get_products_impl must raise on conversion error."""
-        from src.core.exceptions import AdCPAdapterError
+        from src.core.exceptions import AdCPInternalError
 
         tenant = _make_tenant()
         identity = _make_identity(principal_id="user-1", tenant_id="test-tenant", tenant=tenant)
@@ -208,7 +216,7 @@ class TestProductConversionError:
         ):
             from src.core.tools.products import _get_products_impl
 
-            with pytest.raises(AdCPAdapterError) as _ei:
+            with pytest.raises(AdCPInternalError) as _ei:
                 await _get_products_impl(req, identity)
             # The identifier is STRUCTURED now: details/field, not prose.
 

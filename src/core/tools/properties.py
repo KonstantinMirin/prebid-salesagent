@@ -17,7 +17,7 @@ from fastmcp.server.context import Context
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_tenant
 from src.core.database.repositories.uow import TenantConfigUoW
-from src.core.exceptions import AdCPAdapterError, AdCPError
+from src.core.exceptions import AdCPError, AdCPInternalError
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListAuthorizedPropertiesRequest, ListAuthorizedPropertiesResponse
@@ -188,7 +188,7 @@ def _list_authorized_properties_impl(
             error=str(e),
         )
 
-        raise AdCPAdapterError()
+        raise AdCPInternalError()
 
 
 async def list_authorized_properties(

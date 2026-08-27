@@ -28,7 +28,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types import ContextObject
 
-from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPInternalError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListAuthorizedPropertiesRequest, ListAuthorizedPropertiesResponse
 
@@ -130,7 +130,16 @@ class TestTenantErrorPath:
 
 
 class TestPropertiesErrorPath:
-    """When the database query raises an exception, AdCPAdapterError is raised."""
+    """When the database query raises an exception, AdCPInternalError is raised.
+
+    EXPECTATION REVERSED by salesagent-45d27. These asserted AdCPAdapterError, whose
+    code is SERVICE_UNAVAILABLE -- a claim that a dependency is temporarily out and
+    that retrying helps. What the arm actually catches is any untyped crash in tool
+    code, where the identical request fails identically until someone ships a fix.
+    AdCPInternalError says what happened. Everything else these tests assert -- that
+    the failure is fatal, and that the audit record carries success=False and the
+    error text -- is unchanged, because only the raise site's class changed.
+    """
 
     def test_properties_error_on_db_exception(self):
         """H2: Database exception in _impl raises PROPERTIES_ERROR."""
@@ -148,7 +157,7 @@ class TestPropertiesErrorPath:
             patches["audit"],
             patches["log_activity"],
         ):
-            with pytest.raises(AdCPAdapterError):
+            with pytest.raises(AdCPInternalError):
                 _list_authorized_properties_impl(req=None, identity=identity)
 
     def test_properties_error_calls_audit_with_failure(self):
@@ -170,7 +179,7 @@ class TestPropertiesErrorPath:
             mock_audit_instance = MagicMock()
             mock_get_audit.return_value = mock_audit_instance
 
-            with pytest.raises(AdCPAdapterError):
+            with pytest.raises(AdCPInternalError):
                 _list_authorized_properties_impl(req=None, identity=identity)
 
             mock_audit_instance.log_operation.assert_called_once()
@@ -833,7 +842,7 @@ class TestAuditLogFailure:
             mock_audit_instance = MagicMock()
             mock_get_audit.return_value = mock_audit_instance
 
-            with pytest.raises(AdCPAdapterError):
+            with pytest.raises(AdCPInternalError):
                 _list_authorized_properties_impl(req=None, identity=identity)
 
             mock_audit_instance.log_operation.assert_called_once()

@@ -3944,7 +3944,7 @@ async def _create_media_buy_impl(
                                     logger.error(
                                         log_safe(f"Failed to upload creative {creative_id} to GAM: {upload_error}")
                                     )
-                                    raise AdCPAdapterError() from upload_error
+                                    raise AdCPInternalError() from upload_error
 
                             # Create database assignment
                             assignment_id = f"assign_{uuid.uuid4().hex[:12]}"
@@ -4290,7 +4290,7 @@ async def _create_media_buy_impl(
             # Audit logging failure is non-critical, but we should log it
             logger.warning(f"Failed to log failed media buy creation to audit: {audit_error}")
 
-        raise AdCPAdapterError()
+        raise AdCPInternalError()
 
 
 def _build_create_media_buy_request(
