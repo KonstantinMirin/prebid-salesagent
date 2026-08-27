@@ -2103,7 +2103,7 @@ def then_webhook_notification(ctx: dict) -> None:
         # SPEC-PRODUCTION GAP: the repository-driven reject path does NOT populate
         # step.request_data with push_notification_config because it bypasses the
         # Flask admin flow that writes the original request payload onto the step.
-        # FIXME: wire through the production admin approve/reject
+        # FIXME(#2132): wire through the production admin approve/reject
         # flow which populates request_data, then remove this xfail.
         req_data = step.request_data or {}
         step_push_cfg = req_data.get("push_notification_config") if isinstance(req_data, dict) else None

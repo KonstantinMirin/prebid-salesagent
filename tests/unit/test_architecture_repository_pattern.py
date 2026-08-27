@@ -46,9 +46,10 @@ IMPL_FILES = [
     "src/admin/blueprints/creatives.py",
 ]
 
-# Pre-existing violations: (file_path, function_name)
-# These existed before the guard was created. Allowlist shrinks as repositories are introduced.
-# FIXME: all _impl functions should use repositories instead of get_db_session()
+# Was: pre-existing violations, (file_path, function_name).
+# EMPTY AND MUST STAY EMPTY: the _impl-side migration completed in #1094 (closed
+# 2026-03-12). This is not pending work with a shrinking allowlist -- it is a
+# finished invariant. A new row here is a regression, not an accepted exception.
 IMPL_SESSION_ALLOWLIST: set[tuple[str, str]] = set()
 
 # ---------------------------------------------------------------------------
@@ -81,7 +82,7 @@ def _discover_integration_test_files() -> list[str]:
 INTEGRATION_TEST_FILES = _discover_integration_test_files()
 
 # Pre-existing violations: (file_path, function_or_fixture_name)
-# FIXME: integration tests should use polyfactory fixtures
+# FIXME(#2133): integration tests should use polyfactory fixtures
 INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # tests/integration/conftest.py
     ("tests/integration/conftest.py", "authenticated_admin_session"),
@@ -93,11 +94,11 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # tests/integration/test_adapter_factory.py
     ("tests/integration/test_adapter_factory.py", "setup_adapters"),
     # tests/integration/test_gam_adapter_auth.py — no AdapterConfigFactory exists yet
-    # FIXME: migrate to factory when AdapterConfigFactory is created
+    # FIXME(#2133): migrate to factory when AdapterConfigFactory is created
     ("tests/integration/test_gam_adapter_auth.py", "oauth_tenant"),
     ("tests/integration/test_gam_adapter_auth.py", "sa_tenant"),
     # tests/integration/test_adapter_config_repository.py — same: no AdapterConfigFactory
-    # FIXME: migrate to factory when AdapterConfigFactory is created
+    # FIXME(#2133): migrate to factory when AdapterConfigFactory is created
     ("tests/integration/test_adapter_config_repository.py", "_tenants"),
     # tests/integration/test_admin_ui_pages.py
     ("tests/integration/test_admin_ui_pages.py", "test_cannot_access_other_tenant_data"),

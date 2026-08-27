@@ -38,7 +38,7 @@ _STEPDEF_PREFIX = "pytestbdd_stepdef_"
 #     step-text collisions into live shadows (test_architecture_bdd_no_shadowed_steps).
 #     Resolution: add the per-UC harness, resolve the collisions, register it,
 #     and REMOVE the entry.
-# FIXME: wire each module + harness, then delete its entry.
+# FIXME(#2132): wire each module + harness, then delete its entry.
 #
 # (B) Intentionally-local: the module IS live, but registered LOCALLY in its test
 #     module (``from … import *``) rather than globally via pytest_plugins — on

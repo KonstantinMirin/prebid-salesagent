@@ -24,7 +24,7 @@ MEDIA_PACKAGE_MODELS = {"MediaPackage", "DBMediaPackage", "MediaPackageModel"}
 
 # Pre-existing violations: (file_path, function_name)
 # These existed before the guard was created. Allowlist shrinks as they're fixed.
-# FIXME: these should be migrated to repository calls
+# FIXME(#1119): these should be migrated to repository calls
 ALLOWLIST = {
     # media_buy_create.py — raw select missed by UoW migration
     ("src/core/tools/media_buy_create.py", "execute_approved_media_buy"),

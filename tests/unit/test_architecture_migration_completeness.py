@@ -42,7 +42,7 @@ SCHEMA_OPS = {
 }
 
 # Pre-existing violations — allowlists shrink as violations are fixed.
-# FIXME: These legacy migrations have incomplete downgrades.
+# FIXME(#2107): These legacy migrations have incomplete downgrades.
 KNOWN_EMPTY_DOWNGRADE = {
     # Legacy: data migration (adds default values), no structural revert needed
     "017_handle_partial_schemas.py",

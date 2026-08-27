@@ -91,7 +91,7 @@ class GetMediaBuyDeliveryRequest(LibraryGetMediaBuyDeliveryRequest):
 
 
 # AdCP-compliant delivery models
-# FIXME: DeliveryTotals and PackageDelivery duplicate fields from
+# FIXME(#2130): DeliveryTotals and PackageDelivery duplicate fields from
 # adcp library Totals/ByPackageItem instead of inheriting. These should extend the
 # library types (Pattern #1). Field names are now spec-aligned (completed_views);
 # remaining work is switching to inheritance.

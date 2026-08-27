@@ -388,7 +388,7 @@ def _update_media_buy_impl(
         # Single UoW for entire update operation — one session, one transaction
         with MediaBuyUoW(tenant["tenant_id"]) as uow:
             assert uow.media_buys is not None
-            # FIXME: raw session usages below should migrate to repository methods
+            # FIXME(#2128): raw session usages below should migrate to repository methods
             assert uow.session is not None
             session = uow.session
 

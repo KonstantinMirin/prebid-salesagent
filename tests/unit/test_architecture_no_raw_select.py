@@ -73,7 +73,7 @@ ORM_MODEL_NAMES = _discover_orm_model_names()
 # IMPORTANT: This allowlist is DEBT, not permission. New code must use
 # repository methods. See memory/feedback-allowlist-antipattern.md.
 #
-# FIXME: migrate each of these to repository calls
+# FIXME(#1119): migrate each of these to repository calls
 ALLOWLIST: set[tuple[str, str]] = {
     # ── Adapters ──
     # create_line_items removed — uses pre-loaded template param
@@ -149,7 +149,7 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/inventory.py", "check_inventory_sync"),
     ("src/admin/blueprints/inventory.py", "get_inventory_list"),
     ("src/admin/blueprints/inventory.py", "get_inventory_sizes"),
-    ("src/admin/blueprints/inventory.py", "_batch_fetch_ancestors"),  # FIXME: extract to repository
+    ("src/admin/blueprints/inventory.py", "_batch_fetch_ancestors"),  # FIXME(#1119): extract to repository
     ("src/admin/blueprints/inventory.py", "get_inventory_tree"),
     ("src/admin/blueprints/inventory.py", "get_order_details"),
     ("src/admin/blueprints/inventory.py", "get_orders"),
