@@ -336,6 +336,30 @@ class RequestSignatureMiddleware:
         signed = "signature" in headers or "signature-input" in headers
         buffered, resolved = await self._name_request(config, scope, headers, receive, body_needed=signed)
 
+        if resolved.signature_forced:
+            # security.mdx @ v3.1.1 :1464 — "Sellers MUST log every request that arrives with
+            # a non-empty ``authentication`` block." Per REQUEST, and unqualified by posture:
+            # :1465 sends a seller that cannot ENFORCE the signing requirement here rather
+            # than exempting it, so this fires whatever this tenant declared.
+            #
+            # HERE, and not in ``_credentials_force_a_signature`` (:702), which is
+            # ``resolved.signature_forced and posture.supported`` — unreachable for exactly
+            # the ``supported: false`` seller :1465 routes to the log. The posture is not
+            # readable at this point either (``_resolve_request_context`` runs below), so the
+            # message deliberately does not name it.
+            #
+            # The outbound twin is ``_log_legacy_registration``
+            # (``webhook_sender_factory.py``), which observes OUR sender choosing a legacy
+            # mode. Different direction, different event; that one does not discharge this.
+            logger.warning(
+                "Inbound request carries a non-empty webhook authentication block "
+                "(push_notification_config or accounts[].notification_configs): operation=%r "
+                "signed=%s. Legacy HMAC was selected by the buyer rather than RFC 9421 — alarm "
+                "on this if the buyer expected 9421 (security.mdx @ v3.1.1 :1464).",
+                resolved.operation or resolved.protocol_method or "<unnamed>",
+                signed,
+            )
+
         # The hop is unconditional even though the resolver often does no I/O at all
         # (see below): whether it blocks depends on the posture it reads, and the event
         # loop must not be the thing that finds out it guessed wrong.

@@ -340,7 +340,14 @@ def legacy_hmac_fallback_supported() -> bool:
 
 
 def _log_legacy_registration(config: WebhookAuthConfig, mode: str) -> None:
-    """security.mdx @ v3.1.1 :1464 — "Sellers MUST log" every legacy registration.
+    """An operator signal that OUR outbound sender picked a legacy mode for this receiver.
+
+    NOT security.mdx :1464. That line binds the INBOUND direction — "every request that
+    arrives with a non-empty ``authentication`` block" — and is discharged by the log in
+    ``request_verifier_middleware.__call__``. This one fires when this agent BUILDS a sender,
+    which is a different event on the delivery path; an earlier docstring cited :1464 here and
+    read it as "every legacy registration", narrowing a per-request duty into a
+    registration-time one.
 
     The inbound twin of this obligation is ``src/core/signing/operations.py``
     ``_authenticated_configs`` / ``_forces_signature``; the shared rule is "a
@@ -348,7 +355,7 @@ def _log_legacy_registration(config: WebhookAuthConfig, mode: str) -> None:
     """
     logger.warning(
         "Webhook receiver %s opted into the LEGACY authentication scheme %r (mode=%s); "
-        "RFC 9421 webhook signing is suppressed for it (security.mdx @ v3.1.1 :1424, :1464). "
+        "RFC 9421 webhook signing is suppressed for it (security.mdx @ v3.1.1 :1424). "
         "Legacy HMAC-SHA256 is removed in AdCP 4.0.",
         config.url,
         config.authentication_type,
