@@ -111,6 +111,23 @@ services:
       # confirmed the hard way (a full suite run failing `uv sync` against
       # pypi.org with UnknownIssuer) when this first pointed at ca.pem alone.
       SSL_CERT_FILE: /app/.test-tls/combined-ca.pem
+      # Keep this server's log files OFF the bind mount it shares with `tests`.
+      # The image bakes USER app (uid 1001) while `tests` runs as the invoking
+      # host user, so with the default CWD-relative path both create
+      # /app/logs/*.log on the same mounted tree. Whoever got there first owned
+      # the files at umask-derived mode 644 and the other uid could no longer
+      # open them for append — surfacing as `PermissionError: [Errno 13]
+      # Permission denied: '/app/logs/audit.log'` and killing entire suites at
+      # pytest COLLECTION, apparently at random because it depended purely on
+      # which container won the race.
+      #
+      # A container-local path (not a volume at /app/logs — Docker would create
+      # THAT mount point on the host as root:755 and lock `tests` out of its own
+      # log directory instead; measured) means the two never share a path at
+      # all. /tmp is writable by any uid, so this holds however the image's user
+      # is configured. The database remains the audit authority; these files are
+      # a backup.
+      ADCP_LOG_DIR: /tmp/adcp-logs
       # The SERVER must know about the pinned in-network creative agent: sync/
       # create flows resolve format specs server-side, and references carry the
       # PUBLIC canonical agent_url — without this, the registry's connection
@@ -158,6 +175,13 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      # 60s, not creative-agent's 30s (below) -- adcp-server does more work
+      # at startup (DB migrations, etc.) and is the service that actually
+      # showed this bug live: marked genuinely UNHEALTHY (not just
+      # `starting`) under heavy concurrent test-suite load, because there
+      # was no grace period for Docker to report `starting` during
+
+      start_period: 60s
 
   proxy:
     image: nginx:stable
@@ -292,11 +316,9 @@ services:
     #     `docker compose up` for adcp-server -- the `:-0` default applies.
     # Under rootless, container root ALREADY maps to the invoking user, which is
     # exactly the outcome the pin was hand-building. Unset gets it for free.
-    # cassini removed the identical workaround on its own side for the same
-    # reason (cassini/identity.py: "a workaround for a root daemon, and there is
-    # no longer a root daemon"). Symptom this caused live: /app/logs/* created
-    # root-owned, adcp-server (uid 1001) dying at import on a module-level
-    # FileHandler, cascading into ~2100 test failures (cassini-w37).
+    # Symptom this caused live: /app/logs/* created root-owned, adcp-server
+    # (uid 1001) dying at import on a module-level FileHandler, cascading into
+    # ~2100 test failures.
     build:
       context: .
       dockerfile: Dockerfile.test
@@ -310,9 +332,10 @@ services:
       # Consequence: output sat in the buffer, so cassini's RunState.quiet_for
       # climbed monotonically (0m34s -> 12m+) on a genuinely busy run at 1082%
       # CPU that finished exit=0, crossing the 5-minute false-red threshold
-      # (cassini-1w1, reproduced end-to-end as cassini-e7z on run sa-0c74d963).
+      # (reproduced end-to-end on a full in-network run).
       PYTHONUNBUFFERED: "${PYTHONUNBUFFERED:-1}"
-      # Non-root (user: above) has no /etc/passwd entry for a raw numeric
+      # Historical, kept because the reasoning still applies if a `user:`
+      # pin ever returns: a raw numeric UID has no /etc/passwd entry, so
       # UID, so HOME defaults to "/" and Dockerfile.test's baked
       # UV_CACHE_DIR=/cache/uv (root:root 755, no group-write) is
       # unreachable -- uv fails with "Permission denied" trying to even
@@ -392,10 +415,24 @@ services:
       # Integration/unit xdist worker counts (0/unset = serial). Plumbed so the
       # box fast-profile (INTEGRATION_XDIST_N=auto) actually reaches pytest inside
       # the runner container. integration_db creates a uuid-named DB per test, so
-      # parallel workers never share rows -> race-free. UNIT_XDIST_N stays 0 by
-      # default (unit -n auto has flaked); exposed for parity.
+      # parallel workers never share rows -> race-free.
+      #
+      # UNIT_XDIST_N defaults to `auto`, NOT 0. It was 0 because unit "flaked"
+      # under xdist; the flake had a single cause, now fixed -- a leaked
+      # patch("os.getpid") put a MagicMock in every LogRecord.process, which
+      # pytest-json-report copied onto the report and execnet could not
+      # serialize, killing the worker and truncating the session behind a
+      # summary that read "0 failed" (see tests/_xdist_report_safety.py).
+      #
+      # The value matters, not just the default: compose ALWAYS sets a listed
+      # key, so `${UNIT_XDIST_N:-0}` here made tox.ini's own
+      # `-n {env:UNIT_XDIST_N:auto}` unreachable -- the tox default is consulted
+      # only when the variable is UNSET, and this line guarantees it is set.
+      # Leaving it at 0 would have made the tox flip a silent no-op in the only
+      # environment that runs the full suite. `:-auto` keeps the override working
+      # while making the in-network default match tox's.
       INTEGRATION_XDIST_N: "${INTEGRATION_XDIST_N:-0}"
-      UNIT_XDIST_N: "${UNIT_XDIST_N:-0}"
+      UNIT_XDIST_N: "${UNIT_XDIST_N:-auto}"
       # Opt-in fast per-test DB path: clone from a schema template (default off).
       # TEST_DB_SKIP_DROP additionally skips the per-test DROP — safe ONLY on a
       # throwaway (tmpfs) Postgres, where clones are wiped on container restart;
@@ -474,12 +511,12 @@ services:
       # tox_data named volume removed (Aug 2026): it's destroyed+recreated
       # fresh every run (cleanup's `dc down -v`), so nothing ever persisted
       # across runs anyway, and a fresh named volume's mountpoint is created
-      # root:root regardless of the `user:` override above (volume dir
+      # root:root regardless of any `user:` override (volume dir
       # creation happens at the Docker daemon level, before the container
       # process starts) -- permanently EACCES-blocking the non-root tests
       # user from `mkdir .tox/<env>` every single run. .tox now lives on the
       # bind mount instead, same as test-results, which already works
-      # correctly under the `user:` override.
+      # correctly whether or not a `user:` pin is in effect.
     working_dir: /app
     # venv lives at /opt/venv (UV_PROJECT_ENVIRONMENT in Dockerfile.test), outside
     # the /app bind mount, so it is never shadowed — no .venv anonymous volume.
