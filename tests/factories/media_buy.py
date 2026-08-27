@@ -82,11 +82,23 @@ class MediaBuyFactory(factory.alchemy.SQLAlchemyModelFactory):
     # production cannot produce, and the wire documents built from it validate only
     # while a read-time fallback fabricates the missing value.
     #
+    # The writer NO LONGER shares this predicate. It takes an explicit
+    # ``seller_committed`` flag from the caller and does not consult status at all,
+    # because ``pending_creatives`` names two states — an auto-approved buy with
+    # nothing supplied yet (committed) and a buy held on creative review (not) — and
+    # no status-keyed rule can be right about both. This factory keeps a
+    # status-derived DEFAULT because a fixture needs one, and the predicate is still
+    # the best available approximation for every status except that one; it is a
+    # convenience default, not a mirror of the writer.
+    #
+    # For the ambiguous member, pass ``confirmed_at`` explicitly: a held
+    # ``pending_creatives`` row is the default (None), and the auto-approved variant
+    # is seeded with an explicit timestamp.
+    #
     # Two properties are deliberate and must survive edits:
-    #   - CONDITIONAL, calling the SAME predicate the writer calls rather than
-    #     re-listing statuses — a second listing drifts, and an unconditional stamp
-    #     would manufacture committed instants on draft/rejected/failed rows that no
-    #     production path can produce.
+    #   - CONDITIONAL rather than re-listing statuses — a second listing drifts, and
+    #     an unconditional stamp would manufacture committed instants on
+    #     draft/rejected/failed rows that no production path can produce.
     #   - a FRESH clock reading, like the writer's, never derived from another column
     #     (approved_at/created_at) — that derivation is the read-time fabricator, and
     #     reproducing it here would re-import it into every fixture.

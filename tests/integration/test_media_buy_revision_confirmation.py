@@ -481,7 +481,6 @@ class TestConfirmedAtStamp:
         legacy row with an unexpected status should be reported, not crash the
         reader. It answers "not committed", which is the safe half of fail-closed.
         """
-        from src.core.database.models import is_media_buy_seller_confirmed
 
         assert is_media_buy_seller_confirmed(_UNRECOGNISED_STATUS) is False
         assert is_media_buy_seller_confirmed(None) is False
@@ -586,15 +585,40 @@ class TestFactorySeedsWhatTheRepositoryWouldWrite:
     NULL committed rows.
     """
 
-    @pytest.mark.parametrize("status", sorted(PERSISTED_STATUS_TO_CANONICAL))
-    def test_factory_row_agrees_with_the_writer_for_every_persisted_status(
-        self, integration_db, bound_factory_session, status
-    ):
-        """For each status the column can hold, the factory stamps iff the writer would.
+    # Statuses production can only ever reach through a committing writer, and
+    # statuses it never commits. Written out because there is no longer a shared
+    # predicate to derive them from — the writer takes an explicit flag — and a
+    # derived list would just be this list computed elsewhere.
+    _NEVER_COMMITTED = frozenset({"draft", "pending", "pending_approval", "rejected", "failed"})
 
-        Asserted against the writer's OWN predicate rather than a transcribed list
-        of statuses: a second listing is a second thing to maintain, and the defect
-        being guarded is precisely two listings disagreeing.
+    @pytest.mark.parametrize("status", sorted(PERSISTED_STATUS_TO_CANONICAL))
+    def test_factory_never_seeds_a_row_production_cannot_produce(self, integration_db, bound_factory_session, status):
+        """A factory row must be a state some production path can actually reach.
+
+        RE-POINTED. This used to assert the factory stamped exactly when
+        ``is_media_buy_seller_confirmed(status)`` said so, and described itself as
+        graded "against the writer's OWN predicate". That description stopped being
+        true when the writer stopped consulting status: it takes an explicit
+        ``seller_committed`` flag now. The assertion also called the same predicate
+        the factory calls, so it graded "the factory uses this function" while
+        claiming to grade agreement between two seams — a claim about coverage that
+        the code no longer supported.
+
+        What is still real, and is what this now pins, are the two directions in which
+        a fixture can seed an impossible row:
+
+        * ``active`` with a NULL stamp. The pinned item schema forbids it outright,
+          so a fixture like that produces wire documents no buyer could legally
+          receive — and they validate today only while a read-time fallback
+          fabricates the missing instant.
+        * a stamp on a status production NEVER commits. ``draft``/``rejected``/
+          ``failed`` and friends have no committing path, so an instant there is
+          fabricated by the fixture and nothing else.
+
+        ``pending_creatives`` is deliberately unconstrained here: it is the member
+        that names both a committed and an uncommitted state, so BOTH values are
+        production-reachable and asserting either would re-introduce the status-keyed
+        rule this change removed.
         """
         from tests.factories import MediaBuyFactory
 
@@ -602,12 +626,18 @@ class TestFactorySeedsWhatTheRepositoryWouldWrite:
         repo = MediaBuyRepository(bound_factory_session, media_buy.tenant_id)
         stamped = _confirmed_at(repo, media_buy.media_buy_id) is not None
 
-        assert stamped is is_media_buy_seller_confirmed(status), (
-            f"factory-seeded {status!r} carries confirmed_at={'set' if stamped else 'NULL'}, but the "
-            f"repository would write it {'set' if is_media_buy_seller_confirmed(status) else 'NULL'} — "
-            f"the fixture seam and the write seam disagree, so tests are running against a row "
-            f"production cannot produce"
-        )
+        if status == "active":
+            assert stamped, (
+                "factory-seeded 'active' carries a NULL confirmed_at, which the pinned item "
+                "schema forbids — every wire document built from this fixture is one a buyer "
+                "could not legally receive"
+            )
+        if status in self._NEVER_COMMITTED:
+            assert not stamped, (
+                f"factory-seeded {status!r} carries a commitment instant, but no production path "
+                f"commits a buy in that status — the fixture fabricated it, and any test reading "
+                f"it is grading a row production cannot produce"
+            )
 
     def test_factory_stamp_is_a_fresh_clock_reading_not_a_copied_column(self, integration_db, bound_factory_session):
         """The factory reads the clock the way the repository does.
