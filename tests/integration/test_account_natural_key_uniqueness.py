@@ -349,8 +349,16 @@ class TestRepositoryRefusesADuplicateNaturalKey:
                 brand={"domain": _DOMAIN},
                 operator=_OPERATOR,
             )
-            with pytest.raises(ValueError, match="natural key"):
+            # NaturalKeyConflict is now an AdCPConflictError as well as a ValueError
+            # (salesagent-rys3u.5). str(exc) is CODE_TABLE's buyer-facing sentence, so
+            # the specifics are asserted where they now live: the operator text and
+            # the structured account id. Both bases are still pinned -- ValueError
+            # because the admin blueprint catches it, the AdCP code because it escapes
+            # to the buyer when the conflict names a row that has since vanished.
+            with pytest.raises(ValueError) as exc_info:
                 repo.create(duplicate)
+            assert "natural key" in exc_info.value.operator_message
+            assert exc_info.value.error_code == "CONFLICT"
 
 
 class TestTheDatabaseHoldsTheInvariant:

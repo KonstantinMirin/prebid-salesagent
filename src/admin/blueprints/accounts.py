@@ -102,7 +102,13 @@ def create_account(tenant_id):
         # The repository refuses a create whose natural key is already occupied
         # (salesagent-0njj). Surfaced as a form error rather than a 500: this is
         # an operator mistake with an obvious remedy — edit the existing account.
-        flash(str(exc), "error")
+        #
+        # `operator_message` rather than str(exc): NaturalKeyConflict is now an
+        # AdCPConflictError too, so str() returns CODE_TABLE's buyer-facing sentence
+        # ("Revision conflict - refetch and retry"), which tells an OPERATOR nothing
+        # about which account to edit. This is an operator surface, not the buyer
+        # wire, so the specific text is appropriate here and only here.
+        flash(getattr(exc, "operator_message", None) or str(exc), "error")
         return redirect(request.url)
 
     flash(f"Account '{name}' created successfully.", "success")

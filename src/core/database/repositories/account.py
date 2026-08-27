@@ -24,14 +24,28 @@ from src.core.helpers.brand_key import brand_key_parts
 #: only the fast path in front of it.
 NATURAL_KEY_INDEX = "uq_accounts_natural_key"
 
+from src.core.errors.details import ConflictDetails
+from src.core.exceptions import AdCPConflictError
 
-class NaturalKeyConflict(ValueError):
+
+class NaturalKeyConflict(AdCPConflictError, ValueError):
     """The account natural key is already occupied.
 
-    A ``ValueError`` subclass on purpose: the admin blueprint's existing
-    ``except ValueError`` keeps working unchanged, while ``sync_accounts`` — whose
-    semantic is upsert-by-natural-key — can catch this specific type and resolve
-    to ``existing_account_id`` instead of failing the entry.
+    BOTH bases are load-bearing, which is why this is the one class in the
+    disposition that keeps a second one:
+
+    * ``AdCPConflictError`` puts it in the hierarchy (salesagent-rys3u.5) and gives
+      it CONFLICT. It DOES escape: ``sync_accounts`` re-raises at accounts.py:1711
+      when the conflict names a row that has since vanished. As a bare
+      ``ValueError`` that escape reached the buyer as VALIDATION_ERROR -- their
+      request called malformed for a race the seller lost track of.
+    * ``ValueError`` keeps the admin blueprint's existing ``except ValueError``
+      working (src/admin/blueprints/accounts.py:101). Dropping it would silently
+      stop that handler catching, which is the same defect class as an
+      ``except`` naming a type nothing raises.
+
+    ``sync_accounts`` still catches this specific type and resolves to
+    ``existing_account_id`` rather than failing the entry.
 
     Raised for BOTH ways the key can be occupied (the pre-check finding a
     committed row, and losing the index race to a concurrent create), because to
@@ -39,8 +53,16 @@ class NaturalKeyConflict(ValueError):
     """
 
     def __init__(self, message: str, *, existing_account_id: str | None = None) -> None:
-        super().__init__(message)
+        # OPERATOR-facing, never the buyer wire: the admin form flashes this so the
+        # human sees which account to edit. The buyer-facing sentence is CODE_TABLE's,
+        # resolved from CONFLICT, and this text also goes to internal_detail for the
+        # server log.
+        self.operator_message = message
         self.existing_account_id = existing_account_id
+        super().__init__(
+            details=ConflictDetails(account_id=existing_account_id),
+            internal_detail=message,
+        )
 
 
 @dataclass(frozen=True)
