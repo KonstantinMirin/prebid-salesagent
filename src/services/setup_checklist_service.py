@@ -1181,13 +1181,30 @@ class SetupChecklistService:
         return next_steps[:3]
 
 
-class SetupIncompleteError(Exception):
-    """Raised when attempting operations that require complete setup."""
+from src.core.errors.details import ConfigurationDetails
+from src.core.exceptions import AdCPConfigurationError
+
+
+class SetupIncompleteError(AdCPConfigurationError):
+    """Critical setup tasks are incomplete for this tenant.
+
+    In the AdCP hierarchy because we define it and we raise it. CONFIGURATION_ERROR
+    is what media_buy_create already converted it to by hand at its boundary; folding
+    it in makes that conversion redundant rather than load-bearing.
+
+    ``missing_tasks`` is kept as an attribute -- the boundary reads it to build a
+    checklist URL -- and is ALSO carried structurally in the details, where a machine
+    can read it without catching this class.
+    """
 
     def __init__(self, message: str, missing_tasks: list[dict]):
-        self.message = message
+        # `message` is accepted and DISCARDED: the sentence is a function of the code
+        # through CODE_TABLE. The parameter stays so the one raise site is unchanged.
         self.missing_tasks = missing_tasks
-        super().__init__(self.message)
+        super().__init__(
+            details=ConfigurationDetails(missing_tasks=[t["name"] for t in missing_tasks]),
+            internal_detail=message,
+        )
 
 
 def get_incomplete_critical_tasks(tenant_id: str) -> list[dict[str, Any]]:

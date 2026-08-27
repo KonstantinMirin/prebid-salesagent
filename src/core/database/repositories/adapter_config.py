@@ -26,18 +26,23 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import AdapterConfig
+from src.core.errors.details import ConfigurationDetails
+from src.core.exceptions import AdCPConfigurationError
 
 
-class TenantNotConfiguredError(Exception):
-    """Raised when a tenant has no AdapterConfig row.
+class TenantNotConfiguredError(AdCPConfigurationError):
+    """A tenant exists but has no AdapterConfig row.
 
-    This indicates a setup/configuration issue — the tenant exists but has
-    not been configured with an ad server adapter yet.
+    In the AdCP hierarchy because we define it and we raise it. CONFIGURATION_ERROR
+    is what it always meant -- seller-side setup the buyer cannot supply, which the
+    pinned enum classifies terminal. The tenant id travels in ``details.tenant_id``
+    rather than an interpolated message: AdCPError has no message parameter, so the
+    sentence comes from CODE_TABLE.
     """
 
     def __init__(self, tenant_id: str) -> None:
         self.tenant_id = tenant_id
-        super().__init__(f"No adapter configuration found for tenant {tenant_id!r}")
+        super().__init__(details=ConfigurationDetails(tenant_id=tenant_id))
 
 
 class AdapterConfigRepository:

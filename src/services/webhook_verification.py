@@ -10,11 +10,21 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
+from src.core.exceptions import AdCPAuthenticationError
 
-class WebhookVerificationError(Exception):
-    """Raised when webhook verification fails."""
 
-    pass
+class WebhookVerificationError(AdCPAuthenticationError):
+    """An inbound webhook failed signature or timestamp verification.
+
+    In the AdCP hierarchy because we define it and we raise it. AUTH_INVALID is
+    inherited from AdCPAuthenticationError and is what this is: a credential was
+    presented and rejected.
+
+    Every raise site passed a message describing WHICH check failed. Those move to
+    ``internal_detail`` -- server log only -- because the reason a signature check
+    failed is exactly the kind of detail that must not reach the caller, and the
+    buyer-facing sentence comes from CODE_TABLE.
+    """
 
 
 class WebhookVerifier:
@@ -72,21 +82,21 @@ class WebhookVerifier:
         try:
             webhook_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
         except ValueError as e:
-            raise WebhookVerificationError(f"Invalid timestamp format: {e}")
+            raise WebhookVerificationError(internal_detail=f"Invalid timestamp format: {e}")
 
         # Ensure timezone-aware
         if webhook_time.tzinfo is None:
-            raise WebhookVerificationError("Timestamp must be timezone-aware (UTC)")
+            raise WebhookVerificationError(internal_detail="Timestamp must be timezone-aware (UTC)")
 
         # Check age
         age_seconds = (datetime.now(UTC) - webhook_time).total_seconds()
 
         if age_seconds < 0:
-            raise WebhookVerificationError("Timestamp is in the future")
+            raise WebhookVerificationError(internal_detail="Timestamp is in the future")
 
         if age_seconds > self.replay_window_seconds:
             raise WebhookVerificationError(
-                f"Timestamp too old ({age_seconds:.0f}s > {self.replay_window_seconds}s window)"
+                internal_detail=f"Timestamp too old ({age_seconds:.0f}s > {self.replay_window_seconds}s window)"
             )
 
     def _verify_signature(
@@ -123,7 +133,7 @@ class WebhookVerifier:
 
         # Constant-time comparison to prevent timing attacks
         if not hmac.compare_digest(provided_signature, expected_signature):
-            raise WebhookVerificationError("Signature verification failed")
+            raise WebhookVerificationError(internal_detail="Signature verification failed")
 
     @staticmethod
     def extract_headers(request_headers: dict[str, str]) -> tuple[str, str]:
@@ -145,10 +155,10 @@ class WebhookVerifier:
         timestamp = headers_lower.get("x-adcp-timestamp")
 
         if not signature:
-            raise WebhookVerificationError("Missing X-ADCP-Signature header")
+            raise WebhookVerificationError(internal_detail="Missing X-ADCP-Signature header")
 
         if not timestamp:
-            raise WebhookVerificationError("Missing X-ADCP-Timestamp header")
+            raise WebhookVerificationError(internal_detail="Missing X-ADCP-Timestamp header")
 
         return signature, timestamp
 

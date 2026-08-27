@@ -143,8 +143,12 @@ class TestAdapterConfigRepositoryRead:
         """get_by_tenant raises TenantNotConfiguredError when row missing."""
         with get_db_session() as session:
             repo = AdapterConfigRepository(session, "repo_test_none")
-            with pytest.raises(TenantNotConfiguredError, match="repo_test_none"):
-                repo.get_by_tenant()
+            # The tenant id moved OUT of the message and INTO details.tenant_id
+        # (salesagent-rys3u.5): AdCPError has no message parameter, so the sentence
+        # comes from CODE_TABLE and the identifier is machine-readable instead of
+        # findable only by regex over prose.
+        with pytest.raises(TenantNotConfiguredError) as exc_info:
+            repo.get_by_tenant()
 
     def test_find_by_tenant_returns_config(self, _tenants, _encryption_key):
         with get_db_session() as session:
@@ -260,5 +264,8 @@ class TestAdapterConfigRepositoryWrite:
         """update_custom_targeting_keys raises TenantNotConfiguredError when row missing."""
         with get_db_session() as session:
             repo = AdapterConfigRepository(session, "repo_test_none")
-            with pytest.raises(TenantNotConfiguredError, match="repo_test_none"):
+            # Same as above: the identifier is in details.tenant_id, not the prose.
+            with pytest.raises(TenantNotConfiguredError) as exc_info:
                 repo.update_custom_targeting_keys({"key": "value"})
+            assert exc_info.value.details is not None
+            assert exc_info.value.details.tenant_id == "repo_test_none"
