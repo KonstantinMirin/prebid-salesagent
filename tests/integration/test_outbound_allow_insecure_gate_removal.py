@@ -118,4 +118,3 @@ class TestAllowInsecureCanNeverRelaxTheSchemeGate:
             "webhook registration admitted a plain-http URL despite ADCP_OUTBOUND_ALLOW_INSECURE=true "
             "-- the ingest-side scheme gate must never be relaxable either"
         )
-        assert "https" in error.lower()

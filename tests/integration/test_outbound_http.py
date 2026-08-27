@@ -704,6 +704,14 @@ def test_blocked_envelope_hides_the_resolved_address_and_the_reason(seam_call, m
     "cannot resolve host '<host>'". Echoing either back tells whoever supplied
     the URL both the resolved address and whether the name exists — an internal
     port and host scanner. The two envelopes must be identical.
+
+    INDISTINGUISHABILITY is the whole grade. This used to also deny a word list
+    ("reserved", "resolve", "metadata", "private") in the message, which was a
+    proxy that neither implied the property nor followed from it: a per-cause
+    message avoiding those words discloses just as much, and a CONSTANT message
+    containing one discloses nothing. AdCPBlockedUrlError now owns the sentence
+    and takes no message argument, so per-cause variation is unrepresentable and
+    the equality below is a structural fact rather than a hope.
     """
     set_flags(monkeypatch)
 
@@ -716,11 +724,12 @@ def test_blocked_envelope_hides_the_resolved_address_and_the_reason(seam_call, m
     assert_envelope_shape(reserved_envelope, "VALIDATION_ERROR", recovery="correctable")
     assert_envelope_shape(unresolvable_envelope, "VALIDATION_ERROR", recovery="correctable")
 
-    reserved_message = reserved_envelope["errors"][0]["message"]
-    unresolvable_message = unresolvable_envelope["errors"][0]["message"]
-    assert reserved_message == unresolvable_message, (
-        "blocked-message distinguishes an unresolvable host from a reserved address: "
-        f"{unresolvable_message!r} vs {reserved_message!r}"
+    # The WHOLE envelope, not its message. Indistinguishability is the property;
+    # reading one field to compare prose was a narrower way of asking the same
+    # question, and it missed every other field the envelope carries.
+    assert reserved_envelope == unresolvable_envelope, (
+        "the envelope distinguishes an unresolvable host from a reserved address: "
+        f"{unresolvable_envelope!r} vs {reserved_envelope!r}"
     )
 
     for envelope, forbidden in (
@@ -728,9 +737,6 @@ def test_blocked_envelope_hides_the_resolved_address_and_the_reason(seam_call, m
         (unresolvable_envelope, "no-such-host.invalid"),
     ):
         assert forbidden not in json.dumps(envelope), f"{forbidden!r} leaked into {envelope}"
-
-    for term in ("reserved", "resolve", "metadata", "private"):
-        assert term not in reserved_message.lower(), f"refusal reason {term!r} leaked into {reserved_message!r}"
 
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
@@ -750,7 +756,7 @@ def test_carried_field_does_not_discriminate_the_refusal_cause(seam_call, monkey
     discriminator, exactly the spec point 6 side channel that test exists to
     close. Two per-cause assertions would both pass while the two envelopes
     disagreed. Whole-envelope equality is also strictly stronger than the
-    neighbour's ``errors[0]["message"]`` comparison — it covers ``details``,
+    neighbour's whole-envelope comparison — it covers ``details``,
     ``suggestion``, ``recovery`` and ``field`` on both layers at once.
 
     The second half pins the default: a caller that supplies no ``field`` gets
@@ -1011,17 +1017,13 @@ def test_validate_url_refusal_envelope_hides_the_resolved_address_and_the_reason
     assert_envelope_shape(reserved_envelope, "VALIDATION_ERROR", recovery="correctable")
     assert_envelope_shape(unresolvable_envelope, "VALIDATION_ERROR", recovery="correctable")
 
-    reserved_message = reserved_envelope["errors"][0]["message"]
-    assert reserved_message == unresolvable_envelope["errors"][0]["message"]
+    assert reserved_envelope == unresolvable_envelope
 
     for envelope, forbidden in (
         (reserved_envelope, "127.0.0.1"),
         (unresolvable_envelope, "no-such-host.invalid"),
     ):
         assert forbidden not in json.dumps(envelope), f"{forbidden!r} leaked into {envelope}"
-
-    for term in ("reserved", "resolve", "metadata", "private"):
-        assert term not in reserved_message.lower(), f"refusal reason {term!r} leaked into {reserved_message!r}"
 
 
 # ---------------------------------------------------------------------------

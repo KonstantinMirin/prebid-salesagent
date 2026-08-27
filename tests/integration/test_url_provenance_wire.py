@@ -166,7 +166,7 @@ class TestAnOperatorRefusalNamesNoEndpoint:
 
             registry = env.mock["registry"].return_value
             env.set_run_async_result([FormatFactory(format_id={"id": _FORMAT_ID, "agent_url": AGENT_URL})])
-            registry.preview_creative.side_effect = OutboundRequestBlocked("URL resolves to a restricted range.")
+            registry.preview_creative.side_effect = OutboundRequestBlocked()
 
             from adcp.types import FormatId
 

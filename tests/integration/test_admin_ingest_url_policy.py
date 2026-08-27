@@ -445,15 +445,8 @@ def push_notification_configs_for(env) -> list[PushNotificationConfig]:
 @pytest.mark.parametrize(
     ("url", "expected_flash"),
     [
-        (
-            METADATA_URL,
-            "Error registering webhook: Invalid webhook.url: "
-            "URL hostname '169.254.169.254' is blocked (internal/private)",
-        ),
-        (
-            INSECURE_PUBLIC_URL,
-            "Error registering webhook: Invalid webhook.url: URL must use HTTPS scheme, got 'http'",
-        ),
+        (METADATA_URL, "Error registering webhook: URL resolves to a restricted range."),
+        (INSECURE_PUBLIC_URL, "Error registering webhook: URL resolves to a restricted range."),
     ],
 )
 def test_register_webhook_refuses_and_stores_nothing(
@@ -462,14 +455,12 @@ def test_register_webhook_refuses_and_stores_nothing(
     """principals.py — a principal's push-notification webhook is stored now,
     posted to later, and is graded the same as every other ingest site.
 
-    The refusal WORDING changed with salesagent-pldmk.8, deliberately. This route
-    used to run two gates: a generic ``redirect_if_url_blocked`` that answered
-    "Webhook URL is not allowed by outbound egress policy." and, below it, the
-    registration funnel. The generic gate is gone, so the funnel's own refusal is
-    what the operator now reads -- and it NAMES THE FIELD and the reason
-    ("Invalid webhook.url: URL must use HTTPS scheme, got 'http'") instead of
-    saying only that something was disallowed. Both URLs are still refused and
-    nothing is still stored; what improved is what the operator is told.
+    Both rows expect the SAME flash: AdCPBlockedUrlError owns one sentence for
+    every refusal, so the wording no longer varies with the cause. The cause is
+    still recorded -- as a WARNING from the gate that computed it -- which is
+    where an operator reads why a particular URL was refused. The parametrize
+    still carries both URLs because the thing being graded is that each is
+    refused and nothing is stored, not what the operator is told.
     """
     set_flags(monkeypatch)
 
