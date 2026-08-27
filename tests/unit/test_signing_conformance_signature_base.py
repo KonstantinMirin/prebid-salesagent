@@ -25,7 +25,7 @@ Deliberately NOT asserted: that re-signing the base reproduces the vector's ship
 normative, and ES256 is non-deterministic under random-k.
 
 Spec grounding: AdCP 3.1.1 (``adcp==6.6.0``);
-``adcontextprotocol/adcp@v3.1.1:dist/docs/3.1.0/reference/url-canonicalization.mdx``
+``adcontextprotocol/adcp@v3.1.1:docs/reference/url-canonicalization.mdx``
 (the authoritative canonicalization algorithm — security.mdx §"@target-uri
 canonicalization" defers to it) and ``dist/compliance/3.1.1/test-vectors/
 request-signing/{positive,negative}/``.

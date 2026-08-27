@@ -396,15 +396,15 @@ def then_each_creative_carries_concept(ctx: dict, concept_id: str) -> None:
 # creatives, never another principal's, even within the same tenant.
 #
 # Spec ground (Spec-Grounding Gate): this is an AdCP normative MUST, pinned at
-# v3.1-04f59d2d5 — docs/media-buy/advanced-topics/accounts-and-security.mdx §Data
-# Isolation (L33-37): a created object is "permanently associated with the account",
+# v3.1.1 — docs/media-buy/advanced-topics/accounts-and-security.mdx §Data
+# Isolation (L35-37): a created object is "permanently associated with the account",
 # and for any later read "the server MUST verify that the agent has access to that
 # account", else it "MUST return a permission denied error". The deeper normative
 # reference is docs/building/by-layer/L1/security.mdx §Agent and Account Isolation
-# (L159), incl. §"Client-side isolation: cross-principal tool-call confusion" (L229).
+# (L171), incl. §"Client-side isolation: cross-principal tool-call confusion" (L241).
 # (At the pin the superseded 2.5.3 principals-and-security.mdx was renamed to
-# accounts-and-security.mdx; the source docs/ paths resolve at the pin — the built
-# dist/docs/3.1.0-beta.3/ tree is only on later commits.) It is ungraded-by-storyboard:
+# accounts-and-security.mdx; read the repository-root docs/ tree at the tag, which is
+# where the prose the anchors above point at lives.) It is ungraded-by-storyboard:
 # no conformance storyboard grades multi-principal isolation (universal/security.yaml
 # grades authentication, not authenticated isolation), so these two scenarios are the
 # ONLY executable guard of that MUST.

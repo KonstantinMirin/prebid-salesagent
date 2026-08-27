@@ -66,9 +66,9 @@ Measured disjointness is what makes exact-pair deletes safe: none of those three
 modules uses ``test-ed25519-2026`` — they mint their own keys.
 
 Spec grounding: AdCP 3.1.1 (``adcp==6.6.0``), ``adcontextprotocol/adcp@v3.1.1``:
-``dist/docs/3.1.0/building/by-layer/L1/security.mdx`` §"Verifier checklist
+``docs/building/by-layer/L1/security.mdx`` §"Verifier checklist
 (requests)" (15 checks, in order, short-circuiting) and §"Composition with fallback
-authenticators"; ``dist/docs/3.1.0/reference/url-canonicalization.mdx``. Graded by
+authenticators"; ``docs/reference/url-canonicalization.mdx``. Graded by
 ``dist/compliance/3.1.1/universal/signed-requests.yaml``; ``016``/``017``/``020``
 additionally gated on ``dist/compliance/3.1.1/test-kits/signed-requests-runner.yaml``.
 

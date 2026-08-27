@@ -47,7 +47,7 @@ than on the sample.
     tested: the vector's comma-joined one and the repeated-tuple one.
 
 Spec grounding: ``adcontextprotocol/adcp@v3.1.1``
-``dist/docs/3.1.0/reference/url-canonicalization.mdx`` (the authoritative algorithm;
+``docs/reference/url-canonicalization.mdx`` (the authoritative algorithm;
 the "receivers do not silently re-normalize" rule grounds the non-ASCII authority
 rejection) and ``.../L1/security.mdx`` §"Verifier checklist (requests)" step 1.
 **Said out loud rather than implied:** 026 and the malformed-authority family are

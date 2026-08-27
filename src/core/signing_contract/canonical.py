@@ -25,7 +25,7 @@ adds a third: it gates, then hands the string to the vendored canonicalizer.
 
 What the comparer gate adds, and where each rule is grounded
 ------------------------------------------------------------
-``adcontextprotocol/adcp@v3.1.1:dist/docs/3.1.0/reference/url-canonicalization.mdx``
+``adcontextprotocol/adcp@v3.1.1:docs/reference/url-canonicalization.mdx``
 is the authoritative algorithm — security.mdx §"@target-uri canonicalization" defers
 to it explicitly. The vendored canonicalizer enforces the step-3 malformed-authority
 rejections and step 2's IPv6 rules itself (that IS the upstream fix). One rule differs

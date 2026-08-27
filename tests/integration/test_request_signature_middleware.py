@@ -14,7 +14,7 @@ What is graded here, and why each one exists
 **R-H1 — the composition rule (production-breaking if wrong).**
 ``required_for`` governs the signature requirement *relative to the caller's
 credential path*, not absolutely. Pinned spec (AdCP 3.1.1 →
-``dist/docs/3.1.0-rc.15/building/by-layer/L1/security.mdx`` in
+``docs/building/by-layer/L1/security.mdx`` in
 ``github.com/adcontextprotocol/adcp`` @ tag ``v3.1.1``):
 
   :1268  an **unauthenticated** request to a ``required_for`` operation MUST be
