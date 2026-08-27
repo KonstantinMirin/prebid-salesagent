@@ -91,16 +91,12 @@
 # a refused buyer-supplied URL, so what still differs between them is WHEN they
 # refuse and on what evidence — not what the buyer is told.
 # `reject_unsafe_webhook_registration_url` (src/core/webhook_validator.py)
-# refuses as VALIDATION_ERROR / correctable / field / suggestion, message shaped
-# `Invalid <field>: <reason>` — and it is deliberately DNS-FREE: an unresolvable-but-public
+# refuses as VALIDATION_ERROR / correctable / field / suggestion — and it is
+# deliberately DNS-FREE: an unresolvable-but-public
 # hostname is ACCEPTED at ingest and re-checked when the callback is dialled
 # (gh-#1589 / gh-#1697). So the ingest scenario carries its own CAUSES even
 # though it no longer carries its own code; an unresolvable host is not one of
-# them, and its message is the registration gate's own. The <reason> itself
-# is now the SAME fixed, non-disclosing text for every address cause
-# (`egress.policy._RESTRICTED_RANGE_MESSAGE`) — no CIDR, no resolved address —
-# matching the seam's one-message-for-every-cause posture, so every row below
-# expects the identical message.
+# them. AdCPBlockedUrlError owns the message; no gate authors one.
 Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
 
   A URL the buyer supplies for us to fetch is an SSRF vector. When the egress
@@ -124,7 +120,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
     Given a tenant is configured for product discovery
     And the outbound private-range egress hatch is open
     When the buyer requests products with a property list agent at "<agent_url>"
-    Then the refusal message on both envelope layers is exactly "Outbound request to the supplied URL was refused by egress policy."
+    Then the refusal message on both envelope layers is exactly "URL resolves to a restricted range."
     And the error envelope names neither the supplied host nor any IP address
 
     Examples:
@@ -208,13 +204,13 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
     Given the outbound private-range egress hatch is open
     When the buyer creates a media buy with push notification url "<webhook_url>"
     Then the request is rejected with VALIDATION_ERROR naming field "push_notification_config.url"
-    And the refusal message on both envelope layers is exactly "<message>"
+    And the refusal message on both envelope layers is exactly "URL resolves to a restricted range."
     And the error envelope names neither the supplied host nor any IP address
 
     Examples:
-      | webhook_url            | message                                                                    |
-      | https://[fc00::1]/hook | Invalid push_notification_config.url: URL resolves to a restricted range. |
-      | https://[ff02::1]/hook | Invalid push_notification_config.url: URL resolves to a restricted range. |
+      | webhook_url            |
+      | https://[fc00::1]/hook |
+      | https://[ff02::1]/hook |
 
   # ── The CREDENTIAL half of the same registration ─────────────────────
   #

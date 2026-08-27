@@ -661,25 +661,23 @@ class AdCPValidationError(AdCPError):
 
 
 class AdCPBlockedUrlError(AdCPValidationError):
-    """A buyer-supplied URL was refused by egress policy (400).
+    """Raised when a URL is refused by SSRF egress policy."""
 
-    The ONE refusal type for this semantic, raised by both gates that can refuse
-    such a URL: the dial-time egress seam (``OutboundRequestBlocked``) and the
-    DNS-free registration gate (``reject_unsafe_webhook_registration_url``).
-    Before this class they raised INVALID_REQUEST and VALIDATION_ERROR
-    respectively, so the wire code told the buyer which layer noticed rather than
-    what they did wrong.
+    _default_message: ClassVar[str] = "URL resolves to a restricted range."
 
-    VALIDATION_ERROR is the converged answer, per the pinned 3.1.1 enum's own
-    descriptions: INVALID_REQUEST is "malformed, missing required fields, or
-    violates schema constraints", VALIDATION_ERROR is "invalid field values or
-    violates business rules beyond schema validation". A ``format: "uri"``-valid
-    URL that lands in a policy-blocked range is squarely the latter. Both are
-    ``correctable`` in the pin, so buyer retry behavior does not change.
-
-    Inherits VALIDATION_ERROR / 400 / correctable — deliberately no ``_default_*``
-    overrides.
-    """
+    def __init__(
+        self,
+        *,
+        field: str | None = None,
+        suggestion: str | None = None,
+        context: ContextObject | dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            type(self)._default_message,
+            field=field,
+            suggestion=suggestion,
+            context=context,
+        )
 
 
 class AdCPInvalidRequestError(AdCPValidationError):

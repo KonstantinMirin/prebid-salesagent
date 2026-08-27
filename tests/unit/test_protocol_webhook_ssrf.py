@@ -288,7 +288,6 @@ def test_reject_unsafe_webhook_registration_url_raises_validation_error() -> Non
                 field="reporting_webhook.url",
             )
         assert exc_info.value.field == "reporting_webhook.url"
-        assert "Invalid reporting_webhook.url" in exc_info.value.message
         assert exc_info.value.suggestion == WEBHOOK_SSRF_SUGGESTION, "https is required, so the strict wording"
         assert exc_info.value.recovery == "correctable"
 
@@ -352,7 +351,6 @@ async def test_create_media_buy_rejects_reporting_webhook_anyurl() -> None:
     with pytest.raises(AdCPValidationError) as exc_info:
         await _create_media_buy_impl(req, identity=_identity())
     assert exc_info.value.field == "reporting_webhook.url"
-    assert "Invalid reporting_webhook.url" in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -387,9 +385,10 @@ def test_sync_creatives_rejects_unsafe_push_config_url() -> None:
 
 def test_accept_a2a_push_config_rejects_metadata_url() -> None:
     """A2A registration helper maps SSRF to InvalidParamsError + AdCP envelope in data."""
-    with pytest.raises(InvalidParamsError, match="Invalid push_notification_config.url") as exc_info:
+    with pytest.raises(InvalidParamsError) as exc_info:
         _accept_a2a_push_config(_METADATA_URL, None, None)
     assert_envelope_shape(exc_info.value.data, "VALIDATION_ERROR", recovery="correctable")
+    assert exc_info.value.data["errors"][0]["field"] == "push_notification_config.url"
     assert exc_info.value.data["errors"][0].get("suggestion")
 
 
@@ -406,7 +405,7 @@ async def test_a2a_message_send_rejects_unsafe_push_config_url() -> None:
         configuration=SendMessageConfiguration(task_push_notification_config=push),
     )
 
-    with pytest.raises(InvalidParamsError, match="Invalid push_notification_config.url") as exc_info:
+    with pytest.raises(InvalidParamsError) as exc_info:
         await handler.on_message_send(params, context=MagicMock())
 
     assert_envelope_shape(exc_info.value.data, "VALIDATION_ERROR", recovery="correctable")
@@ -428,7 +427,7 @@ async def test_a2a_set_push_handler_rejects_metadata_url() -> None:
         patch.object(handler, "_resolve_a2a_identity", return_value=identity),
         patch.object(handler, "_make_tool_context", return_value=tool_context),
         patch("src.a2a_server.adcp_a2a_server.PushNotificationConfigUoW") as mock_uow,
-        pytest.raises(InvalidParamsError, match="Invalid push_notification_config.url") as exc_info,
+        pytest.raises(InvalidParamsError) as exc_info,
     ):
         await handler.on_create_task_push_notification_config(params, context=MagicMock())
 

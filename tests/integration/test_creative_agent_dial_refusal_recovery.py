@@ -109,9 +109,7 @@ class TestOperatorDialRefusalIsTerminalNotTransient:
 
             registry = env.mock["registry"].return_value
             env.set_run_async_result([_registered_format()])
-            registry.preview_creative = AsyncMock(
-                side_effect=OutboundRequestBlocked("Outbound request to the supplied URL was refused by egress policy.")
-            )
+            registry.preview_creative = AsyncMock(side_effect=OutboundRequestBlocked())
 
             result = env.call_via(
                 transport,
@@ -178,9 +176,7 @@ class TestOperatorDialRefusalIsTerminalNotTransient:
 
             registry = env.mock["registry"].return_value
             env.set_run_async_result([_registered_format()])
-            registry.preview_creative = AsyncMock(
-                side_effect=OutboundRequestBlocked("Outbound request to the supplied URL was refused by egress policy.")
-            )
+            registry.preview_creative = AsyncMock(side_effect=OutboundRequestBlocked())
 
             from adcp.types import FormatId
 

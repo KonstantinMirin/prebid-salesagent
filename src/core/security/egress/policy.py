@@ -14,12 +14,9 @@ salesagent-634hc).
 AdCP 3.1.1, ``building/by-layer/L1/security.mdx``: a fetcher MUST (1) reject
 non-HTTPS in production, (2) reject reserved ranges — including RFC 6598
 CGNAT — (6) never echo the refusal cause back to the party that supplied the
-URL. :func:`resolve_for_dial` stays opaque about *why* a dial-time refusal
-happened, because the resolved address is exactly what point 6 forbids
-disclosing; :func:`check_registration` MAY name the class of range, because
-the caller already supplied that literal information in the URL itself —
-telling them "this hostname is blocked" discloses nothing they did not
-already know.
+URL. Neither verdict tells the caller WHY it refused — that is point 6. The cause
+strings below are for the log; ``AdCPBlockedUrlError`` owns what the caller
+is told.
 """
 
 from __future__ import annotations
@@ -72,21 +69,6 @@ _BLOCKED_HOSTNAMES = frozenset(
         "docker.host.internal",
     }
 )
-
-# One fixed, non-disclosing reason for every REGISTRATION address-cause
-# refusal — no CIDR, no resolved address (spec point 6). Distinct from
-# _BLOCKED_MESSAGE (dial-time): registration already holds the literal URL
-# the caller supplied, so naming the class of range discloses nothing new;
-# dial-time would be disclosing a RESOLVED address the caller never had.
-_RESTRICTED_RANGE_MESSAGE = "URL resolves to a restricted range."
-
-# Spec point 6: one fixed message for every DIAL-time refusal, whatever the
-# real cause. The SDK's own text says "resolved IP <IP> is in a reserved
-# range" versus "cannot resolve host '<host>'" — echoing either back hands
-# the party that supplied the URL both the resolved address and whether the
-# name exists, which is an internal host and port scanner. This message never
-# interpolates anything.
-_BLOCKED_MESSAGE = "Outbound request to the supplied URL was refused by egress policy."
 
 
 class PinnedHost(NamedTuple):
@@ -245,7 +227,7 @@ def _registration_error(url: str) -> str | None:
         return None
 
     if _blocked_address(literal_ip):
-        return _RESTRICTED_RANGE_MESSAGE
+        return "address is in a blocked range"
     return None
 
 
@@ -289,12 +271,16 @@ class EgressPolicy:
             # buyer-facing refusal. Anything that is NOT a ValueError is not a
             # malformed URL and has no business being reported as one -- it now
             # escapes loudly instead of being relabelled.
-            raise AdCPBlockedUrlError("URL could not be parsed") from exc
+            logger.warning("Refusing URL at registration: malformed (%s)", exc)
+            raise AdCPBlockedUrlError() from exc
         if error is None:
             return
         if allow_loopback and _is_rescuable_loopback(url):
             return
-        raise AdCPBlockedUrlError(error)
+        # Same split as the webhook registration gate: ``error`` names the cause
+        # and is operator-side; the class supplies the buyer-facing sentence.
+        logger.warning("Refusing URL at registration: %s", error)
+        raise AdCPBlockedUrlError()
 
     @staticmethod
     def resolve_for_dial(url: str, *, field: str | None = None, allow_private: bool = False) -> PinnedHost:
@@ -321,16 +307,16 @@ class EgressPolicy:
         """
         if _scheme_error(urlparse(url)) is not None:
             logger.warning("Outbound request refused: scheme is not https")
-            raise OutboundRequestBlocked(_BLOCKED_MESSAGE, field=field)
+            raise OutboundRequestBlocked(field=field)
 
         try:
             hostname, ip, _port = resolve_and_validate_host(url, allow_private=allow_private)
         except SSRFValidationError as exc:
             logger.warning("Outbound request refused by address policy: %s", exc)
-            raise OutboundRequestBlocked(_BLOCKED_MESSAGE, field=field) from exc
+            raise OutboundRequestBlocked(field=field) from exc
 
         if not allow_private and _blocked_address(ipaddress.ip_address(ip)):
             logger.warning("Outbound request refused by address policy: matched the supplement range set")
-            raise OutboundRequestBlocked(_BLOCKED_MESSAGE, field=field)
+            raise OutboundRequestBlocked(field=field)
 
         return PinnedHost(hostname=hostname, resolved_ip=ip)
