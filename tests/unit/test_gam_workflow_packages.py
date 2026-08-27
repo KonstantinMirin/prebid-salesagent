@@ -446,6 +446,52 @@ class TestGAMAdapterErrorTaxonomy:
         assert exc_info.value.error_code == "AD_SERVER_CREATE_FAILED"
 
 
+class TestGAMAdapterSeamPreservesClassification:
+    """The classification survives ``GoogleAdManager.create_media_buy``.
+
+    ``orders_manager.create_order`` classifies an ad-server refusal into the AdCP
+    error the buyer should read. The tool layer then re-raises a typed
+    ``AdCPError`` untouched. Between those two is this seam
+    (google_ad_manager.py:672), and nothing pinned it: an ``except Exception``
+    introduced around that call would re-collapse every refusal to one code while
+    the manager-level and wire-level tests both stayed green.
+
+    Driving the real adapter, because the seam IS adapter code -- a mocked adapter
+    replaces exactly what is under test. Reuses ``_build_gam_adapter`` rather than
+    re-wiring the adapter here (salesagent-rys3u.8).
+    """
+
+    def test_rate_limit_from_the_order_call_propagates_unchanged(self, mock_principal, sample_request, sample_packages):
+        """A quota refusal beneath the seam reaches the caller still RATE_LIMITED."""
+        from src.core.exceptions import AdCPRateLimitError
+
+        adapter = _build_gam_adapter(mock_principal)
+
+        with (
+            patch.object(
+                adapter.orders_manager,
+                "create_order",
+                side_effect=AdCPRateLimitError(retry_after=30),
+            ),
+            patch("src.core.database.database_session.get_db_session") as mock_db_session,
+        ):
+            _stub_product_session(mock_db_session)
+
+            start_time = datetime.now()
+            end_time = start_time + timedelta(days=30)
+            with pytest.raises(AdCPRateLimitError) as exc_info:
+                adapter.create_media_buy(
+                    request=sample_request,
+                    packages=sample_packages,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+
+        # Not AdCPAdapterError, not AD_SERVER_CREATE_FAILED: the seam must not
+        # relabel a classification the layer beneath it already made.
+        assert exc_info.value.error_code == "RATE_LIMITED"
+
+
 class TestGAMProductUnavailableRaiseSites:
     """Drive both AdCPProductUnavailableError raise sites in GAM create_media_buy.
 

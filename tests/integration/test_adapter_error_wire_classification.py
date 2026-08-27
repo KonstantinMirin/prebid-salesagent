@@ -23,9 +23,14 @@ the contract is sound and the fix does not need to touch it -- this test pins
 that, because deleting the passthrough arm would silently undo the whole fix.
 
 ``TestRawFaultIsClassified`` grades the ADAPTER, and is the reproduction. It runs
-the real ``GoogleAdManager`` over a mocked GAM client, so the fault travels the
+the real ``GAMOrdersManager`` over a mocked GAM client, so the fault travels the
 production path. A mocked adapter cannot grade this: mocking the adapter replaces
 the very code that must do the classifying.
+
+The seam ABOVE the manager -- ``GoogleAdManager.create_media_buy`` -- is pinned by
+``TestGAMAdapterSeamPreservesClassification`` in
+tests/unit/test_gam_workflow_packages.py, which reuses that file's adapter wiring
+instead of duplicating it here.
 """
 
 from __future__ import annotations
@@ -180,38 +185,55 @@ class TestNoUpstreamTextOnTheWire:
         assert secret in str(error.internal_detail), "internal_detail must keep the fault for the server-side log"
 
 
-class TestAdapterSeamClassifies:
-    """The seam the tool actually calls, not just the manager beneath it.
+class TestEveryClassifierRow:
+    """Every row of ``map_gam_exception``, not just the three the acceptance names.
 
-    ``_execute_adapter_media_buy_creation`` calls
-    ``GoogleAdManager.create_media_buy`` (google_ad_manager.py:672), which calls
-    ``orders_manager.create_order``. Grading only the manager leaves the seam
-    unpinned: an ``except Exception`` introduced at the adapter level later would
-    re-collapse every fault while the manager-level test stayed green.
+    The raise-site coverage guard walks ``raise`` statements. This classifier
+    ``return``s its error and callers raise the result, so the guard cannot see
+    these rows at all -- they carry no test obligation and would otherwise have no
+    test. The blindness is tracked separately; the rows are graded here regardless,
+    because an unclassified row silently falls through to INTERNAL_ERROR and the
+    buyer loses the diagnosis exactly as they did before this fix.
     """
 
-    def test_fault_through_the_adapter_seam_is_classified(self):
-        """A refusal beneath the seam still surfaces as the classified AdCP error."""
-        from src.adapters.gam.managers.orders import GAMOrdersManager
+    _ROWS = [
+        pytest.param("AuthError", "bad credentials", "CONFIGURATION_ERROR", id="auth_is_seller_config"),
+        pytest.param("PermissionError", "denied", "PERMISSION_DENIED", id="permission"),
+        pytest.param("QuotaError", "over limit", "RATE_LIMITED", id="quota"),
+        pytest.param("NotFoundError", "missing", "REFERENCE_NOT_FOUND", id="not_found"),
+        pytest.param("DuplicateError", "already exists", "CONFLICT", id="duplicate"),
+        pytest.param("NetworkError", "unreachable", "SERVICE_UNAVAILABLE", id="network"),
+        pytest.param("SomeTimeoutError", "timeout", "SERVICE_UNAVAILABLE", id="timeout_shares_network_code"),
+        pytest.param("WeirdFault", "no idea what this is", "INTERNAL_ERROR", id="unclassifiable"),
+    ]
 
-        order_service = MagicMock()
-        order_service.createOrders.side_effect = GoogleAdsServerFault("QuotaError.EXCEEDED_QUOTA: too many requests")
-        client_manager = MagicMock()
-        client_manager.get_service.return_value = order_service
+    @pytest.mark.parametrize("type_name,text,expected_code", _ROWS)
+    def test_row_yields_its_code(self, type_name, text, expected_code):
+        """The fault's family decides the code, by type name or message."""
+        from src.adapters.gam.utils.error_handler import map_gam_exception
 
-        manager = GAMOrdersManager(
-            client_manager=client_manager,
-            advertiser_id="12345",
-            trafficker_id="67890",
-            dry_run=False,
+        fault = type(type_name, (Exception,), {})(text)
+        error = map_gam_exception(fault)
+
+        assert error.error_code == expected_code, (
+            f"{type_name}({text!r}) classified as {error.error_code}, expected {expected_code}"
         )
+        # Every row keeps the fault for the operator and off the wire.
+        assert text in str(error.internal_detail)
 
-        # The adapter's create_media_buy reaches createOrders through exactly this
-        # call, so a classifier that only fires deeper down would fail here.
-        with pytest.raises(AdCPRateLimitError):
-            manager.create_order(
-                order_name="seam-order",
-                total_budget=5000.0,
-                start_time=datetime.now(UTC) + timedelta(days=1),
-                end_time=datetime.now(UTC) + timedelta(days=8),
-            )
+    def test_unknown_row_is_not_retryable(self):
+        """An unclassifiable fault must not land in ``with_retry``'s retry set.
+
+        AdCPAdapterError would have: it is SERVICE_UNAVAILABLE, which the default
+        ``retry_on`` includes. Routing UNKNOWN there would retry every mystery
+        fault three times with backoff for no reason.
+        """
+        from src.adapters.gam.utils.error_handler import map_gam_exception
+        from src.core.exceptions import AdCPRateLimitError, AdCPServiceUnavailableError
+
+        error = map_gam_exception(Exception("no idea"))
+
+        retry_on = (AdCPServiceUnavailableError, AdCPRateLimitError)
+        assert not isinstance(error, retry_on), (
+            f"{type(error).__name__} is in the default retry set; an unclassifiable fault must not be retried"
+        )
