@@ -782,9 +782,10 @@ def test_creative_assignments_replaces_all(integration_db):
 #   - creative_assignments -> src/core/tools/media_buy_update.py:1185
 # Each writes through MediaBuyRepository.update_status rather than assigning
 # media_buy_obj.status directly, and that routing is the behaviour graded here:
-# update_status stamps confirmed_at (pending_creatives is a seller-committed
-# status — it IS in models._SELLER_COMMITTED_STATUSES) and bumps revision (the
-# buyer's optimistic-concurrency token). A direct attribute assignment moves the
+# update_status bumps revision (the buyer's optimistic-concurrency token) and does
+# NOT stamp confirmed_at: pending_creatives is deliberately absent from
+# models._SELLER_COMMITTED_STATUSES, because a hold awaiting creative approval is
+# not a seller commitment. A direct attribute assignment moves the
 # buy with neither, which is invisible if the test only checks the status string.
 # =============================================================================
 
@@ -869,6 +870,13 @@ def test_approved_draft_transitions_to_pending_creatives(integration_db, creativ
             before,
             after,
             expected_status="pending_creatives",
-            confirms=True,
+            # confirms=False: pending_creatives is a HOLD, not a commitment. The buy is
+            # waiting on creative approval and the ad server has not been contacted, so
+            # there is nothing to record. Was confirms=True, which graded the defect Chris
+            # reproduced on a real database: the hold stamped a write-once, buyer-visible
+            # confirmed_at, and a buy that later failed ended `failed` still carrying it.
+            # The pin decides it -- create-media-buy-response.json @ 3.1.1 says null "in
+            # deferred or manual-approval flows until seller commitment occurs".
+            confirms=False,
             subject=f"attaching {creative_field} to approved draft {media_buy_id}",
         )

@@ -33,8 +33,16 @@ which is also what the status-normalising migration beside this one then
 resolves.
 
 Not backfilled, deliberately: rows in an unconfirmed status (`draft`, `pending`,
-`pending_approval`, `rejected`, `failed`) have no commitment instant to record, so
-NULL is their correct value rather than missing data.
+`pending_approval`, `rejected`, `failed`, `pending_creatives`) have no commitment
+instant to record, so NULL is their correct value rather than missing data.
+
+`pending_creatives` is on that list for the same reason it is absent from
+`models._SELLER_COMMITTED_STATUSES`: it is a hold awaiting creative approval, the
+ad server has not been contacted, and the pin describes confirmed_at as null in
+manual-approval flows until commitment occurs. Backfilling it would manufacture a
+commitment instant nobody observed -- the outcome the paragraph above forbids --
+for every held row already in the table. Changed before release: this migration
+has never shipped, so the freeze it describes has nothing to protect yet.
 
 Revision ID: 7f3a1c9e2b04
 Revises: 2c4e6a7b8d9e
@@ -56,7 +64,6 @@ _COMMITTED_STATUSES = (
     "ready",
     "scheduled",
     "pending_activation",
-    "pending_creatives",
     "pending_start",
     "paused",
     "completed",

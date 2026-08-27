@@ -487,15 +487,20 @@ class TestCreativeApprovalUnblocksMediaBuy:
         repo = MediaBuyRepository(factory_session, seeded.tenant_id)
         before = repo.get_by_id(media_buy_id)
         before_revision = before.revision
-        # The buy starts ALREADY stamped, and that is correct: "pending_creatives" is a
-        # seller-committed status, so the commitment instant was recorded when the buy
-        # entered it — not when its creatives were later approved. What this site owes
-        # is therefore the revision bump plus write-once stability across the move to
-        # "active". The first-commitment stamp is graded where a buy actually crosses
-        # into commitment, in the workflow-approval tests (pending_approval -> scheduled).
+        # The buy starts UNSTAMPED, and that is the point. "pending_creatives" is a HOLD:
+        # the ad server has not been contacted, so there is no seller commitment to
+        # record. It used to be in models._SELLER_COMMITTED_STATUSES, which stamped a
+        # write-once buyer-visible instant at the moment of the hold — a defect reproduced
+        # on a real database, and one a buy that later FAILED carried to
+        # its grave. Removing that membership is what this fixture now starts from.
+        #
+        # So this move is the FIRST commitment, not a preservation: approving the last
+        # creative drives the buy to "active", the ad server is contacted, and the stamp
+        # lands there. This site therefore grades the first stamp at the point commitment
+        # actually happens, which is strictly more than the write-once check it replaced.
         before_confirmed_at = before.confirmed_at
-        assert before_confirmed_at is not None, (
-            "fixture must start from a seller-committed status carrying its commitment instant"
+        assert before_confirmed_at is None, (
+            "fixture must start from a HELD, uncommitted status carrying no commitment instant"
         )
 
         # execute_approved_media_buy is the SOLE writer of the status below, so mocking
@@ -516,13 +521,13 @@ class TestCreativeApprovalUnblocksMediaBuy:
         factory_session.expire_all()
         after = MediaBuyState.of(repo.get_by_id(media_buy_id))
         assert after.approved_by == "system"
-        # The seeded flight window opened yesterday, so the shared rule picks "active". confirms=None: the buy was ALREADY
-        # committed (pending_creatives is a committed status), so what this move owes is
-        # write-once stability of the stamp, not a new one.
+        # The seeded flight window opened yesterday, so the shared rule picks "active".
+        # confirms=True: this move crosses INTO commitment, so it must mint the stamp.
         assert_status_move_carried_bookkeeping(
             MediaBuyState(status="pending_creatives", revision=before_revision, confirmed_at=before_confirmed_at),
             after,
             expected_status="active",
+            confirms=True,
             subject="approving the last pending creative",
         )
 

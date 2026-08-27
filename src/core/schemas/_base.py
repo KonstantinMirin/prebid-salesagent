@@ -307,11 +307,23 @@ class WireSerializerMixin:
 
         return required_nullable_fields(cls._PINNED_SCHEMA_REF)
 
+    _INTERNAL_ONLY_FIELDS: ClassVar[frozenset[str]] = frozenset()
+    """Fields kept OFF protocol responses unless ``context={"include_internal": True}``.
+
+    Declarative because the alternative is a second ``@model_serializer`` per class
+    that needs one, and a class with two wrap serializers silently runs only one of
+    them — which is how ``confirmed_at`` went missing from the create success arm
+    even after the always-include mixin was composed.
+    """
+
     @model_serializer(mode="wrap")
     def _serialize_wire(self, serializer, info):
         data = serializer(self)
         if self._SERIALIZE_NESTED_MODELS:
             data = self._apply_nested_models(data, info)
+        if self._INTERNAL_ONLY_FIELDS and not (info.context or {}).get("include_internal"):
+            for field in self._INTERNAL_ONLY_FIELDS:
+                data.pop(field, None)
         return self._apply_always_include(data, info)
 
     def _apply_nested_models(self, data, info):
@@ -485,7 +497,7 @@ def _mirror_media_buy_status(model: Any) -> Any:
     return model
 
 
-class CreateMediaBuySuccess(CompletedTaskStatusMixin, AdCPCreateMediaBuySuccess):
+class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, CompletedTaskStatusMixin, AdCPCreateMediaBuySuccess):
     """Successful create_media_buy response extending adcp v1.2.1 type.
 
     Extends the official adcp CreateMediaBuySuccess type with internal workflow tracking.
@@ -519,19 +531,56 @@ class CreateMediaBuySuccess(CompletedTaskStatusMixin, AdCPCreateMediaBuySuccess)
     # Both keep the parent's REQUIRED types and lose only their local defaults, so
     # omitting either is a construction error instead of a fabricated value.
     #
-    # Deliberately NOT widened to ``| None``, though the pinned
-    # ``create-media-buy-response.json`` @ 3.1.1 types ``confirmed_at``
-    # ``["string", "null"]`` (verified against the pin, and it is in ``required``).
-    # Null is what a seller sends when it returns a SUCCESS for a buy it has not
-    # committed to — and this seller never does: ``create_from_request`` calls
-    # ``_stamp_confirmation_if_needed`` before flush, so a row created in any
-    # committed status is stamped at creation, and a create that is NOT committed
-    # (manual approval pending) returns the ``CreateMediaBuySubmitted`` arm instead.
-    # Emitting a non-null value where the spec permits null is a strict subset of
-    # what the spec allows; widening the annotation would buy nothing and would cost
-    # a type-checker suppression against the SDK's non-nullable parent (the ratchet
-    # this PR exists to bring back to 63).
-    confirmed_at: AwareDatetime
+    # WIDENED to ``| None``, and the whole stack already agreed except this line:
+    #
+    #   pin  create-media-buy-response.json @ 3.1.1 arm0 (CreateMediaBuySuccess)
+    #        type ["string", "null"], and IN ``required`` -> present, may be null
+    #   ORM  MediaBuy.confirmed_at  Mapped[datetime | None], nullable=True
+    #   DB   media_buys.confirmed_at  is_nullable = YES
+    #
+    # So this annotation was the only layer narrower than the contract, and the
+    # narrowing was never mandated. ``required`` + nullable is exactly "the key must
+    # be present, its value may be null" -- no default, and AlwaysIncludeFieldsMixin
+    # emits the explicit null rather than dropping the key.
+    #
+    # It previously said "deliberately NOT widened", on the premise that "this seller
+    # never [sends null]: ... a create that is NOT committed (manual approval pending)
+    # returns the ``CreateMediaBuySubmitted`` arm instead." That premise was false for
+    # one path, and review found it: a ``pending_creatives`` create returns the
+    # SUCCESS arm, not Submitted. While PENDING_CREATIVES sat in
+    # ``_SELLER_COMMITTED_STATUSES`` the buy got stamped and the non-null type held --
+    # but the stamp itself was the defect, a write-once buyer-visible commitment minted
+    # at the moment of a HOLD, before the ad server was contacted. Removing that
+    # membership is the fix; this widening is what makes the correct state expressible.
+    #
+    # The suppression records an SDK/SPEC DIVERGENCE, not our convenience: we extend the
+    # SDK's class, and that class does not account for the null case its own pinned
+    # schema permits. Suppressing here is how we keep inheriting the SDK type while
+    # honouring the contract it under-specifies. Cost stated rather than buried -- the
+    # type-ignore ratchet moves 56 -> 57, and the ratchet is shrink-only by default, so
+    # this is an approved exception rather than a silent increase.
+    confirmed_at: AwareDatetime | None  # type: ignore[assignment]
+
+    # Names the arm this model IS, so the retained-field set is DERIVED from the pin
+    # rather than listed here. arm0 is CreateMediaBuySuccess; the bare ref is
+    # underivable by design because the root composes through oneOf.
+    #
+    # Adopting the mixin is not optional once confirmed_at can be null: the library
+    # base serializes with exclude_none=True, so a null value DROPS the key -- and the
+    # pin lists confirmed_at in `required`, so a document missing it fails validation.
+    # That is the same silent-omission class as GH #1900, which is why this PR exists.
+    # It was invisible until now only because the field could never be null.
+    _PINNED_SCHEMA_REF: ClassVar[str] = "media-buy/create-media-buy-response.json#/oneOf/0"
+
+    # Replaces a second @model_serializer that used to live on this class. Two wrap
+    # serializers in one model means only one runs, so composing the always-include
+    # mixin above had NO effect until the duplicate was removed -- confirmed_at was
+    # still dropped. Its packages special-case (exclude platform_line_item_id) was
+    # already redundant: that field carries exclude=True at both declaration sites.
+    # test_architecture_one_wire_serializer_seat.py exists to forbid exactly this and
+    # could not see it -- ALLOWED_FILES exempts this file whole.
+    _SERIALIZE_NESTED_MODELS: ClassVar[bool] = True
+    _INTERNAL_ONLY_FIELDS: ClassVar[frozenset[str]] = frozenset({"workflow_step_id"})
     # revision is INHERITED. It was redeclared here as a bare ``int`` -- no Field, no
     # description -- against a parent typed int/required/[Ge(ge=1)], so the redeclaration
     # dropped the pinned minimum and nothing else. Deleting it restores the bound by
@@ -612,38 +661,6 @@ class CreateMediaBuySuccess(CompletedTaskStatusMixin, AdCPCreateMediaBuySuccess)
         See ``_mirror_media_buy_status`` and docs/adcp-spec-version.md "Behavior target vs SDK pin".
         """
         return _mirror_media_buy_status(self)
-
-    @model_serializer(mode="wrap")
-    def _serialize_model(self, serializer, info):
-        """Serialize model, excluding internal fields by default."""
-        # Get base serialization
-        data = serializer(self)
-
-        # Exclude internal fields from protocol responses
-        # (unless explicitly requested via model_dump_internal)
-        if not info.context or not info.context.get("include_internal"):
-            data.pop("workflow_step_id", None)
-
-        # Auto-handle nested Pydantic models
-        # For packages array, exclude internal platform_line_item_id from AdCP responses
-        for field_name in self.__class__.model_fields:
-            field_value = getattr(self, field_name, None)
-            if field_value is None:
-                continue
-
-            if isinstance(field_value, list) and field_value:
-                if isinstance(field_value[0], BaseModel):
-                    # Exclude internal fields from Package objects in AdCP responses
-                    if field_name == "packages":
-                        data[field_name] = [
-                            item.model_dump(exclude={"platform_line_item_id"}, mode=info.mode) for item in field_value
-                        ]
-                    else:
-                        data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
-            elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump(mode=info.mode)
-
-        return data
 
     def model_dump_internal(self, **kwargs):
         """Dump including internal fields for database storage and internal processing."""

@@ -268,15 +268,21 @@ class TestWorkflowApprovalMovesMediaBuy:
             MediaBuyState(status="pending_approval", revision=before.revision, confirmed_at=None),
             after,
             expected_status="pending_creatives",
-            confirms=True,
+            # confirms=False: pending_creatives is a HOLD, not a commitment. The buy is
+            # waiting on creative approval and the ad server has not been contacted, so
+            # there is nothing to record. Was confirms=True, which graded the defect Chris
+            # reproduced in round 6 (B3): the hold stamped a write-once, buyer-visible
+            # confirmed_at, and a buy that later failed ended `failed` still carrying it.
+            # The pin decides it -- create-media-buy-response.json @ 3.1.1 says null "in
+            # deferred or manual-approval flows until seller commitment occurs".
+            confirms=False,
             subject="approve with an unapproved creative",
         )
-        # pending_creatives IS in models._SELLER_COMMITTED_STATUSES, so the seller has
-        # committed by the time the buy is merely waiting on creatives.
-        assert after.confirmed_at is not None, (
-            "admin approval moved the buy to the seller-confirmed status 'pending_creatives' "
-            "without stamping confirmed_at"
-        )
+        # confirmed_at is NOT asserted again here. The helper above already grades it
+        # under confirms=False, with a stronger message than a hand-rolled copy carries.
+        # This used to be a second, inverted assertion claiming pending_creatives was
+        # seller-committed -- a duplicate oracle that had to be found and flipped
+        # separately when the membership was corrected.
 
     def test_approve_schedules_buy_and_bumps_revision(self, client, factory_session):
         """The scheduled arm: a buy approved BEFORE its flight window opens.

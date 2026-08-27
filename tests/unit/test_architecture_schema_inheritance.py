@@ -383,6 +383,24 @@ class TestSchemaInheritance:
             # makes collection_list typed at the request boundary instead of
             # leaking through library extra="allow" as a raw dict.
             ("Signal", "deployments"),
+            # WEAKENED AXIS: nullability. The parent types confirmed_at as a non-null
+            # datetime; this redeclares it ``AwareDatetime | None``. Rowed rather than
+            # admitted, because a widening a derived rule lets through is invisible and
+            # permanent, while a row names itself and can be audited.
+            #
+            # The weakening is toward the PIN, not away from it:
+            # create-media-buy-response.json @ 3.1.1 arm0 (CreateMediaBuySuccess) types
+            # confirmed_at ["string","null"] AND lists it in ``required``. The SDK parent
+            # is the side that diverges -- it under-specifies its own schema by typing the
+            # field non-null. MediaBuy.confirmed_at is Mapped[datetime | None] and the
+            # column is nullable, so this annotation was the only layer narrower than the
+            # contract.
+            #
+            # Forced by the create path: a ``pending_creatives`` create returns this arm, and
+            # that buy is a HOLD with no seller commitment to report. While the status sat
+            # in _SELLER_COMMITTED_STATUSES it was stamped and the non-null type held --
+            # but the stamp was the defect.
+            ("CreateMediaBuySuccess", "confirmed_at"),
             # adcp 6.6 (spec 3.1.1) re-added status/changes/warnings/platform_id/assignment_errors/
             # assigned_to to the library sync_creatives_response Creative — status/platform_id/
             # assignment_errors/assigned_to are INHERITED (PR #1567). Internal review-routing

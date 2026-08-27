@@ -1018,7 +1018,20 @@ _SELLER_COMMITTED_STATUSES: frozenset[PersistedMediaBuyStatus] = frozenset(
         PersistedMediaBuyStatus.READY,
         PersistedMediaBuyStatus.SCHEDULED,
         PersistedMediaBuyStatus.PENDING_ACTIVATION,
-        PersistedMediaBuyStatus.PENDING_CREATIVES,
+        # PENDING_CREATIVES is deliberately ABSENT. It is a hold: the buy is waiting on
+        # creative approval and the ad server has not been contacted, so there is no
+        # seller commitment to record. Membership here made the repository stamp a
+        # write-once, buyer-visible confirmed_at at the moment of the hold, and a buy
+        # that later failed ended `failed` still carrying it.
+        #
+        # Grounded in the pin, not in preference: create-media-buy-response.json @ 3.1.1
+        # types confirmed_at ["string","null"], describes it as "May be null in deferred
+        # or manual-approval flows until seller commitment occurs", and constrains it in
+        # exactly one direction -- if confirmed_at is null then status MUST NOT be
+        # "active". A held buy is a manual-approval flow and is not `active`, so NULL is
+        # the conformant value; ACTIVE remains in this set, so the stamp lands at
+        # activation instead. Removing the member makes the bad stamp unrepresentable
+        # rather than merely unreached.
         PersistedMediaBuyStatus.PENDING_START,
         PersistedMediaBuyStatus.PAUSED,
         PersistedMediaBuyStatus.COMPLETED,

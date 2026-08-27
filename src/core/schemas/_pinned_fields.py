@@ -66,9 +66,26 @@ def _resolve(node: Any, base: Path) -> tuple[Any, Path, tuple[str, str] | None]:
                 f"no complete required list is derivable"
             )
         seen.add(identity)
-        for token in (t for t in pointer.split("/") if t):
-            node = node[token]
+        node = _walk_pointer(node, pointer)
     return node, base, identity
+
+
+def _walk_pointer(node: Any, pointer: str) -> Any:
+    """Walk a JSON Pointer, honouring RFC 6901 array-index tokens.
+
+    ``schema[token]`` alone is wrong the moment a pointer crosses a list: every
+    token arrives as ``str``, so ``#/oneOf/0`` raises ``TypeError`` on the array
+    rather than selecting the arm. A pinned root that composes through ``oneOf``
+    is exactly the shape a caller needs a pointer for -- the bare ref is
+    underivable by design -- so refusing array tokens made the disjunctive case
+    unreachable through the one mechanism provided for it.
+    """
+    for token in (t for t in pointer.split("/") if t):
+        if isinstance(node, list):
+            node = node[int(token)]
+        else:
+            node = node[token]
+    return node
 
 
 def _is_nullable(prop: dict[str, Any]) -> bool:
@@ -146,9 +163,7 @@ def required_nullable_fields(ref: str) -> frozenset[str]:
     """
     path_part, _, pointer = ref.partition("#")
     base = (_schema_root() / path_part).resolve()
-    schema = json.loads(base.read_text())
-    for token in (t for t in pointer.split("/") if t):
-        schema = schema[token]
+    schema = _walk_pointer(json.loads(base.read_text()), pointer)
     # Resolve the root itself. Some pinned roots are bare ``$ref`` aliases —
     # ``core/signal-pricing-option.json`` is one line of metadata pointing at
     # ``vendor-pricing-option.json`` — and without this an alias declares no
