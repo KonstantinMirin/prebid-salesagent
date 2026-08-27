@@ -479,9 +479,11 @@ jobs:
                  >> "$GITHUB_STEP_SUMMARY" 2>/tmp/"$1".err; then
               :
             else
-              printf '\n> generator FAILED — stderr below\n\n```\n' >> "$GITHUB_STEP_SUMMARY"
-              tail -40 /tmp/"$1".err >> "$GITHUB_STEP_SUMMARY"
-              printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
+              {
+                printf '\n> generator FAILED — stderr below\n\n```\n'
+                tail -40 /tmp/"$1".err
+                printf '\n```\n'
+              } >> "$GITHUB_STEP_SUMMARY"
             fi
             printf '\n</details>\n' >> "$GITHUB_STEP_SUMMARY"
           }
