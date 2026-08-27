@@ -16,6 +16,7 @@ from sqlalchemy.sql import Select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, TenantManagementConfig, User
+from src.core.logging_config import log_safe
 
 T = TypeVar("T")
 
@@ -615,7 +616,7 @@ def approve_media_buy_through_writer(media_buy_id: str, tenant_id: str, *, appro
 
     from src.core.tools.media_buy_create import ApprovalOutcome, execute_approved_media_buy
 
-    logger.info(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}")
+    logger.info(log_safe(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}"))
     approval: ApprovalResult = execute_approved_media_buy(
         media_buy_id,
         tenant_id,
@@ -630,7 +631,7 @@ def approve_media_buy_through_writer(media_buy_id: str, tenant_id: str, *, appro
             "info",
         )
     elif not approval.ok:
-        logger.error(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {approval.error_msg}")
+        logger.error(log_safe(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {approval.error_msg}"))
         flash(f"Media buy approved but adapter creation failed: {approval.error_msg}", "error")
 
     return approval

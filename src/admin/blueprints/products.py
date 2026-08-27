@@ -2137,9 +2137,23 @@ def delete_product(tenant_id, product_id):
 
             # Check if product is used in any active media buys
             mb_repo = MediaBuyRepository(db_session, tenant_id)
+            # SCHEDULED is here because a buy whose flight window has not opened yet is
+            # still a live commitment: the seller has agreed to run it, and deleting the
+            # product underneath it breaks a buy that has not had its chance to deliver.
+            # It became reachable when the admin approval routes started writing the
+            # resolved flight-window status -- a pre-window buy used to land `active`
+            # (and so was protected by that member) and now lands `scheduled`.
+            #
+            # Listed explicitly rather than reusing models._SELLER_COMMITTED_STATUSES,
+            # although that set is a near-match and the resemblance is a trap: it also
+            # contains COMPLETED and CANCELED. A finished or cancelled buy must NOT
+            # block product deletion -- it has no future delivery to protect -- so
+            # adopting the set would silently make products undeletable forever.
+            # The correct membership rule for THIS guard is "could still deliver".
             active_buys = mb_repo.list_by_statuses(
                 [
                     PersistedMediaBuyStatus.PENDING,
+                    PersistedMediaBuyStatus.SCHEDULED,
                     PersistedMediaBuyStatus.ACTIVE,
                     PersistedMediaBuyStatus.PAUSED,
                 ]

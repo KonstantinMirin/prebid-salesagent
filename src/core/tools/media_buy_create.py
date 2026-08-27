@@ -824,7 +824,7 @@ def execute_approved_media_buy(
     from src.core.database.models import MediaPackage as DBMediaPackage
     from src.core.database.repositories import MediaBuyUoW
 
-    logger.info(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}")
+    logger.info(log_safe(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}"))
 
     # Set tenant context (required for adapter helpers to work)
     from src.core.config_loader import set_current_tenant
@@ -873,7 +873,9 @@ def execute_approved_media_buy(
 
             unapproved = CreativeAssignmentRepository(session, tenant_id).unapproved_creative_ids(media_buy_id)
             if unapproved:
-                logger.info(f"[APPROVAL] Media buy {media_buy_id} held: {len(unapproved)} creative(s) not approved")
+                logger.info(
+                    log_safe(f"[APPROVAL] Media buy {media_buy_id} held: {len(unapproved)} creative(s) not approved")
+                )
                 held = _MediaBuyRepository(session, tenant_id).update_status(
                     media_buy_id,
                     PersistedMediaBuyStatus.PENDING_CREATIVES,
@@ -1376,7 +1378,7 @@ def execute_approved_media_buy(
                 approved_by=approved_by,
             )
             assert written is not None, f"media buy {media_buy_id!r} vanished mid-write"
-            logger.info(f"[APPROVAL] Media buy {media_buy_id} -> {resolved}")
+            logger.info(log_safe(f"[APPROVAL] Media buy {media_buy_id} -> {resolved}"))
             return ApprovalResult(
                 outcome=ApprovalOutcome.EXECUTED,
                 status=resolved,
