@@ -17,8 +17,18 @@ resolver crash was reported as the buyer's ``VALIDATION_ERROR``. A fault on the
 seller's side dressed as something the buyer can act on.
 
 ONE parametrized test rather than one test per site (salesagent-45d27 acceptance
-4): the sites differ only in which tool they live in, and 5 near-identical test
+4): the sites differ only in which tool they live in, and near-identical test
 bodies would grade the copy-paste rather than the contract.
+
+TWO TOOLS, NOT THREE. create_media_buy is deliberately absent. Its outermost
+handler sits at the end of a ~1500-line try that CONTAINS the adapter call, and
+the GAM creative path is not wrapped by ``handle_gam_errors`` — so an untyped
+ConnectionError from the ad server lands there too, where SERVICE_UNAVAILABLE is
+the true statement and a retry genuinely may work. That handler cannot tell a
+tool crash from a downstream outage, so no single code is right for it. Typing
+the adapter boundary is the prerequisite; until then the site keeps the honest
+answer for the fault that dominates it. Recorded on the ticket as a decision for
+the owner rather than resolved by weakening a test.
 
 Graded on ``wire_error_envelope`` across every transport that has a wire, through
 ``assert_wire_error`` — the sanctioned surface. An ``_impl``-level
@@ -34,10 +44,8 @@ and salesagent-rys3u.8 depends on it surviving.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import patch
-from uuid import uuid4
 
 import pytest
 
@@ -91,40 +99,9 @@ def _list_authorized_properties_env():
             yield env, {}
 
 
-@contextmanager
-def _create_media_buy_env():
-    """A crash inside the tool body — src/core/tools/media_buy_create.py."""
-    from tests.harness.media_buy_create import MediaBuyCreateEnv
-
-    now = datetime.now(UTC)
-    with MediaBuyCreateEnv() as env:
-        env.setup_media_buy_data()
-        # The adapter FACTORY raising, not the adapter: a factory that blows up is
-        # this seller's own bug, where an adapter call that fails is the downstream
-        # outage SERVICE_UNAVAILABLE legitimately describes.
-        env.mock["adapter"].side_effect = _CRASH
-        yield (
-            env,
-            {
-                "brand": {"domain": "crash-wire.example.com"},
-                "start_time": (now + timedelta(days=1)).isoformat(),
-                "end_time": (now + timedelta(days=8)).isoformat(),
-                "packages": [
-                    {
-                        "product_id": "prod_1",
-                        "budget": 5000.0,
-                        "pricing_option_id": "cpm_usd_fixed",
-                    }
-                ],
-                "idempotency_key": f"crash-wire-{uuid4().hex}",
-            },
-        )
-
-
 _TOOLS = [
     pytest.param(_get_products_env, id="get_products"),
     pytest.param(_list_authorized_properties_env, id="list_authorized_properties"),
-    pytest.param(_create_media_buy_env, id="create_media_buy"),
 ]
 
 

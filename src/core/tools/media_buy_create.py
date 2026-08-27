@@ -4290,7 +4290,7 @@ async def _create_media_buy_impl(
             # Audit logging failure is non-critical, but we should log it
             logger.warning(f"Failed to log failed media buy creation to audit: {audit_error}")
 
-        raise AdCPInternalError()
+        raise AdCPAdapterError()
 
 
 def _build_create_media_buy_request(
