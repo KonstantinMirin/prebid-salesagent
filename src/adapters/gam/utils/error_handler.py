@@ -82,13 +82,28 @@ def map_gam_exception(exception: Exception) -> AdCPError:
 
     # Order matters: the first match wins, and "invalid" appears inside many
     # unrelated fault strings, so the specific families are tested ahead of it.
-    if matches("AuthError", "authentication"):
+    if matches(
+        "AuthError",
+        "RefreshError",
+        "authentication",
+        "invalid_grant",
+        "invalid_client",
+        "credential",
+    ):
         # The SELLER's OAuth to Google failed, not the buyer's token. AUTH_INVALID
         # is defined by the pin as the CALLER's credentials being rejected
         # ("Caller's signed envelope did not verify"), and it is terminal -- so
         # reporting it here would send the buyer to rotate credentials they do not
         # hold and stop them retrying. CONFIGURATION_ERROR is the pin's code for
         # "seller-side deployment ... an operator at the seller has to" fix it.
+        #
+        # This row MUST stay ahead of the validation row below, and must match the
+        # OAuth vocabulary as well as the SOAP one. Google's canonical expired- or
+        # revoked-refresh-token failure is `RefreshError: invalid_grant`, which
+        # names neither "AuthError" nor "authentication" -- so on keyword order
+        # alone it used to fall through to the validation row and told the buyer
+        # their request was malformed while the seller's token sat expired. That is
+        # the most common credential failure this adapter sees.
         #
         # No details object: the pin says CONFIGURATION_ERROR "carries no
         # error.details shape".

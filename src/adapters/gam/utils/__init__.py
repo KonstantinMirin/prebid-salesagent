@@ -56,12 +56,11 @@ from .macros import (
     substitute_macros,
     substitute_tracking_urls,
 )
-from .validation import GAMValidationError, GAMValidator, validate_gam_creative
+from .validation import GAMValidator, validate_gam_creative
 
 __all__ = [
     # Validation
     "GAMValidator",
-    "GAMValidationError",
     "validate_gam_creative",
     # Error handling
     "RetryConfig",

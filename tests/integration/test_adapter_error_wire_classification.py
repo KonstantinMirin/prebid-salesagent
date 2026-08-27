@@ -205,6 +205,29 @@ class TestEveryClassifierRow:
         pytest.param("NetworkError", "unreachable", "SERVICE_UNAVAILABLE", id="network"),
         pytest.param("SomeTimeoutError", "timeout", "SERVICE_UNAVAILABLE", id="timeout_shares_network_code"),
         pytest.param("WeirdFault", "no idea what this is", "INTERNAL_ERROR", id="unclassifiable"),
+        # OAuth vocabulary, which names neither "AuthError" nor "authentication".
+        # `RefreshError: invalid_grant` is Google's canonical expired- or
+        # revoked-refresh-token failure and the most common credential fault this
+        # adapter sees. It contains "invalid", so on keyword order alone it landed
+        # on the validation row and told the buyer their request was malformed
+        # while the SELLER's token sat expired (salesagent-dpxo2).
+        pytest.param(
+            "RefreshError",
+            "invalid_grant: Token has been expired or revoked.",
+            "CONFIGURATION_ERROR",
+            id="expired_refresh_token_is_sellers",
+        ),
+        pytest.param(
+            "RefreshError", "invalid_client: Unauthorized", "CONFIGURATION_ERROR", id="bad_oauth_client_is_sellers"
+        ),
+        # The counter-case that keeps the row above honest: a field the BUYER
+        # supplied really is the buyer's to fix, and must stay VALIDATION_ERROR.
+        pytest.param(
+            "GoogleAdsServerFault",
+            "CommonError.INVALID_ARGUMENT: invalid value for field startDateTime",
+            "VALIDATION_ERROR",
+            id="bad_buyer_field_stays_the_buyers",
+        ),
     ]
 
     @pytest.mark.parametrize("type_name,text,expected_code", _ROWS)
