@@ -791,7 +791,7 @@ def _mark_approval_failed(tenant_id: str, media_buy_id: str, error_msg: str) -> 
         # through: only a database problem is worth continuing past, and anything
         # else is a defect in this function that must not be disguised as one in
         # the adapter.
-        logger.exception(f"[APPROVAL] could not record FAILED for {media_buy_id}")
+        logger.exception(log_safe(f"[APPROVAL] could not record FAILED for {media_buy_id}"))
     return ApprovalResult.failed(error_msg)
 
 
@@ -1168,10 +1168,10 @@ def execute_approved_media_buy(
             # Adapter returned error response (not an exception)
             error_messages = [str(err) for err in response.errors] if response.errors else ["Unknown error"]
             error_msg = "; ".join(error_messages)
-            logger.error(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}")
+            logger.error(log_safe(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}"))
             return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
 
-        logger.info(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}: {response.media_buy_id}")
+        logger.info(log_safe(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}: {response.media_buy_id}"))
 
         # Persist adapter IDs to package_config.
         # platform_order_id is per-buy — always write to all packages so retroactive creative
@@ -1319,19 +1319,21 @@ def execute_approved_media_buy(
                         logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
                         return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
             else:
-                logger.info(f"[APPROVAL] No creative assignments found for {media_buy_id}, skipping creative upload")
+                logger.info(
+                    log_safe(f"[APPROVAL] No creative assignments found for {media_buy_id}, skipping creative upload")
+                )
 
         # After creatives are uploaded (or skipped), retry order approval
         # This is necessary because:
         # 1. GAM may still be processing inventory forecasts (NO_FORECAST_YET error)
         # 2. Creatives may have been uploaded after the initial approval attempt
-        logger.info(f"[APPROVAL] Attempting to approve order {response.media_buy_id} in GAM")
+        logger.info(log_safe(f"[APPROVAL] Attempting to approve order {response.media_buy_id} in GAM"))
         try:
             adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_obj)
             if hasattr(adapter, "orders_manager") and adapter.orders_manager:
                 approval_success = adapter.orders_manager.approve_order(response.media_buy_id)
                 if approval_success:
-                    logger.info(f"[APPROVAL] Successfully approved GAM order {response.media_buy_id}")
+                    logger.info(log_safe(f"[APPROVAL] Successfully approved GAM order {response.media_buy_id}"))
                 else:
                     # GAM approval failed - return failure so status can be updated
                     error_msg = (
