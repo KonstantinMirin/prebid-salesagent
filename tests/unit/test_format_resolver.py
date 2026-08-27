@@ -41,8 +41,7 @@ not the adcp library Format (which does not).
 #   The parameterized/unparameterized case guards the other direction: class-agnostic
 #   must not become lenient about AdCP 2.5 parameters.
 #
-# SUSPECT (3 tests):
-#   test_base_format_lookup_fails_returns_none — salesagent-z4zl: swallows AdCPNotFoundError silently
+# SUSPECT (2 tests):
 #   test_registry_creation_fails_returns_empty — salesagent-z60b: infrastructure error → []
 #   test_format_fetch_fails_returns_empty — salesagent-z60b: connection error → []
 # ---
@@ -52,7 +51,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.core.exceptions import AdCPFormatNotFoundError, AdCPNotFoundError
+from src.core.exceptions import AdCPFormatNotFoundError
 from src.core.schemas import Format
 from tests.helpers.adcp_factories import create_test_format_id
 
@@ -388,9 +387,23 @@ class TestProductFormatOverrideEdgeCases:
 
         assert result is None
 
-    # SUSPECT(salesagent-z4zl): swallows AdCPNotFoundError — should override path propagate?
     def test_base_format_lookup_fails_returns_none(self):
-        """Returns None when recursive get_format call raises AdCPNotFoundError."""
+        """Returns None when the base format genuinely does not exist.
+
+        The SUSPECT(salesagent-z4zl) marker is REMOVED and its question answered by
+        salesagent-w4x1: yes, the override path should propagate — and now does. The
+        arm was ``except (AdCPNotFoundError, Exception)``, whose first member is dead
+        (``Exception`` already covers it) and whose second swallowed everything,
+        including a typed transient. A creative agent answering 429 was reported as
+        "no such override".
+
+        It is now ``except AdCPFormatNotFoundError`` returning None, with every other
+        typed error re-raised. The mock moved with it: it injected a bare
+        ``AdCPNotFoundError``, a shape ``get_format`` never produces — it raises
+        ``AdCPFormatNotFoundError`` (format_resolver.py:128) and nothing else. A mock
+        carrying a shape production cannot emit was propping up the very swallow this
+        change removes.
+        """
         format_overrides = {"display_300x250": {"platform_config": {"gam": {"width": 1}}}}
 
         with (
@@ -398,7 +411,7 @@ class TestProductFormatOverrideEdgeCases:
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,
             patch(
                 "src.core.format_resolver.get_format",
-                side_effect=AdCPNotFoundError(),
+                side_effect=AdCPFormatNotFoundError(),
             ),
         ):
             mock_session = mock_db.return_value.__enter__.return_value
@@ -447,6 +460,66 @@ class TestListAvailableFormats:
             result = list_available_formats(tenant_id="t1")
 
         assert result == []
+
+    def test_typed_transient_propagates_instead_of_an_empty_catalog(self):
+        """A rate-limited agent must not read as "this seller carries no formats".
+
+        Covers salesagent-w4x1. The two arms above return [] for an UNTYPED failure,
+        which is a deliberate degradation and stays. A typed transient is different in
+        kind: returning [] for it puts a claim about this seller's inventory on the
+        wire, with HTTP success and no error anywhere for the buyer to contradict it.
+        The buyer cannot tell "we have no formats" from "the agent said 429".
+
+        The two SUSPECT(salesagent-z60b) markers above ask exactly this question. This
+        answers the typed half of it and deliberately leaves the untyped half alone --
+        widening the degradation to every exception is a separate decision.
+        """
+        from src.core.exceptions import AdCPRateLimitError
+
+        with (
+            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg,  # noqa: F841
+            patch(
+                "src.core.format_resolver.run_async_in_sync_context",
+                side_effect=AdCPRateLimitError(retry_after=30),
+            ),
+            pytest.raises(AdCPRateLimitError) as exc_info,
+        ):
+            from src.core.format_resolver import list_available_formats
+
+            list_available_formats(tenant_id="t1")
+
+        assert exc_info.value.error_code == "RATE_LIMITED"
+        assert exc_info.value.retry_after == 30
+
+    def test_typed_transient_from_registry_creation_also_propagates(self):
+        """Same rule at the sibling arm, so the two cannot drift apart."""
+        from src.core.exceptions import AdCPServiceUnavailableError
+
+        with (
+            patch(
+                "src.core.creative_agent_registry.get_creative_agent_registry",
+                side_effect=AdCPServiceUnavailableError(),
+            ),
+            pytest.raises(AdCPServiceUnavailableError),
+        ):
+            from src.core.format_resolver import list_available_formats
+
+            list_available_formats(tenant_id="t1")
+
+    def test_untyped_failure_still_degrades_to_empty(self):
+        """The degradation this change deliberately did NOT widen.
+
+        Pinned so a later sweep does not "finish the job" by propagating everything:
+        an untyped crash keeps returning [], which is what the two arms above have
+        always done and what the SUSPECT markers leave open.
+        """
+        with patch(
+            "src.core.creative_agent_registry.get_creative_agent_registry",
+            side_effect=RuntimeError("something unanticipated"),
+        ):
+            from src.core.format_resolver import list_available_formats
+
+            assert list_available_formats(tenant_id="t1") == []
 
     def test_success_returns_formats(self):
         """Returns formats from registry on success."""

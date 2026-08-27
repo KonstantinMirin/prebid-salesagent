@@ -16,7 +16,7 @@ from adcp.types import FormatId as LibraryFormatId
 
 from src.core.database.database_session import get_db_session
 from src.core.errors.details import EntityRefDetails
-from src.core.exceptions import AdCPError, AdCPFormatNotFoundError, AdCPNotFoundError
+from src.core.exceptions import AdCPError, AdCPFormatNotFoundError
 from src.core.schemas import Format, format_id_identity
 from src.core.validation_helpers import run_async_in_sync_context
 
@@ -194,9 +194,15 @@ def _get_product_format_override(
             # format_id is a string key in format_overrides dict
             # Pass agent_url to find the base format from the correct creative agent
             base_format = get_format(format_id, agent_url=agent_url, tenant_id=tenant_id, product_id=None)
-        except (AdCPNotFoundError, Exception):
-            # Base format not found - cannot apply override
+        except AdCPFormatNotFoundError:
+            # The base format genuinely does not exist, so there is nothing to
+            # override. The only condition this arm was ever meant to handle.
             return None
+        except AdCPError:
+            # Anything else typed -- a rate limit, an unreachable agent -- is NOT
+            # "no such format". Swallowing it here reported a transient outage as
+            # an absent override, which is a lie the buyer cannot act on.
+            raise
 
         # Apply override to base format
         override_config = format_overrides[format_id]
@@ -260,6 +266,8 @@ def list_available_formats(
 
     try:
         registry = get_creative_agent_registry()
+    except AdCPError:
+        raise
     except Exception as e:
         logger.error(f"[list_available_formats] Failed to get creative agent registry: {e}", exc_info=True)
         return []
@@ -278,6 +286,11 @@ def list_available_formats(
                 name_search=name_search,
             )
         )
+    except AdCPError:
+        # An empty catalog is a claim about this seller's inventory. Returning it
+        # for an agent that answered 429 tells the buyer we carry no formats,
+        # with no error anywhere on the wire to contradict it.
+        raise
     except Exception as e:
         logger.error(f"[list_available_formats] Error fetching formats: {e}", exc_info=True)
         return []

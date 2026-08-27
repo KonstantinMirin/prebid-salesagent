@@ -781,6 +781,63 @@ class TestFormatValidationUnreachable:
             )
 
 
+@pytest.mark.requires_db
+class TestTypedTransientSurvivesCreativeBuild:
+    """A typed transient from the creative agent keeps its own code on the wire.
+
+    Covers salesagent-w4x1. The generative build/preview path caught EVERY exception
+    from registry.build_creative / preview_creative and rebuilt it as
+    SERVICE_UNAVAILABLE. A rate-limited agent therefore reached the buyer as a
+    generic outage: "retry with backoff" instead of "wait, you are over quota", and
+    with retry_after discarded.
+
+    The handler already carved out AdCPConfigurationError for exactly this reason --
+    so a missing GEMINI_API_KEY would not read as a transient agent outage. That
+    carve-out was right and too narrow; every typed error deserves it. This grades
+    the generalization.
+
+    Asserted on the per-creative advisory rather than the error envelope because
+    that is where this failure legitimately lands: the sync SUCCEEDS and reports the
+    creative as failed, which is the contract test_bad_format above also relies on.
+    """
+
+    @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
+    def test_rate_limit_is_not_degraded_to_service_unavailable(self, integration_db, transport):
+        """RATE_LIMITED survives; before this change the buyer read SERVICE_UNAVAILABLE."""
+        from src.core.exceptions import AdCPRateLimitError
+
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+            # A generative format, so the build path this ticket is about actually runs.
+            fmt = env.setup_generative_build()
+            registry_mock = env.mock["registry"].return_value
+            registry_mock.build_creative = AsyncMock(side_effect=AdCPRateLimitError(retry_after=30))
+            registry_mock.preview_creative = AsyncMock(side_effect=AdCPRateLimitError(retry_after=30))
+
+            result = env.call_via(
+                transport,
+                creatives=[
+                    {
+                        "creative_id": "c_rate_limited",
+                        "name": "Rate Limited Build",
+                        "format_id": fmt,
+                        "assets": build_assets(text_spec("message", content="Build me a banner")),
+                    }
+                ],
+            )
+
+        assert result.is_success, f"[{transport.value}] a per-creative failure must not fail the sync"
+        assert len(result.payload.creatives) == 1
+        creative_result = result.payload.creatives[0]
+        assert creative_result.action == "failed"
+
+        codes = _error_codes(creative_result.errors)
+        # The exact regression: this read SERVICE_UNAVAILABLE before the typed arm.
+        assert "SERVICE_UNAVAILABLE" not in codes, (
+            f"[{transport.value}] a typed transient was degraded to a generic outage: {codes}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Assignment Validation Tests
 # ---------------------------------------------------------------------------

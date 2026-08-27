@@ -596,6 +596,19 @@ def _update_existing_creative(
                 ),
                 False,
             )
+        except AdCPError as typed_error:
+            # GENERALIZES the AdCPConfigurationError arm above. That arm was added so a
+            # missing GEMINI_API_KEY would not read as a transient creative-agent outage;
+            # the same is true of every other typed error the registry raises. A
+            # rate limit degraded to SERVICE_UNAVAILABLE tells the buyer to retry
+            # immediately, which is the one thing a 429 says not to do.
+            logger.error(
+                "[sync_creatives] typed %s for update of %s",
+                typed_error.error_code,
+                existing_creative.creative_id,
+                exc_info=True,
+            )
+            return (_failed_sync_result(existing_creative.creative_id, typed_error), False)
         except Exception as validation_error:
             # Creative agent validation failed for update (network error, agent down, etc.)
             # Do NOT update the creative - it needs validation before acceptance
@@ -930,6 +943,15 @@ def _create_new_creative(
                 ),
                 False,
             )
+        except AdCPError as typed_error:
+            # Same generalization as the update path above.
+            logger.error(
+                "[sync_creatives] typed %s - rejecting creative %s",
+                typed_error.error_code,
+                creative_id,
+                exc_info=True,
+            )
+            return (_failed_sync_result(creative_id, typed_error), False)
         except Exception as validation_error:
             # Creative agent validation failed (network error, agent down, etc.)
             # Do NOT store the creative - it needs validation before acceptance
