@@ -140,6 +140,14 @@ def test_logging_does_not_raise_when_the_backup_file_cannot_be_opened(tmp_path):
         "an unwritable audit backup file propagated into the caller instead of "
         f"degrading the backup sink:\n{result.stderr}"
     )
+    # The handler's docstring claims "a degraded sink ANNOUNCING ITSELF, not a
+    # silently swallowed failure". Without this, replacing `self.handleError(record)`
+    # with `pass` -- making the swallow genuinely silent -- leaves this module
+    # green, and the distinction the docstring draws is graded nowhere.
+    assert "--- Logging error ---" in result.stderr, (
+        "the degraded sink swallowed the failure silently; `handleError` must "
+        f"report it on stderr. stderr was:\n{result.stderr!r}"
+    )
 
 
 def test_logging_still_writes_its_backup_file_without_a_preexisting_log_dir(tmp_path):

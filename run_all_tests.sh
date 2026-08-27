@@ -50,7 +50,7 @@ export COMPOSE_PROJECT_NAME="$(printf '%s' "${COMPOSE_PROJECT_NAME:-adcp-innet-$
 # the bind-mounted repo is owned by whoever launched the run, with no uid
 # plumbing at all. Exporting `id -u` here actively broke that -- rootless maps a
 # non-zero container uid to a host SUBUID, which is what left /app/logs
-# unwritable and killed adcp-server at import (cassini-w37).
+# unwritable and killed adcp-server at import.
 # The delivery-webhook scheduler runs on the SERVER (adcp-server), gated by this
 # interval. docker-compose.e2e.yml defaults it empty (scheduler off); the host
 # e2e path sets it to 5 via conftest. Mirror that so test_daily_delivery_webhook
@@ -78,6 +78,13 @@ export DELIVERY_WEBHOOK_INTERVAL="${DELIVERY_WEBHOOK_INTERVAL:-5}"
 # chosen in isolation. Tiers are keyed on the Docker VM's MemTotal, with the
 # CI-box tier matching what is measured green in-network (16/16/8 at 86-196GB).
 _docker_mem_gb="$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)"
+# `{{.MemTotal}}` renders the literal string `<no value>` when the daemon does
+# not report it. Under `set -euo pipefail` the arithmetic below then aborts the
+# whole run before a single suite starts ("syntax error: operand expected"), so
+# anything non-numeric falls back to the laptop tier rather than killing the
+# run. Empty output is already safe (0 -> laptop tier), which is why the
+# stubbed-docker test never caught this.
+[[ $_docker_mem_gb =~ ^[0-9]+$ ]] || _docker_mem_gb=0
 _docker_mem_gb=$(( _docker_mem_gb / 1073741824 ))
 _cores="$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) )"
 
@@ -346,18 +353,18 @@ fi
 # --use-aliases gives this run container the `tests` network alias so the server
 # can call webhooks back to it (ADCP_WEBHOOK_HOST=tests) by name.
 #
-# PARALLEL (`-p`, re-enabled salesagent-8v2yu): this was serial from 2026-06-18
+# PARALLEL (`-p`): this was serial from 2026-06-18
 # to 2026-08-16 over an OOM observed running all six suites concurrently in one
 # container, where bdd's `-n auto` alone could spawn one worker per host CPU
 # (~17), each loading the app. That OOM predates PYTEST_XDIST_AUTO_NUM_WORKERS
 # (added the same day, in response) ever reaching this container correctly —
-# a real, separate export-plumbing bug (cassini-i04) meant the cap this
+# a real, separate export-plumbing bug meant the cap this
 # comment used to cite was, for some callers, never actually applied. With
 # that bug fixed and the cap now confirmed to genuinely reach the container,
 # a real, monitored, disposable-worktree run of the full 7-suite `-p` (unit,
 # integration, bdd_inprocess, bdd_e2e, admin, e2e, ui) measured peak memory at
 # ~35GB of the box's 86.4GB (40.5%), no OOM, pass/fail counts matching a
-# serial baseline — see salesagent-8v2yu for the full live-test evidence.
+# serial baseline, measured on a full in-network run of all 7 suites.
 echo "Running suites in-network (parallel): $SUITES"
 # Capture the suite exit code without aborting under `set -e` — reports must
 # still be extracted and the security audit must still run on a suite failure.
@@ -408,48 +415,12 @@ fi
 echo "Reports: $RESULTS_DIR/"
 ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
 
-# A suite that reported FEWER items than it collected did not pass -- it died
-# partway and said nothing. This is not hypothetical: an unserializable pytest
-# report kills an xdist worker, and the session then ends after relaying only
-# the tests already collected back, with a summary line reading "0 failed".
-# Measured on this branch before the fix, tests/unit at 4/8/14 workers:
-# collected 5846 but reported 5430 / 5348 / 5271, every run "0 failed".
-#
-# The delta is recorded in every suite's own JSON, so one check covers all of
-# them and cannot be regressed by whatever truncates a run next. Fails the run:
-# a truncated suite is a failed suite, and the whole point is that it must not
-# be mistakable for a green one.
+# A truncated suite is a failed suite, and the whole point is that it must not
+# be mistakable for a green one. The predicate is shared with
+# run_all_tests_host.sh -- see scripts/check_truncated_reports.py for why it
+# lives in its own file rather than inline here.
 if ls "$RESULTS_DIR"/*.json >/dev/null 2>&1; then
-    _truncated="$(python3 - "$RESULTS_DIR" <<'PYEOF'
-import glob, json, os, sys
-for f in sorted(glob.glob(os.path.join(sys.argv[1], "*.json"))):
-    try:
-        summary = json.load(open(f)).get("summary", {})
-    except Exception as exc:
-        print(f"  {os.path.basename(f)}: unreadable ({exc})")
-        continue
-    collected, total = summary.get("collected"), summary.get("total")
-    if collected is None or total is None:
-        continue
-    # Subtract deselection. pytest-json-report's `collected` counts what
-    # collection FOUND, before -m/-k filtering; `total` counts what ran. A suite
-    # with a marker expression is legitimately short by exactly `deselected`, and
-    # treating that as truncation is a false positive -- measured on the plain
-    # `bdd` env, which reports collected 9895 / deselected 323 / total 9572.
-    expected = collected - summary.get("deselected", 0)
-    if total < expected:
-        print(f"  {os.path.basename(f)}: collected {collected} (minus {summary.get('deselected', 0)} "
-              f"deselected = {expected} expected) but reported {total} "
-              f"-- {expected - total} item(s) never reported (summary claims "
-              f"{summary.get('failed', 0)} failed)")
-PYEOF
-)"
-    if [ -n "$_truncated" ]; then
-        echo ""
-        echo "ERROR: a suite reported fewer items than it collected -- the run is TRUNCATED, not green:"
-        echo "$_truncated"
-        echo "       Look for INTERNALERROR in the suite output above; an xdist worker died."
-        echo ""
+    if ! python3 scripts/check_truncated_reports.py "$RESULTS_DIR"; then
         RC=1
     fi
 fi

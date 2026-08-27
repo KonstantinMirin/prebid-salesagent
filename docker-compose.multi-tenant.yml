@@ -82,7 +82,7 @@ services:
       timeout: 10s
       retries: 3
       # See docker-compose.e2e.yml's adcp-server healthcheck for why 60s
-      # (salesagent-g6l43).
+
       start_period: 60s
 
   admin-ui:
@@ -112,7 +112,7 @@ services:
       timeout: 10s
       retries: 3
       # Same app-server shape and risk as adcp-server -- see
-      # docker-compose.e2e.yml's adcp-server healthcheck (salesagent-g6l43).
+      # docker-compose.e2e.yml's adcp-server healthcheck.
       start_period: 60s
 
 volumes:

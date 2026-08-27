@@ -1,27 +1,28 @@
-"""Regression test for salesagent-8v2yu: the default in-network run must invoke
-``tox -p`` (full multi-suite parallelism), not serial ``tox``.
+"""The default in-network run must invoke ``tox -p``, not serial ``tox``.
 
-salesagent-8v2yu's live test (run sa-ca89380e) proved the 2026-06-18 OOM
-rationale in run_all_tests.sh no longer holds: PYTEST_XDIST_AUTO_NUM_WORKERS /
-BDD_XDIST_N caps genuinely reach the in-network tests container, and a real
-``tox -p`` run of all 7 suites completed with memory peaking at ~40.5% of the
-box (well under the locked 70% fail threshold) with zero OOM-kills. Until the
-runner is changed, its default (no-flag) invocation still builds a SERIAL
-(no ``-p``) ``tox`` command — this test pins the correct future behavior and
-must fail red today.
+The runner was serial from 2026-06-18, on an OOM rationale that a live
+all-7-suites ``tox -p`` run disproved: the ``PYTEST_XDIST_AUTO_NUM_WORKERS`` /
+``BDD_XDIST_N`` caps genuinely reach the in-network tests container, and memory
+peaked at ~40.5% of the box -- well under the 70% fail threshold -- with zero
+OOM-kills. Serial made the run's critical path the SUM of every suite rather
+than the longest one.
 
 Runs the REAL run_all_tests.sh end to end (real arg parsing, real env/suite
 resolution, real command construction) rather than grepping its source, so it
 asserts on genuine behavior instead of text shape. The only thing replaced is
-the `docker` binary on PATH -- a stub that records every invocation and exits
-0 -- because actually standing up the full Postgres/app/proxy compose stack
-(already exercised live for salesagent-8v2yu) is not needed to observe *which
-command run_all_tests.sh hands to tox*, and doing so here would make this
-regression test slow, non-hermetic, and dependent on a real Docker daemon.
-Docker orchestration itself is the true external boundary being stubbed, not
-the subject under test.
+the ``docker`` binary on PATH -- a stub that records every invocation and exits
+0 -- because standing up the full Postgres/app/proxy compose stack is not
+needed to observe *which command run_all_tests.sh hands to tox*, and doing so
+would make this slow, non-hermetic, and dependent on a real Docker daemon.
+Docker orchestration is the external boundary being stubbed, not the subject.
+
+Also covers ``scripts/check_truncated_reports.py``, the predicate BOTH runners
+apply to decide whether a green-looking run actually reported everything it
+collected. Nothing graded it before: it was inline shell in one runner and
+absent from the other.
 """
 
+import json
 import os
 import shutil
 import stat
@@ -30,8 +31,10 @@ from pathlib import Path
 
 import pytest
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_RUNNER = _REPO_ROOT / "run_all_tests.sh"
+from scripts import check_truncated_reports
+from scripts.check_truncated_reports import truncation_report
+from tests.unit.test_run_all_tests_contract import _REPO_ROOT, _RUNNER
+
 _CREATIVE_AGENT_STACK = _REPO_ROOT / "scripts" / "creative-agent-stack.sh"
 
 _DOCKER_STUB = """#!/usr/bin/env bash
@@ -97,10 +100,10 @@ def _tox_invocation_tokens(docker_log: Path) -> list[str]:
 
 @pytest.mark.slow
 def test_default_run_invokes_tox_with_parallel_flag(tmp_path):
-    """run_all_tests.sh's default (no-flag) invocation must run `tox -p`
-    (genuine multi-suite parallelism), matching what salesagent-8v2yu's live
-    test proved safe (7 suites concurrently, ~40.5% peak box memory, no OOM) --
-    not the serial (no `-p`) tox call it emits today.
+    """The default (no-flag) invocation must run `tox -p`.
+
+    Genuine multi-suite parallelism, matching what the live all-suites run
+    proved safe: 7 suites concurrently, ~40.5% peak box memory, no OOM.
     """
     proc, docker_log = _run_with_stubbed_docker(tmp_path)
 
@@ -114,3 +117,60 @@ def test_default_run_invokes_tox_with_parallel_flag(tmp_path):
         "run_all_tests.sh's default tox invocation must include -p (parallel "
         f"multi-suite execution) but did not: tox {' '.join(tox_args)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# The truncation predicate both runners share
+# ---------------------------------------------------------------------------
+
+
+def _write_report(directory: Path, name: str, **summary) -> None:
+    (directory / name).write_text(json.dumps({"summary": summary}), encoding="utf-8")
+
+
+def test_a_suite_that_reported_everything_it_collected_is_not_flagged(tmp_path):
+    _write_report(tmp_path, "unit.json", collected=5846, total=5846, deselected=0, failed=0)
+    assert truncation_report(str(tmp_path)) == []
+
+
+def test_a_deselected_suite_is_not_mistaken_for_a_truncated_one(tmp_path):
+    """`collected` counts what collection FOUND, before -m/-k filtering.
+
+    The plain `bdd` env legitimately reports collected 9895 / deselected 323 /
+    total 9572. Without subtracting deselection this predicate reddens every
+    marker-filtered suite -- a guard that cries wolf gets deleted.
+    """
+    _write_report(tmp_path, "bdd.json", collected=9895, total=9572, deselected=323, failed=0)
+    assert truncation_report(str(tmp_path)) == []
+
+
+def test_a_truncated_suite_is_flagged_even_though_it_claims_zero_failures(tmp_path):
+    """The signature of the bug: items missing, `failed` reading 0.
+
+    A dead xdist worker ends the session after relaying only the tests already
+    collected back, so exit code and `failed` both say the run was fine.
+    """
+    _write_report(tmp_path, "unit.json", collected=5846, total=5430, deselected=0, failed=0)
+
+    problems = truncation_report(str(tmp_path))
+
+    assert len(problems) == 1, problems
+    assert "416 item(s) never reported" in problems[0], problems[0]
+
+
+def test_an_unreadable_report_is_a_finding_not_a_pass(tmp_path):
+    """A truncated run can also corrupt its own JSON; silence would be wrong."""
+    (tmp_path / "unit.json").write_text("{not json", encoding="utf-8")
+
+    problems = truncation_report(str(tmp_path))
+
+    assert len(problems) == 1 and "unreadable" in problems[0], problems
+
+
+def test_the_predicate_exits_non_zero_so_a_shell_caller_can_branch_on_it(tmp_path):
+    """Both runners consume this through `if ! python3 ...`, not by parsing."""
+    _write_report(tmp_path, "unit.json", collected=100, total=40, deselected=0, failed=0)
+    assert check_truncated_reports.main(["check_truncated_reports.py", str(tmp_path)]) == 1
+
+    _write_report(tmp_path, "unit.json", collected=100, total=100, deselected=0, failed=0)
+    assert check_truncated_reports.main(["check_truncated_reports.py", str(tmp_path)]) == 0

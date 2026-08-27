@@ -85,6 +85,21 @@ def _type_name(value: Any) -> str:
 def make_execnet_safe(
     value: Any, *, _depth: int = 0, _seen: frozenset[int] = frozenset()
 ) -> tuple[Any, list[str], bool]:
+    """Return ``(safe_value, offenders, changed)``, never raising.
+
+    A container whose ``items()`` or ``__iter__`` raises degrades to its repr
+    with an offender, rather than escaping into the hookwrapper. An exception
+    out of here kills the worker -- which is precisely the failure this module
+    exists to prevent, so the net must not be able to cause it. Recursion goes
+    through this function, so the guard covers every depth, not just the top.
+    """
+    try:
+        return _walk(value, _depth=_depth, _seen=_seen)
+    except Exception as exc:  # noqa: BLE001 -- see the docstring: no escape, ever
+        return _short_repr(value), [f" = <unwalkable: {exc!r}> {_type_name(value)}"], True
+
+
+def _walk(value: Any, *, _depth: int = 0, _seen: frozenset[int] = frozenset()) -> tuple[Any, list[str], bool]:
     """Return ``(safe_value, offenders, changed)``.
 
     ``safe_value`` contains only types execnet serializes. ``offenders`` names
@@ -113,7 +128,15 @@ def make_execnet_safe(
 
     offenders: list[str] = []
 
-    if isinstance(value, dict):
+    # `issubclass(type(...))`, not `isinstance`: a mock with a container spec
+    # (`Mock(spec=dict)`, `create_autospec(dict)`) has a SPOOFED `__class__`, so it
+    # satisfies `isinstance` while being neither iterable nor a real container.
+    # Under `isinstance` those took two paths, both violating this module's
+    # contract: `Mock(spec=dict)` raised TypeError out of the walk and killed the
+    # worker; `MagicMock(spec=dict)` returned an EMPTY container with no offender
+    # and no announcement -- a value destroyed silently. The atom branch above
+    # already uses exact-type semantics for the same reason.
+    if issubclass(type(value), dict):
         seen = _seen | {ident}
         # A dict SUBCLASS (OrderedDict, defaultdict, Counter) is refused by
         # execnet's exact-type dispatch just as a mock is, so rebuilding is a
@@ -131,7 +154,7 @@ def make_execnet_safe(
             out[safe_key] = safe_item
         return (out if changed else value), offenders, changed
 
-    if isinstance(value, (list, tuple)):
+    if issubclass(type(value), (list, tuple)):
         seen = _seen | {ident}
         # Same exact-type rule: a list subclass, or a namedtuple (a tuple
         # subclass), must be rebuilt as the plain base type.
@@ -146,7 +169,7 @@ def make_execnet_safe(
             return value, offenders, False
         return (list(items) if isinstance(value, list) else tuple(items)), offenders, True
 
-    if isinstance(value, (set, frozenset)):
+    if issubclass(type(value), (set, frozenset)):
         seen = _seen | {ident}
         changed = type(value) not in (set, frozenset)
         items = []

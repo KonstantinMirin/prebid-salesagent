@@ -116,19 +116,6 @@ services:
       - single-request-reopen
     volumes:
       - .:/app
-    # adcp-server's own process identity is baked into the Dockerfile (uid
-    # 1001, gid "app") — independent of whoever invokes run_all_tests.sh.
-    # Its mitigation for the bind-mounted logs/ tree (mkdir+chmod 2775
-    # setgid, rm+recreate each file at 664) only grants write access to a
-    # file's OWNER and GROUP; without this, uid 1001 is never a member of
-    # the invoker's group and falls into 664's read-only "other" bucket --
-    # PermissionError: '/app/logs/audit.log' at import time, the container
-    # crashes and never restarts (salesagent-dhhlg). ADCP_LOG_DIR above
-    # already redirects the app's OWN logging off this bind mount entirely
-    # (a separate, independent fix); this is defense-in-depth for whatever
-    # else on this mount adcp-server's own uid might still need to touch.
-    group_add:
-      - "${TEST_GID:-0}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -139,7 +126,7 @@ services:
       # showed this bug live: marked genuinely UNHEALTHY (not just
       # `starting`) under heavy concurrent test-suite load, because there
       # was no grace period for Docker to report `starting` during
-      # (salesagent-g6l43).
+
       start_period: 60s
 
   proxy:
@@ -182,11 +169,9 @@ services:
     #     `docker compose up` for adcp-server -- the `:-0` default applies.
     # Under rootless, container root ALREADY maps to the invoking user, which is
     # exactly the outcome the pin was hand-building. Unset gets it for free.
-    # cassini removed the identical workaround on its own side for the same
-    # reason (cassini/identity.py: "a workaround for a root daemon, and there is
-    # no longer a root daemon"). Symptom this caused live: /app/logs/* created
-    # root-owned, adcp-server (uid 1001) dying at import on a module-level
-    # FileHandler, cascading into ~2100 test failures (cassini-w37).
+    # Symptom this caused live: /app/logs/* created root-owned, adcp-server
+    # (uid 1001) dying at import on a module-level FileHandler, cascading into
+    # ~2100 test failures.
     build:
       context: .
       dockerfile: Dockerfile.test
@@ -200,9 +185,10 @@ services:
       # Consequence: output sat in the buffer, so cassini's RunState.quiet_for
       # climbed monotonically (0m34s -> 12m+) on a genuinely busy run at 1082%
       # CPU that finished exit=0, crossing the 5-minute false-red threshold
-      # (cassini-1w1, reproduced end-to-end as cassini-e7z on run sa-0c74d963).
+      # (reproduced end-to-end on a full in-network run).
       PYTHONUNBUFFERED: "${PYTHONUNBUFFERED:-1}"
-      # Non-root (user: above) has no /etc/passwd entry for a raw numeric
+      # Historical, kept because the reasoning still applies if a `user:`
+      # pin ever returns: a raw numeric UID has no /etc/passwd entry, so
       # UID, so HOME defaults to "/" and Dockerfile.test's baked
       # UV_CACHE_DIR=/cache/uv (root:root 755, no group-write) is
       # unreachable -- uv fails with "Permission denied" trying to even
@@ -340,12 +326,12 @@ services:
       # tox_data named volume removed (Aug 2026): it's destroyed+recreated
       # fresh every run (cleanup's `dc down -v`), so nothing ever persisted
       # across runs anyway, and a fresh named volume's mountpoint is created
-      # root:root regardless of the `user:` override above (volume dir
+      # root:root regardless of any `user:` override (volume dir
       # creation happens at the Docker daemon level, before the container
       # process starts) -- permanently EACCES-blocking the non-root tests
       # user from `mkdir .tox/<env>` every single run. .tox now lives on the
       # bind mount instead, same as test-results, which already works
-      # correctly under the `user:` override.
+      # correctly whether or not a `user:` pin is in effect.
     working_dir: /app
     # venv lives at /opt/venv (UV_PROJECT_ENVIRONMENT in Dockerfile.test), outside
     # the /app bind mount, so it is never shadowed — no .venv anonymous volume.

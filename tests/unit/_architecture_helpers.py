@@ -196,55 +196,127 @@ _FS_MUTATING_CALLS: frozenset[str] = frozenset(
 
 
 def _is_main_guard(node: ast.AST) -> bool:
-    """True for ``if __name__ == "__main__":`` — a block that never runs on import."""
+    """True for ``if __name__ == "__main__":`` — a block that never runs on import.
+
+    Both operand orders, and ``==``/``!=`` distinguished: ``if __name__ !=
+    "__main__":`` DOES run on import and must not be treated as a script guard.
+    """
     if not isinstance(node, ast.If):
         return False
     test = node.test
-    return (
-        isinstance(test, ast.Compare)
-        and isinstance(test.left, ast.Name)
-        and test.left.id == "__name__"
-        and len(test.comparators) == 1
-        and isinstance(test.comparators[0], ast.Constant)
-        and test.comparators[0].value == "__main__"
-    )
+    if not isinstance(test, ast.Compare) or len(test.comparators) != 1 or len(test.ops) != 1:
+        return False
+    if not isinstance(test.ops[0], ast.Eq):
+        return False
+    left, right = test.left, test.comparators[0]
+    for name_node, const_node in ((left, right), (right, left)):
+        if (
+            isinstance(name_node, ast.Name)
+            and name_node.id == "__name__"
+            and isinstance(const_node, ast.Constant)
+            and const_node.value == "__main__"
+        ):
+            return True
+    return False
+
+
+# Statement fields whose contents execute in the ENCLOSING scope at import time.
+# ``ast.Match`` keeps its arms under ``cases``, not ``body``.
+_IMPORT_TIME_BODY_FIELDS = ("body", "orelse", "finalbody", "handlers", "cases")
 
 
 def iter_import_time_statements(tree: ast.Module) -> Iterator[ast.stmt]:
     """Yield statements that EXECUTE when the module is imported.
 
-    Descends through module-level control flow (if/try/with/for) because those
-    bodies do run on import, but never into function or class bodies (deferred to
-    call time) nor into ``if __name__ == "__main__":`` (only runs as a script).
+    Descends through module-level control flow (if/try/with/for/match) because
+    those bodies do run on import, and INTO class bodies, which run on import
+    too -- a class-level ``handler = logging.FileHandler(...)`` is exactly the
+    defect this exists to catch, and skipping ``ClassDef`` made it invisible.
+
+    Function bodies are deferred to call time and are not yielded. Their
+    ``decorator_list`` and default arguments are, because both are evaluated at
+    ``def`` time -- i.e. at import.
     """
     stack: list[ast.stmt] = list(tree.body)
     while stack:
         node = stack.pop()
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-            continue
         if _is_main_guard(node):
             continue
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            # The `def` statement itself runs at import: decorators are called
+            # and defaults are evaluated. The body is not. Yielding the node
+            # would drag the body in via `iter_statement_scoped_nodes`, so hand
+            # back only the two parts that execute, wrapped as expressions.
+            yield from _synthetic_expressions(node.decorator_list)
+            yield from _synthetic_expressions(_default_expressions(node))
+            continue
         yield node
-        for field in ("body", "orelse", "finalbody", "handlers"):
+        if isinstance(node, ast.ClassDef):
+            # A class body executes at import; its decorators do too.
+            yield from _synthetic_expressions(node.decorator_list)
+        for field in _IMPORT_TIME_BODY_FIELDS:
             stack.extend(getattr(node, field, []) or [])
+
+
+def _default_expressions(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.expr]:
+    """Default-argument expressions, which are evaluated once at ``def`` time."""
+    args = node.args
+    return [d for d in (*args.defaults, *args.kw_defaults) if d is not None]
+
+
+def _synthetic_expressions(exprs: list[ast.expr]) -> Iterator[ast.stmt]:
+    """Wrap bare expressions as ``Expr`` statements so callers can treat them alike."""
+    for expr in exprs:
+        stmt = ast.Expr(value=expr)
+        stmt.lineno = expr.lineno
+        stmt.col_offset = expr.col_offset
+        yield stmt
+
+
+# Expression nodes whose contents are DEFERRED, not run where they are written.
+# A `lambda: os.makedirs(...)` or a generator expression at module level builds
+# an object; nothing inside it has run yet.
+_DEFERRED_EXPR_NODES = (ast.Lambda, ast.GeneratorExp)
 
 
 def iter_statement_scoped_nodes(stmt: ast.stmt) -> Iterator[ast.AST]:
     """Yield the nodes of *stmt* WITHOUT descending into nested statements.
 
     ``ast.walk`` on a compound statement swallows its whole body, which silently
-    unions everything a function does into one "statement". A guard that binds
-    filter keys per statement needs the header only -- ``If.test``, ``Return.value``,
-    the right-hand side of an assignment -- so that two unrelated queries in one
-    ``if`` block cannot compose a key tuple neither of them checks.
+    unions everything a function does into one "statement". Callers want the
+    header only -- ``If.test``, ``Return.value``, the right-hand side of an
+    assignment.
+
+    Lambda bodies and generator expressions are not descended into either: they
+    are built where they are written but executed somewhere else, so treating
+    them as part of the statement reports a call that has not happened.
     """
     stack: list[ast.AST] = [stmt]
     while stack:
         node = stack.pop()
         yield node
+        if isinstance(node, _DEFERRED_EXPR_NODES):
+            continue
         for child in ast.iter_child_nodes(node):
             if not isinstance(child, ast.stmt):
                 stack.append(child)
+
+
+def call_callee_name(call: ast.Call) -> str | None:
+    """The bare name being called: ``x.foo()`` -> ``"foo"``, ``foo()`` -> ``"foo"``.
+
+    ``None`` for a callee that is neither -- a subscript, a call result, a
+    lambda. The canonical form: this idiom was hand-rolled at 15 sites across
+    13 files in three mutually inconsistent spellings, none of which R0801 sees
+    (they are 1-3 line clones, under `min-similarity-lines=6`). Migrating the
+    other sites is tracked separately.
+    """
+    func = call.func
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return None
 
 
 def find_import_time_fs_io_violations(tree: ast.Module) -> list[int]:
@@ -258,11 +330,7 @@ def find_import_time_fs_io_violations(tree: ast.Module) -> list[int]:
     lines: list[int] = []
     for stmt in iter_import_time_statements(tree):
         for node in iter_statement_scoped_nodes(stmt):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
-            if name in _FS_MUTATING_CALLS:
+            if isinstance(node, ast.Call) and call_callee_name(node) in _FS_MUTATING_CALLS:
                 lines.append(node.lineno)
     return sorted(lines)
 

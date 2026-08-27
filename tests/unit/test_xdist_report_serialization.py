@@ -25,7 +25,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, Mock, NonCallableMock, create_autospec
 
 import pytest
 from execnet.gateway_base import DumpError, dumps
@@ -118,6 +118,99 @@ def test_container_subclasses_are_rebuilt_at_the_boundary_the_hook_calls(factory
     out = sanitize_serialized_report(payload, nodeid="t::x", stream=io.StringIO())
     assert out is not payload
     dumps(out)
+
+
+def test_an_unserializable_dict_KEY_is_replaced_and_the_rebuild_is_kept():
+    """The ``key_changed`` operand is load-bearing, not defensive padding.
+
+    Without it, a report whose only offender sits in the KEY position returns
+    the ORIGINAL, still-undumpable dict while ``offenders`` is non-empty --
+    the same class of bug as the container-subclass case above, moved one
+    position over. Mutating `changed = changed or key_changed or item_changed`
+    to drop `key_changed` left this module at 32 passed before this test.
+    """
+    payload = {"nodeid": "t::x", "_json_report_extra": {MagicMock(): "v"}}
+    with pytest.raises(DumpError):
+        dumps(payload)
+
+    safe, offenders, changed = make_execnet_safe(payload)
+    assert changed is True
+    assert offenders == ["._json_report_extra<key> = unittest.mock.MagicMock"]
+    dumps(safe)  # the REBUILT value is what must go on the wire
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        pytest.param(lambda: MagicMock(spec=dict), id="MagicMock-spec-dict"),
+        pytest.param(lambda: Mock(spec=dict), id="Mock-spec-dict"),
+        pytest.param(lambda: Mock(spec_set=dict), id="Mock-spec_set-dict"),
+        pytest.param(lambda: NonCallableMock(spec=dict), id="NonCallableMock-spec-dict"),
+        pytest.param(lambda: create_autospec(dict), id="create_autospec-dict"),
+        pytest.param(lambda: Mock(spec=collections.OrderedDict), id="Mock-spec-OrderedDict"),
+        pytest.param(lambda: MagicMock(spec=list), id="MagicMock-spec-list"),
+        pytest.param(lambda: Mock(spec=list), id="Mock-spec-list"),
+        pytest.param(lambda: MagicMock(spec=set), id="MagicMock-spec-set"),
+    ],
+)
+def test_a_mock_that_only_LOOKS_like_a_container_is_replaced_and_announced(factory, request):
+    """A container ``spec`` spoofs ``__class__``, so ``isinstance`` says yes.
+
+    The branches dispatch on ``issubclass(type(value), ...)`` for exactly this
+    reason -- the same exact-type semantics the atom branch uses, and the same
+    semantics execnet itself uses. Under ``isinstance`` these took two paths,
+    both violating this module's "REPLACED, never dropped, and always
+    announced" contract: the non-magic mocks raised ``TypeError`` out of the
+    walk and killed the worker (measured: one PASSING probe test lost 5373 of
+    5757 items at ``-n 4``), while the magic ones returned an EMPTY container
+    with no offender and no announcement -- a value destroyed in silence.
+
+    ``create_autospec`` is included because it is the form the stdlib docs
+    steer people toward.
+    """
+    # A distinct nodeid per case: announcements are deduped per
+    # (nodeid, offenders), and every Mock variant here yields the same offender
+    # string -- a shared nodeid would silence 6 of the 9 and grade nothing.
+    nodeid = f"t::{request.node.name}"
+    payload = {"nodeid": nodeid, "_json_report_extra": {"cfg": factory()}}
+    with pytest.raises(DumpError):
+        dumps(payload)
+
+    stream = io.StringIO()
+    out = sanitize_serialized_report(payload, nodeid=nodeid, stream=stream)
+
+    dumps(out)  # must cross the wire
+    assert "unittest.mock" in stream.getvalue(), (
+        f"a destroyed value must be announced, got stderr={stream.getvalue()!r}"
+    )
+    assert out["_json_report_extra"]["cfg"] != {}, "the mock was replaced by an EMPTY container, not by its repr"
+
+
+def test_the_walk_cannot_itself_become_the_crash_it_prevents():
+    """This code runs in a hookwrapper on every report of every test.
+
+    An exception out of it kills the worker and ends the session green over a
+    truncated run -- which is the failure the module exists to prevent, so the
+    net must be total: whatever it cannot walk degrades to a repr.
+
+    The realistic trigger is a container that raises ON ITERATION.
+    ``sqlalchemy.orm.collections.InstrumentedList`` IS a ``list`` subclass, so
+    it passes ``issubclass`` and gets iterated; a DETACHED lazy collection
+    raises ``DetachedInstanceError`` when it does. Reports are serialized at
+    teardown, after the session is gone. The stand-in below is local because
+    constructing a detached ORM collection would cost this unit test a
+    database, not because the shape is hypothetical.
+    """
+
+    class Detached(list):
+        def __iter__(self):
+            raise RuntimeError("Parent instance is not bound to a Session")
+
+    safe, offenders, changed = make_execnet_safe({"k": Detached([1, 2])})
+
+    assert changed is True
+    assert len(offenders) == 1 and "unwalkable" in offenders[0], offenders
+    dumps(safe)  # and the degraded value still crosses the wire
 
 
 def test_cycles_terminate_instead_of_recursing_forever():
