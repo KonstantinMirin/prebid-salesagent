@@ -173,7 +173,7 @@ def assert_pem_publishes_jwk(
     *,
     kid: str,
     purpose: str,
-    public_jwk: dict,
+    public_jwk: dict[str, object],
     tenant_id: str,
     passphrase: bytes | None,
 ) -> PrivateKey:

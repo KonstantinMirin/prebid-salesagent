@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from typing import Annotated, NamedTuple
 
 from adcp.types import ContextObject, Error, GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
+from adcp.types.generated_poc.core.ext import ExtensionObject
 from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
 from adcp.types.generated_poc.core.postal_area_support import (
     PostalAreaSupport,  # adcp 6.6: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
@@ -277,7 +278,7 @@ def build_get_adcp_capabilities_request(
     context: ContextObject | None = None,
     adcp_version: str | None = None,
     adcp_major_version: int | None = None,
-    ext: dict | None = None,
+    ext: ExtensionObject | None = None,
 ) -> GetAdcpCapabilitiesRequest:
     """Build the shared get_adcp_capabilities request for transport wrappers.
 
