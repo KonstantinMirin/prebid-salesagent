@@ -70,7 +70,7 @@ class TestOneWireErrorAssertion:
             "asserted through the result:\n  "
             + "\n  ".join(offenders)
             + "\n\nUse `result.assert_wire_error(code, recovery=..., field=..., details=..., "
-            "retry_after=...)`. It delegates to the same primitive but adds the CODE_TABLE "
+            "issues=..., retry_after=...)`. It delegates to the same primitive but adds the CODE_TABLE "
             "emittability check, the pinned recovery default, and a loud failure when no "
             "envelope was captured. Do NOT add an allowlist entry — this set is empty."
         )

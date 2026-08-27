@@ -365,6 +365,183 @@ class TestEnvelopeDetailsSubset:
             result.assert_wire_error("VERSION_UNSUPPORTED", details={"build_version": "3.0.0"})
 
 
+def _issues_envelope(errors_issues: object = None, *, adcp_issues: object = None) -> dict:
+    """A VALIDATION_ERROR envelope carrying ``issues`` on the named layer(s) only.
+
+    Mirrors :func:`_details_envelope`: ``None`` means the key is absent from that
+    layer entirely, so "absent" and "present but empty" stay distinguishable.
+    """
+    payload_error: dict = {
+        "code": "VALIDATION_ERROR",
+        "message": "webhook credential value is too short",
+        "recovery": "correctable",
+    }
+    envelope_error: dict = dict(payload_error)
+    if errors_issues is not None:
+        payload_error["issues"] = errors_issues
+    if adcp_issues is not None:
+        envelope_error["issues"] = adcp_issues
+    return {"adcp_error": envelope_error, "errors": [payload_error]}
+
+
+# core/error.json 3.1.1 requires pointer/message/keyword on every emitted item.
+_TOKEN_ISSUE = {
+    "pointer": "/webhook/credentials/0/value",
+    "message": "String should have at least 8 characters",
+    "keyword": "minLength",
+}
+_URL_ISSUE = {
+    "pointer": "/webhook/url",
+    "message": "Field required",
+    "keyword": "required",
+}
+
+
+class TestEnvelopeIssuesSubset:
+    """``issues=`` on the ONE sanctioned error surface, mirroring ``details=``.
+
+    ``issues`` is the pin's field-level rejection channel — the map ``field``
+    (singular) cannot carry — and until this kwarg exists a step can only grade
+    it by hand-indexing the envelope or by reaching for the reader. So the
+    contract is the LIST analogue of what ``details=`` does per key:
+
+    * ``errors[0].issues`` must be a non-empty list — absent, empty, or not a
+      list fails, because a channel that is not there cannot be graded;
+    * each expected item is matched by MEMBERSHIP: at least ONE wire item must
+      carry every key in that expected item with an equal value. Per item and
+      order-independent — two expected keys satisfied by two DIFFERENT wire
+      items do NOT satisfy one expected item;
+    * a matched wire item may carry keys the oracle does not name (the pinned
+      item is ``additionalProperties: true``), the same openness rule
+      ``details`` follows.
+
+    The protocol position is ``errors[0].issues``, resolved through the single
+    ``locate_envelope_error`` locator: a block living only on the envelope-level
+    ``adcp_error`` mirror, or a value nested one level deeper inside an item, is
+    not at the position the schema defines (the same burial rule ``field`` and
+    ``details`` carry). Non-binary oracles (find-by-pointer, regex-per-entry)
+    keep using ``TransportResult.wire_error_issues``, exactly as
+    ``wire_error_details`` stays beside ``details=``.
+    """
+
+    def test_matching_item_passes(self):
+        assert_envelope_shape(
+            _issues_envelope([_TOKEN_ISSUE]),
+            "VALIDATION_ERROR",
+            recovery="correctable",
+            issues=[{"keyword": "minLength"}],
+        )
+
+    def test_extra_keys_on_the_matched_item_do_not_break_the_subset(self):
+        """An open item: production may carry ``keyword_value`` no oracle names."""
+        assert_envelope_shape(
+            _issues_envelope([{**_TOKEN_ISSUE, "keyword_value": 8}]),
+            "VALIDATION_ERROR",
+            recovery="correctable",
+            issues=[{"pointer": "/webhook/credentials/0/value", "keyword": "minLength"}],
+        )
+
+    def test_a_second_unnamed_wire_item_does_not_break_the_match(self):
+        """Membership, not positional equality: unnamed siblings are allowed."""
+        assert_envelope_shape(
+            _issues_envelope([_URL_ISSUE, _TOKEN_ISSUE]),
+            "VALIDATION_ERROR",
+            recovery="correctable",
+            issues=[{"keyword": "minLength"}],
+        )
+
+    def test_mismatched_value_fails(self):
+        with pytest.raises(AssertionError, match=r"issues"):
+            assert_envelope_shape(
+                _issues_envelope([_TOKEN_ISSUE]),
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                issues=[{"keyword": "maxLength"}],
+            )
+
+    def test_expected_key_absent_from_every_item_fails(self):
+        with pytest.raises(AssertionError, match=r"issues"):
+            assert_envelope_shape(
+                _issues_envelope([_TOKEN_ISSUE, _URL_ISSUE]),
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                issues=[{"keyword_value": 8}],
+            )
+
+    def test_two_expected_keys_split_across_two_items_fails(self):
+        """The defect this kwarg must not have: ONE wire item carries the whole expected item.
+
+        ``/webhook/url`` is the pointer of the *required* issue and ``minLength``
+        is the keyword of the *credential* issue. Both values are on the wire —
+        but never together on one item, so the oracle is unsatisfied.
+        """
+        with pytest.raises(AssertionError, match=r"issues"):
+            assert_envelope_shape(
+                _issues_envelope([_TOKEN_ISSUE, _URL_ISSUE]),
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                issues=[{"pointer": "/webhook/url", "keyword": "minLength"}],
+            )
+
+    def test_absent_issues_array_fails(self):
+        with pytest.raises(AssertionError, match=r"issues"):
+            assert_envelope_shape(
+                _issues_envelope(None),
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                issues=[{"keyword": "minLength"}],
+            )
+
+    def test_empty_issues_array_fails(self):
+        """An empty channel grades nothing; passing on it is the vacuity this closes."""
+        with pytest.raises(AssertionError, match=r"issues"):
+            assert_envelope_shape(
+                _issues_envelope([]),
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                issues=[{"keyword": "minLength"}],
+            )
+
+    def test_issues_that_is_not_a_list_fails(self):
+        """A single object where the pin defines an array is malformed, not a one-item match."""
+        with pytest.raises(AssertionError, match=r"issues"):
+            assert_envelope_shape(
+                _issues_envelope(dict(_TOKEN_ISSUE)),
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                issues=[{"keyword": "minLength"}],
+            )
+
+    def test_issues_only_on_the_envelope_mirror_does_not_satisfy_the_protocol_position(self):
+        """``errors[0].issues`` is the position; the ``adcp_error`` mirror alone is not it."""
+        with pytest.raises(AssertionError, match=r"issues"):
+            assert_envelope_shape(
+                _issues_envelope(None, adcp_issues=[_TOKEN_ISSUE]),
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                issues=[{"keyword": "minLength"}],
+            )
+
+    def test_value_buried_one_level_deeper_does_not_satisfy_the_protocol_position(self):
+        """The subset is over an item's own keys — not a recursive search."""
+        with pytest.raises(AssertionError, match=r"issues"):
+            assert_envelope_shape(
+                _issues_envelope([{**_TOKEN_ISSUE, "context": {"keyword_value": 8}}]),
+                "VALIDATION_ERROR",
+                recovery="correctable",
+                issues=[{"keyword_value": 8}],
+            )
+
+    def test_omitting_issues_leaves_the_assertion_unchanged(self):
+        assert_envelope_shape(_issues_envelope(None), "VALIDATION_ERROR", recovery="correctable")
+
+    def test_assert_wire_error_forwards_issues(self):
+        result = TransportResult(payload=None, envelope={}, wire_error_envelope=_issues_envelope([_TOKEN_ISSUE]))
+        result.assert_wire_error("VALIDATION_ERROR", issues=[{"keyword": "minLength"}])
+        with pytest.raises(AssertionError, match=r"issues"):
+            result.assert_wire_error("VALIDATION_ERROR", issues=[{"keyword": "maxLength"}])
+
+
 class TestWireErrorDetailsReader:
     """``wire_error_details(code, ...)`` — the escape hatch that is STRONGER than the kwarg.
 

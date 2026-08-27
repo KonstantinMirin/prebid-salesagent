@@ -14,7 +14,7 @@ Usage::
 from __future__ import annotations
 
 import functools
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -261,6 +261,7 @@ class TransportResult:
         require_suggestion: bool = False,
         field: str | None = None,
         details: Mapping[str, Any] | None = None,
+        issues: Sequence[Mapping[str, Any]] | None = None,
         retry_after: int | None = None,
     ) -> None:
         """Assert this result carries the AdCP two-layer wire error ``code``.
@@ -274,11 +275,15 @@ class TransportResult:
         must not hand-roll envelope parsing.
 
         ``field`` pins ``errors[0].field``, the error.json pointer naming WHICH
-        request field was rejected, and ``details`` subset-checks
-        ``errors[0].details``. They are kwargs here rather than separate
-        wire_error_field()/wire_error_details() assertions on purpose: one
-        sanctioned error surface means a step never has to decide which
-        mechanism to reach for.
+        request field was rejected, ``details`` subset-checks
+        ``errors[0].details``, and ``issues`` does the same per ENTRY of
+        ``errors[0].issues`` -- the pin's field-level rejection map, which
+        ``field`` (singular) cannot carry. They are kwargs here rather than
+        separate wire_error_field()/wire_error_details()/wire_error_issues()
+        assertions on purpose: one sanctioned error surface means a step never
+        has to decide which mechanism to reach for. All three forward to
+        ``assert_envelope_shape``; this method adds only the CODE_TABLE recovery
+        default and the no-envelope diagnosis, never a second shape check.
         """
         from src.core.errors.codes import CODE_TABLE
         from tests.helpers import assert_envelope_shape
@@ -308,6 +313,7 @@ class TransportResult:
             recovery=expected_recovery,
             field=field,
             details=details,
+            issues=issues,
             retry_after=retry_after,
         )
         if require_suggestion:

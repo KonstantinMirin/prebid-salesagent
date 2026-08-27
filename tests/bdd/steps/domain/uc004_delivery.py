@@ -1934,8 +1934,7 @@ def then_config_rejected(ctx: dict) -> None:
     which is what core/error.json asks for -- "drawn from the JSON Schema
     vocabulary ... Matches the keyword names emitted by JSON Schema validators".
     """
-    issues = ctx["result"].wire_error_issues("VALIDATION_ERROR", recovery="correctable")
-    assert any(i.get("keyword") == "minLength" for i in issues), f"expected a minLength issue, got {issues!r}"
+    ctx["result"].assert_wire_error("VALIDATION_ERROR", recovery="correctable", issues=[{"keyword": "minLength"}])
 
 
 @then("the error should indicate minimum credential length is 32 characters")

@@ -16,7 +16,7 @@ the envelope now requires updating exactly one helper.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 
@@ -103,6 +103,23 @@ def assert_no_marker_in_payload_errors(wire_response: Mapping[str, Any] | None, 
     _assert_marker_absent(errors, marker, region_label="payload errors[]")
 
 
+def _subset_mismatch(expected: Mapping[str, Any], actual: Mapping[str, Any], *, position: str) -> str | None:
+    """``None`` when every key in ``expected`` is in ``actual`` with an equal value.
+
+    Otherwise the first mismatch, already phrased for an assertion message. Shared
+    by the ``details`` and ``issues`` kwargs below because they are the SAME check:
+    core/error.json declares both objects ``additionalProperties: true``, so both
+    are subsets rather than equality, and they differ only in whether the object is
+    the block itself or one entry of an array.
+    """
+    for key, value in expected.items():
+        if key not in actual:
+            return f"{position} is missing {key!r}"
+        if actual[key] != value:
+            return f"{position}[{key!r}]={actual[key]!r}, expected {value!r}"
+    return None
+
+
 def assert_envelope_shape(
     target: Any,
     code: str,
@@ -110,6 +127,7 @@ def assert_envelope_shape(
     recovery: str,
     field: str | None = None,
     details: Mapping[str, Any] | None = None,
+    issues: Sequence[Mapping[str, Any]] | None = None,
     retry_after: int | None = None,
     check_mcp_tool_error: bool = False,
 ) -> None:
@@ -151,6 +169,21 @@ def assert_envelope_shape(
                 mechanism. Non-binary oracles (non-empty, regex-per-entry,
                 membership) use ``TransportResult.wire_error_details`` instead,
                 which asserts the code before handing the block over.
+        issues: If provided, the LIST analogue of ``details``. ``errors[0].issues``
+                must be a non-empty list, and each expected item must be carried
+                by at least ONE wire item that has every key in it with an equal
+                value. Per item and order-independent: two expected keys
+                satisfied by two DIFFERENT wire items do not satisfy one expected
+                item, because ``issues[]`` is the pin's map of WHICH field failed
+                for WHICH reason and splitting a pair across entries loses that
+                pairing. A matched wire item may carry keys the oracle does not
+                name — the pinned item is ``additionalProperties: true``, the same
+                openness rule ``details`` follows. Asserted at the protocol
+                position ``errors[0].issues`` only, so a block on the
+                envelope-level mirror alone does not satisfy it (the same burial
+                rule as ``field`` and ``details``). Non-binary oracles
+                (find-by-pointer, regex-per-entry) use
+                ``TransportResult.wire_error_issues`` instead.
         check_mcp_tool_error: If ``True``, additionally assert that ``target``
                 is an ``AdCPToolError`` instance before reading its envelope.
                 MCP-boundary call sites use this to pin the exception type as
@@ -208,8 +241,24 @@ def assert_envelope_shape(
             f"errors[0].details={actual_details!r} is not an object at the protocol position; "
             f"expected it to carry {dict(details)!r}"
         )
-        for key, expected in details.items():
-            assert key in actual_details, f"errors[0].details is missing {key!r}: {actual_details!r}"
-            assert actual_details[key] == expected, (
-                f"errors[0].details[{key!r}]={actual_details[key]!r}, expected {expected!r}"
+        mismatch = _subset_mismatch(details, actual_details, position="errors[0].details")
+        assert mismatch is None, f"{mismatch}: {actual_details!r}"
+
+    if issues is not None:
+        actual_issues = error.get("issues")
+        assert isinstance(actual_issues, list) and actual_issues, (
+            f"errors[0].issues={actual_issues!r} is not a non-empty array at the protocol position; "
+            f"expected it to carry {[dict(item) for item in issues]!r}"
+        )
+        for expected_issue in issues:
+            # ONE entry must carry the whole expected item. Checking each key against
+            # the array as a whole would let a pointer from one rejection pair with a
+            # keyword from another, which is exactly the field-to-reason mapping
+            # `issues[]` exists to carry and `field` (singular) could not.
+            carried = any(
+                isinstance(item, dict) and _subset_mismatch(expected_issue, item, position="issue") is None
+                for item in actual_issues
+            )
+            assert carried, (
+                f"no entry in errors[0].issues carries {dict(expected_issue)!r} in full; issues were {actual_issues!r}"
             )
