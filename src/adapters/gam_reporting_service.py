@@ -20,6 +20,8 @@ from urllib.parse import urlparse
 import pytz
 import requests
 
+from src.core.exceptions import AdCPAdapterError, AdCPError
+
 logger = logging.getLogger(__name__)
 
 
@@ -333,7 +335,7 @@ class GAMReportingService:
                 if status == "COMPLETED":
                     break
                 elif status == "FAILED":
-                    raise Exception("GAM report job failed")
+                    raise AdCPAdapterError()
 
                 # Log progress for long-running reports
                 if wait_time > 0 and wait_time % 30 == 0:
@@ -343,20 +345,22 @@ class GAMReportingService:
                 wait_time += poll_interval
 
             if self.report_service.getReportJobStatus(report_job_id) != "COMPLETED":
-                raise Exception(f"GAM report job timed out after {max_wait} seconds")
+                raise AdCPAdapterError()
 
             # Use modern ReportService method instead of deprecated GetDataDownloader
             try:
                 download_url = self.report_service.getReportDownloadURL(report_job_id, "CSV_DUMP")
+            except AdCPError:
+                raise
             except Exception as e:
-                raise Exception(f"Failed to get GAM report download URL: {str(e)}") from e
+                raise AdCPAdapterError(internal_detail=e) from e
 
             # Validate URL is from Google for security
             parsed_url = urlparse(download_url)
             if not parsed_url.hostname or not any(
                 parsed_url.hostname.endswith(domain) for domain in ReportingConfig.ALLOWED_DOMAINS
             ):
-                raise Exception(f"Invalid download URL: not from Google domain ({parsed_url.hostname})")
+                raise AdCPAdapterError()
 
             # Download the report using requests with proper timeout and error handling
             try:
@@ -368,9 +372,9 @@ class GAMReportingService:
                 )
                 response.raise_for_status()
             except requests.exceptions.Timeout as e:
-                raise Exception(f"GAM report download timed out: {str(e)}") from e
+                raise AdCPAdapterError(internal_detail=e) from e
             except requests.exceptions.RequestException as e:
-                raise Exception(f"Failed to download GAM report: {str(e)}") from e
+                raise AdCPAdapterError(internal_detail=e) from e
 
             # Parse the CSV data directly from the response with memory limits
             try:
@@ -385,8 +389,10 @@ class GAMReportingService:
                             )
                             break
                         data.append(row)
+            except AdCPError:
+                raise
             except Exception as e:
-                raise Exception(f"Failed to parse GAM report CSV data: {str(e)}") from e
+                raise AdCPAdapterError(internal_detail=e) from e
 
             # Debug: Log the first row to see column names
             if data:
@@ -398,8 +404,14 @@ class GAMReportingService:
 
             return data
 
+        except AdCPError:
+            # Every typed error raised inside this body -- the job-failed and
+            # timeout arms above, the URL refusal, the parse failure -- already
+            # names its own fault. Re-raise rather than relabel them all
+            # AdCPAdapterError, which is what the broad arm below did.
+            raise
         except Exception as e:
-            raise Exception(f"Error running GAM report: {str(e)}")
+            raise AdCPAdapterError(internal_detail=e) from e
 
     def _process_report_data(
         self, raw_data: list[dict[str, Any]], granularity: str, requested_tz: str

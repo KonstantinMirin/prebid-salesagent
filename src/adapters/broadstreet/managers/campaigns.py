@@ -13,6 +13,7 @@ from src.adapters.broadstreet.client import BroadstreetClient
 from src.adapters.broadstreet.config_schema import (
     parse_implementation_config,
 )
+from src.core.exceptions import AdCPConfigurationError
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,7 @@ class BroadstreetCampaignManager:
             }
 
         if not self.client:
-            raise RuntimeError("Client not available in non-dry-run mode")
+            raise AdCPConfigurationError()
 
         result = self.client.create_campaign(
             advertiser_id=self.advertiser_id,

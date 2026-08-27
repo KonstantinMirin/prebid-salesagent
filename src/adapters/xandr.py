@@ -12,6 +12,7 @@ import requests
 from dateutil import parser as dateutil_parser
 
 from src.adapters.base import AdServerAdapter
+from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError, AdCPInternalError
 from src.core.retry_utils import api_retry
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -252,7 +253,7 @@ class XandrAdapter(AdServerAdapter):
                 self.token_expiry = datetime.now(UTC) + timedelta(hours=2)
                 logger.info("Successfully authenticated with Xandr")
             else:
-                raise Exception(f"Authentication failed: {data}")
+                raise AdCPAdapterError()
 
         except Exception as e:
             logger.error(f"Xandr authentication error: {e}")
@@ -277,7 +278,7 @@ class XandrAdapter(AdServerAdapter):
             elif method == "DELETE":
                 response = requests.delete(url, headers=headers)
             else:
-                raise ValueError(f"Unsupported method: {method}")
+                raise AdCPInternalError()
 
             response.raise_for_status()
             return response.json()
@@ -498,7 +499,7 @@ class XandrAdapter(AdServerAdapter):
 
             # Create insertion order
             if not self.advertiser_id:
-                raise ValueError("Advertiser ID is required for Xandr operations")
+                raise AdCPConfigurationError()
 
             # campaign_name is no longer on CreateMediaBuyRequest per AdCP spec
             # Use brand domain as fallback
@@ -536,7 +537,7 @@ class XandrAdapter(AdServerAdapter):
             # Create line items for each package
             for _idx, package in enumerate(packages):
                 if not self.advertiser_id:
-                    raise ValueError("Advertiser ID is required for creating line items")
+                    raise AdCPConfigurationError()
 
                 # Get pricing for this package
                 pricing_info = package_pricing_info.get(package.package_id) if package_pricing_info else None
@@ -683,7 +684,7 @@ class XandrAdapter(AdServerAdapter):
 
         try:
             if not self.advertiser_id:
-                raise ValueError("Advertiser ID is required for creating creatives")
+                raise AdCPConfigurationError()
 
             for asset in assets:
                 # Create creative
@@ -872,7 +873,7 @@ class XandrAdapter(AdServerAdapter):
         """Get comprehensive reporting data for the advertiser."""
         try:
             if not self.advertiser_id:
-                raise ValueError("Advertiser ID is required for reporting")
+                raise AdCPConfigurationError()
 
             # Create advertiser-level report
             report_data = {

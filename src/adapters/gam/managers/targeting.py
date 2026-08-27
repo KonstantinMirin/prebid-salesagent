@@ -11,7 +11,13 @@ import os
 from typing import Any
 
 from src.core.errors.details import CapabilityRefusalDetails
-from src.core.exceptions import AdCPCapabilityNotSupportedError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPAdapterResourceNotFoundError,
+    AdCPCapabilityNotSupportedError,
+    AdCPConfigurationError,
+    AdCPError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +203,7 @@ class GAMTargetingManager:
             ValueError: If GAM client not configured
         """
         if not self.gam_client:
-            raise ValueError("GAM client required for syncing custom targeting keys")
+            raise AdCPConfigurationError()
 
         from src.core.database.database_session import get_db_session
 
@@ -271,11 +277,7 @@ class GAMTargetingManager:
             ValueError: If key name not found in mapping
         """
         if key_name not in self.custom_targeting_key_ids:
-            raise ValueError(
-                f"Custom targeting key '{key_name}' not found in GAM key mappings. "
-                f"Available keys: {list(self.custom_targeting_key_ids.keys())}. "
-                "Run sync_custom_targeting_keys() to update the mapping."
-            )
+            raise AdCPAdapterResourceNotFoundError()
 
         return self.custom_targeting_key_ids[key_name]
 
@@ -293,7 +295,7 @@ class GAMTargetingManager:
             ValueError: If GAM API call fails
         """
         if not self.gam_client:
-            raise ValueError("GAM client required for custom targeting value operations")
+            raise AdCPConfigurationError()
 
         try:
             custom_targeting_service = self.gam_client.GetService("CustomTargetingService")
@@ -324,11 +326,13 @@ class GAMTargetingManager:
                 logger.info(f"Created custom targeting value: {value_name} (ID: {value_id})")
                 return value_id
 
-            raise ValueError(f"Failed to create custom targeting value '{value_name}' for key ID {key_id}")
+            raise AdCPAdapterError()
 
+        except AdCPError:
+            raise
         except Exception as e:
             logger.error(f"Failed to get/create custom targeting value '{value_name}': {e}", exc_info=True)
-            raise ValueError(f"Custom targeting value lookup/creation failed for '{value_name}': {e}")
+            raise AdCPAdapterError(internal_detail=e) from e
 
     def _build_custom_targeting_structure(
         self, custom_targeting_dict: dict[str, Any], logical_operator: str = "AND"
@@ -845,10 +849,7 @@ class GAMTargetingManager:
                 )
             except ValueError as e:
                 logger.error(f"Failed to resolve AXE include key '{self.axe_include_key}': {e}")
-                raise ValueError(
-                    f"AXE include key '{self.axe_include_key}' not found in GAM. "
-                    "Create the custom targeting key in GAM UI and sync using 'Sync Custom Targeting Keys' button."
-                ) from e
+                raise AdCPConfigurationError(internal_detail=e) from e
 
         if targeting_overlay.axe_exclude_segment:
             if not self.axe_exclude_key:
@@ -866,10 +867,7 @@ class GAMTargetingManager:
                 )
             except ValueError as e:
                 logger.error(f"Failed to resolve AXE exclude key '{self.axe_exclude_key}': {e}")
-                raise ValueError(
-                    f"AXE exclude key '{self.axe_exclude_key}' not found in GAM. "
-                    "Create the custom targeting key in GAM UI and sync using 'Sync Custom Targeting Keys' button."
-                ) from e
+                raise AdCPConfigurationError(internal_detail=e) from e
 
         if custom_targeting:
             # Convert simple dict to GAM CustomCriteria structure

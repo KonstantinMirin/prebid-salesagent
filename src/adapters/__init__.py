@@ -2,6 +2,8 @@
 from dataclasses import dataclass
 from typing import cast
 
+from src.core.exceptions import AdCPConfigurationError
+
 from .base import AdapterCapabilities as AdapterCapabilities
 from .base import AdServerAdapter as AdServerAdapter
 from .base import BaseConnectionConfig as BaseConnectionConfig
@@ -63,7 +65,7 @@ def get_adapter(adapter_type: str, config: dict, principal):
     """Factory function to get the appropriate adapter instance."""
     adapter_class = ADAPTER_REGISTRY.get(adapter_type.lower())
     if not adapter_class:
-        raise ValueError(f"Unknown adapter type: {adapter_type}")
+        raise AdCPConfigurationError()
     return adapter_class(config, principal)
 
 
@@ -71,7 +73,7 @@ def get_adapter_class(adapter_type: str) -> type[AdServerAdapter]:
     """Get the adapter class for a given adapter type."""
     adapter_class = ADAPTER_REGISTRY.get(adapter_type.lower())
     if not adapter_class:
-        raise ValueError(f"Unknown adapter type: {adapter_type}")
+        raise AdCPConfigurationError()
     return cast("type[AdServerAdapter]", adapter_class)
 
 

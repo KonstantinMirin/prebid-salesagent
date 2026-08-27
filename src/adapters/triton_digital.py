@@ -471,7 +471,7 @@ class TritonDigital(AdServerAdapter):
                         break
                     time.sleep(0.5)
                 else:
-                    raise Exception("Triton report did not complete in time.")
+                    raise AdCPAdapterError()
 
                 report_response = requests.get(report_url)
                 report_response.raise_for_status()

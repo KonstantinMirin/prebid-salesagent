@@ -21,6 +21,7 @@ from typing import Any
 
 from src.adapters.broadstreet.client import BroadstreetClient
 from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES, get_template_info
+from src.core.exceptions import AdCPConfigurationError
 
 logger = logging.getLogger(__name__)
 
@@ -380,7 +381,7 @@ class BroadstreetAdvertisementManager:
             status = "approved"
         else:
             if not self.client:
-                raise RuntimeError("Client not available")
+                raise AdCPConfigurationError()
 
             try:
                 result = self.client.create_advertisement(
@@ -459,7 +460,7 @@ class BroadstreetAdvertisementManager:
             ad_type = f"template:{template_type}"
         else:
             if not self.client:
-                raise RuntimeError("Client not available")
+                raise AdCPConfigurationError()
 
             try:
                 # Step 1: Create base HTML ad

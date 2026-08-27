@@ -12,8 +12,8 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
-from src.core.errors.details import CreativeRejectionDetails
-from src.core.exceptions import AdCPCreativeRejectedError, AdCPError
+from src.core.errors.details import CapabilityRefusalDetails, CreativeRejectionDetails
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPCreativeRejectedError, AdCPError
 from src.core.schemas import AssetStatus
 
 from ..utils.validation import GAMValidator
@@ -766,7 +766,9 @@ class GAMCreativesManager:
         else:
             # Internal invariant, not buyer input: _determine_asset_type only
             # returns "image" or "video".
-            raise AssertionError(f"Unsupported asset type: {asset_type}")
+            raise AdCPCapabilityNotSupportedError(
+                details=CapabilityRefusalDetails(capability="asset_type", rejected_value=str(asset_type))
+            )
 
         self._add_tracking_urls_to_creative(creative, asset)
         return creative

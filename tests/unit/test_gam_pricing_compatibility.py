@@ -3,6 +3,7 @@
 import pytest
 
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
+from src.core.exceptions import AdCPCapabilityNotSupportedError
 
 
 class TestCompatibilityMatrix:
@@ -95,8 +96,12 @@ class TestLineItemTypeSelection:
         assert result == "NETWORK"
 
     def test_override_incompatible_type_rejected(self):
-        """Override with incompatible type should raise ValueError."""
-        with pytest.raises(ValueError, match="not compatible with pricing model 'flat_rate'"):
+        """Override with incompatible type is refused as an unsupported capability.
+
+        EXPECTATION REVERSED by salesagent-7et3j: a GAM constraint the buyer cannot
+        satisfy is UNSUPPORTED_FEATURE, not the buyer mis-typing their request.
+        """
+        with pytest.raises(AdCPCapabilityNotSupportedError):
             PricingCompatibility.select_line_item_type(
                 "flat_rate",
                 is_guaranteed=False,
@@ -105,7 +110,7 @@ class TestLineItemTypeSelection:
 
     def test_override_vcpm_with_incompatible_rejected(self):
         """Override VCPM with non-STANDARD type should be rejected."""
-        with pytest.raises(ValueError, match="not compatible with pricing model 'vcpm'"):
+        with pytest.raises(AdCPCapabilityNotSupportedError):
             PricingCompatibility.select_line_item_type(
                 "vcpm",
                 is_guaranteed=False,

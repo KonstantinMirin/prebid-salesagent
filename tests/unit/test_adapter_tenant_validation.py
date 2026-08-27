@@ -3,7 +3,7 @@
 beads-yz1: Adapters using `tenant_id or ""` silently coerce None to empty
 string, causing all tenant-scoped queries to return empty results instead of
 raising an error.  The fix is to validate tenant_id at the adapter boundary
-and raise ValueError for None or empty string.
+and raise AdCPConfigurationError for None or empty string.
 
 beads-7zn: Same pattern in admin blueprint _call_webhook_for_creative_status —
 `tenant_id or ""` coerces None to empty string, causing AdminCreativeUoW to
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import pytest
 
+from src.core.exceptions import AdCPConfigurationError
 from src.core.schemas import Principal
 
 
@@ -27,13 +28,26 @@ def _make_principal() -> Principal:
 
 
 class TestAdapterTenantIdValidation:
-    """Adapter must reject None or empty tenant_id at construction time."""
+    """Adapter must reject None or empty tenant_id at construction time.
+
+    EXPECTATION REVERSED by salesagent-7et3j. These asserted a bare ValueError, which
+    adcp_error_for maps by PYTHON TYPE to AdCPValidationError -- telling the buyer their
+    request is malformed for a fault entirely on the seller's side. The raise sites now
+    name AdCPConfigurationError, so the buyer reads CONFIGURATION_ERROR (terminal): the
+    seller must fix its own configuration and no retry will help.
+
+    The match= substrings went with the message: AdCPError has no message parameter, so
+    the sentence is a function of the code through CODE_TABLE and cannot be asserted at
+    a raise site. Provenance now rides internal_detail, which the boundary logs
+    server-side and never puts on the wire -- which is what makes acceptance 2 ("no
+    converted site carries upstream text in message") hold by construction.
+    """
 
     def test_gam_adapter_rejects_none_tenant_id(self):
         """GoogleAdManager with tenant_id=None must raise, not silently use ''."""
         from src.adapters.google_ad_manager import GoogleAdManager
 
-        with pytest.raises(ValueError, match="tenant_id"):
+        with pytest.raises(AdCPConfigurationError):
             GoogleAdManager(
                 config={"service_account_json": "{}"},
                 principal=_make_principal(),
@@ -46,7 +60,7 @@ class TestAdapterTenantIdValidation:
         """GoogleAdManager with tenant_id='' must raise, not proceed silently."""
         from src.adapters.google_ad_manager import GoogleAdManager
 
-        with pytest.raises(ValueError, match="tenant_id"):
+        with pytest.raises(AdCPConfigurationError):
             GoogleAdManager(
                 config={"service_account_json": "{}"},
                 principal=_make_principal(),
@@ -59,7 +73,7 @@ class TestAdapterTenantIdValidation:
         """MockAdServer with tenant_id=None must raise, not silently use ''."""
         from src.adapters.mock_ad_server import MockAdServer
 
-        with pytest.raises(ValueError, match="tenant_id"):
+        with pytest.raises(AdCPConfigurationError):
             MockAdServer(
                 config={},
                 principal=_make_principal(),
@@ -70,7 +84,7 @@ class TestAdapterTenantIdValidation:
         """MockAdServer with tenant_id='' must raise, not proceed silently."""
         from src.adapters.mock_ad_server import MockAdServer
 
-        with pytest.raises(ValueError, match="tenant_id"):
+        with pytest.raises(AdCPConfigurationError):
             MockAdServer(
                 config={},
                 principal=_make_principal(),
@@ -103,7 +117,13 @@ class TestAdapterTenantIdValidation:
 
 
 class TestBlueprintTenantIdValidation:
-    """Admin blueprint functions must reject None/empty tenant_id explicitly."""
+    """Admin blueprint functions must reject None/empty tenant_id explicitly.
+
+    NOT reversed by salesagent-7et3j, deliberately. This class targets
+    src/admin/blueprints/creatives.py, which is outside that ticket's scope
+    (src/adapters/ only). The bare ValueError there is untouched debt, not a
+    site this pass converted.
+    """
 
     @pytest.mark.asyncio
     async def test_call_webhook_rejects_none_tenant_id(self):

@@ -10,6 +10,8 @@ from typing import Any
 
 from googleads import ad_manager
 
+from src.core.exceptions import AdCPConfigurationError
+
 from .auth import GAMAuthManager
 from .utils.health_check import GAMHealthChecker, HealthCheckResult, HealthStatus
 
@@ -57,7 +59,7 @@ class GAMClientManager:
             Exception: If client creation fails
         """
         if not self.network_code:
-            raise ValueError("Network code is required for GAM client initialization")
+            raise AdCPConfigurationError()
 
         try:
             # Get credentials from auth manager

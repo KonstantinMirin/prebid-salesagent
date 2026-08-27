@@ -37,23 +37,23 @@ import pytest
 # would make the distinction visible at the guard level. For now, both
 # categories share the cap dict and shrink together as PR 2 lands.
 VALUE_ERROR_PER_FILE_CAP: dict[str, int] = {
-    "src/adapters/__init__.py": 2,
-    "src/adapters/base.py": 1,
+    "src/adapters/__init__.py": 0,
+    "src/adapters/base.py": 0,
     "src/adapters/broadstreet/config_schema.py": 4,
-    "src/adapters/gam/auth.py": 5,
-    "src/adapters/gam/client.py": 1,
+    "src/adapters/gam/auth.py": 0,
+    "src/adapters/gam/client.py": 0,
     # 3→0: the creative-input rejection sites now raise
     # AdCPCreativeRejectedError (CREATIVE_REJECTED/correctable).
-    "src/adapters/gam/managers/orders.py": 11,
+    "src/adapters/gam/managers/orders.py": 0,
     # 22→7: the 15 buyer-correctable capability-gap sites now raise
     # AdCPCapabilityNotSupportedError (UNSUPPORTED_FEATURE/correctable); the 7
     # remaining ValueErrors are seller-side operational faults by design.
-    "src/adapters/gam/managers/targeting.py": 7,
+    "src/adapters/gam/managers/targeting.py": 0,
     # 2→1: the pricing-model capability gap is typed; the remaining ValueError
     # is the seller-config incompatible-override raise (deliberately untyped).
-    "src/adapters/gam/pricing_compatibility.py": 1,
+    "src/adapters/gam/pricing_compatibility.py": 0,
     "src/adapters/gam_implementation_config_schema.py": 4,
-    "src/adapters/xandr.py": 5,
+    "src/adapters/xandr.py": 0,
     "src/core/tools/media_buy_create.py": 2,  # null-session guard + agent_url HTTP(S) validation (internal contracts)
 }
 

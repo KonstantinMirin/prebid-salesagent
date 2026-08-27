@@ -24,6 +24,7 @@ from src.core.errors.details import PolicyViolationDetails
 from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPAuthRequiredError,
+    AdCPConfigurationError,
     AdCPError,
     AdCPInternalError,
     AdCPPolicyViolationError,
@@ -772,7 +773,7 @@ async def _get_products_impl(
                             inner.unsupported_reason = (
                                 f"Current adapter does not support {pricing_model.upper()} pricing"
                             )
-        except (ImportError, RuntimeError, OSError, ValueError) as e:
+        except (ImportError, RuntimeError, OSError, ValueError, AdCPConfigurationError) as e:
             # structural-guard: spec-neutral — the dropped fields are not in
             # the pin. `supported` / `unsupported_reason` do not exist in
             # AdCP 3.1.1 core/pricing-option.json at all; that schema declares no

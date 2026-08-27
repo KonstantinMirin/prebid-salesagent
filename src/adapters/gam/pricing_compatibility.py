@@ -105,10 +105,12 @@ class PricingCompatibility:
         # Validate override if provided
         if override_type:
             if not cls.is_compatible(override_type, pricing_model):
-                compatible = cls.get_compatible_line_item_types(pricing_model)
-                raise ValueError(
-                    f"Line item type '{override_type}' is not compatible with pricing model '{pricing_model}'. "
-                    f"GAM supports {pricing_model.upper()} with: {', '.join(sorted(compatible))}"
+                raise AdCPCapabilityNotSupportedError(
+                    details=CapabilityRefusalDetails(
+                        capability=f"line_item_type_for:{pricing_model}",
+                        rejected_value=override_type,
+                        accepted_values=sorted(cls.get_compatible_line_item_types(pricing_model)),
+                    )
                 )
             return override_type
 

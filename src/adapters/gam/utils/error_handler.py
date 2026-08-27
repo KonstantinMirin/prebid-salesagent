@@ -218,9 +218,7 @@ def with_retry(
             # All retries exhausted
             if last_exception is None:
                 # This should never happen, but handle it gracefully
-                raise RuntimeError(
-                    f"{op_name} failed after {retry_config.max_attempts} attempts with no exception recorded"
-                )
+                raise AdCPInternalError()
 
             logger.error(
                 f"{op_name} failed after {retry_config.max_attempts} attempts with {last_exception.error_code}"

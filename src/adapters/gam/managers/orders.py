@@ -14,7 +14,15 @@ from googleads import ad_manager
 
 from src.adapters.gam.utils.error_handler import map_gam_exception
 from src.adapters.gam.utils.timeout_handler import timeout
-from src.core.exceptions import AdCPAdapterError, AdCPError, AdCPNotFoundError
+from src.core.errors.details import CapabilityRefusalDetails
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPCapabilityNotSupportedError,
+    AdCPConfigurationError,
+    AdCPError,
+    AdCPNotFoundError,
+    AdCPValidationError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,10 +81,7 @@ class GAMOrdersManager:
         """
         # Validate required configuration for order creation
         if not self.advertiser_id or not self.trafficker_id:
-            raise ValueError(
-                "Order creation requires both advertiser_id and trafficker_id. "
-                "These must be provided when initializing GAMOrdersManager for order operations."
-            )
+            raise AdCPConfigurationError()
 
         # Create Order object
         order = {
@@ -395,10 +400,7 @@ class GAMOrdersManager:
             Exception: If line item creation fails
         """
         if not self.advertiser_id or not self.trafficker_id:
-            raise ValueError(
-                "Line item creation requires both advertiser_id and trafficker_id. "
-                "These must be provided when initializing GAMOrdersManager."
-            )
+            raise AdCPConfigurationError()
 
         def log(msg):
             if log_func:
@@ -440,7 +442,7 @@ class GAMOrdersManager:
                         f"\nFind IDs in GAM Admin UI → Inventory → Ad Units (the numeric ID column)."
                     )
                     log(f"[red]Error: {error_msg}[/red]")
-                    raise ValueError(error_msg)
+                    raise AdCPConfigurationError()
 
                 line_item_targeting["inventoryTargeting"]["targetedAdUnits"] = [
                     {"adUnitId": ad_unit_id, "includeDescendants": impl_config.get("include_descendants", True)}
@@ -466,7 +468,7 @@ class GAMOrdersManager:
                     f"\n\nFor testing, you can use Mock adapter instead of GAM (set ad_server='mock' on tenant)."
                 )
                 log(f"[red]Error: {error_msg}[/red]")
-                raise ValueError(error_msg)
+                raise AdCPConfigurationError()
 
             # Add custom targeting from product config
             # IMPORTANT: Merge without overwriting buyer's targeting (e.g., AEE signals from key_value_pairs)
@@ -510,10 +512,12 @@ class GAMOrdersManager:
                         format_obj = get_format(
                             format_id_str, agent_url=agent_url, tenant_id=tenant_id, product_id=product_id_for_format
                         )
-                    except (ValueError, AdCPNotFoundError, AdCPAdapterError) as e:
-                        error_msg = f"Format lookup failed for '{format_display}': {e}"
-                        log(f"[red]Error: {error_msg}[/red]")
-                        raise ValueError(error_msg)
+                    except (AdCPNotFoundError, AdCPAdapterError):
+                        # Already typed by get_format. Re-raise rather than flatten:
+                        # wrapping it in a builtin cost the buyer the very code that
+                        # says whether the format is unknown or the agent is down.
+                        log(f"[red]Error: format lookup failed for '{format_display}'[/red]")
+                        raise
 
                     # Check if format type is supported by product
                     # adcp 3.12: Format.type removed. Infer from format_id string.
@@ -535,7 +539,13 @@ class GAMOrdersManager:
                             f"Configure 'supported_format_types' in product implementation_config if this should be supported."
                         )
                         log(f"[red]Error: {error_msg}[/red]")
-                        raise ValueError(error_msg)
+                        raise AdCPCapabilityNotSupportedError(
+                            details=CapabilityRefusalDetails(
+                                capability="format",
+                                rejected_value=str(format_display),
+                                accepted_values=sorted(supported_format_types),
+                            )
+                        )
 
                     # Audio formats are not supported in GAM (no creative placeholders)
                     if format_type_str == "audio":
@@ -546,7 +556,9 @@ class GAMOrdersManager:
                             f"To deliver audio ads, use a different ad server (e.g., Triton, Kevel) that supports audio."
                         )
                         log(f"[red]Error: {error_msg}[/red]")
-                        raise ValueError(error_msg)
+                        raise AdCPCapabilityNotSupportedError(
+                            details=CapabilityRefusalDetails(capability="format", rejected_value=str(format_display))
+                        )
 
                     # Check if format has GAM-specific config
                     platform_cfg = format_obj.platform_config or {}
@@ -634,7 +646,7 @@ class GAMOrdersManager:
                                 f"or add 'platform_config.gam.creative_placeholder' to the format definition."
                             )
                             log(f"[red]Error: {error_msg}[/red]")
-                            raise ValueError(error_msg)
+                            raise AdCPConfigurationError()
 
                     creative_placeholders.append(placeholder)
 
@@ -801,13 +813,13 @@ class GAMOrdersManager:
                             f"Either provide bid_price or use fixed pricing."
                         )
                         log(f"[red]Error: {error_msg}[/red]")
-                        raise ValueError(error_msg)
+                        raise AdCPValidationError(field=f"packages[{package.package_id}].bid_price")
 
                 # Validate rate is not None
                 if rate is None:
                     error_msg = f"Package '{package.package_id}' has no valid rate. Pricing info: {pricing_info}"
                     log(f"[red]Error: {error_msg}[/red]")
-                    raise ValueError(error_msg)
+                    raise AdCPConfigurationError()
 
                 # Map AdCP pricing model to GAM cost type
                 gam_cost_type = PricingCompatibility.get_gam_cost_type(pricing_model)
@@ -890,7 +902,7 @@ class GAMOrdersManager:
                     f"This package has no valid pricing configuration."
                 )
                 log(f"[red]Error: {error_msg}[/red]")
-                raise ValueError(error_msg)
+                raise AdCPConfigurationError()
 
             # Build line item object
             # In dry-run mode, order_id is a string like 'dry_run_order_123'; use a dummy numeric ID
