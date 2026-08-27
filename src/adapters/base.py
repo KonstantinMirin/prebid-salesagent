@@ -14,6 +14,8 @@ from rich.console import Console
 
 from src.core.audit_logger import get_audit_logger
 from src.core.enum_helpers import enum_value
+from src.core.errors.codes import ErrorCode
+from src.core.errors.details import ErrorProblem
 from src.core.exceptions import AdCPConfigurationError
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -28,6 +30,7 @@ from src.core.schemas import (
     ReportingPeriod,
     UpdateMediaBuyResponse,
 )
+from src.core.validation_helpers import package_field_path
 
 # Return type of AdServerAdapter._require_config — preserves the caller's value type.
 _ConfigT = TypeVar("_ConfigT")
@@ -384,7 +387,7 @@ class AdServerAdapter(ABC):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
-    ) -> list[str]:
+    ) -> list[ErrorProblem]:
         """Pre-validate a media buy request without creating anything.
 
         Called before adapter execution (including dry_run) to catch
@@ -394,25 +397,43 @@ class AdServerAdapter(ABC):
         Default implementation validates pricing model compatibility.
         Subclasses can override to add adapter-specific checks (e.g., impressions limits).
 
+        Returns ``ErrorProblem`` rather than strings (salesagent-rys3u.4). An adapter
+        CLASSIFIES a constraint violation; it does not describe one. ``ErrorProblem``
+        has no free-text field, so the four authored sentences this used to append --
+        the last of them a suggestion, the field the epic made a function of the code --
+        are not merely deleted but unwritable.
+
         Returns:
-            List of error messages. Empty list means validation passed.
+            One problem per violation. Empty list means validation passed.
         """
-        errors: list[str] = []
+        problems: list[ErrorProblem] = []
         supported = self.get_supported_pricing_models()
 
         if package_pricing_info:
-            for _pkg_id, pricing in package_pricing_info.items():
+            # Position, not just id: package_field_path builds an INDEXED pointer
+            # (packages[0].x), which is the shape the pinned contract grades and the
+            # only one that says WHICH package on a multi-package request.
+            index_of = {pkg.package_id: i for i, pkg in enumerate(packages)}
+            for pkg_id, pricing in package_pricing_info.items():
                 pricing_model = pricing.get("pricing_model", "")
                 if pricing_model and pricing_model.lower() not in supported:
-                    sorted_supported = ", ".join(sorted(s.upper() for s in supported))
-                    errors.append(
-                        f"Adapter does not support '{pricing_model}' pricing. "
-                        f"Supported pricing models: {sorted_supported}. "
-                        f"The requested pricing model ('{pricing_model}') is not available. "
-                        f"Please choose a product with compatible pricing."
+                    problems.append(
+                        ErrorProblem(
+                            code=ErrorCode.UNSUPPORTED_FEATURE,
+                            subject_type="package",
+                            # The old message discarded this, so a buyer with three
+                            # packages could not tell which one was refused.
+                            subject_id=pkg_id,
+                            field=package_field_path("pricing_option_id", index_of.get(pkg_id, 0)),
+                            rejected_value=pricing_model,
+                            # An ARRAY, which is the pin's canonical accepted_values
+                            # (core/error.json details description). It was a joined
+                            # string, which a machine has to split on ", ".
+                            accepted_values=sorted(m.upper() for m in supported),
+                        )
                     )
 
-        return errors
+        return problems
 
     @abstractmethod
     def create_media_buy(

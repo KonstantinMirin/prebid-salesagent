@@ -18,10 +18,12 @@ from src.adapters.base import (
     BaseProductConfig,
     TargetingCapabilities,
 )
+from src.core.errors.codes import ErrorCode
 from src.core.errors.details import (
     CapabilityRefusalDetails,
     CreativeRejectionDetails,
     EntityRefDetails,
+    ErrorProblem,
     RejectionReasonDetails,
     ValidationDetails,
 )
@@ -50,6 +52,7 @@ from src.core.schemas import (
     UpdateMediaBuyResponse,
     UpdateMediaBuySuccess,
 )
+from src.core.validation_helpers import package_field_path
 
 
 def simulate_breakdowns(impressions: float, spend: float) -> tuple[list[dict], list[dict]]:
@@ -226,40 +229,76 @@ class MockAdServer(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
-    ) -> list[str]:
-        """Validate media buy request with GAM-like validation rules."""
-        errors = super().validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
+    ) -> list[ErrorProblem]:
+        """Validate media buy request with GAM-like validation rules.
+
+        The GAM-shaped tokens these checks used to append -- "NotNullError.NULL @
+        lineItem[0].endDateTime" and friends -- were an ad server's internal error
+        vocabulary reaching a buyer as prose. They are structured now
+        (salesagent-rys3u.4): the same facts, in fields a machine can read, with the
+        sentence coming from CODE_TABLE.
+        """
+        problems = super().validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
 
         # Date validation (like GAM)
         if start_time >= end_time:
-            errors.append("NotNullError.NULL @ lineItem[0].endDateTime")
+            problems.append(
+                ErrorProblem(
+                    code=ErrorCode.VALIDATION_ERROR,
+                    field="end_time",
+                    rejected_value=end_time.isoformat(),
+                )
+            )
 
         current_time = datetime.now(UTC)
         if end_time <= current_time:
-            errors.append("InvalidArgumentError @ lineItem[0].endDateTime")
+            problems.append(
+                ErrorProblem(
+                    code=ErrorCode.VALIDATION_ERROR,
+                    field="end_time",
+                    rejected_value=end_time.isoformat(),
+                )
+            )
 
         # Goal validation (like GAM limits)
-        for package in packages:
+        for pkg_index, package in enumerate(packages):
             pricing_model = None
             if package_pricing_info and package.package_id in package_pricing_info:
                 pricing_model = package_pricing_info[package.package_id].get("pricing_model")
 
             limit = 100000000 if pricing_model in ["cpcv", "cpv", "cpp"] else 1000000
             if package.impressions > limit:
-                errors.append(
-                    f"ReservationDetailsError.PERCENTAGE_UNITS_BOUGHT_TOO_HIGH "
-                    f"@ lineItem[0].primaryGoal.units; trigger:'{package.impressions}'"
+                problems.append(
+                    ErrorProblem(
+                        code=ErrorCode.VALIDATION_ERROR,
+                        subject_type="package",
+                        subject_id=package.package_id,
+                        field=package_field_path("impressions", pkg_index),
+                        rejected_value=str(package.impressions),
+                    )
                 )
 
         # Budget validation (AdCP v2.2.0: sum package budgets)
         budget_amount = request.get_total_budget()
         if budget_amount > 0:
             if budget_amount > 1000000:
-                errors.append("InvalidArgumentError.VALUE_TOO_LARGE @ order.totalBudget")
+                problems.append(
+                    ErrorProblem(
+                        code=ErrorCode.VALIDATION_ERROR,
+                        field="budget",
+                        rejected_value=str(budget_amount),
+                    )
+                )
         else:
-            errors.append("InvalidArgumentError @ order.totalBudget")
+            problems.append(
+                ErrorProblem(
+                    code=ErrorCode.VALIDATION_ERROR,
+                    field="budget",
+                    rejected_value=str(budget_amount),
+                )
+            )
 
-        return errors
+        return problems
 
     def _initialize_hitl_config(self):
         """Initialize Human-in-the-Loop configuration from principal platform_mappings."""

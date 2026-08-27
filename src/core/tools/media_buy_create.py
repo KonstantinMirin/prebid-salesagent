@@ -1630,6 +1630,7 @@ from src.core.errors.details import (
     ConfigurationDetails,
     CreativeRejectionDetails,
     EntityRefDetails,
+    ErrorProblem,
     PricingValidationDetails,
     ProductRefDetails,
     TimeWindowDetails,
@@ -3507,18 +3508,20 @@ async def _create_media_buy_impl(
 
         # Pre-validate adapter-specific constraints (pricing models, budget limits)
         # This runs regardless of dry_run so adapter restrictions are always enforced.
-        pre_creation_errors: list[str] = adapter.validate_media_buy_request(
+        pre_creation_problems: list[ErrorProblem] = adapter.validate_media_buy_request(
             req, packages, start_time, end_time, package_pricing_info
         )
-        if isinstance(pre_creation_errors, list) and pre_creation_errors:
-            logger.error(f"[PRE-VALIDATE] Adapter validation failed: {pre_creation_errors}")
+        if pre_creation_problems:
+            logger.error(f"[PRE-VALIDATE] Adapter validation failed: {pre_creation_problems}")
             if step:
                 ctx_manager.update_workflow_step(
                     step.step_id, status="failed", error_message="Adapter validation failed"
                 )
-            # The adapter's own constraint list is machine-readable buyer detail — the
-            # sibling at the config-error branch already relocates its list the same way.
-            raise AdCPValidationError(details=ValidationDetails(reasons=pre_creation_errors))
+            # Forwarded unchanged into `problems`, not `reasons` (salesagent-rys3u.4).
+            # The adapter now returns classified facts rather than sentences, and
+            # ValidationDetails.problems is already typed list[ErrorProblem] -- so the
+            # type system, not a review, is what stops a string arriving here.
+            raise AdCPValidationError(details=ValidationDetails(problems=pre_creation_problems))
 
         # Dry-run mode: skip adapter call entirely, return simulated response
         # All validation (products, pricing, budgets, creatives) has passed above.
