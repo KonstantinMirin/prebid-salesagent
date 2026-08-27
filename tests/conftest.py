@@ -868,9 +868,16 @@ def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None):
 
     # Secondary check for the routes `_active_patches` cannot see: a raw setattr
     # or `sys.modules[x] = MagicMock()` (live in test_incremental_sync_stale_marking,
-    # test_setup_dev and test_inspect_bdd_steps). These are the callables
+    # test_setup_dev and test_inspect_bdd_steps). These are callables
     # logging.LogRecord reads at construction, so replacing one poisons every
     # later record and therefore every later report.
+    #
+    # NOT the complete set: LogRecord also reads `asyncio.current_task`,
+    # `logging.getLevelName` and `os.path.basename` (patching those puts a
+    # MagicMock into `taskName`, `levelname` and `filename` respectively). There
+    # are 0 patch sites for those today, and `sanitize_serialized_report` catches
+    # the value at the wire regardless — this list only decides whether the
+    # RIGHT TEST gets blamed, so a miss costs attribution, not the session.
     for name, original in _PRISTINE_CALLABLES.items():
         if _resolve_dotted(name) is not original:
             leaked.append(f"{name} (replaced without patch())")
@@ -903,17 +910,25 @@ def _resolve_dotted(dotted: str) -> Any:
 # ---------------------------------------------------------------------------
 # Nested-pytest modules — one at a time under xdist
 # ---------------------------------------------------------------------------
-# These modules each spawn a `pytest ... --collect-only` SUBPROCESS over the
-# whole unit suite. Their timeouts were calibrated against a serial run, so with
-# N xdist workers you get up to N concurrent full-suite collections competing
-# with the N workers that spawned them. Measured on a 14-core Mac at -n 12 and
-# -n 14, `test_all_unit_tests_have_entity_markers` dies with
+# MEMBERSHIP RULE: a module belongs here if and only if it spawns a `pytest`
+# SUBPROCESS. Nothing pins that, so check before adding — an earlier revision of
+# this set carried four modules that spawn nothing (0.47s + 0.73s + 0.19s +
+# 0.13s of work pinned to one worker for no reason), and one of them stopped
+# spawning in the same change that listed it. Verify with:
+#
+#     grep -cE 'subprocess\.(run|Popen|check_output|check_call)' <module>
+#
+# Why the group: a nested subprocess re-collects the whole unit suite, and its
+# timeout was calibrated against a SERIAL run. With N xdist workers you get up
+# to N concurrent full-suite collections competing with the N workers that
+# spawned them. Measured on a 14-core Mac at -n 12 and -n 14, the nested
+# collection dies with
 #
 #     subprocess.TimeoutExpired: [... 'pytest','tests/unit/','--collect-only' ...]
 #     timed out after 60 seconds
 #
 # while passing at -n 8 and serially. Raising the timeout would hide the
-# contention rather than remove it; a shared cached collection across the six
+# contention rather than remove it; a shared cached collection across the three
 # would remove the duplicated work outright and is the right follow-up. Until
 # then, one xdist_group means at most ONE nested collection runs at a time,
 # whatever the worker count -- which is the property that was actually missing.
@@ -923,11 +938,7 @@ def _resolve_dotted(dotted: str) -> Any:
 _NESTED_PYTEST_MODULES: frozenset[str] = frozenset(
     {
         "test_architecture_ci_bdd_shard_manifest",
-        "test_architecture_ci_suite_coverage",
-        "test_architecture_pre_commit_coverage_map",
-        "test_architecture_test_marker_coverage",
         "test_e2e_rest_ledger_fitness",
-        "test_warning_filters",
         "test_xdist_report_serialization",
     }
 )
@@ -938,10 +949,14 @@ def entity_markers_for_path(fspath: str) -> frozenset[str]:
     """Entity markers this path earns from its filename and directory.
 
     The single definition of the auto-marking rule. `pytest_collection_modifyitems`
-    applies it at collection; `test_architecture_test_marker_coverage` asserts
-    against it WITHOUT re-collecting the suite in a subprocess. Two copies of this
-    logic would drift, and the guard would then grade a rule production does not
-    follow.
+    applies it at collection; `test_architecture_test_marker_coverage` asserts it
+    directly, in-process. Two copies of this logic would drift, and anything
+    grading the rule would then grade something production does not follow.
+
+    Keyed on the FULL path, not the stem: ten stems are duplicated across
+    `tests/`, and `test_authorized_properties.py` earns `admin` under
+    `tests/admin/` but not under `tests/unit/`. A stem key let whichever file
+    collection reached first decide for both.
     """
     filename = Path(fspath).stem  # e.g. "test_delivery_webhook_behavioral"
     markers: set[str] = set()
