@@ -86,7 +86,7 @@ class BroadstreetClient:
             Parsed JSON response body
 
         Raises:
-            AdCPError: The subclass for the upstream status (see the mapping below).
+            AdCPSalesAgentError: The subclass for the upstream status (see the mapping below).
         """
         try:
             body = response.json() if response.content else None
@@ -141,7 +141,7 @@ class BroadstreetClient:
             Parsed response body
 
         Raises:
-            AdCPError: The subclass for the upstream failure.
+            AdCPSalesAgentError: The subclass for the upstream failure.
         """
         url = self._build_url(path, query_params)
 

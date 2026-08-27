@@ -1,7 +1,7 @@
 """Then steps for create_media_buy response assertions.
 
 Asserts on ``ctx["response"]`` (CreateMediaBuyResult or CreateMediaBuySuccess)
-and ``ctx["error"]`` (AdCPError or CreateMediaBuyError).
+and ``ctx["error"]`` (AdCPSalesAgentError or CreateMediaBuyError).
 """
 
 from __future__ import annotations
@@ -729,7 +729,7 @@ def then_error_has_retry_after(ctx: dict) -> None:
     """Assert the WIRE envelope carries a positive retry_after hint.
 
     Reads ``errors[0].details`` from the envelope the buyer received. The former
-    implementation inspected a reconstructed ``AdCPError`` and fell back to
+    implementation inspected a reconstructed ``AdCPSalesAgentError`` and fell back to
     ``getattr(error, "retry_after", None)`` on anything else — a read that
     silently yields ``None`` for an object that is not the expected shape, which
     is indistinguishable from a wire that genuinely omitted the hint

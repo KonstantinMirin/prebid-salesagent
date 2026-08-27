@@ -40,9 +40,9 @@ the exception), and the remaining 6 are comments and docstrings.
   TOTAL                              23    0 remain. Nothing to ALLOWLIST, nothing
                                            to DEFER, so no follow-up ticket is owed.
 
-Migrated BY WHAT: AdCPError.__init__ no longer has a recovery parameter. Probed, not
+Migrated BY WHAT: AdCPSalesAgentError.__init__ no longer has a recovery parameter. Probed, not
 assumed: AdCPValidationError(recovery='terminal') raises
-TypeError: AdCPError.__init__() got an unexpected keyword argument 'recovery'.
+TypeError: AdCPSalesAgentError.__init__() got an unexpected keyword argument 'recovery'.
 recovery is a read-only property resolving from CODE_TABLE per read.
 
 ### Table B — hand-built advisory Error objects (13 live sites)

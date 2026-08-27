@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 from pytest_bdd import given, parsers, when
 
-from src.core.exceptions import AdCPError
+from src.core.exceptions import AdCPSalesAgentError
 
 # ═══════════════════════════════════════════════════════════════════════
 # Helpers
@@ -268,7 +268,7 @@ def when_query_task_list(ctx: dict) -> None:
             result = _dispatch_list_tasks(env, **params)
         ctx["response"] = result
         ctx["task_list_result"] = result
-    except (AdCPError, TypeError, Exception) as exc:
+    except (AdCPSalesAgentError, TypeError, Exception) as exc:
         ctx["error"] = exc
 
 

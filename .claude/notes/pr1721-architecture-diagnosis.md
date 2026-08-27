@@ -17,7 +17,7 @@ surface so the fixed shape is the new path of least resistance.
 
 ### D1. The advisory-error lane has no owned, capable combinator (R1-3, R1-4, R1-9's site)
 
-The RAISED-error lane is fully architected: typed `AdCPError` → boundary translation →
+The RAISED-error lane is fully architected: typed `AdCPSalesAgentError` → boundary translation →
 `WIRE_STANDARD_CODES` → envelope, guard-enforced end to end. The ADVISORY lane (`errors[]`
 inside a success response) has only a half-built primitive:
 

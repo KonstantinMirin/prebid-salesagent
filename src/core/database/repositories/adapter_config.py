@@ -36,7 +36,7 @@ class TenantNotConfiguredError(AdCPConfigurationError):
     In the AdCP hierarchy because we define it and we raise it. CONFIGURATION_ERROR
     is what it always meant -- seller-side setup the buyer cannot supply, which the
     pinned enum classifies terminal. The tenant id travels in ``details.tenant_id``
-    rather than an interpolated message: AdCPError has no message parameter, so the
+    rather than an interpolated message: AdCPSalesAgentError has no message parameter, so the
     sentence comes from CODE_TABLE.
     """
 

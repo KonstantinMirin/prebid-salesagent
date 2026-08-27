@@ -181,7 +181,7 @@ FILE_DESCRIPTIONS: dict[str, str] = {
     "schemas/creative.pyi": "Creative-domain schemas",
     "schemas/delivery.pyi": "Delivery-domain schemas",
     "schemas/product.pyi": "Product-domain schemas",
-    "errors.pyi": "AdCPError hierarchy — exception classes, status codes, error codes",
+    "errors.pyi": "AdCPSalesAgentError hierarchy — exception classes, status codes, error codes",
     "harness/base.pyi": "BaseTestEnv + IntegrationEnv interface (test harness base)",
     "harness/transport.pyi": "Transport enum, TransportResult, dispatcher classes",
     "harness/envs.pyi": "Domain-specific test env classes with methods",

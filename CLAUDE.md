@@ -86,7 +86,7 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 
 | Guard | Enforces | Test File |
 |-------|----------|-----------|
-| No ToolError in _impl | `_impl` raises AdCPError, never ToolError | `test_no_toolerror_in_impl.py` |
+| No ToolError in _impl | `_impl` raises AdCPSalesAgentError, never ToolError | `test_no_toolerror_in_impl.py` |
 | Transport-agnostic _impl | `_impl` has zero transport imports | `test_transport_agnostic_impl.py` |
 | ResolvedIdentity in _impl | `_impl` accepts ResolvedIdentity, not Context | `test_impl_resolved_identity.py` |
 | Schema inheritance | Schemas extend adcp library base types | `test_architecture_schema_inheritance.py` |
@@ -264,14 +264,14 @@ async def create_media_buy_raw(...) -> CreateMediaBuyResponse:
 
 **Rules for `_impl` functions:**
 - Accept `ResolvedIdentity`, never `Context`, `ToolContext`, or raw headers
-- Raise `AdCPError` subclasses, never `ToolError` (that's transport-specific)
+- Raise `AdCPSalesAgentError` subclasses, never `ToolError` (that's transport-specific)
 - Zero imports from `fastmcp`, `a2a`, `starlette`, or `fastapi`
 - No auth extraction or tenant resolution — that's the wrapper's job
 
 **Rules for transport wrappers:**
 - Call `resolve_identity()` to create `ResolvedIdentity` before calling `_impl`
 - Forward **every** `_impl` parameter — don't silently drop any
-- Catch `AdCPError` and translate to transport-appropriate error format
+- Catch `AdCPSalesAgentError` and translate to transport-appropriate error format
 
 **Enforced by:** `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`, `test_no_toolerror_in_impl.py`, `test_architecture_boundary_completeness.py`
 
@@ -482,7 +482,7 @@ Tenant → CurrencyLimit (USD required for budget validation)
 
 ### Error Verification
 **New error-path tests must assert on the wire envelope, not reconstructed exceptions.**
-The test harness reconstructs `AdCPError` from wire responses, but this reconstruction is lossy.
+The test harness reconstructs `AdCPSalesAgentError` from wire responses, but this reconstruction is lossy.
 Use `assert_envelope_shape(result.wire_error_envelope, code, recovery=...)` as the primary authority.
 See `tests/CLAUDE.md` § "Error Verification Policy" for the full policy, helpers, and migration path.
 

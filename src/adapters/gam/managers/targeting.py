@@ -15,7 +15,7 @@ from src.core.exceptions import (
     AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
-    AdCPError,
+    AdCPSalesAgentError,
 )
 
 logger = logging.getLogger(__name__)
@@ -329,7 +329,7 @@ class GAMTargetingManager:
 
             raise AdCPAdapterError()
 
-        except AdCPError:
+        except AdCPSalesAgentError:
             raise
         except Exception as e:
             logger.error(f"Failed to get/create custom targeting value '{value_name}': {e}", exc_info=True)

@@ -1,7 +1,7 @@
-"""Tests that _impl functions raise AdCPError, not ToolError.
+"""Tests that _impl functions raise AdCPSalesAgentError, not ToolError.
 
 Validates the core invariant: business logic raises transport-agnostic
-AdCPError subclasses, never fastmcp-specific ToolError.
+AdCPSalesAgentError subclasses, never fastmcp-specific ToolError.
 
 This test scans source files to ensure no ToolError leaks into _impl functions.
 
@@ -115,7 +115,7 @@ class TestNoToolErrorInSimpleModules:
 
     @pytest.mark.arch_guard
     def test_no_toolerror_in_simple_modules(self):
-        """All 12 simple modules must raise AdCPError subclasses, not ToolError."""
+        """All 12 simple modules must raise AdCPSalesAgentError subclasses, not ToolError."""
         violations = []
         for filepath in SIMPLE_MODULE_FILES:
             sites = _find_toolerror_raises(filepath)
@@ -124,7 +124,7 @@ class TestNoToolErrorInSimpleModules:
 
         assert not violations, (
             f"Found {len(violations)} ToolError raise(s) in _impl modules "
-            f"(should use AdCPError subclasses):\n" + "\n".join(violations)
+            f"(should use AdCPSalesAgentError subclasses):\n" + "\n".join(violations)
         )
 
 
@@ -133,7 +133,7 @@ class TestNoToolErrorInComplexModules:
 
     @pytest.mark.arch_guard
     def test_no_toolerror_in_complex_modules(self):
-        """All 4 complex modules must raise AdCPError subclasses, not ToolError."""
+        """All 4 complex modules must raise AdCPSalesAgentError subclasses, not ToolError."""
         violations = []
         for filepath in COMPLEX_MODULE_FILES:
             sites = _find_toolerror_raises(filepath)
@@ -142,5 +142,5 @@ class TestNoToolErrorInComplexModules:
 
         assert not violations, (
             f"Found {len(violations)} ToolError raise(s) in complex _impl modules "
-            f"(should use AdCPError subclasses):\n" + "\n".join(violations)
+            f"(should use AdCPSalesAgentError subclasses):\n" + "\n".join(violations)
         )

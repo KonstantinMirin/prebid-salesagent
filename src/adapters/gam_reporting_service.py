@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 import pytz
 import requests
 
-from src.core.exceptions import AdCPAdapterError, AdCPError
+from src.core.exceptions import AdCPAdapterError, AdCPSalesAgentError
 
 logger = logging.getLogger(__name__)
 
@@ -350,7 +350,7 @@ class GAMReportingService:
             # Use modern ReportService method instead of deprecated GetDataDownloader
             try:
                 download_url = self.report_service.getReportDownloadURL(report_job_id, "CSV_DUMP")
-            except AdCPError:
+            except AdCPSalesAgentError:
                 raise
             except Exception as e:
                 raise AdCPAdapterError(internal_detail=e) from e
@@ -389,7 +389,7 @@ class GAMReportingService:
                             )
                             break
                         data.append(row)
-            except AdCPError:
+            except AdCPSalesAgentError:
                 raise
             except Exception as e:
                 raise AdCPAdapterError(internal_detail=e) from e
@@ -404,7 +404,7 @@ class GAMReportingService:
 
             return data
 
-        except AdCPError:
+        except AdCPSalesAgentError:
             # Every typed error raised inside this body -- the job-failed and
             # timeout arms above, the URL refusal, the parse failure -- already
             # names its own fault. Re-raise rather than relabel them all

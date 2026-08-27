@@ -86,7 +86,7 @@ class TestTimeoutError:
     """What a timeout raises, and what the buyer is allowed to read.
 
     These two tests replaced ones written for a module-local ``TimeoutError``
-    that took a positional message. ``AdCPError`` accepts no message parameter
+    that took a positional message. ``AdCPSalesAgentError`` accepts no message parameter
     at all -- the sentence comes from CODE_TABLE, keyed by the code -- so a test
     asserting ``str(error) == "operation timed out"`` was asserting a channel
     that no longer exists. The obligation underneath it does still exist and is

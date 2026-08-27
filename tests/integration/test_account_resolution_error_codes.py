@@ -17,8 +17,8 @@ from adcp.types import (
 from src.core.database.repositories.uow import AccountUoW
 from src.core.exceptions import (
     AdCPAccountNotFoundError,
-    AdCPError,
     AdCPNotFoundError,
+    AdCPSalesAgentError,
     build_two_layer_error_envelope,
 )
 from src.core.helpers.account_helpers import _require_account_access, resolve_account
@@ -125,7 +125,7 @@ class TestRequireAccountAccessFalsyPrincipal:
                 # Sanity: the access grant is real — a valid principal HAS access.
                 assert uow.accounts.has_access(good_principal_id, account_id) is True
 
-                with pytest.raises(AdCPError) as exc_info:
+                with pytest.raises(AdCPSalesAgentError) as exc_info:
                     _require_account_access(identity, account_id, uow.accounts)
 
             assert_envelope_shape(
@@ -172,7 +172,7 @@ class TestResolveAccountFalsyPrincipalEntryGuard:
             )
 
             with AccountUoW(tenant.tenant_id) as uow:
-                with pytest.raises(AdCPError) as exc_info:
+                with pytest.raises(AdCPSalesAgentError) as exc_info:
                     resolve_account(ref, identity, uow.accounts)
 
             assert_envelope_shape(
@@ -241,7 +241,7 @@ class TestAccountNotFoundViaTransports:
         """
         result = env_with_data.call_via(Transport.MCP, req=self._nonexistent_account_req())
         assert result.is_error, f"Expected ACCOUNT_NOT_FOUND error, got success: {result.payload}"
-        # Graded on the WIRE. This used to assert result.error was an AdCPError with an
+        # Graded on the WIRE. This used to assert result.error was an AdCPSalesAgentError with an
         # .error_code, which held only because the harness rebuilt one from wire bytes;
         # that reconstruction is gone (salesagent-3dawm.15) and result.error is now the
         # carrier holding the envelope.

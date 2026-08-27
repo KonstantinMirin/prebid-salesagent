@@ -362,7 +362,7 @@ class TestValidationModeSemantics:
             if transport is Transport.A2A:
                 pytest.xfail(
                     "salesagent-b2wny: A2A captures no wire envelope for a tool-internal "
-                    "AdCPError — is_error is True but wire_error_envelope is None, so there "
+                    "AdCPSalesAgentError — is_error is True but wire_error_envelope is None, so there "
                     "is nothing to grade. Second instance of the same gap (the first was "
                     "SERVICE_UNAVAILABLE in test_creative_sync_transport), which is why the "
                     "bead is scoped to the A2A path rather than to one code."

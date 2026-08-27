@@ -95,7 +95,7 @@ def then_error_carries_declared_code(ctx: dict, code: str) -> None:
     Recovery is left to the shared recovery step so each Then pins one thing.
 
     No suggestion is asserted HERE, though the envelope now carries one: since
-    salesagent-3dawm.8 the table owns the suggestion (``AdCPError.suggestion`` is a
+    salesagent-3dawm.8 the table owns the suggestion (``AdCPSalesAgentError.suggestion`` is a
     read-only property over CODE_TABLE), so this
     error resolves the pin's suggestion rather than omitting the field. This step pins the
     two fields a buyer DISPATCHES on; the suggestion's presence on this same bare path is

@@ -2,7 +2,7 @@
 
 Wire-shape decisions live at the transport boundary, not in ``_impl``. Tools and
 adapters that need to surface an error to the buyer MUST raise a typed
-``AdCPError`` subclass; the boundary translator runs
+``AdCPSalesAgentError`` subclass; the boundary translator runs
 ``build_two_layer_error_envelope()`` once at the boundary.
 
 This guard counts ``Error(code=...)`` literal construction sites in
@@ -13,7 +13,7 @@ raise a cap is to land a fix that exceeds it intentionally, which is a code-
 review red flag.
 
 Capped files may carry a ``# FIXME(salesagent-pattern-a): migrate to typed
-AdCPError raise`` comment at every Error(code=...) site so reviewers can grep
+AdCPSalesAgentError raise`` comment at every Error(code=...) site so reviewers can grep
 their way to the cleanup work. The comments are aspirational; the cap dict
 + ratchet (`assert_caps_only_shrink`) is the actual enforcement mechanism.
 
@@ -91,7 +91,7 @@ class TestNoErrorConstructionInImpl:
             count_sites=_count_pattern_a_sites,
             scan_dirs=SCAN_DIRS,
             site_label="Pattern A",
-            typed_raise_hint="convert to typed AdCPError raise (e.g., AdCPMediaBuyNotFoundError)",
+            typed_raise_hint="convert to typed AdCPSalesAgentError raise (e.g., AdCPMediaBuyNotFoundError)",
             rel=_rel,
         )
 

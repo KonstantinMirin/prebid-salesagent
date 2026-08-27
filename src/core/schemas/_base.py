@@ -72,9 +72,9 @@ from src.core.errors.codes import CODE_TABLE, ErrorCodeT
 from src.core.errors.details import ErrorDetails
 from src.core.errors.issues import ErrorIssue, JsonPointer
 from src.core.exceptions import (
-    AdCPError,
     AdCPInvalidRequestError,
     AdCPNotFoundError,
+    AdCPSalesAgentError,
     AdCPValidationError,
     _details_to_wire,
 )
@@ -170,7 +170,7 @@ class Error(_LibraryError):
     yields X's message rather than carrying the old one. This is what makes the
     defect unconstructible instead of merely detectable; the alternative
     considered was an AST guard banning ``model_copy``, which would have covered
-    one of the five routes and could never have fired on ``AdCPError`` at all
+    one of the five routes and could never have fired on ``AdCPSalesAgentError`` at all
     (it is not a pydantic model).
     """
 
@@ -235,7 +235,7 @@ class Error(_LibraryError):
         return cls.model_validate(payload)
 
     @classmethod
-    def from_exception(cls, exc: AdCPError[Any]) -> "Error":
+    def from_exception(cls, exc: AdCPSalesAgentError[Any]) -> "Error":
         """Build an advisory from the error that already knows its own code.
 
         The EXCEPTION class is the authority on which code an error is, so an

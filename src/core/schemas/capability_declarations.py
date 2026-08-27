@@ -268,7 +268,7 @@ class CapabilityDeclarations(BaseModel):
                 )
 
         # ValidationError only -- never a broad `except Exception`, which would
-        # flatten any typed AdCPError raised from a nested validator into a
+        # flatten any typed AdCPSalesAgentError raised from a nested validator into a
         # generic CONFIGURATION_ERROR and lose its code
         # (guard: test_architecture_no_error_flattening).
         try:

@@ -573,7 +573,7 @@ class CreativeAgentRegistry:
                 # status is structured first-party data, not an identifier. The URL is
                 # already captured server-side by the logger.error above.
                 if exc.response.status_code == 429:
-                    # retry_after is a FIRST-CLASS field on AdCPError and on the wire
+                    # retry_after is a FIRST-CLASS field on AdCPSalesAgentError and on the wire
                     # error object, so it travels there rather than inside details --
                     # two channels for one fact is what this migration removes. The
                     # header is only honoured when it is a delta-seconds integer; the

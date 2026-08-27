@@ -2,7 +2,7 @@
 
 These steps assert on ``ctx["error"]`` which is populated by When steps when
 an operation fails. Errors are real exceptions from production code:
-    - AdCPError subclasses (have .error_code, .message)
+    - AdCPSalesAgentError subclasses (have .error_code, .message)
     - pydantic.ValidationError (mapped to VALIDATION_ERROR)
     - Other exceptions
 """
@@ -102,15 +102,15 @@ def _get_error_code(error: object) -> str:
     """Extract error code from an exception or Error model.
 
     Handles two patterns:
-    1. Exception-based: AdCPError with .error_code
+    1. Exception-based: AdCPSalesAgentError with .error_code
     2. Partial success: adcp.types.Error model with .code (from response.errors)
     """
     wire = _wire_of(error)
     if wire is not None:
         return str(wire.get("code") or "")
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPSalesAgentError
 
-    if isinstance(error, AdCPError):
+    if isinstance(error, AdCPSalesAgentError):
         return error.error_code
     # adcp.types.Error model (from partial success response.errors)
     if hasattr(error, "code") and not isinstance(error, Exception):
@@ -131,9 +131,9 @@ def _get_error_message(error: object) -> str:
     wire = _wire_of(error)
     if wire is not None:
         return str(wire.get("message") or "")
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPSalesAgentError
 
-    if isinstance(error, AdCPError):
+    if isinstance(error, AdCPSalesAgentError):
         return error.message
     # adcp.types.Error model
     if hasattr(error, "message") and not isinstance(error, Exception):
@@ -146,9 +146,9 @@ def _get_error_dict(error: object) -> dict:
     wire = _wire_of(error)
     if wire is not None:
         return dict(wire)
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPSalesAgentError
 
-    if isinstance(error, AdCPError):
+    if isinstance(error, AdCPSalesAgentError):
         # The wire envelope, not a second serialization of the same object, and
         # located through the ONE sanctioned locator rather than indexed here --
         # `locate_envelope_error` is where "which region does the spec put this in"
@@ -183,7 +183,7 @@ def _assert_meaningful_error(error: object) -> None:
     """Assert the error object carries meaningful error information.
 
     Validates that the error is either:
-    - An AdCPError with a non-empty error_code string, OR
+    - An AdCPSalesAgentError with a non-empty error_code string, OR
     - An adcp Error model with a non-empty string .code attribute, OR
     - Another Exception with a non-empty string representation.
 
@@ -195,11 +195,11 @@ def _assert_meaningful_error(error: object) -> None:
         code = wire.get("code")
         assert isinstance(code, str) and code, f"wire error object has empty or non-string code: {code!r}"
         return
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPSalesAgentError
 
-    if isinstance(error, AdCPError):
+    if isinstance(error, AdCPSalesAgentError):
         assert isinstance(error.error_code, str) and error.error_code, (
-            f"AdCPError has empty or non-string error_code: {error.error_code!r}"
+            f"AdCPSalesAgentError has empty or non-string error_code: {error.error_code!r}"
         )
         return
 
@@ -377,12 +377,12 @@ def then_error_recovery(ctx: dict, recovery: str) -> None:
         return
     error = ctx.get("error")
     assert error is not None, "No error recorded in ctx"
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPSalesAgentError
 
-    if isinstance(error, AdCPError):
+    if isinstance(error, AdCPSalesAgentError):
         assert error.recovery == recovery, f"Expected recovery '{recovery}', got '{error.recovery}'"
     else:
-        raise AssertionError(f"Cannot check recovery on non-AdCPError: {type(error).__name__}")
+        raise AssertionError(f"Cannot check recovery on non-AdCPSalesAgentError: {type(error).__name__}")
 
 
 @then('the error should include a "suggestion" field')
@@ -905,7 +905,7 @@ def then_terminal_failure(ctx: dict) -> None:
     branch fell off the end asserting nothing, on the reasoning quoted below
     that a non-AdCP exception is terminal anyway. That made it the step most
     exposed to a change in what ``ctx['error']`` holds -- an object that is not
-    an AdCPError satisfied neither branch and the scenario passed having graded
+    an AdCPSalesAgentError satisfied neither branch and the scenario passed having graded
     no recovery hint whatsoever. On a wire transport the buyer-facing hint now
     comes from the envelope, where a missing or wrong recovery fails.
     """
@@ -923,9 +923,9 @@ def then_terminal_failure(ctx: dict) -> None:
         f"ctx keys: {list(ctx.keys())}, response: {ctx.get('response')!r}"
     )
     _assert_meaningful_error(error)
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPSalesAgentError
 
-    if isinstance(error, AdCPError):
+    if isinstance(error, AdCPSalesAgentError):
         assert error.recovery == "terminal", f"Expected terminal recovery, got '{error.recovery}'"
     elif hasattr(error, "recovery"):
         recovery = error.recovery.value if hasattr(error.recovery, "value") else str(error.recovery)
@@ -1060,9 +1060,9 @@ def _get_error_details(error: object) -> dict:
     wire = _wire_of(error)
     if wire is not None:
         return dict(wire.get("details") or {})
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPSalesAgentError
 
-    if isinstance(error, AdCPError):
+    if isinstance(error, AdCPSalesAgentError):
         return error.details or {}
     # adcp.types.Error model
     if hasattr(error, "details") and not isinstance(error, Exception):

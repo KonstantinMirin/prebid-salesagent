@@ -32,7 +32,7 @@ class StrategyError(AdCPNotFoundError[ValueRejectionDetails]):
     had broken.
 
     REFERENCE_NOT_FOUND is inherited from AdCPNotFoundError. The identifier travels
-    in ``details.rejected_value``, not in a message: AdCPError has no message
+    in ``details.rejected_value``, not in a message: AdCPSalesAgentError has no message
     parameter, so the sentence comes from CODE_TABLE.
     """
 

@@ -16,7 +16,7 @@ from adcp.types import FormatId as LibraryFormatId
 
 from src.core.database.database_session import get_db_session
 from src.core.errors.details import EntityRefDetails
-from src.core.exceptions import AdCPError, AdCPFormatNotFoundError
+from src.core.exceptions import AdCPFormatNotFoundError, AdCPSalesAgentError
 from src.core.schemas import Format, format_id_identity
 from src.core.validation_helpers import run_async_in_sync_context
 
@@ -30,7 +30,7 @@ def fetch_format_spec(agent_url: str, format_id: str) -> Format | None:
     sync_creatives validation, and get_format all route through here so typed
     transient errors behave identically on every tool:
 
-    - Typed ``AdCPError`` from the registry (429 -> AdCPRateLimitError,
+    - Typed ``AdCPSalesAgentError`` from the registry (429 -> AdCPRateLimitError,
       5xx/timeout/connect -> AdCPServiceUnavailableError) PROPAGATES: it carries
       its own recovery semantics, and swallowing it into ``None`` degrades a
       transient agent failure to a terminal "unknown format" rejection.
@@ -45,7 +45,7 @@ def fetch_format_spec(agent_url: str, format_id: str) -> Format | None:
     registry = get_creative_agent_registry()
     try:
         return run_async_in_sync_context(registry.get_format(agent_url, format_id))
-    except AdCPError:
+    except AdCPSalesAgentError:
         raise
     except Exception as e:
         logger.warning(f"Could not fetch format {format_id} from {agent_url}: {e}")
@@ -198,7 +198,7 @@ def _get_product_format_override(
             # The base format genuinely does not exist, so there is nothing to
             # override. The only condition this arm was ever meant to handle.
             return None
-        except AdCPError:
+        except AdCPSalesAgentError:
             # Anything else typed -- a rate limit, an unreachable agent -- is NOT
             # "no such format". Swallowing it here reported a transient outage as
             # an absent override, which is a lie the buyer cannot act on.
@@ -288,7 +288,7 @@ def list_available_formats(
         # Deliberately still degrades to [] for EVERY failure, typed or not. The
         # only caller is the admin UI (src/admin/blueprints/products.py:156), which
         # catches the SDK's adcp.exceptions.ADCPError -- a different class tree from
-        # src.core.exceptions.AdCPError -- so propagating a typed error here does not
+        # src.core.exceptions.AdCPSalesAgentError -- so propagating a typed error here does not
         # reach a buyer, it 500s an admin page that used to degrade. salesagent-w4x1's
         # defect ("buyer sees empty catalog SUCCESS on an agent 429") is real but is
         # NOT at this site; wiring this path to a buyer is what would create it.

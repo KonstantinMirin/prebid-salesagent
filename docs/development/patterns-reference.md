@@ -250,9 +250,9 @@ with get_db_session() as session:
 
 All tools have two layers: transport wrappers (MCP, A2A, REST) and business logic (`_impl` functions).
 
-**`_impl` rules:** Accept `ResolvedIdentity` (not `Context`). Raise `AdCPError` subclasses (not `ToolError`). Zero imports from `fastmcp`/`a2a`/`starlette`/`fastapi`.
+**`_impl` rules:** Accept `ResolvedIdentity` (not `Context`). Raise `AdCPSalesAgentError` subclasses (not `ToolError`). Zero imports from `fastmcp`/`a2a`/`starlette`/`fastapi`.
 
-**Transport wrapper rules:** Call `resolve_identity()` first. Forward every `_impl` parameter. Translate `AdCPError` to transport-specific format.
+**Transport wrapper rules:** Call `resolve_identity()` first. Forward every `_impl` parameter. Translate `AdCPSalesAgentError` to transport-specific format.
 
 **Anti-pattern** (exists in `task_management.py`):
 ```python
@@ -271,12 +271,12 @@ This is tracked debt — functions should be split into `_list_tasks_impl` + tra
 
 ## 7. Error Hierarchy
 
-`_impl` functions raise `AdCPError` subclasses (defined in `src/core/exceptions.py`). Transport wrappers catch these and translate to transport-appropriate format.
+`_impl` functions raise `AdCPSalesAgentError` subclasses (defined in `src/core/exceptions.py`). Transport wrappers catch these and translate to transport-appropriate format.
 
 **Canonical file:** [`src/core/exceptions.py`](../../src/core/exceptions.py)
 
 ```
-AdCPError
+AdCPSalesAgentError
 ├── AdCPValidationError      (400)
 ├── AdCPAuthenticationError   (401)
 ├── AdCPAuthorizationError    (403)
@@ -294,12 +294,12 @@ AdCPError
 if total_budget <= 0:
     return UpdateMediaBuyError(errors=[Error(code="invalid_budget", message=...)])
 
-# CORRECT: raise AdCPError, let transport wrapper format the response
+# CORRECT: raise AdCPSalesAgentError, let transport wrapper format the response
 if total_budget <= 0:
     raise AdCPValidationError("Budget must be positive")
 ```
 
-**Anti-pattern: using ValueError/RuntimeError instead of AdCPError**
+**Anti-pattern: using ValueError/RuntimeError instead of AdCPSalesAgentError**
 
 ```python
 # WRONG: generic Python exceptions
@@ -309,7 +309,7 @@ raise ValueError(f"Media buy '{media_buy_id}' not found.")
 raise AdCPNotFoundError(f"Media buy '{media_buy_id}' not found.")
 ```
 
-**Enforced by:** `review-execution-excellence` (AdCPError Hierarchy), `review-python-practices` (Error Handling), `test_no_toolerror_in_impl.py`
+**Enforced by:** `review-execution-excellence` (AdCPSalesAgentError Hierarchy), `review-python-practices` (Error Handling), `test_no_toolerror_in_impl.py`
 
 ## 8. DRY — Shared Validation
 

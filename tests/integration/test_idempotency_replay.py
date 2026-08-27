@@ -94,7 +94,7 @@ class TestImplReplaysCachedSuccess:
         assert result.replayed is True  # top-level replay marker, injected at replay time
 
     async def test_different_payload_same_key_raises_conflict(self, integration_db):
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         idem_key = f"conflict-{uuid.uuid4().hex}"
@@ -105,7 +105,7 @@ class TestImplReplaysCachedSuccess:
         # Stored hash will NOT match the request's canonical hash → conflict.
         _seed_success(tenant_id, principal_id, idem_key, media_buy_id="mb_first", payload_hash="non-matching-hash")
 
-        with pytest.raises(AdCPError) as exc_info:
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             await _create_media_buy_impl(req=_make_request(idem_key), identity=_identity(tenant_id, principal_id))
 
         exc = exc_info.value
@@ -118,13 +118,13 @@ class TestImplReplaysCachedSuccess:
         Pins the schema-drift guard: a stored envelope from an older deploy that no
         longer validates must never surface as an internal error on a retry of a
         previously-successful call. The probe treats it as absent and re-executes
-        (here the bare request then fails downstream as a typed AdCPError — what
+        (here the bare request then fails downstream as a typed AdCPSalesAgentError — what
         matters is it is neither a replay, a conflict, nor a raw ValidationError).
         """
         from pydantic import BaseModel
         from pydantic import ValidationError as PydanticValidationError
 
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from src.core.idempotency_canonical import canonical_request_hash
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from tests.helpers import seed_cached_success
@@ -148,7 +148,7 @@ class TestImplReplaysCachedSuccess:
             payload_hash=canonical_request_hash(_make_request(idem_key)),
         )
 
-        with pytest.raises(AdCPError) as exc_info:
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             await _create_media_buy_impl(req=_make_request(idem_key), identity=_identity(tenant_id, principal_id))
 
         assert not isinstance(exc_info.value, PydanticValidationError)
@@ -304,7 +304,7 @@ class TestErrorsAreNeverCached:
         from datetime import timedelta
 
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from src.core.schemas import CreateMediaBuyError, Error
 
         idem_key = f"err-{uuid.uuid4().hex}"
@@ -318,7 +318,7 @@ class TestErrorsAreNeverCached:
                 context=None,
             )
             now = datetime.now(UTC)
-            # The adapter error surfaces as a failed result or a raised AdCPError —
+            # The adapter error surfaces as a failed result or a raised AdCPSalesAgentError —
             # either way the key must NOT be cached.
             try:
                 result = env.call_impl(
@@ -332,7 +332,7 @@ class TestErrorsAreNeverCached:
                     idempotency_key=idem_key,
                 )
                 assert result.status == "failed"
-            except AdCPError:
+            except AdCPSalesAgentError:
                 # The adapter failure may surface as a raised typed error rather
                 # than a failed result — both are valid emission shapes here. The
                 # assertion that matters is below: no cache row exists either way.

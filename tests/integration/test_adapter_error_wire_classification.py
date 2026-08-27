@@ -15,8 +15,8 @@ and retry, contact the seller, fix the reference -- collapse into one.
 Two tests, at the two different loci this defect spans:
 
 ``TestTypedAdapterErrorReachesTheBuyer`` grades the WIRE. It passes today, and
-that is the point: the tool layer already re-raises a typed ``AdCPError``
-untouched (``except AdCPError as adcp_err: raise`` at
+that is the point: the tool layer already re-raises a typed ``AdCPSalesAgentError``
+untouched (``except AdCPSalesAgentError as adcp_err: raise`` at
 src/core/tools/media_buy_create.py:4214, ahead of the ``except Exception`` that
 collapses everything else to SERVICE_UNAVAILABLE). So the buyer-facing half of
 the contract is sound and the fix does not need to touch it -- this test pins

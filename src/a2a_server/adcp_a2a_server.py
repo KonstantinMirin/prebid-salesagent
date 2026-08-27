@@ -64,7 +64,7 @@ from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPAuthRequiredError,
     AdCPCapabilityNotSupportedError,
-    AdCPError,
+    AdCPSalesAgentError,
     AdCPUrlNotAllowedError,
     AdCPValidationError,
     adcp_error_for,
@@ -145,7 +145,7 @@ def _require_params(params: dict, required: list[str], *, field: str | None = No
 def _invalid_params_from_ssrf_error(exc: Exception) -> InvalidParamsError:
     """Wrap a refused-URL rejection as A2A InvalidParamsError with the AdCP ``data`` envelope."""
     if isinstance(exc, AdCPUrlNotAllowedError):
-        adcp_err: AdCPError = exc
+        adcp_err: AdCPSalesAgentError = exc
     else:
         adcp_err = AdCPUrlNotAllowedError(
             field="push_notification_config.url",
@@ -289,7 +289,7 @@ DISCOVERY_SKILLS = frozenset(
 def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     """Canonical InternalError shape for non-skill A2A boundary failures.
 
-    Skill handlers raise typed ``AdCPError`` (or untyped exceptions that the
+    Skill handlers raise typed ``AdCPSalesAgentError`` (or untyped exceptions that the
     dispatcher normalizes), and ``_handle_explicit_skill`` → ``on_message_send``
     surface those as a two-layer envelope on a failed Task's DataPart. Non-skill
     paths (``on_message_send`` fallthrough, NL handlers) historically picked their
@@ -301,7 +301,7 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     is NOT a deliberate protocol-level convention (see push-notif handlers
     below). ``message`` is built from ``adcp_error_for(exc).message``,
     NEVER the raw exception's own ``str()`` — the two are only the same value
-    when ``exc`` is already a typed ``AdCPError`` (passed through unchanged,
+    when ``exc`` is already a typed ``AdCPSalesAgentError`` (passed through unchanged,
     its message deliberately authored to be buyer-safe) or one of the other
     typed branches (``ValueError``/``PermissionError``, our own deliberately-
     raised validation text). For an arbitrary/untyped exception,
@@ -344,10 +344,10 @@ class AdCPRequestHandler(RequestHandler):
         Single source of truth for "wrap-arbitrary-exception → wire envelope"
         used by both the per-skill dispatcher (``_build_failed_skill_result``)
         and the top-level ``on_message_send`` error handler. Delegates to
-        ``adcp_error_for`` for the type→AdCPError mapping
+        ``adcp_error_for`` for the type→AdCPSalesAgentError mapping
         (``ValueError → AdCPValidationError``, ``PermissionError →
         AdCPAuthorizationError``, arbitrary ``Exception →
-        AdCPError(INTERNAL_ERROR)``) so the wire output stays in
+        AdCPSalesAgentError(INTERNAL_ERROR)``) so the wire output stays in
         ``CODE_TABLE`` (the pinned ``enums/error-code.json`` plus this platform's
         own ``AppErrorCode`` members) and the envelope shape never degrades to a
         flat ``{"error": "..."}`` dict the storyboard runner would synthesize
@@ -360,7 +360,7 @@ class AdCPRequestHandler(RequestHandler):
     def _build_failed_skill_result(skill_name: str, exc: Exception) -> dict[str, Any]:
         """Build the dispatcher result dict for a failed skill invocation.
 
-        Both the typed-AdCPError branch and the untyped fallthrough land here so
+        Both the typed-AdCPSalesAgentError branch and the untyped fallthrough land here so
         the artifact DataPart always carries a spec-compliant two-layer envelope
         under ``error_envelope`` — the single source of truth on the wire, never a
         flat ``{"error": "..."}`` dict. Callers needing the human-readable message
@@ -769,7 +769,7 @@ class AdCPRequestHandler(RequestHandler):
                         # are now caught below and surfaced as failed Tasks with a
                         # two-layer envelope in the artifact DataPart.
                         raise
-                    except AdCPError as e:
+                    except AdCPSalesAgentError as e:
                         # AdCP-level errors are async-task failures, not JSON-RPC
                         # errors. Mirrors the SDK's _send_adcp_error reference for
                         # storyboard scenarios that exercise invalid-state
@@ -780,14 +780,14 @@ class AdCPRequestHandler(RequestHandler):
                         # same failure.
                         results.append(self._build_failed_skill_result(skill_name, e))
                     except Exception as e:
-                        # Untyped fallthrough — same envelope shape as the AdCPError
+                        # Untyped fallthrough — same envelope shape as the AdCPSalesAgentError
                         # branch so storyboard runners can `JSON.parse` the DataPart
                         # uniformly regardless of which branch caught the failure.
                         # Route through the canonical boundary hook (ERROR + exc_info
                         # for untyped failures, plus activity-feed + audit) so untyped
                         # A2A skill failures land on the same observability surface as
                         # MCP/REST and the typed path. The typed
-                        # (AdCPError/ValueError/PermissionError) failures were already
+                        # (AdCPSalesAgentError/ValueError/PermissionError) failures were already
                         # recorded inside _handle_explicit_skill, so this only fires for
                         # genuinely-unexpected exceptions that escaped it.
                         record_boundary_error(
@@ -829,7 +829,7 @@ class AdCPRequestHandler(RequestHandler):
                         # which always sets error_envelope. A failed result without it
                         # is a contract violation — fail loud rather than silently emit
                         # the legacy flat ``{"error": ...}`` shape.
-                        raise AdCPError(
+                        raise AdCPSalesAgentError(
                             error_code=AppErrorCode.INTERNAL_ERROR,
                             internal_detail=(
                                 f"Skill result for {res.get('skill', '?')!r} is marked failed "
@@ -1529,7 +1529,7 @@ class AdCPRequestHandler(RequestHandler):
           ``apply_version_compat`` and emits a dict already populated with
           ``message``/``success`` via ``_stamp_a2a_protocol_fields``) use
           this path. Error dicts that bypass the envelope contract were
-          retired in this PR — NL handlers now raise typed ``AdCPError``
+          retired in this PR — NL handlers now raise typed ``AdCPSalesAgentError``
           instead.
 
         Args:
@@ -1644,7 +1644,7 @@ class AdCPRequestHandler(RequestHandler):
 
         try:
             handler = skill_handlers[skill_name]
-            # Handlers return raw Pydantic models (or raise typed AdCPError on validation failure)
+            # Handlers return raw Pydantic models (or raise typed AdCPSalesAgentError on validation failure)
             if skill_name == "create_media_buy":
                 result = await handler(parameters, identity, raw_wire_payload=raw_wire_payload)
             else:
@@ -1654,11 +1654,11 @@ class AdCPRequestHandler(RequestHandler):
         except A2AError:
             # Re-raise A2AError as-is (already properly formatted)
             raise
-        except (AdCPError, ValueError, PermissionError) as e:
-            # Normalize ValueError/PermissionError to typed AdCPError via the
+        except (AdCPSalesAgentError, ValueError, PermissionError) as e:
+            # Normalize ValueError/PermissionError to typed AdCPSalesAgentError via the
             # shared adcp_error_for() helper — same mapping the MCP
             # and REST boundaries apply. The outer dispatcher's `except
-            # AdCPError` branch wraps the result into a failed Task with the
+            # AdCPSalesAgentError` branch wraps the result into a failed Task with the
             # two-layer envelope.
             normalized = adcp_error_for(e)
 
@@ -1770,7 +1770,7 @@ class AdCPRequestHandler(RequestHandler):
             params["brand"] = brand_ref.model_dump(mode="json")
 
         # Validate required AdCP parameters (packages is optional in model but required by spec).
-        # Raise typed AdCPValidationError so the outer dispatcher's `except AdCPError` branch
+        # Raise typed AdCPValidationError so the outer dispatcher's `except AdCPSalesAgentError` branch
         # routes through `_build_failed_skill_result` -> `_build_error_envelope`, producing
         # the single two-layer envelope wire shape. Returning a custom dict here bypasses
         # the envelope builder and erases the real code on the buyer side.

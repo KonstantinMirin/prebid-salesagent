@@ -451,7 +451,7 @@ class TestGAMAdapterSeamPreservesClassification:
 
     ``orders_manager.create_order`` classifies an ad-server refusal into the AdCP
     error the buyer should read. The tool layer then re-raises a typed
-    ``AdCPError`` untouched. Between those two is this seam
+    ``AdCPSalesAgentError`` untouched. Between those two is this seam
     (google_ad_manager.py:672), and nothing pinned it: an ``except Exception``
     introduced around that call would re-collapse every refusal to one code while
     the manager-level and wire-level tests both stayed green.
@@ -504,7 +504,7 @@ class TestGAMProductUnavailableRaiseSites:
     test_typed_error_wire_codes.py pins the class -> wire-code mapping by
     constructing the exception directly; here the production validation loop is
     driven so a class-swap at either site (e.g. AdCPProductUnavailableError ->
-    AdCPError or AdCPCapabilityNotSupportedError) is caught. The wire collapses
+    AdCPSalesAgentError or AdCPCapabilityNotSupportedError) is caught. The wire collapses
     PRODUCT_UNAVAILABLE as its own declared code, pinned separately.
     """
 

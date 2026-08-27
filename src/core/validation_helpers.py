@@ -30,7 +30,7 @@ def adcp_validation_boundary(context: str = "parameters", field: str | None = No
     Transport wrappers and skill handlers validate buyer parameters at the
     boundary. A raw ``ValidationError`` leaking from ``model_validate`` (or a
     typed-model constructor) would surface as an untyped error — and the outer
-    dispatcher only builds the two-layer error envelope for ``AdCPError``
+    dispatcher only builds the two-layer error envelope for ``AdCPSalesAgentError``
     subclasses, so the buyer would lose the real code/recovery.
 
     This is ERGONOMICS over ``adcp_error_for``, not a second translation: wrapping

@@ -2183,7 +2183,7 @@ def then_real_validation_error(ctx: dict) -> None:
 
     raise AssertionError(
         "Expected a real wire REJECTION carrying VALIDATION_ERROR, but no wire error envelope was "
-        "captured. The old fallback accepted any AdCPError/ValueError/TypeError, so a scenario that "
+        "captured. The old fallback accepted any AdCPSalesAgentError/ValueError/TypeError, so a scenario that "
         "never reached the wire passed on the strength of an exception type (salesagent-3dawm.18)."
     )
 

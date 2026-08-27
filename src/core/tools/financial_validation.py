@@ -8,7 +8,7 @@ the same policy checks without duplicating comparison logic.
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from src.core.exceptions import AdCPError, AdCPValidationError
+from src.core.exceptions import AdCPSalesAgentError, AdCPValidationError
 
 if TYPE_CHECKING:
     from adcp.types import ContextObject
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 def raise_if_validation_failed(
     reason: str | None,
     *,
-    exc_type: type[AdCPError] = AdCPValidationError,
+    exc_type: type[AdCPSalesAgentError] = AdCPValidationError,
     context: "ContextObject | None" = None,
 ) -> None:
     """Raise ``exc_type`` when ``reason`` is non-empty.

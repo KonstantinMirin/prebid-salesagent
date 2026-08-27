@@ -35,7 +35,7 @@ A MUST on the seller:
 
 Current state:
 
-- `AdCPError.__init__` has NO `issues` parameter. Params are exactly:
+- `AdCPSalesAgentError.__init__` has NO `issues` parameter. Params are exactly:
   `error_code`, `status_code`, `details`, `field`, `retry_after`, `context`,
   `internal_detail`. The raised lane cannot emit the channel at all.
 - The advisory `Error` already can: `Error.model_fields["issues"]` is
@@ -100,7 +100,7 @@ initial entries.
 
 ### 4. `issues` on the raised lane
 
-Add `issues: list[ErrorIssue] | None = None` to `AdCPError.__init__`, carried
+Add `issues: list[ErrorIssue] | None = None` to `AdCPSalesAgentError.__init__`, carried
 into the wire envelope by `build_two_layer_error_envelope` alongside the
 existing `_details_to_wire` call. Top-level `field` is DERIVED from
 `issues[0].pointer` when issues are present and `field` was not passed --

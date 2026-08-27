@@ -24,7 +24,7 @@ only record). Reconciled items were fixed by the Phase-2 wave (run
 |------|--------|------|
 | C1 + C2 (account not enforced at _impl boundary; +9d5 REST FIXME) | OPEN P1 sec | `salesagent-xpcd` |
 | C3 (cross-principal 200+empty, not 403) | OPEN P1 sec | `salesagent-h25j` |
-| C4 (ValidationError→AdCPError boundary translator) | OPEN P2 broad | `salesagent-l6ev` |
+| C4 (ValidationError→AdCPSalesAgentError boundary translator) | OPEN P2 broad | `salesagent-l6ev` |
 | C5 (`include_package_daily_breakdown` no-op) | OPEN P2 | `salesagent-kzk0` |
 | C6 (date-range validation in success envelope) | OPEN P3 | `salesagent-t6y9` |
 | C7 (end-only date_range default) | OPEN P3 | `salesagent-losz` |
@@ -100,18 +100,18 @@ only record). Reconciled items were fixed by the Phase-2 wave (run
 - **Severity:** P1 (security gap)
 - **Origin:** Batch 3 audit
 
-### C4 — Pydantic `ValidationError` not translated to `AdCPError(INVALID_REQUEST, suggestion)`
+### C4 — Pydantic `ValidationError` not translated to `AdCPSalesAgentError(INVALID_REQUEST, suggestion)`
 - **Scope:** ~32 partition rows across UC-004 (`reporting_dimensions`,
   `attribution_window`, possibly more) — currently `strict=True` xfail
   pointing at this item
 - **Where:** transport boundary in `_get_media_buy_delivery_impl` and other
   `_impl` functions
 - **Impact:** Many invalid partition rows correctly fail validation but
-  produce a Pydantic `ValidationError`, not an `AdCPError` with `error_code
+  produce a Pydantic `ValidationError`, not an `AdCPSalesAgentError` with `error_code
   == "INVALID_REQUEST"` and `details["suggestion"]`. The BDD step's stricter
-  invalid-with-error-code path requires the AdCPError shape.
+  invalid-with-error-code path requires the AdCPSalesAgentError shape.
 - **Unblocks:** add a transport-boundary translator that wraps Pydantic
-  `ValidationError` in `AdCPError(INVALID_REQUEST, suggestion=…)`. One change
+  `ValidationError` in `AdCPSalesAgentError(INVALID_REQUEST, suggestion=…)`. One change
   clears ~32 currently-xfailed rows across UC-004 and probably more across
   UC-005.
 - **Severity:** P2 (broad payoff)
@@ -321,9 +321,9 @@ only record). Reconciled items were fixed by the Phase-2 wave (run
   - `invalid_oneOf_both` / `both account_id and brand`: the `adcp`
     `AccountReference` union raises a Pydantic `ValidationError` at parse
     time, which production does not translate into
-    `AdCPError(INVALID_REQUEST, suggestion)` — the same C4 gap.
+    `AdCPSalesAgentError(INVALID_REQUEST, suggestion)` — the same C4 gap.
 - **Unblocks:** add a transport-boundary translator that wraps Pydantic
-  `ValidationError` in `AdCPError(INVALID_REQUEST, suggestion=…)` (C4) plus
+  `ValidationError` in `AdCPSalesAgentError(INVALID_REQUEST, suggestion=…)` (C4) plus
   required-account enforcement. The moment those land, these rows xpass and
   the strict=True markers force their removal.
 - **Severity:** P2 (real production gap, no longer masked by a fake test)
@@ -338,7 +338,7 @@ only record). Reconciled items were fixed by the Phase-2 wave (run
 - **Issue:** the `invalid` branch only checks `"error" in ctx`. Any
   exception type satisfies it, including unrelated bugs (e.g., `KeyError`
   in step setup masquerading as "production rejected the input").
-- **Fix:** add `isinstance(error, (AdCPError, ValidationError))` guard,
+- **Fix:** add `isinstance(error, (AdCPSalesAgentError, ValidationError))` guard,
   matching UC-004's richer helper at
   `tests/bdd/steps/domain/uc004_delivery.py:1966-1968`
 - **Severity:** P3 (latent risk; no current coverage harm)

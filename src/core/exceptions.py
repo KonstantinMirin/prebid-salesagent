@@ -100,11 +100,11 @@ def _serialize_context(
     return context.model_dump(mode="json", exclude_none=True)
 
 
-def _rebuild_error(cls: type[AdCPError], code: ErrorCodeT) -> AdCPError:
+def _rebuild_error(cls: type[AdCPSalesAgentError], code: ErrorCodeT) -> AdCPSalesAgentError:
     """Reconstruct a pickled or copied error.
 
     The ``hasattr`` branch is load-bearing: a class-coded subclass IS its code, so
-    naming it again would trip ``AdCPError.__new__``'s "already names a code" refusal.
+    naming it again would trip ``AdCPSalesAgentError.__new__``'s "already names a code" refusal.
     ``__dict__`` restoration then repopulates ``_error_code`` and the rest.
     """
     return cls() if hasattr(cls, "_code") else cls(error_code=code)
@@ -120,7 +120,7 @@ def _details_to_wire(details: ErrorDetails | None) -> dict[str, Any] | None:
     The ``Mapping`` branch that used to be here was migration scaffolding, for
     the window where some ``self.details`` were still plain dicts. All 177 sites
     now pass a declared class, so the branch is gone and a dict no longer has a
-    path to the wire: ``AdCPError`` is generic in its detail type, so mypy
+    path to the wire: ``AdCPSalesAgentError`` is generic in its detail type, so mypy
     refuses one at the raise site.
     """
     if details is None:
@@ -128,7 +128,7 @@ def _details_to_wire(details: ErrorDetails | None) -> dict[str, Any] | None:
     return details.to_wire()
 
 
-class AdCPError[DetailsT: ErrorDetails](Exception):
+class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
     """Base exception for all AdCP errors.
 
     Parameterized on the detail shape it carries. Parameterizing rather than
@@ -183,7 +183,7 @@ class AdCPError[DetailsT: ErrorDetails](Exception):
     database error text …; stack traces or file paths; upstream API responses
     from internal services; credentials, tokens, or session identifiers."
 
-    ``adcp_error_for()`` returns an already-typed ``AdCPError``
+    ``adcp_error_for()`` returns an already-typed ``AdCPSalesAgentError``
     unchanged, so for a typed error THE RAISE SITE IS THE WIRE — there is no
     downstream sanitization point. That is why ``message`` is no longer
     authored at all: it is a read-only property returning
@@ -240,7 +240,7 @@ class AdCPError[DetailsT: ErrorDetails](Exception):
                 "classify. Declare a code the table knows, or add the entry."
             )
 
-    def __new__(cls, *args: Any, **kwargs: Any) -> AdCPError:
+    def __new__(cls, *args: Any, **kwargs: Any) -> AdCPSalesAgentError:
         """Refuse to build an error whose code is absent, or doubly named.
 
         The invariant is: an error names a code, by its class OR explicitly. Both
@@ -250,7 +250,7 @@ class AdCPError[DetailsT: ErrorDetails](Exception):
         True on every subclass that declares one. This is the check
         ``object.__new__`` performs for an abstract class and that
         ``BaseException.__new__`` does not: ABC is a runtime no-op for exception
-        classes, so without this a bare ``AdCPError()`` would construct and put a
+        classes, so without this a bare ``AdCPSalesAgentError()`` would construct and put a
         null code on the buyer's wire.
 
         The second branch is why there is no ``synthesize()``: a boundary that needs
@@ -264,7 +264,7 @@ class AdCPError[DetailsT: ErrorDetails](Exception):
             raise TypeError(f"{cls.__name__} already names a code; do not override it")
         if not has_class_code and not named:
             raise TypeError(f"{cls.__name__} declares no _code and none was named")
-        return cast("AdCPError", super().__new__(cls, *args, **kwargs))
+        return cast("AdCPSalesAgentError", super().__new__(cls, *args, **kwargs))
 
     def __init__(
         self,
@@ -357,7 +357,7 @@ class AdCPError[DetailsT: ErrorDetails](Exception):
         return (_rebuild_error, (type(self), self._error_code), self.__dict__)
 
     @classmethod
-    def iter_concrete_subclasses(cls) -> Iterator[type[AdCPError]]:
+    def iter_concrete_subclasses(cls) -> Iterator[type[AdCPSalesAgentError]]:
         """Yield every transitive *concrete* subclass of ``cls`` exactly once.
 
         Single source of truth for the subclass walk that builds the
@@ -381,14 +381,14 @@ class AdCPError[DetailsT: ErrorDetails](Exception):
                 yield sub
 
 
-class AdCPValidationError(AdCPError[ValidationDetails]):
+class AdCPValidationError(AdCPSalesAgentError[ValidationDetails]):
     """Invalid parameters or request data (400)."""
 
     _default_status_code: ClassVar[int] = 400
     _code: ClassVar[ErrorCodeT] = ErrorCode.VALIDATION_ERROR
 
 
-class AdCPVersionUnsupportedError(AdCPError[VersionUnsupportedDetails]):
+class AdCPVersionUnsupportedError(AdCPSalesAgentError[VersionUnsupportedDetails]):
     """Buyer pinned an adcp_version/adcp_major_version this seller doesn't support (400).
 
     Recovery is correctable per v3.1.1 error-code.json enumMetadata: re-pin to
@@ -424,7 +424,7 @@ class AdCPInvalidRequestError(AdCPValidationError):
 # genuinely-absent-credential sites.
 
 
-class AdCPAuthenticationError(AdCPError[EntityRefDetails]):
+class AdCPAuthenticationError(AdCPSalesAgentError[EntityRefDetails]):
     """Presented-but-invalid authentication credentials (401, AUTH_INVALID).
 
     Emits ``AUTH_INVALID`` per the v3.1.1 error-code enum: "Credentials were
@@ -453,7 +453,7 @@ class AdCPAuthRequiredError(AdCPAuthenticationError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.AUTH_MISSING
 
 
-class AdCPAuthorizationError(AdCPError[EntityRefDetails]):
+class AdCPAuthorizationError(AdCPSalesAgentError[EntityRefDetails]):
     """Authenticated but not authorized for this resource (403).
 
     Emits ``PERMISSION_DENIED`` with ``correctable`` recovery per the v3.1.1
@@ -481,7 +481,7 @@ class AdCPPolicyViolationError(AdCPAuthorizationError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.POLICY_VIOLATION
 
 
-class AdCPNotFoundError[D: ErrorDetails](AdCPError[D]):
+class AdCPNotFoundError[D: ErrorDetails](AdCPSalesAgentError[D]):
     """Requested resource does not exist (404, REFERENCE_NOT_FOUND).
 
     Emits the PUBLISHED ``REFERENCE_NOT_FOUND`` rather than a minted generic
@@ -532,14 +532,14 @@ class AdCPAccountNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_NOT_FOUND
 
 
-class AdCPAccountSetupRequiredError(AdCPError[AccountSetupDetails]):
+class AdCPAccountSetupRequiredError(AdCPSalesAgentError[AccountSetupDetails]):
     """Account exists but requires setup before use (422, ACCOUNT_SETUP_REQUIRED)."""
 
     _default_status_code: ClassVar[int] = 422
     _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_SETUP_REQUIRED
 
 
-class AdCPAccountSuspendedError(AdCPError[EntityRefDetails]):
+class AdCPAccountSuspendedError(AdCPSalesAgentError[EntityRefDetails]):
     """Account is suspended and cannot be used (403, ACCOUNT_SUSPENDED).
 
     Recovery=terminal per the pinned enumMetadata — declared explicitly
@@ -550,7 +550,7 @@ class AdCPAccountSuspendedError(AdCPError[EntityRefDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_SUSPENDED
 
 
-class AdCPAccountPaymentRequiredError(AdCPError[EntityRefDetails]):
+class AdCPAccountPaymentRequiredError(AdCPSalesAgentError[EntityRefDetails]):
     """Account has outstanding payment requirements (402, ACCOUNT_PAYMENT_REQUIRED).
 
     Recovery=terminal: from the sales agent's perspective there is
@@ -564,7 +564,7 @@ class AdCPAccountPaymentRequiredError(AdCPError[EntityRefDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_PAYMENT_REQUIRED
 
 
-class AdCPConflictError(AdCPError[ConflictDetails]):
+class AdCPConflictError(AdCPSalesAgentError[ConflictDetails]):
     """Resource conflict, e.g. duplicate idempotency key (409).
 
     Recovery=transient per the pinned error-code.json enumMetadata (CONFLICT):
@@ -586,7 +586,7 @@ class AdCPAccountAmbiguousError(AdCPConflictError):
     # an explicit account_id) — override the transient CONFLICT parent (#1417).
 
 
-class AdCPGoneError(AdCPError[InvalidStateDetails]):
+class AdCPGoneError(AdCPSalesAgentError[InvalidStateDetails]):
     """Resource previously existed but is no longer available (410).
 
     Recovery=correctable: the resource itself is gone, but the buyer can
@@ -598,7 +598,7 @@ class AdCPGoneError(AdCPError[InvalidStateDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.INVALID_STATE
 
 
-class AdCPBudgetExhaustedError(AdCPError[BudgetDetails]):
+class AdCPBudgetExhaustedError(AdCPSalesAgentError[BudgetDetails]):
     """Budget or spend limit has been reached (422).
 
     Recovery=terminal per the pinned error-code.json enumMetadata (BUDGET_EXHAUSTED):
@@ -610,21 +610,21 @@ class AdCPBudgetExhaustedError(AdCPError[BudgetDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.BUDGET_EXHAUSTED
 
 
-class AdCPRateLimitError(AdCPError[AdapterFailureDetails]):
+class AdCPRateLimitError(AdCPSalesAgentError[AdapterFailureDetails]):
     """Too many requests (429)."""
 
     _default_status_code: ClassVar[int] = 429
     _code: ClassVar[ErrorCodeT] = ErrorCode.RATE_LIMITED
 
 
-class AdCPAdapterError(AdCPError[AdapterFailureDetails]):
+class AdCPAdapterError(AdCPSalesAgentError[AdapterFailureDetails]):
     """External adapter (GAM, etc.) failure (502)."""
 
     _default_status_code: ClassVar[int] = 502
     _code: ClassVar[ErrorCodeT] = ErrorCode.SERVICE_UNAVAILABLE
 
 
-class AdCPConfigurationError(AdCPError[ConfigurationDetails]):
+class AdCPConfigurationError(AdCPSalesAgentError[ConfigurationDetails]):
     """Server-side configuration is broken (500).
 
     Raised when encrypted secrets cannot be decrypted (key rotation,
@@ -640,7 +640,7 @@ class AdCPConfigurationError(AdCPError[ConfigurationDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.CONFIGURATION_ERROR
 
 
-class AdCPServiceUnavailableError(AdCPError[AdapterFailureDetails]):
+class AdCPServiceUnavailableError(AdCPSalesAgentError[AdapterFailureDetails]):
     """Service or product temporarily unavailable (503).
 
     503 indicates a temporary outage in a downstream service the sales
@@ -652,7 +652,7 @@ class AdCPServiceUnavailableError(AdCPError[AdapterFailureDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.SERVICE_UNAVAILABLE
 
 
-class AdCPInternalError(AdCPError[EntityRefDetails]):
+class AdCPInternalError(AdCPSalesAgentError[EntityRefDetails]):
     """The seller's own state is inconsistent, so the request cannot be completed (500).
 
     Distinct from AdCPServiceUnavailableError, which names a downstream outage, and from
@@ -670,7 +670,7 @@ class AdCPInternalError(AdCPError[EntityRefDetails]):
     _code: ClassVar[ErrorCodeT] = AppErrorCode.INTERNAL_ERROR
 
 
-class AdCPUrlNotAllowedError(AdCPError[ValueRejectionDetails]):
+class AdCPUrlNotAllowedError(AdCPSalesAgentError[ValueRejectionDetails]):
     """A buyer-supplied URL names a host this seller will not contact (400).
 
     Emits the PUBLISHED ``VALIDATION_ERROR``, not a platform code. This class briefly
@@ -832,14 +832,14 @@ class AdCPTaskNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.REFERENCE_NOT_FOUND
 
 
-class AdCPBudgetTooLowError(AdCPError[BudgetDetails]):
+class AdCPBudgetTooLowError(AdCPSalesAgentError[BudgetDetails]):
     """Requested budget falls below product minimum (422, BUDGET_TOO_LOW)."""
 
     _default_status_code: ClassVar[int] = 422
     _code: ClassVar[ErrorCodeT] = ErrorCode.BUDGET_TOO_LOW
 
 
-class AdCPCapabilityNotSupportedError(AdCPError[CapabilityRefusalDetails]):
+class AdCPCapabilityNotSupportedError(AdCPSalesAgentError[CapabilityRefusalDetails]):
     """Requested capability is not supported by this seller (422, UNSUPPORTED_FEATURE).
 
     .. note::
@@ -903,21 +903,21 @@ class AdCPIdempotencyExpiredError(AdCPConflictError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.IDEMPOTENCY_EXPIRED
 
 
-class AdCPCreativeRejectedError(AdCPError[CreativeRejectionDetails]):
+class AdCPCreativeRejectedError(AdCPSalesAgentError[CreativeRejectionDetails]):
     """Creative failed policy or technical validation (422, CREATIVE_REJECTED)."""
 
     _default_status_code: ClassVar[int] = 422
     _code: ClassVar[ErrorCodeT] = ErrorCode.CREATIVE_REJECTED
 
 
-class AdCPBudgetExceededError(AdCPError[BudgetDetails]):
+class AdCPBudgetExceededError(AdCPSalesAgentError[BudgetDetails]):
     """Requested budget exceeds tenant or product ceiling (422, BUDGET_EXCEEDED)."""
 
     _default_status_code: ClassVar[int] = 422
     _code: ClassVar[ErrorCodeT] = ErrorCode.BUDGET_EXCEEDED
 
 
-class AdCPProductUnavailableError(AdCPError[EntityRefDetails]):
+class AdCPProductUnavailableError(AdCPSalesAgentError[EntityRefDetails]):
     """Product is offline, sold out, deactivated, or otherwise unavailable (422).
 
     Emits the PUBLISHED ``PRODUCT_UNAVAILABLE``, whose pinned description covers
@@ -1005,7 +1005,7 @@ class AdCPGamUpdateError(AdCPAdapterError):
     _code: ClassVar[ErrorCodeT] = AppErrorCode.AD_SERVER_UPDATE_FAILED
 
 
-class AdCPMediaBuyRejectedError(AdCPError[RejectionReasonDetails]):
+class AdCPMediaBuyRejectedError(AdCPSalesAgentError[RejectionReasonDetails]):
     """The seller declined the media buy (422 → POLICY_VIOLATION).
 
     A business rejection, not a server failure: recovery=correctable so the
@@ -1017,7 +1017,7 @@ class AdCPMediaBuyRejectedError(AdCPError[RejectionReasonDetails]):
     _code: ClassVar[ErrorCodeT] = AppErrorCode.MEDIA_BUY_REJECTED
 
 
-def build_error_object(exc: AdCPError) -> dict[str, Any]:
+def build_error_object(exc: AdCPSalesAgentError) -> dict[str, Any]:
     """The single per-error object for an advisory list (``errors[]`` entries).
 
     Same derivation as ``build_two_layer_error_envelope``, which is the point: a second
@@ -1028,7 +1028,7 @@ def build_error_object(exc: AdCPError) -> dict[str, Any]:
     return dict(build_two_layer_error_envelope(exc)["errors"][0])
 
 
-def build_two_layer_error_envelope(exc: AdCPError) -> dict[str, Any]:
+def build_two_layer_error_envelope(exc: AdCPSalesAgentError) -> dict[str, Any]:
     """Build the AdCP spec-compliant two-layer error envelope from an exception.
 
     Wraps the stable ``adcp_error()`` SDK helper for the payload half
@@ -1109,8 +1109,8 @@ def first_validation_error_field(validation_error: ValidationError) -> str | Non
     return "".join(parts)
 
 
-def _log_internal_detail(exc: AdCPError) -> None:
-    """Emit an ``AdCPError``'s non-wire ``internal_detail`` to the server log.
+def _log_internal_detail(exc: AdCPSalesAgentError) -> None:
+    """Emit an ``AdCPSalesAgentError``'s non-wire ``internal_detail`` to the server log.
 
     The single emission point for every raise site that hands its raw cause to
     ``internal_detail=`` instead of interpolating it into the buyer-facing
@@ -1123,18 +1123,18 @@ def _log_internal_detail(exc: AdCPError) -> None:
     if detail is None:
         return
     logger.error(
-        "AdCPError %s internal detail (not emitted to the buyer): %s",
+        "AdCPSalesAgentError %s internal detail (not emitted to the buyer): %s",
         type(exc).__name__,
         detail,
         exc_info=detail if isinstance(detail, BaseException) else None,
     )
 
 
-def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPError:
-    """Normalize untyped exceptions to typed AdCPError subclasses.
+def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPSalesAgentError:
+    """Normalize untyped exceptions to typed AdCPSalesAgentError subclasses.
 
     Single source of truth for the wrapping applied at all three transport
-    boundaries (MCP, A2A, REST). Already-typed ``AdCPError`` passes through
+    boundaries (MCP, A2A, REST). Already-typed ``AdCPSalesAgentError`` passes through
     unchanged. Pydantic ``ValidationError`` maps to a structured, sanitized
     ``AdCPValidationError``; other ``ValueError`` instances map to the plain
     validation error, ``PermissionError`` to ``AdCPAuthorizationError``, and
@@ -1147,7 +1147,7 @@ def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPError:
     original exception is still logged in full server-side by the transport
     boundary's record_boundary_error() / audit logger.
     """
-    if isinstance(exc, AdCPError):
+    if isinstance(exc, AdCPSalesAgentError):
         _log_internal_detail(exc)
         return exc
     if isinstance(exc, ValidationError):
@@ -1163,4 +1163,4 @@ def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPError:
         return AdCPValidationError()
     if isinstance(exc, PermissionError):
         return AdCPAuthorizationError()
-    return AdCPError(error_code=AppErrorCode.INTERNAL_ERROR)
+    return AdCPSalesAgentError(error_code=AppErrorCode.INTERNAL_ERROR)

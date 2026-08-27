@@ -120,7 +120,7 @@ async def test_nl_targeting_query_calls_resolve_identity_once():
 
 @pytest.mark.asyncio
 async def test_nl_media_buy_raises_capability_not_supported():
-    """NL media buy is not supported — invocation must surface a typed AdCPError.
+    """NL media buy is not supported — invocation must surface a typed AdCPSalesAgentError.
 
     Pre-fix the NL stub returned ``{"success": False, "message": "use explicit"}``
     which bypassed the two-layer-envelope contract — storyboard runners

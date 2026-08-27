@@ -18,7 +18,7 @@ from fastmcp.server import Context as FastMCPContext
 from src.core.errors.codes import CODE_TABLE, AppErrorCode, Recovery
 from src.core.errors.details import ErrorDetails
 from src.core.exceptions import (
-    AdCPError,
+    AdCPSalesAgentError,
     adcp_error_for,
     build_two_layer_error_envelope,
 )
@@ -44,7 +44,7 @@ class AdCPToolError(ToolError):
     The envelope is also exposed as ``self.envelope`` so audit logging,
     activity feed, and REST fallback code can read it without re-parsing.
 
-    ``status_code`` mirrors the source ``AdCPError.status_code`` so REST
+    ``status_code`` mirrors the source ``AdCPSalesAgentError.status_code`` so REST
     routes catching this exception emit the right HTTP status. Defaults to
     500 for compatibility with paths that don't supply a typed source (the
     plain ToolError fallback in ``_handle_tool_error``).
@@ -53,7 +53,7 @@ class AdCPToolError(ToolError):
     def __init__(self, envelope: dict[str, Any], *, status_code: int = 500):
         # ``status_code`` is keyword-only so a missing positional arg cannot
         # silently default to 500, misclassifying a 4xx as 5xx. Callers must
-        # opt in explicitly when not supplying a typed source AdCPError.
+        # opt in explicitly when not supplying a typed source AdCPSalesAgentError.
         self.envelope = envelope
         self.status_code = status_code
         super().__init__()
@@ -107,7 +107,7 @@ def extract_error_info(error: Exception) -> tuple[str, str, Recovery | None]:
     """Extract error code, message, and recovery hint from an exception.
 
     For AdCPToolError, reads directly from the carried two-layer envelope.
-    For AdCPError, uses the exception's error_code, message, and recovery attributes.
+    For AdCPSalesAgentError, uses the exception's error_code, message, and recovery attributes.
     For plain ToolError, attempts to parse structured (code, message, recovery) format
     for backward compatibility with code that raises ToolError directly.
 
@@ -120,7 +120,7 @@ def extract_error_info(error: Exception) -> tuple[str, str, Recovery | None]:
     if isinstance(error, AdCPToolError):
         first = error.envelope["errors"][0]
         return first["code"], first.get("message", ""), _coerce_recovery(first.get("recovery"))
-    if isinstance(error, AdCPError):
+    if isinstance(error, AdCPSalesAgentError):
         return error.error_code, error.message, error.recovery
     elif isinstance(error, ToolError):
         # Plain ToolError raised by other code paths — preserve legacy parsing.
@@ -193,7 +193,7 @@ def record_boundary_error(
             ``"anonymous"`` for downstream sinks.
 
     Behavior:
-        1. stdlib logger: WARNING for typed ``AdCPError`` (expected,
+        1. stdlib logger: WARNING for typed ``AdCPSalesAgentError`` (expected,
            buyer-correctable error path), ERROR with ``exc_info=True`` for
            untyped fallthrough so on-call sees the traceback.
         2. ``activity_feed.log_error`` (when ``tenant_id`` present) so the
@@ -207,7 +207,7 @@ def record_boundary_error(
     when on-call goes looking.
     """
     error_code, error_message, _recovery = extract_error_info(error)
-    is_typed = isinstance(error, AdCPError)
+    is_typed = isinstance(error, AdCPSalesAgentError)
     transport_upper = transport.upper()
 
     if is_typed:
@@ -270,10 +270,10 @@ def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, pri
     record_boundary_error("mcp", tool_name, error, tenant_id=tenant_id, principal_id=principal_id)
 
 
-def _translate_to_tool_error(error: Exception, typed: AdCPError | None = None) -> NoReturn:
+def _translate_to_tool_error(error: Exception, typed: AdCPSalesAgentError | None = None) -> NoReturn:
     """Translate typed exceptions to AdCPToolError at the MCP boundary.
 
-    AdCPError → AdCPToolError carrying a two-layer envelope built by
+    AdCPSalesAgentError → AdCPToolError carrying a two-layer envelope built by
     ``build_two_layer_error_envelope()``. ValueError and PermissionError are
     wrapped in synthetic AdCPValidationError / AdCPAuthorizationError so they
     produce the same envelope shape. Already-translated AdCPToolError and
@@ -291,7 +291,7 @@ def _translate_to_tool_error(error: Exception, typed: AdCPError | None = None) -
         raise error
     # `typed` lets a caller that already converted pass the result instead of
     # making this convert a second time. The mapping is deterministic, so one
-    # conversion or two produced the same AdCPError; doing it once is simply the
+    # conversion or two produced the same AdCPSalesAgentError; doing it once is simply the
     # truth about how many mappings exist. The RAW error is still what `from`
     # chains, so __cause__ is unchanged either way.
     typed = typed if typed is not None else adcp_error_for(error)
@@ -375,9 +375,9 @@ def with_error_logging(tool_func: Callable) -> Callable:
 
 
 def _build_error_code_to_status() -> dict[str, int]:
-    """Derive the wire-code → HTTP status map from ``AdCPError`` subclasses.
+    """Derive the wire-code → HTTP status map from ``AdCPSalesAgentError`` subclasses.
 
-    Walks every concrete subclass of ``AdCPError`` and reads its class-level
+    Walks every concrete subclass of ``AdCPSalesAgentError`` and reads its class-level
     ``error_code`` + ``status_code`` declarations. Eliminates the drift potential of a
     hand-maintained table — historically the table declared
     ``AUTH_REQUIRED → 401`` while ``AdCPAuthorizationError`` (same wire
@@ -408,7 +408,7 @@ def _build_error_code_to_status() -> dict[str, int]:
     # walk — shared with the error-code compliance tests. Class-level identity
     # lives on the _default_* ClassVar slots; error_code/status_code are instance
     # attrs set in __init__, so read the _default_* slots off the class object.
-    for cls in AdCPError.iter_concrete_subclasses():
+    for cls in AdCPSalesAgentError.iter_concrete_subclasses():
         code = getattr(cls, "_code", None)
         status = getattr(cls, "_default_status_code", None)
         if not code or not status:
@@ -421,7 +421,7 @@ def _build_error_code_to_status() -> dict[str, int]:
 
 
 # Plain ``ToolError("CODE", "message")`` legacy paths don't carry the typed
-# AdCPError that owns ``status_code``. Derived from class declarations at
+# AdCPSalesAgentError that owns ``status_code``. Derived from class declarations at
 # import time so the table cannot drift from the source of truth.
 _ERROR_CODE_TO_STATUS: dict[str, int] = _build_error_code_to_status()
 
@@ -433,7 +433,7 @@ def handle_tool_error(e: ToolError) -> JSONResponse:
     is the typed ``AdCPToolError`` raised by the MCP boundary translator, its
     envelope and status_code are forwarded unchanged so 4xx errors don't get
     mislabeled as 5xx. Plain ``ToolError`` (raised by other paths) is rebuilt
-    into an envelope via a synthetic ``AdCPError``; its HTTP status is
+    into an envelope via a synthetic ``AdCPSalesAgentError``; its HTTP status is
     resolved from ``_ERROR_CODE_TO_STATUS`` for known wire codes and falls
     through to 500 only when the code is unrecognized.
     """
@@ -456,12 +456,12 @@ def handle_tool_error(e: ToolError) -> JSONResponse:
     # recovery is NOT passed: it is a function of the code, resolved from CODE_TABLE by the
     # named-code branch of the constructor. A caller-supplied recovery could contradict the
     # code it travels with, which is what deleting the parameter prevents.
-    # Annotated because AdCPError is parameterized on its detail shape and this
+    # Annotated because AdCPSalesAgentError is parameterized on its detail shape and this
     # call passes no details, so there is nothing for mypy to infer from. The
     # bare ErrorDetails argument is honest here: this boundary resolves a code
     # from a lookup rather than from a class, so it has no specific shape to
     # name -- and it carries no details at all.
-    synthetic: AdCPError[ErrorDetails] = AdCPError(
+    synthetic: AdCPSalesAgentError[ErrorDetails] = AdCPSalesAgentError(
         error_code=resolved_code,
         status_code=_ERROR_CODE_TO_STATUS.get(error_code, 500),
     )

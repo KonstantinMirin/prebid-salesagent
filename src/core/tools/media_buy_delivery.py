@@ -20,7 +20,7 @@ from rich.console import Console
 from src.core.errors.codes import AppErrorCode, ErrorCode
 from src.core.errors.details import EntityRefDetails
 from src.core.exceptions import (
-    AdCPError,
+    AdCPSalesAgentError,
     AdCPValidationError,
 )
 from src.core.helpers import enum_value
@@ -541,8 +541,8 @@ def _get_media_buy_delivery_impl(
                 if adapter_conversion_value is not None:
                     total_conversion_value = (total_conversion_value or 0.0) + adapter_conversion_value
 
-            except AdCPError:
-                # A typed AdCPError from per-buy processing propagates to the boundary
+            except AdCPSalesAgentError:
+                # A typed AdCPSalesAgentError from per-buy processing propagates to the boundary
                 # translator for a spec-compliant envelope.
                 raise
             except Exception as e:

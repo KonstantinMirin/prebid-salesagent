@@ -183,7 +183,7 @@ wrapper, don't weaken the test.
 Four guards enforce the transport boundary (see `docs/development/structural-guards.md`):
 - `test_transport_agnostic_impl.py` — no transport imports in `_impl`
 - `test_impl_resolved_identity.py` — `_impl` takes `ResolvedIdentity`, not `Context`
-- `test_no_toolerror_in_impl.py` — `_impl` raises `AdCPError`, not `ToolError`
+- `test_no_toolerror_in_impl.py` — `_impl` raises `AdCPSalesAgentError`, not `ToolError`
 - `test_architecture_boundary_completeness.py` — wrappers forward all `_impl` params
 
 ## MCP Protocol Implementation

@@ -32,7 +32,7 @@ def _wire_error_from_body(env: Any, status_code: int, body: dict[str, Any]) -> t
 
     Returns the ENVELOPE as the graded artefact and a carrier exception that holds
     it verbatim. Neither is rebuilt into a production error class: the harness used
-    to map an HTTP status back to an AdCPError subclass (400 -> AdCPValidationError,
+    to map an HTTP status back to an AdCPSalesAgentError subclass (400 -> AdCPValidationError,
     404 -> AdCPNotFoundError, ...), which is the code-to-class mistake in a second
     spelling -- a status is not a code (salesagent-3dawm.15).
     """
@@ -85,7 +85,7 @@ class A2ADispatcher:
     ``env.call_a2a`` drives ``AdCPRequestHandler.on_message_send`` end-to-end
     (message parsing → skill routing → handler dispatch → ``_serialize_for_a2a``
     → Task/Artifact framing). On a failed Task, the harness reconstructs the
-    ``AdCPError`` from the artifact DataPart and stashes the real wire
+    ``AdCPSalesAgentError`` from the artifact DataPart and stashes the real wire
     envelope on the exception via ``_wire_error_envelope`` — captured here
     by ``_wire_envelope_from_exception``.
     """
@@ -163,7 +163,7 @@ class McpDispatcher:
             payload = env.call_mcp(**kwargs)
         except Exception as exc:
             # REAL wire only: the raw MCP ToolError JSON when present, else
-            # the envelope the harness reconstruction stashed on the AdCPError
+            # the envelope the harness reconstruction stashed on the AdCPSalesAgentError
             # as ``_wire_error_envelope`` (same stash A2A uses). NEVER the
             # synthesized fallback — a dead MCP wire path must yield None here
             # (failing assert_envelope_shape), not an envelope regenerated
@@ -172,13 +172,13 @@ class McpDispatcher:
             # When a wire envelope came from the raw ToolError JSON, exc is an
             # AdCPToolError carrying that envelope (an env that dispatched through
             # the production with_error_logging boundary). Unwrap it so
-            # result.error is the typed AdCPError — error-code assertions resolve
+            # result.error is the typed AdCPSalesAgentError — error-code assertions resolve
             # to the real wire code, not "AdCPToolError". Typed errors (raw JSON
             # absent, the path taken by every _run_mcp_client-based env, which
             # unwraps internally) pass through unchanged, so this is a no-op for
             # them.
             # ``error`` stays the RAW exception the transport produced. It used to be
-            # replaced with a reconstructed AdCPError so error-code assertions would
+            # replaced with a reconstructed AdCPSalesAgentError so error-code assertions would
             # resolve to the wire code; they now read ``wire_error_envelope``, which is
             # the wire code rather than a re-derivation of it (salesagent-3dawm.15).
             error = exc
@@ -263,7 +263,7 @@ class RestE2EDispatcher:
             try:
                 body = response.json()
             except Exception:
-                # Non-JSON error (e.g. 500 with empty body) — wrap as AdCPError so
+                # Non-JSON error (e.g. 500 with empty body) — wrap as AdCPSalesAgentError so
                 # Then steps detect the error type and xfail spec-production gaps.
                 # No wire_error_envelope: there is no structured body to expose, and
                 # the INTERNAL_ERROR/5xx shape lets the "invalid" Then-step tell a
@@ -271,9 +271,9 @@ class RestE2EDispatcher:
 
                 body_text = response.text or "(empty body)"
                 from src.core.errors.codes import AppErrorCode
-                from src.core.exceptions import AdCPError
+                from src.core.exceptions import AdCPSalesAgentError
 
-                error = AdCPError(
+                error = AdCPSalesAgentError(
                     error_code=AppErrorCode.INTERNAL_ERROR,
                     details={"status_code": response.status_code, "raw_body": body_text},
                 )

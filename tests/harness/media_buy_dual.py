@@ -210,7 +210,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         # full middleware/auth chain runs. This subsumes the earlier mock-Context invocation
         # through with_error_logging (#1417): the real pipeline applies the production
         # boundary decorator via registration (src/core/main.py: mcp.tool()(with_error_logging(fn))),
-        # so a raised AdCPError still surfaces as the two-layer wire envelope captured as
+        # so a raised AdCPSalesAgentError still surfaces as the two-layer wire envelope captured as
         # wire_error_envelope.
         return self._run_mcp_client(
             "update_media_buy",

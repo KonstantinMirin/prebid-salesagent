@@ -71,7 +71,7 @@ def resolve_account(
 
     # Unreachable: AccountReference is a closed two-variant union validated by
     # Pydantic upstream. A fresh variant reaching here is an internal contract
-    # violation, not a buyer-facing not-found — raise ValueError, not AdCPError.
+    # violation, not a buyer-facing not-found — raise ValueError, not AdCPSalesAgentError.
     raise ValueError(f"Unsupported AccountReference variant: {type(inner)}")
 
 

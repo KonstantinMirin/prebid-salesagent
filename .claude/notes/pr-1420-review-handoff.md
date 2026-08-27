@@ -16,8 +16,8 @@ Net: PR is mergeable as-is per the reviewer. The items below are quality/correct
 
 ## Should-fix #A — e2e_rest reports a server crash as a correct rejection
 **Verified locations (head d21a6c14b):**
-- `tests/harness/dispatchers.py:240-253` — `RestE2EDispatcher`: on a ≥400 *non-JSON* response it wraps the body as `AdCPError(f"HTTP {status}: {body}", details={status_code, raw_body})` — **no `error_code`**.
-- `tests/bdd/steps/domain/uc004_delivery.py:2611-2614` — the `"invalid"` Then-branch asserts only `isinstance(error, (AdCPError, ValidationError))` (no mock, no code check). A genuine 5xx crash / nginx HTML error therefore satisfies "correctly rejected invalid input."
+- `tests/harness/dispatchers.py:240-253` — `RestE2EDispatcher`: on a ≥400 *non-JSON* response it wraps the body as `AdCPSalesAgentError(f"HTTP {status}: {body}", details={status_code, raw_body})` — **no `error_code`**.
+- `tests/bdd/steps/domain/uc004_delivery.py:2611-2614` — the `"invalid"` Then-branch asserts only `isinstance(error, (AdCPSalesAgentError, ValidationError))` (no mock, no code check). A genuine 5xx crash / nginx HTML error therefore satisfies "correctly rejected invalid input."
 - Contrast: the narrower `error "<CODE>"` branch (`uc004_delivery.py:2624-2625`) **does** check `error.error_code`, so only the loose `"invalid"` branch on a non-JSON response is fooled.
 
 **Why it matters:** these same `-invalid` scenarios are on the e2e_rest ledger today (server *accepts* invalid input → 200). When #1270 / ownership land and they graduate, a later 5xx regression would false-pass the loose step (and could fire a strict tripwire as a false xpass).

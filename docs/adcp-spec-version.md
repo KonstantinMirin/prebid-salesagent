@@ -101,7 +101,7 @@ upstream commit recorded in its `_refresh.py` `PINNED_SHA`) by
 Verified at migration time: the installed SDK's error-code enum is a strict
 superset of the fixture's (92 vs. 64 codes, fixture-only set empty), and its
 `recovery` classification is IDENTICAL across all 64 shared codes (0
-divergences; 30 `AdCPError` subclasses graded, unchanged before/after).
+divergences; 30 `AdCPSalesAgentError` subclasses graded, unchanged before/after).
 Reproduce the fixture's code count: `uv run python3 -c "import json;
 print(len(json.load(open('tests/fixtures/adcp_schemas_pinned/enums/error-code.json'))['enum']))"`
 -> 64 (65 `enumMetadata` keys, one of which is `$comment`). So

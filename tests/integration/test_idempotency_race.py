@@ -92,7 +92,7 @@ class TestDegradedReplayFailsClosed:
 
     def test_missing_cache_row_rejects_transient(self, integration_db):
         """A same-key buy with no cache row rejects SERVICE_UNAVAILABLE + retry_after."""
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from src.core.tools.media_buy_create import _raise_degraded_replay_outcome
         from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
 
@@ -114,7 +114,7 @@ class TestDegradedReplayFailsClosed:
             MediaPackageFactory(media_buy=buy, package_id="pkg_winner_1")
             env.get_session()  # commit factory data
 
-        with pytest.raises(AdCPError) as exc_info:
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             _raise_degraded_replay_outcome(
                 tenant_id,
                 idem_key,
@@ -139,7 +139,7 @@ class TestIdempotencyRaceRecovery:
     def test_integrity_error_loser_fails_closed_single_booking(self, integration_db):
         """The loser gets a transient rejection; the winner's booking is untouched."""
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from src.core.tools.media_buy_create import _raise_degraded_replay_outcome
         from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
 
@@ -184,7 +184,7 @@ class TestIdempotencyRaceRecovery:
 
             # This is the degraded outcome `_replay_after_race` lands on when
             # no cache row is usable — fail closed, never a fabricated body:
-            with pytest.raises(AdCPError) as exc_info:
+            with pytest.raises(AdCPSalesAgentError) as exc_info:
                 _raise_degraded_replay_outcome(
                     tenant_id,
                     idem_key,
@@ -208,7 +208,7 @@ class TestDegradedFallbackStatus:
     def test_pending_approval_buy_fails_closed_too(self, integration_db):
         """The original submitted response (task_id and all) is unrecoverable here —
         fabricating one would hand the buyer an envelope that never existed."""
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from src.core.tools.media_buy_create import _raise_degraded_replay_outcome
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
 
@@ -227,7 +227,7 @@ class TestDegradedFallbackStatus:
             )
             env.get_session()
 
-        with pytest.raises(AdCPError) as exc_info:
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             _raise_degraded_replay_outcome(
                 tenant_id,
                 idem_key,
@@ -242,7 +242,7 @@ class TestRaceLoserPayloadRules:
 
     def test_different_payload_after_race_conflicts(self, integration_db):
         """A race loser whose payload differs gets IDEMPOTENCY_CONFLICT, never the winner's response."""
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from src.core.tools.media_buy_create import _replay_after_race
         from tests.factories import PrincipalFactory, TenantFactory
         from tests.helpers import make_active_cached_success, seed_cached_success
@@ -264,7 +264,7 @@ class TestRaceLoserPayloadRules:
             payload_hash="winner-hash",
         )
 
-        with pytest.raises(AdCPError) as exc_info:
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             _replay_after_race(
                 tenant_id,
                 idempotency_key=idem_key,
@@ -286,7 +286,7 @@ class TestRaceLoserPayloadRules:
         """
         from pydantic import BaseModel
 
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from src.core.tools.media_buy_create import _replay_after_race
         from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
         from tests.helpers import seed_cached_success
@@ -314,7 +314,7 @@ class TestRaceLoserPayloadRules:
 
         seed_cached_success(tenant_id, principal_id, idem_key, response_model=_LegacyShape(), payload_hash="same-hash")
 
-        with pytest.raises(AdCPError) as exc_info:
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             _replay_after_race(
                 tenant_id,
                 idempotency_key=idem_key,
@@ -343,7 +343,7 @@ class TestRaceSeamThroughEntrypoint:
         from datetime import timedelta
 
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from src.core.schemas._base import CreateMediaBuySuccess
         from tests.harness.media_buy_create import MediaBuyCreateEnv
 
@@ -376,7 +376,7 @@ class TestRaceSeamThroughEntrypoint:
 
             adapter_mock = env.mock["adapter"].return_value.create_media_buy
             calls_before = adapter_mock.call_count
-            with pytest.raises(AdCPError) as exc_info:
+            with pytest.raises(AdCPSalesAgentError) as exc_info:
                 env.call_impl(**call_kwargs)
             calls_after = adapter_mock.call_count
             tenant_id = env._tenant_id
@@ -426,7 +426,7 @@ class TestDegradedFallbackScopeRules:
         must never be resolved to a buy describing a different request.
         """
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from src.core.schemas._base import CreateMediaBuySuccess
         from tests.harness.media_buy_create import MediaBuyCreateEnv
 
@@ -442,7 +442,7 @@ class TestDegradedFallbackScopeRules:
                 assert uow.idempotency_attempts is not None
                 assert uow.idempotency_attempts.expire_old(now=datetime(2099, 1, 1, tzinfo=UTC)) >= 1
 
-            with pytest.raises(AdCPError) as exc_info:
+            with pytest.raises(AdCPSalesAgentError) as exc_info:
                 env.call_impl(**self._create_kwargs(product, idem_key, po_number="DEG-2-MUTATED"))
 
         exc = exc_info.value
@@ -460,7 +460,7 @@ class TestDegradedFallbackScopeRules:
         """
         from datetime import timedelta
 
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from tests.factories import MediaBuyFactory
         from tests.harness.media_buy_create import MediaBuyCreateEnv
 
@@ -477,7 +477,7 @@ class TestDegradedFallbackScopeRules:
                 created_at=datetime.now(UTC) - timedelta(days=2),
             )
 
-            with pytest.raises(AdCPError) as exc_info:
+            with pytest.raises(AdCPSalesAgentError) as exc_info:
                 env.call_impl(**self._create_kwargs(product, idem_key, po_number="EXP-1"))
 
         assert exc_info.value.error_code == "IDEMPOTENCY_EXPIRED"
@@ -523,7 +523,7 @@ class TestDegradedExpiryAnchoring:
         """
         from datetime import timedelta
 
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from src.core.tools.media_buy_create import _replay_after_race
         from tests.helpers import make_active_cached_success, seed_cached_success, seed_media_buy
 
@@ -545,7 +545,7 @@ class TestDegradedExpiryAnchoring:
             now=datetime.now(UTC) - timedelta(hours=2),
         )
 
-        with pytest.raises(AdCPError) as exc_info:
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             _replay_after_race(
                 tenant_id,
                 idempotency_key=idem_key,

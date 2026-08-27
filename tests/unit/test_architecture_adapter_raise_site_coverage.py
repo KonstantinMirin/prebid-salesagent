@@ -1,21 +1,21 @@
-"""Structural guard: every adapter-raised typed AdCPError has a raise-site test.
+"""Structural guard: every adapter-raised typed AdCPSalesAgentError has a raise-site test.
 
 Adapters are the layer most likely to introduce a fresh typed error
 (``raise AdCPLineItemError(...)``, ``raise AdCPProductUnavailableError(...)``)
 that the unit suite never exercises through production code. A class -> wire-code
 mapping test (test_typed_error_wire_codes.py) pins the code by *constructing* the
 exception directly, but it cannot catch a class-swap at the raise site: if a site
-silently changes ``raise AdCPProductUnavailableError`` to ``raise AdCPError`` the
+silently changes ``raise AdCPProductUnavailableError`` to ``raise AdCPSalesAgentError`` the
 mapping test stays green while buyers start seeing INTERNAL_ERROR.
 
 The defense is a raise-site test (``pytest.raises(<Class>)`` driving the real
 adapter method to the actual ``raise``). This guard makes that coverage
-mandatory: it AST-scans ``src/adapters/`` for every concrete ``AdCPError``
+mandatory: it AST-scans ``src/adapters/`` for every concrete ``AdCPSalesAgentError``
 subclass raised via ``raise <Name>(...)``, AST-scans ``tests/`` for every class
 named in ``pytest.raises(<Name>)``, and asserts the adapter raise-set is a subset
 of the tested set.
 
-Scope note — the base ``AdCPError`` is excluded. It is the abstract root of the
+Scope note — the base ``AdCPSalesAgentError`` is excluded. It is the abstract root of the
 taxonomy (default code INTERNAL_ERROR), not a concrete typed subclass, and the
 coverage requirement targets the *typed* classes whose specific wire code a
 class-swap would erase. The lone base-class raise in the mock adapter
@@ -47,16 +47,16 @@ _TESTS_DIR = REPO_ROOT / "tests"
 
 
 def _is_adcp_error_name(name: str) -> bool:
-    """True for concrete typed AdCPError subclass names (``AdCP<Something>Error``).
+    """True for concrete typed AdCPSalesAgentError subclass names (``AdCP<Something>Error``).
 
-    Excludes the abstract base ``AdCPError`` — it is the taxonomy root, not a
+    Excludes the abstract base ``AdCPSalesAgentError`` — it is the taxonomy root, not a
     typed subclass, so it is out of scope for typed-error coverage.
     """
-    return name.startswith("AdCP") and name.endswith("Error") and name != "AdCPError"
+    return name.startswith("AdCP") and name.endswith("Error") and name != "AdCPSalesAgentError"
 
 
 def collect_adapter_raised_errors() -> dict[str, list[str]]:
-    """Map each typed ``AdCPError`` subclass raised in ``src/adapters/`` to its sites.
+    """Map each typed ``AdCPSalesAgentError`` subclass raised in ``src/adapters/`` to its sites.
 
     Only fresh typed raises (``raise <Name>(...)``) count — a bare ``raise`` that
     re-raises a caught exception carries no class name in the AST and is correctly
@@ -79,7 +79,7 @@ def collect_adapter_raised_errors() -> dict[str, list[str]]:
 
 
 def collect_pytest_raises_classes() -> set[str]:
-    """Collect every typed ``AdCPError`` subclass named in a ``pytest.raises(...)`` call across ``tests/``.
+    """Collect every typed ``AdCPSalesAgentError`` subclass named in a ``pytest.raises(...)`` call across ``tests/``.
 
     Handles both ``pytest.raises(Foo)`` (Attribute call) and a bare
     ``raises(Foo)`` (Name call), and unpacks tuple forms
@@ -106,14 +106,14 @@ def collect_pytest_raises_classes() -> set[str]:
 
 
 class TestAdapterRaiseSiteCoverage:
-    """Every typed AdCPError raised in an adapter must have a ``pytest.raises`` test."""
+    """Every typed AdCPSalesAgentError raised in an adapter must have a ``pytest.raises`` test."""
 
     def test_every_adapter_raised_error_has_a_raise_site_test(self):
         raised = collect_adapter_raised_errors()
         # Self-check: the scan must actually find adapter raises. A zero result
         # means the AST walk silently broke (e.g. a refactor moved the adapters
         # dir), which would make this guard vacuously pass.
-        assert raised, f"no adapter AdCPError raises found under {_ADAPTERS_DIR} — scan likely broken"
+        assert raised, f"no adapter AdCPSalesAgentError raises found under {_ADAPTERS_DIR} — scan likely broken"
 
         tested = collect_pytest_raises_classes()
         uncovered = (set(raised) - tested) - ALLOWLIST
@@ -124,7 +124,7 @@ class TestAdapterRaiseSiteCoverage:
                 for name in sorted(uncovered)
             )
             msg = (
-                "Adapter-raised typed AdCPError subclasses lack a raise-site test:\n"
+                "Adapter-raised typed AdCPSalesAgentError subclasses lack a raise-site test:\n"
                 f"{detail}\n\n"
                 "Add a test that drives the real adapter method to the raise and asserts "
                 "pytest.raises(<Class>) + the exact error_code. See "

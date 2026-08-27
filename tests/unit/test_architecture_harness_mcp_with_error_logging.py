@@ -4,7 +4,7 @@ A harness env method that invokes a production MCP tool wrapper DIRECTLY
 (``update_media_buy(ctx=...)`` / ``create_media_buy(ctx=...)`` via asyncio.run)
 bypasses the production boundary decorator that real MCP registration applies
 (src/core/main.py: ``mcp.tool()(with_error_logging(fn))``). On error the raw
-AdCPError propagates instead of an AdCPToolError carrying the two-layer wire
+AdCPSalesAgentError propagates instead of an AdCPToolError carrying the two-layer wire
 envelope, so McpDispatcher cannot capture ``wire_error_envelope`` — the MCP
 error path can't be asserted at the wire layer.
 

@@ -5,7 +5,7 @@ helper families:
 
 1. **auth.py guard helpers echo request context.** Every ``require_*`` /
    ``*_or_raise`` helper in ``src/core/auth.py`` raises a typed auth
-   ``AdCPError`` when identity/principal/tenant resolution fails. Each accepts a
+   ``AdCPSalesAgentError`` when identity/principal/tenant resolution fails. Each accepts a
    keyword-only ``context=`` parameter so callers can pass ``req.context`` and the
    buyer agent can correlate the failure to its request. A new helper that omits
    ``context=`` (or declares it positionally) regresses the convention.
@@ -86,7 +86,7 @@ def test_auth_guard_helpers_accept_keyword_context():
         AUTH_KNOWN_VIOLATIONS,
         fix_hint=(
             "Add `*, context: ContextObject | dict[str, Any] | None = None` to auth guard "
-            "helpers and pass it into the raised AdCPError."
+            "helpers and pass it into the raised AdCPSalesAgentError."
         ),
     )
 

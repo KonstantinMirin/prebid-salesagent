@@ -338,9 +338,9 @@ _XFAIL_TAGS: dict[str, str] = {
     # but no details["suggestion"]. Spec requires suggestion for buyer remediation.
     # FIXME(salesagent-9vgz.6): creative/format_id validation errors lack suggestion field
     # ext-g: _validate_creatives_before_adapter_call raises INVALID_CREATIVES without suggestion
-    # ext-h: plain string format_id caught by Pydantic, not structured AdCPError
+    # ext-h: plain string format_id caught by Pydantic, not structured AdCPSalesAgentError
     # ext-h-agent: _validate_and_convert_format_ids is dead code — unregistered agent not detected
-    "T-UC-002-ext-h": "plain string format_id produces Pydantic error, not AdCPError with suggestion",
+    "T-UC-002-ext-h": "plain string format_id produces Pydantic error, not AdCPSalesAgentError with suggestion",
     "T-UC-002-ext-h-agent": "unregistered agent_url validation not wired — _validate_and_convert_format_ids is dead code",
     # FIXME(salesagent-9vgz.8): auth error lacks suggestion field
     # AdCPAuthenticationError("Principal ID not found...") has no details["suggestion"].
@@ -1451,14 +1451,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
         # --- UC-006: spec-production gaps surfaced by Wave 1B step implementations ---
         # Production uses generic error codes / plain-string errors where the spec
-        # demands specific codes and structured AdCPError with suggestion fields.
+        # demands specific codes and structured AdCPSalesAgentError with suggestion fields.
         _UC006_SPECGAP_XFAIL_TAGS: dict[str, str] = {
             # Error-path scenarios: production returns CREATIVE_VALIDATION_FAILED or
-            # plain-string errors[] instead of spec-specific error codes / AdCPError.
+            # plain-string errors[] instead of spec-specific error codes / AdCPSalesAgentError.
             # See _processing.py error handling paths.
             "T-UC-006-ext-d-whitespace": (
                 "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
-                "_SyntheticError, spec expects structured AdCPError with suggestion"
+                "_SyntheticError, spec expects structured AdCPSalesAgentError with suggestion"
             ),
             "T-UC-006-ext-f": (
                 "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, spec expects CREATIVE_FORMAT_UNKNOWN"
@@ -1468,12 +1468,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             ),
             "T-UC-006-ext-h": (
                 "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
-                "_SyntheticError, spec expects structured AdCPError with suggestion "
+                "_SyntheticError, spec expects structured AdCPSalesAgentError with suggestion "
                 "(preview-failure path, _processing.py:712-737)"
             ),
             "T-UC-006-ext-i": (
                 "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
-                "_SyntheticError, spec expects structured AdCPError with suggestion "
+                "_SyntheticError, spec expects structured AdCPSalesAgentError with suggestion "
                 "(GEMINI_API_KEY not configured path)"
             ),
             # Creative unchanged: production returns action "updated" not "unchanged"
@@ -1489,7 +1489,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # ext-d: empty name — _SyntheticError lacks suggestion field
             "T-UC-006-ext-d": (
                 "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
-                "_SyntheticError, spec expects structured AdCPError with suggestion"
+                "_SyntheticError, spec expects structured AdCPSalesAgentError with suggestion"
             ),
             # ext-e: missing format_id — wrong error code
             "T-UC-006-ext-e": (
@@ -1726,7 +1726,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             (
                 "T-UC-004-partition-reporting-dims",
                 {"geo_missing_geo_level", "geo_metro_missing_system", "limit_zero", "limit_negative"},
-                "Pydantic raises ValidationError, not AdCPError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
+                "Pydantic raises ValidationError, not AdCPSalesAgentError(INVALID_REQUEST, suggestion). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
             # GRADUATED (removed): T-UC-004-partition-attribution interval_zero /
             # interval_negative / invalid_unit / invalid_model — the attribution_window
@@ -1819,7 +1819,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "T-UC-004-partition-daily-breakdown",
                 {"non_boolean"},
                 "production lax-coerces non-boolean strings to bool (no strict-bool "
-                "validation, no AdCPError(INVALID_REQUEST)). See docs/test-debt-bdd-strict-markers.md item C4.",
+                "validation, no AdCPSalesAgentError(INVALID_REQUEST)). See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
             (
                 "T-UC-004-boundary-daily-breakdown",
@@ -1832,7 +1832,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # metrically — a2a/mcp/rest never parse/resolve AccountReference
             # at the boundary (resolve_account does account_ref.root on a raw
             # dict → RuntimeError); the invalid-account rows raise Pydantic
-            # ValidationError instead of AdCPError(INVALID_REQUEST/
+            # ValidationError instead of AdCPSalesAgentError(INVALID_REQUEST/
             # ACCOUNT_NOT_FOUND). Substrings are transport-prefixed so only
             # the genuinely-failing rows are marked (impl valid rows pass).
             (
@@ -1851,7 +1851,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # account_not_found now correctly raises ACCOUNT_NOT_FOUND on
                     # a2a/mcp/rest once resolution runs (seeded siblings exist, the unseeded
                     # id 404s) — removed. Only invalid_oneOf_both / empty_object still raise
-                    # ValidationError-not-AdCPError on the wire, kept (impl path also fails).
+                    # ValidationError-not-AdCPSalesAgentError on the wire, kept (impl path also fails).
                     "a2a-invalid_oneOf_both",
                     "a2a-empty_object",
                     "mcp-invalid_oneOf_both",
@@ -1860,7 +1860,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "[rest-empty_object",
                 },
                 "a2a/mcp/rest do not parse/resolve the invalid oneOf/empty account "
-                "reference into an AdCPError(INVALID_REQUEST) at the transport boundary; "
+                "reference into an AdCPSalesAgentError(INVALID_REQUEST) at the transport boundary; "
                 "these rows raise ValidationError instead. "
                 "See docs/test-debt-bdd-strict-markers.md items C1/C2/C4.",
             ),
@@ -1872,7 +1872,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # present", incl. the sandbox:true variant) now resolve on a2a/mcp/rest
                     # once their accounts are seeded (salesagent-jr5b, present in the merged
                     # tree) — removed. a2a invalid rows (both / not found / empty) already
-                    # raise AdCPError (wire-drop XPASS, #1417) — removed.
+                    # raise AdCPSalesAgentError (wire-drop XPASS, #1417) — removed.
                     # GRADUATED (#1534 merge): mcp-both / mcp-empty-object —
                     # RequestCompatMiddleware normalizes the MCP TypeAdapter oneOf
                     # rejection to the VALIDATION_ERROR envelope; both rows fired
@@ -1882,7 +1882,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # (ValidationError satisfies 'invalid') — NOT marked.
                 },
                 "impl does not resolve the account_id-not-found reference into an "
-                "AdCPError at the _impl boundary for this row. "
+                "AdCPSalesAgentError at the _impl boundary for this row. "
                 "See docs/test-debt-bdd-strict-markers.md items C1/C2/C4.",
             ),
             # sampling (salesagent-03q): sampling_method is NOT a
@@ -1912,7 +1912,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "[rest-unknown_value-systematic",
                 },
                 "sampling_method is unimplemented in get_media_buy_delivery (no schema "
-                "field); ValidationError not AdCPError (rest silently drops it). "
+                "field); ValidationError not AdCPSalesAgentError (rest silently drops it). "
                 "See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
             (
@@ -1923,7 +1923,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "a2a-random (first enum value)",
                     "a2a-failures_only (last enum value)",
                     # a2a now rejects the unknown sampling_method value via extra=forbid
-                    # -> AdCPError (wire-drop confirmed XPASS, #1417) — removed.
+                    # -> AdCPSalesAgentError (wire-drop confirmed XPASS, #1417) — removed.
                     "mcp-random (first enum value)",
                     "mcp-failures_only (last enum value)",
                     # GRADUATED (#1534 merge): mcp-Unknown-string — the unknown
@@ -1936,7 +1936,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "[rest-Unknown string not in enum",
                 },
                 "sampling_method is unimplemented in get_media_buy_delivery (no schema "
-                "field); ValidationError not AdCPError (rest silently drops it). "
+                "field); ValidationError not AdCPSalesAgentError (rest silently drops it). "
                 "See docs/test-debt-bdd-strict-markers.md item C4.",
             ),
             # resolution (salesagent-x18x, #1545): GRADUATED on all transports. The
@@ -1948,9 +1948,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # stale — production emits VALIDATION_ERROR here, not INVALID_REQUEST — so no
             # partition marker remains. (e2e-harness-wiring corroborates: strict XPASS
             # observed on the merged tree 2026-07-09, the merged A2A boundary raises
-            # AdCPError on the empty-array reject — adcp_validation_boundary from the
+            # AdCPSalesAgentError on the empty-array reject — adcp_validation_boundary from the
             # #1417 embed — matching the boundary-resolution graduation below. Entry removed.)
-            # T-UC-004-boundary-resolution: a2a now raises AdCPError on the empty-array
+            # T-UC-004-boundary-resolution: a2a now raises AdCPSalesAgentError on the empty-array
             # reject (wire-drop confirmed XPASS, #1417); the only remaining
             # transport-aware failure (a2a empty array) is handled below — entry removed
             # here so it does not blanket-xfail every boundary-resolution row.
@@ -1961,7 +1961,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "T-UC-004-partition-ownership",
                 {"owner_mismatch"},
                 "cross-principal access returns 200+empty instead of "
-                "AdCPError(MEDIA_BUY_NOT_FOUND). See docs/test-debt-bdd-strict-markers.md item C3.",
+                "AdCPSalesAgentError(MEDIA_BUY_NOT_FOUND). See docs/test-debt-bdd-strict-markers.md item C3.",
             ),
             # boundary-ownership: fully GRADUATED. a2a first (wire-drop XPASS,
             # #1417), then mcp/rest at the #1534 merge — production reports the
@@ -1978,7 +1978,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # arrays + (field absent) pass. pending_activation rows fail
             # (Gherkin uses a non-spec MediaBuyStatus — item B1); empty-array /
             # unknown-value "failed" rows raise ValidationError not
-            # AdCPError(INVALID_REQUEST) — item C4.
+            # AdCPSalesAgentError(INVALID_REQUEST) — item C4.
             # partition: impl now genuinely PASSES single_pending (production
             # normalizes the legacy 'pending_activation' label). a2a/mcp/rest
             # still fail on the unknown-value/empty-array C4 normalization.
@@ -1987,7 +1987,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {
                     # single_pending now normalizes on all wire transports (wire-drop
                     # confirmed XPASS, #1417) — removed. empty_array/unknown_value
-                    # still raise ValidationError-not-AdCPError on a2a/mcp/rest, kept.
+                    # still raise ValidationError-not-AdCPSalesAgentError on a2a/mcp/rest, kept.
                     "a2a-empty_array",
                     "mcp-empty_array",
                     "[rest-empty_array",
@@ -1998,7 +1998,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "single_pending: Gherkin 'pending_activation' is not a valid AdCP "
                 "MediaBuyStatus (item B1) — impl normalizes the legacy label, "
                 "a2a/mcp/rest do not. empty_array/unknown_value: ValidationError "
-                "not AdCPError(INVALID_REQUEST) (item C4). "
+                "not AdCPSalesAgentError(INVALID_REQUEST) (item C4). "
                 "See docs/test-debt-bdd-strict-markers.md.",
             ),
             # boundary: pending_activation fails everywhere; the 'failed' /
@@ -2010,7 +2010,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {
                     "impl-pending_activation (first enum value)",
                     "a2a-pending_activation (first enum value)",
-                    # a2a now raises AdCPError on failed/[] (wire-drop confirmed XPASS,
+                    # a2a now raises AdCPSalesAgentError on failed/[] (wire-drop confirmed XPASS,
                     # #1417) — removed.
                     # GRADUATED (#1534 merge): mcp-failed — RequestCompatMiddleware
                     # normalizes the MCP TypeAdapter enum rejection to the
@@ -2075,7 +2075,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     or (is_e2e_rest and "matches owner" in nodeid)
                 )
             ) or (
-                # a2a now raises AdCPError(MEDIA_BUY_NOT_FOUND) on cross-principal access
+                # a2a now raises AdCPSalesAgentError(MEDIA_BUY_NOT_FOUND) on cross-principal access
                 # (wire-drop confirmed XPASS, #1417).
                 is_a2a and "differs from owner" in nodeid
             )
@@ -2125,7 +2125,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 and not is_e2e_rest
                 and any(s in nodeid for s in ("random (first enum", "failures_only (last enum"))
             )
-            # a2a now rejects the unknown value via extra=forbid -> AdCPError (wire-drop
+            # a2a now rejects the unknown value via extra=forbid -> AdCPSalesAgentError (wire-drop
             # confirmed XPASS, #1417); mcp still fails the type check.
             _samp_not_impl_fail = (
                 not is_impl and not is_a2a and not is_e2e_rest and "Unknown string not in enum" in nodeid
@@ -2219,7 +2219,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # "account_id not found" (invalid): fail on impl/a2a only.
         # "omitted": already PASS everywhere.
         if "T-UC-004-boundary-account" in marker_names:
-            # a2a now raises AdCPError on invalid-account rows (both / empty / not found)
+            # a2a now raises AdCPSalesAgentError on invalid-account rows (both / empty / not found)
             # (wire-drop confirmed XPASS, #1417). Valid rows (account exists / single
             # match / sandbox account exists) now pass on mcp/rest once their accounts
             # are seeded (salesagent-jr5b) — the former "production gaps" mask hid the
@@ -2270,7 +2270,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                 break
 
-        # T-UC-004-boundary-resolution "empty array": a2a now raises AdCPError
+        # T-UC-004-boundary-resolution "empty array": a2a now raises AdCPSalesAgentError
         # (wire-drop confirmed XPASS, #1417) — no transport still fails here.
         # T-UC-004-boundary-status-filter: graduated per-transport
         # "not in AdCP enum" (failed): all transports now pass.
@@ -2373,7 +2373,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "include_package_daily_breakdown validation not implemented — production accepts non-boolean",
             ),
             # account: production doesn't validate the oneOf constraint / empty object
-            # on the wire (raises ValidationError, not AdCPError(INVALID_REQUEST)).
+            # on the wire (raises ValidationError, not AdCPSalesAgentError(INVALID_REQUEST)).
             # account_not_found is NOT here: with the valid siblings seeded
             # (salesagent-jr5b), resolution runs and the unseeded id correctly
             # raises ACCOUNT_NOT_FOUND on every transport.
@@ -2381,7 +2381,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "T-UC-004-partition-account",
                 {"invalid_oneOf_both", "empty_object"},
                 "delivery account oneOf/empty-object validation not implemented — "
-                "production raises ValidationError not AdCPError(INVALID_REQUEST)",
+                "production raises ValidationError not AdCPSalesAgentError(INVALID_REQUEST)",
             ),
             # Graduated: T-UC-004-partition-sampling (transport-aware block below)
             # "not_provided" passes all transports; valid named methods pass on REST only.
@@ -2511,7 +2511,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # / 422, which is exactly what the pin defines ("A requested feature or field
             # is not supported by this seller"). What actually failed was the scenario
             # demanding the MESSAGE contain "account_id filtering is not yet supported" —
-            # an authored sentence that cannot exist, since AdCPError.message is a
+            # an authored sentence that cannot exist, since AdCPSalesAgentError.message is a
             # read-only property returning CODE_TABLE[code].message ("Feature not
             # supported"). Removing that tautology is what un-xfailed it. Then steps are
             # wire-graded via then_fail_with_code (both envelope layers must agree, and
@@ -3163,7 +3163,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # AUTH_REQUIRED on rest/e2e_rest, matching the corrected Gherkin.
         # Graduated: expired-token also passes — AUTH_REQUIRED matches.
 
-        # T-UC-011-ext-g-echo-error: impl passes (AdCPError carries context=req.context);
+        # T-UC-011-ext-g-echo-error: impl passes (AdCPSalesAgentError carries context=req.context);
         # a2a/mcp/rest xfail+note via the context-echo Then step (pytest.xfail) because the
         # wire error envelope does not echo context — #1417 / D2. No marker here.
         # Graduated: T-UC-011-sync-missing-brand (all 4 transports pass — ValidationError now structured)

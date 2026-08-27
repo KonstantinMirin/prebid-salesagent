@@ -2,7 +2,7 @@
 
 Verifies Critical Pattern #5 (Transport Boundary) compliance:
 1. _get_media_buys_impl accepts identity: ResolvedIdentity, not ctx: Context
-2. _get_media_buys_impl raises AdCPError, not ToolError
+2. _get_media_buys_impl raises AdCPSalesAgentError, not ToolError
 3. _get_media_buys_impl signature has no transport-specific types
 """
 
@@ -43,7 +43,7 @@ class TestGetMediaBuysImplAcceptsResolvedIdentity:
 
 
 class TestGetMediaBuysImplRaisesAdCPError:
-    """Violation 2: _get_media_buys_impl must raise AdCPError, not ToolError."""
+    """Violation 2: _get_media_buys_impl must raise AdCPSalesAgentError, not ToolError."""
 
     def test_none_identity_raises_adcp_error(self):
         """Passing identity=None should raise AdCPAuthenticationError (not ToolError)."""
@@ -87,7 +87,7 @@ class TestGetMediaBuysImplRaisesAdCPError:
         with pytest.raises(AdCPCapabilityNotSupportedError):
             _get_media_buys_impl(req, identity=identity)
 
-    # No issubclass test here: "errors raised by _impl are AdCPError, never
+    # No issubclass test here: "errors raised by _impl are AdCPSalesAgentError, never
     # ToolError" is enforced for EVERY _impl by the AST guard
     # test_no_toolerror_in_impl.py; asserting two class statements' inheritance
     # re-stated the source against itself.

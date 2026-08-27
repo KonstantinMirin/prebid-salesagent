@@ -301,7 +301,7 @@ class TestEnvMethodNamingConsistency:
 
         The method invoked a tool wrapper directly, skipping the FastMCP
         middleware chain and TypeAdapter validation. On an error path a raised
-        AdCPError therefore never became a ToolError, so the dispatcher captured
+        AdCPSalesAgentError therefore never became a ToolError, so the dispatcher captured
         ``wire_error_envelope=None`` and every mcp error assertion in such an env
         silently graded a reconstructed exception instead of the wire -- the exact
         false-green salesagent-3dawm exists to remove. Deleting it makes the

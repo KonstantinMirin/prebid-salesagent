@@ -741,7 +741,7 @@ class TestErrorPropagation:
         asyncio.run(_call())
 
     def test_retry_does_not_catch_adcp_error(self):
-        """AdCPError from _impl propagates directly — never retried."""
+        """AdCPSalesAgentError from _impl propagates directly — never retried."""
         from src.core.exceptions import AdCPValidationError
         from src.core.mcp_compat_middleware import RequestCompatMiddleware
 

@@ -587,7 +587,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                     # webhook. Spec 3.1.1 create-media-buy-response.json models a non-success
                     # outcome as the CreateMediaBuyError variant — embed that with the reason.
                     #
-                    # Route the code through the typed AdCPError cascade so the buyer sees
+                    # Route the code through the typed AdCPSalesAgentError cascade so the buyer sees
                     # the same WIRE code the tool path emits for this event — which is now
                     # MEDIA_BUY_REJECTED itself, not a POLICY_VIOLATION rewrite. Never
                     # hand-pick codes here (PR #1567 round-2 item 1); the class declares it.

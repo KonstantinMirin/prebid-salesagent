@@ -113,7 +113,7 @@ class TestGAMOrderLifecycleIntegration:
     def test_lifecycle_workflow_validation(self, test_principals, gam_config):
         """Test lifecycle action workflows with business validation.
 
-        After the error-emission architecture migration, the GAM adapter raises typed AdCPError subclasses for
+        After the error-emission architecture migration, the GAM adapter raises typed AdCPSalesAgentError subclasses for
         unsupported actions and authorization failures. Only ``approve_order``,
         ``activate_order``, and ``update_package_budget`` are supported.
         """

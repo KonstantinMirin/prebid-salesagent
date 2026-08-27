@@ -767,7 +767,7 @@ class TestBuildAdapterAssetFormatFallback:
 
     Cache-miss (None) falls back to format_resolver.get_format; a genuinely
     unknown format proceeds with no spec (raw-data extraction); a typed
-    transient AdCPError propagates from EITHER fetch — never degraded into a
+    transient AdCPSalesAgentError propagates from EITHER fetch — never degraded into a
     missing-spec asset error.
     """
 
@@ -3866,7 +3866,7 @@ class TestDeliveryImplErrors:
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_1"])
         with pytest.raises(AdCPAuthenticationError) as exc_info:
             _get_media_buy_delivery_impl(req, identity=None)
-        # AdCPAuthenticationError inherits recovery from AdCPError (default "fatal")
+        # AdCPAuthenticationError inherits recovery from AdCPSalesAgentError (default "fatal")
         # but the actual behavior is that the error is raised, which is correct
 
     def test_principal_not_found_returns_error_response(self):

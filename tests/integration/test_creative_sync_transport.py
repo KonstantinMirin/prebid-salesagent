@@ -23,7 +23,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
-from src.core.exceptions import AdCPError
+from src.core.exceptions import AdCPSalesAgentError
 from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import CreativeSyncEnv, Transport, assert_envelope, make_identity
 from tests.helpers.creative_test_helpers import assert_stored_creative_assets, creative_payload
@@ -1026,7 +1026,7 @@ class TestAuthPrincipalRequired:
             # _impl raises; the error class and its code ARE the oracle. This used
             # to dispatch through Transport.IMPL so the dispatcher would catch the
             # exception into a TransportResult -- a wrapper around a raise.
-            with pytest.raises(AdCPError) as exc_info:
+            with pytest.raises(AdCPSalesAgentError) as exc_info:
                 env.call_impl(
                     creatives=[_creative()],
                     identity=identity_no_principal,
@@ -1058,7 +1058,7 @@ class TestAuthTenantRequired:
             # _impl raises; the error class and its code ARE the oracle. This used
             # to dispatch through Transport.IMPL so the dispatcher would catch the
             # exception into a TransportResult -- a wrapper around a raise.
-            with pytest.raises(AdCPError) as exc_info:
+            with pytest.raises(AdCPSalesAgentError) as exc_info:
                 env.call_impl(
                     creatives=[_creative()],
                     identity=identity_no_tenant,

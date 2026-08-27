@@ -28,7 +28,7 @@ extraction — is the unfinished refactor the branch was named for.**
 
 ## Shape
 `validate_business_rules(req, *, session/repos, op: Literal["create","update"]) -> None`
-- Raises the typed `AdCPError` (→ wire envelope) on first violation, OR accumulates into the
+- Raises the typed `AdCPSalesAgentError` (→ wire envelope) on first violation, OR accumulates into the
   multi-error `errors[]` envelope (decide: fail-fast vs drain — match current behavior).
 - Shared across create + update; op-specific rules (media-buy existence on update) gated by `op`.
 - Extends `financial_validation.py` (don't start fresh — it's the seed).

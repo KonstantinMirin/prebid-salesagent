@@ -308,7 +308,7 @@ class TestA2AParameterMapping:
             import asyncio
 
             # Skill handlers raise typed AdCPValidationError on missing-params; the
-            # outer dispatcher catches AdCPError and routes through
+            # outer dispatcher catches AdCPSalesAgentError and routes through
             # _build_failed_skill_result to produce the two-layer envelope.
             # Asserting on the raised exception (not a returned dict) verifies the
             # flat-dict bypass path is closed — handlers must raise, never return

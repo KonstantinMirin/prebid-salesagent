@@ -1,4 +1,4 @@
-"""Behavioral pin tests for typed AdCPError subclass raises.
+"""Behavioral pin tests for typed AdCPSalesAgentError subclass raises.
 
 These tests prove that production raise sites emit the correct typed
 subclass at the actual call site. They CALL production code (not just

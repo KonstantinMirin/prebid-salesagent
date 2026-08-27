@@ -13,7 +13,7 @@ from fastmcp.server.context import Context
 from src.core.errors.details import ValidationDetails
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPError,
+    AdCPSalesAgentError,
     AdCPServiceUnavailableError,
     AdCPValidationError,
 )
@@ -313,13 +313,13 @@ async def _activate_signal_impl(
             context=context,
         )
 
-    except AdCPError:
+    except AdCPSalesAgentError:
         raise
     except Exception as e:
         logger.error("Error activating signal %s: %s", signal_agent_segment_id, e)
         # Unbounded catch: whatever provider call replaces the mock, ``str(e)``
         # has no provenance guarantee and this raise site sits directly on the
-        # buyer wire (a typed AdCPError passes through adcp_error_for
+        # buyer wire (a typed AdCPSalesAgentError passes through adcp_error_for
         # unchanged). AdCP 3.1.1 transport-errors.mdx § Security Considerations.
         raise AdCPAdapterError(context=context, internal_detail=e) from e
 

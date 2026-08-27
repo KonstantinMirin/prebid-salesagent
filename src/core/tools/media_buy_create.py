@@ -48,13 +48,13 @@ from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
     AdCPCreativeRejectedError,
-    AdCPError,
     AdCPFormatNotFoundError,
     AdCPIdempotencyConflictError,
     AdCPIdempotencyExpiredError,
     AdCPInternalError,
     AdCPInvalidRequestError,
     AdCPProductNotFoundError,
+    AdCPSalesAgentError,
     AdCPServiceUnavailableError,
     AdCPValidationError,
 )
@@ -318,7 +318,7 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
     """Get format specification synchronously from the async registry.
 
     Thin delegate kept for its patch surface (tests/harness envs patch this
-    name). The behavior — typed AdCPError propagates (transient agent failures
+    name). The behavior — typed AdCPSalesAgentError propagates (transient agent failures
     keep their recovery semantics, #1430: transient-error taxonomy fix), untyped errors log and
     become None (unknown-format) — lives in the SINGLE shared fetch path,
     format_resolver.fetch_format_spec (#1430 review).
@@ -522,7 +522,7 @@ def _pre_validate_package_creatives(
             # FIXME(#1119): creative validation should use a repository
             assert pre_validate_uow.session is not None
             _validate_creatives_before_adapter_call(packages, tenant_id, principal_id, session=pre_validate_uow.session)
-    except AdCPError:
+    except AdCPSalesAgentError:
         # Validation failed - creative validation errors already logged
         # Update workflow step as failed and re-raise (only if step exists - not created in dry_run mode)
         if step:
@@ -662,7 +662,7 @@ def _build_adapter_asset_from_creative(
     format_spec = None
     # Prefer cached spec (same as auto-approval path); fall back to the resolver
     # (product overrides + agent search) on an UNKNOWN-format miss (None). A
-    # typed transient AdCPError from either fetch PROPAGATES — a rate-limited
+    # typed transient AdCPSalesAgentError from either fetch PROPAGATES — a rate-limited
     # agent must not be degraded into a missing-spec asset error, and the
     # fallback must not mask it by re-fetching from the same throttled agent
     # (#1430 review). AdCPFormatNotFoundError from the resolver = genuinely
@@ -684,7 +684,7 @@ def _build_adapter_asset_from_creative(
             # Genuinely unknown format — proceed without a spec (extraction
             # falls back to the creative's raw data fields).
             logger.warning(log_safe(f"[ASSET] Could not load format spec for {creative.creative_id}: {e}"))
-        except AdCPError:
+        except AdCPSalesAgentError:
             # Transient/typed agent failure — propagate with its recovery
             # semantics rather than degrading to a missing-spec asset error.
             raise
@@ -1608,7 +1608,7 @@ async def _validate_and_convert_format_ids(
                     field=field,
                     details=EntityRefDetails(**where, agent_url=agent_url, format_id=format_id),
                 )
-        except AdCPError:
+        except AdCPSalesAgentError:
             raise
         except Exception as e:
             logger.exception(f"Error fetching format {format_id} from {agent_url}: {e}")
@@ -2470,9 +2470,9 @@ async def _create_media_buy_impl(
                                 )
                                 # Store by index (package IDs aren't generated yet)
                                 package_pricing_info_by_index[idx] = pricing_info
-                            except AdCPError:
+                            except AdCPSalesAgentError:
                                 # Re-raise pricing validation errors as-is, preserving
-                                # the typed AdCPError code/details/recovery hints rather
+                                # the typed AdCPSalesAgentError code/details/recovery hints rather
                                 # than stripping to a string-only ValueError.
                                 raise
 
@@ -2631,13 +2631,13 @@ async def _create_media_buy_impl(
                             field="targeting_overlay",
                         )
 
-    except (AdCPError, ValueError, PermissionError) as e:
+    except (AdCPSalesAgentError, ValueError, PermissionError) as e:
         # Audit-update then re-raise via the shared helper so this early-validation
         # exit threads the two-layer envelope into workflow_step.response_data the
         # same way the post-adapter failure exits do — push-notification subscribers
         # see the same wire shape the synchronous caller receives, and the audit
         # write is try/except-wrapped so a DB hiccup can't shadow the original error.
-        # Typed AdCPError propagates to the transport boundary which translates to
+        # Typed AdCPSalesAgentError propagates to the transport boundary which translates to
         # the spec two-layer wire envelope; ValueError/PermissionError propagate so
         # the boundary wrappers translate them to AdCPValidationError /
         # AdCPAuthorizationError with correct wire codes (the prior
@@ -2677,7 +2677,7 @@ async def _create_media_buy_impl(
                 logger.info("[INLINE_CREATIVE_DEBUG] Updated req.packages with creative_ids")
                 if uploaded_ids:
                     logger.info(f"Successfully uploaded creatives for {len(uploaded_ids)} packages: {uploaded_ids}")
-            except AdCPError as e:
+            except AdCPSalesAgentError as e:
                 # Update workflow step on failure (only if step exists)
                 if step:
                     ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))
@@ -3941,7 +3941,7 @@ async def _create_media_buy_impl(
                                         pcid = (creative.data or {}).get("platform_creative_id")
                                         if pcid:
                                             platform_creative_ids.append(pcid)
-                                except AdCPError:
+                                except AdCPSalesAgentError:
                                     raise
                                 except Exception as upload_error:
                                     logger.error(
@@ -4214,12 +4214,12 @@ async def _create_media_buy_impl(
         _buy_result = CreateMediaBuyResult(response=modified_response, status=AdcpTaskStatus.completed.value)
         return _cache_and_return(_buy_result, req, identity, request_hash)
 
-    except AdCPError as adcp_err:
+    except AdCPSalesAgentError as adcp_err:
         # Re-raise transport-agnostic errors (CREATIVE_UPLOAD_FAILED, etc.) without wrapping.
         # audit_workflow_step_failure_if_present threads the two-layer envelope into
         # response_data so push notification subscribers see the same wire shape
         # the synchronous caller receives, AND wraps in try/except so a DB hiccup
-        # during audit can't shadow the original AdCPError on re-raise.
+        # during audit can't shadow the original AdCPSalesAgentError on re-raise.
         ctx_manager.audit_workflow_step_failure_if_present(step, adcp_err)
         raise
 

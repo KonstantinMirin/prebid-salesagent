@@ -789,7 +789,7 @@ def when_send_update_request(ctx: dict) -> None:
     """Build UpdateMediaBuyRequest and dispatch through harness."""
     from pydantic import ValidationError
 
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPSalesAgentError
     from src.core.schemas import UpdateMediaBuyRequest
 
     update_kwargs = ctx.get("update_kwargs", {})
@@ -808,7 +808,7 @@ def when_send_update_request(ctx: dict) -> None:
         # Store as ctx["error"] so Then steps can assert on it.
         ctx["error"] = e
         return
-    except AdCPError as e:
+    except AdCPSalesAgentError as e:
         # A schema-level validator raised a typed AdCP error (e.g. the immutable
         # package-field guard → INVALID_REQUEST). It propagates as-is (not wrapped
         # in ValidationError), so capture it the same way for the Then steps.

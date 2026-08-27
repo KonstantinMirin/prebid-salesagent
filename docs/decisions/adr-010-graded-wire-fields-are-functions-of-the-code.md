@@ -99,7 +99,7 @@ code-dependent, (2) and (3) stop being true and this ADR is superseded.
 
 **Decision (owner).** Keep construction-time derivation. Do NOT contort the type system to make a
 derived field proof against `pydantic.model_copy(update=...)`. Instead add an AST guard that bans
-`model_copy` on the AdCPError / advisory-Error classes, with a **zero-entry allowlist**.
+`model_copy` on the AdCPSalesAgentError / advisory-Error classes, with a **zero-entry allowlist**.
 
 **Why this is the right trade, stated plainly.** It is a DETECT, and this ADR's own rule is REMOVE.
 The exception is deliberate. Measured, the remove options are all worse:

@@ -63,7 +63,7 @@ def build_agent_config(agent: _HasAgentFields) -> AgentConfig:
 
 
 def raise_mapped_adcp_error(exc: ADCPError, *, agent_label: str, logger: logging.Logger) -> NoReturn:
-    """Translate an adcp SDK exception into the internal typed AdCPError taxonomy.
+    """Translate an adcp SDK exception into the internal typed AdCPSalesAgentError taxonomy.
 
     Shared by CreativeAgentRegistry and SignalsAgentRegistry so the SDK-to-internal
     error mapping — and its recovery classification — has a single home: an
@@ -87,19 +87,19 @@ def raise_mapped_adcp_error(exc: ADCPError, *, agent_label: str, logger: logging
     from src.core.exceptions import (
         AdCPAdapterError,
         AdCPAuthenticationError,
-        AdCPError,
+        AdCPSalesAgentError,
         AdCPServiceUnavailableError,
     )
 
     # (SDK exception, internal class, buyer-facing sentence + log label). One
     # table + one raise, rather than four copies of "log raw / raise typed"
     # differing only in the label and the class (CLAUDE.md DRY invariant).
-    mapping: tuple[tuple[type[Exception], type[AdCPError], str], ...] = (  # (sdk, internal, mode label)
+    mapping: tuple[tuple[type[Exception], type[AdCPSalesAgentError], str], ...] = (  # (sdk, internal, mode label)
         (ADCPAuthenticationError, AdCPAuthenticationError, "Authentication failed"),
         (ADCPTimeoutError, AdCPServiceUnavailableError, "Request timed out"),
         (ADCPConnectionError, AdCPServiceUnavailableError, "Connection failed"),
     )
-    error_class: type[AdCPError] = AdCPAdapterError
+    error_class: type[AdCPSalesAgentError] = AdCPAdapterError
     # ONE CODE, MANY SENTENCES — resolved as an ACCEPTED MERGE, recorded not defaulted.
     # ADCPTimeoutError and ADCPConnectionError both map to AdCPServiceUnavailableError,
     # and they used to carry different buyer sentences ("Request timed out" /

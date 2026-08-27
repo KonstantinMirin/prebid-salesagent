@@ -4,7 +4,7 @@ Verifies that suggestion (and the other error-object fields) are present on the
 WIRE after a REST round-trip -- what the buyer actually receives.
 
 Historically this file guarded a harness reconstruction: before #1417
-_envelope_to_adcp_error rebuilt an AdCPError from the wire body and dropped
+_envelope_to_adcp_error rebuilt an AdCPSalesAgentError from the wire body and dropped
 suggestion while doing so. That reconstruction was deleted by
 salesagent-3dawm.15, so the file now asserts the wire directly and the
 reconstruction-specific test is gone with the mechanism it guarded.

@@ -1792,7 +1792,7 @@ class TestExtensionObligations:
         """
         # Zero budget triggers the typed AdCPBudgetTooLowError raise at
         # media_buy_create.py:1758 directly — propagates through the boundary
-        # catch unchanged (typed AdCPError raised directly).
+        # catch unchanged (typed AdCPSalesAgentError raised directly).
         req = _make_request(packages=[{"product_id": "prod_1", "budget": 0, "pricing_option_id": "cpm_usd_fixed"}])
 
         with _env() as env:

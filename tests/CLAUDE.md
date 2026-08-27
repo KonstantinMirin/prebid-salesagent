@@ -382,7 +382,7 @@ def then_response_has_formats(ctx, count):
 
 ### Principle: Assert on the Wire Envelope, Not Reconstructed Exceptions
 
-The harness NO LONGER reconstructs `AdCPError` subclasses from wire responses. It used
+The harness NO LONGER reconstructs `AdCPSalesAgentError` subclasses from wire responses. It used
 to, so tests could write `isinstance()` and `.error_code` against a wire error — and
 that reconstruction was lossy: it covered 20 of 43 classes, and because
 `AdCPAuthenticationError` and `AdCPAuthorizationError` share a wire code, it always
@@ -391,7 +391,7 @@ not the wire.
 
 The map is deleted (`salesagent-3dawm.15`). `result.error` now carries what the
 transport actually raised: a `WireError` holding the envelope VERBATIM on REST and A2A
-(deliberately not an `AdCPError` subclass, so `isinstance` against a production class
+(deliberately not an `AdCPSalesAgentError` subclass, so `isinstance` against a production class
 fails loudly instead of quietly passing), and the raw `ToolError` on MCP.
 
 **New error-path tests MUST assert on the wire error envelope** as the primary authority.

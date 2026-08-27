@@ -35,7 +35,7 @@ need cross-team visibility.
   corresponding box here.
 
   Production gaps (P2–P3):
-  - [ ] C4 — Pydantic ValidationError → AdCPError(INVALID_REQUEST, suggestion) translation
+  - [ ] C4 — Pydantic ValidationError → AdCPSalesAgentError(INVALID_REQUEST, suggestion) translation
   - [ ] C5 — include_package_daily_breakdown no-op
   - [ ] C6 — date-range validation in success envelope vs raised
   - [ ] C7 — end-only date_range defaults to today-30d, not creation date

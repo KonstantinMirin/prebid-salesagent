@@ -153,6 +153,6 @@ async def test_handle_get_products_skill_no_brief_no_brand_raises():
 
         mock_core_tool.side_effect = AdCPValidationError()
 
-        # AdCPError propagates via 'except AdCPError: raise' to outer handler
+        # AdCPSalesAgentError propagates via 'except AdCPSalesAgentError: raise' to outer handler
         with pytest.raises(AdCPValidationError):
             await handler._handle_get_products_skill({}, _MOCK_IDENTITY)

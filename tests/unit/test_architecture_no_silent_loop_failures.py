@@ -2,7 +2,7 @@
 
 CLAUDE.md rule: "No Quiet Failures". When an ``_impl`` function iterates to
 build a response and an item's processing fails, the failure must be visible
-to the caller — a raised ``AdCPError``, an advisory appended to the response's
+to the caller — a raised ``AdCPSalesAgentError``, an advisory appended to the response's
 ``errors[]`` list, or at minimum a recorded per-item result. A handler that
 only logs (or logs and ``continue``s) makes the item silently vanish from the
 response: the buyer sees a shorter list with no signal that anything failed.
@@ -114,7 +114,7 @@ _LOG_METHODS = frozenset({"debug", "info", "warning", "error", "exception", "cri
 FIX_HINT = (
     "Surface the failure: append an advisory Error to the response errors[] list "
     "(see the SERVICE_UNAVAILABLE handler in _get_media_buy_delivery_impl), raise an "
-    "AdCPError, or assign a fallback the response can carry. If the swallow is "
+    "AdCPSalesAgentError, or assign a fallback the response can carry. If the swallow is "
     "genuinely correct, allowlist it with a FIXME(#gh-issue) at the source."
 )
 
@@ -253,7 +253,7 @@ KNOWN_GOOD_SNIPPETS = {
         "    for item in req.items:\n"
         "        try:\n"
         "            results.append(process(item))\n"
-        "        except AdCPError:\n"
+        "        except AdCPSalesAgentError:\n"
         "            raise\n"
     ),
     # A SILENT, deliberate default. Add a log line and it becomes
@@ -747,7 +747,7 @@ _ADVISORY_GOOD = {
         "    try:\n"
         "        x = lookup()\n"
         "    except Exception as e:\n"
-        "        raise AdCPError(str(e)) from e\n"
+        "        raise AdCPSalesAgentError(str(e)) from e\n"
         "    return Response(errors=advisories or None)\n"
     ),
     # shape (a): control leaves the function — the helper resolves the race or raises

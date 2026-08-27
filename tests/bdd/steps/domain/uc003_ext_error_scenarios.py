@@ -37,7 +37,7 @@ def _inject_privilege_error(ctx: dict) -> None:
     short-circuits the fields-less ext-n request through the empty-update path
     and never reaches the adapter — hence the documented production gap.
     """
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPSalesAgentError
 
     env = ctx["env"]
     # MediaBuyDualEnv keys the UPDATE adapter under "update_adapter" (the create
@@ -48,7 +48,7 @@ def _inject_privilege_error(ctx: dict) -> None:
     mock_adapter = env.mock["update_adapter"].return_value
     # PERMISSION_DENIED is canonical (pinned enum @04f59d2d5, recovery
     # correctable) but no typed subclass models it, so synthesize the code.
-    error = AdCPError(
+    error = AdCPSalesAgentError(
         error_code="PERMISSION_DENIED",
         details={"suggestion": "Request admin privileges or contact an administrator to perform this action"},
     )
@@ -678,7 +678,7 @@ def given_media_buy_uncancellable(ctx: dict) -> None:
     refuse the cancel (the seller-side gate) and set canceled=true so the real
     cancellation path is exercised on the wire.
     """
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPSalesAgentError
 
     kwargs = _ensure_update_defaults(ctx)
     kwargs["canceled"] = True
@@ -686,7 +686,7 @@ def given_media_buy_uncancellable(ctx: dict) -> None:
     # Arm the seller-side refusal at the update adapter with the canonical code.
     env = ctx["env"]
     mock_adapter = env.mock["update_adapter"].return_value
-    mock_adapter.update_media_buy.side_effect = AdCPError(
+    mock_adapter.update_media_buy.side_effect = AdCPSalesAgentError(
         error_code="NOT_CANCELLABLE",
         details={"suggestion": "Pause the buy instead (paused: true) or contact the seller to arrange cancellation"},
     )

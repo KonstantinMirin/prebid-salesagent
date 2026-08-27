@@ -44,7 +44,7 @@ def test_valid_delivery_boundary_empty_deliveries_raises():
 def test_invalid_delivery_boundary_with_wire_rejection_passes():
     """The step now grades the WIRE, so the fixture must supply one.
 
-    It used to hand-build ctx["error"] = AdCPError(INTERNAL_ERROR) -- fabricating
+    It used to hand-build ctx["error"] = AdCPSalesAgentError(INTERNAL_ERROR) -- fabricating
     the expected error, which is the antipattern
     test_architecture_bdd_wire_discipline bans in step definitions, and which also
     meant this characterization test asserted the step accepted a

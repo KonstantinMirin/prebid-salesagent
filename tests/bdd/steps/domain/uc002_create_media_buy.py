@@ -838,7 +838,7 @@ def then_result_should_be(ctx: dict, outcome: str) -> None:
     - Workflow outcomes: correct approval path was taken
     - Persistence outcomes: DB state matches the expected persistence behavior
     - Task list outcomes: task query returned correctly shaped/ordered results
-    - Error outcomes: AdCPError with matching code and recovery
+    - Error outcomes: AdCPSalesAgentError with matching code and recovery
     - Unknown: raises ValueError so unmapped rows are caught immediately
     """
     if outcome == "success":

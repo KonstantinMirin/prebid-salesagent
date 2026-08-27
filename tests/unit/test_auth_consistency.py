@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPSalesAgentError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.services.policy_check_service import PolicyStatus
 
@@ -225,7 +225,7 @@ class TestDiscoveryEndpointsAnonymousAccess:
             try:
                 result = await _get_products_impl(req, identity)
                 # If it gets past auth, it succeeded (may fail later on business logic)
-            except (ToolError, AdCPError) as e:
+            except (ToolError, AdCPSalesAgentError) as e:
                 pass  # the operation must raise; its message is not asserted
                 # Auth errors are failures; business logic errors are OK
 
@@ -336,7 +336,7 @@ class TestDiscoveryEndpointsInvalidAuth:
 
             try:
                 await _get_products_impl(req, identity)
-            except (ToolError, AdCPError):
+            except (ToolError, AdCPSalesAgentError):
                 pass  # Business logic errors OK
 
             # Verify the identity was anonymous (principal_id=None)
@@ -367,7 +367,7 @@ class TestDiscoveryEndpointsInvalidAuth:
 
                 req = ListCreativeFormatsRequest()
                 _list_creative_formats_impl(req, identity)
-            except (ToolError, AdCPError):
+            except (ToolError, AdCPSalesAgentError):
                 pass  # Business logic errors OK
 
             # Verify the identity was anonymous
@@ -390,7 +390,7 @@ class TestDiscoveryEndpointsInvalidAuth:
         with patch("src.core.tools.properties.TenantConfigUoW", return_value=mock_uow):
             try:
                 _list_authorized_properties_impl(req=None, identity=identity)
-            except (ToolError, AdCPError):
+            except (ToolError, AdCPSalesAgentError):
                 pass  # Business logic errors OK
 
             # Verify the identity was anonymous

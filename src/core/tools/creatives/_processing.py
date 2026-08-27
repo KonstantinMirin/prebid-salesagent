@@ -23,7 +23,7 @@ from src.core.errors.details import AdapterFailureDetails, ConfigurationDetails,
 from src.core.exceptions import (
     AdCPConfigurationError,
     AdCPCreativeRejectedError,
-    AdCPError,
+    AdCPSalesAgentError,
     AdCPServiceUnavailableError,
 )
 from src.core.format_resolver import find_format
@@ -132,7 +132,7 @@ def build_update_sync_result(
     )
 
 
-def _failed_sync_result(creative_id: str, source: AdCPError) -> SyncCreativeResult:
+def _failed_sync_result(creative_id: str, source: AdCPSalesAgentError) -> SyncCreativeResult:
     """Build a SyncCreativeResult for a failed creative sync operation.
 
     Takes the TYPED error and nothing else. The advisory carries the exception's CODE
@@ -596,7 +596,7 @@ def _update_existing_creative(
                 ),
                 False,
             )
-        except AdCPError as typed_error:
+        except AdCPSalesAgentError as typed_error:
             # GENERALIZES the AdCPConfigurationError arm above. That arm was added so a
             # missing GEMINI_API_KEY would not read as a transient creative-agent outage;
             # the same is true of every other typed error the registry raises. A
@@ -943,7 +943,7 @@ def _create_new_creative(
                 ),
                 False,
             )
-        except AdCPError as typed_error:
+        except AdCPSalesAgentError as typed_error:
             # Same generalization as the update path above.
             logger.error(
                 "[sync_creatives] typed %s - rejecting creative %s",

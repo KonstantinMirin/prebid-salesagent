@@ -39,7 +39,7 @@ from adcp.utils.format_assets import get_format_assets
 from fastmcp.server.context import Context
 from pydantic import Field
 
-from src.core.exceptions import AdCPError, AdCPServiceUnavailableError
+from src.core.exceptions import AdCPSalesAgentError, AdCPServiceUnavailableError
 from src.core.helpers import enum_value
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
@@ -211,7 +211,7 @@ def _list_creative_formats_impl(
 
     try:
         registry = get_creative_agent_registry()
-    except AdCPError:
+    except AdCPSalesAgentError:
         raise
     except Exception as e:
         logger.error(f"Failed to create creative agent registry: {e}", exc_info=True)

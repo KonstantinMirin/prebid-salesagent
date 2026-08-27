@@ -29,9 +29,9 @@ from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPConfigurationError,
     AdCPConflictError,
-    AdCPError,
     AdCPInternalError,
     AdCPRateLimitError,
+    AdCPSalesAgentError,
     AdCPServiceUnavailableError,
     AdCPValidationError,
 )
@@ -60,12 +60,12 @@ class RetryConfig:
         self.jitter = jitter
 
 
-def map_gam_exception(exception: Exception) -> AdCPError:
+def map_gam_exception(exception: Exception) -> AdCPSalesAgentError:
     """Classify an upstream GAM fault into the AdCP error the buyer should read.
 
     Sorting the fault is the adapter's job and this is the only place that does
     it. The returned error is raised as-is: the tool layer re-raises a typed
-    ``AdCPError`` untouched, so this decision is the one the buyer receives.
+    ``AdCPSalesAgentError`` untouched, so this decision is the one the buyer receives.
 
     Carries NO upstream text into the error. A SOAP fault's string is a third
     party's, and AdCP 3.1.1 transport-errors.mdx forbids putting it on the wire
@@ -162,7 +162,7 @@ def with_retry(
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @wraps(func)
         def wrapper(*args, **kwargs) -> T:
-            last_exception: AdCPError | None = None
+            last_exception: AdCPSalesAgentError | None = None
             op_name = operation_name or func.__name__
 
             for attempt in range(retry_config.max_attempts):
@@ -181,9 +181,9 @@ def with_retry(
                     return result
 
                 except Exception as e:
-                    # Classify once. An already-typed AdCPError is the raise site's
+                    # Classify once. An already-typed AdCPSalesAgentError is the raise site's
                     # own decision and is never reclassified.
-                    adcp_error = e if isinstance(e, AdCPError) else map_gam_exception(e)
+                    adcp_error = e if isinstance(e, AdCPSalesAgentError) else map_gam_exception(e)
                     last_exception = adcp_error
 
                     should_retry = (

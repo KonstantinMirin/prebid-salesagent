@@ -383,7 +383,7 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
         protocol="mcp",
     )
 
-    # Boundary-validation failures are now signaled via typed AdCPError that
+    # Boundary-validation failures are now signaled via typed AdCPSalesAgentError that
     # propagates past the narrowed (ValueError, PermissionError) catch in _impl
     # and is translated to the spec two-layer envelope at the transport
     # boundary. Verify the typed raise at the layer above the transport.
@@ -456,7 +456,7 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
         protocol="mcp",
     )
 
-    # Boundary-validation failures are now signaled via typed AdCPError that
+    # Boundary-validation failures are now signaled via typed AdCPSalesAgentError that
     # propagates past the narrowed (ValueError, PermissionError) catch in _impl
     # and is translated to the spec two-layer envelope at the transport
     # boundary. Verify the typed raise at the layer above the transport.
@@ -529,7 +529,7 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
         protocol="mcp",
     )
 
-    # Boundary-validation failures are now signaled via typed AdCPError that
+    # Boundary-validation failures are now signaled via typed AdCPSalesAgentError that
     # propagates past the narrowed (ValueError, PermissionError) catch in _impl
     # and is translated to the spec two-layer envelope at the transport
     # boundary. Verify the typed raise at the layer above the transport.

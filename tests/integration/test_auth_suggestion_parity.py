@@ -26,7 +26,7 @@ transport dispatcher calls).
 
 import pytest
 
-from src.core.exceptions import AdCPError, build_two_layer_error_envelope
+from src.core.exceptions import AdCPSalesAgentError, build_two_layer_error_envelope
 from tests.helpers import assert_envelope_shape
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -101,7 +101,7 @@ class TestAuthHelperFamilySuggestion:
             TenantFactory(tenant_id="auth_sugg_t1")
             env.get_session()  # commit factory data
 
-            with pytest.raises(AdCPError) as exc_info:
+            with pytest.raises(AdCPSalesAgentError) as exc_info:
                 resolve_principal_or_raise("nonexistent-principal", tenant_id="auth_sugg_t1")
 
         _assert_auth_invalid_with_suggestion(build_two_layer_error_envelope(exc_info.value))
@@ -116,7 +116,7 @@ class TestAuthHelperFamilySuggestion:
         """
         from src.core.auth import require_tenant
 
-        with pytest.raises(AdCPError) as exc_info:
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             require_tenant(None)
 
         _assert_auth_missing_with_suggestion(build_two_layer_error_envelope(exc_info.value))
@@ -136,7 +136,7 @@ class TestAuthHelperFamilySuggestion:
 
         identity = PrincipalFactory.make_identity(tenant=None, auth_token="presented-token")
 
-        with pytest.raises(AdCPError) as exc_info:
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             require_tenant(identity)
 
         _assert_auth_invalid_with_suggestion(build_two_layer_error_envelope(exc_info.value))
@@ -155,7 +155,7 @@ class TestAuthHelperFamilySuggestion:
 
         identity = PrincipalFactory.make_identity(tenant=None, auth_token=None)
 
-        with pytest.raises(AdCPError) as exc_info:
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             require_tenant(identity)
 
         _assert_auth_missing_with_suggestion(build_two_layer_error_envelope(exc_info.value))
@@ -183,7 +183,7 @@ class TestAuthHelperFamilySuggestion:
                     "x-adcp-tenant": "auth_sugg_t2",
                 }
 
-            with pytest.raises(AdCPError) as exc_info:
+            with pytest.raises(AdCPSalesAgentError) as exc_info:
                 get_principal_from_context(_HeaderCarrier())
 
         _assert_auth_invalid_with_suggestion(build_two_layer_error_envelope(exc_info.value))

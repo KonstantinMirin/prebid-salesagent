@@ -3,7 +3,7 @@
 ``test_typed_error_wire_codes.py`` pins each class -> wire-code mapping by
 constructing the exception directly. This module drives the production
 ``MockAdServer`` create paths so the actual ``raise`` fires: a class-swap at
-the site (e.g. AdCPMediaBuyRejectedError -> AdCPError) would go unnoticed by
+the site (e.g. AdCPMediaBuyRejectedError -> AdCPSalesAgentError) would go unnoticed by
 the mapping test but fails here.
 
 The internal ``error_code`` asserted on each class is the taxonomy code carried

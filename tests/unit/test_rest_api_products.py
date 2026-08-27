@@ -5,7 +5,7 @@ Validates the first REST transport for get_products:
 - Response has 'products' field
 - Auth-optional (discovery skill)
 - Version compat applied when adcp_version < 3.0
-- Error responses use AdCPError format
+- Error responses use AdCPSalesAgentError format
 
 beads: salesagent-b61l.13
 """

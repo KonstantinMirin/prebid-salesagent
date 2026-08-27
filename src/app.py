@@ -39,8 +39,8 @@ from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
 from src.core.domain_routing import route_landing_page
 from src.core.errors.issues import issues_from_validation_error
 from src.core.exceptions import (
-    AdCPError,
     AdCPInvalidRequestError,
+    AdCPSalesAgentError,
     AdCPValidationError,
     adcp_error_for,
     build_two_layer_error_envelope,
@@ -131,7 +131,7 @@ app.mount("/mcp", mcp_app)
 # ---------------------------------------------------------------------------
 
 
-def _envelope_response(request: Request, exc: AdCPError, *, log_as: Exception | None = None) -> JSONResponse:
+def _envelope_response(request: Request, exc: AdCPSalesAgentError, *, log_as: Exception | None = None) -> JSONResponse:
     """Build a JSONResponse carrying the two-layer envelope for ``exc``.
 
     Single source of truth for the REST envelope-response shape — used by
@@ -153,9 +153,9 @@ def _envelope_response(request: Request, exc: AdCPError, *, log_as: Exception | 
     defaulting to ``exc`` (existing behavior, unchanged for typed handlers).
     The untyped-``Exception`` handler passes the ORIGINAL exception here
     instead of the normalized ``exc`` — ``record_boundary_error`` logs
-    untyped errors (``not isinstance(error, AdCPError)``) at ERROR with
+    untyped errors (``not isinstance(error, AdCPSalesAgentError)``) at ERROR with
     ``exc_info=True`` (full traceback), which on-call needs for a genuinely
-    unexpected failure; the normalized ``AdCPError`` alone (post prkv.8's
+    unexpected failure; the normalized ``AdCPSalesAgentError`` alone (post prkv.8's
     fix, just ``type(exc).__name__``) would silently drop both the traceback
     and the original message from server-side logs, unlike the MCP/A2A
     boundaries which always log the original exception.
@@ -188,8 +188,8 @@ def _best_effort_rest_identity(request: Request) -> tuple[str | None, str | None
         return None, None
 
 
-@app.exception_handler(AdCPError)
-async def adcp_error_handler(request: Request, exc: AdCPError) -> JSONResponse:
+@app.exception_handler(AdCPSalesAgentError)
+async def adcp_error_handler(request: Request, exc: AdCPSalesAgentError) -> JSONResponse:
     """Convert AdCP exceptions to the spec-compliant two-layer envelope.
 
     Body shape::
@@ -301,7 +301,7 @@ async def untyped_exception_handler(request: Request, exc: Exception) -> JSONRes
     Registration ORDER is irrelevant here, and it is worth being precise about
     why: Starlette stores handlers in a dict keyed by exception CLASS and
     resolves by walking ``type(exc).__mro__`` for the nearest registered
-    ancestor. So ``AdCPError``/``ValueError``/``RequestValidationError``/
+    ancestor. So ``AdCPSalesAgentError``/``ValueError``/``RequestValidationError``/
     ``PermissionError``/``ToolError`` keep their own handlers no matter where
     this one sits (``ToolError``'s is in fact registered below it), and this
     catches only what has no more specific handler. Do not "fix" this by moving

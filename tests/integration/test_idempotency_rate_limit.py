@@ -40,7 +40,7 @@ class TestInsertCeilingRepository:
     def test_full_scope_raises_rate_limited_with_retry_after(self, integration_db):
         """At the ceiling, the probe gate raises RATE_LIMITED; retry_after points at the oldest expiry."""
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
 
         tenant_id = f"rl_t_{uuid.uuid4().hex[:6]}"
         principal_id = f"p_{uuid.uuid4().hex[:8]}"
@@ -51,7 +51,7 @@ class TestInsertCeilingRepository:
 
         with MediaBuyUoW(tenant_id) as uow:
             assert uow.idempotency_attempts is not None
-            with pytest.raises(AdCPError) as exc_info:
+            with pytest.raises(AdCPSalesAgentError) as exc_info:
                 enforce_insert_ceiling(
                     uow.idempotency_attempts,
                     principal_id=principal_id,
@@ -114,7 +114,7 @@ class TestInsertRateWindow:
         window — bounded by the window length, far shorter than any TTL.
         """
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
 
         tenant_id = f"rlw_t_{uuid.uuid4().hex[:6]}"
         principal_id = f"p_{uuid.uuid4().hex[:8]}"
@@ -124,7 +124,7 @@ class TestInsertRateWindow:
 
         with MediaBuyUoW(tenant_id) as uow:
             assert uow.idempotency_attempts is not None
-            with pytest.raises(AdCPError) as exc_info:
+            with pytest.raises(AdCPSalesAgentError) as exc_info:
                 enforce_insert_ceiling(
                     uow.idempotency_attempts,
                     principal_id=principal_id,
@@ -159,7 +159,7 @@ class TestInsertRateWindow:
     def test_storage_bound_retry_after_clamps_to_spec_maximum(self, integration_db):
         """A 24h TTL would imply retry_after=86400; the spec Error model caps at 3600."""
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
 
         tenant_id = f"rlc_t_{uuid.uuid4().hex[:6]}"
         principal_id = f"p_{uuid.uuid4().hex[:8]}"
@@ -169,7 +169,7 @@ class TestInsertRateWindow:
 
         with MediaBuyUoW(tenant_id) as uow:
             assert uow.idempotency_attempts is not None
-            with pytest.raises(AdCPError) as exc_info:
+            with pytest.raises(AdCPSalesAgentError) as exc_info:
                 enforce_insert_ceiling(
                     uow.idempotency_attempts,
                     principal_id=principal_id,

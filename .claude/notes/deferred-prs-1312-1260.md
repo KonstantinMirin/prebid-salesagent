@@ -21,7 +21,7 @@ re-implemented/generalized the PR's feature), not mechanical. Deferred during th
   BUT the *merged* `create_media_buy_raw` (auto-merge) DID keep #1312's `account`/`idempotency_key`
   kwargs and threads them into the request (4250-4251) + main's `enrich_identity_with_account`.
   So #1312's REST/A2A idempotency-param enhancement survives the merge intact.
-- main's early-validation error path: `except (AdCPError, ValueError, PermissionError):
+- main's early-validation error path: `except (AdCPSalesAgentError, ValueError, PermissionError):
   audit_step_failure_if_present(step,e); raise` — main's stated reason: the old
   return-CreateMediaBuyResult path **mis-tagged PermissionError as VALIDATION_ERROR**.
 - #1312's path: `except (ValueError, PermissionError): _cache_and_return_rejection(...)` which
@@ -33,9 +33,9 @@ re-implemented/generalized the PR's feature), not mechanical. Deferred during th
   Result → two-layer envelope, so could not verify return-based replay is wire-equivalent to a raise.
 
 **The design fork (owner decision — it changes the buyer idempotency wire contract):**
-- (A) Raise-based: live-rejection caches envelope + raises; replay reconstructs AdCPError from the
+- (A) Raise-based: live-rejection caches envelope + raises; replay reconstructs AdCPSalesAgentError from the
   cached envelope + raises → both go through the boundary → identical wire shape (two-layer envelope).
-  Requires rewriting `_build_idempotency_rejection_replay` (return→raise) + a cached-envelope→AdCPError
+  Requires rewriting `_build_idempotency_rejection_replay` (return→raise) + a cached-envelope→AdCPSalesAgentError
   reconstruction helper (none exists) + updating ~4 tests + `assert_replayed_rejection`. Gold-standard
   but it's a feature re-architecture.
 - (B) Return-based (keep #1312's design): preserves feature + tests, but must (1) fix the mis-tagging

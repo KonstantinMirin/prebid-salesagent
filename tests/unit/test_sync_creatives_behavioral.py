@@ -5,7 +5,7 @@ Tests organized by BR-RULE invariant, covering:
 - BR-RULE-040: Media buy status transitions (5 invariants, zero prior coverage)
 - BR-RULE-033 inv2/inv3: Strict/lenient assignment modes
 - BR-RULE-037 inv6: Slack notification guard
-- BR-RULE-033 inv4 / BR-RULE-038 inv4: AdCPError propagation in strict mode
+- BR-RULE-033 inv4 / BR-RULE-038 inv4: AdCPSalesAgentError propagation in strict mode
 
 Reference: salesagent-1xsp design field.
 """
@@ -425,22 +425,22 @@ class TestLenientAssignmentSkip:
 
 
 # ========================================================================
-# BR-RULE-033 inv4 / BR-RULE-038 inv4: AdCPError propagation in strict mode
+# BR-RULE-033 inv4 / BR-RULE-038 inv4: AdCPSalesAgentError propagation in strict mode
 # ========================================================================
 
 
 class TestStrictModeAdCPErrorPropagation:
-    """BR-RULE-033 inv4 / BR-RULE-038 inv4: strict mode AdCPError prevents result population.
+    """BR-RULE-033 inv4 / BR-RULE-038 inv4: strict mode AdCPSalesAgentError prevents result population.
 
     In strict mode, when a package is not found, the error IS recorded in the
-    local assignment_errors_by_creative dict *before* AdCPError is raised.
-    However, the AdCPError propagates out of _process_assignments before the
+    local assignment_errors_by_creative dict *before* AdCPSalesAgentError is raised.
+    However, the AdCPSalesAgentError propagates out of _process_assignments before the
     post-processing loop that writes assignment_errors to SyncCreativeResult.
     The BDD claim 'errors always recorded in response' does NOT hold in strict mode.
     """
 
     def test_strict_mode_error_not_written_to_result_on_toolerror(self, tenant):
-        """rule-033-inv4 / rule-038-inv4: AdCPError prevents assignment_errors from reaching result."""
+        """rule-033-inv4 / rule-038-inv4: AdCPSalesAgentError prevents assignment_errors from reaching result."""
         results = [SyncCreativeResult(creative_id="c1", action="created")]
 
         mock_uow, mock_repo = _make_creative_uow()
@@ -459,7 +459,7 @@ class TestStrictModeAdCPErrorPropagation:
                     principal_id="principal_1",
                 )
 
-        # After AdCPError, the post-processing loop never ran,
+        # After AdCPSalesAgentError, the post-processing loop never ran,
         # so assignment_errors is NOT populated on the result
         assert results[0].assignment_errors is None
 

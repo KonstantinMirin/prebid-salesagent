@@ -59,7 +59,7 @@ class MediaBuyListEnv(IntegrationEnv):
         Was ``_run_mcp_wrapper``, whose own docstring deprecates it: it calls the
         tool wrapper directly and so bypasses the FastMCP middleware chain and
         TypeAdapter validation. The consequence on the ERROR path is that a raised
-        ``AdCPError`` propagated raw out of ``asyncio.run(wrapper_fn(...))`` and
+        ``AdCPSalesAgentError`` propagated raw out of ``asyncio.run(wrapper_fn(...))`` and
         was never serialized into a ``ToolError``, so ``McpDispatcher`` captured
         ``wire_error_envelope=None``. Every mcp error assertion in UC-019 was
         therefore graded against a reconstructed exception rather than the wire,

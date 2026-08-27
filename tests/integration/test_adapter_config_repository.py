@@ -144,7 +144,7 @@ class TestAdapterConfigRepositoryRead:
         with get_db_session() as session:
             repo = AdapterConfigRepository(session, "repo_test_none")
             # The tenant id moved OUT of the message and INTO details.tenant_id
-        # (salesagent-rys3u.5): AdCPError has no message parameter, so the sentence
+        # (salesagent-rys3u.5): AdCPSalesAgentError has no message parameter, so the sentence
         # comes from CODE_TABLE and the identifier is machine-readable instead of
         # findable only by regex over prose.
         with pytest.raises(TenantNotConfiguredError) as exc_info:

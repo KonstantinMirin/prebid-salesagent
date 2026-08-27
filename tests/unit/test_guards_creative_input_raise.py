@@ -9,7 +9,7 @@ family the pinned spec (v3.1.1 enums/error-code.json) assigns to creative
 rejections.
 
 Scope: ``creatives*.py`` modules under ``src/adapters``. Creative-input
-rejections raise ``AdCPCreativeRejectedError`` (or another typed ``AdCPError``
+rejections raise ``AdCPCreativeRejectedError`` (or another typed ``AdCPSalesAgentError``
 for a different family); internal invariants raise ``AssertionError``.
 Sibling guard: ``test_guards_adapter_capability_raise`` covers the
 capability-gap phrasing family across all adapter modules.

@@ -10,7 +10,7 @@ Validates the two contracts the helper exists to enforce:
 
 2. A DB hiccup during the audit write must NOT shadow the original
    exception. The caller's bare ``raise`` (intended to re-raise the original
-   AdCPError) would otherwise pick up the audit-failure exception and the
+   AdCPSalesAgentError) would otherwise pick up the audit-failure exception and the
    buyer would see an unrelated DB error in place of the real validation
    failure.
 """
@@ -21,7 +21,7 @@ import pytest
 
 from src.core.context_manager import ContextManager
 from src.core.errors.details import ValidationDetails
-from src.core.exceptions import AdCPError, AdCPValidationError
+from src.core.exceptions import AdCPSalesAgentError, AdCPValidationError
 
 
 def _new_ctx_manager_with_mocked_update() -> tuple[ContextManager, MagicMock]:
@@ -36,7 +36,7 @@ def _new_ctx_manager_with_mocked_update() -> tuple[ContextManager, MagicMock]:
     return cm, cm.update_workflow_step
 
 
-def _expected_response_data(exc: AdCPError) -> dict:
+def _expected_response_data(exc: AdCPSalesAgentError) -> dict:
     """Build the two-layer wire-shape ``response_data`` the helper must emit.
 
     Built from the SAME exception the test raises, through the same
@@ -44,7 +44,7 @@ def _expected_response_data(exc: AdCPError) -> dict:
     dict ``update_workflow_step`` receives, with nothing reconstructed.
 
     Reconstructing an equivalent error here would not be equivalent: a NAMED-code
-    ``AdCPError`` resolves recovery and suggestion from CODE_TABLE, while a class-coded
+    ``AdCPSalesAgentError`` resolves recovery and suggestion from CODE_TABLE, while a class-coded
     subclass keeps its class defaults. Passing the real exception sidesteps that
     asymmetry instead of encoding it.
     """
@@ -53,7 +53,7 @@ def _expected_response_data(exc: AdCPError) -> dict:
     return build_two_layer_error_envelope(exc)
 
 
-def _normalized_for(exc: Exception) -> AdCPError:
+def _normalized_for(exc: Exception) -> AdCPSalesAgentError:
     """The typed error production derives from an untyped one, via the same helper."""
     from src.core.exceptions import adcp_error_for
 
@@ -84,9 +84,9 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
         )
 
     def test_untyped_exception_wrapped_with_wire_safe_code(self):
-        """Bare exceptions get a synthetic AdCPError so the wire code stays standard.
+        """Bare exceptions get a synthetic AdCPSalesAgentError so the wire code stays standard.
 
-        ``AdCPError`` defaults to ``INTERNAL_ERROR`` which is in
+        ``AdCPSalesAgentError`` defaults to ``INTERNAL_ERROR`` which is in
         ``INTERNAL_CODES``; the helper's defensive wire-code enforcement
         falls back to ``SERVICE_UNAVAILABLE`` so async subscribers only see
         codes from ``STANDARD_ERROR_CODES`` even when the source was untyped.

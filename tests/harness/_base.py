@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 class WireError(Exception):
     """A transport failure carrying the envelope the buyer received, VERBATIM.
 
-    Deliberately NOT an ``AdCPError`` subclass. The harness used to rebuild the
+    Deliberately NOT an ``AdCPSalesAgentError`` subclass. The harness used to rebuild the
     matching production exception from wire bytes so a test could write
     ``pytest.raises(AdCPNotFoundError)`` through a transport; that map covered 20 of
     43 classes, was silent about the other 23, and its own docstring conceded the
@@ -137,11 +137,11 @@ def _wire_envelope(envelope: dict) -> dict | None:
     (``{"adcp_error": {...}, "errors": [...]}``) and the legacy flat shape
     (``{"error_code": ..., "recovery": ...}``), and RETURNS THE ENVELOPE.
 
-    It used to return a reconstructed ``AdCPError`` built from those bytes, with a
+    It used to return a reconstructed ``AdCPSalesAgentError`` built from those bytes, with a
     hand-maintained code-to-class map. That map covered 20 of 43 classes and was
     silent about the rest, so type identity was already lost for most codes; its own
     docstring conceded the reconstruction was "lossy by construction"; and it was the
-    only place outside production that called an ``AdCPError`` constructor, which made
+    only place outside production that called an ``AdCPSalesAgentError`` constructor, which made
     it the only place that could drift from a signature change -- and it did, twice,
     the second time costing 469 tests (salesagent-3dawm.15).
 
@@ -169,7 +169,7 @@ def _wire_envelope(envelope: dict) -> dict | None:
 def _a2a_wire_envelope(exc: Exception) -> dict | None:
     """The two-layer envelope inside an a2a ``A2AError``'s ``data``, or ``None``.
 
-    The A2A dispatcher wraps an ``AdCPError`` into a failed Task whose artifact
+    The A2A dispatcher wraps an ``AdCPSalesAgentError`` into a failed Task whose artifact
     carries the envelope; a JSON-RPC-level ``A2AError`` carries it in ``data``.
 
     Returns the ENVELOPE. The three-way fallback ladder that used to sit here --
@@ -674,7 +674,7 @@ class BaseTestEnv:
             task_result = asyncio.run(_call())
         except Exception as exc:
             # The ORIGINAL exception propagates. It used to be translated into a
-            # reconstructed AdCPError so callers could catch domain exceptions; the
+            # reconstructed AdCPSalesAgentError so callers could catch domain exceptions; the
             # dispatcher now reads the envelope off the A2AError instead
             # (salesagent-3dawm.15), and a genuine in-process production error --
             # which is what the IMPL path raises -- is unaffected either way.
@@ -692,7 +692,7 @@ class BaseTestEnv:
         self._last_a2a_task = task_result
 
         # AdCP-domain errors now surface as a failed Task with the two-layer
-        # envelope in the artifact DataPart. Reconstruct the AdCPError so
+        # envelope in the artifact DataPart. Reconstruct the AdCPSalesAgentError so
         # callers can catch domain exceptions instead of getting
         # a pydantic ValidationError from trying to parse the envelope as a
         # success response.
@@ -705,7 +705,7 @@ class BaseTestEnv:
                 envelope = _wire_envelope(extract_data_from_artifact(task_result.artifacts[0]))
                 if envelope is not None:
                     raise WireError(envelope)
-            raise AdCPError(
+            raise AdCPSalesAgentError(
                 error_code=AppErrorCode.INTERNAL_ERROR,
                 internal_detail=f"A2A task failed: {task_result.status}",
             )
@@ -1173,7 +1173,7 @@ class IntegrationEnv(BaseTestEnv):
     use_real_db = True
     #: TestClient(app, raise_server_exceptions=...) for get_rest_client(). True
     #: preserves every existing REST test's behavior unchanged — provably a
-    #: no-op for every typed error path (AdCPError/ValueError/
+    #: no-op for every typed error path (AdCPSalesAgentError/ValueError/
     #: RequestValidationError/PermissionError/ToolError each have their own
     #: @app.exception_handler and never reach ServerErrorMiddleware, the only
     #: place this flag matters). inject_untyped_exception() sets this to False

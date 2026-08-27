@@ -118,7 +118,7 @@ def _validate_creative_input(
 
     if not is_adapter_format:
         # Check if the format exists via the SINGLE shared fetch path
-        # (format_resolver.fetch_format_spec): a typed AdCPError from the
+        # (format_resolver.fetch_format_spec): a typed AdCPSalesAgentError from the
         # registry (429 -> RATE_LIMITED, 5xx/timeout -> SERVICE_UNAVAILABLE)
         # PROPAGATES with its own recovery semantics — the old bare-except
         # rewrap into AdCPAdapterError made a rate-limited agent look like a

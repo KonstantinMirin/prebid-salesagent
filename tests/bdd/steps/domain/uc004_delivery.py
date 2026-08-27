@@ -2911,8 +2911,8 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
     # the reporting-webhook Authentication rules through CreateMediaBuyRequest PARSING
     # on purpose, so those scenarios have no dispatch by construction.
     #
-    # What is NOT accepted any more is the old `isinstance(error, (AdCPError,
-    # ValidationError))`: admitting AdCPError there let a scenario that DID dispatch,
+    # What is NOT accepted any more is the old `isinstance(error, (AdCPSalesAgentError,
+    # ValidationError))`: admitting AdCPSalesAgentError there let a scenario that DID dispatch,
     # and produced no wire bytes, pass on the strength of a reconstructed exception
     # (salesagent-3dawm.18).
     from pydantic import ValidationError as PydanticValidationError

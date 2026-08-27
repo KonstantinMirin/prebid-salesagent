@@ -370,7 +370,7 @@ def _update_media_buy_impl(
 
     # ── Workflow-step bookkeeping fence ──────────────────────────────────
     # Hoist ``ctx_manager`` and ``step`` out of the try below so the
-    # AdCPError / Exception handlers at the function end can mark the step
+    # AdCPSalesAgentError / Exception handlers at the function end can mark the step
     # as ``failed``. Without this, a raise from any validation site
     # (property_targeting, geo, budget, …) leaves the workflow step
     # orphaned in ``in_progress`` forever, which suppresses the
@@ -428,7 +428,7 @@ def _update_media_buy_impl(
 
             # Create or get persistent context and workflow step
             # (ctx_manager + step were hoisted before the try block so the
-            # AdCPError / Exception handlers can mark the step as failed)
+            # AdCPSalesAgentError / Exception handlers can mark the step as failed)
             ctx_id = context_id  # Extracted at transport boundary, passed in
             persistent_ctx = None
 
@@ -469,7 +469,7 @@ def _update_media_buy_impl(
             # early return so dry_run requests are also rejected (parity with create).
             # Raise shape is shared with create via ``raise_if_property_targeting_violations``
             # so both paths emit byte-identical error envelopes (same code, same field,
-            # same details). The boundary's AdCPError handler updates any in-flight
+            # same details). The boundary's AdCPSalesAgentError handler updates any in-flight
             # workflow step to status="failed" for the audit trail.
             if req.packages:
                 assert uow.products is not None, "MediaBuyUoW.products required for product targeting validation"

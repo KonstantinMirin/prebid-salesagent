@@ -25,9 +25,9 @@ from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPAuthRequiredError,
     AdCPConfigurationError,
-    AdCPError,
     AdCPInternalError,
     AdCPPolicyViolationError,
+    AdCPSalesAgentError,
     AdCPValidationError,
 )
 from src.core.helpers import enum_value
@@ -365,7 +365,7 @@ async def _get_products_impl(
                 validated_product = convert_product_model_to_schema(product_obj, adapter_type=tenant_adapter_type)
                 products.append(validated_product)
                 logger.debug(f"Successfully converted product {product_obj.product_id}")
-            except AdCPError:
+            except AdCPSalesAgentError:
                 raise
             except Exception as e:
                 error_msg = (

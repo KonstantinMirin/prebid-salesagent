@@ -19,8 +19,8 @@ from src.core.exceptions import (
     AdCPAdapterError,
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
-    AdCPError,
     AdCPNotFoundError,
+    AdCPSalesAgentError,
     AdCPValidationError,
 )
 
@@ -123,7 +123,7 @@ class GAMOrdersManager:
             order_service = self.client_manager.get_service("OrderService")
             try:
                 created_orders = order_service.createOrders([order])
-            except AdCPError:
+            except AdCPSalesAgentError:
                 # Already classified by a lower layer; that decision stands.
                 raise
             except Exception as fault:

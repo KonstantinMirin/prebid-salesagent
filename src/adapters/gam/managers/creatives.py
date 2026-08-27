@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from src.core.errors.details import CreativeRejectionDetails
-from src.core.exceptions import AdCPCreativeRejectedError, AdCPError, AdCPInternalError
+from src.core.exceptions import AdCPCreativeRejectedError, AdCPInternalError, AdCPSalesAgentError
 from src.core.schemas import AssetStatus
 
 from ..utils.validation import GAMValidator
@@ -251,7 +251,7 @@ class GAMCreativesManager:
 
                 created_asset_statuses.append(_approved(asset["creative_id"]))
 
-            except AdCPError as e:
+            except AdCPSalesAgentError as e:
                 # Typed rejection (e.g. CREATIVE_REJECTED): this surface reports
                 # per-asset partial success, so the buyer-correctable reason
                 # must ride the status — a bare "failed" is unactionable.

@@ -89,7 +89,7 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
 
     The validation block raises AdCPValidationError so the transport boundary translates
     to the spec-compliant two-layer envelope. The raise propagates cleanly through the
-    narrowed except AdCPError boundary; the prior ValueError shape was caught by an inner
+    narrowed except AdCPSalesAgentError boundary; the prior ValueError shape was caught by an inner
     (ValueError, PermissionError) catchall and re-emitted via Pattern A, which is the
     anti-pattern the typed-error substrate eliminates.
     """

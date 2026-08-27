@@ -307,7 +307,7 @@ _POSTAL_AREA_TABLE: dict[str, tuple[str, str]] = {
 # typing + getattr let through).
 # An explicit raise, not `assert`: `python -O` strips asserts, and a stripped
 # invariant is one that silently stops holding in exactly the environment where
-# a typo'd key would do the most damage. RuntimeError, not AdCPError -- this
+# a typo'd key would do the most damage. RuntimeError, not AdCPSalesAgentError -- this
 # fires at IMPORT time on a developer error; there is no request to attach a
 # buyer-facing code or recovery to.
 if not set(_POSTAL_AREA_TABLE) <= {f.name for f in dataclasses.fields(TargetingCapabilities)}:

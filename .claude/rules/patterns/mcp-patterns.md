@@ -52,9 +52,9 @@ async def create_media_buy_raw(...) -> CreateMediaBuyResponse:
     return await _create_media_buy_impl(req=req, identity=identity, ...)
 ```
 
-**`_impl` rules:** Accept `ResolvedIdentity` (not Context). Raise `AdCPError` (not ToolError). Zero imports from fastmcp/a2a/starlette/fastapi.
+**`_impl` rules:** Accept `ResolvedIdentity` (not Context). Raise `AdCPSalesAgentError` (not ToolError). Zero imports from fastmcp/a2a/starlette/fastapi.
 
-**Wrapper rules:** Call `resolve_identity()` first. Forward every `_impl` parameter. Translate `AdCPError` to transport-specific format.
+**Wrapper rules:** Call `resolve_identity()` first. Forward every `_impl` parameter. Translate `AdCPSalesAgentError` to transport-specific format.
 
 **Enforced by 4 structural guards** — see `docs/development/structural-guards.md`.
 

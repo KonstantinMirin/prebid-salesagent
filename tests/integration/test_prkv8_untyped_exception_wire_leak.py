@@ -1,10 +1,10 @@
 """Reproduction for salesagent-prkv.8: raw exception text reaching the buyer-facing wire.
 
 An untyped exception raised inside a dispatched skill's business logic is
-normalized to a wire-safe ``AdCPError`` by ``adcp_error_for()``
+normalized to a wire-safe ``AdCPSalesAgentError`` by ``adcp_error_for()``
 (src/core/exceptions.py) — the single chokepoint used by all three transport
 boundaries (A2A, MCP, REST). Its final fallback branch,
-``return AdCPError(str(exc) or type(exc).__name__)``, uses the raw exception's
+``return AdCPSalesAgentError(str(exc) or type(exc).__name__)``, uses the raw exception's
 ``str()`` as the buyer-facing ``message`` verbatim: whatever internal detail
 the exception happened to carry (a DB DSN, a stack fragment, an upstream
 response body) lands directly in the wire's two-layer error envelope.

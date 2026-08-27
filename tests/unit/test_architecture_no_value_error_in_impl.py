@@ -4,7 +4,7 @@
 recovery hint, or context. At the transport boundary it is mapped to a synthetic
 ``AdCPValidationError`` (VALIDATION_ERROR), which loses the semantic specificity
 the caller intended. Per the error-emission architecture, business logic should
-raise typed AdCPError subclasses (AdCPValidationError, AdCPBudgetTooLowError,
+raise typed AdCPSalesAgentError subclasses (AdCPValidationError, AdCPBudgetTooLowError,
 AdCPMediaBuyNotFoundError, etc.) with explicit codes.
 
 This guard counts ``raise ValueError(...)`` sites in ``src/core/tools/`` and
@@ -22,8 +22,8 @@ import pytest
 # Per-file caps for ``raise ValueError(...)`` sites. Two categories of entries:
 #
 #   1. **Migration targets** — boundary-facing raises that should become typed
-#      ``AdCPError`` subclasses. Each site carries a
-#      ``# FIXME(salesagent-pattern-a): migrate to typed AdCPError raise`` comment so reviewers
+#      ``AdCPSalesAgentError`` subclasses. Each site carries a
+#      ``# FIXME(salesagent-pattern-a): migrate to typed AdCPSalesAgentError raise`` comment so reviewers
 #      can grep to the cleanup work. PR 2 sub-batches drain these.
 #
 #   2. **Internal contracts** — ``ValueError`` raised inside helper functions
@@ -89,7 +89,7 @@ class TestNoValueErrorInImpl:
             count_sites=_count_value_error_raises,
             scan_dirs=SCAN_DIRS,
             site_label="raise ValueError",
-            typed_raise_hint="convert to typed AdCPError raise (e.g., AdCPValidationError)",
+            typed_raise_hint="convert to typed AdCPSalesAgentError raise (e.g., AdCPValidationError)",
             rel=_rel,
         )
 

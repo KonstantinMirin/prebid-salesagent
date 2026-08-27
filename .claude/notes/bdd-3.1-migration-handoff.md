@@ -170,7 +170,7 @@ supersedes the reverted `0a9612cc4`).
 **jceq xpass verification result:** of the 5 a2a xpasses, only `sort_by-fallback`
 was a real, strongly-asserted pass (graduated). The 4 webhook-credential xpasses
 pass for the **wrong reason** (When sends an unsupported `credentials` field →
-`extra_forbidden` satisfies a loose `isinstance(error, AdCPError)` check) — left
+`extra_forbidden` satisfies a loose `isinstance(error, AdCPSalesAgentError)` check) — left
 xfailed, rework bead filed.
 
 **KEY GOTCHA:** the generic `@when("...with {request_params}")` step shadows the

@@ -36,7 +36,7 @@ Graded on ``wire_error_envelope`` across every transport that has a wire, throug
 makes ``SERVICE_UNAVAILABLE`` a lie here: it is pinned ``transient``, which is the
 retry invitation itself.
 
-The sibling ``except AdCPError: raise`` arm at each site is deliberately NOT
+The sibling ``except AdCPSalesAgentError: raise`` arm at each site is deliberately NOT
 exercised here — ``test_adapter_error_wire_classification.py`` already pins it,
 and salesagent-rys3u.8 depends on it surviving.
 """

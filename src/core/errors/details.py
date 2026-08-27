@@ -17,7 +17,7 @@ a code here would invert that authority and force a copy of the shape per
 error.
 
 The pairing is declared exactly once, in the exception's type parameter:
-``class AdCPPackageNotFoundError(AdCPError[EntityRefDetails])``. mypy enforces
+``class AdCPPackageNotFoundError(AdCPSalesAgentError[EntityRefDetails])``. mypy enforces
 it at every raise site, and the advisory lane reads the code off the exception
 via ``Error.from_exception()`` rather than off the details.
 
@@ -482,7 +482,7 @@ class PricingValidationDetails(ValidationDetails):
     """A pricing refusal, with the numbers and options that decided it.
 
     A subclass rather than more fields on ``ValidationDetails``: these seven are
-    cohesive and only the pricing sites need them, and ``AdCPError[ValidationDetails]``
+    cohesive and only the pricing sites need them, and ``AdCPSalesAgentError[ValidationDetails]``
     accepts any subclass, so the precision costs nothing at the other sites.
 
     Deliberately NOT borrowing ``budget-too-low.json``'s ``minimum_budget``: that

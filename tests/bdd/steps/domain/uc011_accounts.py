@@ -1150,9 +1150,9 @@ def _dispatch_sync_table(ctx: dict, datatable: Any, *, idempotency_key: str | No
 
     # Handle forced internal error
     if ctx.get("force_internal_error"):
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
 
-        err = AdCPError(error_code=AppErrorCode.INTERNAL_ERROR)
+        err = AdCPSalesAgentError(error_code=AppErrorCode.INTERNAL_ERROR)
         ctx["error"] = err
         return
 
@@ -1826,7 +1826,7 @@ def _get_error(ctx: dict) -> Exception:
 def _assert_error_has_code(err: Any, index: int) -> None:
     """Assert a single error object carries a non-empty machine CODE.
 
-    Checks .code first (per-account errors), then .error_code (AdCPError).
+    Checks .code first (per-account errors), then .error_code (AdCPSalesAgentError).
 
     The message half is deliberately gone: the buyer-facing sentence is derived from the
     code through CODE_TABLE, so a present code guarantees a present sentence and
@@ -1968,21 +1968,21 @@ def then_error_has_suggestion(ctx: dict) -> None:
         assert suggestion, f"Expected a non-empty top-level suggestion on the wire error, got {wire!r}"
         return
 
-    # Third legitimate source: a GENUINE in-process AdCPError, i.e. one production
+    # Third legitimate source: a GENUINE in-process AdCPSalesAgentError, i.e. one production
     # actually raised rather than one rebuilt from wire bytes. Its suggestion is
     # derived from its code by CODE_TABLE, so reading it is reading the table, not a
     # reconstruction. Service-level failure scenarios take this path: the env drives
     # the failure without a transport round-trip, so there is no envelope to read.
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPSalesAgentError
 
     error = ctx.get("error")
-    if isinstance(error, AdCPError):
+    if isinstance(error, AdCPSalesAgentError):
         assert error.suggestion, f"Expected a non-empty suggestion on {error.error_code}, got {error.suggestion!r}"
         return
 
     raise AssertionError(
         "Nothing that can carry a suggestion: no per-account error, no wire envelope, and "
-        f"the recorded error is not a production AdCPError. ctx error: {error!r}"
+        f"the recorded error is not a production AdCPSalesAgentError. ctx error: {error!r}"
     )
 
 
@@ -3116,13 +3116,13 @@ def then_response_includes_context(ctx: dict, ctx_json: str) -> None:
             actual = dict(error_context)
         assert actual == expected, f"Error context mismatch: expected {expected}, got {actual}"
         return
-    # Production error objects (AdCPError) do not carry a context field yet, and
+    # Production error objects (AdCPSalesAgentError) do not carry a context field yet, and
     # the wire error envelope (a2a/mcp/rest) does not echo context on the error
-    # path — only impl carries context=req.context on the AdCPError. Tracked by
+    # path — only impl carries context=req.context on the AdCPSalesAgentError. Tracked by
     # #1417 (D2: envelope status/context on the wire error path).
     pytest.xfail(
         "SPEC-PRODUCTION GAP (salesagent-egnl / D2): context not echoed on the wire "
-        "error envelope — AdCPError carries no context field on a2a/mcp/rest, "
+        "error envelope — AdCPSalesAgentError carries no context field on a2a/mcp/rest, "
         "expected context echo on error responses"
     )
 

@@ -460,7 +460,7 @@ def _extract_error_code_and_suggestion(ctx: dict, error: object) -> tuple[str | 
 def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
     """Assert error has the expected error_code and includes a suggestion.
 
-    Accepts both src.core.exceptions.AdCPError and adcp.types.Error shapes —
+    Accepts both src.core.exceptions.AdCPSalesAgentError and adcp.types.Error shapes —
     different UCs dispatch through different error hierarchies.
     """
     _SPEC_PRODUCTION_GAP_CODES = {
@@ -2250,7 +2250,7 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
 
     Production raises AdCPValidationError (FORMAT_MISMATCH branch) or
     AdCPNotFoundError (package-not-found branch) from _assignments.py.
-    Both are AdCPError subclasses surfaced as ctx["error"] by dispatch.
+    Both are AdCPSalesAgentError subclasses surfaced as ctx["error"] by dispatch.
 
     SPEC-PRODUCTION GAP handling:
       * MCP transport may reject the format string at the FastMCP TypeAdapter
@@ -2270,7 +2270,7 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
     """
     from sqlalchemy.exc import IntegrityError
 
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPSalesAgentError
 
     error = ctx.get("error")
     if error is None:
@@ -2304,7 +2304,7 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
 
     # E2E server crash from format-id-with-slash gap — same root cause as above
     # but manifested as HTTP 500 with empty body on the real Docker stack.
-    if isinstance(error, AdCPError) and error.error_code == "INTERNAL_ERROR" and "HTTP 500" in err_str:
+    if isinstance(error, AdCPSalesAgentError) and error.error_code == "INTERNAL_ERROR" and "HTTP 500" in err_str:
         pytest.xfail(
             "SPEC-PRODUCTION GAP: spec format id 'agent1/<name>' contains '/', which violates "
             "production's FormatId.id pattern ^[a-zA-Z0-9_-]+$. Server returns 500 with empty "
@@ -2315,7 +2315,7 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
     # Production's FormatId.id pattern is ^[a-zA-Z0-9_-]+$ — slashes are invalid.
     # Different transports reject at different layers with different error types.
     creative_fmt = str(ctx.get("creative_format_id", ""))
-    if "/" in creative_fmt and isinstance(error, (AdCPError, IntegrityError)):
+    if "/" in creative_fmt and isinstance(error, (AdCPSalesAgentError, IntegrityError)):
         pytest.xfail(
             f"SPEC-PRODUCTION GAP: spec format id '{creative_fmt}' contains '/', which violates "
             "production's FormatId.id pattern ^[a-zA-Z0-9_-]+$. "
@@ -2400,7 +2400,7 @@ def then_assignment_result_should_be(ctx: dict, outcome: str) -> None:
         assert error is not None, (
             f"Strict mode with non-existent package should abort with error, but production succeeded. Response: {resp}"
         )
-        # Was isinstance(error, (AdCPError, Exception)) -- VACUOUS, since every
+        # Was isinstance(error, (AdCPSalesAgentError, Exception)) -- VACUOUS, since every
         # exception satisfies the second arm. Graded on the wire code instead
         # (salesagent-3dawm.18).
         result = ctx.get("result")
@@ -2434,7 +2434,7 @@ def then_assignment_processing_should_abort(ctx: dict) -> None:
 
     The scenario sets up a non-existent package assignment under strict
     validation_mode. Production must raise AdCPNotFoundError whose message
-    references the missing package — not just any AdCPError subclass.
+    references the missing package — not just any AdCPSalesAgentError subclass.
 
     Error code is wire-first (real wire envelope preferred over the lossy
     reconstructed exception), same strategy as then_error_code.
@@ -4541,7 +4541,7 @@ def then_assignment_should_fail_with(ctx: dict, error_code: str) -> None:
     """Assert the assignment failed with the specified error code.
 
     Hard-asserts production actually failed and the failure carries the expected
-    code. For AdCPError, checks error_code directly. For FORMAT_MISMATCH,
+    code. For AdCPSalesAgentError, checks error_code directly. For FORMAT_MISMATCH,
     also accepts 'not supported' in the error message (production's phrasing).
     """
 
@@ -4560,7 +4560,7 @@ def then_assignment_should_fail_with(ctx: dict, error_code: str) -> None:
     if wire_code is not None:
         assert wire_code == error_code, f"Expected wire error code {error_code!r}, got {wire_code!r}"
     else:
-        # Non-AdCPError: assert the error string contains the expected code
+        # Non-AdCPSalesAgentError: assert the error string contains the expected code
         assert error_code.lower() in str(error).lower(), (
             f"Expected error containing '{error_code}', got {type(error).__name__}: {error}"
         )
@@ -6631,11 +6631,11 @@ def then_system_should_reject_validation_error(ctx: dict) -> None:
 
     SPEC-PRODUCTION GAP: MCP transport rejects via FastMCP TypeAdapter
     before reaching _impl. The error is a ToolError with a Pydantic
-    ValidationError message, not an AdCPError. The rejection is functionally
+    ValidationError message, not an AdCPSalesAgentError. The rejection is functionally
     correct (invalid enum value rejected) but uses a transport-specific
     error type. We xfail for the error_code mismatch.
     """
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPSalesAgentError
 
     error = ctx.get("error")
     if error is None:
@@ -6646,15 +6646,17 @@ def then_system_should_reject_validation_error(ctx: dict) -> None:
         )
 
     # MCP transport: FastMCP TypeAdapter rejects invalid enum before _impl
-    if not isinstance(error, AdCPError):
+    if not isinstance(error, AdCPSalesAgentError):
         err_str = str(error)
         if "validation_mode" in err_str and ("enum" in err_str or "partial" in err_str):
             pytest.xfail(
                 f"SPEC-PRODUCTION GAP: MCP TypeAdapter rejected invalid validation_mode "
-                f"'partial' with {type(error).__name__} instead of AdCPError(VALIDATION_ERROR). "
+                f"'partial' with {type(error).__name__} instead of AdCPSalesAgentError(VALIDATION_ERROR). "
                 f"Rejection is functionally correct but uses transport-specific error type."
             )
-        pytest.xfail(f"SPEC-PRODUCTION GAP: expected AdCPError(VALIDATION_ERROR), got {type(error).__name__}: {error}")
+        pytest.xfail(
+            f"SPEC-PRODUCTION GAP: expected AdCPSalesAgentError(VALIDATION_ERROR), got {type(error).__name__}: {error}"
+        )
 
     actual_code = error.error_code
     expected_codes = {"VALIDATION_ERROR", "INVALID_REQUEST"}

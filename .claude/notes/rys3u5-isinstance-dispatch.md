@@ -36,7 +36,7 @@ dispatching at the catch site with `except`, or by narrowing the helper's
 parameter so the caller's knowledge survives the call.
 
 - `src/core/tool_error_logging.py` — `extract_error_info` (`AdCPToolError` /
-  `AdCPError` / `ToolError` ladder), `is_typed = isinstance(error, AdCPError)`,
+  `AdCPSalesAgentError` / `ToolError` ladder), `is_typed = isinstance(error, AdCPSalesAgentError)`,
   and the `AdCPToolError` branch in the `ToolError`-to-envelope converter.
 - `src/services/property_discovery_service.py` — `_log_fetch_error`'s three-way
   ladder over `AdagentsNotFoundError` / `AdagentsTimeoutError` /

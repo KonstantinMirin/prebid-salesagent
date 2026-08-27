@@ -356,7 +356,7 @@ class ContextManager(DatabaseManager):
         (``adcp_error`` + ``errors[]``) via ``build_two_layer_error_envelope``
         so async and sync paths see the same wire shape.
 
-        Untyped exceptions are normalized to ``AdCPError`` via
+        Untyped exceptions are normalized to ``AdCPSalesAgentError`` via
         ``adcp_error_for``. Wire-code enforcement ensures webhook
         subscribers only see codes the pinned table classifies.
 

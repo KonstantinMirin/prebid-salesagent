@@ -193,7 +193,7 @@ class TransportResult:
         The wire envelope when there is one; otherwise the in-process exception's own
         ``error_code``. Both are legitimate: on a wire transport the envelope is what
         the buyer received, and on IMPL there is no wire at all -- the raised
-        ``AdCPError`` IS the product, and its code comes from CODE_TABLE.
+        ``AdCPSalesAgentError`` IS the product, and its code comes from CODE_TABLE.
 
         What this deliberately does NOT do is rebuild a production error class from
         wire bytes to make the two look alike; that reconstruction is gone

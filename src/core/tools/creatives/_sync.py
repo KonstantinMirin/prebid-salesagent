@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import ValidationDetails
-from src.core.exceptions import AdCPError, adcp_error_for
+from src.core.exceptions import AdCPSalesAgentError, adcp_error_for
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
@@ -356,7 +356,7 @@ def _sync_creatives_impl(
                     # If we reach here, creative processing succeeded
                     synced_creatives.append(creative)
 
-            except AdCPError as e:
+            except AdCPSalesAgentError as e:
                 # Typed errors keyed on their recovery semantics: TRANSIENT ones
                 # (agent rate-limited/unavailable during the format fetch) are
                 # request-level infra failures — propagate so the buyer sees

@@ -11,7 +11,7 @@ from typing import Any
 import google.oauth2.service_account
 from googleads import oauth2
 
-from src.core.exceptions import AdCPConfigurationError, AdCPError
+from src.core.exceptions import AdCPConfigurationError, AdCPSalesAgentError
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ class GAMAuthManager:
             client_id = gam_config.client_id
             client_secret = gam_config.client_secret
 
-        except AdCPError:
+        except AdCPSalesAgentError:
             # A typed error already names its own fault; flattening it here would
             # cost the buyer the code it earned.
             raise

@@ -36,7 +36,7 @@ class TestAdapterTenantIdValidation:
     name AdCPConfigurationError, so the buyer reads CONFIGURATION_ERROR (terminal): the
     seller must fix its own configuration and no retry will help.
 
-    The match= substrings went with the message: AdCPError has no message parameter, so
+    The match= substrings went with the message: AdCPSalesAgentError has no message parameter, so
     the sentence is a function of the code through CODE_TABLE and cannot be asserted at
     a raise site. Provenance now rides internal_detail, which the boundary logs
     server-side and never puts on the wire -- which is what makes acceptance 2 ("no

@@ -369,7 +369,7 @@ class TestHighRiskA2A:
         Covers: #30 T-UC-009-ext-b-rest
         Identity is resolved at transport boundary so the handler receives it directly.
 
-        Skill handlers raise typed AdCPError on validation failure; the outer
+        Skill handlers raise typed AdCPSalesAgentError on validation failure; the outer
         dispatcher's _build_failed_skill_result produces the two-layer envelope
         on the wire.
         """

@@ -469,7 +469,7 @@ class TestListAvailableFormats:
         but is not at this site: the only caller is the admin UI
         (src/admin/blueprints/products.py:156), which catches the SDK's
         ``adcp.exceptions.ADCPError`` -- a different class tree from
-        ``src.core.exceptions.AdCPError`` -- so propagating would have 500'd an admin
+        ``src.core.exceptions.AdCPSalesAgentError`` -- so propagating would have 500'd an admin
         page rather than informed a buyer. Pinned here so the next attempt reads this
         before repeating it.
         """

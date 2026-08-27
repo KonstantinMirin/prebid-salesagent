@@ -47,7 +47,7 @@ modules.
 
 | Test File | What It Enforces |
 |-----------|-----------------|
-| `test_no_toolerror_in_impl.py` | `_impl` functions raise `AdCPError`, never `ToolError` from FastMCP |
+| `test_no_toolerror_in_impl.py` | `_impl` functions raise `AdCPSalesAgentError`, never `ToolError` from FastMCP |
 | `test_transport_agnostic_impl.py` | `_impl` functions have zero transport imports (no fastmcp, a2a, starlette) |
 | `test_impl_resolved_identity.py` | `_impl` functions accept `ResolvedIdentity`, not `Context`/`ToolContext` |
 

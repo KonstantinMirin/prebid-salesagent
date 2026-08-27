@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.exceptions import AdCPAuthorizationError, AdCPError, AdCPValidationError
+from src.core.exceptions import AdCPAuthorizationError, AdCPSalesAgentError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tenant_context import LazyTenantContext
 from src.core.testing_hooks import AdCPTestContext
@@ -670,7 +670,7 @@ class TestBriefPolicyComplianceMatrix:
             env.mock["policy_service"].return_value = mock_policy_inst
 
             if expect_error:
-                with pytest.raises(AdCPError) as exc_info:
+                with pytest.raises(AdCPSalesAgentError) as exc_info:
                     await env.call_impl(brief="test")
                 error_str = str(exc_info.value)
                 assert error_substring in error_str or exc_info.value.error_code == error_substring

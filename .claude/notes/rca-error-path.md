@@ -247,7 +247,7 @@ Verified repo-wide: the only other `adcp.server.*` imports in `src/` are
 | `adcp.server.helpers.adcp_error()` | **USED** (2 call sites) | `exceptions.py:597` (`to_adcp_error`), `exceptions.py:1219` (`build_two_layer_error_envelope`) |
 | `_schemas/3.1/enums/error-code.json` `enumMetadata` | **IGNORED**, hand-copied | see 2.1 |
 | `adcp.decisioning.types.AdcpError` | **IGNORED / RE-IMPLEMENTED** | zero imports in `src/` |
-| `adcp.decisioning.errors.*` (9 typed subclasses) | **IGNORED / RE-IMPLEMENTED** as 42 `AdCPError` subclasses | `exceptions.py:608-1180` (42 `class AdCP*` declarations) |
+| `adcp.decisioning.errors.*` (9 typed subclasses) | **IGNORED / RE-IMPLEMENTED** as 42 `AdCPSalesAgentError` subclasses | `exceptions.py:608-1180` (42 `class AdCP*` declarations) |
 | `AdcpError.to_wire()` | **RE-IMPLEMENTED** as `build_two_layer_error_envelope` | `exceptions.py:1197` |
 | `adcp.server.translate._extract_structured_fields` | **RE-IMPLEMENTED** as `normalize_to_adcp_error` | `exceptions.py:1306` |
 | `adcp.server.translate.build_mcp_error_result` | **IGNORED / RE-IMPLEMENTED** as `AdCPToolError` | `tool_error_logging.py:32` |
@@ -316,8 +316,8 @@ src/**/*.py` returns only comments — nothing in `src/` reads the file.
 
 ```python
 # src/core/exceptions.py:1306
-def normalize_to_adcp_error(exc: Exception) -> AdCPError:
-    if isinstance(exc, AdCPError):
+def normalize_to_adcp_error(exc: Exception) -> AdCPSalesAgentError:
+    if isinstance(exc, AdCPSalesAgentError):
         _log_internal_detail(exc)
         return exc                                              # (A) no-op
     if isinstance(exc, ValidationError):
@@ -333,14 +333,14 @@ def normalize_to_adcp_error(exc: Exception) -> AdCPError:
         return AdCPAuthorizationError(str(exc))                 # (D) same
     # Deliberately NOT str(exc): an arbitrary/untyped exception's text has no
     # provenance guarantee ...
-    return AdCPError(type(exc).__name__)                        # (E)
+    return AdCPSalesAgentError(type(exc).__name__)                        # (E)
 ```
 Branch (A) is the load-bearing one and is a **no-op**: for a typed error there
 is no downstream sanitization point at all. The class docstring says so:
 
 ```python
-# src/core/exceptions.py:403 (AdCPError docstring; class at :362)
-    ``normalize_to_adcp_error()`` returns an already-typed ``AdCPError``
+# src/core/exceptions.py:403 (AdCPSalesAgentError docstring; class at :362)
+    ``normalize_to_adcp_error()`` returns an already-typed ``AdCPSalesAgentError``
     unchanged, so for a typed error THE RAISE SITE IS THE WIRE — there is no
     downstream sanitization point. The trust decision therefore has to be
     taken at construction time, per raise site, and it is opt-in
@@ -353,7 +353,7 @@ describes. Trace 2 below is a live instance.
 ### 2.3 `internal_detail` — the sanctioned escape hatch, at 12 use sites
 
 ```python
-# src/core/exceptions.py:464 (AdCPError.__init__, def at :436)
+# src/core/exceptions.py:464 (AdCPSalesAgentError.__init__, def at :436)
         # NON-WIRE. Deliberately absent from to_dict()/to_adcp_error()/
         # build_two_layer_error_envelope(); emitted only to the server-side log
         # by normalize_to_adcp_error(). Never add it to a serializer.
@@ -390,14 +390,14 @@ faults. That is Trace 2.
 | # | Hop | Object | who set `message` | `code` | `suggestion` | no-op? |
 |---|---|---|---|---|---|---|
 | 1 | any untyped `e` inside `_create_media_buy_impl` (line 2008) | arbitrary `Exception` | its own raiser | — | — | — |
-| 2 | `context_manager.audit_workflow_step_failure_if_present` → `audit_workflow_step_failure` (`context_manager.py:370-391`) | `AdCPError` (via `normalize_to_adcp_error`) persisted to `workflow_step.response_data` | branch (E) `type(exc).__name__`, unless `wire_code not in WIRE_STANDARD_CODES` → `AdCPError.synthesize(..., error_code="SERVICE_UNAVAILABLE", recovery="terminal")` at `context_manager.py:381-390` | rewritten here | carried forward | no — it authors a *second, different* envelope for webhook subscribers |
+| 2 | `context_manager.audit_workflow_step_failure_if_present` → `audit_workflow_step_failure` (`context_manager.py:370-391`) | `AdCPSalesAgentError` (via `normalize_to_adcp_error`) persisted to `workflow_step.response_data` | branch (E) `type(exc).__name__`, unless `wire_code not in WIRE_STANDARD_CODES` → `AdCPSalesAgentError.synthesize(..., error_code="SERVICE_UNAVAILABLE", recovery="terminal")` at `context_manager.py:381-390` | rewritten here | carried forward | no — it authors a *second, different* envelope for webhook subscribers |
 | 3 | `media_buy_create.py:4336` | `AdCPAdapterError` | **this line**, `f"Failed to create media buy: {str(e)}"` | class default `SERVICE_UNAVAILABLE` (`exceptions.py:835`, 502, transient) | `None` (`_default_suggestion` unset) | no |
 | 4a | MCP: `with_error_logging` → `_handle_tool_exception` (`tool_error_logging.py:307`) → `_translate_to_tool_error` (`tool_error_logging.py:294`) | `normalize_to_adcp_error` **branch (A)** | unchanged | unchanged | unchanged | **yes, pure no-op** |
 | 5a | `AdCPToolError(build_two_layer_error_envelope(typed), status_code=502)` | dict `{"adcp_error":…, "errors":[…]}` | copied | `exc.wire_error_code` = `translate_error_code("SERVICE_UNAVAILABLE")` = unchanged | copied (`None` → key omitted by `adcp_error()`) | no |
 | 6a | FastMCP serializes `raise AdCPToolError`; `__str__` = `json.dumps(self.envelope)` (`tool_error_logging.py:58`) | `CallToolResult(isError=True, content=[TextContent(text=<json>)])` — **no `structuredContent`** (0 hits for `structuredContent=` in `src/`, cf. SDK `build_mcp_error_result` which sets it) | — | — | — | no |
-| 4b | A2A: `adcp_a2a_server.py:1655-1659` `except (AdCPError, ValueError, PermissionError)` → `normalize_to_adcp_error(e)` | branch (A) | unchanged | unchanged | unchanged | **yes** |
+| 4b | A2A: `adcp_a2a_server.py:1655-1659` `except (AdCPSalesAgentError, ValueError, PermissionError)` → `normalize_to_adcp_error(e)` | branch (A) | unchanged | unchanged | unchanged | **yes** |
 | 5b | `_build_failed_skill_result` (`adcp_a2a_server.py:354`) → `_build_error_envelope` (`:342`) = `build_two_layer_error_envelope(normalize_to_adcp_error(exc))` — **normalizes a third time** | `{"skill":…, "error_envelope": {...}, "success": False}` in an artifact DataPart | copied | copied | copied | the third normalize is a no-op |
-| 4c | REST: `routes/api_v1.py:373` `create_media_buy_raw` raises up to `@app.exception_handler(AdCPError)` (`app.py:192`) → `_envelope_response` (`app.py:135`) | `JSONResponse(status_code=exc.status_code=502, content=build_two_layer_error_envelope(exc))` | copied | copied | copied | no |
+| 4c | REST: `routes/api_v1.py:373` `create_media_buy_raw` raises up to `@app.exception_handler(AdCPSalesAgentError)` (`app.py:192`) → `_envelope_response` (`app.py:135`) | `JSONResponse(status_code=exc.status_code=502, content=build_two_layer_error_envelope(exc))` | copied | copied | copied | no |
 
 Wire result, all three transports: `code="SERVICE_UNAVAILABLE"`,
 `recovery="transient"`, `message="Failed to create media buy: <str of an
@@ -436,7 +436,7 @@ by which `except` clause happens to be nearest, not by the failure.
 
 Final wire text contains, nested three deep: GAM SOAP fault → `"Custom targeting
 value lookup/creation failed for '<value>': <fault>"` → `"Failed to create media
-buy: <that>"`. Measured against the constraint the `AdCPError` docstring itself
+buy: <that>"`. Measured against the constraint the `AdCPSalesAgentError` docstring itself
 quotes (`transport-errors.mdx` § Security Considerations: *"MUST NOT include…
 upstream API responses from internal services"*).
 
@@ -533,7 +533,7 @@ supply an error `message` or `code`.
 | `AdCP*Error(...)` constructions with a message arg | **292** |
 | advisory `Error(...)` / `AdCPResponseError(...)` with `message=` | **12** |
 | direct `adcp_error(...)` | 2 |
-| `AdCPError.synthesize(...)` | 2 |
+| `AdCPSalesAgentError.synthesize(...)` | 2 |
 
 Of the 292 `AdCP*Error` sites: **82** pass a bare string literal, **210** pass a
 non-literal (f-string, `str(...)`, variable, conditional).
@@ -567,9 +567,9 @@ constants `INVALID_REQUEST_SUGGESTION` / `VALIDATION_ERROR_SUGGESTION`), against
 
 | kind | count | where |
 |---|---|---|
-| `AdCPError` subclasses declaring `_default_error_code` | 42 | `exceptions.py:608-1180` (42 `class AdCP*` declarations) |
+| `AdCPSalesAgentError` subclasses declaring `_default_error_code` | 42 | `exceptions.py:608-1180` (42 `class AdCP*` declarations) |
 | `error_code=` runtime override | 1 | `context_manager.py:383` |
-| `AdCPError.synthesize(...)` | 2 | `context_manager.py:381`, `tool_error_logging.py:455` |
+| `AdCPSalesAgentError.synthesize(...)` | 2 | `context_manager.py:381`, `tool_error_logging.py:455` |
 | advisory `Error(code="...")` literal | 11 | `creative_agent_registry.py:859`, `media_buy_delivery.py:235,366,564`, `accounts.py:1230`, `capabilities.py:140`, `creatives/listing.py:389`, `media_buy_list.py:123,138,257`, `targeting_capabilities.py:261` |
 | `ERROR_CODE_MAPPING` rewrite table | 42 entries | `exceptions.py:125-198` |
 | `to_wire_error_code` collapse-to-`SERVICE_UNAVAILABLE` | 1 | `exceptions.py:242` |
@@ -584,7 +584,7 @@ declarations (the shape the thesis wants) and ~25 are runtime rewrites.
 `"TOOL_ERROR"` has no `ERROR_CODE_MAPPING` entry and is not in
 `WIRE_STANDARD_CODES`, so `handle_tool_error` (`tool_error_logging.py:449-461`)
 can emit it verbatim on the REST wire via
-`AdCPError.synthesize(error_message, error_code="TOOL_ERROR", …)` →
+`AdCPSalesAgentError.synthesize(error_message, error_code="TOOL_ERROR", …)` →
 `build_two_layer_error_envelope` → `wire_error_code` → unchanged. Reachable when
 a plain `fastmcp` `ToolError` (not `AdCPToolError`) hits `app.py`'s
 `@app.exception_handler(ToolError)`. **Unverified** whether any live path raises
@@ -676,7 +676,7 @@ that: `STANDARD_ERROR_CODES` and `adcp_error`.
 
 ### (b) "Our error types don't carry enough" — **PARTLY TRUE**, 2 gaps
 
-`AdCPError.__init__` (`exceptions.py:436`) already carries `details, field, suggestion, retry_after,
+`AdCPSalesAgentError.__init__` (`exceptions.py:436`) already carries `details, field, suggestion, retry_after,
 context, internal_detail` (`exceptions.py:438-464`). What it lacks:
 
 1. **No class-level default `message`.** Every subclass declares
@@ -710,7 +710,7 @@ Every one of those calls is a no-op for an already-typed error.
 Three of the boundaries also *rewrite*, not just serialize:
 `context_manager.py:381` (code → `SERVICE_UNAVAILABLE`),
 `app.py:266-268` (code chosen by `field.startswith("attribution_window")`),
-`tool_error_logging.py:455` (`AdCPError.synthesize` from a parsed `ToolError`).
+`tool_error_logging.py:455` (`AdCPSalesAgentError.synthesize` from a parsed `ToolError`).
 
 The wire shapes also differ per transport by construction: MCP emits the
 envelope as `json.dumps` inside `content[0].text` with **no**
@@ -758,7 +758,7 @@ src/core/tools/properties.py:191         AdCPAdapterError             f"Failed t
   explicitly blesses `accepted_values` for exactly this. Whether the *rendered
   sentence* matters is a graded question I did not measure — **unverified**
   which of these are asserted on by a storyboard step. One that is: the
-  `AdCPError` docstring claims *"the spec also POSITIVELY requires specific
+  `AdCPSalesAgentError` docstring claims *"the spec also POSITIVELY requires specific
   first-party message content in places (version negotiation must name the
   buyer's requested version and the seller's supported set)"* — the candidate
   site is `src/core/version_negotiation.py:49`. I did not open the storyboard to
@@ -766,7 +766,7 @@ src/core/tools/properties.py:191         AdCPAdapterError             f"Failed t
 
 ### 5.1 What would have to be true for `raise SomeTypedError(field=..., details=...)` with no message
 
-1. `AdCPError` gains `_default_message: ClassVar[str]`, or `__init__` falls back
+1. `AdCPSalesAgentError` gains `_default_message: ClassVar[str]`, or `__init__` falls back
    to `WIRE_STANDARD_CODES[self.error_code]["message"]` — currently
    `message: str = ""` with no fallback (`exceptions.py:438-464`).
 2. `_default_suggestion` populated for all 42 subclasses from
