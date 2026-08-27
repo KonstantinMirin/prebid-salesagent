@@ -9,15 +9,6 @@ from urllib.parse import urlparse
 logger = logging.getLogger(__name__)
 
 
-class ValidationError(Exception):
-    """Raised when validation fails."""
-
-    def __init__(self, field: str, message: str):
-        self.field = field
-        self.message = message
-        super().__init__(f"{field}: {message}")
-
-
 class FormValidator:
     """Form validation utility class."""
 

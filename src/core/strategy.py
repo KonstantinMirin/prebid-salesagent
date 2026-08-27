@@ -9,7 +9,7 @@ Provides unified strategy system that works for both:
 
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any
+from typing import Any, ClassVar
 
 from sqlalchemy import delete, select
 
@@ -17,18 +17,35 @@ from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Strategy as StrategyModel
 from src.core.database.models import StrategyState
+from src.core.errors.codes import ErrorCode, ErrorCodeT
+from src.core.errors.details import ValueRejectionDetails
+from src.core.exceptions import AdCPNotFoundError
 
 
-class StrategyError(Exception):
-    """Base exception for strategy-related errors."""
+class StrategyError(AdCPNotFoundError[ValueRejectionDetails]):
+    """A strategy the caller named does not exist.
 
-    pass
+    In the AdCP hierarchy because we define it and we raise it. Outside it, these
+    escaped uncaught to the MCP boundary -- src/core/main.py imports StrategyManager
+    and never catches either class -- where ``adcp_error_for`` matched no branch and
+    typed them INTERNAL_ERROR. A buyer naming an unknown strategy was told the seller
+    had broken.
+
+    REFERENCE_NOT_FOUND is inherited from AdCPNotFoundError. The identifier travels
+    in ``details.rejected_value``, not in a message: AdCPError has no message
+    parameter, so the sentence comes from CODE_TABLE.
+    """
 
 
 class SimulationError(StrategyError):
-    """Errors related to simulation control."""
+    """The caller asked for a simulation action or parameter this seller cannot run.
 
-    pass
+    Redeclares the code: every raise site is bad INPUT to control_simulation (an
+    unknown action, a missing parameter, a malformed duration), which is the buyer's
+    request being wrong rather than a strategy being absent.
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.INVALID_REQUEST
 
 
 class JumpEvent(StrEnum):
@@ -96,7 +113,7 @@ class StrategyManager:
                 session.refresh(strategy)
 
             if not strategy:
-                raise StrategyError(f"Strategy not found: {strategy_id}")
+                raise StrategyError(details=ValueRejectionDetails(rejected_value=strategy_id))
 
             return StrategyContext(strategy)
 
@@ -220,12 +237,12 @@ class StrategyManager:
     def control_simulation(self, strategy_id: str, action: str, parameters: dict[str, Any]) -> dict[str, Any]:
         """Control simulation time progression and events."""
         if not strategy_id.startswith("sim_"):
-            raise SimulationError("Only simulation strategies can be controlled")
+            raise SimulationError(details=ValueRejectionDetails(rejected_value=strategy_id))
 
         strategy = self.get_or_create_strategy(strategy_id)
 
         if not strategy.is_simulation:
-            raise SimulationError(f"Strategy {strategy_id} is not a simulation strategy")
+            raise SimulationError(details=ValueRejectionDetails(rejected_value=strategy_id))
 
         sim_context = self._get_simulation_context(strategy_id, strategy)
 
@@ -233,17 +250,17 @@ class StrategyManager:
             # Support both event and target_date parameters for flexibility
             target = parameters.get("event") or parameters.get("target_date")
             if not target:
-                raise SimulationError("jump_to requires either 'event' or 'target_date' parameter")
+                raise SimulationError(field="parameters.event")
             return sim_context.jump_to_event(target)
         elif action == "reset":
             return sim_context.reset()
         elif action == "set_scenario":
             scenario = parameters.get("scenario")
             if not isinstance(scenario, str):
-                raise SimulationError("set_scenario requires 'scenario' parameter to be a string")
+                raise SimulationError(field="parameters.scenario")
             return sim_context.set_scenario(scenario)
         else:
-            raise SimulationError(f"Unknown simulation action: {action}")
+            raise SimulationError(field="action", details=ValueRejectionDetails(rejected_value=action))
 
     def _get_simulation_context(self, strategy_id: str, strategy: "StrategyContext") -> "SimulationContext":
         """Get or create simulation context."""
@@ -366,7 +383,9 @@ class SimulationContext:
                     "current_time": self.current_time.isoformat(),
                 }
             except ValueError:
-                raise SimulationError(f"Unknown jump event: {event}")
+                raise SimulationError(
+                    field="parameters.event", details=ValueRejectionDetails(rejected_value=str(event))
+                )
 
     def _advance_time(self, duration_str: str) -> dict[str, Any]:
         """Advance simulation time by duration."""
@@ -482,7 +501,7 @@ class SimulationContext:
         elif duration_str.endswith("s"):
             return timedelta(seconds=int(duration_str[:-1]))
         else:
-            raise SimulationError(f"Invalid duration format: {duration_str}")
+            raise SimulationError(details=ValueRejectionDetails(rejected_value=duration_str))
 
     def register_media_buy(self, media_buy_id: str, initial_state: dict[str, Any]):
         """Register a media buy in this simulation."""
