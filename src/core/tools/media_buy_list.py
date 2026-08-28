@@ -251,7 +251,6 @@ def _get_media_buys_impl(
 
     # Build response
     response_media_buys = []
-    buyer_named_rows = _buyer_named_rows(req)
     for buy in target_media_buys:
         # No policy here, and none is possible: the row's status was resolved at the
         # fetch seam and a row whose status could not be resolved never became a
