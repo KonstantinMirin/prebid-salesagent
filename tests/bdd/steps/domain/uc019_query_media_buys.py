@@ -8,13 +8,14 @@ Then steps assert on GetMediaBuysResponse fields.
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
 from src.core.schemas._base import GetMediaBuysRequest
-from tests.bdd.steps._outcome_helpers import wire_dict, wire_field
+from tests.bdd.steps._outcome_helpers import WIRE_MISSING, wire_dict, wire_field, wire_lookup
 from tests.bdd.steps.generic._create_request import build_create_request_kwargs
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _wire_code, _wire_error_object, _wire_suggestion
@@ -1813,14 +1814,23 @@ def then_errors_name_omitted_media_buy(ctx: dict, mb_id: str) -> None:
     The id matters more than the code here. An advisory saying a row was dropped
     without saying WHICH row cannot be reconciled against — the buyer has no way to
     tell whether the buy they wanted is broken or simply does not exist.
+
+    The whole advisory OBJECT is searched, not its ``message`` alone, and that is the
+    obligation rather than a loosening of it: ``Error`` derives
+    ``message``/``suggestion``/``recovery`` from ``CODE_TABLE`` and DISCARDS anything a
+    call site passes for them, so an id can only reach the buyer as data — in
+    ``details``. A message-only read graded a slot production is structurally unable to
+    put the id in, and would have gone on passing an advisory that named no row at all
+    once the code table answered "Configuration error" for every one of them. Same
+    wire-first, whole-object shape as ``then_request_refused_for_media_buy``.
     """
     real_id = _resolve_media_buy_id(ctx, mb_id)
-    document = wire_dict(ctx)
-    errors = document.get("errors") or []
-    messages = [e.get("message", "") if isinstance(e, dict) else getattr(e, "message", "") for e in errors]
-    assert any(real_id in message for message in messages), (
-        f"expected an advisory naming the omitted media buy {real_id!r}; "
-        f"the response carried {len(errors)} advisory/advisories: {messages}"
+    errors = _wire_advisories(ctx)
+    haystacks = [json.dumps(advisory, default=str) for advisory in errors]
+    assert any(real_id in haystack for haystack in haystacks), (
+        f"expected an advisory naming the omitted media buy {real_id!r} — in `details`, since "
+        f"`message` is derived from the code table and cannot carry it; the response carried "
+        f"{len(errors)} advisory/advisories: {haystacks}"
     )
 
 
@@ -3318,9 +3328,12 @@ def _wire_advisories(ctx: dict) -> list[dict]:
     advisories live INSIDE a successful response, so ``wire_error_envelope`` is
     empty for them and the typed payload would show already-coerced values.
     ``errors`` is dropped by ``exclude_none`` when the listing is clean, so an
-    absent key means "no advisories".
+    absent key means "no advisories" — the TRI-STATE case ``wire_lookup`` exists
+    for. Where the channel sits in the document is the harness's business, so the
+    key is resolved there rather than dug out of the body here.
     """
-    return list(wire_dict(ctx).get("errors") or [])
+    advisories = wire_lookup(ctx, "errors")
+    return [] if advisories is WIRE_MISSING or advisories is None else list(advisories)
 
 
 @then(parsers.parse('the response should include media buy "{mb_id}" with package "{pkg_id}"'))

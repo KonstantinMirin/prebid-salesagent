@@ -46,7 +46,6 @@ class TestFormatFetchTransientErrors:
     @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS, ids=lambda t: t.value)
     def test_typed_transient_registry_error_reaches_wire(self, integration_db, raised, wire_code, transport):
         from src.core.exceptions import AdCPRateLimitError, AdCPServiceUnavailableError
-        from tests.helpers import assert_envelope_shape
 
         exc = AdCPRateLimitError() if raised == "rate_limit" else AdCPServiceUnavailableError()
 
@@ -67,11 +66,7 @@ class TestFormatFetchTransientErrors:
                 f"not return success with a terminal-looking per-item failure. Got: "
                 f"{getattr(result, 'wire_response', None) or result.payload!r}"
             )
-            assert_envelope_shape(
-                result.wire_error_envelope,
-                wire_code,
-                recovery="transient",
-            )
+            result.assert_wire_error(wire_code, recovery="transient")
 
 
 class TestCreateMediaBuyFormatFetchTransientErrors:
@@ -92,7 +87,6 @@ class TestCreateMediaBuyFormatFetchTransientErrors:
         from src.core.exceptions import AdCPRateLimitError, AdCPServiceUnavailableError
         from tests.factories import CreativeFactory
         from tests.harness.media_buy_create import MediaBuyCreateEnv
-        from tests.helpers import assert_envelope_shape
         from tests.integration.media_buy_helpers import _make_create_request
 
         exc = AdCPRateLimitError() if raised == "rate_limit" else AdCPServiceUnavailableError()
@@ -126,8 +120,4 @@ class TestCreateMediaBuyFormatFetchTransientErrors:
             assert result.is_error, (
                 f"A transient fetch failure must fail create_media_buy transiently: {result.payload!r}"
             )
-            assert_envelope_shape(
-                result.wire_error_envelope,
-                wire_code,
-                recovery="transient",
-            )
+            result.assert_wire_error(wire_code, recovery="transient")

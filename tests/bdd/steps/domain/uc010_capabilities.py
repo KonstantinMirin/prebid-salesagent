@@ -1303,10 +1303,17 @@ def then_wire_context_empty(ctx: dict) -> None:
 # ── Thens: version negotiation error details ─────────────────────────
 
 
-@then("the error details should include supported_versions as a non-empty array")
+@then("the error details should carry supported_versions as a non-empty array")
 def then_details_supported_versions(ctx: dict) -> None:
     """The code is asserted before the block is read (wire_error_details takes it):
-    otherwise this grades the details of whatever envelope happened to be captured."""
+    otherwise this grades the details of whatever envelope happened to be captured.
+
+    "carry", not "include": the generic ``the error details should include {key} {value}``
+    parser matches the "include" spelling of this sentence too (key=supported_versions,
+    value="as a non-empty array"), and pytest-bdd would then hand the scenario one of the
+    two bodies with the other dead — the generic one comparing the details value against
+    the literal string "as a non-empty array". One sentence, one meaning.
+    """
     versions = ctx["result"].wire_error_details("VERSION_UNSUPPORTED").get("supported_versions")
     assert isinstance(versions, list) and versions, f"details.supported_versions not a non-empty array: {versions!r}"
 

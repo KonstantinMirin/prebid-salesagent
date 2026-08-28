@@ -1420,7 +1420,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the seller speaks adcp release-precision versions "3.0", "3.1"
     When the Buyer Agent calls get_adcp_capabilities with adcp_version "4.0"
     Then the wire error envelope should carry code "VERSION_UNSUPPORTED" with recovery "correctable"
-    And the error details should include supported_versions as a non-empty array
+    And the error details should carry supported_versions as a non-empty array
     And each supported_versions entry should match pattern "^\\d+\\.\\d+(-[a-zA-Z0-9.-]+)?$"
     # Graduated: version negotiation now implemented (src/core/version_negotiation.py) — a bad
     # adcp_version/adcp_major_version pin raises AdCPVersionUnsupportedError -> VERSION_UNSUPPORTED.
@@ -1463,7 +1463,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     When the Buyer Agent calls get_adcp_capabilities with adcp_version "4.0"
     Then the wire error envelope should carry code "VERSION_UNSUPPORTED" with recovery "correctable"
     And the error details should include build_version equal to "3.1.2+scope3.deploy.4821"
-    And the error details should include supported_versions as a non-empty array
+    And the error details should carry supported_versions as a non-empty array
     And each supported_versions entry should match pattern "^\\d+\\.\\d+(-[a-zA-Z0-9.-]+)?$"
     # Graduated: version negotiation now implemented (src/core/version_negotiation.py).
     # Trimmed 2026-07-13 to seller-observable assertions: "Buyer Agent must select from

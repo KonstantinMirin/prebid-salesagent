@@ -14,7 +14,7 @@ from decimal import Decimal
 # --- V2.3 Pydantic Models (Bearer Auth, Restored & Complete) ---
 # --- MCP Status System (AdCP PR #77) ---
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, TypeAlias, cast
 
 from src.core.enum_helpers import enum_value
 
@@ -137,6 +137,7 @@ from adcp.types import TargetingOverlay
 from adcp.types.generated_poc.core.collection_list_ref import (
     CollectionListReference,  # noqa: F401 — re-exported via src.core.schemas; used by callers and TargetingOverlay.collection_list type
 )
+from annotated_types import MaxLen, MinLen
 from pydantic import (
     AnyUrl,
     AwareDatetime,
@@ -198,7 +199,10 @@ class Error(_LibraryError):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode(), frozen=True)
 
-    code: ErrorCodeT
+    # The parent's length constraints are carried forward rather than dropped: the
+    # narrowing is on the VOCABULARY axis only, so re-declaring must not quietly
+    # relax MinLen/MaxLen that the SDK's ``code: str`` carries.
+    code: Annotated[ErrorCodeT, MinLen(1), MaxLen(64)]
 
     @model_validator(mode="before")
     @classmethod

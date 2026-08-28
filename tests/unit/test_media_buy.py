@@ -66,7 +66,7 @@ from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 # ---------------------------------------------------------------------------
 
 
-def _stub_media_buy_reads(repo, row):
+def _stub_media_buy_reads(repo, row, media_buy_id: str | None = None):
     """Point BOTH row accessors at *row*.
 
     The update tool reads the row back through ``get_by_id_or_raise`` (the
@@ -74,6 +74,9 @@ def _stub_media_buy_reads(repo, row):
     leaves the other returning a bare ``MagicMock``, whose ``.status`` is not a real
     status — which now fails loudly at the vocabulary boundary instead of being
     silently interpreted. One helper so the two never drift apart again.
+
+    ``media_buy_id`` is read only on the ``row is None`` branch, where it becomes the
+    ``details.media_buy_id`` the repository's own not-found refusal carries.
     """
     repo.get_by_id.return_value = row
     if row is None:
@@ -81,11 +84,15 @@ def _stub_media_buy_reads(repo, row):
         # it raises. A stub that returned None here would let production walk past a
         # missing row and fail later with an AttributeError instead of the typed
         # MEDIA_BUY_NOT_FOUND the buyer is owed.
+        from src.core.errors.details import EntityRefDetails
         from src.core.exceptions import AdCPMediaBuyNotFoundError
 
+        # Mirrors MediaBuyRepository.get_by_id_or_raise exactly: the identity travels
+        # as typed details, and the buyer-facing message/suggestion are functions of
+        # MEDIA_BUY_NOT_FOUND (CODE_TABLE), not of the raise site — a stub that
+        # authored either would carry a shape production can no longer produce.
         repo.get_by_id_or_raise.side_effect = AdCPMediaBuyNotFoundError(
-            "Media buy not found",
-            suggestion="Verify the media_buy_id is correct and belongs to your account.",
+            details=EntityRefDetails(media_buy_id=media_buy_id),
         )
     else:
         repo.get_by_id_or_raise.return_value = row
@@ -2911,8 +2918,7 @@ class TestUpdateMediaBuyIdentification:
             mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
-            _stub_media_buy_reads(mock_uow.media_buys, None)
-            _stub_media_buy_reads(mock_uow.media_buys, None)
+            _stub_media_buy_reads(mock_uow.media_buys, None, media_buy_id="mb_nonexistent")
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow

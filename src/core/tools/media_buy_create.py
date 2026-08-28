@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from src.core.database.repositories.media_buy import MediaBuyRepository
+    from src.core.database.repositories.uow import MediaBuyUoW as _MediaBuyUoWType
 
 from adcp import PushNotificationConfig
 from adcp.server.helpers import valid_actions_for_status
@@ -766,7 +767,13 @@ class ApprovalResult:
         return cls(outcome=ApprovalOutcome.FAILED, error_msg=error_msg)
 
 
-def _mark_approval_failed(tenant_id: str, media_buy_id: str, error_msg: str) -> ApprovalResult:
+def _mark_approval_failed(
+    tenant_id: str,
+    media_buy_id: str,
+    error_msg: str,
+    *,
+    uow: "_MediaBuyUoWType | None" = None,
+) -> ApprovalResult:
     """Record that the adapter did not create the order, and report it.
 
     Lives beside the single writer rather than in a route: the failure arm is a
@@ -774,13 +781,26 @@ def _mark_approval_failed(tenant_id: str, media_buy_id: str, error_msg: str) -> 
     came to write FAILED and two did not. Because nothing is written before the
     adapter runs, ``confirmed_at`` is still NULL here — the buy failed without
     ever carrying a seller commitment.
+
+    ``uow`` JOINS the caller's transaction when it already has one open, rather
+    than opening a second: ``get_db_session()`` hands back the thread-scoped
+    session with no nesting refcount, so a second unit commits the caller's
+    in-flight writes and then closes the session out from under it. The
+    creative-upload arm of ``execute_approved_media_buy`` calls this with unflushed
+    enrichment writes pending, which is exactly that shape. Passing nothing owns a
+    transaction for the duration — the live behaviour for the arms that run once
+    the caller's unit has already closed.
     """
+    from contextlib import ExitStack
+
     from src.core.database.repositories.uow import MediaBuyUoW as _MediaBuyUoW
 
     try:
-        with _MediaBuyUoW(tenant_id) as uow_failed:
-            assert uow_failed.media_buys is not None
-            uow_failed.media_buys.update_status(media_buy_id, PersistedMediaBuyStatus.FAILED)
+        with ExitStack() as stack:
+            if uow is None:
+                uow = stack.enter_context(_MediaBuyUoW(tenant_id))
+            assert uow.media_buys is not None
+            uow.media_buys.update_status(media_buy_id, PersistedMediaBuyStatus.FAILED)
     except SQLAlchemyError:
         # Narrow deliberately. A broad except here swallowed a NameError once and
         # reported it as an ad-server failure, which is a lie the caller cannot see
@@ -1266,7 +1286,7 @@ def execute_approved_media_buy(
                         + "\n\nAll creatives must have dimensions (width/height) and a content URL."
                     )
                     logger.error(f"[APPROVAL] {error_msg}")
-                    return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
+                    return _mark_approval_failed(tenant_id, media_buy_id, error_msg, uow=uow2)
 
                 if assets:
                     logger.info(f"[APPROVAL] Uploading {len(assets)} creatives to adapter")
@@ -1313,7 +1333,7 @@ def execute_approved_media_buy(
                         # Creative upload failed - this is critical for GAM orders
                         error_msg = f"Failed to upload creatives to adapter: {str(creative_error)}"
                         logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
-                        return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
+                        return _mark_approval_failed(tenant_id, media_buy_id, error_msg, uow=uow2)
             else:
                 logger.info(
                     log_safe(f"[APPROVAL] No creative assignments found for {media_buy_id}, skipping creative upload")

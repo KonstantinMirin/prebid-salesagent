@@ -15,7 +15,7 @@ Two things shape every step here:
   the update side gained it in ``media_buy_dual._is_update_request``.
 
 * **The oracle is the wire envelope, per tests/CLAUDE.md § Error Verification
-  Policy** — ``assert_envelope_shape`` on ``result.wire_error_envelope``, with no
+  Policy** — ``result.assert_wire_error(...)``, with no
   fallback to the reconstructed ``ctx["error"]``. The generic
   ``the error code should be "..."`` step does carry such a fallback; for these
   rows that fallback is precisely the failure mode to exclude, because a
@@ -24,8 +24,8 @@ Two things shape every step here:
 
 The expected code/recovery/field are MEASURED, not predicted: with the four
 constraints applied in-memory, every one of a2a/mcp/rest emits
-``VALIDATION_ERROR`` / ``correctable`` and names the offending field in both
-envelope layers. (The human-readable message is NOT asserted — it legitimately
+``VALIDATION_ERROR`` / ``correctable`` and names the offending field at the
+protocol position the harness grades. (The human-readable message is NOT asserted — it legitimately
 differs between the MCP boundary's short form and the a2a/rest long form.)
 """
 
@@ -36,7 +36,6 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.generic._dispatch import dispatch_request
-from tests.helpers import assert_envelope_shape
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — put the out-of-bounds value on the request
@@ -141,23 +140,14 @@ def then_refused_on_wire(ctx: dict, code: str, recovery: str, field: str) -> Non
     assert result is not None, f"no dispatch recorded; ctx error: {ctx.get('error')!r}"
     assert result.is_error, f"the request was ACCEPTED — expected a {code} refusal. Payload: {result.payload!r}"
 
-    envelope = result.wire_error_envelope
-    assert envelope is not None, (
-        f"{ctx.get('transport')}: no wire error envelope — the refusal never reached a "
-        f"transport boundary, so the buyer never sees it. Reconstructed error: {ctx.get('error')!r}"
-    )
-    assert_envelope_shape(envelope, code, recovery=recovery)
-
-    # Both layers must name the offending field: the buyer's remediation target.
-    # A generic "something was invalid" refusal is not a usable answer to an
-    # out-of-bounds value, and it is what the pre-constraint SERVICE_UNAVAILABLE
-    # path produced.
-    assert envelope["adcp_error"].get("field") == field, (
-        f"adcp_error.field={envelope['adcp_error'].get('field')!r}, expected {field!r}"
-    )
-    assert envelope["errors"][0].get("field") == field, (
-        f"errors[0].field={envelope['errors'][0].get('field')!r}, expected {field!r}"
-    )
+    # ``field`` is passed through the sanctioned surface rather than read off the
+    # envelope here: the refusal must name the offending field — the buyer's
+    # remediation target — and a generic "something was invalid" answer is what the
+    # pre-constraint SERVICE_UNAVAILABLE path produced. Where the spec puts that
+    # pointer is the harness's business (assert_wire_error -> assert_envelope_shape
+    # pins ``errors[0].field``), and a missing envelope fails there with the
+    # never-reached-a-boundary diagnosis this step used to raise itself.
+    result.assert_wire_error(code, recovery=recovery, field=field)
 
 
 @then("no media buy is persisted for the tenant")

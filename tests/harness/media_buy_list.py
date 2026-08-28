@@ -76,6 +76,59 @@ class MediaBuyListDispatchMixin:
         """
         return self._run_mcp_client("get_media_buys", GetMediaBuysResponse, **kwargs)
 
+    #: The route get_media_buys answers on — ``@router.post("/media-buys/query")`` in
+    #: src/routes/api_v1.py. It lives on the MIXIN, beside the other three dispatches,
+    #: because a composite env dispatches this verb at a DIFFERENT endpoint from its
+    #: primary one and has to be able to name this one to switch to it. The
+    #: ``AccountListDispatchMixin.LIST_REST_ENDPOINT`` precedent, for the same reason.
+    LIST_REST_ENDPOINT = "/api/v1/media-buys/query"
+
+    @staticmethod
+    def is_list_request(kwargs: dict[str, Any]) -> bool:
+        """Whether this dispatch is get_media_buys rather than the env's primary verb.
+
+        Discriminates on the request TYPE, so ONE rule covers every call site and
+        every transport — no dispatch of create, update or delivery ever carries a
+        ``GetMediaBuysRequest``. Public and owned here so the composite envs route
+        REST on exactly the same predicate their ``call_impl``/``call_a2a``/
+        ``call_mcp`` already route on; a second private copy is how one transport
+        drifts into dispatching a different tool than the other three.
+        """
+        return isinstance(kwargs.get("req"), GetMediaBuysRequest)
+
+    def _build_list_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """Convert get_media_buys kwargs to the ``GetMediaBuysBody`` shape.
+
+        Both call shapes are served, because both are dispatched: scenarios that
+        exercise how the ROUTE treats a wire field send flat kwargs, while the
+        post-create poll sends a built ``req=GetMediaBuysRequest(...)`` (it has to —
+        that is the discriminator the composite env routes on). A builder that
+        handled only the flat form returned ``{}`` for the poll and graded an
+        unfiltered listing under a scenario name that says "by media_buy_id".
+        """
+        req = kwargs.get("req")
+        if req is not None:
+            body = req.model_dump(mode="json", exclude_none=True)
+        else:
+            body = {}
+            # "account" belongs here: the steps dispatch account={"account_id": ...}
+            # (the AdCP 3.x reference shape), so a list naming only the legacy
+            # "account_id" silently dropped the filter on REST -- the request then
+            # SUCCEEDED where MCP and A2A correctly rejected it with
+            # UNSUPPORTED_FEATURE. Invisible until UC-019 regained REST
+            # parametrization (salesagent-ma52s); the same shape of harness gap as
+            # CreativeFormatsEnv.build_rest_body in salesagent-3dawm.16.
+            for key in ("media_buy_ids", "status_filter", "account", "account_id", "context"):
+                if key in kwargs and kwargs[key] is not None:
+                    body[key] = kwargs[key]
+        if kwargs.get("include_snapshot"):
+            body["include_snapshot"] = True
+        return body
+
+    def _parse_list_rest_response(self, data: dict[str, Any]) -> GetMediaBuysResponse:
+        """Parse a get_media_buys REST body into the typed response."""
+        return GetMediaBuysResponse(**data)
+
 
 class MediaBuyListEnv(MediaBuyListDispatchMixin, IntegrationEnv):
     """Integration test environment for _get_media_buys_impl.
@@ -91,10 +144,10 @@ class MediaBuyListEnv(MediaBuyListDispatchMixin, IntegrationEnv):
     # would have failed as if production were broken rather than as if the route
     # were missing. With the route landed, the opposite failure is the live one:
     # dropping the endpoint silently deletes the REST arm of every UC-019 scenario,
-    # which then grades nothing instead of failing. The sibling composite env still
-    # refuses this dispatch (`media_buy_create_list.py::build_rest_body`) — it is
-    # keyed on its own create/list discriminator and is not touched here.
-    REST_ENDPOINT = "/api/v1/media-buys/query"
+    # which then grades nothing instead of failing. The sibling composite env routes
+    # the SAME endpoint behind its create/list discriminator
+    # (`media_buy_create_list.py::REST_ENDPOINT`) — one constant, two envs.
+    REST_ENDPOINT = MediaBuyListDispatchMixin.LIST_REST_ENDPOINT
 
     def _configure_mocks(self) -> None:
         """No mocks needed for read-only list operation."""
@@ -110,21 +163,8 @@ class MediaBuyListEnv(MediaBuyListDispatchMixin, IntegrationEnv):
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to GetMediaBuysBody shape for REST POST."""
-        body: dict[str, Any] = {}
-        # "account" belongs here: the steps dispatch account={"account_id": ...}
-        # (the AdCP 3.x reference shape), so a list naming only the legacy
-        # "account_id" silently dropped the filter on REST -- the request then
-        # SUCCEEDED where MCP and A2A correctly rejected it with
-        # UNSUPPORTED_FEATURE. Invisible until UC-019 regained REST
-        # parametrization (salesagent-ma52s); the same shape of harness gap as
-        # CreativeFormatsEnv.build_rest_body in salesagent-3dawm.16.
-        for key in ("media_buy_ids", "status_filter", "account", "account_id", "context"):
-            if key in kwargs and kwargs[key] is not None:
-                body[key] = kwargs[key]
-        if kwargs.get("include_snapshot"):
-            body["include_snapshot"] = True
-        return body
+        return self._build_list_rest_body(**kwargs)
 
     def parse_rest_response(self, data: dict[str, Any]) -> GetMediaBuysResponse:
         """Parse REST response JSON."""
-        return GetMediaBuysResponse(**data)
+        return self._parse_list_rest_response(data)

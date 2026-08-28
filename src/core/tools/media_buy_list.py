@@ -54,7 +54,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.errors.codes import ErrorCode
-from src.core.errors.details import ValidationDetails
+from src.core.errors.details import ConfigurationDetails, ValidationDetails
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 from src.core.tools._media_buy_status import resolve_canonical_status
@@ -578,25 +578,31 @@ def _omitted_row_advisory(media_buy_id: str, exc: AdCPPersistedStateError) -> Er
     Names the ``media_buy_id`` deliberately. An advisory that says a row was dropped
     without saying which one cannot be reconciled against: the buyer has no way to
     tell whether the buy they are looking for is missing or was never there.
+
+    It names it in ``details``, not in an authored sentence. ``Error`` DERIVES
+    ``message``/``suggestion``/``recovery`` from ``CODE_TABLE`` (ADR-010), discarding
+    anything a call site passes for them — so the f-string this replaces named the row
+    only in a string the model threw away, leaving the buyer an advisory that pointed
+    at no row at all. The marker and the id travel as data instead, which is also
+    where a client can read them without parsing prose.
     """
-    # CONFIGURATION_ERROR, not SERVICE_UNAVAILABLE, and the pin's own enumMetadata is
-    # the reason. SERVICE_UNAVAILABLE carries recovery "transient" / "retry with
-    # exponential backoff" — advice that can never succeed here, because no amount of
-    # backoff repairs a row whose persisted revision is 0. CONFIGURATION_ERROR carries
-    # "terminal" / "surface to a human at the seller ... MUST NOT auto-retry", which is
-    # what this fault actually needs. It is also the code ruling R-M1 chose for the
-    # REFUSAL on this same fault: one defect, one code, two mechanisms.
-    # recovery is stated rather than left to be inferred from the code's enumMetadata:
-    # a client that does not consult the enum still learns not to retry.
-    return Error(  # structural-guard: advisory per-row omission in GetMediaBuysResponse.errors[]
-        code="CONFIGURATION_ERROR",
-        recovery="terminal",
-        message=(
-            f"MEDIA_BUY_UNRENDERABLE: media buy {media_buy_id!r} is omitted from this "
-            f"listing because a spec-required field could not be published from the "
-            f"persisted row; the remaining media buys are unaffected. Cause: {exc}"
-        ),
+    # The code comes from the refusal itself rather than being transcribed here: one
+    # defect, one code, two mechanisms (ruling R-M1 chose CONFIGURATION_ERROR for the
+    # REFUSAL on this same fault). That also settles the code question the same way it
+    # was settled there — SERVICE_UNAVAILABLE carries "transient" / "retry with
+    # exponential backoff", advice that can never succeed, because no amount of backoff
+    # repairs a row whose persisted revision is 0; CONFIGURATION_ERROR carries
+    # "terminal" / "surface to a human at the seller ... MUST NOT auto-retry".
+    # ``field`` is the LISTING slot, not the refusal's own column: this advisory
+    # explains an absence from ``media_buys[]``, and the offending column travels
+    # with the cause in the server log.
+    return Error.of(  # structural-guard: advisory per-row omission in GetMediaBuysResponse.errors[]
+        exc.error_code,
         field="media_buys[]",
+        details=ValidationDetails(
+            reasons=["MEDIA_BUY_UNRENDERABLE"],
+            media_buy_id=media_buy_id,
+        ),
     )
 
 
@@ -726,10 +732,22 @@ def _persisted_revision(buy) -> int:
     minimum = revision_minimum()
     revision = buy.revision
     if revision is None or revision < minimum:
+        # The buy and the refused value travel as typed details, and the bound as
+        # server-log-only provenance: buyer-facing text is a function of the code
+        # (``AdCPSalesAgentError.message``), so this raise site names the subject
+        # instead of writing the sentence — the same shape the sibling status door
+        # uses (``PersistedMediaBuyStatus.parse``). ``accepted_values`` stays unset:
+        # the pin states a MINIMUM here, not an enumerable member set.
         raise AdCPPersistedStateError(
-            f"media buy {buy.media_buy_id!r} carries persisted revision {revision!r}, below the "
-            f"pinned minimum of {minimum}; the optimistic-concurrency token cannot be published",
+            details=ConfigurationDetails(
+                media_buy_id=buy.media_buy_id,
+                rejected_value=repr(revision),
+            ),
             field="revision",
+            internal_detail=(
+                f"media buy {buy.media_buy_id!r} carries persisted revision {revision!r}, below the "
+                f"pinned minimum of {minimum}; the optimistic-concurrency token cannot be published"
+            ),
         )
     return revision
 

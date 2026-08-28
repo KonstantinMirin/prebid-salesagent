@@ -58,11 +58,10 @@ from typing import Any
 import pytest
 
 from src.core.database.repositories.media_buy import MediaBuyRepository
-from src.core.schemas import UpdateMediaBuyRequest
+from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuySuccess
 from src.core.schemas._base import GetMediaBuysRequest
 from tests.harness.media_buy_create_update_list import MediaBuyCreateUpdateListEnv
 from tests.harness.transport import Transport
-from tests.helpers import assert_envelope_shape
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -72,8 +71,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # easily drops a field, so excluding it by default is the expensive direction to be
 # wrong in.
 #
-# A2A (artifact DataPart) and MCP (structured_content) stash a REAL wire body;
-# IMPL has no wire by definition.
+# A2A (artifact DataPart) and MCP (structured_content) stash a REAL wire body.
 #
 # Scenarios that POLL get_media_buys stop here: that tool has no REST route, a
 # pre-existing surface fact, so a REST parametrization would grade nothing.
@@ -186,7 +184,7 @@ class _VanishingRow:
             f"{result.wire_response!r}. A success here carries a media_buy_id, a status and a "
             f"revision the seller cannot honour"
         )
-        assert_envelope_shape(result.wire_error_envelope, "MEDIA_BUY_NOT_FOUND", recovery="correctable")
+        result.assert_wire_error("MEDIA_BUY_NOT_FOUND", recovery="correctable")
 
 
 @pytest.mark.parametrize("transport", _GET_MEDIA_BUYS_TRANSPORTS)
@@ -297,15 +295,17 @@ def test_dry_run_update_reports_the_current_revision_and_moves_nothing(integrati
     three answers: the default (1), a bump (``_SEEDED_REVISION + 1``) and the
     correct current value.
 
-    IMPL only, and the reason is a property of the hook rather than a shortcut:
-    ``dry_run`` is not a spec request field, it is a testing-context flag the
-    harness injects through the env's identity (``BaseTestEnv(dry_run=True)`` ->
-    ``make_identity(dry_run=True)`` -> ``testing_context.dry_run``). The A2A and
-    MCP dispatches resolve identity from the token/headers through the real
-    pipeline, so the env's flag never reaches them — measured: the same call on
-    those transports applies an ordinary update and bumps the token to
-    ``_SEEDED_REVISION + 1``. Grading it there would grade the harness, not the
-    branch. Serialized through ``model_dump(mode="json")`` — the production
+    Graded by a DIRECT ``_impl`` call, not through a transport, and the reason is
+    a property of the hook rather than a shortcut: ``dry_run`` is not a spec
+    request field, it is a testing-context flag the harness injects through the
+    env's identity (``BaseTestEnv(dry_run=True)`` -> ``make_identity(dry_run=True)``
+    -> ``testing_context.dry_run``). The A2A and MCP dispatches resolve identity
+    from the token/headers through the real pipeline, so the env's flag never
+    reaches them — measured: the same call on those transports applies an ordinary
+    update and bumps the token to ``_SEEDED_REVISION + 1``. Grading it there would
+    grade the harness, not the branch. There is no wire to assert on here and none
+    is claimed: ``env.call_impl`` returns the ``_impl`` DTO, and that DTO is the
+    oracle. Serialized through ``model_dump(mode="json")`` — the production
     serializer every transport emits, which is where the constant surfaces.
     """
     from tests.factories import MediaBuyFactory
@@ -315,15 +315,17 @@ def test_dry_run_update_reports_the_current_revision_and_moves_nothing(integrati
         buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active", revision=_SEEDED_REVISION)
         env._commit_factory_data()  # noqa: SLF001 — the harness's factory/session flush seam
 
-        simulated = env.call_via(
-            Transport.IMPL, req=UpdateMediaBuyRequest(media_buy_id=buy.media_buy_id, budget=20000.0)
-        )
-        listed = env.call_via(Transport.IMPL, req=GetMediaBuysRequest(media_buy_ids=[buy.media_buy_id]))
+        simulated = env.call_impl(req=UpdateMediaBuyRequest(media_buy_id=buy.media_buy_id, budget=20000.0))
+        listed = env.call_impl(req=GetMediaBuysRequest(media_buy_ids=[buy.media_buy_id]))
 
-        assert simulated.is_success, f"dry-run update errored: {simulated.error!r}"
-        assert listed.is_success, f"get_media_buys errored: {listed.error!r}"
-        reported = simulated.payload.model_dump(mode="json")["revision"]
-        persisted = listed.payload.model_dump(mode="json")["media_buys"][0]["revision"]
+        # A failed update returns UpdateMediaBuyError in the same envelope, which
+        # carries no `revision` — assert the success arm explicitly so a refusal
+        # fails as a refusal rather than as a KeyError three lines down.
+        assert isinstance(simulated.response, UpdateMediaBuySuccess), (
+            f"dry-run update did not succeed: {simulated.response!r}"
+        )
+        reported = simulated.model_dump(mode="json")["revision"]
+        persisted = listed.model_dump(mode="json")["media_buys"][0]["revision"]
 
     # Asserted FIRST because it doubles as the branch proof: the non-dry-run path
     # writes, and a write bumps the token. An unmoved token is what tells us the

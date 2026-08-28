@@ -27,13 +27,14 @@ imports all 180), ``.pre-commit-hooks/`` and ``examples/`` -- with NO allowlist:
 the tree has zero instances today and must keep it that way. Deferring the work
 to first use is always available: open on demand, not on import.
 
-MERGE NOTE: with ``tests/`` back in scope, the detector's name-based match
-reports one FALSE POSITIVE --
-``tests/unit/test_architecture_bdd_xfail_reason_tokens.py:80``, a ``str.replace``
-call that ``call_callee_name`` cannot distinguish from ``Path.replace``. The fix
-belongs in ``_architecture_helpers.py`` (make the receiver decide, not the bare
-attribute name); dropping ``tests/`` from scope would hide the historical defect
-this guard was written for, so the scope stays and the detector gets narrowed.
+DETECTOR NOTE: the match is by attribute NAME, so a module-level ``str.replace``
+reads the same as ``Path.replace`` (a rename) and is reported. One such site
+existed when ``tests/`` came into scope -- ``test_architecture_bdd_xfail_reason_tokens``
+built a mutated xfail reason at module level -- and it was moved into a function,
+which is the right shape regardless: nothing about that string needs to be
+computed during collection. Narrowing the detector to let the RECEIVER decide is
+still worth doing; dropping ``tests/`` from scope is not, because that hides the
+historical defect this guard was written for.
 
 The detector treats a class body and a function's default arguments as
 import-time, because they are. A class-level ``handler = logging.FileHandler(...)``

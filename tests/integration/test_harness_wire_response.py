@@ -7,7 +7,10 @@ of the already-validated typed payload — otherwise the wire assertions would b
 tautological again (the typed payload can never be a bare string by construction).
 
 These tests pin that contract against ``list_creative_formats`` so a future refactor
-cannot quietly substitute a reconstruction. IMPL has no wire by definition.
+cannot quietly substitute a reconstruction. Every transport the harness registers
+is a real wire — the IMPL pseudo-transport, whose only contract was "has no wire",
+was deleted along with the fallbacks that let a no-wire path satisfy a wire
+assertion.
 
 MCP has no envelope-only markers (GH #1710): before that fix, the MCP wrapper
 handed ``ToolResult`` the raw pydantic response object, which
@@ -144,9 +147,3 @@ class TestWireResponseIsRealWire:
             "MCP wire_response does not round-trip through ListCreativeFormatsResponse — "
             "looks like a fabricated/partial reconstruction, not real wire"
         )
-
-    def test_impl_has_no_wire(self, integration_db):
-        """IMPL is an in-process call — no wire by definition."""
-        with CreativeFormatsEnv() as env:
-            result = env.call_via(Transport.IMPL)
-            assert result.wire_response is None

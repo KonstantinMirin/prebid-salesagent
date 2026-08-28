@@ -300,8 +300,17 @@ class TestFetchTargetMediaBuys:
         assert advisory.recovery == "terminal", (
             "a persisted-state defect cannot be retried into success; the advisory must say so"
         )
-        assert "buy_corrupt" in advisory.message
-        assert "MEDIA_BUY_UNRENDERABLE" in advisory.message
+        # Read off the advisory's DATA, not its prose. ``Error`` derives
+        # message/suggestion/recovery from CODE_TABLE and discards whatever a call site
+        # passes for them (ADR-010), so an assertion on ``message`` would grade the
+        # table rather than this advisory — and would pass just as well for an advisory
+        # that named no row at all, which is exactly the defect it must catch.
+        assert advisory.details["media_buy_id"] == "buy_corrupt", (
+            "the advisory must name the row it stands in for; a buyer cannot otherwise "
+            "tell whether the buy they are looking for is missing or was never there"
+        )
+        assert advisory.details["reasons"] == ["MEDIA_BUY_UNRENDERABLE"]
+        assert advisory.field == "media_buys[]"
 
     def test_a_null_revision_is_refused_like_a_below_minimum_one(self):
         """The ``revision is None`` operand has an oracle now.
