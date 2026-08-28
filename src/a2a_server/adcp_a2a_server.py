@@ -73,6 +73,7 @@ from src.core.exceptions import (
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import (
     coerce_creative_filters,
+    select_builder_kwargs,
     select_request_fields,
     to_account_reference,
     to_brand_reference,
@@ -1887,30 +1888,17 @@ class AdCPRequestHandler(RequestHandler):
         filters = coerce_creative_filters(parameters.get("filters"))
 
         # Call core function with optional parameters (fixing original validation bug)
-        response = core_list_creatives_tool(
-            media_buy_id=parameters.get("media_buy_id"),
-            # media_buy_ids (AdCP 2.5) and the four projection flags below are accepted on
-            # MCP and REST; this handler used to enumerate around them, so an A2A buyer's
-            # filters were silently ignored (salesagent-e8wt.1 scan row 11).
-            media_buy_ids=parameters.get("media_buy_ids"),
-            status=parameters.get("status"),
-            format=parameters.get("format"),
-            tags=parameters.get("tags", []),
-            created_after=parameters.get("created_after"),
-            created_before=parameters.get("created_before"),
-            search=parameters.get("search"),
-            filters=filters,
-            fields=parameters.get("fields"),
-            include_performance=parameters.get("include_performance", False),
-            include_assignments=parameters.get("include_assignments", False),
-            include_sub_assets=parameters.get("include_sub_assets", False),
-            page=parameters.get("page", 1),
-            limit=parameters.get("limit", 50),
-            sort_by=parameters.get("sort_by", "created_date"),
-            sort_order=parameters.get("sort_order", "desc"),
-            context=parameters.get("context"),
-            identity=identity,
-        )
+        # Selected off list_creatives_raw's own signature rather than hand-listed. The 20-name
+        # list this replaces is the shape that silently drops every field added later, which
+        # is how an A2A buyer's media_buy_ids came to be ignored (salesagent-e8wt.1 row 11).
+        # Selecting by signature also keeps spec sort/pagination OFF this surface for free:
+        # list_creatives_raw does not declare them, so they cannot be forwarded here while
+        # exposing them on A2A remains a deferred, buyer-visible change.
+        # `filters` is set explicitly AFTER selection because it needs typed coercion
+        # (invalid filters must raise AdCPValidationError, not reach the impl as a dict).
+        selected = select_builder_kwargs(core_list_creatives_tool, parameters)
+        selected["filters"] = filters
+        response = core_list_creatives_tool(**selected, identity=identity)
 
         return response
 
@@ -1988,12 +1976,20 @@ class AdCPRequestHandler(RequestHandler):
         # Identity already resolved at transport boundary (on_message_send)
 
         # Import and call the core implementation
+        from adcp.types import GetAdcpCapabilitiesRequest
+
         from src.core.tools.capabilities import get_adcp_capabilities_raw
 
-        # Call core function with identity
+        # Consume the parameter bag wholesale rather than naming each field: a handler
+        # that enumerates is the shape that silently drops every field added later --
+        # which is exactly how `ext` went missing here (salesagent-prkv.5 Lane D).
+        # adcp_version / adcp_major_version are forwarded EXPLICITLY: select_request_fields
+        # strips the version-envelope pair by design (a REST body defaults adcp_version to
+        # "1.0.0", which the envelope pattern rejects), but for THIS tool they are real
+        # request data -- they drive version negotiation and the unsupported-version
+        # advisory. Selecting alone would silently disable that negotiation.
         response = await get_adcp_capabilities_raw(
-            protocols=parameters.get("protocols"),
-            context=parameters.get("context"),
+            **select_request_fields(GetAdcpCapabilitiesRequest, parameters),
             adcp_version=parameters.get("adcp_version"),
             adcp_major_version=parameters.get("adcp_major_version"),
             identity=identity,
@@ -2013,22 +2009,12 @@ class AdCPRequestHandler(RequestHandler):
 
         # Same context string as the REST route's boundary so buyer-invalid
         # input produces a byte-identical envelope on every transport (klkg).
+        # Selected off the request model rather than hand-listed: the 13-name list this
+        # replaces already dropped ext, pagination, property_id and publisher_domain,
+        # all of which ListCreativeFormatsRequest declares (salesagent-prkv.5 Lane D).
         with adcp_validation_boundary(context="list_creative_formats request"):
             req = build_list_creative_formats_request(
-                format_ids=parameters.get("format_ids"),
-                output_format_ids=parameters.get("output_format_ids"),
-                input_format_ids=parameters.get("input_format_ids"),
-                is_responsive=parameters.get("is_responsive"),
-                name_search=parameters.get("name_search"),
-                asset_types=parameters.get("asset_types"),
-                wcag_level=parameters.get("wcag_level"),
-                min_width=parameters.get("min_width"),
-                max_width=parameters.get("max_width"),
-                min_height=parameters.get("min_height"),
-                max_height=parameters.get("max_height"),
-                disclosure_positions=parameters.get("disclosure_positions"),
-                disclosure_persistence=parameters.get("disclosure_persistence"),
-                context=parameters.get("context"),
+                **select_builder_kwargs(build_list_creative_formats_request, parameters)
             )
 
         # Call core function with identity

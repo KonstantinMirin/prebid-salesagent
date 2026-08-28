@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, Request
 from src.core.auth_context import require_auth, resolve_auth
 from src.core.schema_helpers import (
     coerce_creative_filters,
+    select_builder_kwargs,
     select_request_fields,
     to_account_reference,
     to_brand_reference,
@@ -267,11 +268,16 @@ class SyncAccountsBody(SalesAgentBaseModel):
     adcp_version: str = "1.0.0"
 
 
-class GetCapabilitiesBody(SalesAgentBaseModel):
+class GetAdcpCapabilitiesBody(SalesAgentBaseModel):
+    # Named for the TOOL, not the route: the transport-parity guard derives the body
+    # class from the tool name (get_adcp_capabilities -> GetAdcpCapabilitiesBody), so
+    # the old GetCapabilitiesBody spelling meant this tool never entered the
+    # comparison at all -- which is why the dropped `ext` stayed invisible.
     protocols: list[str] | None = None
     context: dict[str, Any] | None = None
     adcp_version: str | None = None
     adcp_major_version: int | None = None
+    ext: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -287,12 +293,12 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
     translation; no defensive catch needed here.
     """
     with adcp_validation_boundary(context="get_products request"):
+        # Selected off the BUILDER's signature, not GetProductsRequest's fields: the model
+        # declares 13 fields this builder does not take (catalog, refine, pagination, ...),
+        # and handing it those would turn a key that is ignored today into a TypeError --
+        # a 500 on a spec-conformant payload (salesagent-prkv.5 Lane D / F3).
         req = products_module.create_get_products_request(
-            brief=body.brief,
-            brand=body.brand,
-            filters=body.filters,
-            property_list=body.property_list,
-            context=to_context_object(body.context),
+            **select_builder_kwargs(products_module.create_get_products_request, body)
         )
     response = await products_module._get_products_impl(req, identity)
     result = response.model_dump(mode="json")
@@ -307,7 +313,7 @@ async def get_capabilities(identity: ResolvedIdentity | None = resolve_auth):
 
 
 @router.post("/capabilities")
-async def post_capabilities(body: GetCapabilitiesBody, identity: ResolvedIdentity | None = resolve_auth):
+async def post_capabilities(body: GetAdcpCapabilitiesBody, identity: ResolvedIdentity | None = resolve_auth):
     """Get AdCP capabilities with request parameters (auth-optional discovery skill).
 
     Additive alongside the parameterless GET route above (owner decision
@@ -315,9 +321,12 @@ async def post_capabilities(body: GetCapabilitiesBody, identity: ResolvedIdentit
     body, which a bare GET cannot carry — matches the POST+JSON-body
     convention every other route in this file follows.
     """
+    from adcp.types import GetAdcpCapabilitiesRequest
+
+    # Version pair forwarded explicitly -- see the A2A handler's note: the selector strips
+    # the version-envelope fields by design, but this tool negotiates on them.
     response = await capabilities_module.get_adcp_capabilities_raw(
-        protocols=body.protocols,
-        context=to_context_object(body.context),
+        **select_request_fields(GetAdcpCapabilitiesRequest, body),
         adcp_version=body.adcp_version,
         adcp_major_version=body.adcp_major_version,
         identity=identity,

@@ -42,7 +42,18 @@ TOOLS_DIR = REPO_ROOT / "src/core/tools"
 NON_REQUEST_PARAMS = frozenset({"ctx", "self", "identity", "req", "adcp_version", "adcp_major_version"})
 
 #: Names that mean "this handler consumes the whole parameter bag" -- immune by construction.
-WHOLESALE_MARKERS = ("select_request_fields", "model_validate", "**parameters", "**params")
+WHOLESALE_MARKERS = (
+    "select_request_fields",
+    # The signature-keyed twin, for builders whose kwargs are NOT the model's fields.
+    # It must be listed here for the same reason as select_request_fields: a handler
+    # using it consumes the bag wholesale and cannot lag a field. Omitting it would
+    # make such a handler read as a NON-wholesale surface with an EMPTY named-key set,
+    # so every model field would report as "missing" on that transport (prkv.5 F3).
+    "select_builder_kwargs",
+    "model_validate",
+    "**parameters",
+    "**params",
+)
 
 #: Known divergences, each citing the GitHub PR/issue that records them. SHRINK ONLY -- never add.
 #: Format: (tool, field) -> "#<issue> reason"

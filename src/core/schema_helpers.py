@@ -10,7 +10,8 @@ Philosophy:
 - Custom logic (validators, conversions) lives here, not in wrapper classes
 """
 
-from collections.abc import Mapping
+import inspect
+from collections.abc import Callable, Mapping
 from typing import Any
 from urllib.parse import urlparse
 
@@ -297,6 +298,47 @@ def select_request_fields(model: type[BaseModel], source: BaseModel | Mapping[st
     }
 
 
+#: Transport plumbing and identity -- never buyer request data. Excluded from
+#: ``select_builder_kwargs`` because that helper selects by the FUNCTION SIGNATURE, and a
+#: raw wrapper's signature contains ``ctx``/``identity`` alongside its request params. A
+#: buyer bag carrying an ``identity`` key would otherwise be forwarded as a real kwarg --
+#: either colliding with the identity the transport resolved (TypeError) or, worse, being
+#: accepted as one. Identity is resolved at the boundary and passed explicitly; it is never
+#: selected out of buyer input.
+_NON_REQUEST_PARAMS = frozenset({"ctx", "self", "identity", "req"})
+
+
+def select_builder_kwargs(builder: Callable[..., Any], source: BaseModel | Mapping[str, Any]) -> dict[str, Any]:
+    """Select the kwargs a ``build_*_request`` helper actually accepts, out of a raw bag.
+
+    The companion to ``select_request_fields``, for the case where the builder's signature
+    and the request model's fields are NOT the same set. ``build_list_creative_formats_request``
+    is the live example: ``ListCreativeFormatsRequest`` declares ``ext``, ``pagination``,
+    ``property_id`` and ``publisher_domain``, and the builder takes none of them. Selecting
+    by ``model_fields`` there would hand the builder four kwargs it cannot accept and turn a
+    key that is merely IGNORED today into a ``TypeError`` -- a buyer-visible 500 on a
+    spec-conformant payload, which is a worse failure than the drop it was meant to fix.
+
+    So the builder's own signature is the contract: whatever it declares is forwarded, the
+    rest is left behind exactly as it is today. A field added to the builder later is picked
+    up the moment it exists, which is the drift-proofing that matters.
+
+    Version-envelope fields are excluded on the same grounds as ``select_request_fields``
+    (see ``_VERSION_ENVELOPE_FIELDS``), and ``None`` values are dropped so the builder's own
+    defaults apply.
+    """
+    values = source.model_dump(exclude_none=True) if isinstance(source, BaseModel) else source
+    accepted = inspect.signature(builder).parameters
+    return {
+        name: value
+        for name, value in values.items()
+        if name in accepted
+        and name not in _VERSION_ENVELOPE_FIELDS
+        and name not in _NON_REQUEST_PARAMS
+        and value is not None
+    }
+
+
 __all__ = [
     "is_url_shorthand",
     "brand_shorthand_to_domain",
@@ -309,6 +351,7 @@ __all__ = [
     "coerce_creative_filters",
     "create_get_products_request",
     "select_request_fields",
+    "select_builder_kwargs",
     # Re-export types for type hints
     "BrandReference",
     "CreativeFilters",

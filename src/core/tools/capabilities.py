@@ -631,6 +631,7 @@ async def get_adcp_capabilities(
     context: ContextObject | None = None,
     adcp_version: Annotated[str | None, Field(description="Requested AdCP spec version")] = None,
     adcp_major_version: Annotated[int | None, Field(description="Requested AdCP major version")] = None,
+    ext: Annotated[dict | None, Field(description="Vendor-namespaced extension object (spec: always optional)")] = None,
     ctx: Context | None = None,
 ) -> ToolResult:
     """Get the capabilities of this AdCP sales agent.
@@ -642,6 +643,7 @@ async def get_adcp_capabilities(
         context: Application-level context per AdCP spec, echoed on the response
         adcp_version: Requested AdCP spec version (optional)
         adcp_major_version: Requested AdCP major version (optional)
+        ext: Vendor-namespaced extension object, echoed per the spec's ext contract
         ctx: FastMCP context (automatically provided)
 
     Returns:
@@ -655,6 +657,7 @@ async def get_adcp_capabilities(
             context=context,
             adcp_version=adcp_version,
             adcp_major_version=adcp_major_version,
+            ext=ext,
         )
 
     # Call shared implementation
@@ -685,6 +688,7 @@ async def get_adcp_capabilities_raw(
     context: ContextObject | None = None,
     adcp_version: str | None = None,
     adcp_major_version: int | None = None,
+    ext: dict | None = None,
     ctx: Context | ToolContext | None = None,
     identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> GetAdcpCapabilitiesResponse:
@@ -697,6 +701,7 @@ async def get_adcp_capabilities_raw(
         context: Application-level context per AdCP spec, echoed on the response
         adcp_version: Requested AdCP spec version (optional)
         adcp_major_version: Requested AdCP major version (optional)
+        ext: Vendor-namespaced extension object, echoed per the spec's ext contract
         ctx: FastMCP context (automatically provided)
         identity: Pre-resolved identity (preferred over ctx)
 
@@ -710,5 +715,6 @@ async def get_adcp_capabilities_raw(
             context=context,
             adcp_version=adcp_version,
             adcp_major_version=adcp_major_version,
+            ext=ext,
         )
     return _get_adcp_capabilities_impl(req, identity)

@@ -199,6 +199,9 @@ def _build_list_creatives_request(
     limit: int = 50,
     sort_by: str = "created_date",
     sort_order: str = "desc",
+    sort: "Sort | None" = None,
+    pagination: "PaginationRequest | None" = None,
+    accept_structured_sort: bool = False,
     context: ContextObject | None = None,
 ) -> "ListCreativesRequest":
     """Build a ListCreativesRequest from individual wire params.
@@ -213,6 +216,26 @@ def _build_list_creatives_request(
     are NOT representable on ListCreativesRequest and stay as out-of-band _impl
     kwargs.
     """
+    # Structured -> flat, FIRST, so the flat guards below still run. This block moved
+    # here from the MCP wrapper (prkv.5 R1). It MUST produce flat values rather than
+    # writing sort/pagination straight onto ListCreativesRequest: doing the latter would
+    # bypass three silent coercions buyers rely on -- unknown sort field -> "created_date"
+    # (field_mapping), sort_order not in {asc,desc} -> "desc", limit -> min(limit, 1000) --
+    # each of which is a graded row in BR-UC-018 (prkv.5 F1).
+    #
+    # Gated on accept_structured_sort because spec `sort`/`pagination` are NOT yet exposed
+    # on A2A/REST: that is a buyer-visible surface change deferred to its own ticket. MCP is
+    # the ONE caller that passes True. Expressed once here rather than as a per-transport
+    # hand-list of keys to strip.
+    if accept_structured_sort:
+        if sort is not None:
+            if sort.field is not None:
+                sort_by = enum_value(sort.field)
+            if sort.direction is not None:
+                sort_order = enum_value(sort.direction)
+        if pagination is not None and pagination.max_results is not None:
+            limit = pagination.max_results
+
     from adcp.types import CreativeFilters as LibraryCreativeFilters
     from adcp.types import PaginationRequest as LibraryPagination
     from adcp.types.generated_poc.creative.list_creatives_request import Sort as LibrarySort
@@ -704,18 +727,14 @@ async def list_creatives(
     # Pass typed Pydantic models directly (no model_dump conversion needed)
     fields_list = [enum_value(f) for f in fields] if fields else None
 
-    # Structured sort and pagination are AdCP spec params; _impl is built around flat
-    # equivalents (sort_by/sort_order, page/limit). Coerce structured forms to flat
-    # at the boundary so spec-compliant payloads are honored instead of silently dropped.
-    if sort is not None:
-        if sort.field is not None:
-            sort_by = enum_value(sort.field)
-        if sort.direction is not None:
-            sort_order = enum_value(sort.direction)
-    if pagination is not None and pagination.max_results is not None:
-        limit = pagination.max_results
-
+    # The structured->flat coercion lives in _build_list_creatives_request now, so every
+    # transport that reaches the builder gets identical treatment instead of MCP alone
+    # doing it at its own boundary (prkv.5 R1). MCP is the one caller that ENABLES it:
+    # spec sort/pagination are not exposed on A2A/REST yet (deferred ticket).
     req = _build_list_creatives_request(
+        sort=sort,
+        pagination=pagination,
+        accept_structured_sort=True,
         media_buy_id=media_buy_id,
         media_buy_ids=media_buy_ids,
         status=status,
