@@ -211,6 +211,10 @@ class SignalsAgentRegistry:
                 )
 
         except ADCPError as e:
+            # The SDK's client-side ADCPError only, deliberately -- same reasoning as
+            # the creative-agent registry's sibling handler. Our own typed errors
+            # raised in this body propagate untouched; the SDK's get mapped into our
+            # vocabulary. See salesagent-nsay7.
             from src.core.helpers.adapter_helpers import raise_mapped_adcp_error
 
             raise_mapped_adcp_error(e, agent_label=agent.name, logger=logger)

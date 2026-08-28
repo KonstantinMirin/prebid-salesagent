@@ -61,7 +61,7 @@ Task = WorkflowStep
 # Try to load config, but use defaults if no tenant context available
 try:
     config = load_config()
-except (RuntimeError, Exception) as e:
+except Exception as e:
     # Use minimal config for test environments or when DB is unavailable
     # This handles both "No tenant context set" and database connection errors
     if "No tenant context" in str(e) or "connection" in str(e).lower() or "operational" in str(e).lower():

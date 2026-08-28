@@ -95,7 +95,7 @@ def is_encrypted(value: str | None) -> bool:
     try:
         decrypt_api_key(value)
         return True
-    except (ValueError, TypeError, Exception):
+    except Exception:
         return False
 
 

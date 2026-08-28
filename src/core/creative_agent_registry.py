@@ -507,6 +507,15 @@ class CreativeAgentRegistry:
                 )
 
         except ADCPError as e:
+            # The SDK's client-side ADCPError, NOT our AdCPSalesAgentError -- catching
+            # only the former is deliberate. This try body raises BOTH: our own typed
+            # errors above (which must propagate to the boundary untouched) and the
+            # SDK's, raised by the adcp client when the agent we CALLED misbehaved.
+            # Those need mapping into our vocabulary; ours do not.
+            #
+            # Before the rename (salesagent-nsay7) the two names differed by one
+            # letter's case, so this read as though it might catch ours. It cannot,
+            # and now it cannot be misread either.
             from src.core.helpers.adapter_helpers import raise_mapped_adcp_error
 
             raise_mapped_adcp_error(e, agent_label=f"creative agent {agent.name}", logger=logger)

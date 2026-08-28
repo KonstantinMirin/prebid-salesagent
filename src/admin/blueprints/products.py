@@ -776,7 +776,7 @@ def add_product(tenant_id):
 
                                 logger.info(f"Validated {len(formats)} formats for new product")
 
-                        except (ADCPError, Exception) as e:
+                        except Exception as e:
                             logger.error(f"Failed to validate formats: {e}")
                             flash("Unable to validate formats. Please try again.", "error")
                             return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
@@ -1399,7 +1399,7 @@ def edit_product(tenant_id, product_id):
 
                     logger.info(f"Validated {len(validated_formats)} formats for product {product_id}")
 
-                except (ADCPError, Exception) as e:
+                except Exception as e:
                     # Unexpected error - fail hard
                     logger.error(f"Failed to validate formats: {e}")
                     flash("Unable to validate formats. Please try again.", "error")

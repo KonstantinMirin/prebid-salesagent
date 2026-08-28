@@ -122,7 +122,7 @@ def _decode_cursor(cursor: str) -> int:
     """Decode a base64 cursor string to an offset. Returns 0 for invalid cursors."""
     try:
         return int(base64.b64decode(cursor).decode())
-    except (ValueError, Exception):
+    except Exception:
         return 0
 
 
