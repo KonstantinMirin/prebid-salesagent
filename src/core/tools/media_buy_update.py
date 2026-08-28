@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 #: Configurable via MAX_CAMPAIGN_BUDGET_USD env var; default 10,000,000.
 MAX_CAMPAIGN_BUDGET: Decimal = Decimal(os.environ.get("MAX_CAMPAIGN_BUDGET_USD", "10000000"))
 
-from adcp.types import ContextObject, ReportingWebhook, TargetingOverlay
+from adcp.types import ContextObject, ReportingWebhook
 from adcp.types import PackageUpdate as UpdatePackage
 from fastmcp.server.context import Context
 from sqlalchemy import select
@@ -1496,13 +1496,11 @@ async def update_media_buy(
     flight_end_date: Annotated[str | None, Field(description="New campaign end date in YYYY-MM-DD format")] = None,
     budget: Annotated[float | None, Field(description="New total campaign budget amount")] = None,
     currency: Annotated[str | None, Field(description="ISO 4217 currency code (e.g. 'USD')")] = None,
-    targeting_overlay: TargetingOverlay | None = None,
     start_time: Annotated[str | None, Field(description="New campaign start time in ISO 8601 format")] = None,
     end_time: Annotated[str | None, Field(description="New campaign end time in ISO 8601 format")] = None,
     pacing: Annotated[str | None, Field(description="Budget pacing strategy: 'even' or 'asap'")] = None,
     daily_budget: Annotated[float | None, Field(description="Maximum daily spend cap")] = None,
     packages: list[UpdatePackage] | None = None,
-    creatives: list = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # payload-level context
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
@@ -1523,7 +1521,6 @@ async def update_media_buy(
         flight_end_date: Extend or shorten campaign
         budget: Update total budget
         currency: Update currency (ISO 4217)
-        targeting_overlay: Update global targeting
         start_time: Update start datetime
         end_time: Update end datetime
         pacing: Pacing strategy (even, asap, daily_budget)
@@ -1578,7 +1575,6 @@ def update_media_buy_raw(
     flight_end_date: str = None,
     budget: float = None,
     currency: str = None,
-    targeting_overlay: TargetingOverlay | None = None,
     start_time: str = None,
     end_time: str = None,
     pacing: str = None,
@@ -1586,7 +1582,6 @@ def update_media_buy_raw(
     # A2A/REST send wire dicts; UpdateMediaBuyRequest validates them as the
     # request's packages[] field.
     packages: list[UpdatePackage] | list[dict[str, Any]] | None = None,
-    creatives: list = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # payload-level context
     reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
@@ -1607,13 +1602,11 @@ def update_media_buy_raw(
         flight_end_date: Change end date
         budget: Update total budget
         currency: Update currency
-        targeting_overlay: Update targeting
         start_time: Update start datetime
         end_time: Update end datetime
         pacing: Pacing strategy
         daily_budget: Daily budget cap
         packages: Package updates
-        creatives: Creative updates
         push_notification_config: Push notification config for status updates
         context: Application level context per adcp spec
         reporting_webhook: Webhook configuration for automated reporting delivery

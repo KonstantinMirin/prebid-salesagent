@@ -41,6 +41,9 @@ TOOLS_DIR = REPO_ROOT / "src/core/tools"
 #: Parameters that are transport plumbing or identity, never buyer request fields.
 NON_REQUEST_PARAMS = frozenset({"ctx", "self", "identity", "req", "adcp_version", "adcp_major_version"})
 
+#: The version-envelope pair select_request_fields strips by design.
+_VERSION_ENVELOPE = frozenset({"adcp_version", "adcp_major_version"})
+
 #: Names that mean "this handler consumes the whole parameter bag" -- immune by construction.
 WHOLESALE_MARKERS = (
     "select_request_fields",
@@ -59,23 +62,16 @@ WHOLESALE_MARKERS = (
 #: Format: (tool, field) -> "#<issue> reason"
 ALLOWLIST: dict[tuple[str, str], str] = {
     ("list_creatives", "pagination"): (
-        "#1721 review F1 scan row 12: pagination/sort exist only on the MCP surface. Not a "
-        "dropped kwarg -- it needs a pinned-spec decision on whether they supersede "
-        "page/limit/sort_by/sort_order before being added to A2A and the REST body."
+        "#1721 pagination/sort exist only on the MCP surface, now BY CONSTRUCTION: the "
+        "structured->flat coercion lives in _build_list_creatives_request behind "
+        "accept_structured_sort, which only the MCP wrapper passes. The previous reason "
+        "said this 'needs a pinned-spec decision on whether they supersede "
+        "page/limit/sort_by/sort_order' -- that was factually wrong. The pin DECIDED: "
+        "ListCreativesRequest 3.1.1 declares pagination and sort and declares no page, "
+        "limit, sort_by or sort_order. Exposing them on A2A/REST is a buyer-visible "
+        "change on a non-titled surface and travels with its own ticket."
     ),
     ("list_creatives", "sort"): "#1721 see pagination above.",
-    ("update_media_buy", "creatives"): (
-        "#1417 deliberately omitted from the REST body: update_media_buy_raw accepts these in "
-        "its signature but drops them before _build_update_request, so declaring them on REST "
-        "would advertise a silent no-op."
-    ),
-    ("update_media_buy", "targeting_overlay"): "#1417 see creatives above.",
-    ("update_performance_index", "webhook_url"): (
-        "#1721 review F1 scan follow-on: webhook_url is a DEAD MCP parameter -- the wrapper "
-        "accepts it and _build_update_performance_index_request never takes it, so it is "
-        "dropped on MCP too. Adding it to REST would spread the no-op; the fix is to implement "
-        "async notification or remove the parameter, both wire-contract decisions of their own."
-    ),
 }
 
 
@@ -299,27 +295,108 @@ class TestDetectorMetaTests:
         assert fields == {"alpha", "beta"}
 
     def test_builder_kwargs_match_their_request_models(self) -> None:
-        """The builders are splatted with ``**select_request_fields(Model, ...)``.
+        """A builder splatted with ``select_request_fields(Model, ...)`` must accept every
+        field of Model -- otherwise a newly declared field becomes a TypeError at request
+        time instead of being forwarded.
 
-        That splat is only safe while every model field is a builder kwarg -- otherwise a
-        newly declared field becomes a TypeError at request time instead of being forwarded.
-        Pin it here rather than discovering it on the wire.
+        The rule is CONDITIONAL ON THE SELECTOR, which is the whole point. Two builders
+        deliberately accept LESS than their model declares (``create_get_products_request``
+        takes 5 of 18; ``build_list_creative_formats_request`` rejects ext, pagination,
+        property_id and publisher_domain). Splatting those by model_fields would turn a key
+        that is merely IGNORED today into a 500 on a spec-conformant payload, so their call
+        sites use ``select_builder_kwargs``, which selects by SIGNATURE. Asserting full
+        coverage for every builder would therefore demand exactly the change that breaks
+        them; asserting it for none would lose the guarantee where it holds.
+
+        Builders are discovered from the ARTIFACT -- each ``build_*_request`` /
+        ``create_*_request`` and its return annotation -- not from a hand-list, so a new
+        builder is covered the moment it exists (prkv.5 F4).
         """
+        import ast as _ast
+        import importlib
         import inspect
 
-        from src.core.schemas.account import ListAccountsRequest, SyncAccountsRequest
-        from src.core.tools.accounts import build_list_accounts_request, build_sync_accounts_request
+        import adcp.types as _sdk
 
-        for builder, model in (
-            (build_list_accounts_request, ListAccountsRequest),
-            (build_sync_accounts_request, SyncAccountsRequest),
-        ):
-            kwargs = set(inspect.signature(builder).parameters)
-            missing = set(model.model_fields) - kwargs
+        from src.core import schemas as _app
+
+        scan_roots = [*sorted(TOOLS_DIR.rglob("*.py")), REPO_ROOT / "src/core/schema_helpers.py"]
+
+        def _resolve(name: str):
+            name = name.strip("\"'")
+            return getattr(_app, name, None) or getattr(_sdk, name, None)
+
+        builders: dict[str, tuple[object, object]] = {}
+        for path in scan_roots:
+            tree = _ast.parse(path.read_text())
+            for node in _ast.walk(tree):
+                if not isinstance(node, _ast.FunctionDef | _ast.AsyncFunctionDef) or not node.returns:
+                    continue
+                if not re.fullmatch(r"_?build_\w+_request|create_\w+_request", node.name):
+                    continue
+                model = _resolve(_ast.unparse(node.returns))
+                if model is None or not hasattr(model, "model_fields"):
+                    continue
+                module = importlib.import_module(str(path.relative_to(REPO_ROOT)).removesuffix(".py").replace("/", "."))
+                fn = getattr(module, node.name, None)
+                if fn is not None:
+                    builders[node.name] = (fn, model)
+
+        assert builders, "discovered no build_*_request at all -- the scan is broken, not the tree"
+
+        # The invariant is not about builders specifically -- it is about ANY callable
+        # splatted with select_request_fields(Model, ...). Our own capabilities conversions
+        # splat get_adcp_capabilities_raw, not its builder, so a builder-only scan would
+        # miss precisely the call sites this lane added.
+        call_sites: set[tuple[str, str, str]] = set()
+        for path in sorted((REPO_ROOT / "src").rglob("*.py")):
+            text = path.read_text()
+            for m in re.finditer(r"(\w+)\(\s*\*\*select_request_fields\(\s*(\w+)", text):
+                call_sites.add((m.group(1), m.group(2), str(path.relative_to(REPO_ROOT))))
+
+        assert call_sites, (
+            "found no select_request_fields splat anywhere in src/ -- either the seam was "
+            "removed or this scan is broken; both are worth failing on."
+        )
+
+        modmap = {
+            str(p.relative_to(REPO_ROOT)): str(p.relative_to(REPO_ROOT)).removesuffix(".py").replace("/", ".")
+            for p in sorted((REPO_ROOT / "src").rglob("*.py"))
+        }
+        checked = 0
+        for callee_name, model_name, rel in sorted(call_sites):
+            model = _resolve(model_name)
+            if model is None or not hasattr(model, "model_fields"):
+                continue
+            # Resolve by DEFINITION site, not by the calling module: these callees are
+            # imported function-locally at several call sites, so getattr(caller, name)
+            # is None and a naive lookup silently grades nothing.
+            callee = None
+            for cand in sorted((REPO_ROOT / "src").rglob("*.py")):
+                text_c = cand.read_text()
+                if not re.search(rf"^(async )?def {re.escape(callee_name)}\(", text_c, re.M):
+                    continue
+                mod = importlib.import_module(str(cand.relative_to(REPO_ROOT)).removesuffix(".py").replace("/", "."))
+                callee = getattr(mod, callee_name, None)
+                if callee is not None:
+                    break
+            if callee is None:
+                continue
+            kwargs = set(inspect.signature(callee).parameters)
+            if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in inspect.signature(callee).parameters.values()):
+                continue  # **kwargs absorbs anything; nothing to pin
+            missing = set(model.model_fields) - kwargs - NON_REQUEST_PARAMS - _VERSION_ENVELOPE
+            checked += 1
             assert not missing, (
-                f"{builder.__name__} cannot accept {sorted(missing)} declared on {model.__name__}; "
-                "a select_request_fields splat carrying those fields would raise TypeError."
+                f"{rel}: {callee_name}(**select_request_fields({model_name}, ...)) cannot accept "
+                f"{sorted(missing)} declared on {model_name}; that splat raises TypeError the "
+                f"moment a buyer sends one. Widen the callee, or use select_builder_kwargs, "
+                f"which selects by signature instead."
             )
+        assert checked >= 4, (
+            f"only {checked} select_request_fields splats were graded; the seam is used at more "
+            f"sites than that, so the scan has gone blind"
+        )
 
 
 if __name__ == "__main__":

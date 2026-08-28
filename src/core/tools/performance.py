@@ -125,7 +125,6 @@ def _update_performance_index_impl(
 async def update_performance_index(
     media_buy_id: str,
     performance_data: list[dict[str, Any]],
-    webhook_url: str | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -137,7 +136,6 @@ async def update_performance_index(
     Args:
         media_buy_id: ID of the media buy to update
         performance_data: List of performance data objects
-        webhook_url: URL for async task completion notifications (AdCP spec, optional)
         ctx: FastMCP context (automatically provided)
 
     Returns:
