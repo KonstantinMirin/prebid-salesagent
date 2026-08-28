@@ -551,6 +551,20 @@ def when_call_with_context(ctx: dict, context: str) -> None:
     _call_capabilities(ctx, context=request_context)
 
 
+@when(parsers.parse("the Buyer Agent calls get_adcp_capabilities with ext {ext}"))
+def when_call_with_ext(ctx: dict, ext: str) -> None:
+    """Send a vendor-namespaced request ``ext`` object.
+
+    get-adcp-capabilities-request.json (3.1.1) declares ``ext`` as core/ext.json —
+    an always-optional, vendor-namespaced extension object — on a request whose
+    schema is ``additionalProperties: true``. Dispatching it through the ordinary
+    ``_call_capabilities`` funnel means each transport carries it the way that
+    transport carries any other request field, so a transport that cannot express
+    ``ext`` at all surfaces here as a wire rejection rather than a silent drop.
+    """
+    _call_capabilities(ctx, ext=json.loads(ext))
+
+
 @when(parsers.parse('the Buyer Agent calls get_adcp_capabilities with adcp_version "{version}"'))
 def when_call_with_adcp_version(ctx: dict, version: str) -> None:
     _call_capabilities(ctx, adcp_version=version)

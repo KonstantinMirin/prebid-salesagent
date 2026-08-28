@@ -664,6 +664,67 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "Pre-existing UC-003 targeting-overlay validation gaps (not da07): pydantic "
         "extra='forbid' / GeoProximity coordinate modes / frequency_cap / keyword-dup / device_type overlap",
     ),
+    # ── #1721 lane D (salesagent-prkv.5): three UC-018 outlines newly wired ──
+    # The lane converts _handle_list_creatives_skill to the shared build_*_request
+    # seam and moves the MCP structured->flat sort/pagination coercion into
+    # _build_list_creatives_request. Only the rows whose behavior that conversion can
+    # silently delete are authored; the siblings below grade production the lane does
+    # NOT touch, so they are parked PER ROW rather than the whole outline being left
+    # dormant at the harness gate (which is how the merge and coercion rows came to be
+    # ungraded in the first place). Every entry cites #1721.
+    (
+        "T-UC-018-partition-filters",
+        {
+            "no_filters",
+            "flat_only",
+            "structured_only",
+            "flat_and_structured_no_conflict",
+            "flat_and_structured_conflict",
+            "tags_and_semantics",
+            "tags_or_semantics",
+            "combined_date_range",
+            "invalid_date_format",
+            "empty_tags_array",
+            "creative_ids_over_limit",
+        },
+        "UC-018 filter-semantics rows outside the media_buy_id/media_buy_ids merge this lane "
+        "grades: flat/structured precedence, tags AND/OR semantics, date-range and creative_ids "
+        "validation are unimplemented or ungraded production surfaces — #1721",
+    ),
+    (
+        "T-UC-018-partition-field-selector",
+        {
+            "omitted",
+            "single_field",
+            "minimal_set",
+            "all_fields",
+            "enrichment_fields",
+            "invalid_db_status_tolerance",
+            "empty_array",
+            "unknown_field",
+            "non_string_item",
+        },
+        "UC-018 fields[] projection is not implemented in production (nothing reads req.fields; "
+        "no field selector exists in src/), so only the include_assignments row of this outline "
+        "grades a real behavior — #1721",
+    ),
+    (
+        "T-UC-018-boundary-pagination",
+        {
+            "max_results=0",
+            "max_results=1",
+            "max_results=100",
+            "max_results=101",
+            "limit=1000",
+            "limit=1001",
+            "sort_by='assignment_count'",
+        },
+        "UC-018 pagination boundaries: max_results is a PaginationRequest field with no flat "
+        "equivalent on A2A/REST, the limit cap is unobservable below 1000 rows, and "
+        "assignment_count sorting is unimplemented (CreativeRepository.get_by_principal maps only "
+        "name/status/created_at). The sort_order/sort_by coercion rows are the ones this lane "
+        "grades — #1721",
+    ),
     (
         "T-UC-005-partition-disclosure",
         {"duplicate_positions"},
@@ -4069,7 +4130,30 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
         # scenarios (see _detect_uc), so the tag never collides with the UC-006
         # BR-RULE-034 scenarios routed elsewhere.
         marker_names = {m.name for m in request.node.iter_markers()}
-        if marker_names & {"list-after-sync", "concept-id", "BR-RULE-034"}:
+        if marker_names & {
+            "list-after-sync",
+            "concept-id",
+            "BR-RULE-034",
+            # #1721 lane D (salesagent-prkv.5). The lane converts
+            # _handle_list_creatives_skill to the shared build_*_request seam;
+            # these three outlines carry the rows whose behavior that conversion
+            # can silently delete, so they must EXECUTE rather than xfail fast:
+            #  - partition-filters: singular media_buy_id + plural media_buy_ids
+            #    merge/dedup, the lane's stated RED/GREEN acceptance. A bare
+            #    select_request_fields(ListCreativesRequest, bag) drops both keys
+            #    (they live on CreativeFilters, not on the request model).
+            #  - partition-field-selector: include_assignments, one of the
+            #    projection flags the A2A hand-list carries today.
+            #  - boundary-pagination: the sort_by/sort_order silent coercions the
+            #    builder performs on the FLAT path. Moving the MCP structured->flat
+            #    coercion into the builder bypasses them unless it lands ahead of
+            #    that path (binding constraint F1).
+            # Rows in these outlines that grade behavior this lane does not
+            # implement are parked per-row in _SELECTIVE_XFAIL, not per-scenario.
+            "T-UC-018-partition-filters",
+            "T-UC-018-partition-field-selector",
+            "T-UC-018-boundary-pagination",
+        }:
             # CreativeListEnv mocks only the audit logger; DB, repository, and
             # query building are real. The Background auth step switches the env
             # principal; the seed step owns the creatives under it.
@@ -4181,6 +4265,12 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
             # {boundary_point}"), citing #1855 (generic wiring) instead of the
             # accurate #1856 (account-config surface) -- both fixed.
             "T-UC-010-v31-account-sandbox",
+            # Batch 15 — request-ext acceptance (#1721 lane D / salesagent-prkv.5).
+            # Authored as the grader for adding `ext` to the get_adcp_capabilities
+            # MCP wrapper, get_adcp_capabilities_raw and the REST body: the request
+            # schema declares core/ext.json, so a vendor-namespaced ext must be
+            # served the normal response on every transport.
+            "T-UC-010-ext-request-vendor-namespaced",
         }
         marker_names = {m.name for m in request.node.iter_markers()}
         if not (marker_names & _UC010_WIRED_TAGS):

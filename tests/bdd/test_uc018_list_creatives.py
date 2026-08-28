@@ -66,6 +66,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 
 from tests.bdd.steps._outcome_helpers import _require_response, wire_field
 from tests.bdd.steps.generic._auth import authenticate_env_as
+from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.helpers.pinned_schema import validate_against_pinned_schema
 
 # Three genuinely-different formats (display / video / audio) for the "three
@@ -89,6 +90,7 @@ def _seed_creative(
     *,
     concept_id: str | None = None,
     concept_name: str | None = None,
+    **overrides: Any,
 ) -> Any:
     """Seed one approved creative owned by *principal*, optionally concept-tagged.
 
@@ -103,9 +105,22 @@ def _seed_creative(
     from tests.factories import CreativeFactory
     from tests.factories.creative_asset import build_assets, image_spec
 
-    kwargs: dict[str, Any] = {"tenant": tenant, "principal": principal, "approved": True}
+    kwargs: dict[str, Any] = {"tenant": tenant, "principal": principal}
+    if "status" not in overrides:
+        kwargs["approved"] = True
     if fmt is not None:
         kwargs["format"] = fmt
+    # Overrides for the #1721 lane-D rows: an explicit name (the repository maps the
+    # ``tags`` filter onto Creative.name.contains, so a "tag" IS a name substring),
+    # a non-approved status, and an explicit created_at so ordering assertions have
+    # distinct, deterministic sort keys instead of 60 rows sharing one server_default
+    # timestamp. Layered here rather than in a second seeder so this stays the one
+    # place the module assembles a creative.
+    for key in ("name", "status", "created_at"):
+        if key in overrides:
+            kwargs[key] = overrides.pop(key)
+    if overrides:
+        raise TypeError(f"_seed_creative got unexpected overrides: {sorted(overrides)}")
     if concept_id or concept_name:
         data: dict[str, Any] = {"assets": build_assets(image_spec("banner"))}
         if concept_id:
@@ -510,3 +525,272 @@ def then_none_belong_to(ctx: dict, principal_id: str) -> None:
     assert not leaked, (
         f"cross-principal leak: creatives owned by {principal_id!r} appeared in the response: {sorted(leaked)}"
     )
+
+
+# ── #1721 lane D: rows whose behavior the transport-seam conversion can delete ──
+#
+# salesagent-prkv.5 converts _handle_list_creatives_skill (and the other handlers this
+# PR opened) to build the typed request through the shared build_*_request seam, and
+# moves the MCP structured->flat sort/pagination coercion into
+# _build_list_creatives_request. Two families of behavior are silently deletable by
+# that conversion, and both were ungraded — the whole UC-018 partition/boundary set
+# xfailed fast at the conftest harness gate:
+#
+#  1. media_buy_id + media_buy_ids merge/dedup. ListCreativesRequest declares NEITHER
+#     key (they live on CreativeFilters, adcp 3.1.1 core/creative-filters.json), so
+#     the plan's literal prescription — build_X_request(**select_request_fields(
+#     ListCreativesRequest, bag)) — drops both. The merge lives in the builder
+#     (listing.py:151-156) and the DB join in CreativeRepository.get_by_principal.
+#
+#  2. The flat-path silent coercions: sort_order outside {asc, desc} -> "desc"
+#     (listing.py:126-130) and sort_by outside the field_mapping -> "created_date"
+#     (:161-178). If the moved coercion writes the structured Sort object straight
+#     onto ListCreativesRequest instead of landing ahead of the flat path, the SDK
+#     Sort enum REJECTS those values and the buyer gets a wire error where they used
+#     to get a silently-coerced ordering.
+#
+# Rows in these three outlines that grade behavior this lane does not implement
+# (the fields[] projection, max_results/PaginationRequest, assignment_count sorting,
+# tag AND/OR semantics) are parked per-row in tests/bdd/conftest.py _SELECTIVE_XFAIL,
+# each citing #1721 — per-ROW, so the rows this PR's behavior change touches execute
+# while the untouched siblings stay declared rather than silently green.
+#
+# Spec ground: adcp v3.1.1 dist/schemas/3.1.1/core/creative-filters.json declares
+# media_buy_ids (array) with no singular sibling, and
+# dist/schemas/3.1.1/creative/list-creatives-request.json carries filters/sort/
+# pagination. The singular media_buy_id is this agent's documented backward-compat
+# flat param, which is exactly why nothing on the request model protects it.
+
+#: The two media buys whose creatives the merge row expects back, plus a decoy the
+#: request never names. Literal ids because the scenario names them literally.
+_MERGE_MEDIA_BUY_IDS = ("mb1", "mb2")
+_DECOY_MEDIA_BUY_ID = "mb3"
+
+#: Row count for the pagination/sorting boundary outline ("60 approved creatives"),
+#: and the default page size the reader applies when no pagination is requested.
+_PAGINATION_SEED_COUNT = 60
+_DEFAULT_PAGE_SIZE = 50
+
+
+def _seed_media_buy(tenant: Any, principal: Any, media_buy_id: str) -> Any:
+    """Seed one media buy with a literal id, via the factory."""
+    from tests.factories import MediaBuyFactory
+
+    return MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id=media_buy_id)
+
+
+def _assign(tenant: Any, creative: Any, media_buy: Any) -> Any:
+    """Attach *creative* to *media_buy*; the media_buy_ids filter joins on this row."""
+    from tests.factories import CreativeAssignmentFactory
+
+    return CreativeAssignmentFactory(creative=creative, media_buy=media_buy)
+
+
+@given("the authenticated principal has creatives with various tags, statuses, and media buy associations")
+def given_creatives_with_tags_statuses_and_media_buys(ctx: dict) -> None:
+    """Seed the filter-semantics fixture: creatives under mb1, mb2 and a decoy buy.
+
+    The merge row's falsifiability comes from the decoys. One creative sits under
+    ``mb3``, which the request never names, and one is unassigned entirely; a filter
+    that collapsed to "no media_buy filter at all" (the shape a dropped
+    media_buy_id/media_buy_ids produces) returns all four and fails the exact-set
+    assertion. A filter that honoured only ONE of the two keys returns one creative
+    and fails it too.
+
+    Tags travel as name substrings because that is what the repository's ``tags``
+    filter actually does (``Creative.name.contains(tag)``,
+    CreativeRepository.get_by_principal), and statuses vary so the parked
+    status-filter rows have real data behind them when they are wired.
+    """
+    env = ctx["env"]
+    tenant, principal = _get_or_create_tenant_and_principal(env)
+
+    mb1, mb2 = (_seed_media_buy(tenant, principal, mb_id) for mb_id in _MERGE_MEDIA_BUY_IDS)
+    decoy_buy = _seed_media_buy(tenant, principal, _DECOY_MEDIA_BUY_ID)
+
+    in_mb1 = _seed_creative(tenant, principal, name="nike q1 launch")
+    in_mb2 = _seed_creative(tenant, principal, name="nike brand anthem")
+    in_decoy_buy = _seed_creative(tenant, principal, name="adidas q1 retargeting")
+    _assign(tenant, in_mb1, mb1)
+    _assign(tenant, in_mb2, mb2)
+    _assign(tenant, in_decoy_buy, decoy_buy)
+
+    # Unassigned, and rejected — a creative no media_buy filter can reach.
+    _seed_creative(tenant, principal, name="nike rejected cut", status="rejected")
+
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["expected_merged_creative_ids"] = {in_mb1.creative_id, in_mb2.creative_id}
+
+
+@given("the authenticated principal has 3 approved creatives with full data")
+def given_three_approved_creatives_with_full_data(ctx: dict) -> None:
+    """Seed 3 approved creatives that DO carry package assignments in the database.
+
+    The assignments are the point: ``include_assignments false`` is only falsifiable
+    against creatives that have assignment rows to leak. Without them the Then would
+    pass over an empty library and grade nothing.
+    """
+    env = ctx["env"]
+    tenant, principal = _get_or_create_tenant_and_principal(env)
+    media_buy = _seed_media_buy(tenant, principal, _MERGE_MEDIA_BUY_IDS[0])
+
+    creatives = [_seed_creative(tenant, principal, name=f"full data creative {i}") for i in range(3)]
+    for creative in creatives:
+        _assign(tenant, creative, media_buy)
+
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["seeded_creative_ids"] = [creative.creative_id for creative in creatives]
+
+
+@given(parsers.parse("the authenticated principal has {count:d} approved creatives"))
+def given_n_approved_creatives(ctx: dict, count: int) -> None:
+    """Seed *count* approved creatives with strictly decreasing created_at.
+
+    Each row is one minute older than the previous, so "sorted by created_date
+    descending" has a single correct answer and the ordering assertions below can
+    compare an exact id sequence rather than "is it sorted by something".
+    Names are alphabetically ordered the SAME way, so a step that silently sorted by
+    name instead of created_date would still have to explain the coercion rows.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    env = ctx["env"]
+    tenant, principal = _get_or_create_tenant_and_principal(env)
+
+    newest = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    seeded = [
+        _seed_creative(
+            tenant,
+            principal,
+            name=f"paged creative {index:03d}",
+            created_at=newest - timedelta(minutes=index),
+        )
+        for index in range(count)
+    ]
+
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    # Newest first — the reader's documented default ordering (created_date desc).
+    ctx["creative_ids_newest_first"] = [creative.creative_id for creative in seeded]
+
+
+# ── When ─────────────────────────────────────────────────────────────
+
+
+@when(
+    parsers.parse(
+        'the Buyer Agent sends a list_creatives request with singular media_buy_id "{singular}" '
+        'and plural media_buy_ids ["{plural}"]'
+    )
+)
+def when_list_creatives_singular_and_plural_media_buy_ids(ctx: dict, singular: str, plural: str) -> None:
+    """Dispatch with BOTH the singular backward-compat key and the plural array."""
+    dispatch_request(ctx, media_buy_id=singular, media_buy_ids=[plural])
+
+
+@when("the Buyer Agent sends a list_creatives request with include_assignments false")
+def when_list_creatives_without_assignments(ctx: dict) -> None:
+    """Dispatch with the projection flag the A2A handler enumerates by hand today."""
+    dispatch_request(ctx, include_assignments=False)
+
+
+@when(parsers.parse('the Buyer Agent sends a list_creatives request with sort_order "{sort_order}"'))
+def when_list_creatives_with_sort_order(ctx: dict, sort_order: str) -> None:
+    """Dispatch with a flat sort_order — valid enum members and invalid values alike."""
+    dispatch_request(ctx, sort_order=sort_order)
+
+
+@when(parsers.parse('the Buyer Agent sends a list_creatives request with sort_by "{sort_by}"'))
+def when_list_creatives_with_sort_by(ctx: dict, sort_by: str) -> None:
+    """Dispatch with a flat sort_by — valid enum members and unknown fields alike."""
+    dispatch_request(ctx, sort_by=sort_by)
+
+
+# ── Then ─────────────────────────────────────────────────────────────
+
+
+def _wire_creative_ids(ctx: dict) -> list[str]:
+    """The creative_ids the buyer received, in wire order."""
+    return [entry["creative_id"] for entry in _wire_creatives(ctx)]
+
+
+@then("creatives for both mb1 and mb2 returned (merged, deduplicated)")
+def then_merged_media_buy_creatives(ctx: dict) -> None:
+    """Exactly the union of mb1's and mb2's creatives — no decoys, no duplicates.
+
+    Three distinct regressions fail here, which is why the assertion is an exact SET
+    plus a length check rather than a containment check:
+      - the singular media_buy_id dropped  -> only mb2's creative comes back;
+      - the plural media_buy_ids dropped   -> only mb1's;
+      - both dropped (the shape a bare select_request_fields(ListCreativesRequest,
+        bag) produces, since neither key is declared on that model) -> the whole
+        library including the decoy-buy and unassigned creatives.
+    """
+    returned = _wire_creative_ids(ctx)
+    assert set(returned) == ctx["expected_merged_creative_ids"], (
+        f"expected exactly the mb1+mb2 creatives {sorted(ctx['expected_merged_creative_ids'])}, got {sorted(returned)}"
+    )
+    assert len(returned) == len(ctx["expected_merged_creative_ids"]), (
+        f"media_buy_id/media_buy_ids merge emitted duplicate rows: {returned}"
+    )
+
+
+@then("assignment data excluded from creatives")
+def then_assignments_excluded(ctx: dict) -> None:
+    """No creative on the wire carries assignment data, though every seeded creative
+    has a CreativeAssignment row in the database."""
+    creatives = _wire_creatives(ctx)
+    assert {entry["creative_id"] for entry in creatives} == set(ctx["seeded_creative_ids"]), (
+        f"expected the 3 seeded creatives {sorted(ctx['seeded_creative_ids'])}, "
+        f"got {sorted(entry['creative_id'] for entry in creatives)}"
+    )
+    leaked = [entry["creative_id"] for entry in creatives if entry.get("assignments") is not None]
+    assert leaked == [], f"include_assignments=false still emitted assignment data for: {leaked}"
+
+
+def _assert_wire_order(ctx: dict, expected_newest_first: bool) -> None:
+    """Assert the returned page is the expected slice of the seeded created_at order."""
+    ordered = ctx["creative_ids_newest_first"]
+    if not expected_newest_first:
+        ordered = list(reversed(ordered))
+    expected = ordered[:_DEFAULT_PAGE_SIZE]
+    assert _wire_creative_ids(ctx) == expected, (
+        f"expected the first {_DEFAULT_PAGE_SIZE} creatives "
+        f"{'newest' if expected_newest_first else 'oldest'}-first, got a different sequence"
+    )
+
+
+@then("creatives sorted descending")
+def then_creatives_sorted_descending(ctx: dict) -> None:
+    _assert_wire_order(ctx, expected_newest_first=True)
+
+
+@then("creatives sorted ascending")
+def then_creatives_sorted_ascending(ctx: dict) -> None:
+    _assert_wire_order(ctx, expected_newest_first=False)
+
+
+@then("creatives sorted descending (silently coerced)")
+@then("creatives sorted by created_date (silently coerced)")
+def then_creatives_sorted_by_default_after_coercion(ctx: dict) -> None:
+    """Both silent coercions land on the SAME observable: the default created_date-desc
+    ordering, with no wire error.
+
+      - sort_order="random" is not a member of the AdCP sort-direction enum; the agent
+        coerces it to "desc" (listing.py:126-130) rather than rejecting the request.
+      - sort_by="unknown_field" is outside the builder's field_mapping; the agent
+        coerces it to "created_date" (:161-178), direction defaulting to desc.
+
+    A coercion is only observable as an ORDERING plus the ABSENCE of an error, so the
+    exact newest-first sequence pins both halves: ``_wire_creatives`` raises loudly if
+    the dispatch produced an error envelope instead of a response, and the sequence
+    discriminates against the other candidate coercion targets (name-desc and
+    status-desc both yield a different order over this fixture).
+
+    One body, two rows: the two coercions differ in WHICH input is out of range, not in
+    what the buyer is supposed to receive — writing them as two identical functions
+    would be the duplication the repo's DRY invariant forbids.
+    """
+    _assert_wire_order(ctx, expected_newest_first=True)

@@ -6341,6 +6341,12 @@ mappings:
       upstream_refs: ["BR-UC-010-ext-d"]
       business_rules: []
       status: new
+    - adcp_scenario_id: "T-UC-010-ext-request-vendor-namespaced"
+      adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
+      obligation_id: null
+      upstream_refs: ["BR-UC-010-ext-d"]
+      business_rules: []
+      status: new
     - adcp_scenario_id: "T-UC-010-ext-d-invalid-value"
       adcp_feature: "BR-UC-010-discover-seller-capabilities.feature"
       obligation_id: null

@@ -572,6 +572,22 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # @bva protocols: creative (last enum value)
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-request.json pointer=/properties/protocols/items/enum
 
+  @T-UC-010-ext-request-vendor-namespaced @extension @ext-request @partition
+  Scenario: A vendor-namespaced request ext is accepted and the normal capabilities response is returned
+    Given a tenant is resolvable from the request context
+    And the tenant has full capabilities configured
+    When the Buyer Agent calls get_adcp_capabilities with ext {"acme_dsp": {"tier": "gold"}}
+    Then the response should be success
+    And the response should pass schema validation for get-adcp-capabilities-response
+    # get-adcp-capabilities-request.json declares `ext` ($ref core/ext.json: "Extension object
+    # for platform-specific, vendor-namespaced parameters. Extensions are always optional and
+    # must be namespaced under a vendor/platform key"). The request schema is
+    # additionalProperties: true, so a buyer sending a namespaced ext MUST be served the normal
+    # response, never rejected. Note this scenario is deliberately NOT an echo assertion: the
+    # 3.1.1 response schema declares no request-ext echo, so acceptance is the whole obligation.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-request.json pointer=/properties/ext
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/ext.json
+
   @T-UC-010-ext-d-invalid-value @extension @ext-d @error @boundary @partition
   Scenario: unknown_protocol — filter with invalid enum value is rejected
     Given a tenant is resolvable from the request context

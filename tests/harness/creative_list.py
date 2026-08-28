@@ -84,18 +84,26 @@ class CreativeListEnv(IntegrationEnv):
         return self._run_mcp_client("list_creatives", ListCreativesResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
-        """Convert kwargs to ListCreativesBody shape for REST POST."""
-        body: dict[str, Any] = {}
-        for key in ("media_buy_id", "media_buy_ids", "status", "format"):
-            if key in kwargs and kwargs[key] is not None:
-                body[key] = kwargs[key]
-        # The structured filters travel over REST as a JSON dict — the body field is
-        # typed dict and coerced to CreativeFilters server-side. Callers pass an
-        # already-serialized dict (see the UC-018 concept_ids When step).
-        filters = kwargs.get("filters")
-        if filters is not None:
-            body["filters"] = filters
-        return body
+        """Convert kwargs to ListCreativesBody shape for REST POST.
+
+        The carried key set is sourced from the ARTIFACT — ``ListCreativesBody``'s
+        own ``model_fields`` — not from a hand-list. The hand-list this replaces
+        named four keys (media_buy_id, media_buy_ids, status, format) plus filters,
+        so every other field the REST route genuinely accepts (tags, search, dates,
+        fields, include_assignments, page/limit, sort_by/sort_order) was dropped
+        BEFORE the request left the harness: a scenario sending them graded MCP and
+        A2A for real and graded nothing on REST. Deriving the set from the body model
+        means a field added to the route is carried here without a harness edit.
+
+        The structured ``filters`` object travels as an already-serialized JSON dict
+        (the body field is typed ``dict`` and coerced to CreativeFilters server-side);
+        it needs no special case beyond being one of the model's fields.
+        """
+        from src.routes.api_v1 import ListCreativesBody
+
+        return {
+            key: value for key, value in kwargs.items() if key in ListCreativesBody.model_fields and value is not None
+        }
 
     def parse_rest_response(self, data: dict[str, Any]) -> ListCreativesResponse:
         """Parse REST JSON into ListCreativesResponse."""
