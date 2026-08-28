@@ -346,3 +346,41 @@ class TestWebhookSchemeGateTracksTheEgressSeam:
             assert ingest_admits == dial_admits, (
                 f"ingest and the dial-time seam disagree on {url}: ingest={ingest_admits}, dial={dial_admits}"
             )
+
+
+class TestLogSanitizerCannotForgeALine:
+    """``webhook_url_for_log`` output is always ONE physical line.
+
+    CodeQL 1003 (``policy.py:287``): ``sanitize_webhook_url_for_log`` rebuilt the
+    URL with the PATH verbatim, and ``urlsplit`` strips only ``\\t \\r \\n``
+    (``urllib.parse._UNSAFE_URL_BYTES_TO_REMOVE``). VT, FF, the separators, NEL,
+    U+2028 and U+2029 survived it, so a buyer-supplied path forged a second log
+    line at every one of the sanitizer's callers.
+
+    The set is DERIVED from ``str.splitlines()`` rather than restated, so a
+    character Python starts treating as a boundary is covered here the day it is,
+    instead of the day someone remembers to extend a literal.
+    """
+
+    # Every character str.splitlines() splits on, found by asking it.
+    LINE_BREAKING = [chr(c) for c in range(0x110000) if len(f"a{chr(c)}b".splitlines()) > 1]
+
+    def test_the_derived_set_is_not_empty(self):
+        """Guards the guard: an empty set would make the sweep below vacuous."""
+        assert len(self.LINE_BREAKING) >= 8
+
+    def test_no_line_breaking_character_survives_into_a_log_line(self):
+        from src.core.webhook_validator import webhook_url_for_log
+
+        offenders = [
+            (hex(ord(ch)), out)
+            for ch in self.LINE_BREAKING
+            if len((out := webhook_url_for_log(f"https://localhost/ho{ch}ok")).splitlines()) > 1
+        ]
+        assert offenders == [], f"these forge a second log line: {offenders}"
+
+    def test_the_path_is_still_readable_when_it_is_innocent(self):
+        """Escaping must not mangle an ordinary path -- the operator still needs it."""
+        from src.core.webhook_validator import webhook_url_for_log
+
+        assert webhook_url_for_log("https://buyer.example/hooks/delivery") == ("https://buyer.example/hooks/delivery")
