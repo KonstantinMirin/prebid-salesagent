@@ -329,3 +329,67 @@ def test_webhook_retries_on_failure(mock_sleep):
         assert call_counter["count"] <= 4, (
             f"Expected at most 4 retry attempts (3 + 1 pollution), got {call_counter['count']}"
         )
+
+
+def test_a_started_approval_thread_can_be_cancelled(mock_db_session):
+    """A caller can cancel a started approval thread, and it stops promptly.
+
+    The defect (#2056): `_active_approvals` holds the thread but exposes no way
+    to stop it. A started thread runs the real retry path -- `time.sleep(2 **
+    attempt)` behind HTTP POSTs that time out after 10 s -- so it outlives the
+    request, and the test, by tens of seconds. Measured: a thread from
+    `test_start_approval_creates_sync_job` called sleep(1) and sleep(2) during
+    `test_performance_index_behavioral` and `test_policy_typed_models`, roughly
+    1500 tests later, landing inside another test's mock because
+    `src/core/webhook_delivery.py` imports `time` and patching
+    `src.core.webhook_delivery.time.sleep` replaces it process-wide.
+
+    `delivery_simulator.stop_simulation` and gam/managers/reporting already
+    solve this with a parallel `_stop_signals` Event dict beside the registry;
+    this service is the third site and never got one.
+
+    The import is inside the test on purpose: in the red state it fails here,
+    before any thread is started, so a failing run does not itself leak the
+    thread this test exists to bound.
+    """
+    import threading
+
+    from src.services.order_approval_service import (
+        _active_approvals,
+        cancel_order_approval,
+        get_approval_stop_signal,
+    )
+
+    started = threading.Event()
+    observed_stop: dict[str, threading.Event | None] = {"signal": None}
+
+    def _blocking_worker(*args, **kwargs):
+        # Stand in for the real retry loop: wait on the stop signal the way a
+        # cancellable sleep must, rather than sleeping blind. approval_id comes
+        # from args[0], as production's _run_approval_thread receives it — NOT
+        # from a variable the caller assigns after start_order_approval_background
+        # returns, which the worker races.
+        signal = get_approval_stop_signal(args[0])
+        observed_stop["signal"] = signal
+        started.set()
+        signal.wait(timeout=30.0)
+
+    approval_id_holder: dict[str, str] = {}
+    with patch("src.services.order_approval_service._run_approval_thread", side_effect=_blocking_worker):
+        approval_id_holder["id"] = start_order_approval_background(
+            order_id="12345",
+            media_buy_id="mb_123",
+            tenant_id="tenant_1",
+            principal_id="principal_1",
+        )
+        approval_id = approval_id_holder["id"]
+        assert started.wait(timeout=5.0), "worker never started"
+        assert is_approval_running(approval_id)
+
+        cancel_order_approval(approval_id)
+
+        thread = _active_approvals.get(approval_id)
+        assert thread is not None
+        thread.join(timeout=5.0)
+        assert not thread.is_alive(), "cancel did not stop the approval thread within 5 s"
+        assert observed_stop["signal"] is not None and observed_stop["signal"].is_set()

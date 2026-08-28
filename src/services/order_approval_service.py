@@ -26,6 +26,54 @@ logger = logging.getLogger(__name__)
 # (production memory-leak triage #5).
 _active_approvals = ThreadRegistry()
 
+# The parallel stop-signal dict, the same dual-dict shape delivery_simulator.py
+# and gam/managers/reporting.py already use and that ThreadRegistry's own
+# docstring sanctions. Without it the registry could observe a thread but never
+# stop one: the retry path below sleeps 2**attempt behind HTTP POSTs that time
+# out after 10 s, so a started approval outlived the request that began it by
+# tens of seconds. Measured (#2056): a thread from one unit test called sleep(1)
+# and sleep(2) inside two OTHER tests ~1500 tests later, landing in their mocks
+# because src/core/webhook_delivery.py imports `time` and patching
+# src.core.webhook_delivery.time.sleep replaces it process-wide.
+_stop_signals: dict[str, threading.Event] = {}
+_stop_signals_lock = threading.Lock()  # Protects _stop_signals iteration
+
+
+def _on_approval_reaped(approval_id: str) -> None:
+    """Drop the parallel _stop_signals entry when a dead approval is reaped.
+
+    Lock-free by design, exactly as delivery_simulator._on_simulation_reaped is:
+    ``dict.pop`` is atomic under the GIL, and the reap path runs
+    registry-lock -> here while the accessors take _stop_signals_lock ->
+    registry. Taking the lock here would invert that order and risk an ABBA
+    deadlock.
+    """
+    _stop_signals.pop(approval_id, None)
+
+
+_active_approvals.add_reap_callback(_on_approval_reaped)
+
+
+def get_approval_stop_signal(approval_id: str) -> threading.Event | None:
+    """The stop signal for a running approval, or None if it is not running."""
+    with _stop_signals_lock:
+        return _stop_signals.get(approval_id)
+
+
+def cancel_order_approval(approval_id: str) -> bool:
+    """Ask a running approval thread to stop; True if one was signalled.
+
+    Cooperative: it sets the Event the worker's interruptible sleep waits on, so
+    the thread stops at its next sleep boundary rather than being killed. Join
+    it with ``_active_approvals.get(approval_id)`` when the caller needs the
+    thread actually finished.
+    """
+    signal = get_approval_stop_signal(approval_id)
+    if signal is None:
+        return False
+    signal.set()
+    return True
+
 
 def start_order_approval_background(
     order_id: str,
@@ -90,6 +138,14 @@ def start_order_approval_background(
         )
         db.add(approval_job)
         db.commit()
+
+    # Reserve the stop signal BEFORE starting the thread, so a cancel racing the
+    # start still lands: the worker reads the signal, and a caller that cancels
+    # between add() and the worker's first sleep finds an Event already there.
+    # Never call into the registry while holding this lock — the registry has its
+    # own, and the reap callback re-enters _stop_signals (ABBA avoidance).
+    with _stop_signals_lock:
+        _stop_signals[approval_id] = threading.Event()
 
     # Start background thread
     thread = threading.Thread(
@@ -291,6 +347,7 @@ def _mark_approval_complete(
                 message="Order approved successfully",
                 order_id=summary.get("order_id"),
                 attempts=summary.get("attempts"),
+                stop_signal=get_approval_stop_signal(approval_id),
             )
 
     except Exception as e:
@@ -327,6 +384,7 @@ def _mark_approval_failed(
                 message=error_message,
                 order_id=approval_job.progress.get("order_id") if approval_job and approval_job.progress else None,
                 attempts=approval_job.progress.get("attempts") if approval_job and approval_job.progress else None,
+                stop_signal=get_approval_stop_signal(approval_id),
             )
 
     except Exception as e:
@@ -360,8 +418,14 @@ def _post_approval_webhook_with_retries(
     webhook_url: str,
     payload: dict[str, Any],
     headers: dict[str, str],
+    stop_signal: threading.Event | None = None,
 ) -> None:
-    """POST the approval payload with retries; refuse open redirects."""
+    """POST the approval payload with retries; refuse open redirects.
+
+    ``stop_signal`` makes the backoff interruptible. It is passed in rather than
+    looked up from the registry so this helper stays ignorant of approval
+    bookkeeping — it only needs "has the caller been asked to stop".
+    """
     safe_url = webhook_url_for_log(webhook_url)
     max_retries = 3
     for attempt in range(max_retries):
@@ -403,7 +467,16 @@ def _post_approval_webhook_with_retries(
             )
 
         if attempt < max_retries - 1:
-            time.sleep(2**attempt)
+            # Interruptible: Event.wait returns True the moment cancel_order_approval
+            # sets it, so a cancelled approval stops at this boundary instead of
+            # sleeping out the full backoff. time.sleep() here is what let a thread
+            # outlive its request by tens of seconds.
+            if stop_signal is not None:
+                if stop_signal.wait(timeout=2**attempt):
+                    logger.info("Approval webhook retries cancelled during backoff (%s)", safe_url)
+                    return
+            else:
+                time.sleep(2**attempt)
 
     logger.error("Failed to send approval webhook to %s after %s attempts", safe_url, max_retries)
 
@@ -417,6 +490,7 @@ def _send_approval_webhook(
     message: str,
     order_id: str | None = None,
     attempts: int | None = None,
+    stop_signal: threading.Event | None = None,
 ):
     """Send webhook notification for approval status update.
 
@@ -460,6 +534,7 @@ def _send_approval_webhook(
             webhook_url,
             payload,
             _approval_webhook_headers(config),
+            stop_signal,
         )
 
     except Exception as e:
