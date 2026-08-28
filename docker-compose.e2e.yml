@@ -247,6 +247,13 @@ services:
       # (2) under xdist BDD_E2E_ENABLED doesn't reach the worker's collection, so
       # the e2e_rest 5th transport is silently dropped. -n0 collects in-process.
       BDD_XDIST_N: "${BDD_XDIST_N:-0}"
+      # Sharded bdd-inprocess-s{1,2}: each shard's path list and its worker count.
+      # Empty defaults are deliberate -- run_all_tests.sh asserts both non-empty
+      # with ${VAR:?} before tox runs, because tox itself drops an empty
+      # {env:...} from argv silently rather than failing.
+      BDD_SHARD_PATHS_1: "${BDD_SHARD_PATHS_1:-}"
+      BDD_SHARD_PATHS_2: "${BDD_SHARD_PATHS_2:-}"
+      BDD_SHARD_XDIST_N: "${BDD_SHARD_XDIST_N:-}"
       # xdist distribution mode: loadfile (default; whole feature file -> one
       # worker) vs load (individual scenarios spread across workers). load
       # removes the big-file wall-time floor but requires scenarios to be

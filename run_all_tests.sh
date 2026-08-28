@@ -113,7 +113,7 @@ export INTEGRATION_XDIST_N="${INTEGRATION_XDIST_N:-$_integration}"
 # raises a UsageError for that together with -n>0 unless E2E_PER_WORKER=1 --
 # because under xdist the e2e_rest transport is silently dropped at collection and
 # the suite would go green without ever having run it. Setting E2E_WORKERS>0 takes
-# the fast path below, which splits `bdd` into `bdd_inprocess` (e2e disabled,
+# the fast path below, which splits `bdd` into `bdd-inprocess-s1,s2` (e2e off,
 # freely parallel) plus `bdd_e2e`, and provisions N per-worker server+DB stacks so
 # e2e_rest can run in parallel legally.
 export E2E_WORKERS="${E2E_WORKERS:-$_e2e_workers}"
@@ -150,28 +150,45 @@ if [ "$DELEGATE" = 1 ]; then
 fi
 
 # Fast bdd path: when per-worker e2e stacks are provisioned (E2E_WORKERS>0), swap
-# the plain serial `bdd` env for the two-pass split — bdd_inprocess (the
+# the plain serial `bdd` env for the sharded split — bdd-inprocess-s1/s2 (the
 # a2a/mcp/rest bulk, parallelized by BDD_XDIST_N) then bdd_e2e (the e2e_rest
 # transport, fanned across the per-worker servers by BDD_E2E_XDIST_N). Without
 # E2E_WORKERS the plain serial `bdd` runs unchanged, so CI and small runners are
 # unaffected. Phase B below provisions the servers and exports BDD_E2E_XDIST_N.
 if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
     # Token-exact swap: a plain-substring ${SUITES/bdd/...} would mangle an
-    # explicit bdd_inprocess/bdd_e2e suite argument (bdd_e2e -> bdd_e2e_e2e).
+    # explicit bdd-inprocess-s*/bdd_e2e suite argument (bdd_e2e -> bdd_e2e_e2e).
     SUITES=",$SUITES,"
-    SUITES="${SUITES/,bdd,/,bdd_inprocess,bdd_e2e,}"
+    SUITES="${SUITES/,bdd,/,bdd-inprocess-s1,bdd-inprocess-s2,bdd_e2e,}"
     SUITES="${SUITES#,}"; SUITES="${SUITES%,}"
-    # bdd_inprocess reads BDD_XDIST_N (compose pins it to 0 = serial by default),
-    # so the in-process bulk only parallelizes if we export a worker count here.
+    # Each shard collects only its own files. Under xdist every worker collected
+    # all 7223 items to run a slice of them -- 162.5 s per worker against 57.9 s
+    # to import -- so collection cost was O(items x workers). The split is the
+    # committed one at SHARD_COUNTS["bdd"]=2, the same assignment CI's matrix
+    # runs, so tests/unit/test_architecture_ci_bdd_shard_manifest.py already
+    # grades the exact partition used here.
     #
     # A REAL NUMBER, not `auto`. `auto` resolves through
     # PYTEST_XDIST_AUTO_NUM_WORKERS, which docker-compose.e2e.yml pins to 1 for
-    # BDD's own benefit -- so `auto` here meant ONE worker for every caller that
-    # does not separately export that variable, and the ~23m->~3.5m in-process win
-    # silently never landed. Matching E2E_WORKERS keeps the two halves of the split
-    # in proportion; both are overridable.
-    export BDD_XDIST_N="${BDD_XDIST_N:-$E2E_WORKERS}"
-    echo "Fast bdd path: E2E_WORKERS=$E2E_WORKERS BDD_XDIST_N=$BDD_XDIST_N -> suites=$SUITES"
+    # BDD's own benefit -- so `auto` meant ONE worker for every caller that does
+    # not separately export that variable, and the ~23m->~3.5m in-process win
+    # silently never landed. Half of E2E_WORKERS per shard keeps the TOTAL worker
+    # count at E2E_WORKERS, which is what the memory tiering above already sized;
+    # the override form is what lets a measurement harness pin it.
+    export BDD_SHARD_XDIST_N="${BDD_SHARD_XDIST_N:-$(( E2E_WORKERS / 2 > 0 ? E2E_WORKERS / 2 : 1 ))}"
+    BDD_SHARD_PATHS_1="$(python3 scripts/ci/shard_paths.py bdd 1 | tr '\n' ' ')"
+    BDD_SHARD_PATHS_2="$(python3 scripts/ci/shard_paths.py bdd 2 | tr '\n' ' ')"
+    export BDD_SHARD_PATHS_1 BDD_SHARD_PATHS_2
+    # `export X="$(cmd)"` does NOT abort under `set -euo pipefail`: the exit
+    # status is the export builtin's, not the substitution's. So a shard_paths.py
+    # failure yields an EMPTY list, and tox drops an empty {env:...} from argv
+    # without a word -- pytest then falls back to pytest.ini's `testpaths = tests`
+    # and each shard collects the whole tree, green. These asserts are the only
+    # thing standing between that and a silent full-tree run.
+    : "${BDD_SHARD_PATHS_1:?shard_paths.py produced no paths for bdd shard 1}"
+    : "${BDD_SHARD_PATHS_2:?shard_paths.py produced no paths for bdd shard 2}"
+    : "${BDD_SHARD_XDIST_N:?shard worker count resolved empty}"
+    echo "Fast bdd path: E2E_WORKERS=$E2E_WORKERS BDD_SHARD_XDIST_N=$BDD_SHARD_XDIST_N -> suites=$SUITES"
 fi
 
 # UTC, not local: the runner box and the machine reading the reports are in
@@ -362,7 +379,8 @@ fi
 # comment used to cite was, for some callers, never actually applied. With
 # that bug fixed and the cap now confirmed to genuinely reach the container,
 # a real, monitored, disposable-worktree run of the full 7-suite `-p` (unit,
-# integration, bdd_inprocess, bdd_e2e, admin, e2e, ui) measured peak memory at
+# integration, bdd-inprocess-s1, bdd-inprocess-s2, bdd_e2e, admin, e2e, ui)
+# measured peak memory at
 # ~35GB of the box's 86.4GB (40.5%), no OOM, pass/fail counts matching a
 # serial baseline, measured on a full in-network run of all 7 suites.
 echo "Running suites in-network (parallel): $SUITES"
@@ -381,7 +399,7 @@ chmod -R go-w .git 2>/dev/null || true
 # Delete last run's reports BEFORE this run writes its own. The copy below is a
 # blanket `cp .tox/*.json`, so without this it publishes reports from envs THIS
 # run never executed, stamped into a fresh results dir as if they were current.
-# That is not hypothetical: `bdd` is swapped out for `bdd_inprocess,bdd_e2e`
+# That is not hypothetical: `bdd` is swapped out for `bdd-inprocess-s*,bdd_e2e`
 # whenever E2E_WORKERS>0 (see above), so a stale bdd.json from whenever
 # `tox -e bdd` last ran kept being republished -- one was a full DAY older than
 # its directory-mates and reported 6 failures against code that no longer
@@ -390,6 +408,40 @@ chmod -R go-w .git 2>/dev/null || true
 rm -f .tox/*.json
 
 dc run --rm --use-aliases $E2E_ENV_ARGS tests tox -p -e "$SUITES" || RC=$?
+
+# Merge the BDD shard reports back into one bdd_inprocess.json. Every downstream
+# reader globs FILES, not env names -- the `cp .tox/*.json` below, the RC
+# reconciliation further down, and scripts/check_truncated_reports.py -- and each
+# expects one row per suite. Left as parts, one failure would be counted twice
+# and cassini would render three BDD rows where there is one suite.
+#
+# The hard-fail is the point. check_truncated_reports.py compares
+# collected-deselected against total PER FILE and is BLIND to a file that is
+# absent: if a shard OOMs (this box has done exactly that -- `bdd_inprocess:
+# FAIL code -9`) and we quietly emitted the survivor alone, the merged report
+# would be internally consistent and the run would go GREEN with half the BDD
+# suite never executed. Summing collected/total/deselected is what keeps that
+# existing predicate binding on the merged file.
+# The expected count comes from SHARD_COUNTS, not from a literal here: the two
+# `shard_paths.py bdd 1|2` calls above are hand-written, so raising SHARD_COUNTS
+# would send a third of the suite to a shard nothing runs. Reading it back means
+# that drift fails the merge instead of silently publishing a short suite.
+if ls .tox/bdd-inprocess-s*.json >/dev/null 2>&1; then
+    # Read INSIDE the guard: without shard reports there is nothing to merge, and
+    # the plain `bdd` path (E2E_WORKERS=0, which CI and small runners take) must
+    # not pay for or fail on an import it has no use for.
+    #
+    # sys.path.insert is not optional: `python3 -c` does not reliably put the cwd
+    # on sys.path (PYTHONSAFEPATH / -P turn it off), and scripts/ci/shard_paths.py
+    # solves the same problem the same way at its own top.
+    _BDD_SHARDS="$(python3 -c "import sys; sys.path.insert(0, '.'); from scripts.ci.shard_split import SHARD_COUNTS; print(SHARD_COUNTS['bdd'])")"
+    if ! python3 scripts/ci/merge_shard_reports.py .tox/bdd_inprocess.json "$_BDD_SHARDS" .tox/bdd-inprocess-s*.json; then
+        echo "ERROR: BDD shard reports could not be merged -- refusing to publish a partial suite." >&2
+        RC=1
+    else
+        rm -f .tox/bdd-inprocess-s*.json
+    fi
+fi
 
 # tox writes per-suite JSON into /app/.tox, which is a plain bind-mounted dir
 # now (Aug 2026: the tox_data named volume it used to live on was removed --
