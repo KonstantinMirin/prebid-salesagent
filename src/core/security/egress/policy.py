@@ -166,7 +166,7 @@ def _scheme_error(parsed: ParseResult) -> str | None:
     ``return True``).
     """
     if parsed.scheme != "https":
-        return f"URL must use HTTPS scheme, got '{parsed.scheme}'"
+        return "scheme is not https"
     return None
 
 
@@ -214,10 +214,10 @@ def _registration_error(url: str) -> str | None:
 
     hostname = parsed.hostname
     if not hostname:
-        return "URL must have a valid hostname"
+        return "no hostname"
 
     if hostname.lower() in _BLOCKED_HOSTNAMES:
-        return f"URL hostname '{hostname}' is blocked (internal/private)"
+        return "hostname is on the blocklist"
 
     try:
         literal_ip = ipaddress.ip_address(hostname)
@@ -271,15 +271,20 @@ class EgressPolicy:
             # buyer-facing refusal. Anything that is NOT a ValueError is not a
             # malformed URL and has no business being reported as one -- it now
             # escapes loudly instead of being relabelled.
-            logger.warning("Refusing URL at registration: malformed (%s)", exc)
+            logger.warning("Refusing URL at registration: malformed (%r)", exc)
             raise AdCPBlockedUrlError() from exc
         if error is None:
             return
         if allow_loopback and _is_rescuable_loopback(url):
             return
-        # Same split as the webhook registration gate: ``error`` names the cause
-        # and is operator-side; the class supplies the buyer-facing sentence.
-        logger.warning("Refusing URL at registration: %s", error)
+        # Every cause is a FIXED label -- no scheme, no hostname, nothing the
+        # caller supplied -- so there is nothing here to inject with. The URL an
+        # operator needs to act goes through webhook_url_for_log, the one
+        # sanitizer, which drops credentials and query. Local import:
+        # webhook_validator imports this module, so a module-level one is a cycle.
+        from src.core.webhook_validator import webhook_url_for_log
+
+        logger.warning("Refusing URL at registration (%s): %s", error, webhook_url_for_log(url))
         raise AdCPBlockedUrlError()
 
     @staticmethod

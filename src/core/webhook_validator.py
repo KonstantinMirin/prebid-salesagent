@@ -41,7 +41,6 @@ coercion) that happens to live in this file.
 
 from __future__ import annotations
 
-import logging
 import os
 from typing import Any
 from urllib.parse import urlparse
@@ -50,8 +49,6 @@ from adcp.types import ContextObject, TaskType
 
 from src.core.exceptions import AdCPBlockedUrlError
 from src.core.security.egress.policy import EgressPolicy
-
-logger = logging.getLogger(__name__)
 
 # Fallback used when an action label is not a member of the SDK's closed
 # TaskType enum. create_mcp_webhook_payload() restricts task_type to that
@@ -156,10 +153,12 @@ def reject_unsafe_webhook_registration_url(
     """
     if url is None or not str(url).strip():
         return
-    is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(str(url))
+    # The cause is logged by EgressPolicy.check_registration, which computes it.
+    # Logging it a second time here would double every refusal in the operator's
+    # log for no added fact — this frame only adds ``field``, which the buyer
+    # already receives on the error.
+    is_valid, _ = WebhookURLValidator.validate_webhook_url_registration(str(url))
     if not is_valid:
-        # The cause is for the operator; the buyer gets the class's message.
-        logger.warning("Refusing webhook registration for field %s: %s", field, error_msg)
         raise AdCPBlockedUrlError(
             field=field,
             suggestion=webhook_ssrf_suggestion(),
