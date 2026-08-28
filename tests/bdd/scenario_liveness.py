@@ -363,6 +363,40 @@ def pytest_testnodedown(node: Any, error: Any) -> None:
         _merge_shard(workeroutput[_WORKEROUTPUT_KEY])
 
 
+def _run_scope(session: pytest.Session) -> dict[str, Any]:
+    """What this session actually covered, recorded beside what it observed.
+
+    The collect-only early return above closes the case where a session observes
+    NOTHING and writes ``{"scenarios": []}`` over a real artifact; the join fails
+    closed on an empty file. It fails closed only on EMPTY. A NARROWED run is the
+    remaining hole and it is not hypothetical: seeding the artifact with 900
+    records and running ``pytest tests/bdd -k "storyboard and recancel"`` rewrote
+    it to ONE record, and the 899 became ``measured_this_run=False`` -> dormant,
+    with nothing in the file saying a narrower question had been asked.
+
+    This module's docstring claims "the artifact didn't run this session must be
+    visible in the file itself, not inferred from the file's absence". That was
+    true for zero and false for partial. This block makes it true for both:
+    ``load_artifact`` refuses an artifact whose own scope says it is not a
+    measurement of the suite.
+    """
+    config = session.config
+    return {
+        "collected": session.testscollected,
+        "selection": getattr(config.option, "keyword", "") or "",
+        "markers": getattr(config.option, "markexpr", "") or "",
+        "deselected": len(getattr(session, "deselected", ()) or ()),
+        "workers": len(getattr(config, "workerinput", {})) or _worker_count(config),
+        "exitstatus": int(session.exitstatus or 0),
+        "testsfailed": int(session.testsfailed or 0),
+    }
+
+
+def _worker_count(config: pytest.Config) -> int:
+    """xdist worker count as the CONTROLLER sees it, or 0 for a serial run."""
+    return int(getattr(config.option, "numprocesses", 0) or 0)
+
+
 def pytest_sessionfinish(session: pytest.Session) -> None:
     """Ship this worker's shard, or (on the controller) write the merged artifact.
 
@@ -402,5 +436,5 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     _merge_shard([_RECORDS[k].to_dict() for k in sorted(_RECORDS)])
     path = artifact_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    artifact = {"scenarios": [_SHARDS[k] for k in sorted(_SHARDS)]}
+    artifact = {"run": _run_scope(session), "scenarios": [_SHARDS[k] for k in sorted(_SHARDS)]}
     path.write_text(json.dumps(artifact, indent=2, sort_keys=False) + "\n", encoding="utf-8")

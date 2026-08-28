@@ -46,12 +46,14 @@ load-bearing today. They are kept because a future pin can give either file
 graded checks, and then the inflated expectation would demand gating the spec
 does not require.
 
-KNOWN BLIND SPOT. Both assertions read the PUBLISHED records, and only ON-PATH
-and GATED storyboards are published (``INDEXED_STATUSES``). So a declaring
-storyboard misrouted to OFF-PATH leaves the index entirely and both tests go
-quiet — absence is invisible to a comparison over what is present. Guarding that
-needs a floor on the record COUNT, which is salesagent-kkvy2.6's instrument, not
-this module's.
+BLIND SPOT, now covered elsewhere. Both assertions read the PUBLISHED records,
+and only ON-PATH and GATED storyboards are published (``INDEXED_STATUSES``). So a
+declaring storyboard misrouted to OFF-PATH leaves the index entirely and both
+tests go quiet — absence is invisible to a comparison over what is present. The
+floor that catches it lives in ``test_architecture_measurement_floors.py``
+(``test_the_published_check_index_does_not_silently_shrink``): it pins the GATED
+storyboard SET, so a storyboard leaving the index reddens there even though it
+goes silent here.
 """
 
 from __future__ import annotations

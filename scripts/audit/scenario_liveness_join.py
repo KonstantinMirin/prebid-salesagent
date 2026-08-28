@@ -139,7 +139,37 @@ def load_artifact(path: Path) -> dict[str, dict[str, Any]]:
     if not path.is_file():
         return {}
     data = json.loads(path.read_text(encoding="utf-8"))
+    _reject_narrowed_run(path, data.get("run"))
     return {s["scenario_id"]: s for s in data.get("scenarios", [])}
+
+
+def _reject_narrowed_run(path: Path, run: dict[str, Any] | None) -> None:
+    """A narrowed session's artifact is not a measurement of the suite.
+
+    Absence fails closed already; NARROWING did not. ``pytest tests/bdd -k
+    "storyboard and recancel"`` over a 900-record artifact leaves one record, and
+    every other scenario reads as dormant rather than as unasked. The writer now
+    records its own scope, so the distinction is in the file rather than
+    inferred from it.
+
+    ``run`` is absent in an artifact written before that landed. Treated as
+    legacy and allowed through: it is a gitignored, regenerated file, and
+    refusing it would fail the first run after an upgrade rather than the
+    condition worth catching.
+    """
+    if not run:
+        return
+    selection = run.get("selection") or ""
+    markers = run.get("markers") or ""
+    if not selection and not markers:
+        return
+    raise storyboard_spec.StoryboardAuditError(
+        f"{path} was written by a NARROWED bdd run "
+        f"(-k {selection!r}, -m {markers!r}; {run.get('collected')} collected). "
+        "Every scenario it does not name would report dormant, which is a claim about "
+        "production rather than about the question that was asked. Re-run the full suite "
+        "(`pytest tests/bdd`) before regenerating anything that quotes liveness."
+    )
 
 
 def build_index(

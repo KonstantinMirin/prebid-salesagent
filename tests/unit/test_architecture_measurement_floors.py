@@ -10,9 +10,14 @@ thing being counted disappears and the count keeps reporting success.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
+
+from tests.unit._storyboard_guard_env import ADCP_HOME, requires_pinned_bundle
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
@@ -84,6 +89,84 @@ def test_every_wired_env_route_is_still_registered() -> None:
     )
 
 
+# ── Floor 2: the published check-index cannot shrink unnoticed ─────────────
+#
+# The gate-schema oracle declares this blind spot about itself: both of its
+# assertions read the PUBLISHED records, and only ON-PATH and GATED storyboards
+# are published (`INDEXED_STATUSES`). A DECLARING storyboard misrouted to
+# OFF-PATH therefore leaves the index entirely, and a comparison over what is
+# present cannot see an absence. Measured blast radius: misrouting the 21 gated
+# storyboards that carry no ledger entry drops 516 of 544 GATED records — 38% of
+# the 1351-record index — and the whole 110-module architecture suite stays
+# green.
+#
+# Pinned as a SET, not a count, for the same reason the route floor above is:
+# a count is satisfied by add-plus-drop. The set is what makes a misroute
+# visible, because a misrouted storyboard leaves it.
+EXPECTED_GATED_STORYBOARDS: frozenset[str] = frozenset(
+    {
+        "protocols/media-buy/scenarios/audience_buy_flow.yaml",
+        "protocols/media-buy/scenarios/available_actions.yaml",
+        "protocols/media-buy/scenarios/clicks_buy_flow.yaml",
+        "protocols/media-buy/scenarios/completed_views_buy_flow.yaml",
+        "protocols/media-buy/scenarios/dependency_impairment.yaml",
+        "protocols/media-buy/scenarios/dependency_impairment_cardinality.yaml",
+        "protocols/media-buy/scenarios/event_dedup_flow.yaml",
+        "protocols/media-buy/scenarios/frequency_cap_enforcement.yaml",
+        "protocols/media-buy/scenarios/inline_creatives_without_sync.yaml",
+        "protocols/media-buy/scenarios/pending_creatives_to_start.yaml",
+        "protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml",
+        "protocols/media-buy/scenarios/performance_buy_flow.yaml",
+        "protocols/media-buy/scenarios/performance_buy_flow_roas.yaml",
+        "protocols/media-buy/scenarios/product_signal_targeting.yaml",
+        "protocols/media-buy/scenarios/reach_buy_flow.yaml",
+        "protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml",
+        "protocols/media-buy/scenarios/vendor_metric_catalog_precondition.yaml",
+        "protocols/media-buy/scenarios/vendor_metric_optimization_flow.yaml",
+        "protocols/media-buy/state-machine.yaml",
+        "universal/get-products-pagination-integrity.yaml",
+        "universal/wholesale-feed-bulk-webhooks.yaml",
+        "universal/wholesale-feed-product-webhooks.yaml",
+        "universal/wholesale-feed-products.yaml",
+        "universal/wholesale-feed-signal-webhooks.yaml",
+        "universal/wholesale-feed-signals.yaml",
+    }
+)
+
+#: Floor under the record count itself. A count, not a set — the records are the
+#: thing being counted, and 1351 individual ids would be a second index rather
+#: than a floor. It catches wholesale collapse; the SET above catches a misroute.
+MINIMUM_INDEX_CHECKS = 1351
+
+
+@requires_pinned_bundle
+def test_the_published_check_index_does_not_silently_shrink() -> None:
+    """A declaring storyboard leaving the index must redden, not go quiet."""
+    from scripts.audit import storyboard_check_index
+
+    index = storyboard_check_index.build(REPO_ROOT, ADCP_HOME)
+    gated = {r["storyboard"] for r in index["records"] if r["gate"] == "GATED"}
+
+    missing = sorted(EXPECTED_GATED_STORYBOARDS - gated)
+    added = sorted(gated - EXPECTED_GATED_STORYBOARDS)
+
+    assert not missing, (
+        f"{len(missing)} GATED storyboard(s) left the published index: {missing}. "
+        "Either the gate classifier misrouted them to OFF-PATH — in which case their checks "
+        "vanished from the index and the gate-schema oracle cannot see the absence — or the "
+        "reclassification is deliberate and belongs in EXPECTED_GATED_STORYBOARDS in the same change."
+    )
+    assert not added, (
+        f"{len(added)} GATED storyboard(s) are published but not pinned: {added}. "
+        "Add them so a later disappearance is caught."
+    )
+    assert index["totals"]["checks"] >= MINIMUM_INDEX_CHECKS, (
+        f"the check index published {index['totals']['checks']} records, below the "
+        f"{MINIMUM_INDEX_CHECKS} floor. The index is the denominator every conformance "
+        "number here is quoted against; it shrinking silently makes every one of them flattering."
+    )
+
+
 # ── Floor 2: the liveness artifact's collect-only protection ────────────────
 #
 # `scenario_liveness.pytest_sessionfinish` returns early on a collect-only
@@ -120,3 +203,50 @@ def test_collect_only_session_does_not_write_the_liveness_artifact(tmp_path, mon
         "scenario_liveness.pytest_sessionfinish that returns early on collectonly is gone or "
         "no longer reached, and `make quality` will now destroy the artifact on every run"
     )
+
+
+# ── Floor 3: a narrowed bdd run must not pass as a measurement ──────────────
+#
+# The collect-only return closes the ZERO case. NARROWING was the remaining
+# hole: seeding the artifact with 900 records and running
+# `pytest tests/bdd -k "storyboard and recancel"` rewrote it to ONE record, and
+# the other 899 read as dormant — a claim about production, from a file that
+# only recorded a narrower question having been asked.
+
+
+def test_a_narrowed_run_is_rejected_rather_than_read_as_dormancy(tmp_path) -> None:
+    """The artifact's own scope block must make a partial run visible."""
+    from scripts.audit import scenario_liveness_join, storyboard_spec
+
+    artifact = tmp_path / "liveness.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "run": {"collected": 1, "selection": "storyboard and recancel", "markers": ""},
+                "scenarios": [{"scenario_id": "T-UC-003-x", "steps_bound": True, "ledgered": False}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(storyboard_spec.StoryboardAuditError) as excinfo:
+        scenario_liveness_join.load_artifact(artifact)
+    assert "storyboard and recancel" in str(excinfo.value)
+
+
+def test_a_full_run_is_still_read_normally(tmp_path) -> None:
+    """The floor must not reject the artifact it exists to protect."""
+    from scripts.audit import scenario_liveness_join
+
+    artifact = tmp_path / "liveness.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                "run": {"collected": 900, "selection": "", "markers": ""},
+                "scenarios": [{"scenario_id": "T-UC-003-x", "steps_bound": True, "ledgered": False}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert set(scenario_liveness_join.load_artifact(artifact)) == {"T-UC-003-x"}
