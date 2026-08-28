@@ -18,8 +18,8 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
 from sqlalchemy import func, select
 
 from src.core.database.database_session import get_db_session
+from src.core.database.models import PersistedMediaBuyStatus, WebhookDeliveryLog
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
-from src.core.database.models import WebhookDeliveryLog
 from src.core.database.repositories import MediaBuyRepository
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
@@ -95,7 +95,9 @@ class DeliveryWebhookScheduler:
         try:
             with get_db_session() as session:
                 # Find all active media buys (cross-tenant scheduler query)
-                media_buys = MediaBuyRepository.get_all_by_statuses(session, ["active", "approved"])
+                media_buys = MediaBuyRepository.get_all_by_statuses(
+                    session, {PersistedMediaBuyStatus.ACTIVE, PersistedMediaBuyStatus.APPROVED}
+                )
 
                 reports_sent = 0
                 errors = 0

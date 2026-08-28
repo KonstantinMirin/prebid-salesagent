@@ -1,4 +1,4 @@
-"""Regression tests for salesagent-kwws: silent return [] masks agent failures.
+"""Regression tests for : silent return [] masks agent failures.
 
 A creative-agent fetch failure must surface as an error in
 ``FormatFetchResult.errors``, never as a silently empty format list — that
@@ -15,7 +15,6 @@ a malformed/unparseable MCP response must raise, not silently validate into
 both the operator and counterparty fetch paths share.
 
 Bug: prebid/salesagent#1136
-Beads: salesagent-kwws
 """
 
 from unittest.mock import AsyncMock, patch

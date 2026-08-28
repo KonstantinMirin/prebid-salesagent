@@ -10,7 +10,6 @@ This guard also checks that downgrade() reverses the structural changes made by
 upgrade() — specifically, that if upgrade() creates/drops tables, constraints,
 or columns, the downgrade() references the same tables.
 
-beads: salesagent-t735
 """
 
 import ast
@@ -64,8 +63,9 @@ SCHEMA_OPS = {
 
 # KNOWN_EMPTY_DOWNGRADE is imported from scripts.ci.migration_helpers — the
 # pre-push hook enforces the same policy and cannot import from tests/, so the
-# allowlist lives there and both paths read the one copy. The stale-entry tests
-# below stay here: they are the ratchet, not the policy.
+# allowlist lives there and both paths read the one copy. Its two legacy
+# migrations have incomplete downgrades; FIXME(#2107) tracks them. The
+# stale-entry tests below stay here: they are the ratchet, not the policy.
 
 KNOWN_DOWNGRADE_COVERAGE_GAPS = {
     # Legacy: upgrade creates index but downgrade doesn't drop it

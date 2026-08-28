@@ -43,9 +43,10 @@ this document.
 
 ## Behavior target vs SDK pin
 
-At the current pin the SDK **type shapes** and the graded **behavior** COINCIDE
-for `media_buy_status`. They did not always, and the history is worth keeping
-because the production mechanism that came out of it is still live.
+The SDK **pin** (`adcp==6.6.0`, spec **3.1.1**) fixes the request/response
+*type shapes* we build against. It does **not** always fix the graded
+*behavior*. One field diverges deliberately: the `media_buy_status` dual-emit
+on create-/update-media-buy responses.
 
 - **Then (3.1.0-beta.3):** the storyboard graded the body `status` as
   `field_value_or_absent` that MUST equal `media_buy_status` — the deprecated

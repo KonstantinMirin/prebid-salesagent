@@ -1,4 +1,4 @@
-"""CREATIVE_AGENT_URL aliases the public default agent's CONNECTION (salesagent-9qe2).
+"""CREATIVE_AGENT_URL aliases the public default agent's CONNECTION .
 
 The pinned test/CI stacks set CREATIVE_AGENT_URL to an in-network agent serving
 the same reference catalog as the public default. The registry honored that for
@@ -98,9 +98,10 @@ class TestRegistryConnectionRouting:
         # CANONICAL agent_url (not the connection alias) — the pinned reference
         # agent rejects a bare string, which the live public host tolerated
         # (the mismatch the in-network pinning unmasked). The identity keeps the
-        # CANONICAL agent_url. AnyUrl serialization yields the
-        # trailing-slash form for path-less URLs — verified tolerated
-        # by the pinned reference agent (probe 2026-07-13, salesagent-ehdq).
+        # CANONICAL agent_url and is the FormatId serialization
+        # (model_dump(mode="json")): Pydantic AnyUrl yields the trailing-slash
+        # form for the path-less public URL — verified tolerated by the pinned
+        # reference agent (probe 2026-07-13).
         payload = cmc.call_args.kwargs["arguments"]
         assert payload["format_id"] == {
             "agent_url": PUBLIC_DEFAULT_AGENT_URL + "/",

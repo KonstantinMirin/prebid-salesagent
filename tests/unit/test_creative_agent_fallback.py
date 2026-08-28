@@ -4,15 +4,13 @@ The fallback classes that used to live here (``TestStructuredContentFallbackTrig
 ``TestSchemaValidationFailureTriggersFallback``) tested a mechanism that no
 longer exists: the adcp SDK's own strict Pydantic parsing of
 ``list_creative_formats`` responses, which sometimes rejected a TextContent-only
-reply and triggered a fallback to the raw-MCP path. salesagent-4n88 removed the
-SDK client (``ADCPMultiAgentClient``) from the OPERATOR agent path entirely —
-routing it through the guarded MCP seam instead — so there is no SDK-side
+reply and triggered a fallback to the raw-MCP path. The SDK client
+(``ADCPMultiAgentClient``) has been removed from the OPERATOR agent path
+entirely — it is routed through the guarded MCP seam instead — so there is no SDK-side
 strict parser left to reject anything, and therefore nothing left to trigger a
 fallback FROM. ``_parse_mcp_tool_result``'s own tolerant, per-format validation
 (covered below) is now the ONLY ingestion path, for both the operator method
 and the counterparty raw-MCP method.
-
-Fixes: salesagent-c6i
 """
 
 import pytest
@@ -45,7 +43,7 @@ class TestParseMcpToolResult:
     def test_no_text_content_raises(self, registry):
         """Content with no text items → raises AdCPAdapterError.
 
-        Fix for salesagent-kwws: silent return [] masked failures as 'no formats'.
+        A silent ``return []`` used to mask failures as 'no formats'.
         """
         import logging
 
@@ -184,7 +182,7 @@ class TestParseMcpToolResult:
     def test_empty_content_raises(self, registry):
         """Empty content list → raises AdCPAdapterError.
 
-        Fix for salesagent-kwws: silent return [] masked failures as 'no formats'.
+        A silent ``return []`` used to mask failures as 'no formats'.
         """
         import logging
 
@@ -215,7 +213,7 @@ _KNOWN_FORMAT_B = {
 }
 # AdCP-additive asset_type the canonical reference agent serves but the pinned
 # (and latest) adcp closed Literal union does NOT model. This is the exact
-# production defect class from salesagent-w8yn.
+# production defect class.
 _ADDITIVE_FORMAT = {
     "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "tracking_pixel"},
     "name": "Tracking Pixel",
@@ -224,7 +222,7 @@ _ADDITIVE_FORMAT = {
 
 
 class TestTolerantPerFormatIngestion:
-    """Hermetic regression for salesagent-w8yn (Postel / asymmetric strictness).
+    """Hermetic regression (Postel / asymmetric strictness).
 
     One unknown AdCP-additive asset_type must NOT nuke the whole
     list_creative_formats response. Fully-understood formats are returned;

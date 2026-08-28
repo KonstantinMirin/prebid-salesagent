@@ -75,31 +75,6 @@ def _cleanup_completed_tasks():
             logger.debug(f"Cleaned up completed AI review task: {task_id}")
 
 
-def _compute_media_buy_status_from_flight_dates(media_buy) -> str:
-    """Compute status based on flight dates: 'active' if within window, else 'scheduled'."""
-    now = datetime.now(UTC)
-
-    start_time = None
-    if media_buy.start_time:
-        raw_start = media_buy.start_time
-        start_time = raw_start.replace(tzinfo=UTC) if raw_start.tzinfo is None else raw_start.astimezone(UTC)
-    elif media_buy.start_date:
-        start_time = datetime.combine(media_buy.start_date, datetime.min.time()).replace(tzinfo=UTC)
-
-    end_time = None
-    if media_buy.end_time:
-        raw_end = media_buy.end_time
-        end_time = raw_end.replace(tzinfo=UTC) if raw_end.tzinfo is None else raw_end.astimezone(UTC)
-    elif media_buy.end_date:
-        end_time = datetime.combine(media_buy.end_date, datetime.max.time()).replace(tzinfo=UTC)
-
-    # If start time passed and end time not passed, set to active
-    if start_time and end_time and now >= start_time and now <= end_time:
-        return "active"
-
-    return "scheduled"
-
-
 async def _deliver_sync_creatives_webhook(
     *,
     creative_id,
@@ -645,15 +620,10 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} status: {media_buy.status}")
 
                 if media_buy.status in {"pending_creatives", "draft"}:
-                    # Get all creative assignments for this media buy
-                    all_assignments = uow.assignments.get_by_media_buy(media_buy_id)
-
-                    creative_ids = [a.creative_id for a in all_assignments]
-                    all_creatives = uow.creatives.admin_get_by_ids(creative_ids)
-
-                    unapproved_creatives = [
-                        c.creative_id for c in all_creatives if c.status not in ["approved", "active"]
-                    ]
+                    # The same gate the writer applies, asked once. Open-coding it here
+                    # meant the route evaluated it, decided to call execute, and the
+                    # callee then evaluated it again in the same request.
+                    unapproved_creatives = uow.assignments.unapproved_creative_ids(media_buy_id)
 
                     logger.info(
                         f"[CREATIVE APPROVAL] Media buy {media_buy_id} has {len(unapproved_creatives)} unapproved creatives remaining"
@@ -684,23 +654,24 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                 f"[CREATIVE APPROVAL] All creatives approved for media buy {action['media_buy_id']}, executing adapter creation"
             )
 
-            success, error_msg = execute_approved_media_buy(action["media_buy_id"], tenant_id)
+            approval = execute_approved_media_buy(
+                action["media_buy_id"],
+                tenant_id,
+                approved_by="system",
+                approved_at=datetime.now(UTC),
+            )
 
-            if success:
-                # Update media buy status in a separate UoW
-                with AdminCreativeUoW(tenant_id) as uow2:
-                    assert uow2.media_buys is not None
-                    mb = uow2.media_buys.get_by_id(action["media_buy_id"])
-                    if mb:
-                        new_status = _compute_media_buy_status_from_flight_dates(mb)
-                        mb.status = new_status
-                        mb.approved_at = datetime.now(UTC)
-                        mb.approved_by = "system"
-                    # auto-commits
-
-                logger.info(f"[CREATIVE APPROVAL] Media buy {action['media_buy_id']} successfully created in adapter")
+            if approval.ok:
+                # No post-execute read or write here. The callee resolved the flight
+                # window and committed it in the same write that bumped the revision;
+                # this route only reports what it was told.
+                logger.info(
+                    f"[CREATIVE APPROVAL] Media buy {action['media_buy_id']} created in adapter -> {approval.status}"
+                )
             else:
-                logger.error(f"[CREATIVE APPROVAL] Adapter creation failed for {action['media_buy_id']}: {error_msg}")
+                logger.error(
+                    f"[CREATIVE APPROVAL] Adapter creation failed for {action['media_buy_id']}: {approval.error_msg}"
+                )
 
         # Retroactive push for already-live buys (#1038):
         # Buys in pending_creatives/draft were handled above. For buys that are

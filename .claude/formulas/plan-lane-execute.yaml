@@ -38,7 +38,7 @@ variables:
     description: "Space-separated lane task IDs (e.g. 'salesagent-prkv.4 salesagent-prkv.2'). Walk in the parent epic's dependency order."
     required: true
   PLAN_DOC:
-    description: "Path to the frozen plan doc that is the scope authority (e.g. .claude/notes/pr1721-review-round3-remediation-plan.md). Later ALTERATIONS sections win over earlier ones."
+    description: "Path to the frozen plan doc that is the scope authority (e.g. .claude/notes/pr1721-review-round3-remediation.md). Later ALTERATIONS sections win over earlier ones. MUST be git-tracked — an untracked plan is editable mid-run with no history and is absent from a fresh worktree, so 'frozen' would be honor-system only; the baseline atom records its SHA. Required (not optional): solution-review grades the design's FIDELITY to this doc, which is only non-vacuous when the referee lives OUTSIDE the bead the design was transcribed from."
     required: true
 
 labels:
@@ -57,14 +57,20 @@ setup:
       # when exit=0, read test-results/<latest>/ *.json — 0 failed/error in EVERY suite
       ```
 
-      Record in the epic notes: the run id, and the per-suite table. This table
-      is the layer-5 baseline the final verify compares against (pass-count +
-      xpass-IDENTITY, per the semantic-merge discipline).
+      Record in the epic notes: the run id, the per-suite table, AND the frozen
+      plan's identity so "frozen" is enforced, not asserted:
+      ```bash
+      git ls-files --error-unmatch "{PLAN_DOC}" >/dev/null 2>&1 \
+        || { echo "GATE FAIL: PLAN_DOC is not git-tracked — an untracked plan is not a frozen authority"; exit 1; }
+      git rev-parse "HEAD:{PLAN_DOC}"   # record this blob SHA in the epic notes
+      ```
+      This table is the layer-5 baseline the final verify compares against
+      (pass-count + xpass-IDENTITY, per the semantic-merge discipline).
 
       ## Gate — HARD STOP
       If ANY suite has failures/errors, stop. The lanes cannot be graded against
-      a red baseline.
-    acceptance: "Green baseline (run id + per-suite table) recorded in epic notes."
+      a red baseline. If PLAN_DOC is untracked, stop — commit it first.
+    acceptance: "Green baseline (run id + per-suite table) recorded; PLAN_DOC confirmed git-tracked and its blob SHA recorded in epic notes."
     labels: ["atom:baseline"]
 
 iterate:

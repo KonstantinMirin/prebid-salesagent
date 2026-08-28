@@ -67,7 +67,7 @@ def _make_creative_uow():
 
 
 # ===========================================================================
-# _sync.py coverage gaps (salesagent-ibj6)
+# _sync.py coverage gaps
 # ===========================================================================
 
 
@@ -366,7 +366,7 @@ class TestSyncMixedMessageSuffix:
 
 
 # ===========================================================================
-# _workflow.py coverage gaps (salesagent-ca0o)
+# _workflow.py coverage gaps
 # ===========================================================================
 
 
@@ -590,7 +590,7 @@ class TestWorkflowStatusBranches:
 
 
 # ===========================================================================
-# _validation.py coverage gaps (salesagent-94ep)
+# _validation.py coverage gaps
 # ===========================================================================
 
 
@@ -629,7 +629,7 @@ class TestValidationEdgeCases:
 
 
 # ===========================================================================
-# _assets.py coverage gaps (salesagent-94ep)
+# _assets.py coverage gaps
 # ===========================================================================
 
 
@@ -669,7 +669,7 @@ class TestAssetsEdgeCases:
 
 
 # ===========================================================================
-# listing.py coverage gaps (salesagent-94ep)
+# listing.py coverage gaps
 # ===========================================================================
 
 
@@ -707,7 +707,7 @@ class TestListingEdgeCases:
 
 
 # ===========================================================================
-# _assignments.py coverage gaps (salesagent-94ep)
+# _assignments.py coverage gaps
 # ===========================================================================
 
 

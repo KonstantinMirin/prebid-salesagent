@@ -4,7 +4,6 @@ Covers:
 - resolve_adapter_id() in src/adapters/constants.py
 - _build_package_responses() and _build_create_success() in src/adapters/base.py
 
-Task: salesagent-qe0
 """
 
 from __future__ import annotations

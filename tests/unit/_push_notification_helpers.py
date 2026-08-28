@@ -1,8 +1,8 @@
 """Shared fixtures for driving ContextManager._send_push_notifications in tests.
 
 Both ``test_context_manager_task_pinning`` (webhook task GC pinning) and
-``test_context_manager_task_type_label`` (task_type wire/label split,
-salesagent-yi3s) drive the REAL ``_send_push_notifications`` path. These helpers
+``test_context_manager_task_type_label`` (task_type wire/label split)
+drive the REAL ``_send_push_notifications`` path. These helpers
 build the step and the session mock so the two suites don't hand-roll the same
 setup (DRY -- enforced by check_code_duplication).
 

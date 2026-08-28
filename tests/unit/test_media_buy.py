@@ -65,6 +65,31 @@ from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 # ---------------------------------------------------------------------------
 
 
+def _stub_media_buy_reads(repo, row):
+    """Point BOTH row accessors at *row*.
+
+    The update tool reads the row back through ``get_by_id_or_raise`` (the
+    repository's typed not-found accessor). A stub that wires only ``get_by_id``
+    leaves the other returning a bare ``MagicMock``, whose ``.status`` is not a real
+    status — which now fails loudly at the vocabulary boundary instead of being
+    silently interpreted. One helper so the two never drift apart again.
+    """
+    repo.get_by_id.return_value = row
+    if row is None:
+        # Faithful to the repository: the *_or_raise accessor does not return None,
+        # it raises. A stub that returned None here would let production walk past a
+        # missing row and fail later with an AttributeError instead of the typed
+        # MEDIA_BUY_NOT_FOUND the buyer is owed.
+        from src.core.exceptions import AdCPMediaBuyNotFoundError
+
+        repo.get_by_id_or_raise.side_effect = AdCPMediaBuyNotFoundError(
+            "Media buy not found",
+            suggestion="Verify the media_buy_id is correct and belongs to your account.",
+        )
+    else:
+        repo.get_by_id_or_raise.return_value = row
+
+
 def _future(days: int = 7) -> str:
     """Return an ISO 8601 datetime string N days in the future."""
     dt = datetime.now(UTC) + timedelta(days=days)
@@ -88,9 +113,9 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
 
 def _make_success(**overrides) -> CreateMediaBuySuccess:
     """Build a minimal valid CreateMediaBuySuccess response."""
-    defaults = {"media_buy_id": "mb_1", "packages": []}
+    defaults = {"media_buy_id": "mb_1", "packages": [{"package_id": "pkg_1"}]}
     defaults.update(overrides)
-    return CreateMediaBuySuccess(**defaults)
+    return CreateMediaBuySuccess.carrier(**defaults)
 
 
 def _make_identity(
@@ -554,7 +579,7 @@ class TestCreateMediaBuyValidation:
         Spec: UPDATED -- buyer_campaign_ref removed from create-media-buy-request.json in adcp 3.12
         Priority: P0
         Type: unit
-        Source: UC-002, salesagent-7gnv
+        Source: UC-002,
         Covers: UC-002-UPG-03
         """
         with pytest.raises(ValidationError, match="buyer_campaign_ref"):
@@ -567,7 +592,7 @@ class TestCreateMediaBuyValidation:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/create-media-buy-request.json
         Priority: P0
         Type: unit
-        Source: UC-002, salesagent-7gnv
+        Source: UC-002,
         Covers: UC-002-UPG-05
         """
         req = _make_request(ext={"custom_key": "custom_value"})
@@ -589,7 +614,7 @@ class TestCreateMediaBuyValidation:
         (AccountReference) instead of 'account_id' (string).
         Priority: P1
         Type: unit
-        Source: UC-002, salesagent-7gnv
+        Source: UC-002,
         Covers: UC-002-UPG-06
         """
         req = _make_request(account={"account_id": "acc_123"})
@@ -759,7 +784,7 @@ class TestCreateMediaBuyValidation:
 
 
 class TestBuildAdapterAssetFormatFallback:
-    """_build_adapter_asset_from_creative format-spec fallback (salesagent-mpo1 TQ-04).
+    """_build_adapter_asset_from_creative format-spec fallback ( TQ-04).
 
     Cache-miss (None) falls back to format_resolver.get_format; a genuinely
     unknown format proceeds with no spec (raw-data extraction); a typed
@@ -1294,7 +1319,7 @@ class TestCreateMediaBuyImplAuth:
         code (VALIDATION_ERROR) the pin classifies correctable — the intent was
         right and the pair contradicted the spec. Choosing the class whose pinned
         recovery is the intent is how that intent is now expressed.
-        Covers: salesagent-91pp (PR #1083 review)
+        Covers: PR #1083 review
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.services.setup_checklist_service import SetupIncompleteError
@@ -1339,7 +1364,7 @@ class TestIdempotencyKeyRequired:
     def _kwargs(self, **overrides):
         base = {
             "brand": {"domain": "key-test.example.com"},
-            "packages": [],
+            "packages": [{"product_id": "prod_1", "budget": 1000, "pricing_option_id": "po_1"}],
             "start_time": datetime(2026, 6, 1, tzinfo=UTC),
             "end_time": datetime(2026, 6, 30, tzinfo=UTC),
         }
@@ -1713,7 +1738,7 @@ class TestUpdateMediaBuySchemaCompliance:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-request.json
         Covers: UC-003-MAIN-01
         """
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", packages=[])
+        req = UpdateMediaBuyRequest(media_buy_id="mb_1", packages=[{"package_id": "pkg_1"}])
         assert req.media_buy_id == "mb_1"
 
     def test_update_request_parses_iso_datetime_strings(self):
@@ -1750,7 +1775,7 @@ class TestUpdateMediaBuySchemaCompliance:
         https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/schemas/cache/core/media-buy.json
         Priority: P0
         Type: unit
-        Source: UC-003, salesagent-7gnv
+        Source: UC-003,
         Covers: UC-003-MAIN-11
         """
         # buyer_campaign_ref is a create-time field, not an update field.
@@ -1764,6 +1789,12 @@ class TestUpdateMediaBuySchemaCompliance:
             currency="USD",
             total_budget=5000.0,
             packages=[],
+            # Spec-required on media_buys[] at AdCP 3.1.1. Supplied here because the
+            # model is now grounded on the library item type and enforces them; this
+            # test's fixture predates that and was silently constructing an item the
+            # pinned schema would reject.
+            confirmed_at=datetime(2025, 2, 1, tzinfo=UTC),
+            revision=1,
         )
         dumped = mb.model_dump()
         assert dumped.get("buyer_campaign_ref") == "camp-ref-123"
@@ -1775,7 +1806,7 @@ class TestUpdateMediaBuySchemaCompliance:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-request.json
         Priority: P0
         Type: unit
-        Source: UC-003, salesagent-7gnv
+        Source: UC-003,
         Covers: UC-003-MAIN-12
         """
         req = UpdateMediaBuyRequest(
@@ -1799,7 +1830,7 @@ class TestUpdateMediaBuyResponseShapes:
         Ported from test_update_media_buy_affected_packages.py::test_response_serialization_includes_affected_packages
         Covers: UC-003-MAIN-09
         """
-        resp = UpdateMediaBuySuccess(
+        resp = UpdateMediaBuySuccess.carrier(
             media_buy_id="mb_1",
             affected_packages=[
                 AffectedPackage(package_id="pkg_1", paused=False),
@@ -1874,7 +1905,7 @@ class TestUpdateMediaBuyMainFlow:
         cl.max_daily_package_spend = Decimal("5000")
         cl.min_package_budget = None
 
-        adapter_result = UpdateMediaBuySuccess(
+        adapter_result = UpdateMediaBuySuccess.carrier(
             media_buy_id="mb_resolved",
             affected_packages=[AffectedPackage(package_id="pkg_1", paused=False)],
         )
@@ -1916,8 +1947,8 @@ class TestUpdateMediaBuyMainFlow:
             adapter.update_media_buy.return_value = adapter_result
             mock_adapter.return_value = adapter
 
-            mock_uow.media_buys.get_by_id.return_value = mock_buy
-            mock_uow.media_buys.get_by_id.return_value = mock_buy
+            _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
+            _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -1982,7 +2013,7 @@ class TestUpdateMediaBuyPauseResume:
         req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True)
         identity = _make_identity()
 
-        adapter_result = UpdateMediaBuySuccess(
+        adapter_result = UpdateMediaBuySuccess.carrier(
             media_buy_id="mb_1",
             affected_packages=[],
         )
@@ -2018,7 +2049,7 @@ class TestUpdateMediaBuyPauseResume:
             # State-machine precondition guard needs a non-terminal status
             _stub_mb = MagicMock()
             _stub_mb.status = "active"
-            mock_uow.media_buys.get_by_id.return_value = _stub_mb
+            _stub_media_buy_reads(mock_uow.media_buys, _stub_mb)
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2046,7 +2077,7 @@ class TestUpdateMediaBuyPauseResume:
         req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=False)
         identity = _make_identity()
 
-        adapter_result = UpdateMediaBuySuccess(
+        adapter_result = UpdateMediaBuySuccess.carrier(
             media_buy_id="mb_1",
             affected_packages=[],
         )
@@ -2082,7 +2113,7 @@ class TestUpdateMediaBuyPauseResume:
             # State-machine precondition: 'resume' is only valid from 'paused'
             _stub_mb = MagicMock()
             _stub_mb.status = "paused"
-            mock_uow.media_buys.get_by_id.return_value = _stub_mb
+            _stub_media_buy_reads(mock_uow.media_buys, _stub_mb)
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2109,7 +2140,7 @@ class TestUpdateMediaBuyPauseResume:
         req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True)
         identity = _make_identity()
 
-        adapter_result = UpdateMediaBuySuccess(
+        adapter_result = UpdateMediaBuySuccess.carrier(
             media_buy_id="mb_1",
             affected_packages=[],
         )
@@ -2145,7 +2176,7 @@ class TestUpdateMediaBuyPauseResume:
             # State-machine precondition guard needs a non-terminal status
             _stub_mb = MagicMock()
             _stub_mb.status = "active"
-            mock_uow.media_buys.get_by_id.return_value = _stub_mb
+            _stub_media_buy_reads(mock_uow.media_buys, _stub_mb)
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2318,7 +2349,7 @@ class TestUpdateMediaBuyTiming:
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
-            mock_uow.media_buys.get_by_id.return_value = mock_buy
+            _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
 
             from src.core.exceptions import AdCPBudgetExceededError
 
@@ -2473,13 +2504,13 @@ class TestUpdateMediaBuyCreativeIds:
             # State-machine precondition guard needs a non-terminal status
             _stub_mb = MagicMock()
             _stub_mb.status = "active"
-            mock_uow.media_buys.get_by_id.return_value = _stub_mb
+            _stub_media_buy_reads(mock_uow.media_buys, _stub_mb)
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
             # Media buy and package via repo
-            mock_uow.media_buys.get_by_id.return_value = mock_buy
+            _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
             mock_uow.media_buys.get_package.return_value = mock_package
 
             # Creative existence/status + product format via repositories.
@@ -2554,13 +2585,13 @@ class TestUpdateMediaBuyCreativeIds:
             # State-machine precondition guard needs a non-terminal status
             _stub_mb = MagicMock()
             _stub_mb.status = "active"
-            mock_uow.media_buys.get_by_id.return_value = _stub_mb
+            _stub_media_buy_reads(mock_uow.media_buys, _stub_mb)
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
             # Media buy via repo
-            mock_uow.media_buys.get_by_id.return_value = mock_buy
+            _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
 
             # No creatives found via repository.
             mock_uow.creatives.get_by_ids.return_value = []
@@ -2638,13 +2669,13 @@ class TestUpdateMediaBuyCreativeIds:
             # State-machine precondition guard needs a non-terminal status
             _stub_mb = MagicMock()
             _stub_mb.status = "active"
-            mock_uow.media_buys.get_by_id.return_value = _stub_mb
+            _stub_media_buy_reads(mock_uow.media_buys, _stub_mb)
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
             # Media buy and package via repo
-            mock_uow.media_buys.get_by_id.return_value = mock_buy
+            _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
             mock_uow.media_buys.get_package.return_value = mock_package
 
             # Creative existence/status + product format via repositories.
@@ -2724,13 +2755,13 @@ class TestUpdateMediaBuyCreativeIds:
             # State-machine precondition guard needs a non-terminal status
             _stub_mb = MagicMock()
             _stub_mb.status = "active"
-            mock_uow.media_buys.get_by_id.return_value = _stub_mb
+            _stub_media_buy_reads(mock_uow.media_buys, _stub_mb)
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
             # Media buy and package via repo
-            mock_uow.media_buys.get_by_id.return_value = mock_buy
+            _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
             mock_uow.media_buys.get_package.return_value = mock_package
 
             # Creative existence/status + product format via repositories.
@@ -2826,13 +2857,13 @@ class TestUpdateMediaBuyCreativeIds:
             # State-machine precondition guard needs a non-terminal status
             _stub_mb = MagicMock()
             _stub_mb.status = "active"
-            mock_uow.media_buys.get_by_id.return_value = _stub_mb
+            _stub_media_buy_reads(mock_uow.media_buys, _stub_mb)
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
             # Media buy and package via repo
-            mock_uow.media_buys.get_by_id.return_value = mock_buy
+            _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
             mock_uow.media_buys.get_package.return_value = mock_package
 
             # Creative existence/status + product format via repositories.
@@ -2872,7 +2903,7 @@ class TestUpdateMediaBuyIdentification:
         # media_buy_id is now the sole identifier; omitting it is rejected
         with pytest.raises(ValidationError, match="media_buy_id"):
             UpdateMediaBuyRequest(
-                packages=[],
+                packages=[{"package_id": "pkg_1"}],
             )
 
     def test_neither_id_rejected(self):
@@ -2888,7 +2919,7 @@ class TestUpdateMediaBuyIdentification:
         # Per AdCP spec, media_buy_id is required for update
         with pytest.raises(ValidationError):
             UpdateMediaBuyRequest(
-                packages=[],
+                packages=[{"package_id": "pkg_1"}],
             )
 
     def test_media_buy_id_not_found(self):
@@ -2903,7 +2934,7 @@ class TestUpdateMediaBuyIdentification:
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(media_buy_id="mb_nonexistent", packages=[])
+        req = UpdateMediaBuyRequest(media_buy_id="mb_nonexistent", packages=[{"package_id": "pkg_1"}])
         identity = _make_identity()
 
         with (
@@ -2922,8 +2953,8 @@ class TestUpdateMediaBuyIdentification:
             mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
-            mock_uow.media_buys.get_by_id.return_value = None
-            mock_uow.media_buys.get_by_id.return_value = None
+            _stub_media_buy_reads(mock_uow.media_buys, None)
+            _stub_media_buy_reads(mock_uow.media_buys, None)
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -2946,7 +2977,7 @@ class TestUpdateMediaBuyIdentification:
         Covers: UC-003-EXT-B-02
         """
         with pytest.raises(ValidationError, match="media_buy_id"):
-            UpdateMediaBuyRequest(packages=[])
+            UpdateMediaBuyRequest(packages=[{"package_id": "pkg_1"}])
 
 
 class TestUpdateMediaBuyOwnership:
@@ -2963,7 +2994,7 @@ class TestUpdateMediaBuyOwnership:
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", packages=[])
+        req = UpdateMediaBuyRequest(media_buy_id="mb_1", packages=[{"package_id": "pkg_1"}])
         identity = _make_identity(principal_id="different_principal")
 
         with (
@@ -2990,7 +3021,7 @@ class TestUpdateMediaBuyOwnership:
             mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.session = MagicMock()
             mock_uow.media_buys = MagicMock()
-            mock_uow.media_buys.get_by_id.return_value = mock_buy
+            _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -3051,7 +3082,7 @@ class TestUpdateMediaBuyManualApproval:
             # State-machine precondition guard needs a non-terminal status
             _stub_mb = MagicMock()
             _stub_mb.status = "active"
-            mock_uow.media_buys.get_by_id.return_value = _stub_mb
+            _stub_media_buy_reads(mock_uow.media_buys, _stub_mb)
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -3121,7 +3152,7 @@ class TestUpdateMediaBuyManualApproval:
             # State-machine precondition guard needs a non-terminal status
             _stub_mb = MagicMock()
             _stub_mb.status = "active"
-            mock_uow.media_buys.get_by_id.return_value = _stub_mb
+            _stub_media_buy_reads(mock_uow.media_buys, _stub_mb)
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -3191,7 +3222,7 @@ class TestUpdateMediaBuyAdapterFailure:
             # State-machine precondition guard needs a non-terminal status
             _stub_mb = MagicMock()
             _stub_mb.status = "active"
-            mock_uow.media_buys.get_by_id.return_value = _stub_mb
+            _stub_media_buy_reads(mock_uow.media_buys, _stub_mb)
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -3273,7 +3304,7 @@ class TestUpdateMediaBuyAdapterFailure:
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
-            mock_uow.media_buys.get_by_id.return_value = mock_buy
+            _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -3319,7 +3350,7 @@ class TestUpdateMediaBuyAdapterFailure:
             mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
             mock_uow.idempotency_attempts.count_active.return_value = (0, None)
             mock_uow.media_buys = MagicMock()
-            mock_uow.media_buys.get_by_id.return_value = mock_buy
+            _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
             mock_uow.__enter__ = MagicMock(return_value=mock_uow)
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
@@ -3898,7 +3929,7 @@ class TestDeliveryImplErrors:
     def test_missing_identity_recovery_is_correctable(self):
         """Missing identity is correctable — buyer can fix by including auth headers.
 
-        Covers: salesagent-80je (PR #1083 review)
+        Covers: (PR #1083 review)
         """
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_1"])
         with pytest.raises(AdCPAuthenticationError) as exc_info:
@@ -3998,7 +4029,7 @@ class TestDeliveryImplErrors:
 
 
 class TestDeliveryImplPricingLookup:
-    """UC-004 pricing: salesagent-mq3n string-to-integer PK regression."""
+    """UC-004 pricing: string-to-integer PK regression."""
 
     def test_pricing_option_lookup_uses_string_field(self):
         """UC-004-PL01: lookup via synthetic ID (model_currency_type), not integer PK.
@@ -4007,7 +4038,7 @@ class TestDeliveryImplPricingLookup:
         Our implementation constructs synthetic IDs like "cpm_usd_fixed".
         Priority: P0
         Type: unit
-        Source: UC-004, salesagent-mq3n
+        Source: UC-004,
         Covers: UC-002-EXT-N-08
         """
         from src.core.tools.media_buy_delivery import _get_pricing_options
@@ -4033,7 +4064,7 @@ class TestDeliveryImplPricingLookup:
         Spec: UNSPECIFIED (implementation-defined spend calculation)
         Priority: P0
         Type: unit
-        Source: UC-004, salesagent-mq3n
+        Source: UC-004,
         """
         buy = _mock_media_buy(media_buy_id="mb_1", start_date=date.today() - timedelta(days=5))
         buy.raw_request = {"packages": [{"package_id": "pkg_1", "product_id": "prod_1", "pricing_option_id": "42"}]}
@@ -4166,10 +4197,23 @@ class TestGetMediaBuysStatusComputation:
 
     @staticmethod
     def _make_buy(*, status="active", start_offset_days, end_offset_days, start_time=None, is_paused=False):
-        from src.core.tools.media_buy_list import _MediaBuyData
+        """Build the ORM row ``_compute_status`` actually receives.
 
-        return _MediaBuyData(
+        This used to build a ``_MediaBuyData``. It cannot any more, and the reason is the
+        point of the change rather than an inconvenience: the carrier no longer holds
+        ``start_date``/``end_date``/``start_time``/``is_paused`` — the very inputs status
+        is derived from — so a carrier cannot be asked what its status should be. Only
+        the persisted row can, which is what production passes here.
+
+        Constructed unset-then-assigned rather than by keyword because ``MediaBuy``
+        refuses ``revision``/``confirmed_at`` at construction; neither is read on this
+        path.
+        """
+        from src.core.database.models import MediaBuy
+
+        return MediaBuy(
             media_buy_id="mb_1",
+            tenant_id="tenant_1",
             currency="USD",
             budget=Decimal("1000"),
             start_date=date.today() + timedelta(days=start_offset_days),
@@ -4177,8 +4221,6 @@ class TestGetMediaBuysStatusComputation:
             start_time=start_time,
             end_time=None,
             raw_request={},
-            created_at=None,
-            updated_at=None,
             status=status,
             is_paused=is_paused,
         )
@@ -4298,6 +4340,10 @@ class TestGetMediaBuysResponseShape:
                     status=MediaBuyStatus.active,
                     currency="USD",
                     total_budget=5000.0,
+                    # Spec-required on media_buys[] at 3.1.1, enforced by the model
+                    # now that it is grounded on the library item type.
+                    confirmed_at=datetime(2025, 2, 1, tzinfo=UTC),
+                    revision=1,
                     packages=[
                         GetMediaBuysPackage(package_id="pkg_1"),
                     ],
@@ -4324,6 +4370,10 @@ class TestGetMediaBuysResponseShape:
                     status=MediaBuyStatus.active,
                     currency="USD",
                     total_budget=5000.0,
+                    # Spec-required on media_buys[] at 3.1.1, enforced by the model
+                    # now that it is grounded on the library item type.
+                    confirmed_at=datetime(2025, 2, 1, tzinfo=UTC),
+                    revision=1,
                     packages=[
                         GetMediaBuysPackage(package_id="pkg_1", budget=2500.0, product_id="p1"),
                         GetMediaBuysPackage(package_id="pkg_2", budget=2500.0, product_id="p2"),
@@ -4414,7 +4464,7 @@ class TestGetMediaBuysImplAuth:
     def test_account_id_unsupported_recovery_is_correctable(self):
         """Unsupported account_id should be correctable — buyer removes the param.
 
-        Covers: salesagent-bmlk (PR #1083 review)
+        Covers: (PR #1083 review)
         """
         from src.core.exceptions import AdCPCapabilityNotSupportedError
         from src.core.resolved_identity import ResolvedIdentity
@@ -4474,7 +4524,7 @@ class TestBRRule018AtomicResponse:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-response.json
         Covers: UC-003-EXT-O-05
         """
-        resp = UpdateMediaBuySuccess(media_buy_id="mb_1")
+        resp = UpdateMediaBuySuccess.carrier(media_buy_id="mb_1")
         dumped = resp.model_dump()
         assert dumped.get("errors") is None
 

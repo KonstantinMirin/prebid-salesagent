@@ -194,7 +194,7 @@ def _is_operator_agent(agent_url: str) -> bool:
 
 
 def _connection_agent_url(agent_url: str) -> str:
-    """Resolve the TRANSPORT url for an agent reference (salesagent-9qe2).
+    """Resolve the TRANSPORT url for an agent reference.
 
     When CREATIVE_AGENT_URL is set (test/CI stacks run a pinned container
     serving the standard catalog), references to the PUBLIC default agent
@@ -352,8 +352,8 @@ class CreativeAgentRegistry:
         Routes through ``call_operator_mcp_tool`` — a real MCP handshake, IP-pinned,
         redirect-refusing — rather than ``adcp.ADCPMultiAgentClient``, whose own
         httpx stack no egress policy of ours could reach (adcp 6.6.0 exposes no
-        transport injection point; upstream adcp-client-python#1004). Closes the
-        gap tracked by salesagent-4n88. ``_connection_agent_url`` applies HERE
+        transport injection point; upstream adcp-client-python#1004).
+        ``_connection_agent_url`` applies HERE
         (the pinned-container alias for the public default agent); a
         counterparty-supplied ``agent_url`` never reaches this method — see
         ``_fetch_formats_raw_mcp`` for that path, unchanged by this migration.
@@ -844,11 +844,11 @@ class CreativeAgentRegistry:
                 # The pinned reference agent's schema takes format_id as the
                 # federation-identity OBJECT {agent_url, id} — the live public
                 # host tolerated a bare string, which masked this mismatch
-                # until connections were pinned in-network (salesagent-9qe2).
+                # until connections were pinned in-network.
                 # The identity keeps the CANONICAL agent_url, not the
                 # connection alias. AnyUrl serialization yields the
                 # trailing-slash form for path-less URLs — verified tolerated
-                # by the pinned reference agent (probe 2026-07-13, salesagent-ehdq).
+                # by the pinned reference agent (probe 2026-07-13).
                 "format_id": FormatId(agent_url=agent_url, id=format_id).model_dump(mode="json"),
                 "creative_manifest": creative_manifest,
             },

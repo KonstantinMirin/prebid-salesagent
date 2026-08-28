@@ -5,7 +5,6 @@ Real: get_db_session, MediaBuyRepository, all validation (all hit real DB).
 
 Requires: integration_db fixture.
 
-beads: salesagent-4n0
 """
 
 from __future__ import annotations
@@ -265,7 +264,11 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
                 pkg_count = 1
 
             media_buy_id = f"mb_{uuid.uuid4().hex[:8]}"
-            return CreateMediaBuySuccess(
+            # adapter_ack, not a bare construction: this stands in for an ad-server
+            # adapter's return, and an adapter has no row to read confirmed_at/revision
+            # from. Using the same factory production adapters use keeps the fake
+            # honest about which envelope fields it is entitled to speak for.
+            return CreateMediaBuySuccess.carrier(
                 media_buy_id=media_buy_id,
                 packages=[
                     {
@@ -367,8 +370,6 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         # Keep ``account``: the create_media_buy wrappers declare it and resolve it
         # at the transport boundary (998ad1be2). Stripping it here regresses
         # account-not-found scenarios to a successful create.
-        for key in ("proposal_id", "total_budget"):
-            flat.pop(key, None)
         _restore_creative_ids(req, flat)
         flat.update(kwargs)
         return flat
@@ -432,7 +433,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         if status == "submitted":
             response = CreateMediaBuySubmitted(status=status, **data)
         elif data.get("media_buy_id") is not None:
-            response = CreateMediaBuySuccess(**data)
+            response = CreateMediaBuySuccess.carrier(**data)
         else:
             response = CreateMediaBuyError(**data)
         return CreateMediaBuyResult(response=response, status=status, replayed=replayed)

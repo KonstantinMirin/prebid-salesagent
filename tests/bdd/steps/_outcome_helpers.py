@@ -69,13 +69,12 @@ def _wire_or_none(ctx: dict) -> dict | None:
         )
     if not result.has_wire:
         return None
-    wire = result.wire_response
-    if wire is None:
-        raise AssertionError(
-            f"{ctx.get('transport')}: the dispatcher declared has_wire but stashed no "
-            "wire_response — the env does not capture success-path wire"
-        )
-    return wire
+    # The guarded read itself lives on TransportResult (#1941): one implementation,
+    # shared with the integration tests asserting the same thing, so a step
+    # definition cannot drift from them. This helper decides only WHETHER a wire
+    # exists — from the dispatcher's declaration — and ``require_wire`` decides
+    # whether the declared wire was actually captured.
+    return result.require_wire()
 
 
 def wire_field(ctx: dict, field: str) -> Any:
@@ -87,13 +86,7 @@ def wire_field(ctx: dict, field: str) -> Any:
     for the other transports. Which case applies is read from the dispatcher's
     own declaration, not guessed here; see :func:`_wire_or_none`.
     """
-    wire = _wire_or_none(ctx)
-    if wire is not None:
-        return wire[field]
-    # IMPL has no wire — serialize the typed payload through the production
-    # serializer. require_payload preserves the diagnostic if a (reused) sibling
-    # scenario hit an error path, instead of a bare KeyError.
-    return require_payload(ctx).model_dump(mode="json")[field]
+    return wire_dict(ctx)[field]
 
 
 def wire_dict(ctx: dict) -> dict:
