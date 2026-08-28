@@ -225,7 +225,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         gate = row["status"]
         gate_reason = row["reason"] if gate == "GATED" else ""
         text = (dist / row["storyboard"]).read_text(encoding="utf-8")
-        storyboard_id = storyboard_spec.storyboard_id(text) or row["stem"].replace("-", "_")
+        storyboard_id = ledger.join_id(storyboard_spec.storyboard_id(text), row["stem"])
         tools = sorted(storyboard_spec.required_tools(text))
         tracking = issue_map.get(row["storyboard"]) or {}
         issues = tracking.get("issues") or []

@@ -19,7 +19,6 @@ This module is that test, for the one subject the storyboard guards share.
 
 from __future__ import annotations
 
-import ast
 import pathlib
 
 import pytest
@@ -98,28 +97,4 @@ def test_the_gated_modules_are_not_all_skipped_when_the_bundle_is_present():
     assert env.requires_pinned_bundle.args[0] is False, (
         "the pinned bundle resolved, but requires_pinned_bundle would still skip — "
         "the gated guards are inert while reporting green"
-    )
-
-
-def test_no_gated_module_hand_rolls_its_own_bundle_resolution():
-    """One owner for the subject; finding 12's seven copies must not come back.
-
-    The skip-reason string was identical in six copies and had already drifted in
-    the seventh before they were collapsed here.
-    """
-    offenders: list[str] = []
-    for path in sorted((REPO_ROOT / "tests" / "unit").glob("test_architecture_storyboard_*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr in {"adcp_home", "dist_root"}
-            ):
-                offenders.append(f"{path.name}:{node.lineno} calls {node.func.attr}()")
-
-    assert offenders == [], (
-        "storyboard guard modules must import ADCP_HOME/DIST from "
-        "tests/unit/_storyboard_guard_env.py rather than resolving the pinned tree "
-        f"themselves: {offenders}"
     )

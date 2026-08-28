@@ -96,6 +96,25 @@ class LedgerCheckId:
         return self.storyboard_id.replace("-", "_")
 
 
+def join_id(declared_id: str | None, stem: str) -> str:
+    """The join key both index builders group on: the declared ``id:``, else the stem.
+
+    The module docstring above says this spelling "lives on the derived
+    ``storyboard_key`` property instead" and that callers joining against
+    ``storyboard_coverage_map`` use it "never ``storyboard_id``". Two callers
+    said otherwise, with byte-identical inline copies of
+    ``storyboard_spec.storyboard_id(text) or row["stem"].replace("-", "_")`` --
+    the exact form ``test_architecture_storyboard_ledger.py`` names as "the old
+    bug". Divergence between the two current consumers would be loud today
+    because both floors fire; the exposure is the next copy, written without one.
+
+    Only the FALLBACK branch normalizes: a declared ``id:`` is already in the
+    runner's underscore spelling, while a filename stem is hyphenated for
+    ``universal/`` storyboards.
+    """
+    return declared_id or stem.replace("-", "_")
+
+
 LEDGER = Path("tests") / "storyboard" / "known_failures.txt"
 
 # The runner-level synthetic. `test_storyboard_conformance` emits this row when

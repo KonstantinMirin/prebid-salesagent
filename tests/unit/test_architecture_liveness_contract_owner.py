@@ -391,7 +391,7 @@ def test_graded_unit_derives_markers_only_in_the_pinned_accessor() -> None:
         allowed,
         fix_hint=(
             f"Only {_DERIVATION_ACCESSOR}() may derive a marker set, and it must be the accessor pinned in "
-            f"_DERIVATION_ACCESSOR_MODULE (binding input G2). {_FIX_HINT}"
+            f"_DERIVATION_ACCESSOR_MODULE. {_FIX_HINT}"
         ),
     )
 
@@ -437,7 +437,7 @@ def test_derivation_accessor_is_defined_once_and_called_by_both_sites() -> None:
     expected = {str(_DERIVATION_ACCESSOR_MODULE)} if _DERIVATION_ACCESSOR_MODULE is not None else set()
     assert definitions == expected, (
         f"{_DERIVATION_ACCESSOR}() must be defined exactly once, in the module pinned as "
-        f"_DERIVATION_ACCESSOR_MODULE (binding input G2). Found: {sorted(definitions) or 'nowhere'}."
+        f"_DERIVATION_ACCESSOR_MODULE. Found: {sorted(definitions) or 'nowhere'}."
     )
 
     callers = {

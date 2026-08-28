@@ -195,7 +195,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         # filename stem matched only where the two happen to coincide; the
         # stem is the fallback for an id-less storyboard, which is this
         # table's policy rather than a fact about the tree.
-        storyboard_id = storyboard_spec.storyboard_id(text) or row["stem"].replace("-", "_")
+        storyboard_id = ledger.join_id(storyboard_spec.storyboard_id(text), row["stem"])
         # Never sum checks_for_phase() over phases() here: phase windows
         # enclose their steps' windows, so that spelling counts every nested
         # check twice.

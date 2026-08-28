@@ -171,16 +171,17 @@ generator. `docs/test-obligations/` now holds only curated inputs
 `bdd-traceability.yaml`). The rules below still bind any test carrying a
 `Covers:` tag; do not add new tags against a document that no longer exists.
 
-### Six hard rules
+### Five hard rules
 
 1. MUST import from `src.*`
 2. MUST call a production function (not just import it)
 3. MUST assert on production output
-4. MUST have `Covers:` tag in docstring
-5. MUST use factory-boy factories for data setup
-6. MUST NOT be mock-echo only (asserting mock return values)
+4. MUST use factory-boy factories for data setup
+5. MUST NOT be mock-echo only (asserting mock return values)
 
-### Enforced by structural guards
+Rule 4 was "MUST have a `Covers:` tag". It is gone: there is no longer a document
+to tag against, and the guard that graded it was deleted with those documents.
+Telling a contributor both to add a tag and not to add one is worse than neither.
 
 
 ## Anti-Patterns in This Codebase

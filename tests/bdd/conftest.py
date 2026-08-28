@@ -186,12 +186,28 @@ _XFAIL_TAGS: dict[str, str] = {
     # graduates the moment that issue lands. See the PR description's
     # "corroborated gaps" table for the full evidence chain.
     #
-    # GH #1261 -- salesagent silently ignores `canceled`/`cancellation_reason`
-    # on update_media_buy; the issue itself names
-    # media_buy_state_machine/terminal_enforcement (recancel) as unreachable.
+    # Re-derived at this head; the previous reason here was wrong in both of its
+    # claims. Re-cancel does NOT return silent success and production DOES have a
+    # terminal-state guard: src/core/tools/media_buy_update.py:411 raises
+    # AdCPGoneError, which the boundary translates to INVALID_STATE
+    # ("Cannot update media buy in terminal state: canceled"). The scenario fails
+    # on the CODE, not on the absence of enforcement.
+    #
+    # The gap is code specialization. The pinned enum carries both codes, both
+    # `recovery: correctable` (tests/fixtures/adcp_schemas_pinned/enums/error-code.json),
+    # and BR-UC-003-update-media-buy.feature:2094-2097 states the split correctly:
+    # INVALID_STATE covers non-cancel updates to a terminal buy, while
+    # NOT_CANCELLABLE is reserved for re-cancel attempts specifically.
+    #
+    # Graduation trigger: NOT #1261 (silent-ignore of `canceled`) -- landing that
+    # leaves INVALID_STATE in place and this scenario still red. #1961 is the
+    # sibling on the A2A `on_cancel_task` surface, not this one. No issue
+    # currently owns specializing the code on update_media_buy; this entry
+    # graduates when one lands.
     "T-UC-003-storyboard-not-cancellable-on-recancel": (
-        "re-cancel returns silent success instead of NOT_CANCELLABLE; production has no "
-        "terminal-state guard — GH #1261, corroborated by the storyboard's own unreachability note"
+        "re-cancel is refused with the generic INVALID_STATE; the pinned enum reserves "
+        "NOT_CANCELLABLE for a refused cancel specifically — a code-specialization gap, "
+        "not a missing terminal-state guard (that guard is media_buy_update.py:411)"
     ),
     # GH #1075 -- idempotency_key support on update_media_buy and sync_creatives.
     "T-UC-006-idempotency-replay": (
