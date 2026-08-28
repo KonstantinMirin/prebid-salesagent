@@ -1,0 +1,111 @@
+"""A buyer sending the SPEC's exact JSON shape must have it land, on every transport.
+
+This is the acceptance metric for the derived-announcement work (salesagent-prkv.5 R4):
+not "does our advertised schema look tidy", but "if a consumer builds a payload straight
+from the AdCP 3.1.1 request schema, is it accepted and does it take effect -- identically
+on MCP, A2A and REST".
+
+The payload here is not hand-written. It is built FROM the pinned schema's own declared
+properties, restricted to the fields the tool implements, so the test cannot drift into
+asserting a shape we invented. If the SDK pin moves and a field changes type, this fails.
+
+Transport independence is the second half of the claim: the SAME payload is dispatched on
+each transport and the SAME assertions run against each result. Only the envelope differs,
+so a per-transport branch here would defeat the point and must never be added.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import pathlib
+
+import pytest
+
+from src.core.tools._announced_shape import request_model_for
+from tests.harness.capabilities import CapabilitiesEnv
+
+_PINNED = pathlib.Path(importlib.util.find_spec("adcp").origin).parent / "_schemas/3.1"
+
+
+def _pinned_request_properties(filename: str) -> dict:
+    """The pinned schema's declared top-level properties for a request."""
+    matches = list(_PINNED.rglob(filename))
+    assert matches, f"{filename} not found under the pinned schema tree {_PINNED}"
+    return json.loads(matches[0].read_text()).get("properties", {})
+
+
+@pytest.mark.requires_db
+class TestSpecShapedPayloadLands:
+    """get_adcp_capabilities: this PR authored the whole request path, so it is the case
+    where a drifted advertised shape would be our own doing."""
+
+    #: A spec-shaped value per declared property we implement. Values are chosen to be
+    #: valid under the PINNED schema, not under our own annotations.
+    _SPEC_VALUES = {
+        "protocols": ["media_buy"],
+        "context": {"request_id": "spec-shaped-1"},
+        "adcp_version": "3.1.1",
+        "adcp_major_version": 3,
+        "ext": {"acme_vendor": {"tier": "gold"}},
+    }
+
+    def _payload(self) -> dict:
+        """Spec-declared fields ∩ fields the tool implements -- built, never hand-listed."""
+        from src.core.tools.capabilities import get_adcp_capabilities
+
+        declared = set(_pinned_request_properties("get-adcp-capabilities-request.json"))
+        model = request_model_for(get_adcp_capabilities)
+        assert model is not None, "the capabilities tool must resolve to its request DTO"
+        implemented = set(model.model_fields)
+
+        payload = {k: v for k, v in self._SPEC_VALUES.items() if k in declared and k in implemented}
+        assert payload, "built an empty payload -- the schema or the DTO join is broken"
+        # Every value we send must be a field the SPEC declares; catches a test that has
+        # drifted into exercising an invented field.
+        assert set(payload) <= declared, f"payload carries non-spec fields: {set(payload) - declared}"
+        return payload
+
+    def test_the_spec_shape_is_fully_covered_by_what_we_implement(self):
+        """Our implemented set must not silently shrink below the fields we send."""
+        payload = self._payload()
+        declared = set(_pinned_request_properties("get-adcp-capabilities-request.json"))
+        missing = declared - set(payload)
+        assert not missing, (
+            f"the pinned schema declares {sorted(missing)} which this test does not send -- "
+            "either the tool stopped implementing them or the fixture went stale"
+        )
+
+    def test_spec_shaped_payload_lands_on_mcp(self, integration_db):
+        with CapabilitiesEnv() as env:
+            env.setup_default_data()
+            result = env.call_mcp(**self._payload())
+        self._assert_landed(result, "mcp")
+
+    def test_spec_shaped_payload_lands_on_a2a(self, integration_db):
+        with CapabilitiesEnv() as env:
+            env.setup_default_data()
+            result = env.call_a2a(**self._payload())
+        self._assert_landed(result, "a2a")
+
+    def test_spec_shaped_payload_lands_on_rest(self, integration_db):
+        with CapabilitiesEnv() as env:
+            env.setup_default_data()
+            client = env.get_rest_client()
+            response = client.post("/api/v1/capabilities", json=self._payload())
+        assert response.status_code == 200, (
+            f"a spec-shaped payload was REFUSED on rest: {response.status_code} {response.text}"
+        )
+        self._assert_landed(response.json(), "rest")
+
+    @staticmethod
+    def _assert_landed(result, transport: str) -> None:
+        """Accepted AND acted on -- identical assertions for every transport."""
+        data = result if isinstance(result, dict) else result.model_dump(mode="json")
+        assert data.get("context") == {"request_id": "spec-shaped-1"}, (
+            f"[{transport}] context was not echoed from the spec-shaped request; got {data.get('context')!r}. "
+            "Landing means the value took effect, not merely that the call returned 200."
+        )
+        assert data.get("media_buy") is not None, (
+            f"[{transport}] protocols=['media_buy'] did not select the media_buy section"
+        )

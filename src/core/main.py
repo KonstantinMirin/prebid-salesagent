@@ -332,6 +332,7 @@ from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
 from mcp.types import ToolAnnotations
 
 from src.core.tool_error_logging import with_error_logging
+from src.core.tools._announced_shape import apply_dto_announced_shape
 from src.core.tools.accounts import list_accounts, sync_accounts
 from src.core.tools.capabilities import get_adcp_capabilities
 from src.core.tools.creative_formats import list_creative_formats
@@ -349,7 +350,13 @@ _sdk_tool_defs = {td["name"]: td for td in ADCP_TOOL_DEFINITIONS}
 
 
 def _register_tool(fn: Any) -> None:
-    """Register an MCP tool with SDK description and annotations when available."""
+    """Register an MCP tool with SDK description, annotations and ADVERTISED SHAPE.
+
+    The shape is derived, not hand-written: the parameters this tool accepts, typed from
+    the SDK request DTO wherever it declares the field (see ``_announced_shape``). A DTO
+    field the tool does not implement is simply absent from the signature and therefore
+    never advertised, with no list of exclusions to maintain.
+    """
     tool_name = fn.__name__
     sdk_def = _sdk_tool_defs.get(tool_name)
     kwargs: dict[str, Any] = {}
@@ -357,7 +364,9 @@ def _register_tool(fn: Any) -> None:
         kwargs["description"] = sdk_def["description"]
         if sdk_def.get("annotations"):
             kwargs["annotations"] = ToolAnnotations(**sdk_def["annotations"])
-    mcp.tool(**kwargs)(with_error_logging(fn))
+    registered = with_error_logging(fn)
+    apply_dto_announced_shape(registered, fn)
+    mcp.tool(**kwargs)(registered)
 
 
 _register_tool(list_accounts)
