@@ -987,7 +987,7 @@ def run_cli(
     entry points only — every library function raises the typed error and lets
     its caller decide, so importing these functions from a test or a sibling
     script never risks killing the importing process. This is one of two such
-    entry points; ``build_review_report.main`` supplies its own argument parser
+    entry points; a caller with its own argument parser supplies one
     and repeats the same catch.
     """
     parser = argparse.ArgumentParser(description=description)

@@ -5,10 +5,6 @@ For every ON-PATH storyboard (from storyboard_coverage_map.build()), attaches:
 
   * the 3.1.1 citation (the storyboard's own pinned-tree path + pinned_version()),
   * required_tools and a static, YAML-derived check-type inventory,
-  * real measured status where the runner executed this storyboard
-    (per-STEP passed/failed counts — never a per-check-type breakdown, which
-    the runner's free-text step details cannot support soundly; see the
-    "measured status" note below),
   * the comply_test_controller divergence tag for the 20 storyboards triaged
     as deliberate (not a plain gap),
 
@@ -35,7 +31,6 @@ Read-only. Emits JSON, or ``--markdown`` for the checked-in artifact.
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -180,54 +175,9 @@ def _ledgered_failures(repo: Path) -> dict[str, list[str]]:
     return failures
 
 
-def _load_runner_scenarios(results_dir: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Load the runner's real per-step results, preferring them over the older run."""
-    for name in ("sb1d-full.json", "sb1b-full.json"):
-        path = results_dir / name
-        if path.is_file():
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as exc:
-                raise storyboard_spec.StoryboardAuditError(f"malformed runner results at {path}: {exc}") from exc
-            scenarios = [s for track in data.get("tested_tracks", []) for s in track.get("scenarios", [])]
-            return scenarios, data
-    return [], {}
-
-
-def _measured_status(stem: str, runner_scenarios: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Aggregate real per-step pass/fail for one storyboard, or None if never run.
-
-    Joined on the runner scenario field's storyboard-stem prefix, normalized
-    to underscores on both sides (coverage_map stems are hyphenated for
-    universal/ storyboards; the runner spells them with underscores).
-    """
-    normalized_stem = stem.replace("-", "_")
-    matched = [s for s in runner_scenarios if s.get("scenario", "").split("/")[0] == normalized_stem]
-    if not matched:
-        return None
-
-    passed = failed = failed_skip_affected = 0
-    for scenario in matched:
-        for step in scenario.get("steps", []):
-            if step.get("passed"):
-                passed += 1
-            else:
-                failed += 1
-                if "skipped" in (step.get("details") or ""):
-                    failed_skip_affected += 1
-    return {
-        "scenarios_matched": len(matched),
-        "steps_passed": passed,
-        "steps_failed": failed,
-        "steps_failed_skip_affected": failed_skip_affected,
-    }
-
-
 def build(repo: Path, adcp: Path) -> dict[str, Any]:
     coverage = storyboard_coverage_map.build(repo, adcp)
     dist = storyboard_spec.dist_root(adcp, coverage["pinned_version"])
-    runner_results_dir = repo / "tests" / "storyboard" / "runner" / "results"
-    runner_scenarios, runner_summary = _load_runner_scenarios(runner_results_dir)
     issue_map = ledger.load_issue_map(repo)
     ledgered = _ledgered_failures(repo)
 
@@ -236,7 +186,6 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     untriaged = check_issue_map_complete(repo, [r["storyboard"] for r in on_path])
 
     rows: list[dict[str, Any]] = []
-    joined = 0
     for row in on_path:
         text = (dist / row["storyboard"]).read_text(encoding="utf-8")
         # The runner keys results on the storyboard's DECLARED `id:`, which
@@ -252,10 +201,6 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         # check twice.
         checks = storyboard_spec.check_inventory(text)
 
-        measured = _measured_status(row["stem"], runner_scenarios)
-        if measured is not None:
-            joined += 1
-
         tracking = issue_map.get(row["storyboard"])
 
         rows.append(
@@ -266,7 +211,6 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
                 "scenarios": row["covered_by"],
                 "required_tools": sorted(storyboard_spec.required_tools(text)),
                 "checks": checks,
-                "measured": measured or {"status": "not_yet_run"},
                 **build_row_status_fields(stem=row["stem"], text=text),
                 "tracking": _render_issue_cell(tracking),
                 "tracking_issues": (tracking or {}).get("issues") or [],
@@ -275,18 +219,6 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
                 "storyboard_id": storyboard_id,
                 "ledgered_failures": sorted(ledgered.get(storyboard_id, [])),
             }
-        )
-
-    # Never ship a silently-degraded join: assert against the runner's own
-    # reported totals rather than an arbitrary threshold.
-    runner_ran_count = len(runner_summary.get("storyboards_executed", [])) + len(
-        runner_summary.get("storyboards_missing_tools", [])
-    )
-    if runner_ran_count and joined == 0:
-        raise storyboard_spec.StoryboardAuditError(
-            f"measured-status join resolved 0 of {len(on_path)} on-path rows, but the runner "
-            f"reports {runner_ran_count} storyboards executed/missing-tools — the join key is "
-            "broken, not the data. Fix _measured_status() before trusting this output."
         )
 
     if ledgered and not any(r["ledgered_failures"] for r in rows):
@@ -309,8 +241,6 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         "totals": {
             "on_path": len(on_path),
             "gated": len(gated),
-            "measured_join": joined,
-            "runner_reported": runner_ran_count,
             "no_scenario": sum(1 for r in rows if not r["scenarios"]),
             "no_ticket": sum(1 for r in rows if not r["tracking_issues"]),
             "no_scenario_no_ticket": sum(1 for r in rows if not r["scenarios"] and not r["tracking_issues"]),

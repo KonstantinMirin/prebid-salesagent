@@ -163,10 +163,9 @@ def test_tagged_scenarios_block_terminates_at_next_tagline():
 def test_tagged_scenarios_keys_on_an_arbitrary_tag():
     """``tagged_scenarios(tag=...)`` must key on any tag, not only ``TAG``.
 
-    ``scripts/audit/build_review_report.py`` looks up ONE scenario by its own
-    ``@T-UC-…`` identifier rather than the shared ``@storyboard-v3.1``, so the
-    ``tag`` parameter has to really select on the caller's tag. Pinned as the
-    same block reached two ways.
+    A caller may look up ONE scenario by its own ``@T-UC-…`` identifier rather
+    than the shared ``@storyboard-v3.1``, so the ``tag`` parameter has to really
+    select on the caller's tag. Pinned as the same block reached two ways.
     """
     from scripts.audit import storyboard_spec
 

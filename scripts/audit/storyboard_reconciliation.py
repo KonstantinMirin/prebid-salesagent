@@ -35,9 +35,9 @@ sys.path.insert(0, str(REPO_ROOT))
 from scripts.audit import storyboard_spec  # noqa: E402
 
 # The single source of truth for how many @storyboard-v3.1 scenarios this
-# sweep covers -- build_review_report.py reuses this rather than repeating
-# the number, since a magic 40 drifting silently out of sync with this one
-# is exactly the disease this constant exists to prevent.
+# sweep covers -- callers reuse this rather than repeating the number, since a
+# magic 40 drifting silently out of sync with this one is exactly the disease
+# this constant exists to prevent.
 EXPECTED_SCENARIOS = 40
 
 VERDICT_RE = re.compile(r"^##\s*\d*\.?\s*VERDICT\s*$", re.M)
