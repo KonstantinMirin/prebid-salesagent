@@ -238,7 +238,7 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-002-inv-087-5": "duplicate optimization_goals priority: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
     "T-UC-002-inv-087-6": "empty optimization_goals array: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
     "T-UC-002-inv-087-7": "per_ad_spend without value_field: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
-    # FIXME(beads-dul): disclosure_positions filter not implemented in production
+    # FIXME(#1660): disclosure_positions filter not implemented in production
     # Note: violated/nofield pass vacuously (field rejected at schema level)
     "T-UC-005-inv-049-8-holds": "disclosure_positions filter not implemented",
     # adcp 3.12: FormatCategory/type filter removed from ListCreativeFormatsRequest.
@@ -265,18 +265,18 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-005-ext-a": "error code AUTH_REQUIRED instead of TENANT_REQUIRED — spec-production gap",
     # Graduated: creative agent partition/boundary tests
     # Steps now dispatch through harness — all 34 tests pass across 4 transports.
-    # FIXME(beads-dul): suggestion field not in production error model
+    # FIXME(#1660): suggestion field not in production error model
     # NOTE(ah98 red-step inspection, 2026-07-06): NOT graduatable as-is — the
     # When step no-ops (type filter removed in adcp 3.12), so the scenario
     # fails on "operation should fail", not on the missing suggestion.
     # Suggestion parity for list_creative_formats is pinned instead by
     # tests/integration/test_request_validation_suggestion_parity.py.
     "T-UC-005-ext-b": "suggestion field not implemented in error responses",
-    # FIXME(beads-dul): disclosure validation errors not implemented
+    # FIXME(#1660): disclosure validation errors not implemented
     "T-UC-005-ext-b-disclosure-invalid": "disclosure_positions validation not implemented",
     "T-UC-005-ext-b-disclosure-empty": "disclosure_positions validation not implemented",
     "T-UC-005-ext-b-disclosure-dupes": "disclosure_positions validation not implemented",
-    # FIXME(beads-dul): specific error codes (OUTPUT_FORMAT_IDS_EMPTY etc.)
+    # FIXME(#1660): specific error codes (OUTPUT_FORMAT_IDS_EMPTY etc.)
     # not produced by production — Pydantic gives generic VALIDATION_ERROR
     "T-UC-005-ext-b-output-empty": "specific validation error codes not implemented",
     "T-UC-005-ext-b-output-invalid": "specific validation error codes not implemented",
@@ -409,7 +409,7 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-002-nfr-001": "rate limiting + payload size validation not implemented — spec-production gap",
 }
 
-# FIXME(beads-dul): Selective xfail for parametrized scenarios where only
+# Selective xfail for parametrized scenarios where only
 # some examples exercise unimplemented features. Each entry: (tag, node_id
 # substrings that should xfail, reason).
 _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
@@ -989,7 +989,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # would XPASS-fail.
 
         # --- UC-005: disclosure/asset scenarios with partial impl ---
-        # FIXME(beads-dul): disclosure_positions and brief/catalog asset types
+        # FIXME(#1660): disclosure_positions and brief/catalog asset types
         # partially implemented — some transport variants pass, others fail.
         # Must run BEFORE selective xfails (which use strict=True) to avoid
         # XPASS failures on transport variants that now pass.
