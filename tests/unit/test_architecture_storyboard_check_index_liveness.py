@@ -9,7 +9,7 @@ gap that the real conformance ledger does not currently measure as failing.
 
 The real, exhaustive proof needs the live pinned compliance tree (``build()`` reads
 per-check text that the vendored offline fixture doesn't carry) — same
-``requires_clone`` contract as this repo's other storyboard_check_index consumers
+``requires_pinned_bundle`` contract as this repo's other storyboard_check_index consumers
 (``test_architecture_storyboard_wireability.py``, ``test_architecture_storyboard_ledger.py``).
 Liveness itself is injected via ``scenario_liveness_join.build_index``'s
 ``artifact_path``/``env_routes`` parameters (monkeypatched), so this test needs neither a
@@ -30,20 +30,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.audit import scenario_liveness_join, storyboard_check_index, storyboard_spec  # noqa: E402
-
-ADCP_HOME = storyboard_spec.adcp_home(REPO_ROOT)
+from tests.unit._storyboard_guard_env import (  # noqa: E402
+    ADCP_HOME,
+    requires_pinned_bundle,
+)
 
 # Captured before any test monkeypatches scenario_liveness_join.load_artifact --
 # tests below patch that name to a fixed-path lambda, so the lambda body must call
 # the ORIGINAL function object, not the (by-then-patched) module attribute.
 _real_load_artifact = scenario_liveness_join.load_artifact
-
-DIST = storyboard_spec.dist_root(ADCP_HOME, storyboard_spec.pinned_version(REPO_ROOT))
-
-requires_clone = pytest.mark.skipif(
-    not DIST.is_dir(),
-    reason=f"live pinned AdCP compliance tree not found at {DIST} (download the pinned bundle: gh release download v<pinned> --repo adcontextprotocol/adcp -p '<pinned>.tgz' && tar -xzf into tests/storyboard/runner/, or set $ADCP_HOME)",
-)
 
 
 class _Route:
@@ -56,7 +51,7 @@ class _Route:
         self.when = when
 
 
-@requires_clone
+@requires_pinned_bundle
 def test_no_artifact_publishes_zero_graded_and_zero_candidates(monkeypatch, tmp_path: Path) -> None:
     """Baseline: with no BDD run this session, nothing can be claimed graded or a
     graduation candidate -- missing measurement must render as a gap, not a guess.
@@ -78,7 +73,7 @@ def test_no_artifact_publishes_zero_graded_and_zero_candidates(monkeypatch, tmp_
     assert all(not r["graduation_candidate"] for r in result["records"])
 
 
-@requires_clone
+@requires_pinned_bundle
 def test_registry_wired_scenario_grades_its_claimed_checks(monkeypatch, tmp_path: Path) -> None:
     """A steps-bound scenario whose UC bucket IS a registry row grades every check
     its storyboard claims -- the actual join, not a bool the fixture hands us."""
@@ -114,7 +109,7 @@ def test_registry_wired_scenario_grades_its_claimed_checks(monkeypatch, tmp_path
     assert result["totals"]["with_live_scenario"] >= len(claiming)
 
 
-@requires_clone
+@requires_pinned_bundle
 def test_steps_bound_without_registry_row_does_not_grade(monkeypatch, tmp_path: Path) -> None:
     """steps_bound alone (the old 4-of-21 hand measurement) is not enough -- a UC
     bucket absent from ENV_ROUTES must stay ungraded even when its steps run for real."""
@@ -149,7 +144,7 @@ def test_steps_bound_without_registry_row_does_not_grade(monkeypatch, tmp_path: 
     assert all(r["scenario_liveness"][scenario_id]["registry_wired"] is False for r in claiming)
 
 
-@requires_clone
+@requires_pinned_bundle
 def test_ledgered_scenario_marks_graduation_candidate_when_not_measured_failing(monkeypatch, tmp_path: Path) -> None:
     """A scenario ledgered as a known gap, for a check the real conformance run
     does not measure FAILING, is a graduation candidate -- independent of wiring."""
@@ -177,7 +172,7 @@ def test_ledgered_scenario_marks_graduation_candidate_when_not_measured_failing(
     assert f"`{scenario_id}`" in rendered.split("## 4. Graduation candidates")[1].split("## 5.")[0]
 
 
-@requires_clone
+@requires_pinned_bundle
 def test_ungradable_checks_are_never_graduation_candidates(monkeypatch, tmp_path: Path) -> None:
     """comply_test_controller-gated checks can never graduate -- excluded even when
     their claiming scenario is ledgered, because 'ungradable' != 'no ledger entry'."""

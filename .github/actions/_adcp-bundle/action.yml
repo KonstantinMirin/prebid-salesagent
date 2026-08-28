@@ -51,3 +51,15 @@ runs:
           -p "${VERSION}.tgz" -p "${VERSION}.tgz.sha256"
         shasum -a 256 -c "${VERSION}.tgz.sha256"
         tar -xzf "${VERSION}.tgz"
+        # The path is spelled twice, in two languages: here, and by
+        # storyboard_spec.adcp_home() in Python. Nothing made them agree, and
+        # the failure mode was silent -- 25 guards across 7 modules skipping
+        # themselves off with the job still green. Assert the extraction landed
+        # where the resolver actually looks.
+        if [ ! -d "adcp-${VERSION}/compliance" ]; then
+          echo "::error::bundle extracted, but adcp-${VERSION}/compliance is not a directory."
+          echo "::error::storyboard_spec.adcp_home() resolves tests/storyboard/runner/adcp-<version>;"
+          echo "::error::the tarball root or BUNDLE_PARENT has diverged. Contents:"
+          ls -la
+          exit 1
+        fi

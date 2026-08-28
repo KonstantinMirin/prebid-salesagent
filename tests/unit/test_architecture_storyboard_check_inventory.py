@@ -47,14 +47,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.audit import storyboard_spec  # noqa: E402
-
-ADCP_HOME = storyboard_spec.adcp_home(REPO_ROOT)
-
-DIST = storyboard_spec.dist_root(ADCP_HOME, storyboard_spec.pinned_version(REPO_ROOT))
-
-requires_clone = pytest.mark.skipif(
-    not DIST.is_dir(),
-    reason=f"live pinned AdCP compliance tree not found at {DIST} (download the pinned bundle: gh release download v<pinned> --repo adcontextprotocol/adcp -p '<pinned>.tgz' && tar -xzf into tests/storyboard/runner/, or set $ADCP_HOME)",
+from tests.unit._storyboard_guard_env import (  # noqa: E402
+    ADCP_HOME,
+    DIST,
+    requires_pinned_bundle,
 )
 
 # The literal ground truth this whole module is graded against: one entry per
@@ -141,7 +137,7 @@ def test_phase_is_graded_still_sees_grading_in_a_later_step():
     assert storyboard_spec.phase_is_graded(NESTED_STORYBOARD, "nope") == "absent"
 
 
-@requires_clone
+@requires_pinned_bundle
 @pytest.mark.parametrize(
     ("rel", "expected"),
     [
@@ -204,7 +200,7 @@ def test_check_inventory_matches_pinned_file_counts(rel: str, expected: dict[str
     assert storyboard_spec.check_inventory(text) == expected
 
 
-@requires_clone
+@requires_pinned_bundle
 def test_check_inventory_matches_file_truth_for_every_pinned_storyboard():
     """Sweep: no storyboard at the pin may publish an inflated inventory."""
     mismatches = {
@@ -215,7 +211,7 @@ def test_check_inventory_matches_file_truth_for_every_pinned_storyboard():
     assert mismatches == {}
 
 
-@requires_clone
+@requires_pinned_bundle
 def test_roadmap_rows_publish_file_truth_check_counts():
     """The deliverable itself: every roadmap row's Checks cell equals file truth.
 

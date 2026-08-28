@@ -60,12 +60,15 @@ import re
 import sys
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.audit import storyboard_check_index, storyboard_spec  # noqa: E402
+from scripts.audit import storyboard_check_index  # noqa: E402
+from tests.unit._storyboard_guard_env import (  # noqa: E402
+    ADCP_HOME,
+    DIST,
+    requires_pinned_bundle,
+)
 
 # The oracle's OWN reading of the spec. Deliberately not imported from
 # storyboard_spec — see the module docstring's second independence axis.
@@ -75,16 +78,8 @@ _DECLARES_GATE = re.compile(r"^requires_capability:", re.M)
 # storyboard and carries no graded checks.
 _SCHEMA_FILE = "universal/storyboard-schema.yaml"
 
-ADCP_HOME = storyboard_spec.adcp_home(REPO_ROOT)
-DIST = storyboard_spec.dist_root(ADCP_HOME, storyboard_spec.pinned_version(REPO_ROOT))
 
-pytestmark = pytest.mark.skipif(
-    not DIST.is_dir(),
-    reason=(
-        f"no pinned AdCP compliance tree at {DIST} — set $ADCP_HOME, or download the release "
-        "bundle into tests/storyboard/runner/ (the CI jobs do this via ./.github/actions/_adcp-bundle)"
-    ),
-)
+pytestmark = requires_pinned_bundle
 
 
 def _storyboards_declaring_a_gate() -> set[str]:

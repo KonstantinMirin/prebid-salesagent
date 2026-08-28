@@ -46,19 +46,16 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
-
 from scripts.audit import storyboard_spec
+from tests.unit._storyboard_guard_env import (  # noqa: E402
+    DIST,
+    requires_pinned_bundle,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ADCP_HOME = storyboard_spec.adcp_home(REPO_ROOT)
 
-DIST = storyboard_spec.dist_root(ADCP_HOME, storyboard_spec.pinned_version(REPO_ROOT))
 
-pytestmark = pytest.mark.skipif(
-    not DIST.is_dir(),
-    reason=f"live pinned AdCP compliance tree not found at {DIST} (download the pinned bundle: gh release download v<pinned> --repo adcontextprotocol/adcp -p '<pinned>.tgz' && tar -xzf into tests/storyboard/runner/, or set $ADCP_HOME)",
-)
+pytestmark = requires_pinned_bundle
 
 
 def _read_pinned(rel_path: str) -> str:
@@ -72,7 +69,6 @@ def test_checks_for_phase_extracts_id_first_ordered_checks():
     on the validation item's own line (id-first ordering), not only the
     leading-`- check:` form the old regex required.
     """
-    from scripts.audit import storyboard_spec
 
     text = _read_pinned("protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml")
 
@@ -108,7 +104,6 @@ def test_checks_for_phase_does_not_match_prose_ending_in_check_colon():
     "check:" must not be counted as a validation check -- only real `check:` keys
     inside a `validations:` item may contribute.
     """
-    from scripts.audit import storyboard_spec
 
     text = _read_pinned("protocols/media-buy/scenarios/inventory_list_targeting.yaml")
 
@@ -137,7 +132,6 @@ def test_tagged_scenarios_block_terminates_at_next_tagline():
     one's block (verified pre-fix: 16 of 21 tagged scenarios in
     tests/bdd/features/ were affected).
     """
-    from scripts.audit import storyboard_spec
 
     feature_dir = REPO_ROOT / "tests" / "bdd" / "features"
     scenarios = storyboard_spec.tagged_scenarios(feature_dir)
@@ -167,7 +161,6 @@ def test_tagged_scenarios_keys_on_an_arbitrary_tag():
     than the shared ``@storyboard-v3.1``, so the ``tag`` parameter has to really
     select on the caller's tag. Pinned as the same block reached two ways.
     """
-    from scripts.audit import storyboard_spec
 
     feature_dir = REPO_ROOT / "tests" / "bdd" / "features"
     identifier = "T-UC-003-storyboard-media-buy-not-found"
@@ -191,7 +184,6 @@ def test_storyboard_key_does_not_collapse_index_files_onto_index():
     same key, making one citation of protocols/creative/index.yaml look like a
     claim on every specialism's index.
     """
-    from scripts.audit import storyboard_spec
 
     key_a = storyboard_spec.storyboard_key("protocols/media-buy/index.yaml")
     key_b = storyboard_spec.storyboard_key("specialisms/sales-non-guaranteed/index.yaml")
@@ -209,7 +201,6 @@ def test_storyboards_excludes_non_gradable_universal_files():
     -- confirmed against a real-runner baseline, neither ever appears in
     storyboards_executed or storyboards_missing_tools.
     """
-    from scripts.audit import storyboard_spec
 
     rels = {sb.rel for sb in storyboard_spec.storyboards(DIST)}
     assert "universal/fictional-entities.yaml" not in rels

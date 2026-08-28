@@ -53,9 +53,12 @@ from scripts.audit import (
     storyboard_coverage_map,
     storyboard_spec,
 )
+from tests.unit._storyboard_guard_env import (  # noqa: E402
+    ADCP_HOME,
+    requires_pinned_bundle,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ADCP_HOME = storyboard_spec.adcp_home(REPO_ROOT)
 
 # A real, currently-ledgered line (tests/storyboard/known_failures.txt:40), also
 # pinned verbatim in tests/unit/test_storyboard_ledger_state.py's EXPECTED_LEDGER
@@ -284,15 +287,8 @@ def test_binding_buckets_is_driven_by_audit_data_not_rendered_markdown(monkeypat
 
 # --- Zero-join tripwire: build() raises StoryboardAuditError naming an unresolved scenario id ---
 
-DIST = storyboard_spec.dist_root(ADCP_HOME, storyboard_spec.pinned_version(REPO_ROOT))
 
-requires_clone = pytest.mark.skipif(
-    not DIST.is_dir(),
-    reason=f"live pinned AdCP compliance tree not found at {DIST} (download the pinned bundle: gh release download v<pinned> --repo adcontextprotocol/adcp -p '<pinned>.tgz' && tar -xzf into tests/storyboard/runner/, or set $ADCP_HOME)",
-)
-
-
-@requires_clone
+@requires_pinned_bundle
 def test_build_raises_storyboard_audit_error_naming_an_unresolved_covered_by_scenario(monkeypatch):
     """The real zero-join invariant: build() must name any scenario id a
     covered on-path row claims but the binding-bucket join cannot resolve.

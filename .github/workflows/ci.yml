@@ -160,7 +160,7 @@ jobs:
     permissions:
       contents: read
     # 15 was enough while the six storyboard structural guards SKIPPED for want
-    # of a pinned tree. Provisioning the release bundle below un-skips 23 of
+    # of a pinned tree. Provisioning the release bundle below un-skips 25 of
     # them, and they parse all 121 pinned storyboards — the job went 9m38s ->
     # over 15m and was cancelled at the ceiling. Raised with headroom rather
     # than trimmed, because the point of provisioning the tree is that these

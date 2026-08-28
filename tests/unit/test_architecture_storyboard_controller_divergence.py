@@ -35,22 +35,15 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INDEX = REPO_ROOT / "tests" / "fixtures" / "adcp_storyboards_pinned" / "index.json"
 
 sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.audit import storyboard_roadmap, storyboard_spec  # noqa: E402
-
-ADCP_HOME = storyboard_spec.adcp_home(REPO_ROOT)
-
-DIST = storyboard_spec.dist_root(ADCP_HOME, storyboard_spec.pinned_version(REPO_ROOT))
-
-requires_clone = pytest.mark.skipif(
-    not DIST.is_dir(),
-    reason=f"live pinned AdCP compliance tree not found at {DIST} (download the pinned bundle: gh release download v<pinned> --repo adcontextprotocol/adcp -p '<pinned>.tgz' && tar -xzf into tests/storyboard/runner/, or set $ADCP_HOME)",
+from tests.unit._storyboard_guard_env import (  # noqa: E402
+    ADCP_HOME,
+    requires_pinned_bundle,
 )
 
 CONTROLLER = "comply_test_controller"
@@ -192,7 +185,7 @@ def test_every_controller_storyboard_in_the_pinned_index_is_covered():
     assert mismatched == []
 
 
-@requires_clone
+@requires_pinned_bundle
 def test_roadmap_renders_every_controller_storyboard_as_ungradable():
     """The deliverable: no on-path controller row may read 'no ledger entries'."""
     result = storyboard_roadmap.build(REPO_ROOT, ADCP_HOME)
