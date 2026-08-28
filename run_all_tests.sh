@@ -249,10 +249,29 @@ dc build postgres adcp-server proxy tests
 # governed by the DIRECTORY's write bit (which we own), not the file's own
 # owner, so `rm -f` succeeds even on a ci-owned file; the fresh file this
 # process then creates is ours. Verified live: ci:ci 0644 -> sacirunner:ci 0664.
-mkdir -p logs && chmod 2775 logs
+mkdir -p logs
+chmod 2775 logs
 for f in audit.log error.log structured.jsonl security.jsonl; do
     rm -f "logs/$f" 2>/dev/null || true
-    : > "logs/$f" && chmod 664 "logs/$f"
+    # Two statements, not `: > "logs/$f" && chmod ...`. errexit exempts every command
+    # in an AND-OR list except the last, so as an &&-list a failed truncate merely
+    # short-circuits: chmod is skipped, the loop continues, and the script still exits
+    # 0. Verified A/B (with a directory planted at logs/audit.log to force the
+    # failure): &&-list -> "REACHED-END", exit 0; split -> exit 1 at the truncate.
+    : > "logs/$f"
+    # 666, not 664. The point of this block is that the adcp-server container can
+    # WRITE these; 664 only achieves that if the container's user shares the file's
+    # group, and it does not. The server runs as the image's `app` (uid/gid 1001,
+    # no supplementary groups), while these files are owned by whoever ran the
+    # script -- and the bind-mount of this directory onto /app SHADOWS the image's
+    # own `chown -R app:app /app`, so host-side permissions are what decide. Group
+    # never matches, so `app` falls through to the OTHER bits: r-- under 664, and
+    # the server dies on PermissionError while opening audit.log at import time,
+    # taking every per-worker server container unhealthy with it.
+    # The setgid bit set on the directory above does not rescue this either: it
+    # controls the GROUP of new files, not their write bit.
+    # These are ephemeral per-run test logs, not durable state.
+    chmod 666 "logs/$f"
 done
 
 dc up -d postgres adcp-server proxy creative-pg creative-agent

@@ -169,9 +169,11 @@ services:
     #     `docker compose up` for adcp-server -- the `:-0` default applies.
     # Under rootless, container root ALREADY maps to the invoking user, which is
     # exactly the outcome the pin was hand-building. Unset gets it for free.
-    # Symptom this caused live: /app/logs/* created root-owned, adcp-server
-    # (uid 1001) dying at import on a module-level FileHandler, cascading into
-    # ~2100 test failures.
+    # cassini removed the identical workaround on its own side for the same
+    # reason (cassini/identity.py: "a workaround for a root daemon, and there is
+    # no longer a root daemon"). Symptom this caused live: /app/logs/* created
+    # root-owned, adcp-server (uid 1001) dying at import on a module-level
+    # FileHandler, cascading into ~2100 test failures.
     build:
       context: .
       dockerfile: Dockerfile.test
@@ -187,13 +189,12 @@ services:
       # CPU that finished exit=0, crossing the 5-minute false-red threshold
       # (reproduced end-to-end on a full in-network run).
       PYTHONUNBUFFERED: "${PYTHONUNBUFFERED:-1}"
-      # Historical, kept because the reasoning still applies if a `user:`
-      # pin ever returns: a raw numeric UID has no /etc/passwd entry, so
-      # UID, so HOME defaults to "/" and Dockerfile.test's baked
-      # UV_CACHE_DIR=/cache/uv (root:root 755, no group-write) is
-      # unreachable -- uv fails with "Permission denied" trying to even
-      # create its cache dir, surfacing as a confusing "could not find
-      # python interpreter" error from tox. Redirect both to a
+      # Written for the `user:` pin removed above, and RETAINED. Under that pin
+      # a raw numeric UID had no /etc/passwd entry, so HOME defaulted to "/"
+      # and Dockerfile.test's baked UV_CACHE_DIR=/cache/uv (root:root 755, no
+      # group-write) was unreachable -- uv failed with "Permission denied"
+      # trying to even create its cache dir, surfacing as a confusing "could
+      # not find python interpreter" error from tox. Both stay redirected to a
       # container-local writable path (not the bind mount -- this is a
       # throwaway per-run cache, no reason to fight over its ownership too).
       HOME: /tmp
@@ -304,10 +305,10 @@ services:
       # pytest-bdd's scenarios() resolve feature files to /Users/... instead of
       # /app/... (FileNotFoundError). Redirect bytecode to a container-local dir
       # so Python recompiles from /app and paths resolve correctly.
+      PYTHONPYCACHEPREFIX: /tmp/pycache
       # Opt-in per-worker timing profile (tests/_worker_profile.py). Unset by
       # default, so it costs one environment lookup at import and nothing else.
       PYTEST_WORKER_PROFILE: "${PYTEST_WORKER_PROFILE:-}"
-      PYTHONPYCACHEPREFIX: /tmp/pycache
       GEMINI_API_KEY: ${GEMINI_API_KEY:-test_key}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}  # TEST ONLY — never use in production
     depends_on:
@@ -338,7 +339,7 @@ services:
       # process starts) -- permanently EACCES-blocking the non-root tests
       # user from `mkdir .tox/<env>` every single run. .tox now lives on the
       # bind mount instead, same as test-results, which already works
-      # correctly whether or not a `user:` pin is in effect.
+      # correctly. (Both references are to the `user:` pin since removed above.)
     working_dir: /app
     # venv lives at /opt/venv (UV_PROJECT_ENVIRONMENT in Dockerfile.test), outside
     # the /app bind mount, so it is never shadowed — no .venv anonymous volume.
