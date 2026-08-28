@@ -210,17 +210,6 @@ services:
       context: .
       dockerfile: Dockerfile.test
     environment:
-      # Unbuffered stdout/stderr for the tox process that actually runs the
-      # suite. cassini sets PYTHONUNBUFFERED on its supervisor's own subprocess
-      # env, but the work runs HERE -- a separate container started by
-      # `docker compose run tests` -- and this environment: block is a curated
-      # allowlist with no host passthrough, so it never arrived. Verified live
-      # by `docker exec ... env | grep PYTHONUNBUFFERED` returning nothing.
-      # Consequence: output sat in the buffer, so cassini's RunState.quiet_for
-      # climbed monotonically (0m34s -> 12m+) on a genuinely busy run at 1082%
-      # CPU that finished exit=0, crossing the 5-minute false-red threshold
-      # (reproduced end-to-end on a full in-network run).
-      PYTHONUNBUFFERED: "${PYTHONUNBUFFERED:-1}"
       # Written for the `user:` pin removed above, and RETAINED. Under that pin
       # a raw numeric UID had no /etc/passwd entry, so HOME defaulted to "/"
       # and Dockerfile.test's baked UV_CACHE_DIR=/cache/uv (root:root 755, no

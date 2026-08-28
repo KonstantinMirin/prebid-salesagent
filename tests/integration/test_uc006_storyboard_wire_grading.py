@@ -60,6 +60,7 @@ byte-for-byte echo test would redden for a PRODUCTION normalization defect
 from __future__ import annotations
 
 import copy
+import dataclasses
 from dataclasses import replace
 from typing import Any
 
@@ -218,14 +219,28 @@ def test_reverting_the_a2a_wire_capture_makes_the_envelope_schema_then_fail_loud
     with _sync_env("wire-c2-revert-a2a") as env:
         ctx = _live_scenario_ctx(env, Transport.A2A)
         # THE REVERSION: the A2A leg stashed no success-path wire.
+        #
+        # Applied at BOTH observables, and that is not belt-and-braces. The
+        # guarded read moved onto ``TransportResult.require_wire()``, and
+        # ``wire_dict`` prefers it over ``ctx["wire_response"]`` whenever a
+        # result is present — which it always is for a real-wire transport.
+        # Clearing only the ctx key therefore reverts nothing: the accessor
+        # still reads a real wire off the result, the Then passes, and this
+        # test grades nothing. (Caught exactly that way when main's
+        # guarded-accessor refactor merged into this branch: auto-merged with
+        # no conflict, and only this test failed.)
         ctx["wire_response"] = None
+        if ctx.get("result") is not None:
+            ctx["result"] = dataclasses.replace(ctx["result"], wire_response=None)
         assert ctx.get("response") is not None, "reversion must leave the typed response intact"
 
         with pytest.raises(AssertionError) as excinfo:
             steps.then_response_envelope_schema_valid(ctx)
 
-    assert "wire_response missing" in str(excinfo.value), (
-        f"the envelope-schema Then failed, but not through the guarded accessor's missing-wire guard: {excinfo.value!r}"
+    message = str(excinfo.value)
+    assert "no wire body was stashed" in message or "wire_response missing" in message, (
+        "the envelope-schema Then failed, but not through a missing-wire guard "
+        f"(require_wire's, or wire_dict's own when no result is present): {excinfo.value!r}"
     )
 
 
