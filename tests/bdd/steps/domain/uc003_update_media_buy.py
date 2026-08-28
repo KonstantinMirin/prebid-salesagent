@@ -2359,6 +2359,26 @@ def given_request_revision(ctx: dict, revision: int) -> None:
     kwargs["revision"] = revision
 
 
+@given(parsers.parse('the request revision is set to "{revision}"'))
+def given_request_revision_wrong_type(ctx: dict, revision: str) -> None:
+    """Send *revision* as a STRING where the schema declares an integer.
+
+    A separate step from the `{revision:d}` parser above because that parser cannot
+    match a quoted value, and the `wrong_type` Examples row carries `"7"` precisely to
+    exercise the type boundary: 7 and "7" must NOT behave alike. The quotes are the
+    whole point, so the value is forwarded as `str` rather than coerced -- coercing it
+    here would grade nothing (it would re-run the `matches_current` row) and would let
+    a production regression that silently accepts a string read as green.
+
+    Without this step the row raised StepDefinitionNotFoundError, and the resulting
+    xfail was recorded as a production/spec gap when the real cause was missing wiring
+    -- the dormancy-misclassified-as-gap pattern that
+    test_architecture_bdd_xfail_reason_tokens grades.
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    kwargs["revision"] = revision
+
+
 @then(parsers.parse("the response should contain a revision with value {expected:d}"))
 def then_response_revision_value(ctx: dict, expected: int) -> None:
     """Assert the WIRE revision is the post-write value.
