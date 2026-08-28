@@ -127,7 +127,7 @@ from adcp.types import Signal as LibrarySignal
 from adcp.types import SignalFilters as LibrarySignalFilters
 from adcp.types import TargetingOverlay
 
-# adcp 4.3 generates CollectionListReference and uses it on TargetingOverlay.collection_list /
+# The adcp SDK generates CollectionListReference and uses it on TargetingOverlay.collection_list /
 # collection_list_exclude, but does not re-export the type from the public adcp.types namespace
 # (PropertyListReference is exported, CollectionListReference is not — likely a codegen oversight).
 # We import from the internal generated path so our isinstance checks and type annotations match
@@ -1630,7 +1630,7 @@ class Targeting(TargetingOverlay):
     frequency_cap: FrequencyCap | None = None
 
     # NOTE: property_list, collection_list, and collection_list_exclude are inherited from
-    # TargetingOverlay (added natively in adcp 4.3). CollectionListReference is re-exported
+    # TargetingOverlay (native in the adcp SDK). CollectionListReference is re-exported
     # from src.core.schemas (see import above) so callers can use a single import path.
 
     # --- Internal dimensions (unchanged) ---
@@ -2179,7 +2179,8 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # adcp 4.3 makes account and idempotency_key required.  Our impl resolves
+    # AdCP 3.1.1 makes account and idempotency_key required (see the /required list of
+    # create-media-buy-request.json and update-media-buy-request.json).  Our impl resolves
     # identity at the transport layer (ResolvedIdentity), not from the request
     # payload, so account stays optional here.  idempotency_key inherits the
     # library's REQUIRED field (MinLen 16 + pattern) — a missing key rejects at
@@ -2473,7 +2474,8 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # adcp 4.3 makes account and idempotency_key required.  Override as optional:
+    # AdCP 3.1.1 makes account and idempotency_key required (see /required in the
+    # request schema).  Override as optional:
     # identity is resolved at the transport boundary, and update_media_buy's
     # required-key enforcement is a deliberate fast-follow — create_media_buy
     # enforces it today; the update BDD contract still encodes optional keys.

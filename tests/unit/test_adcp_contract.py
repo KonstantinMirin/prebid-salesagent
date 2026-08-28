@@ -580,7 +580,7 @@ class TestAdCPContract:
                 "supports_webhooks": True,
                 "available_metrics": ["impressions", "clicks"],
                 "date_range_support": "date_range",
-            },  # Required per AdCP 4.3 spec
+            },  # Required per AdCP 3.1.1
         }
 
         # Should be convertible to AdCP schema
@@ -3532,7 +3532,7 @@ class TestProductV36FieldContract:
         dump = schema.model_dump()
 
         # None-valued optional fields should be omitted from dump
-        # reporting_capabilities is required in adcp 4.3 — the field's default_factory
+        # reporting_capabilities is required in AdCP 3.1.1 (product.json /required) — the field's default_factory
         # guarantees a validated value, so it is never among the absent fields
         absent_fields = [
             "channels",

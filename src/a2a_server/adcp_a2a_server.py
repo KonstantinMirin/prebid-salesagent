@@ -1785,7 +1785,7 @@ class AdCPRequestHandler(RequestHandler):
             req = CreateMediaBuyRequest.model_validate(params)
 
         # Call core function with validated parameters and identity.
-        # Per AdCP 4.3 (commit 3c604130) targeting_overlay and budgets live on each
+        # Per AdCP 3.1.1 (media-buy/package-update.json) targeting_overlay and budgets live on each
         # PackageRequest; only request-level spec fields are forwarded here.
         response = await core_create_media_buy_tool(
             brand=params.get("brand"),

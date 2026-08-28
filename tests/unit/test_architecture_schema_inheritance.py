@@ -449,7 +449,7 @@ class TestSchemaInheritance:
             ("SyncCreativesRequest", "account"),  # optional override (library requires it)
             ("UpdateMediaBuyRequest", "end_time"),  # datetime|None (library uses AwareDatetime)
             ("UpdateMediaBuyRequest", "start_time"),  # datetime|Literal["asap"]|None (wider type)
-            # adcp 4.3 field overrides — library made these required; we keep them
+            # AdCP 3.1.1 field overrides — the library made these required; we keep them
             # optional because identity is resolved at the transport boundary, and
             # required-key enforcement rolls out create_media_buy-first
             # (CreateMediaBuyRequest.idempotency_key now inherits the required field)

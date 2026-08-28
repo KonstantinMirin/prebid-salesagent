@@ -4192,7 +4192,7 @@ async def _create_media_buy_impl(
                                 f"Creatives will need to be associated via sync_creatives."
                             )
 
-        # Per AdCP 4.3 (commit 3c604130) creatives live on each PackageRequest, not at
+        # Per AdCP 3.1.1 (media-buy/package-request.json) creatives live on each PackageRequest, not at
         # request level. Inline creative submission to the adapter happens via the
         # package-level inline creative flow (process_and_upload_package_creatives
         # earlier in this function and req.packages[].creatives).
@@ -4364,7 +4364,7 @@ async def _create_media_buy_impl(
             }
             slack_notifier = get_slack_notifier(notifier_config)
 
-            # Per AdCP 4.3, creatives live on each PackageRequest. Count creatives across
+            # Per AdCP 3.1.1, creatives live on each PackageRequest. Count creatives across
             # all request packages for the notification.
             notification_creatives_count = sum(len(pkg.creatives) for pkg in (req.packages or []) if pkg.creatives)
             success_details = {
@@ -4602,7 +4602,7 @@ async def create_media_buy(
     MCP tool wrapper that delegates to the shared implementation.
     FastMCP automatically validates and coerces JSON inputs to Pydantic models.
 
-    Per AdCP 4.3 (commit 3c604130) targeting_overlay and creatives live on each
+    Per AdCP 3.1.1 (media-buy/package-request.json) targeting_overlay and creatives live on each
     PackageRequest (packages[].targeting_overlay, packages[].creatives), not at
     request level.
 
@@ -4690,7 +4690,7 @@ async def create_media_buy_raw(
 ):
     """Create a new media buy with specified parameters (raw function for A2A server use).
 
-    Param set mirrors CreateMediaBuyRequest per AdCP 4.3 spec. Per-package fields
+    Param set mirrors CreateMediaBuyRequest per AdCP 3.1.1. Per-package fields
     (budget, pacing, daily_budget, targeting_overlay, creatives, product_id, etc.)
     live inside packages[].
 

@@ -71,10 +71,10 @@ class TestSchemaFieldMapping:
             "material_submission",  # Material submission config from adcp 3.12 spec
             "measurement_readiness",  # Measurement readiness from adcp 3.12 spec
             "trusted_match",  # Trusted match config from adcp 3.12 spec
-            # AdCP 4.3+ fields - inherited from library Product, not yet stored in database
-            "measurement_terms",  # Measurement terms from adcp 4.3 spec
-            "cancellation_policy",  # Cancellation policy from adcp 4.3 spec
-            "performance_standards",  # Performance standards from adcp 4.3 spec
+            # AdCP 3.1.1 Product fields - inherited from library Product, not yet stored in database
+            "measurement_terms",  # product.json, optional in AdCP 3.1.1
+            "cancellation_policy",  # product.json, optional in AdCP 3.1.1
+            "performance_standards",  # product.json, optional in AdCP 3.1.1
             # AdCP 5.7+ fields - inherited from library Product, not yet stored in database
             "format_options",  # Format option config from adcp 5.7 spec
             "vendor_metric_optimization",  # Vendor metric optimization from adcp 5.7 spec

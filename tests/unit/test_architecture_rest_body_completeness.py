@@ -51,12 +51,12 @@ _ALLOWLIST: dict[str, dict[str, str]] = {
         # media_buy_id is the URL path parameter (/media-buys/{media_buy_id}),
         # resolved by FastAPI from the path — legitimately not a body field.
         "media_buy_id": "URL path parameter, not a body field",
-        # update_media_buy_raw accepts these in its signature but DROPS them before
-        # _build_update_request (which has no targeting_overlay/creatives params), so
-        # exposing them on the body would be a silent no-op. Remove from this allowlist
-        # once the raw wrapper actually plumbs them through.
-        "targeting_overlay": "raw wrapper accepts but drops before _build_update_request",
-        "creatives": "raw wrapper accepts but drops before _build_update_request",
+        # targeting_overlay / creatives were allowlisted here while update_media_buy_raw
+        # accepted them and dropped them before _build_update_request. Both parameters are
+        # now GONE from the raw wrapper (prkv.5 D7): AdCP 3.1.1 declares them on
+        # media-buy/package-update.json, not on update-media-buy-request.json, so a
+        # request-level parameter advertised a no-op. Entries deleted rather than
+        # re-worded -- there is no divergence left to allow.
     },
 }
 

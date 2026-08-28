@@ -80,7 +80,8 @@ class TestMCPToolTypedSchemas:
         """create_media_buy should use BrandReference (brand), PackageRequest, etc.
 
         adcp 3.6.0: brand_manifest renamed to brand (BrandReference with domain field).
-        adcp 4.3 (commit 3c604130): targeting_overlay and creatives moved to PackageRequest.
+        AdCP 3.1.1: targeting_overlay and creatives are package-level, not request-level
+        (media-buy/package-request.json declares both; create-media-buy-request.json does not).
         """
         from src.core.tools.media_buy_create import create_media_buy
 
@@ -99,17 +100,17 @@ class TestMCPToolTypedSchemas:
             f"packages should use PackageRequest type, got {params['packages'].annotation}"
         )
 
-        # adcp 4.3: targeting_overlay and creatives are package-level, not request-level
+        # AdCP 3.1.1: targeting_overlay and creatives are package-level, not request-level
         assert "targeting_overlay" not in params, (
-            "targeting_overlay was moved to PackageRequest in adcp 4.3 (commit 3c604130); "
+            "targeting_overlay is package-level in AdCP 3.1.1 (media-buy/package-request.json); "
             "use packages[].targeting_overlay instead"
         )
         assert "creatives" not in params, (
-            "creatives was moved to PackageRequest in adcp 4.3 (commit 3c604130); use packages[].creatives instead"
+            "creatives is package-level in AdCP 3.1.1 (media-buy/package-request.json); use packages[].creatives instead"
         )
 
     def test_update_media_buy_uses_typed_parameters(self):
-        """update_media_buy should use TargetingOverlay, PackageUpdate types.
+        """update_media_buy should use PackageUpdate types, and NOT a top-level overlay.
 
         V3 Migration: Packages renamed to PackageUpdate in adcp library.
         """
@@ -118,9 +119,15 @@ class TestMCPToolTypedSchemas:
         sig = inspect.signature(update_media_buy)
         params = sig.parameters
 
-        # Check targeting_overlay uses TargetingOverlay type
-        assert "TargetingOverlay" in str(params["targeting_overlay"].annotation), (
-            f"targeting_overlay should use TargetingOverlay type, got {params['targeting_overlay'].annotation}"
+        # targeting_overlay is NOT a top-level parameter. Per AdCP 3.1.1 it lives on
+        # it lives on each package, exactly like `creatives` above -- the A2A dispatcher
+        # says so at adcp_a2a_server.py:1788, and every one of its ~229 uses in src/ reads
+        # it off a package, never off the request. The top-level parameter survived as dead
+        # weight: update_media_buy_raw accepted it and dropped it before
+        # _build_update_request, so it advertised a no-op. Removed (prkv.5 D7).
+        assert "targeting_overlay" not in params, (
+            "targeting_overlay is package-level in AdCP 3.1.1 (media-buy/package-update.json); use packages[].targeting_overlay. "
+            "A top-level parameter here is accepted and silently dropped."
         )
 
         # Check packages uses PackageUpdate type (V3: was Packages)
@@ -137,7 +144,7 @@ class TestMCPToolTypedSchemas:
 
         # type parameter removed in adcp 3.12
 
-        # Check format_ids uses FormatId type (alias for FormatReferenceStructuredObject in adcp 4.3)
+        # Check format_ids uses FormatId type (SDK alias for FormatReferenceStructuredObject)
         annotation_str = str(params["format_ids"].annotation)
         assert "FormatId" in annotation_str or "FormatReference" in annotation_str, (
             f"format_ids should use FormatId type, got {annotation_str}"

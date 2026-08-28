@@ -102,7 +102,7 @@ class Product(LibraryProduct):
     - Automatic updates when library Product changes
     """
 
-    # adcp 4.3 makes reporting_capabilities required. Callers that don't know it
+    # AdCP 3.1.1 makes reporting_capabilities required (product.json /required). Callers that don't know it
     # yet get a validated default from the factory below, so the attribute, the
     # wire and the persisted row always agree and None is unconstructible.
     reporting_capabilities: LibraryReportingCapabilities = Field(default_factory=_default_reporting_capabilities)

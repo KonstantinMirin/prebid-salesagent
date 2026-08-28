@@ -117,7 +117,8 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
     Defaults: one package with product_id, pricing_option_id, budget.
     Start 1 day ahead, end 8 days ahead.
 
-    idempotency_key is required by adcp 4.3 and drives real replay/conflict
+    idempotency_key is required by AdCP 3.1.1 (create-media-buy-request.json /required)
+    and drives real replay/conflict
     behavior against the persistent integration DB (the harness runs the real
     idempotency machinery), so a per-call-unique key is injected by default.
     Callers may override it via the ``idempotency_key`` kwarg.

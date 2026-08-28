@@ -59,7 +59,7 @@ class TestMockMediaBuyRejectedRaiseSites:
 
     Two raise sites exist in mock_ad_server.py. The keyword-scenario site
     (``[REJECT:...]`` in brand.domain) is unreachable through a schema-validated
-    CreateMediaBuyRequest under adcp 4.3.0 — the library ``BrandReference.domain``
+    CreateMediaBuyRequest under the pinned adcp SDK — the library ``BrandReference.domain``
     enforces a strict domain pattern that rejects bracket characters, so a valid
     request can never carry the keyword. The sync-mode approval-rejection site
     below is the reachable one and is what guards the class identity.

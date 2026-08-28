@@ -20,7 +20,8 @@ def _future(days: int = 1) -> datetime:
 def _make_create_request(**overrides: Any) -> CreateMediaBuyRequest:
     """Build a minimal valid CreateMediaBuyRequest.
 
-    idempotency_key is required by adcp 4.3 and drives real replay/conflict
+    idempotency_key is required by AdCP 3.1.1 (create-media-buy-request.json /required)
+    and drives real replay/conflict
     behavior against the persistent integration DB, so a per-call-unique key is
     injected by default. Callers may override it (e.g. to deliberately reuse a
     key) via the ``idempotency_key`` kwarg.

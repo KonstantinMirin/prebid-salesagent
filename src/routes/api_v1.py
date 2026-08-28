@@ -396,7 +396,7 @@ async def create_media_buy(
 ):
     """Create a new media buy (auth required).
 
-    Per AdCP 4.3 (commit 3c604130) per-package fields (budget, product_id,
+    Per AdCP 3.1.1 (media-buy/package-request.json) per-package fields (budget, product_id,
     targeting_overlay, creatives, pacing, daily_budget) live inside packages[].
     """
     # Coerce wire dicts to the SDK types the raw wrapper declares, inside the

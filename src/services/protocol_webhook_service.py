@@ -43,7 +43,8 @@ logger = logging.getLogger(__name__)
 
 # FIXME(gh-#1299): behaviour-identical backport of adcp 5.4.0
 # ``adcp.to_wire_dict`` + ``_normalize_a2a_task_state_to_v03`` (adcp #602).
-# salesagent is pinned to adcp 4.3.0, which predates that public seam.
+# salesagent is pinned to adcp 6.6.0 (AdCP 3.1.1); this predated the public seam when
+# written and the note is kept until the seam is actually adopted.
 # Delete this block and call ``adcp.to_wire_dict()`` directly once salesagent
 # bumps adcp to the version that ships it.
 def _normalize_message_role(message: dict[str, Any]) -> None:
