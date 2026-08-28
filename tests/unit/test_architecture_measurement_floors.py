@@ -56,6 +56,7 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "uc004-create",
         "uc004-poll",
         "uc006-creative-sync",
+        "uc019-post-create-poll",
         "uc011-list",
         "uc011-sync",
         "uc018-list",

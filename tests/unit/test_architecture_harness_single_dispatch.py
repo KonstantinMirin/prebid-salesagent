@@ -75,6 +75,10 @@ _KNOWN_DELIVER_OVERRIDES: set[tuple[str, str, str]] = {
     #
     # Selects BOTH tool and parser from request CONTENT, so it can declare no
     # single MCP_TOOL/A2A_SKILL.
+    # Selects the transport target from request CONTENT (_is_list_request), so
+    # it can declare no single MCP_TOOL/A2A_SKILL.
+    ("tests/harness/media_buy_create_list.py", "MediaBuyCreateListEnv", "deliver_mcp"),
+    ("tests/harness/media_buy_create_list.py", "MediaBuyCreateListEnv", "deliver_a2a"),
     ("tests/harness/media_buy_dual.py", "MediaBuyDualEnv", "deliver_mcp"),
     ("tests/harness/media_buy_dual.py", "MediaBuyDualEnv", "deliver_a2a"),
     # Reshapes kwargs (_flatten_request) and parses the success|error union via

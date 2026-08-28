@@ -84,7 +84,7 @@ def _adcp_error_from_code(
     )
 
     # Read class-level identity from the _default_error_code ClassVar slot
-    # . error_code is an instance
+    # error_code is an instance
     # attribute set in __init__; reading it off the class would return the
     # descriptor, not the wire code string.
     _CODE_TO_CLASS: dict[str, type[AdCPError]] = {
