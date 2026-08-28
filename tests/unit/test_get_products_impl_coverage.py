@@ -20,6 +20,7 @@ beads: salesagent-vagl
 """
 
 import contextlib
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -150,7 +151,7 @@ class TestProductConversionError:
     """
 
     @pytest.mark.asyncio
-    async def test_convert_failure_raises_adapter_error_with_product_id(self):
+    async def test_convert_failure_raises_adapter_error_with_product_id(self, caplog):
         """convert_product_model_to_schema raises → AdCPInternalError with product_id."""
         from src.core.exceptions import AdCPInternalError
 
@@ -181,12 +182,20 @@ class TestProductConversionError:
             # says what actually happened -- "an invariant this seller relies on did not
             # hold". The test's own intent (fatal, not silently skipped, product identified)
             # is unchanged.
-            with pytest.raises(AdCPInternalError) as exc_info:
-                await _get_products_impl(req, identity)
-            # The identifier is STRUCTURED now: it lives in details/field, not in prose.
+            with caplog.at_level(logging.ERROR, logger="src.core.tools.products"):
+                with pytest.raises(AdCPInternalError) as exc_info:
+                    await _get_products_impl(req, identity)
+
+            assert exc_info.value.error_code == "INTERNAL_ERROR"
+            # Buyer-facing text is CODE_TABLE's now, so the two identifiers this test
+            # has always been about moved to the carriers that still hold them: the
+            # failing row is named in the operator log line, and the underlying cause
+            # is chained rather than interpolated.
+            assert "corrupt-product-42" in caplog.text
+            assert "missing required field" in str(exc_info.value.__cause__)
 
     @pytest.mark.asyncio
-    async def test_convert_failure_is_not_silently_swallowed(self):
+    async def test_convert_failure_is_not_silently_swallowed(self, caplog):
         """Unlike get_product_catalog, _get_products_impl must raise on conversion error."""
         from src.core.exceptions import AdCPInternalError
 
@@ -216,9 +225,13 @@ class TestProductConversionError:
         ):
             from src.core.tools.products import _get_products_impl
 
-            with pytest.raises(AdCPInternalError) as _ei:
-                await _get_products_impl(req, identity)
-            # The identifier is STRUCTURED now: details/field, not prose.
+            with caplog.at_level(logging.ERROR, logger="src.core.tools.products"):
+                with pytest.raises(AdCPInternalError) as exc_info:
+                    await _get_products_impl(req, identity)
+
+            assert exc_info.value.error_code == "INTERNAL_ERROR"
+            assert "bad-1" in caplog.text
+            assert isinstance(exc_info.value.__cause__, TypeError)
 
 
 class TestPropertyListResolution:
@@ -245,6 +258,7 @@ class TestPropertyListResolution:
 
         mock_uow = _mock_uow_with_products([])
         patches = _standard_patches(mock_uow)
+        passthrough = AdCPAdapterError()
 
         with contextlib.ExitStack() as stack:
             for p in patches:
@@ -253,15 +267,17 @@ class TestPropertyListResolution:
                 patch(
                     "src.core.property_list_resolver.resolve_property_list",
                     new_callable=AsyncMock,
-                    side_effect=AdCPAdapterError(),
+                    side_effect=passthrough,
                 )
             )
 
             from src.core.tools.products import _get_products_impl
 
-            with pytest.raises(AdCPAdapterError) as _ei:
+            with pytest.raises(AdCPAdapterError) as exc_info:
                 await _get_products_impl(req, identity)
-            # The identifier is STRUCTURED now: details/field, not prose.
+            # "Passes through untouched" is now assertable by IDENTITY rather than by
+            # matching a message the raise site is no longer allowed to author.
+            assert exc_info.value is passthrough
 
 
 class TestFilterBranches:

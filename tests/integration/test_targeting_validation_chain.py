@@ -8,7 +8,7 @@ Note: managed_only_dimensions / removed_dimensions and the pydantic shape check
 are effectively guarded by the Pydantic model layer (Targeting.model_dump excludes
 managed-only fields; extra="forbid" rejects unknown fields before validators run).
 
-Covers: salesagent-31v (PR review #10).
+Covers: (PR review #10).
 """
 
 import uuid

@@ -633,7 +633,7 @@ class Kevel(AdServerAdapter):
                 self.log(f"Would pause flight '{package_id}' in campaign {media_buy_id}")
                 self.log(f"Would call: PUT {self.base_url}/flight/{package_id}")
                 self.log("  Payload: {'IsActive': false}")
-                return UpdateMediaBuySuccess(
+                return UpdateMediaBuySuccess.carrier(
                     media_buy_id=media_buy_id,
                     affected_packages=[
                         AffectedPackage(
@@ -649,7 +649,7 @@ class Kevel(AdServerAdapter):
                 self.log(f"Would resume flight '{package_id}' in campaign {media_buy_id}")
                 self.log(f"Would call: PUT {self.base_url}/flight/{package_id}")
                 self.log("  Payload: {'IsActive': true}")
-                return UpdateMediaBuySuccess(
+                return UpdateMediaBuySuccess.carrier(
                     media_buy_id=media_buy_id,
                     affected_packages=[
                         AffectedPackage(
@@ -673,7 +673,7 @@ class Kevel(AdServerAdapter):
                 self.log(f"Would call: PUT {self.base_url}/flight/{package_id}")
                 self.log(f"  Payload: {{'Impressions': {new_impressions}}}")
 
-            return UpdateMediaBuySuccess(
+            return UpdateMediaBuySuccess.carrier(
                 media_buy_id=media_buy_id,
                 affected_packages=[],  # List of package_ids affected by update
                 implementation_date=today,
@@ -712,7 +712,7 @@ class Kevel(AdServerAdapter):
                     update_response.raise_for_status()
 
                     # Return affected package with paused state
-                    return UpdateMediaBuySuccess(
+                    return UpdateMediaBuySuccess.carrier(
                         media_buy_id=media_buy_id,
                         affected_packages=[
                             AffectedPackage(
@@ -756,7 +756,7 @@ class Kevel(AdServerAdapter):
                     )
                     update_response.raise_for_status()
 
-                return UpdateMediaBuySuccess(
+                return UpdateMediaBuySuccess.carrier(
                     media_buy_id=media_buy_id,
                     affected_packages=[],
                     implementation_date=today,

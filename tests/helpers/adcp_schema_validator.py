@@ -4,7 +4,7 @@ Validates requests and responses against the AdCP schemas shipped with the
 pinned ``adcp`` SDK (see docs/adcp-spec-version.md for the current pin and
 bump procedure) — never against the live adcontextprotocol.org registry. The
 live registry serves "latest", which
-drifts ahead of the repo's pin: on 2026-08-01 upstream PR #6133 canonicalized
+drifts ahead of the repo's pin: on 2026-08-01 upstream PR adcp#6133 canonicalized
 the live schemas' $ref URIs and broke remote ref resolution here overnight
 with zero contract change, and before that #1308 tracked payload-vs-latest
 drift. Validating against the pin makes CI deterministic and grades the same

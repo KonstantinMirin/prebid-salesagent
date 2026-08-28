@@ -515,10 +515,10 @@ success-path response body**, the success-path analogue of `wire_error_envelope`
 Populated on success by the REST dispatcher (HTTP body) and by the A2A/MCP
 dispatchers **only when the env routes through `_run_a2a_handler` /
 `_run_mcp_client`** (which stash the wire). The direct `*_raw` wrappers do not
-stash, so `wire_response` is `None` there — as it is on error. (The
-legacy `_run_mcp_wrapper` bypass is DELETED, salesagent-3dawm.21: it skipped the
-FastMCP middleware chain, so an env using it captured no wire envelope at all.)
-Today only `CreativeFormatsEnv` reads it.
+stash, so `wire_response` is `None` there — as it is on error and on IMPL. (The
+legacy `_run_mcp_wrapper` bypass is DELETED: it skipped the FastMCP middleware
+chain, so an env using it captured no wire envelope at all.) Today
+`CreativeFormatsEnv` and `CreativeListEnv` read it.
 Use it to assert the **actual serialized shape** a buyer receives (e.g. the v3.1
 `format_id` `{agent_url, id}` federation contract on `list_creative_formats`)
 rather than the typed `payload`, whose fields are already coerced to their

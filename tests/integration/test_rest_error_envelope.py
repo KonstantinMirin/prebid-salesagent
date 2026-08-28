@@ -9,7 +9,6 @@ suggestion while doing so. That reconstruction was deleted by
 salesagent-3dawm.15, so the file now asserts the wire directly and the
 reconstruction-specific test is gone with the mechanism it guarded.
 
-beads: salesagent-kjfy
 """
 
 import pytest

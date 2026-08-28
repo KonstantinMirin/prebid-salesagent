@@ -256,6 +256,32 @@ def test_wire_omits_unset_optional_fields(integration_db, case, transport):
         )
 
 
+# ── The table's own two guardrails ──────────────────────────────────────────
+# __post_init__ is what makes this table safe to add rows to: it is the only
+# thing standing between a future row and the two failure modes that read as
+# coverage while grading nothing. Neither arm fires on any row above — that is
+# the point of them — so without these two tests both are dead code, and
+# deleting either one leaves the whole file green. Construction only: no env,
+# no wire, no DB (the module-level requires_db mark is inherited, harmlessly).
+
+
+def test_case_with_no_schema_and_no_absent_paths_is_rejected():
+    """A row that grades nothing must be unconstructible, not merely useless."""
+    with pytest.raises(ValueError, match="grades nothing"):
+        WireOmissionCase(tool="ungraded", setup=_get_products_env, schema=None)
+
+
+def test_case_narrowed_without_a_reason_is_rejected():
+    """Dropping a wire transport must cost a written reason."""
+    with pytest.raises(ValueError, match="narrowed_because"):
+        WireOmissionCase(
+            tool="quietly_narrowed",
+            setup=_get_products_env,
+            schema=_GET_PRODUCTS_SCHEMA,
+            transports=(Transport.MCP,),
+        )
+
+
 # ── Obligations that are NOT this table's operation ─────────────────────────
 # Each asserts something structurally different from "these paths are absent
 # from the wire". Folding them into a row would mean the row no longer means

@@ -8,7 +8,7 @@ Covers BDD scenarios from BR-UC-009-update-performance-index.feature that are
 ACCURATE (match current code behavior). Aspirational BDD assertions that
 contradict current code are deferred to protocol compliance work.
 
-Reference: beads salesagent-j6uf
+Reference: beads
 """
 
 from datetime import UTC, datetime
@@ -428,7 +428,7 @@ class TestHighRiskA2A:
 
 # ===========================================================================
 # Error path and edge case tests (E1-E8)
-# Reference: beads salesagent-7xc7
+# Reference: beads
 # ===========================================================================
 
 
@@ -552,7 +552,7 @@ class TestErrorPaths:
 
 # ===========================================================================
 # Response shape and serialization tests (S1-S4)
-# Reference: beads salesagent-7xc7
+# Reference: beads
 # ===========================================================================
 
 
@@ -628,7 +628,7 @@ class TestResponseShape:
 
 # ===========================================================================
 # Confidence score and edge case tests (C1-C2)
-# Reference: beads salesagent-7xc7
+# Reference: beads
 # ===========================================================================
 
 

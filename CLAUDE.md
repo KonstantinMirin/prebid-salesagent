@@ -82,14 +82,14 @@ PR titles should use one of these prefixes:
 ### Structural Guards (Automated Architecture Enforcement)
 AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately.
 
-**The table below is a representative subset, not the full set.** There are over 70 guard tests (73 `tests/unit/test_architecture_*.py`, plus a handful of boundary guards like `test_transport_agnostic_impl.py` and `test_impl_resolved_identity.py`); the always-current list is `ls tests/unit/test_architecture_*.py`. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for design rationale (its written inventory covers only a subset).
+**The table below is a representative subset, not the full set.** There are over 110 guard tests (117 `tests/unit/test_architecture_*.py`, plus a handful of boundary guards like `test_transport_agnostic_impl.py` and `test_impl_resolved_identity.py`); the always-current list is `ls tests/unit/test_architecture_*.py`. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for design rationale (its written inventory covers only a subset).
 
 | Guard | Enforces | Test File |
 |-------|----------|-----------|
+| Schema inheritance | Redeclarations are inherited unless reshaped or weakened | `test_architecture_schema_inheritance.py` |
 | No ToolError in _impl | `_impl` raises AdCPSalesAgentError, never ToolError | `test_no_toolerror_in_impl.py` |
 | Transport-agnostic _impl | `_impl` has zero transport imports | `test_transport_agnostic_impl.py` |
 | ResolvedIdentity in _impl | `_impl` accepts ResolvedIdentity, not Context | `test_impl_resolved_identity.py` |
-| Schema inheritance | Schemas extend adcp library base types | `test_architecture_schema_inheritance.py` |
 | Boundary completeness | MCP/A2A wrappers pass all _impl parameters | `test_architecture_boundary_completeness.py` |
 | Query type safety | DB queries use types matching column definitions | `test_architecture_query_type_safety.py` |
 | No model_dump in _impl | `_impl` returns model objects, never calls `.model_dump()` | `test_architecture_no_model_dump_in_impl.py` |
@@ -160,7 +160,24 @@ class Product(LibraryProduct):
 - Only redeclare parent fields when needed for nested serialization (Pattern #4)
 - Mark internal-only fields with `exclude=True`
 - Run `pytest tests/unit/test_adcp_contract.py` before commit
-- **Enforced by:** `test_architecture_schema_inheritance.py`
+- **Enforced by:** `tests/unit/test_pydantic_schema_alignment.py` — declared fields and
+  model_dump survival graded against the PINNED SCHEMA — and by
+  `tests/unit/test_architecture_schema_inheritance.py`, which grades redeclarations
+  against the library parent.
+- The inheritance guard was once deleted on the ground that such a guard "has to
+  enumerate how this repo spells its imports — every spelling it does not know is a
+  silent hole." The premise was true of the old implementation and is no longer true of
+  this one: the REDEFINITION rule decides membership by walking the live MRO and testing
+  `__module__`, so it consults no import spelling and has no spelling to miss. The
+  companion `test_all_library_types_have_local_subclass` is still alias-keyed, and is the
+  remaining place where a differently-spelled import goes unexamined.
+- A redeclaration needs an allowlist row unless it is **neither reshaped nor weakened**:
+  same annotation (or a subclass), nullability not added, `is_required()` not relaxed,
+  metadata a superset, no default introduced. A redeclaration that keeps the parent's
+  shape but is *weaker* — dropping a `Ge` or a `MinLen`, going required→optional — needs
+  a row NAMING the weakened axis. Do not widen the admission rule to make it pass: a
+  hand-written row names itself and can be audited, whereas a derived rule that admits a
+  widening is invisible and permanent.
 
 ### 2. Flask: Prevent Route Conflicts
 **Pre-commit hook detects duplicate routes** - Run manually: `uv run python .pre-commit-hooks/check_route_conflicts.py`

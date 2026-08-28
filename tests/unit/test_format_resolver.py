@@ -328,6 +328,14 @@ class TestGetFormat:
                 get_format("display_300x250", agent_url="https://agent.example.com", tenant_id="t1")
 
             assert exc_info.value.error_code == "REFERENCE_NOT_FOUND"
+            assert exc_info.value.recovery == "correctable"
+            assert exc_info.value.field == "format_id"
+            # The identifiers this test has always been about are still reported --
+            # they moved from the interpolated sentence onto ``details``, which is
+            # where AdCP 3.1.1 puts request-specific content.
+            assert exc_info.value.details.agent_url == "https://agent.example.com"
+            assert exc_info.value.details.tenant_id == "t1"
+            assert exc_info.value.details.format_id == "display_300x250"
 
     def test_not_found_error_no_agent_url_no_tenant(self):
         """AdCPNotFoundError message is minimal without agent_url and tenant_id."""
@@ -339,6 +347,16 @@ class TestGetFormat:
 
             with pytest.raises(AdCPFormatNotFoundError) as exc_info:
                 get_format("nonexistent")
+
+            # "Minimal" now means: the unset identifiers are absent from ``details``,
+            # and the buyer sentence never carried them in the first place (it is
+            # CODE_TABLE's, not interpolated at the raise site).
+            assert exc_info.value.details.format_id == "nonexistent"
+            assert exc_info.value.details.agent_url is None
+            assert exc_info.value.details.tenant_id is None
+            assert "from agent" not in exc_info.value.message
+            assert "for tenant" not in exc_info.value.message
+            assert exc_info.value.recovery == "correctable"
 
 
 # ---------------------------------------------------------------------------

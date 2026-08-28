@@ -78,10 +78,21 @@ class _LazyDirFileHandler(logging.FileHandler):
         open with ``delay=True`` alone would therefore only move that failure
         from import time to first-emit time, not remove it.
 
-        The database is the audit authority; this file is a backup. Losing the
-        backup must not take the operation down with it, so the error is routed
-        to ``handleError``, which reports it on stderr. That is a degraded sink
-        announcing itself, not a silently swallowed failure.
+        Losing this sink must not take the operation down with it, so the error
+        is routed to ``handleError``, which writes to stderr (``logging``'s
+        ``raiseExceptions`` is never set in ``src/``). The trade is a
+        fail-CLOSED import-time failure becoming a fail-OPEN per-record stderr
+        note.
+
+        What that costs, stated precisely rather than as "it's only a backup":
+        for ``log_operation`` and ``log_security_violation`` the database row is
+        the authority and this file duplicates it, so nothing is lost. For
+        ``log_success``/``log_warning``/``log_info`` -- 19 production call sites,
+        including workflow-step creation and ``sync_accounts`` completion -- this
+        file is the ONLY durable sink, and a record dropped here is gone. Giving
+        those three a database counterpart is the real fix; it is not this
+        change, which only stops an unwritable log directory from failing an
+        import.
         """
         try:
             super().emit(record)

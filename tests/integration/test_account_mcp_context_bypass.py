@@ -1,4 +1,4 @@
-"""MCP ``context`` handling for the account tools (salesagent-rhp).
+"""MCP ``context`` handling for the account tools.
 
 The MCP wrappers in ``accounts.py`` take ``context`` as a separate kwarg, because
 that is how FastMCP dispatches tool parameters:
@@ -17,9 +17,7 @@ wrapper handed to ``BaseTestEnv._run_mcp_wrapper``, that a
 ``if context is not None`` merge branch fired. That premise expired twice over —
 the branch no longer exists (``list_accounts`` forwards ``context`` straight into
 ``build_list_accounts_request``), and ``_run_mcp_wrapper`` itself is deleted
-(salesagent-3dawm.21) because it bypassed the FastMCP pipeline.
-
-beads: salesagent-rhp, salesagent-3dawm.21
+because it bypassed the FastMCP pipeline.
 """
 
 import asyncio

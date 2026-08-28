@@ -20,13 +20,17 @@ class TestApprovalErrorHandling:
         # CreateMediaBuyError has 'errors' field
         assert hasattr(error_response, "errors")
         assert len(error_response.errors) == 1
+        # `message` is derived from CODE_TABLE by the code alone (ADR-010), so a
+        # caller-supplied string is discarded rather than echoed back.
+        assert error_response.errors[0].message == Error(code="VALIDATION_ERROR").message
+        assert error_response.errors[0].message
 
         # CreateMediaBuyError does NOT have 'media_buy_id' field
         assert not hasattr(error_response, "media_buy_id")
 
     def test_create_media_buy_success_has_media_buy_id(self):
         """Verify CreateMediaBuySuccess has media_buy_id field."""
-        success_response = CreateMediaBuySuccess(
+        success_response = CreateMediaBuySuccess.carrier(
             media_buy_id="mb_123",
             packages=[],
         )
@@ -38,7 +42,7 @@ class TestApprovalErrorHandling:
     def test_error_response_isinstance_check(self):
         """Test isinstance check correctly identifies error responses."""
         error_response = CreateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="Test error")])
-        success_response = CreateMediaBuySuccess(
+        success_response = CreateMediaBuySuccess.carrier(
             media_buy_id="mb_123",
             packages=[],
         )

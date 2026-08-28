@@ -227,6 +227,12 @@ class TestCreativeAgentRegistry:
         with pytest.raises(AdCPAuthenticationError) as exc_info:
             await registry._fetch_formats_from_agent(mock_client, test_agent)
 
+        # Paired assertion, both halves: the buyer-facing sentence is the code's
+        # first-party one (present) and the SDK's free text is not appended (absent).
+        assert exc_info.value.message == AdCPAuthenticationError().message
+        assert "Invalid credentials" not in exc_info.value.message
+        assert "Authentication failed" in str(exc_info.value.internal_detail or "")
+
     @pytest.mark.asyncio
     async def test_fetch_formats_from_agent_handles_timeout_error(self):
         """Test _fetch_formats_from_agent handles timeout errors."""
@@ -254,9 +260,13 @@ class TestCreativeAgentRegistry:
         mock_agent_client.list_creative_formats = AsyncMock(side_effect=timeout_error)
         mock_client.agent = Mock(return_value=mock_agent_client)
 
-        # Should raise typed AdCPServiceUnavailableError with timeout message
-        with pytest.raises(AdCPServiceUnavailableError):
+        # Should raise typed AdCPServiceUnavailableError. "Request timed out" is now
+        # the operator-facing mode label on internal_detail, not the buyer sentence.
+        with pytest.raises(AdCPServiceUnavailableError) as exc_info:
             await registry._fetch_formats_from_agent(mock_client, test_agent)
+
+        assert exc_info.value.message == AdCPServiceUnavailableError().message
+        assert "Request timed out" in str(exc_info.value.internal_detail or "")
 
     @pytest.mark.asyncio
     async def test_fetch_formats_from_agent_handles_connection_error(self):
@@ -286,6 +296,10 @@ class TestCreativeAgentRegistry:
         # asserted ABSENT from the buyer-facing message.
         with pytest.raises(AdCPServiceUnavailableError) as exc_info:
             await registry._fetch_formats_from_agent(mock_client, test_agent)
+
+        assert exc_info.value.message == AdCPServiceUnavailableError().message
+        assert "Connection refused" not in exc_info.value.message
+        assert "Connection failed" in str(exc_info.value.internal_detail or "")
 
     @pytest.mark.asyncio
     async def test_fetch_formats_from_agent_handles_library_format(self):

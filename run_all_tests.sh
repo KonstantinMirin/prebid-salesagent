@@ -50,12 +50,77 @@ export COMPOSE_PROJECT_NAME="$(printf '%s' "${COMPOSE_PROJECT_NAME:-adcp-innet-$
 # the bind-mounted repo is owned by whoever launched the run, with no uid
 # plumbing at all. Exporting `id -u` here actively broke that -- rootless maps a
 # non-zero container uid to a host SUBUID, which is what left /app/logs
-# unwritable and killed adcp-server at import (cassini-w37).
+# unwritable and killed adcp-server at import.
 # The delivery-webhook scheduler runs on the SERVER (adcp-server), gated by this
 # interval. docker-compose.e2e.yml defaults it empty (scheduler off); the host
 # e2e path sets it to 5 via conftest. Mirror that so test_daily_delivery_webhook
 # gets a report. Compose interpolates this into the adcp-server service env.
 export DELIVERY_WEBHOOK_INTERVAL="${DELIVERY_WEBHOOK_INTERVAL:-5}"
+
+# Parallelism defaults, sized against DOCKER'S memory rather than the host's.
+#
+# Every knob below feeds processes that each import the whole application, so the
+# binding constraint is RAM inside the Docker VM -- not host cores and not host
+# RAM. On a Mac those differ wildly: 48GB host / 14 cores, but Docker Desktop
+# defaults its VM to ~16GB. Sizing from `nproc` alone is what produced this,
+# measured on exactly that machine with E2E_WORKERS=4 + unit=14 + integration=4:
+#
+#     bdd_inprocess: FAIL code -9      <- SIGKILL, the VM OOM-killer
+#     e2e:           FAIL code -9
+#     unit.json:        collected 5894 but reported 0
+#     integration.json: collected 2324 but reported 0
+#
+# (The truncation check further down is what surfaced that as a failure rather
+# than a green run with two silently empty suites.)
+#
+# tox -p runs the suites CONCURRENTLY, so the peak is the SUM of every suite's
+# workers plus the per-worker server stacks -- which is why each knob cannot be
+# chosen in isolation. Tiers are keyed on the Docker VM's MemTotal, with the
+# CI-box tier matching what is measured green in-network (16/16/8 at 86-196GB).
+_docker_mem_gb="$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)"
+# `{{.MemTotal}}` renders the literal string `<no value>` when the daemon does
+# not report it. Under `set -euo pipefail` the arithmetic below then aborts the
+# whole run before a single suite starts ("syntax error: operand expected"), so
+# anything non-numeric falls back to the laptop tier rather than killing the
+# run. Empty output is already safe (0 -> laptop tier), which is why the
+# stubbed-docker test never caught this.
+[[ $_docker_mem_gb =~ ^[0-9]+$ ]] || _docker_mem_gb=0
+_docker_mem_gb=$(( _docker_mem_gb / 1073741824 ))
+_cores="$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) )"
+
+if [ "$_docker_mem_gb" -ge 64 ]; then
+    # CI box. Per-worker e2e stacks are affordable; cores are the ceiling again.
+    _unit=$(( _cores > 16 ? 16 : _cores )); _integration=8; _e2e_workers=8
+elif [ "$_docker_mem_gb" -ge 32 ]; then
+    _unit=$(( _cores > 8 ? 8 : _cores )); _integration=4; _e2e_workers=2
+else
+    # Developer laptop (a default Docker Desktop VM lands here). No per-worker
+    # server stacks: four app-loading containers alongside the suites is what
+    # OOM-killed the run above. Unit still parallelises -- it has no database and
+    # is the largest suite -- but at half the cores, since it shares the VM with
+    # every other suite tox -p starts at the same time.
+    _unit=$(( _cores / 2 )); [ "$_unit" -lt 2 ] && _unit=2
+    _integration=4; _e2e_workers=0
+fi
+
+export UNIT_XDIST_N="${UNIT_XDIST_N:-$_unit}"
+# Integration is safe to parallelise at any tier: tests/conftest_db.py's
+# `integration_db` fixture creates a uuid-named database PER TEST, so workers
+# never share rows, and tox.ini runs this env with `--dist loadfile`.
+export INTEGRATION_XDIST_N="${INTEGRATION_XDIST_N:-$_integration}"
+# BDD parallelism comes from E2E_WORKERS, NOT from BDD_XDIST_N directly.
+# docker-compose.e2e.yml sets BDD_E2E_ENABLED=true, and tests/bdd/conftest.py
+# raises a UsageError for that together with -n>0 unless E2E_PER_WORKER=1 --
+# because under xdist the e2e_rest transport is silently dropped at collection and
+# the suite would go green without ever having run it. Setting E2E_WORKERS>0 takes
+# the fast path below, which splits `bdd` into `bdd_inprocess` (e2e disabled,
+# freely parallel) plus `bdd_e2e`, and provisions N per-worker server+DB stacks so
+# e2e_rest can run in parallel legally.
+export E2E_WORKERS="${E2E_WORKERS:-$_e2e_workers}"
+# stderr, not stdout: RUN_ALL_TESTS_RESOLVE_ONLY makes stdout a machine-read
+# contract (tests/unit/test_run_all_tests_contract.py parses it), so diagnostics
+# must not land there.
+echo "Parallelism: docker_mem=${_docker_mem_gb}GB cores=${_cores} -> unit=$UNIT_XDIST_N integration=$INTEGRATION_XDIST_N e2e_workers=$E2E_WORKERS" >&2
 # Argument contract — back-compat with the historical MODE words so the
 # pre-existing callers (Makefile quality-full/test-full, docs) keep working:
 #   (no arg) | ci                 -> all six suites, in-network (the default)
@@ -98,9 +163,14 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
     SUITES="${SUITES#,}"; SUITES="${SUITES%,}"
     # bdd_inprocess reads BDD_XDIST_N (compose pins it to 0 = serial by default),
     # so the in-process bulk only parallelizes if we export a worker count here.
-    # Default to `auto` (PYTEST_XDIST_AUTO_NUM_WORKERS) so the swap is actually
-    # fast on its own — without this the ~23m->~3.5m in-process win never lands.
-    export BDD_XDIST_N="${BDD_XDIST_N:-auto}"
+    #
+    # A REAL NUMBER, not `auto`. `auto` resolves through
+    # PYTEST_XDIST_AUTO_NUM_WORKERS, which docker-compose.e2e.yml pins to 1 for
+    # BDD's own benefit -- so `auto` here meant ONE worker for every caller that
+    # does not separately export that variable, and the ~23m->~3.5m in-process win
+    # silently never landed. Matching E2E_WORKERS keeps the two halves of the split
+    # in proportion; both are overridable.
+    export BDD_XDIST_N="${BDD_XDIST_N:-$E2E_WORKERS}"
     echo "Fast bdd path: E2E_WORKERS=$E2E_WORKERS BDD_XDIST_N=$BDD_XDIST_N -> suites=$SUITES"
 fi
 
@@ -145,10 +215,29 @@ dc build postgres adcp-server proxy tests
 # governed by the DIRECTORY's write bit (which we own), not the file's own
 # owner, so `rm -f` succeeds even on a ci-owned file; the fresh file this
 # process then creates is ours. Verified live: ci:ci 0644 -> sacirunner:ci 0664.
-mkdir -p logs && chmod 2775 logs
+mkdir -p logs
+chmod 2775 logs
 for f in audit.log error.log structured.jsonl security.jsonl; do
     rm -f "logs/$f" 2>/dev/null || true
-    : > "logs/$f" && chmod 664 "logs/$f"
+    # Two statements, not `: > "logs/$f" && chmod ...`. errexit exempts every command
+    # in an AND-OR list except the last, so as an &&-list a failed truncate merely
+    # short-circuits: chmod is skipped, the loop continues, and the script still exits
+    # 0. Verified A/B (with a directory planted at logs/audit.log to force the
+    # failure): &&-list -> "REACHED-END", exit 0; split -> exit 1 at the truncate.
+    : > "logs/$f"
+    # 666, not 664. The point of this block is that the adcp-server container can
+    # WRITE these; 664 only achieves that if the container's user shares the file's
+    # group, and it does not. The server runs as the image's `app` (uid/gid 1001,
+    # no supplementary groups), while these files are owned by whoever ran the
+    # script -- and the bind-mount of this directory onto /app SHADOWS the image's
+    # own `chown -R app:app /app`, so host-side permissions are what decide. Group
+    # never matches, so `app` falls through to the OTHER bits: r-- under 664, and
+    # the server dies on PermissionError while opening audit.log at import time,
+    # taking every per-worker server container unhealthy with it.
+    # The setgid bit set on the directory above does not rescue this either: it
+    # controls the GROUP of new files, not their write bit.
+    # These are ephemeral per-run test logs, not durable state.
+    chmod 666 "logs/$f"
 done
 
 dc up -d postgres adcp-server proxy creative-pg creative-agent
@@ -266,18 +355,18 @@ fi
 # --use-aliases gives this run container the `tests` network alias so the server
 # can call webhooks back to it (ADCP_WEBHOOK_HOST=tests) by name.
 #
-# PARALLEL (`-p`, re-enabled salesagent-8v2yu): this was serial from 2026-06-18
+# PARALLEL (`-p`): this was serial from 2026-06-18
 # to 2026-08-16 over an OOM observed running all six suites concurrently in one
 # container, where bdd's `-n auto` alone could spawn one worker per host CPU
 # (~17), each loading the app. That OOM predates PYTEST_XDIST_AUTO_NUM_WORKERS
 # (added the same day, in response) ever reaching this container correctly —
-# a real, separate export-plumbing bug (cassini-i04) meant the cap this
+# a real, separate export-plumbing bug meant the cap this
 # comment used to cite was, for some callers, never actually applied. With
 # that bug fixed and the cap now confirmed to genuinely reach the container,
 # a real, monitored, disposable-worktree run of the full 7-suite `-p` (unit,
 # integration, bdd_inprocess, bdd_e2e, admin, e2e, ui) measured peak memory at
 # ~35GB of the box's 86.4GB (40.5%), no OOM, pass/fail counts matching a
-# serial baseline — see salesagent-8v2yu for the full live-test evidence.
+# serial baseline, measured on a full in-network run of all 7 suites.
 echo "Running suites in-network (parallel): $SUITES"
 # Capture the suite exit code without aborting under `set -e` — reports must
 # still be extracted and the security audit must still run on a suite failure.
@@ -327,6 +416,16 @@ if ! cp .tox/*.json "$RESULTS_DIR/"; then
 fi
 echo "Reports: $RESULTS_DIR/"
 ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
+
+# A truncated suite is a failed suite, and the whole point is that it must not
+# be mistakable for a green one. The predicate is shared with
+# run_all_tests_host.sh -- see scripts/check_truncated_reports.py for why it
+# lives in its own file rather than inline here.
+if ls "$RESULTS_DIR"/*.json >/dev/null 2>&1; then
+    if ! python3 scripts/check_truncated_reports.py "$RESULTS_DIR"; then
+        RC=1
+    fi
+fi
 
 # Reconcile a non-zero exit against what the suites actually reported. This does
 # NOT change the exit code -- masking a failure is how the real cause of a dead

@@ -54,6 +54,7 @@ Thumbs.db
 # BUT: Allow pre-commit hooks and scripts/ directory
 check_*.py
 !.pre-commit-hooks/check_*.py
+!scripts/check_*.py
 diagnose_*.py
 fix_*.py
 sync_*.py
@@ -115,6 +116,7 @@ conductor_ports.lock
 # writes to Path(__file__).parent / "schemas" / "compliance_report.json")
 tests/e2e/schemas/
 
+
 # Test database files (PostgreSQL test databases)
 # Only ignore database files/dirs, not test_*.py files
 test_*.db
@@ -156,3 +158,5 @@ manifest.json
 
 # adcp spec fetch cache (mirrored URL paths); no code reads the local copy
 /schemas/
+# Session working notes — scratch, never a deliverable. The PR is their home.
+.claude/notes/

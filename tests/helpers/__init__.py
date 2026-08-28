@@ -89,6 +89,7 @@ from tests.helpers.idempotency_seeds import (
     seed_media_buy,
     seed_principal,
 )
+from tests.helpers.log_assertions import rendered_log_calls
 from tests.helpers.race_window import concurrent_commit_in_write_window, operator_answer
 
 __all__ = [
@@ -101,6 +102,8 @@ __all__ = [
     "locate_envelope_error",
     "assert_no_raw_validation_leak",
     "assert_no_marker_in_envelope",
+    # Log-call assertions
+    "rendered_log_calls",
     # Concurrency harness
     "concurrent_commit_in_write_window",
     "operator_answer",

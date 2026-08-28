@@ -21,9 +21,24 @@ a run filtered down to one unrelated test. ``tests/integration/test_mock_adapter
 did exactly that, dropping a JSON file into the CWD on every integration run
 while containing no tests at all.
 
-Scope is ``src/``, ``scripts/`` and ``tests/`` with NO allowlist: the tree has
-zero instances and must keep it that way. Deferring the work to first use is
-always available -- open on demand, not on import.
+Scope is therefore every directory whose modules get imported by anything --
+``src/``, ``scripts/``, ``tests/``, ``alembic/`` (the container's migration step
+imports all 180), ``.pre-commit-hooks/`` and ``examples/`` -- with NO allowlist:
+the tree has zero instances today and must keep it that way. Deferring the work
+to first use is always available: open on demand, not on import.
+
+MERGE NOTE: with ``tests/`` back in scope, the detector's name-based match
+reports one FALSE POSITIVE --
+``tests/unit/test_architecture_bdd_xfail_reason_tokens.py:80``, a ``str.replace``
+call that ``call_callee_name`` cannot distinguish from ``Path.replace``. The fix
+belongs in ``_architecture_helpers.py`` (make the receiver decide, not the bare
+attribute name); dropping ``tests/`` from scope would hide the historical defect
+this guard was written for, so the scope stays and the detector gets narrowed.
+
+The detector treats a class body and a function's default arguments as
+import-time, because they are. A class-level ``handler = logging.FileHandler(...)``
+is one refactor away from the defect above; skipping ``ClassDef`` made exactly
+that construct invisible to this guard.
 """
 
 from __future__ import annotations
@@ -40,6 +55,8 @@ from tests.unit._architecture_helpers import (
     repo_root,
 )
 
+_SCANNED_DIRS = ("src", "scripts", "tests", "alembic", ".pre-commit-hooks", "examples")
+
 _KNOWN_BAD_SNIPPETS = {
     "module_level_mkdir": "from pathlib import Path\nLOG_DIR = Path('logs')\nLOG_DIR.mkdir(exist_ok=True)",
     "module_level_file_handler": "import logging\nh = logging.FileHandler('logs/audit.log')",
@@ -49,6 +66,18 @@ _KNOWN_BAD_SNIPPETS = {
     "inside_module_level_try": "import os\ntry:\n    os.makedirs('cache')\nexcept OSError:\n    pass",
     "inside_module_level_if": "import os\nif os.sep == '/':\n    os.makedirs('cache')",
     "inside_module_level_with": ("import contextlib, os\nwith contextlib.suppress(OSError):\n    os.makedirs('cache')"),
+    "inside_module_level_match": "import os\nmatch os.sep:\n    case '/':\n        os.makedirs('cache')",
+    # A class body runs at import. This is the construct the defect above is one
+    # refactor away from, and it was invisible while the walk skipped ClassDef.
+    "class_body_file_handler": "import logging\nclass Writer:\n    handler = logging.FileHandler('logs/audit.log')",
+    "nested_class_body": "import os\nclass Outer:\n    class Inner:\n        cache = os.makedirs('cache')",
+    # `def` evaluates its defaults and calls its decorators at import; only the
+    # BODY is deferred.
+    "default_argument": "import os\ndef setup(path=os.makedirs('cache')):\n    pass",
+    "decorator_call_on_function": "import os\n@os.mkdir('cache')\ndef setup():\n    pass",
+    "decorator_call_on_class": "import os\n@os.mkdir('cache')\nclass Writer:\n    pass",
+    # `if __name__ != "__main__":` is the INVERSE of a script guard and does run.
+    "inverted_main_guard": "import os\nif __name__ != '__main__':\n    os.makedirs('cache')",
 }
 
 # Deferred execution: present in the source, but NOT run by an import.
@@ -58,14 +87,20 @@ _KNOWN_GOOD_SNIPPETS = {
     "inside_method": "import os\nclass Writer:\n    def setup(self):\n        os.makedirs('cache')",
     "inside_main_guard": "import os\nif __name__ == '__main__':\n    os.makedirs('cache')",
     "no_fs_io_at_all": "from pathlib import Path\nLOG_DIR = Path('logs')\nNAME = LOG_DIR / 'audit.log'",
+    "inside_main_guard_reversed": "import os\nif '__main__' == __name__:\n    os.makedirs('cache')",
+    # Built where written, executed somewhere else -- reporting these as
+    # import-time I/O names a call that has not happened.
+    "inside_lambda": "import os\nsetup = lambda: os.makedirs('cache')",
+    "inside_generator_expression": "import os\nresults = (os.makedirs(p) for p in [])",
 }
 
 
 @pytest.mark.arch_guard
 def test_no_import_time_filesystem_io_anywhere_in_the_tree() -> None:
     repo = repo_root()
+    _SCANNED_ROOTS = [repo / d for d in _SCANNED_DIRS]
     violations: list[str] = []
-    for tree, rel_path in iter_module_trees([repo / "src", repo / "scripts", repo / "tests"]):
+    for tree, rel_path in iter_module_trees(_SCANNED_ROOTS):
         for lineno in find_import_time_fs_io_violations(tree):
             violations.append(f"{rel_path}:{lineno} — filesystem I/O runs at import time")
 

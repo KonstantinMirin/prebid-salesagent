@@ -11,7 +11,8 @@ Two things are wrong with that on the wire, and only the wire can show them:
    ``VALIDATION_ERROR`` as ``correctable``. The buyer is simultaneously told the
    request is invalid AND that retrying the identical request may work.
 
-Graded on ``wire_error_envelope`` across every transport that has a wire.
+Graded on ``wire_error_envelope`` across every transport that can carry this
+request — see the REST note on ``_WIRE_TRANSPORTS`` below.
 Asserting on the raised exception object instead would grade the plumbing, not
 the contract the buyer reads — and an ``_impl``-level ``pytest.raises`` cannot
 see the recovery hint at all, which is half the defect.

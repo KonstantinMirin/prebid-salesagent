@@ -4,6 +4,7 @@ import logging
 from contextlib import ExitStack
 from typing import Any
 
+from src.core.database.models import PersistedMediaBuyStatus
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import CreativeRejectionDetails, ValidationDetails
 from src.core.exceptions import (
@@ -305,9 +306,10 @@ def _process_assignments(
                         assignments_by_creative[creative_id].append(actual_package_id)
 
             # Update media buy status if needed (draft -> pending_creatives).
+            assert uow.media_buys is not None
             for mb_id, mb_obj in media_buys_with_new_assignments.items():
                 if mb_obj.status == "draft" and mb_obj.approved_at is not None:
-                    mb_obj.status = "pending_creatives"
+                    uow.media_buys.update_status(mb_id, PersistedMediaBuyStatus.PENDING_CREATIVES)
                     logger.info(f"[SYNC_CREATIVES] Media buy {mb_id} transitioned from draft to pending_creatives")
 
             # An owned UoW commits on clean exit; a caller-supplied one is the

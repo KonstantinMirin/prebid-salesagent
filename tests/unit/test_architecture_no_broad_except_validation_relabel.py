@@ -144,7 +144,16 @@ def test_no_broad_except_relabels_as_validation_error():
 
 @pytest.mark.arch_guard
 def test_known_violations_not_stale():
-    """Every allowlisted violation must still exist — the allowlist only shrinks."""
+    """The allowlist ships empty, stays empty, and never holds a stale entry.
+
+    The emptiness check has to come first and separately: the sweep below asserts
+    found == allowlist, which a re-added entry SATISFIES as long as its violation
+    still exists in the tree. Nothing else would catch that — the entry needs no
+    FIXME and no tracker, and there is no repo-wide FIXME-presence guard.
+    """
+    assert _KNOWN_VIOLATIONS == set(), (
+        f"ships empty; delete the handler instead of allowlisting {sorted(_KNOWN_VIOLATIONS)}"
+    )
     assert_violations_match_allowlist(
         _scan_repo(),
         _KNOWN_VIOLATIONS,
@@ -166,6 +175,13 @@ _POSITIVE_SAMPLES = {
     "dotted-raise": "try:\n    f()\nexcept Exception:\n    raise mod.SchemaValidationError('x')\n",
     "raise-nested-in-if": "try:\n    f()\nexcept Exception as e:\n    if e:\n        raise MyValidationError('x')\n",
     "inside-async-def": "async def go():\n    try:\n        await f()\n    except Exception:\n        raise ValidationError('x')\n",
+    # A tuple is only narrow when every member is narrow. Naming a specific type
+    # alongside Exception buys nothing — Exception already subsumes it — so this
+    # is the bare broad catch wearing one extra token. Without this sample the
+    # tuple arm of _is_broad_handler has no failing oracle: every other positive
+    # is a None/Name/Attribute handler, and the one tuple in _NEGATIVE_SAMPLES
+    # stays correctly permitted whichever way that arm goes.
+    "tuple-with-Exception": "try:\n    f()\nexcept (KeyError, Exception) as e:\n    raise MyValidationError('x') from e\n",
 }
 
 _NEGATIVE_SAMPLES = {

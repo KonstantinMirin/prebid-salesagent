@@ -42,6 +42,10 @@ def _wire_body(ctx: dict) -> dict:
     question it forced on every caller, are gone with it (GH #1744 was the
     narrower fix for the same hazard).
 
+    When the dispatch stashed a ``TransportResult`` it delegates to that object's
+    :meth:`require_wire`, so the step definitions and the integration tests share
+    one guard rather than two copies free to drift.
+
     Sole guard implementation for :func:`wire_field`, :func:`wire_dict` and
     :func:`wire_absent` — three copies of it would be exactly the duplication the
     canonical-helper rule exists to prevent.
@@ -52,6 +56,15 @@ def _wire_body(ctx: dict) -> dict:
     really a failed request, which is the single most misleading diagnostic these
     helpers can emit.
     """
+    result = ctx.get("result")
+    if result is not None:
+        # The guarded read lives on TransportResult, which is the object that HOLDS
+        # the wire (origin/main). One implementation, so a step definition cannot
+        # drift from an integration test asserting the same thing; it distinguishes
+        # the same two failures this helper does — an error result never had a
+        # success body, and a success result with no stashed body means the dispatch
+        # bypassed the real pipeline.
+        return result.require_wire()
     wire = ctx.get("wire_response")
     error = ctx.get("error")
     if wire is None and error is not None and ctx.get("response") is None:

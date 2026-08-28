@@ -12,12 +12,14 @@ This script is BOTH:
   * the Phase-1 reconciliation worklist generator (lists what to fix), and
   * the Phase-4 Guard A engine (``--strict``-style: exit 1 on any finding).
 
-Canonical source: ``adcp.ErrorCode``, the installed SDK's own generated enum
-(offline — no ~/projects/adcp clone needed). The SDK generates that enum from
-the very schema file this script used to re-read itself, so reading the enum
-directly means there is no second copy to drift. Only the code LIST; the
-``enumMetadata`` recovery/suggestion content stays on the separately-pinned
-vendored fixture — see docs/adcp-spec-version.md "Pinned schema sources".
+Canonical source: ``src.core.errors.codes.CODE_TABLE`` — the codes a raise site
+can actually EMIT, read offline with no ~/projects/adcp clone needed. CODE_TABLE
+is the same table ``TransportResult.assert_wire_error`` and ``is_pinned_error_code``
+resolve through, so this gate answers the same question as the assertions it backs;
+see ``load_enum`` below for why the published ``adcp.ErrorCode`` set is the wrong
+question. The ``enumMetadata`` recovery/suggestion content stays on the
+separately-pinned vendored fixture — see docs/adcp-spec-version.md "Pinned schema
+sources".
 
 Usage:
     # Worklist for specific use cases
