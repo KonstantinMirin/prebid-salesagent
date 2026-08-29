@@ -90,6 +90,27 @@ _cores="$( (nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) )"
 
 if [ "$_docker_mem_gb" -ge 64 ]; then
     # CI box. Per-worker e2e stacks are affordable; cores are the ceiling again.
+    # 16, and the cap is DERIVED FROM MEASURED BARRIER COST, not from core count.
+    # Post-sharding sweep on noetis-b-vm (40 cores), barrier = import+collect per
+    # process, the phase every added worker pays before running anything:
+    #
+    #   N per suite      8       16       24
+    #   bdd-inproc-s1  101.5    176.6    238.1   s/process
+    #   integration     54.2     90.4    129.7
+    #   unit            67.2     81.5     99.8
+    #   total barrier  3376     7183    13109   s of CPU  (~N^2)
+    #
+    # Barrier per process rises in EVERY suite with N, and the total rises about
+    # quadratically -- per-process cost grows AND more processes pay it. Wall
+    # clock does not repay it: two runs at N=24 on an unchanged tree put the pole
+    # at 743.2 s and 905.6 s, a 21.9% spread, so the walls at 8, 16 and 24
+    # (872.7 / 884.2 / 743.2-905.6) are indistinguishable. Barrier, by contrast,
+    # reproduces within 6.5% across every suite -- which is why it, and not the
+    # wall clock, sets this number.
+    #
+    # 16 is therefore the largest N whose barrier is still mid-curve; 24 costs
+    # ~35% more barrier per process and buys nothing measurable. Raising it needs
+    # a barrier measurement, not a bigger box.
     _unit=$(( _cores > 16 ? 16 : _cores )); _integration=8; _e2e_workers=8
 elif [ "$_docker_mem_gb" -ge 32 ]; then
     _unit=$(( _cores > 8 ? 8 : _cores )); _integration=4; _e2e_workers=2
@@ -120,7 +141,14 @@ export E2E_WORKERS="${E2E_WORKERS:-$_e2e_workers}"
 # stderr, not stdout: RUN_ALL_TESTS_RESOLVE_ONLY makes stdout a machine-read
 # contract (tests/unit/test_run_all_tests_contract.py parses it), so diagnostics
 # must not land there.
+# Print the resolved counts AND the input each came from, so a run is
+# self-describing: a number that disagrees with the sweep should be visible in
+# the log without re-deriving it. `source` is which input actually decided --
+# an explicit override, or the measured-barrier tier.
+_parallelism_source="measured-barrier tier (docker_mem=${_docker_mem_gb}GB)"
+[ -n "${UNIT_XDIST_N_OVERRIDDEN:-}" ] && _parallelism_source="caller override"
 echo "Parallelism: docker_mem=${_docker_mem_gb}GB cores=${_cores} -> unit=$UNIT_XDIST_N integration=$INTEGRATION_XDIST_N e2e_workers=$E2E_WORKERS" >&2
+echo "Parallelism source: ${_parallelism_source}; worker cap derived from barrier sweep (bdd-inproc barrier 101.5/176.6/238.1 s per process at N=8/16/24), not core count (${_cores} cores)" >&2
 # Argument contract — back-compat with the historical MODE words so the
 # pre-existing callers (Makefile quality-full/test-full, docs) keep working:
 #   (no arg) | ci                 -> all six suites, in-network (the default)
