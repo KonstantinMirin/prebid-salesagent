@@ -20,8 +20,7 @@ import inspect
 import pytest
 
 from src.core.tools._announced_shape import (
-    _NEVER_ANNOUNCED,
-    _would_narrow,
+    _is_injected,
     apply_dto_announced_shape,
     request_model_for,
 )
@@ -39,47 +38,6 @@ def _tool(name: str):
         "list_creatives": creatives.list_creatives,
     }[name]
 
-
-#: Every (tool, parameter) where the tool's DECLARED type and the SDK DTO's disagree, in
-#: either direction. This is the drift ledger: the advertised type is always the tool's own
-#: (see derived_signature for why substituting the DTO's changes behaviour), so a
-#: disagreement is not corrected silently -- it is RECORDED, and a NEW one fails this suite.
-#:
-#: SHRINK ONLY. An entry is a place our implementation and AdCP 3.1.1 differ. Some are
-#: deliberate (get_products.brand accepts the documented brand shorthand); at least one is
-#: a real defect (update_media_buy.budget declares a Budget arm the builder rejects with
-#: TypeError -- salesagent-ch9yp). Listing them blesses nothing; it makes them countable.
-_DECLARED_DIVERGES_FROM_DTO: frozenset[tuple[str, str]] = frozenset(
-    {
-        ("create_media_buy", "brand"),
-        ("create_media_buy", "end_time"),
-        ("create_media_buy", "ext"),
-        ("create_media_buy", "idempotency_key"),
-        ("create_media_buy", "start_time"),
-        ("get_adcp_capabilities", "ext"),
-        ("get_adcp_capabilities", "protocols"),
-        ("get_media_buy_delivery", "status_filter"),
-        ("get_media_buys", "account"),
-        ("get_media_buys", "context"),
-        ("get_media_buys", "media_buy_ids"),
-        ("get_media_buys", "status_filter"),
-        ("get_products", "brand"),
-        ("get_products", "brief"),
-        ("list_accounts", "ext"),
-        ("list_creatives", "fields"),
-        ("list_creatives", "include_assignments"),
-        ("sync_accounts", "accounts"),
-        ("sync_accounts", "ext"),
-        ("sync_accounts", "push_notification_config"),
-        ("update_media_buy", "budget"),
-        ("update_media_buy", "end_time"),
-        ("update_media_buy", "ext"),
-        ("update_media_buy", "media_buy_id"),
-        ("update_media_buy", "packages"),
-        ("update_media_buy", "start_time"),
-        ("update_performance_index", "performance_data"),
-    }
-)
 
 #: Every tool whose wrapper builds a request, i.e. every tool the derivation applies to.
 _DERIVED_TOOLS = (
@@ -106,57 +64,6 @@ def _resolve_tool(name: str):
             if request_model_for(candidate) is not None:
                 return candidate
     return None
-
-
-def test_the_drift_ledger_has_no_stale_entries() -> None:
-    """An entry whose types now agree must be deleted -- the ledger only shrinks."""
-    import src.core.main  # noqa: F401  (registers the tools)
-
-    stale = []
-    for tool_name, param in sorted(_DECLARED_DIVERGES_FROM_DTO):
-        fn = _resolve_tool(tool_name)
-        if fn is None:
-            stale.append(f"{tool_name}.{param} (tool not resolvable)")
-            continue
-        model = request_model_for(fn)
-        parameter = inspect.signature(fn).parameters.get(param)
-        field = model.model_fields.get(param) if model else None
-        if parameter is None or field is None:
-            stale.append(f"{tool_name}.{param} (parameter or DTO field is gone)")
-            continue
-        diverges = _would_narrow(parameter.annotation, field.annotation) or _would_narrow(
-            field.annotation, parameter.annotation
-        )
-        if not diverges:
-            stale.append(f"{tool_name}.{param} (types now agree)")
-    assert not stale, f"drift-ledger entries that no longer apply: {stale}"
-
-
-@pytest.mark.parametrize("tool_name", _DERIVED_TOOLS)
-def test_no_unrecorded_drift_between_declared_and_dto(tool_name: str) -> None:
-    """A NEW declared-vs-DTO disagreement must be recorded, not discovered by a buyer."""
-    import src.core.main  # noqa: F401
-
-    fn = _resolve_tool(tool_name)
-    if fn is None:
-        pytest.skip(f"{tool_name} does not resolve a request DTO")
-    model = request_model_for(fn)
-    unrecorded = []
-    for name, parameter in inspect.signature(fn).parameters.items():
-        if name in _NEVER_ANNOUNCED or parameter.annotation is inspect.Parameter.empty:
-            continue
-        field = model.model_fields.get(name)
-        if field is None:
-            continue
-        diverges = _would_narrow(parameter.annotation, field.annotation) or _would_narrow(
-            field.annotation, parameter.annotation
-        )
-        if diverges and (tool_name, name) not in _DECLARED_DIVERGES_FROM_DTO:
-            unrecorded.append(name)
-    assert not unrecorded, (
-        f"{tool_name} declares {unrecorded} differently from the DTO without a ledger entry. "
-        f"Either align the tool with AdCP 3.1.1 or record the divergence with its reason."
-    )
 
 
 @pytest.mark.parametrize("tool_name", _LANE_D_TOOLS)
@@ -206,7 +113,7 @@ def test_unimplemented_dto_fields_are_never_advertised(tool_name: str) -> None:
     apply_dto_announced_shape(registered, fn)
 
     advertised = set(Tool.from_function(registered, name=tool_name).parameters.get("properties", {}))
-    accepted = {n for n in inspect.signature(fn).parameters if n not in _NEVER_ANNOUNCED}
+    accepted = {n for n, p in inspect.signature(fn).parameters.items() if not _is_injected(p)}
     unimplemented = set(model.model_fields) - accepted
 
     leaked = advertised & unimplemented

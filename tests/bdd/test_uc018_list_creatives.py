@@ -705,16 +705,56 @@ def when_list_creatives_without_assignments(ctx: dict) -> None:
     dispatch_request(ctx, include_assignments=False)
 
 
-@when(parsers.parse('the Buyer Agent sends a list_creatives request with sort_order "{sort_order}"'))
-def when_list_creatives_with_sort_order(ctx: dict, sort_order: str) -> None:
-    """Dispatch with a flat sort_order — valid enum members and invalid values alike."""
-    dispatch_request(ctx, sort_order=sort_order)
+@when(parsers.parse('the Buyer Agent sends a list_creatives request with sort direction "{direction}"'))
+def when_list_creatives_with_sort_direction(ctx: dict, direction: str) -> None:
+    """Dispatch with the SPEC's structured sort object.
+
+    ``sort`` is an object with ``field`` and ``direction``, each a closed enum
+    (list-creatives-request.json -> enums/creative-sort-field.json, enums/sort-direction.json).
+    The flat ``sort_order`` this replaces is not in AdCP 3.1.1 at all, and a value outside
+    the enum is a VALIDATION_ERROR rather than something silently coerced.
+    """
+    dispatch_request(ctx, sort={"direction": direction})
 
 
-@when(parsers.parse('the Buyer Agent sends a list_creatives request with sort_by "{sort_by}"'))
-def when_list_creatives_with_sort_by(ctx: dict, sort_by: str) -> None:
-    """Dispatch with a flat sort_by — valid enum members and unknown fields alike."""
-    dispatch_request(ctx, sort_by=sort_by)
+@when(parsers.parse('the Buyer Agent sends a list_creatives request with sort field "{field}"'))
+def when_list_creatives_with_sort_field(ctx: dict, field: str) -> None:
+    """Dispatch with the spec's structured sort object, naming the field."""
+    dispatch_request(ctx, sort={"field": field})
+
+
+@when(parsers.parse("the Buyer Agent sends a list_creatives request with pagination max_results {value}"))
+def when_list_creatives_with_pagination(ctx: dict, value: str) -> None:
+    """Dispatch with the SPEC's pagination object.
+
+    ``pagination.max_results`` is an integer with minimum 1 and maximum 100
+    (core/pagination-request.json). The flat ``limit``/``page`` this replaces are not in
+    AdCP 3.1.1, so the old rows asserting a 1000-item code cap were grading behaviour the
+    spec does not define. A non-integer or out-of-range value is a VALIDATION_ERROR.
+    """
+    raw = value.strip().strip('"')
+    try:
+        parsed: object = int(raw)
+    except ValueError:
+        parsed = raw  # deliberately non-integer, so the boundary can reject it
+    dispatch_request(ctx, pagination={"max_results": parsed})
+
+
+@when(
+    parsers.parse(
+        "the Buyer Agent sends a list_creatives request with structured filters with "
+        'media_buy_ids ["{first}", "{second}"]'
+    )
+)
+def when_list_creatives_with_filter_media_buy_ids(ctx: dict, first: str, second: str) -> None:
+    """Dispatch with ``filters.media_buy_ids`` -- where AdCP 3.1.1 puts it.
+
+    The flat singular ``media_buy_id`` + plural ``media_buy_ids`` pair this replaces exists
+    nowhere in the spec: ListCreativesRequest declares neither, and CreativeFilters declares
+    only the plural. The merge-the-singular-into-the-plural behaviour the old row graded was
+    therefore never a spec obligation.
+    """
+    dispatch_request(ctx, filters={"media_buy_ids": [first, second]})
 
 
 # ── Then ─────────────────────────────────────────────────────────────
@@ -725,7 +765,7 @@ def _wire_creative_ids(ctx: dict) -> list[str]:
     return [entry["creative_id"] for entry in _wire_creatives(ctx)]
 
 
-@then("creatives for both mb1 and mb2 returned (merged, deduplicated)")
+@then("creatives for both mb1 and mb2 returned (deduplicated)")
 def then_merged_media_buy_creatives(ctx: dict) -> None:
     """Exactly the union of mb1's and mb2's creatives — no decoys, no duplicates.
 

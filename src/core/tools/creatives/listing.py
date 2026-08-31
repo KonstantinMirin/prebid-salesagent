@@ -228,6 +228,19 @@ def _build_list_creatives_request(
     # the ONE caller that passes True. Expressed once here rather than as a per-transport
     # hand-list of keys to strip.
     if accept_structured_sort:
+        # Coerce the wire's JSON objects into the typed models before reading attributes.
+        # A2A and REST hand these through as plain dicts; only MCP's own validation builds
+        # the models for us. Without this the builder raised
+        # AttributeError: 'dict' object has no attribute 'field' -- an untyped 500 -- and
+        # constructing the model here also makes an out-of-enum value a proper
+        # ValidationError, which is what the spec's closed enums call for.
+        from adcp.types import PaginationRequest as _LibPagination
+        from adcp.types.generated_poc.creative.list_creatives_request import Sort as _LibSort
+
+        if isinstance(sort, dict):
+            sort = _LibSort(**sort)
+        if isinstance(pagination, dict):
+            pagination = _LibPagination(**pagination)
         if sort is not None:
             if sort.field is not None:
                 sort_by = enum_value(sort.field)
@@ -779,6 +792,13 @@ def list_creatives_raw(
     limit: int = 50,
     sort_by: str = "created_date",
     sort_order: str = "desc",
+    # AdCP 3.1.1 sorts and paginates through OBJECTS (list-creatives-request.json
+    # /properties/sort and /properties/pagination), not the flat params above. Accepted here
+    # so every transport honours the spec shape: the A2A and REST seams forward
+    # "DTO fields INTERSECT this signature", so a field absent here cannot land -- which is
+    # why `sort` used to be honoured on MCP alone.
+    sort: "Sort | dict[str, Any] | None" = None,
+    pagination: "PaginationRequest | dict[str, Any] | None" = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
     identity: IdentityOrNotProvided = NOT_PROVIDED,
@@ -815,6 +835,9 @@ def list_creatives_raw(
     identity = resolve_identity_if_not_provided(identity, ctx)
 
     req = _build_list_creatives_request(
+        sort=sort,
+        pagination=pagination,
+        accept_structured_sort=True,
         media_buy_id=media_buy_id,
         media_buy_ids=media_buy_ids,
         status=status,

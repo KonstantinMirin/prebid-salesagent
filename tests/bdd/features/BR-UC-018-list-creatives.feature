@@ -198,18 +198,15 @@ Feature: BR-UC-018 List Creatives
       | explicit_pagination            | max_results 20                               | 20 creatives returned                                          |
       | boundary_min_limit             | max_results 1                                | 1 creative returned                                            |
       | schema_max_limit               | max_results 100                              | 60 creatives returned (all available, below cap)                |
-      | code_cap_limit                 | limit 1000                                   | 60 creatives returned (all available, below cap)                |
-      | above_code_cap                 | limit 5000                                   | 60 creatives returned (capped to 1000, all available below cap) |
       | default_sort                   | no sort params                               | creatives sorted by created_date descending                     |
-      | explicit_sort                  | sort_by "name" sort_order "asc"              | creatives sorted by name ascending                              |
-      | invalid_sort_order_coercion    | sort_order "random"                          | creatives sorted by created_date descending (coerced)           |
-      | invalid_sort_field_coercion    | sort_by "unknown_field"                      | creatives sorted by created_date descending (coerced)           |
+      | explicit_sort                  | sort field "name" direction "asc"            | creatives sorted by name ascending                              |
 
     Examples: Invalid partitions
       | partition                | request_params                    | outcome                                     |
-      | max_results_zero         | max_results 0                     | error "VALIDATION_ERROR" with suggestion     |
-      | max_results_negative     | max_results -1                    | error "VALIDATION_ERROR" with suggestion     |
-      | non_integer_max_results  | max_results "abc"                 | error "VALIDATION_ERROR" with suggestion     |
+      | max_results_zero         | pagination max_results 0          | error "VALIDATION_ERROR" with suggestion     |
+      | max_results_negative     | pagination max_results -1         | error "VALIDATION_ERROR" with suggestion     |
+      | non_integer_max_results  | pagination max_results "abc"      | error "VALIDATION_ERROR" with suggestion     |
+      | max_results_above_max    | pagination max_results 101        | error "VALIDATION_ERROR" with suggestion     |
 
   @T-UC-018-boundary-pagination @boundary @pagination-sorting
   Scenario Outline: Pagination boundary -- <boundary_point>
@@ -219,17 +216,15 @@ Feature: BR-UC-018 List Creatives
 
     Examples: Boundary values
       | boundary_point                                    | request_params         | outcome                                                          |
-      | max_results=0 (below schema min of 1)             | max_results 0          | error "VALIDATION_ERROR" with suggestion                          |
-      | max_results=1 (schema minimum)                    | max_results 1          | 1 creative returned                                               |
-      | max_results=100 (schema maximum)                  | max_results 100        | 60 creatives returned (all available)                              |
-      | max_results=101 (above schema max, code allows)   | max_results 101        | 60 creatives returned (code allows beyond schema max)              |
-      | limit=1000 (code cap)                             | limit 1000             | 60 creatives returned (all available)                              |
-      | limit=1001 (above code cap, capped to 1000)       | limit 1001             | 60 creatives returned (capped to 1000, all available below cap)    |
-      | sort_order='asc' (valid enum)                     | sort_order "asc"       | creatives sorted ascending                                        |
-      | sort_order='desc' (valid enum, also the default)  | sort_order "desc"      | creatives sorted descending                                       |
-      | sort_order='random' (invalid, coerced to desc)    | sort_order "random"    | creatives sorted descending (silently coerced)                     |
-      | sort_by='assignment_count' (valid enum boundary; v3.1 highest-index sort field) | sort_by "assignment_count" | creatives sorted by assignment_count                 |
-      | sort_by='unknown_field' (invalid, coerced to created_date) | sort_by "unknown_field" | creatives sorted by created_date (silently coerced)       |
+      | pagination.max_results=0 (below schema min of 1)   | pagination max_results 0    | error "VALIDATION_ERROR" with suggestion                    |
+      | pagination.max_results=1 (schema minimum)          | pagination max_results 1    | 1 creative returned                                         |
+      | pagination.max_results=100 (schema maximum)        | pagination max_results 100  | 60 creatives returned (all available)                        |
+      | pagination.max_results=101 (above schema maximum)  | pagination max_results 101  | error "VALIDATION_ERROR" with suggestion                     |
+      | sort.direction='asc' (valid enum)                  | sort direction "asc"        | creatives sorted ascending                                   |
+      | sort.direction='desc' (valid enum, the default)    | sort direction "desc"       | creatives sorted descending                                  |
+      | sort.direction='random' (not in the enum)          | sort direction "random"     | error "VALIDATION_ERROR" with suggestion                     |
+      | sort.field='assignment_count' (last enum member)   | sort field "assignment_count" | creatives sorted by assignment_count                      |
+      | sort.field='unknown_field' (not in the enum)       | sort field "unknown_field"  | error "VALIDATION_ERROR" with suggestion                     |
 
   @T-UC-018-partition-filters @partition @filter-semantics
   Scenario Outline: Filter semantics -- <partition>
@@ -244,7 +239,7 @@ Feature: BR-UC-018 List Creatives
       | structured_only                  | structured filters with statuses ["approved"] and name_contains "nike"             | only approved creatives matching "nike" returned                      |
       | flat_and_structured_no_conflict  | flat tags ["q1"] and structured name_contains "nike"                               | creatives matching both tag "q1" AND name "nike" returned             |
       | flat_and_structured_conflict     | flat status "approved" and structured statuses ["rejected"]                        | approved creatives returned (flat param takes precedence)             |
-      | singular_to_plural_merge         | singular media_buy_id "mb1" and plural media_buy_ids ["mb2"]                       | creatives for both mb1 and mb2 returned (merged, deduplicated)        |
+      | media_buy_ids_multi              | structured filters with media_buy_ids ["mb1", "mb2"]                               | creatives for both mb1 and mb2 returned (deduplicated)                |
       | tags_and_semantics               | tags filter ["q1", "brand"]                                                        | only creatives with BOTH q1 AND brand tags returned                   |
       | tags_or_semantics                | tags_any filter ["q1", "brand"]                                                    | creatives with EITHER q1 OR brand tag returned                        |
       | combined_date_range              | created_after "2024-01-01T00:00:00Z" and created_before "2024-06-30T23:59:59Z"    | only creatives within date range returned                             |

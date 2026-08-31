@@ -50,8 +50,26 @@ from pydantic import Field as PydanticField
 #: Union origins, for deciding whether adopting a DTO type would narrow acceptance.
 _UNION_ORIGINS = (typing.Union, types.UnionType)
 
-#: Transport plumbing, never a buyer-facing parameter -- left exactly as declared.
-_NEVER_ANNOUNCED = frozenset({"ctx", "self", "identity", "req"})
+
+def _is_injected(parameter: inspect.Parameter) -> bool:
+    """True for a parameter FastMCP injects rather than one a buyer sends.
+
+    Detected by ANNOTATION, not by a list of names. The only such parameter is the FastMCP
+    ``Context``: it must stay in the signature so FastMCP can inject it, and FastMCP already
+    keeps it out of the advertised schema. Everything else must be a DTO field or it is not
+    a request parameter at all -- there is no denylist to maintain, because "is this buyer
+    data?" is answered by the DTO, not by a name.
+    """
+    annotation = parameter.annotation
+    if annotation is inspect.Parameter.empty:
+        return False
+    # Match the TYPE, not the spelling. A substring test on "Context" also matches the
+    # spec's own ``ContextObject`` -- a real request field -- and would silently stop
+    # advertising it.
+    from fastmcp.server.context import Context as _FastMCPContext
+
+    return any(arg is _FastMCPContext for arg in (annotation, *typing.get_args(annotation)))
+
 
 #: Names a builder. The tool -> DTO edge is read from the ARTIFACT -- the builder the
 #: wrapper actually references in its BYTECODE, and that builder's return annotation --
@@ -138,7 +156,7 @@ def derived_signature(fn: Callable[..., Any], model: type[BaseModel]) -> inspect
     signature = inspect.signature(fn)
     parameters = []
     for name, parameter in signature.parameters.items():
-        if name in _NEVER_ANNOUNCED:
+        if _is_injected(parameter):
             parameters.append(parameter)
             continue
         field = model.model_fields.get(name)

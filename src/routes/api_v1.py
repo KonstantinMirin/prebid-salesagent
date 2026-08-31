@@ -195,6 +195,13 @@ class ListCreativesBody(SalesAgentBaseModel):
     # coerced at the route via coerce_creative_filters so REST honours the same
     # structured filters as MCP/A2A (concept_ids threaded into the DB query, #1493).
     filters: dict[str, Any] | None = None
+    # AdCP 3.1.1 sorts and paginates through OBJECTS (list-creatives-request.json
+    # /properties/sort, /properties/pagination). Declared here so a spec-shaped REST payload
+    # lands: the route forwards "DTO fields INTERSECT the raw wrapper's parameters", and a
+    # field this body does not declare never reaches that intersection -- `sort` was honoured
+    # on MCP and A2A and silently dropped on REST.
+    sort: dict[str, Any] | None = None
+    pagination: dict[str, Any] | None = None
     fields: list[str] | None = None
     include_performance: bool = False
     include_assignments: bool = False
@@ -570,28 +577,21 @@ async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = r
     # Coerce the raw wire filters dict into a typed CreativeFilters here (#1493): the
     # merged list_creatives_raw expects a typed object (it calls .model_dump()), and
     # this is where an empty concept_ids etc. surfaces the VALIDATION_ERROR envelope.
+    from src.core.schemas import ListCreativesRequest
+
     filters = coerce_creative_filters(body.filters)
-    response = creatives_listing_module.list_creatives_raw(
-        media_buy_id=body.media_buy_id,
-        media_buy_ids=body.media_buy_ids,
-        status=body.status,
-        format=body.format,
-        tags=body.tags,
-        created_after=body.created_after,
-        created_before=body.created_before,
-        search=body.search,
-        filters=filters,
-        fields=body.fields,
-        include_performance=body.include_performance,
-        include_assignments=body.include_assignments,
-        include_sub_assets=body.include_sub_assets,
-        page=body.page,
-        limit=body.limit,
-        sort_by=body.sort_by,
-        sort_order=body.sort_order,
-        context=to_context_object(body.context),
-        identity=identity,
+    # Selected off "DTO fields INTERSECT the raw wrapper's parameters" rather than the
+    # 18-name hand-list this replaces, which never forwarded `sort` -- so a spec-shaped
+    # REST payload sorted on MCP and A2A and silently did not on REST. `filters` is set
+    # after selection because it needs typed coercion (an empty concept_ids must surface
+    # a VALIDATION_ERROR envelope, not reach the impl as a dict).
+    selected = select_request_fields(
+        ListCreativesRequest,
+        body,
+        inspect.signature(creatives_listing_module.list_creatives_raw).parameters,
     )
+    selected["filters"] = filters
+    response = creatives_listing_module.list_creatives_raw(**selected, identity=identity)
     return response.model_dump(mode="json")
 
 
