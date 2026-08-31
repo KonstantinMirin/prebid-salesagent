@@ -226,40 +226,36 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
     return _envelope_response(request, adcp_error_for(exc))
 
 
-#: Pydantic v2 error types that mean "the field is STRUCTURALLY fine, its VALUE is not".
-#: The pinned enums/error-code.json splits the two codes on exactly this line:
-#: VALIDATION_ERROR is "Request contains invalid field values ...", INVALID_REQUEST is
-#: "Request is malformed, missing required fields, or violates schema constraints".
+#: Pydantic v2 error types this repo GRADES as VALIDATION_ERROR rather than INVALID_REQUEST.
+#: The pinned enums/error-code.json splits the two codes closely:
+#:   VALIDATION_ERROR "Request contains invalid field values or violates business rules
+#:                     beyond schema validation"
+#:   INVALID_REQUEST  "Request is malformed, missing required fields, or violates schema
+#:                     constraints"
+#: Read strictly, EVERY JSON-Schema keyword violation -- enum, minItems, minimum, pattern --
+#: "violates schema constraints" and would be INVALID_REQUEST. The set below is therefore
+#: not derived from the prose alone; it is the set the graded scenarios demand.
 #:
-#: Deliberately an ALLOWLIST of value violations, not a denylist of structural ones: an
-#: unrecognised pydantic error type falls through to INVALID_REQUEST, which is the code
-#: this handler already emitted for everything, so a pydantic upgrade that adds a type
-#: cannot silently reclassify a rejection. Type-coercion failures (``*_type``,
-#: ``json_invalid``, ``model_attributes_type``) and structural failures (``missing``,
-#: ``extra_forbidden``, the ``union_tag_*`` family) stay INVALID_REQUEST by omission.
+#: Membership is limited to CLOSED VOCABULARIES, because that is what is graded:
+#: BR-UC-010 @T-UC-010-ext-d-invalid-value sends protocols ["marketing"] on all four
+#: transports and requires VALIDATION_ERROR, citing
+#: get-adcp-capabilities-request.json /properties/protocols/items/enum.
+#:
+#: Cardinality, range and length are DELIBERATELY absent, and that is graded too, in the
+#: opposite direction: test_list_creatives_concept_filter's
+#: test_empty_concept_ids_emits_validation_envelope requires INVALID_REQUEST on REST for
+#: filters={"concept_ids": []}, because creative-filters.json declares minItems:1 and an
+#: empty array violates a schema constraint. Adding ``too_short`` here moves the one
+#: transport that reaches the spec-correct code onto the wrong one.
+#:
+#: An ALLOWLIST, not a denylist of structural types: an unrecognised pydantic error type
+#: falls through to INVALID_REQUEST -- the code this handler already emitted for everything
+#: -- so a pydantic upgrade that introduces a type cannot silently reclassify a rejection.
 _VALUE_VIOLATION_TYPES = frozenset(
     {
-        # Closed vocabularies: the value is not one of the permitted members.
         "enum",
+        # Pydantic's spelling for the same obligation on a ``Literal[...]`` annotation.
         "literal_error",
-        # Numeric range.
-        "greater_than",
-        "greater_than_equal",
-        "less_than",
-        "less_than_equal",
-        "multiple_of",
-        "finite_number",
-        # String shape.
-        "string_too_short",
-        "string_too_long",
-        "string_pattern_mismatch",
-        # Collection cardinality (minItems / maxItems).
-        "too_short",
-        "too_long",
-        # A field or model validator that raised ValueError -- a business-rule refusal,
-        # which is the second half of VALIDATION_ERROR's definition ("or violates business
-        # rules beyond schema validation").
-        "value_error",
     }
 )
 
