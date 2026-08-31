@@ -46,7 +46,6 @@ from src.core.schemas import (
     QuerySummary,
     Signal,
     SignalDeployment,
-    SyncCreativesRequest,
     SyncCreativesResponse,
     Targeting,
     TaskStatus,
@@ -1633,97 +1632,6 @@ class TestAdCPContract:
         assert len(adcp_response) >= 4, (
             f"CreativeAssignment response should have at least 4 core fields, got {len(adcp_response)}"
         )
-
-    def test_sync_creatives_request_adcp_compliance(self):
-        """Test that SyncCreativesRequest model complies with AdCP v2.4 sync-creatives schema."""
-        # Create Creative objects with AdCP v1 spec-compliant format
-        creative = Creative(
-            creative_id="creative_123",
-            variants=[],
-            name="Test Creative",
-            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
-            assets=build_assets(
-                image_spec("banner_image", url="https://example.com/creative.jpg"),
-                url_spec("click_url", url="https://example.com/click", url_type="clickthrough"),
-            ),
-            tags=["sports", "premium"],
-            # Internal fields (added by sales agent during processing)
-            principal_id="principal_456",
-            created_date=datetime.now(tz=UTC),
-            updated_date=datetime.now(tz=UTC),
-        )
-
-        # Test with spec-compliant fields only (adcp 3.9)
-        from adcp.types.generated_poc.creative.sync_creatives_request import (
-            Assignment,
-        )  # TODO: no stable alias in adcp.types  # TODO: no stable alias in adcp.types
-
-        request = SyncCreativesRequest(
-            creatives=[creative],
-            assignments=[
-                Assignment(creative_id="creative_123", package_id="pkg_1"),
-                Assignment(creative_id="creative_123", package_id="pkg_2"),
-            ],
-            # creative_ids: AdCP 2.5 replaces the deprecated patch parameter
-            delete_missing=False,
-            dry_run=False,
-            validation_mode="strict",
-        )
-
-        # Test model_dump (SyncCreativesRequest doesn't have internal fields)
-        adcp_response = request.model_dump()
-
-        # Verify required AdCP fields are present
-        adcp_required_fields = ["creatives"]
-        for field in adcp_required_fields:
-            assert field in adcp_response, f"Required AdCP field '{field}' missing from response"
-            assert adcp_response[field] is not None, f"Required AdCP field '{field}' is None"
-
-        # Verify AdCP v2.5 optional fields - some may be excluded when None
-        # Note: 'patch' was removed in AdCP 2.5, replaced by 'creative_ids'
-        # Fields with default values should be present, fields with None defaults may be excluded
-        adcp_fields_with_defaults = ["delete_missing", "dry_run", "validation_mode"]
-        for field in adcp_fields_with_defaults:
-            assert field in adcp_response, f"AdCP field '{field}' missing from response"
-
-        # Optional fields that may be None: creative_ids, assignments, context, push_notification_config
-        # These are correctly excluded from output when None
-
-        # Verify non-spec fields are NOT present
-        non_spec_fields = ["media_buy_id", "assign_to_packages", "upsert", "patch"]
-        for field in non_spec_fields:
-            assert field not in adcp_response, f"Non-spec field '{field}' should not be in response"
-
-        # Verify creatives array structure
-        assert isinstance(adcp_response["creatives"], list), "Creatives must be an array"
-        assert len(adcp_response["creatives"]) > 0, "Creatives array must not be empty"
-
-        # Test creative object structure
-        # Creative extends listing Creative: model_dump() contains listing fields
-        # (creative_id, format_id, name, status, created_date, updated_date, assets, tags)
-        # Only principal_id is internal/excluded
-        creative_obj = adcp_response["creatives"][0]
-        creative_public_fields = ["creative_id", "format_id", "name", "status", "created_date", "updated_date"]
-        for field in creative_public_fields:
-            assert field in creative_obj, f"Creative public field '{field}' missing"
-            assert creative_obj[field] is not None, f"Creative public field '{field}' is None"
-
-        # Delivery-only fields should NOT be present
-        for field in ["variants", "variant_count", "totals", "media_buy_id"]:
-            assert field not in creative_obj, f"Delivery field '{field}' should not be in listing response"
-
-        # Internal fields should NOT be in the response
-        assert "principal_id" not in creative_obj, "Internal field 'principal_id' exposed in response"
-
-        # Verify assignments structure (adcp 3.9: list of Assignment objects)
-        if adcp_response.get("assignments"):
-            assert isinstance(adcp_response["assignments"], list), "Assignments must be a list"
-            for assignment in adcp_response["assignments"]:
-                assert "creative_id" in assignment, "Assignment must have creative_id"
-                assert "package_id" in assignment, "Assignment must have package_id"
-
-        # Verify field count (flexible due to optional fields)
-        assert len(adcp_response) >= 1, f"SyncCreativesRequest should have at least 1 field, got {len(adcp_response)}"
 
     def test_sync_creatives_response_adcp_compliance(self):
         """Test that SyncCreativesResponse model complies with AdCP sync-creatives response schema."""

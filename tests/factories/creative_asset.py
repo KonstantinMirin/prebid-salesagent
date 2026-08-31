@@ -59,6 +59,22 @@ def make_creative_asset_minimal(**extra: object) -> CreativeAsset:
     return CreativeAsset(**defaults)
 
 
+def make_creative_asset_request(**extra: object) -> dict:
+    """The same minimal creative, as the WIRE DICT sync_creatives accepts.
+
+    Reuses make_creative_asset_minimal rather than restating its defaults. Returns a dict
+    because that is what a transport hands the request DTO -- and because the DTO's item type
+    is CreativeAssetRequest, a subclass, which pydantic will not populate from a parent
+    CreativeAsset instance.
+
+    Use this wherever a test feeds SyncCreativesRequest. The per-file ``_make_creative``
+    helpers build the RESPONSE model (created_date, updated_date, principal_id); feeding one
+    of those to a request worked only while the request field wrongly pointed at the response
+    model, which is what left seven spec-legal fields unsendable and `inputs` unreachable.
+    """
+    return make_creative_asset_minimal(**extra).model_dump(exclude_none=True, mode="json")
+
+
 class CreativeAssetFactory(factory.Factory):
     """Factory for AdCP CreativeAsset Pydantic models.
 

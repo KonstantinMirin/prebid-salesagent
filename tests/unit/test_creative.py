@@ -74,7 +74,14 @@ from src.core.schemas import (
     SyncCreativesResponse,
 )
 from tests.factories import PrincipalFactory
-from tests.factories.creative_asset import asset_spec, build_assets, image_spec, text_spec, video_spec
+from tests.factories.creative_asset import (
+    asset_spec,
+    build_assets,
+    image_spec,
+    make_creative_asset_request,
+    text_spec,
+    video_spec,
+)
 from tests.harness._mock_uow import wire_effect_boundary
 
 # ---------------------------------------------------------------------------
@@ -481,7 +488,7 @@ class TestSyncCreativesRequestSchema:
         Existing: test_adcp_25_creative_management.py
         Covers: UC-006-CREATIVE-IDS-SCOPE-01
         """
-        creative = _make_creative()
+        creative = make_creative_asset_request()
         req = SyncCreativesRequest(
             creatives=[creative],
             creative_ids=["c_test_1"],
@@ -499,7 +506,7 @@ class TestSyncCreativesRequestSchema:
             Assignment,
         )  # TODO: no stable alias in adcp.types
 
-        creative = _make_creative()
+        creative = make_creative_asset_request()
         req = SyncCreativesRequest(
             creatives=[creative],
             assignments=[
@@ -3255,7 +3262,7 @@ class TestValidationModeSemantics:
 
         Covers: UC-006-MAIN-MCP-08
         """
-        creative = _make_creative()
+        creative = make_creative_asset_request()
         req = SyncCreativesRequest(creatives=[creative])
         assert req.validation_mode is not None
         # validation_mode is an enum; compare by value

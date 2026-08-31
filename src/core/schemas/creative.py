@@ -10,6 +10,7 @@ from enum import Enum, StrEnum
 from typing import Any, Literal
 
 from adcp.types import AccountReference as LibraryAccountReference
+from adcp.types import CreativeAsset as LibraryCreativeAsset
 from adcp.types import CreativeStatus
 from adcp.types import Error as LibraryError
 from adcp.types import FormatId as LibraryFormatId
@@ -133,6 +134,38 @@ class CreativeStatusEnum(Enum):
     approved = "approved"
     rejected = "rejected"
     pending_review = "pending_review"
+
+
+class CreativeAssetRequest(LibraryCreativeAsset):
+    """The item type sync_creatives ACCEPTS, per core/creative-asset.json.
+
+    Deliberately NOT ``Creative`` below, which extends the list_creatives RESPONSE model.
+    This field used to point there, so the request shape was a response shape. Once MCP and
+    REST both derived their accepted shape from this DTO, that became enforced on both, and
+    it cost real capability:
+
+      * seven SPEC-LEGAL request fields could not be sent -- inputs, format_kind,
+        format_option_ref, weight, placement_refs, placement_ids, industry_identifiers.
+        ``inputs`` is IMPLEMENTED (tools/creatives/_assets.py reads inputs[0].
+        context_description as the generative prompt fallback), so a shipped feature was
+        unreachable on two of three transports.
+      * ``assets`` is spec-REQUIRED and the response model made it optional, so a payload
+        omitting it cleared the boundary and failed late and differently per transport:
+        mid-pipeline VALIDATION_ERROR on mcp/rest, silently defaulted to {} on a2a.
+
+    The old docstring called the response model "richer". It is -- in RESPONSE fields, while
+    missing REQUEST ones, which is the whole defect in one word.
+
+    KNOWN NARROWING, stated rather than left to be found: the pinned schema also admits a
+    creative identified by ``format_kind`` INSTEAD of ``format_id`` (the SDK models the pair
+    as a two-arm union). This takes the format_id arm only, because nothing here implements
+    the other -- a grep of src/ and tests/ finds that AdCP field used nowhere, its four
+    apparent hits being a BDD step whose own parameter is coincidentally named format_kind.
+    Advertising only what we implement is this seam's rule, so the arm is excluded on
+    purpose; implement it here when the feature arrives rather than assuming an oversight.
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
 
 # --- Creative Lifecycle ---
@@ -336,8 +369,9 @@ class SyncCreativesRequest(LibrarySyncCreativesRequest):
     inherited from AdCP spec.
 
     Local overrides:
-    - creatives: list[Creative] instead of list[CreativeAsset] (our Creative extends
-      LibraryCreative, which has a richer schema than CreativeAsset)
+    - creatives: list[CreativeAssetRequest] -- the SPEC's request item type. This used to be
+      list[Creative], the response model, on the reasoning that it was "richer"; it is richer
+      in response fields while missing seven request ones. See CreativeAssetRequest.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -349,7 +383,7 @@ class SyncCreativesRequest(LibrarySyncCreativesRequest):
     account: LibraryAccountReference | None = None  # type: ignore[assignment]
     idempotency_key: str | None = None  # type: ignore[assignment]
 
-    creatives: list[Creative] = Field(
+    creatives: list[CreativeAssetRequest] = Field(
         ..., min_length=1, max_length=100, description="Array of creative assets to sync (create or update)"
     )  # type: ignore[assignment]
 

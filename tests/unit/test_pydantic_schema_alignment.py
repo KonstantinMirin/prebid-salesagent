@@ -335,14 +335,16 @@ def generate_example_value(
                 if "$ref" in items_spec:
                     ref = items_spec["$ref"]
                     if "creative" in ref.lower():
-                        # Generate minimal Creative object
-                        return [
-                            {
-                                "creative_id": "test_creative_1",
-                                "name": "Test Creative",
-                                "format": "display_300x250",
-                            }
-                        ]
+                        # The shared factory owns this shape, so the generator cannot drift
+                        # from it. Inlining a sample here is what let the old one keep saying
+                        # "format": "display_300x250" and omitting the spec-required assets --
+                        # retired 2.x vocabulary that validated only while the request field
+                        # pointed at the list_creatives RESPONSE model. A generator emitting
+                        # non-spec fields cannot grade whether a model accepts spec fields,
+                        # which is this test's whole purpose.
+                        from tests.factories.creative_asset import make_creative_asset_request
+
+                        return [make_creative_asset_request()]
                     # Resolve the ref to check if it's an enum or simple type
                     try:
                         ref_schema = load_json_schema(ref)

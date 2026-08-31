@@ -13,7 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.core.schemas import Creative, FormatId, SyncCreativesRequest
-from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.creative_asset import build_assets, image_spec, make_creative_asset_request
 
 
 class TestSyncCreativesCreativeIdsFilter:
@@ -21,9 +21,8 @@ class TestSyncCreativesCreativeIdsFilter:
 
     def test_sync_creatives_request_accepts_creative_ids(self):
         """Test SyncCreativesRequest schema accepts creative_ids field."""
-        creative = Creative(
+        creative = make_creative_asset_request(
             creative_id="creative_1",
-            variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display_300x250"),
             assets=build_assets(image_spec("banner")),
@@ -41,9 +40,8 @@ class TestSyncCreativesCreativeIdsFilter:
 
     def test_sync_creatives_request_rejects_patch_parameter(self):
         """Test SyncCreativesRequest rejects deprecated patch parameter."""
-        creative = Creative(
+        creative = make_creative_asset_request(
             creative_id="creative_1",
-            variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display_300x250"),
             assets=build_assets(image_spec("banner")),
@@ -292,11 +290,10 @@ class TestSyncCreativesErrorCases:
         Spec behavior: creative_ids is a filter on the payload, not a fetch.
         If creative_ids contains IDs not in the creatives array, those are ignored.
         """
-        from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+        from src.core.schemas import FormatId, SyncCreativesRequest
 
-        creative = Creative(
+        creative = make_creative_asset_request(
             creative_id="creative_1",
-            variants=[],
             name="Test Creative",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
             assets=build_assets(image_spec("banner")),
@@ -319,19 +316,17 @@ class TestSyncCreativesErrorCases:
         Spec behavior: Only creatives whose IDs appear in both the payload AND
         the creative_ids filter are processed.
         """
-        from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+        from src.core.schemas import FormatId, SyncCreativesRequest
 
         creatives = [
-            Creative(
+            make_creative_asset_request(
                 creative_id="creative_1",
-                variants=[],
                 name="Creative 1",
                 format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
                 assets=build_assets(image_spec("banner", url="https://example.com/1.png")),
             ),
-            Creative(
+            make_creative_asset_request(
                 creative_id="creative_2",
-                variants=[],
                 name="Creative 2",
                 format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
                 assets=build_assets(image_spec("banner", url="https://example.com/2.png")),
@@ -358,11 +353,10 @@ class TestSyncCreativesErrorCases:
         """
         from pydantic import ValidationError
 
-        from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+        from src.core.schemas import FormatId, SyncCreativesRequest
 
-        creative = Creative(
+        creative = make_creative_asset_request(
             creative_id="creative_1",
-            variants=[],
             name="Test",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
             assets=build_assets(image_spec("banner")),
@@ -394,8 +388,6 @@ class TestSyncCreativesErrorCases:
         Spec requires: creative_id, format_id, assets
         """
         from pydantic import ValidationError
-
-        from src.core.schemas import Creative
 
         # Missing format_id should fail
         with pytest.raises(ValidationError) as exc_info:
@@ -598,11 +590,10 @@ class TestDeleteMissingWithCreativeIdsFilter:
 
     def test_schema_accepts_both_parameters(self):
         """Schema should accept both delete_missing and creative_ids together."""
-        from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+        from src.core.schemas import FormatId, SyncCreativesRequest
 
-        creative = Creative(
+        creative = make_creative_asset_request(
             creative_id="creative_1",
-            variants=[],
             name="Test",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
             assets=build_assets(image_spec("banner")),
@@ -629,13 +620,12 @@ class TestDeleteMissingWithCreativeIdsFilter:
         The second case is important: if creative_ids=["c1", "c2"] and payload
         only has c1, should c2 be deleted? This depends on interpretation.
         """
-        from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+        from src.core.schemas import FormatId, SyncCreativesRequest
 
         # This test documents the expected behavior
         # Implementation should handle this consistently
-        creative = Creative(
+        creative = make_creative_asset_request(
             creative_id="c1",
-            variants=[],
             name="Creative 1",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
             assets=build_assets(image_spec("banner")),
@@ -688,18 +678,16 @@ class TestUpsertSemantics:
         Request: creatives=[c1_updated, c2_updated], creative_ids=[c1]
         Result: Only c1 is updated, c2 in payload is ignored
         """
-        from src.core.schemas import Creative, FormatId, SyncCreativesRequest
+        from src.core.schemas import FormatId, SyncCreativesRequest
 
-        c1 = Creative(
+        c1 = make_creative_asset_request(
             creative_id="c1",
-            variants=[],
             name="Creative 1 Updated",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
             assets=build_assets(image_spec("banner", url="https://example.com/new.png")),
         )
-        c2 = Creative(
+        c2 = make_creative_asset_request(
             creative_id="c2",
-            variants=[],
             name="Creative 2 Updated",
             format_id=FormatId(agent_url="https://creatives.example.com/", id="display"),
             assets=build_assets(image_spec("banner", url="https://example.com/new2.png")),
