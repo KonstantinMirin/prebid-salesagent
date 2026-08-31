@@ -709,7 +709,11 @@ class TestA2ASkillInvocation:
             # Per AdCP spec, budget is a float, not a Budget object in update_media_buy
             skill_params = {
                 "media_buy_id": "mb_test_123",
-                "budget": 15000.0,  # Float per AdCP spec, not Budget object
+                # No top-level budget: AdCP 3.1.1 update-media-buy-request.json does not
+                # define one (budget is package-level), so the field was removed rather than
+                # kept as a convenience. The old comment here said "Float per AdCP spec",
+                # which was true of 2.x and is why the payload outlived the field.
+                "end_time": "2026-12-01T00:00:00Z",
                 # AdCP 3.1.1 makes both /required on update-media-buy-request.json, and
                 # UpdateMediaBuyRequest stopped overriding them to optional. This payload
                 # was missed by that sweep, so the skill rejected it with VALIDATION_ERROR

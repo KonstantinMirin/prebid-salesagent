@@ -101,7 +101,16 @@ def given_update_empty_packages(ctx: dict) -> None:
 
     pin: media-buy/update-media-buy-request.json .properties.packages.minItems = 1
     """
-    ctx["raw_update_kwargs"] = {"media_buy_id": ctx["update_target_id"], "packages": []}
+    # account and idempotency_key are AdCP 3.1.1 /required. Without them validation stops
+    # there and the envelope names "account", so the row silently stops grading the thing it
+    # is about -- the empty packages array. A scenario that asserts on a specific field must
+    # get past every OTHER required field first.
+    ctx["raw_update_kwargs"] = {
+        "media_buy_id": ctx["update_target_id"],
+        "account": {"account_id": "acct_test"},
+        "idempotency_key": "test-idem-key-0001",
+        "packages": [],
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -113,10 +122,12 @@ def given_update_empty_packages(ctx: dict) -> None:
 def when_send_raw_update(ctx: dict) -> None:
     """Dispatch the flat update body through the parametrized wire transport.
 
-    Deliberately NOT ``uc003_update_media_buy.when_send_update_request``: that
-    step constructs ``UpdateMediaBuyRequest(**update_kwargs)`` in the test process
-    and catches the ``ValidationError``, so once the constraint lands the
-    rejection would be a test-process exception rather than a wire envelope.
+    Deliberately NOT ``uc003_update_media_buy.when_send_update_request``: that step USED to
+    construct ``UpdateMediaBuyRequest(**update_kwargs)`` in the test process and catch the
+    ``ValidationError``, so the rejection was a test-process exception rather than a wire
+    envelope. That step now dispatches the raw bag too, so the divergence this step was
+    written to avoid is gone -- but a raw dispatch remains the right shape here, and having
+    it named separately keeps the intent legible.
     """
     dispatch_request(ctx, **ctx["raw_update_kwargs"])
 
