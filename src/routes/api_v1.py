@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
-from adcp.types import BrandReference
+from adcp.types import BrandReference, GetAdcpCapabilitiesRequest
 from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
     ReportingDimensions,
@@ -32,8 +32,14 @@ from src.core.schema_helpers import (
     to_push_notification_config,
     to_reporting_webhook,
 )
+from src.core.schemas import GetProductsRequest as GetProductsRequestDTO
+from src.core.schemas import ListAuthorizedPropertiesRequest as ListAuthorizedPropertiesRequestDTO
+from src.core.schemas import ListCreativeFormatsRequest as ListCreativeFormatsRequestDTO
 from src.core.schemas import ListCreativesRequest as ListCreativesRequestDTO
 from src.core.schemas import SalesAgentBaseModel
+from src.core.schemas import UpdatePerformanceIndexRequest as UpdatePerformanceIndexRequestDTO
+from src.core.schemas.account import ListAccountsRequest as ListAccountsRequestDTO
+from src.core.schemas.account import SyncAccountsRequest as SyncAccountsRequestDTO
 from src.core.schemas.creative import SyncCreativesRequest as LocalSyncCreativesRequest
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
@@ -71,20 +77,32 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 # extra="ignore" in prod) — the same validation the MCP/A2A request models get.
 
 
-class GetProductsBody(SalesAgentBaseModel):
-    brief: str = ""
-    # dict BrandReference or string domain/URL shorthand (#1324)
-    brand: dict[str, Any] | str | None = None
-    filters: dict[str, Any] | None = None
-    # create_get_products_request accepts these; REST passed only 3 of its 5 kwargs, so a
-    # buyer's property_list filter and context echo were dropped on this transport alone
-    # (salesagent-e8wt.1 scan row 9).
-    property_list: dict[str, Any] | None = None
-    context: dict[str, Any] | None = None
-    adcp_version: str = "1.0.0"
+# DERIVED: GetProductsRequest fields INTERSECT create_get_products_request's parameters,
+# plus the version envelope this route negotiates on. The hand-written class it replaces
+# happened to name the same five fields, but it also defaulted `adcp_version` to "1.0.0" --
+# a pre-3.0 version, so a REST buyer who simply omitted the field was served v2 compat
+# fields (is_fixed/rate/price_guidance) that the pinned 3.1.1 schema does not define, while
+# MCP and A2A (which read an ABSENT version as None) served the pinned shape. Deriving the
+# envelope removes the guess: absent means absent on every transport.
+GetProductsBody = derived_body_model(
+    "GetProductsBody", GetProductsRequestDTO, products_module.create_get_products_request
+)
 
 
 class CreateMediaBuyBody(SalesAgentBaseModel):
+    # NOT DERIVED, deliberately. The field SET matches ``CreateMediaBuyRequest fields
+    # INTERSECT create_media_buy_raw parameters`` exactly -- and is graded against it by
+    # test_hand_written_bodies_carry_the_derived_field_set -- but the DTO's ANNOTATIONS
+    # must not reach the wire here:
+    #
+    #   * ``packages`` stays ``list[dict]`` so CreateMediaBuyRequest validates it as the
+    #     request's packages[] field. Binding it to list[PackageRequest] would make FastAPI
+    #     reject a bad package before any AdCP code runs, replacing the full-request error
+    #     field path (packages.0.budget...) with a FastAPI location and the graded code with
+    #     INVALID_REQUEST.
+    #   * ``start_time``/``end_time`` stay ``str`` -- the DTO types them StartTiming /
+    #     AwareDatetime, and the raw wrapper (which every transport shares) declares ``str``.
+    #
     # dict BrandReference or string domain/URL shorthand (#1324); coerced to
     # BrandReference at the boundary via to_brand_reference.
     brand: BrandReference | dict[str, Any] | str | None = None  # adcp 3.6.0: BrandReference with domain field
@@ -102,10 +120,25 @@ class CreateMediaBuyBody(SalesAgentBaseModel):
     # raw wrapper on all transports for wire parity, but pause-on-create is not yet
     # honored by _impl — see #1619.
     paused: bool | None = None
-    adcp_version: str = "1.0.0"
+    adcp_version: str | None = None
 
 
 class UpdateMediaBuyBody(SalesAgentBaseModel):
+    # NOT DERIVED, and unlike its siblings this one cannot be: five of its fields are NOT
+    # UpdateMediaBuyRequest fields at all. ``flight_start_date``, ``flight_end_date``,
+    # ``currency``, ``pacing`` and ``daily_budget`` are flat aliases that
+    # ``_build_update_request`` folds into the spec-nested ``start_time``/``end_time``/
+    # ``budget`` -- they are LIVE (media_buy_update.py:_build_update_request reads every one
+    # of them), and the MCP wrapper announces all five. ``DTO fields INTERSECT wrapper
+    # parameters`` therefore drops them, which would delete five working REST inputs that
+    # MCP still advertises -- the divergence this work exists to remove, pointed the other
+    # way. Deriving also ADDS ``media_buy_id``, which is the URL path segment
+    # (PUT /media-buys/{media_buy_id}), not a body field.
+    #
+    # Retiring the five aliases from every transport at once would make this body derivable;
+    # that is a separate, spec-grounded change (they are not in update-media-buy-request.json
+    # 3.1.1). Until then the field set is graded against DTO-INTERSECT-wrapper PLUS the
+    # named aliases by test_hand_written_bodies_carry_the_derived_field_set.
     paused: bool | None = None
     flight_start_date: str | None = None
     flight_end_date: str | None = None
@@ -115,9 +148,6 @@ class UpdateMediaBuyBody(SalesAgentBaseModel):
     end_time: str | None = None
     # Fields update_media_buy_raw plumbs through to UpdateMediaBuyRequest. Raw dicts
     # are coerced downstream (Pattern #7 extra policy inherited from SalesAgentBaseModel).
-    # NOTE: top-level targeting_overlay/creatives are intentionally omitted — the raw
-    # wrapper accepts them in its signature but drops them before _build_update_request,
-    # so declaring them here would be a silent no-op (see #1417).
     packages: list[dict[str, Any]] | None = None
     pacing: str | None = None
     daily_budget: float | None = None
@@ -138,11 +168,27 @@ class UpdateMediaBuyBody(SalesAgentBaseModel):
     # still-xfailed gap (BR-RULE-215 partitions). Accepting it is transport parity, not
     # a claim that concurrency is enforced.
     revision: int | None = None
-    adcp_version: str = "1.0.0"
+    adcp_version: str | None = None
     account: dict[str, Any] | None = None  # AccountReference; AdCP 3.1.1 /required
 
 
 class GetMediaBuyDeliveryBody(SalesAgentBaseModel):
+    # NOT DERIVED, for the same reason as GetMediaBuysBody below: the field SET already
+    # equals ``GetMediaBuyDeliveryRequest fields INTERSECT get_media_buy_delivery_raw
+    # parameters`` and is graded against it by
+    # test_hand_written_bodies_carry_the_derived_field_set, but one field's DTO annotation
+    # must not reach the wire.
+    #
+    # ``account`` stays ``dict``: bound to AccountReference, FastAPI rejects ``{}`` before
+    # any AdCP code runs and the route answers INVALID_REQUEST, while the A2A handler for
+    # the same payload rejects it inside ``to_account_reference`` and answers
+    # VALIDATION_ERROR (pinned by test_get_media_buy_delivery_rejects_malformed_account).
+    # INVALID_REQUEST is the better code -- ``{}`` is literally "missing required fields",
+    # which the pinned enums/error-code.json assigns to INVALID_REQUEST, not to
+    # VALIDATION_ERROR ("invalid field values ... beyond schema validation") -- but the fix
+    # is the missing-vs-value split in ``adcp_error_for``, which moves every transport at
+    # once. Typing it here would move REST alone, spreading the split that /creatives/sync
+    # (whose derived body types ``account``) already exhibits.
     media_buy_ids: list[str] | None = None
     status_filter: Any = None
     start_date: str | None = None
@@ -152,25 +198,33 @@ class GetMediaBuyDeliveryBody(SalesAgentBaseModel):
     include_package_daily_breakdown: bool | None = None
     account: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
-    adcp_version: str = "1.0.0"
+    adcp_version: str | None = None
 
 
 class GetMediaBuysBody(SalesAgentBaseModel):
-    # `Any`, not `list[str] | None`, and for the same reason status_filter is Any
-    # in GetMediaBuyDeliveryBody: a typed field here makes FASTAPI reject a bad
-    # value before any AdCP code runs, which returns INVALID_REQUEST, while MCP
-    # and A2A reject the identical request inside adcp_validation_boundary and
-    # return VALIDATION_ERROR. Same request, two different codes depending on
-    # transport -- exactly what "each transport returns the same typed response"
-    # forbids. Keeping it permissive defers validation to the ONE shared boundary
-    # in _build_get_media_buys_request, so all three answer alike. Surfaced by
-    # test_request_validation_failed[rest] once UC-019 regained REST coverage.
+    # NOT DERIVED, deliberately -- the one body in this file where the DTO's own
+    # annotations must NOT reach the wire.
+    #
+    # `Any`, not `list[str] | None`, and for the same reason status_filter is Any:
+    # a typed field here makes FASTAPI reject a bad value before any AdCP code
+    # runs, which returns INVALID_REQUEST, while MCP and A2A reject the identical
+    # request inside adcp_validation_boundary and return VALIDATION_ERROR. Same
+    # request, two different codes depending on transport -- exactly what "each
+    # transport returns the same typed response" forbids. Keeping it permissive
+    # defers validation to the ONE shared boundary in _build_get_media_buys_request,
+    # so all three answer alike. Surfaced by test_request_validation_failed[rest]
+    # once UC-019 regained REST coverage.
+    #
+    # The FIELD SET is still graded against the DTO -- see
+    # test_hand_written_bodies_carry_the_derived_field_set in
+    # tests/unit/test_architecture_rest_body_completeness.py -- so this exemption
+    # buys permissive TYPES, not the freedom to drop a field.
     media_buy_ids: Any = None
     status_filter: Any = None
     include_snapshot: bool | None = None
     account: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
-    adcp_version: str = "1.0.0"
+    adcp_version: str | None = None
 
 
 # DERIVED, like ListCreativesBody below. Hand-written, this class declared
@@ -199,77 +253,60 @@ ListCreativesBody = derived_body_model(
 )
 
 
-class UpdatePerformanceIndexBody(SalesAgentBaseModel):
-    media_buy_id: str
-    performance_data: list[dict[str, Any]] = []
-    context: dict[str, Any] | None = None
-    adcp_version: str = "1.0.0"
+# DERIVED: UpdatePerformanceIndexRequest fields INTERSECT update_performance_index_raw's
+# parameters -- the same three names, now typed off the DTO.
+UpdatePerformanceIndexBody = derived_body_model(
+    "UpdatePerformanceIndexBody",
+    UpdatePerformanceIndexRequestDTO,
+    performance_module.update_performance_index_raw,
+)
 
 
-class ListCreativeFormatsBody(SalesAgentBaseModel):
-    format_ids: list[dict[str, Any]] | None = None
-    name_search: str | None = None
-    is_responsive: bool | None = None
-    asset_types: list[str] | None = None
-    min_width: int | None = None
-    max_width: int | None = None
-    min_height: int | None = None
-    max_height: int | None = None
-    wcag_level: str | None = None
-    disclosure_positions: list[str] | None = None
-    disclosure_persistence: list[str] | None = None
-    output_format_ids: list[dict[str, Any]] | None = None
-    input_format_ids: list[dict[str, Any]] | None = None
-    # Application-level context is echoed back per the AdCP envelope; MCP and A2A both
-    # carry it, so omitting it here dropped the echo on REST alone (salesagent-e8wt.1).
-    context: dict[str, Any] | None = None
-    adcp_version: str = "1.0.0"
+# DERIVED against the shared BUILDER, not the ``req=``-taking raw wrapper: the wrapper's
+# only parameter is the already-built request, so intersecting with it would yield the empty
+# set. ``build_list_creative_formats_request`` is the seam A2A already selects against
+# (_handle_list_creative_formats_skill), so REST and A2A now compute their field sets from
+# the same two artifacts.
+ListCreativeFormatsBody = derived_body_model(
+    "ListCreativeFormatsBody",
+    ListCreativeFormatsRequestDTO,
+    creative_formats_module.build_list_creative_formats_request,
+)
 
 
-class ListAuthorizedPropertiesBody(SalesAgentBaseModel):
-    property_tags: list[str] | None = None
-    publisher_domains: list[str] | None = None
-    # Application-level context is echoed back per the AdCP envelope; MCP and A2A both
-    # carry it, so omitting it here dropped the echo on REST alone (salesagent-e8wt.1).
-    context: dict[str, Any] | None = None
-    adcp_version: str = "1.0.0"
+# DERIVED against the builder, same as ListCreativeFormatsBody above. The builder was added
+# for this: list_authorized_properties had none, so every transport re-enumerated the three
+# fields by hand (the MCP wrapper, the A2A handler, and this body), which is the enumeration
+# this work exists to delete.
+ListAuthorizedPropertiesBody = derived_body_model(
+    "ListAuthorizedPropertiesBody",
+    ListAuthorizedPropertiesRequestDTO,
+    properties_module.build_list_authorized_properties_request,
+)
 
 
-class ListAccountsBody(SalesAgentBaseModel):
-    account: dict[str, Any] | None = None
-    status: str | None = None
-    sandbox: bool | None = None
-    idempotency_key: str | None = None
-    ext: dict[str, Any] | None = None
-    pagination: dict[str, Any] | None = None
-    context: dict[str, Any] | None = None
-    adcp_version: str = "1.0.0"
+# DERIVED: ListAccountsRequest fields INTERSECT build_list_accounts_request's kwargs. The
+# hand-written class dropped ``adcp_major_version``, which the builder accepts and the DTO
+# declares -- the version envelope's other half, so a buyer could negotiate by version
+# string here but not by major version.
+ListAccountsBody = derived_body_model(
+    "ListAccountsBody", ListAccountsRequestDTO, accounts_module.build_list_accounts_request
+)
 
 
-class SyncAccountsBody(SalesAgentBaseModel):
-    accounts: list[dict[str, Any]] = []
-    delete_missing: bool = False
-    dry_run: bool = False
-    # Client-generated at-most-once key. sync-accounts-request.json 3.1.1 lists it in
-    # /required; omitting it from this body made a spec-conformant buyer's request fail
-    # here as an extra input while MCP minted its own and A2A dropped it (salesagent-e8wt.1).
-    idempotency_key: str | None = None
-    push_notification_config: dict[str, Any] | None = None
-    ext: dict[str, Any] | None = None
-    context: dict[str, Any] | None = None
-    adcp_version: str = "1.0.0"
+# DERIVED: SyncAccountsRequest fields INTERSECT build_sync_accounts_request's kwargs.
+SyncAccountsBody = derived_body_model(
+    "SyncAccountsBody", SyncAccountsRequestDTO, accounts_module.build_sync_accounts_request
+)
 
 
-class GetAdcpCapabilitiesBody(SalesAgentBaseModel):
-    # Named for the TOOL, not the route: the transport-parity guard derives the body
-    # class from the tool name (get_adcp_capabilities -> GetAdcpCapabilitiesBody), so
-    # the old GetCapabilitiesBody spelling meant this tool never entered the
-    # comparison at all -- which is why the dropped `ext` stayed invisible.
-    protocols: list[str] | None = None
-    context: dict[str, Any] | None = None
-    adcp_version: str | None = None
-    adcp_major_version: int | None = None
-    ext: dict[str, Any] | None = None
+# DERIVED. Named for the TOOL, not the route: the transport-parity guard derives the body
+# class from the tool name (get_adcp_capabilities -> GetAdcpCapabilitiesBody), so the old
+# GetCapabilitiesBody spelling meant this tool never entered the comparison at all -- which
+# is why the dropped `ext` stayed invisible.
+GetAdcpCapabilitiesBody = derived_body_model(
+    "GetAdcpCapabilitiesBody", GetAdcpCapabilitiesRequest, capabilities_module.get_adcp_capabilities_raw
+)
 
 
 # ---------------------------------------------------------------------------
@@ -284,16 +321,14 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
     ``ToolError`` propagates to the global handler in ``src.app`` for envelope
     translation; no defensive catch needed here.
     """
-    from src.core.schemas import GetProductsRequest
-
     with adcp_validation_boundary(context="get_products request"):
         # Selected off the BUILDER's signature, not GetProductsRequest's fields: the model
         # declares 13 fields this builder does not take (catalog, refine, pagination, ...),
         # and handing it those would turn a key that is ignored today into a TypeError --
-        # a 500 on a spec-conformant payload (salesagent-prkv.5 Lane D / F3).
+        # a 500 on a spec-conformant payload.
         req = products_module.create_get_products_request(
             **select_request_fields(
-                GetProductsRequest,
+                GetProductsRequestDTO,
                 body,
                 accepted_kwargs(products_module.create_get_products_request),
             )
@@ -337,11 +372,13 @@ async def post_capabilities(body: GetAdcpCapabilitiesBody, identity: ResolvedIde
 @router.post("/creative-formats")
 async def list_creative_formats(body: ListCreativeFormatsBody, identity: ResolvedIdentity | None = resolve_auth):
     """List available creative formats (auth-optional discovery skill)."""
-    from src.core.schemas import ListCreativeFormatsRequest
-
-    body_fields = body.model_dump(exclude={"adcp_version"}, exclude_none=True)
+    # Through the shared builder, selected off "DTO fields INTERSECT builder kwargs" --
+    # the same call A2A's _handle_list_creative_formats_skill makes, so the two transports
+    # cannot construct different requests from the same payload.
+    builder = creative_formats_module.build_list_creative_formats_request
     with adcp_validation_boundary(context="list_creative_formats request"):
-        req = ListCreativeFormatsRequest(**body_fields) if body_fields else None
+        selected = select_request_fields(ListCreativeFormatsRequestDTO, body, accepted_kwargs(builder))
+        req = builder(**selected) if selected else None
 
     response = creative_formats_module.list_creative_formats_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
@@ -352,11 +389,12 @@ async def list_authorized_properties(
     body: ListAuthorizedPropertiesBody, identity: ResolvedIdentity | None = resolve_auth
 ):
     """List authorized properties (auth-optional discovery skill)."""
-    from src.core.schemas import ListAuthorizedPropertiesRequest
-
-    body_fields = body.model_dump(exclude={"adcp_version"}, exclude_none=True)
+    # Through the shared builder the MCP wrapper also calls -- see
+    # build_list_authorized_properties_request.
+    builder = properties_module.build_list_authorized_properties_request
     with adcp_validation_boundary(context="list_authorized_properties request"):
-        req = ListAuthorizedPropertiesRequest(**body_fields) if body_fields else None
+        selected = select_request_fields(ListAuthorizedPropertiesRequestDTO, body, accepted_kwargs(builder))
+        req = builder(**selected) if selected else None
 
     response = properties_module.list_authorized_properties_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
@@ -502,7 +540,7 @@ async def get_media_buys(body: GetMediaBuysBody, identity: ResolvedIdentity = re
 
     This route existed for MCP and A2A but not REST, which silently dropped every
     UC-019 scenario from REST parametrization -- 61 scenarios graded on two
-    transports while the suite read as covering three (salesagent-ma52s).
+    transports while the suite read as covering three.
     """
     # NO enrich_identity_with_account here, deliberately -- unlike the
     # /media-buys/delivery sibling this route was modelled on. get_media_buys
