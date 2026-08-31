@@ -43,9 +43,7 @@ Usage::
 
 from __future__ import annotations
 
-import os
-from typing import Any, Self
-from unittest.mock import patch
+from typing import Any
 
 from adcp import create_mcp_webhook_payload
 from adcp.types import McpWebhookPayload
@@ -55,18 +53,7 @@ from src.services.protocol_webhook_service import ProtocolWebhookService
 from tests.factories import PushNotificationConfigFactory, WebhookTaskContextFactory
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import LocalOriginMixin, WebhookOutcomeRowsMixin
-
-# Test-speed base for the egress seam's retry backoff. The seam's real base is
-# 1s (BR-RULE-029: 1s/2s/4s + jitter), which a retry case would otherwise pay in
-# wall time on every run. The shape and the jitter are NOT overridden — only the
-# base — and the schedule itself is graded once, in
-# tests/integration/test_outbound_http.py via tests/helpers/backoff_assertions.py.
-#
-# It is read by the seam at call time, so it takes effect only once this call
-# site has actually been migrated. Before the migration the service runs its own
-# ``asyncio.sleep(min(2**attempt, 60))`` loop and ignores it, so the retry cases
-# below cost ~3s of real waiting today and ~0s afterwards.
-_FAST_BACKOFF_BASE_SECONDS = "0.01"
+from tests.harness.egress import FastOutboundBackoffMixin
 
 # ``metadata["task_type"]`` is the INTERNAL label the service gates its
 # delivery-log writes on; the payload's own ``task_type`` is the spec TaskType
@@ -86,7 +73,7 @@ AUDIT_LOGGER_NAME = "adcp.audit"
 _DEFAULT_TASK_ID = "task_001"
 
 
-class ProtocolWebhookEnv(WebhookOutcomeRowsMixin, LocalOriginMixin, IntegrationEnv):
+class ProtocolWebhookEnv(FastOutboundBackoffMixin, WebhookOutcomeRowsMixin, LocalOriginMixin, IntegrationEnv):
     """Integration test environment for ``ProtocolWebhookService.send_notification``.
 
     The notification POST goes over real HTTP to a real local origin; the
@@ -105,21 +92,15 @@ class ProtocolWebhookEnv(WebhookOutcomeRowsMixin, LocalOriginMixin, IntegrationE
 
     _service: ProtocolWebhookService | None = None
 
-    def __enter__(self) -> Self:
-        self._fast_backoff = patch.dict(
-            os.environ,
-            {"ADCP_OUTBOUND_BACKOFF_BASE_SECONDS": _FAST_BACKOFF_BASE_SECONDS},
-        )
-        self._fast_backoff.start()
-        self._service = None
-        return super().__enter__()
+    def _enter_pre(self) -> None:
+        """Reset the memoized service, and guarantee the reset on the way out.
 
-    def __exit__(self, *exc: object) -> bool:
-        try:
-            return super().__exit__(*exc)
-        finally:
-            self._service = None
-            self._fast_backoff.stop()
+        Registered rather than done in a teardown override so a FAILED enter
+        leaves no service from this env visible to the next one.
+        """
+        super()._enter_pre()
+        self._service = None
+        self._guard("protocol_service", lambda: setattr(self, "_service", None))
 
     # -- The subject under test ---------------------------------------------
 

@@ -13,8 +13,8 @@ serialized wire (and the A2A submitted reconstruction) are genuinely exercised.
 
 from __future__ import annotations
 
-from typing import Any, Self
-from unittest.mock import MagicMock, patch
+from typing import Any
+from unittest.mock import MagicMock
 
 from src.core.schemas import UpdateMediaBuyRequest
 from tests.harness._mixins import make_adapter_update_side_effect
@@ -61,24 +61,16 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
 
     _seeded_media_buy_id: str = "NOT_SEEDED"
 
-    def __enter__(self) -> Self:
-        result = super().__enter__()
-        self._update_patchers: list = []
-        for name, target in _UPDATE_PATCHES.items():
-            patcher = patch(target)
-            self.mock[name] = patcher.start()
-            self._update_patchers.append(patcher)
-        self._configure_update_mocks()
-        return result
+    # The update patches ride the base's own patch loop rather than a second
+    # registry of their own — the sibling precedent is
+    # ``MediaBuyCreateEnv.EXTERNAL_PATCHES``. The base starts them, registers
+    # each with ``_guard``, and collects teardown errors instead of swallowing
+    # them, so no hook is needed here at all.
+    EXTERNAL_PATCHES = {**MediaBuyCreateEnv.EXTERNAL_PATCHES, **_UPDATE_PATCHES}
 
-    def __exit__(self, *exc: object) -> bool:
-        for patcher in reversed(self._update_patchers):
-            try:
-                patcher.stop()
-            except Exception:
-                pass
-        self._update_patchers = []
-        return super().__exit__(*exc)
+    def _configure_mocks(self) -> None:
+        super()._configure_mocks()
+        self._configure_update_mocks()
 
     def _configure_update_mocks(self) -> None:
         mock_adapter = MagicMock()

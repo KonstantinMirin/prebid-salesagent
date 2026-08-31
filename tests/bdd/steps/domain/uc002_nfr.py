@@ -507,7 +507,7 @@ def given_observe_high_value_alerts(ctx: dict) -> None:
     # Spy the audit logger's external Slack boundary; tie teardown to env lifecycle.
     patcher = mock.patch("src.services.slack_notifier.get_slack_notifier")
     notifier_factory = patcher.start()
-    env._patchers.append(patcher)
+    env._guard("audit_slack", patcher.stop)
     notifier = mock.MagicMock()
     notifier_factory.return_value = notifier
     env.mock["audit_slack"] = notifier_factory

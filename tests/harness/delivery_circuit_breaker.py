@@ -1,7 +1,7 @@
 """CircuitBreakerEnv — integration test environment for WebhookDeliveryService.
 
 Patches: the SEAM's time.sleep and random.uniform — timing and randomness only.
-Delivery retries are the seam's since salesagent-4fya.10, so the schedule is
+Delivery retries are the seam's since GH #1589, so the schedule is
 observed where it is now decided; patching this module's names would silently
 observe nothing.
 Real: a local HTTP origin that actually serves the delivery attempts, and
@@ -94,22 +94,25 @@ class CircuitBreakerEnv(WebhookOutcomeRowsMixin, CircuitBreakerMixin, Integratio
         self._log_handler: _LogCaptureHandler | None = None
         self.captured_logs: list[str] = []
 
-    def __enter__(self) -> CircuitBreakerEnv:
-        result = super().__enter__()
-        # Attach log capture to the webhook delivery service logger
+    def _enter_post(self) -> None:
+        """Attach log capture once the env is otherwise live.
+
+        Post, not pre: nothing in the base's setup logs to this logger, and the
+        handler is a resource — registering its removal with ``_guard`` is what
+        stops a failed enter from leaving a dead handler attached to a
+        process-global logger for every later test.
+        """
+        super()._enter_post()
         self._log_handler = _LogCaptureHandler()
         webhook_logger = logging.getLogger("src.services.webhook_delivery_service")
         webhook_logger.addHandler(self._log_handler)
         self.captured_logs = self._log_handler.records
-        return result  # type: ignore[return-value]
+        self._guard("log_capture", self._remove_log_handler)
 
-    def __exit__(self, *exc: object) -> bool:
-        # Remove log capture handler
+    def _remove_log_handler(self) -> None:
         if self._log_handler is not None:
-            webhook_logger = logging.getLogger("src.services.webhook_delivery_service")
-            webhook_logger.removeHandler(self._log_handler)
+            logging.getLogger("src.services.webhook_delivery_service").removeHandler(self._log_handler)
             self._log_handler = None
-        return super().__exit__(*exc)
 
     def _configure_mocks(self) -> None:
         # random.uniform: return 0.0 for deterministic tests
@@ -129,7 +132,7 @@ class CircuitBreakerEnv(WebhookOutcomeRowsMixin, CircuitBreakerMixin, Integratio
         ``url`` defaults to the running origin, so the configured endpoint is one
         that really answers.
 
-        There is no ``secret=`` parameter (salesagent-47n9.24, GH #1894). It wrote
+        There is no ``secret=`` parameter (GH #1894). It wrote
         ``webhook_secret``, a column with zero writers in ``src/``, so every test
         that used it configured a row no buyer can create -- and graded a signing
         branch production has now abandoned. An HMAC row is

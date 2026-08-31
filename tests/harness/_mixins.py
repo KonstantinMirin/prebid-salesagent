@@ -11,8 +11,9 @@ Mixins may call ``self._commit_factory_data()`` which is a no-op in unit mode.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 from src.adapters.mock_ad_server import simulate_breakdowns
@@ -474,7 +475,25 @@ class LocalOriginMixin:
 
     # -- Lifecycle ----------------------------------------------------------
 
-    def __enter__(self) -> Self:
+    if TYPE_CHECKING:
+        # Declared, not implemented. This mixin is only ever composed with
+        # BaseTestEnv, which owns the cleanup registry; the requirement used to
+        # be spelled as a bare ``_patchers: list`` annotation and this is the
+        # same statement for the method that replaced it.
+        def _guard(self, label: str, cleanup: Callable[[], None]) -> None: ...
+
+    def _enter_pre(self) -> None:
+        """Acquire the TLS origin BEFORE the base binds the DB and configures mocks.
+
+        Pre, not post: ``CircuitBreakerEnv._configure_mocks`` programs
+        ``self.origin``, so the origin has to exist by then.
+
+        Every resource is registered with ``_guard`` on the line it is acquired,
+        so a failure part-way through releases exactly what was started —
+        no defensive ``getattr`` teardown, and nothing survives a failed enter.
+        Release is LIFO, which reproduces the old hatches -> origin -> ssl order.
+        """
+        super()._enter_pre()  # type: ignore[misc]
         if self.is_e2e:  # type: ignore[attr-defined]
             # No local origin under e2e: it would listen on the runner's loopback,
             # which the Docker server cannot reach — that unreachability is the
@@ -484,43 +503,30 @@ class LocalOriginMixin:
             from tests.e2e._webhook_capture import register_capture_key
 
             self._capture_key, _ = register_capture_key()
-            return super().__enter__()  # type: ignore[misc,no-any-return]
+            return
 
         gen_test_tls = load_gen_test_tls()
         gen_test_tls.ensure_test_tls()
         self._ssl_cert_file = patch.dict(os.environ, {"SSL_CERT_FILE": str(gen_test_tls.COMBINED_CERT)})
         self._ssl_cert_file.start()
+        self._guard("ssl_cert_file", self._ssl_cert_file.stop)
+
         self._origin_ctx = run_local_origin(ssl_context=server_ssl_context(gen_test_tls))
         self._origin = self._origin_ctx.__enter__()
+        self._guard("local_origin", self._exit_origin)
+
         self._egress_hatches = patch.dict(os.environ, egress_hatch_env(private=True))
         self._egress_hatches.start()
-        return super().__enter__()  # type: ignore[misc,no-any-return]
+        self._guard("egress_hatches", self._egress_hatches.stop)
 
-    def __exit__(self, *exc: object) -> bool:
-        try:
-            return super().__exit__(*exc)  # type: ignore[misc,no-any-return]
-        finally:
-            # Mirror __enter__'s e2e branch exactly. Under e2e none of these
-            # three were ever started -- the endpoint is the compose stack's
-            # capture service, not an in-process origin -- so tearing them down
-            # raised AttributeError, and because that happened in the FINALLY of
-            # a teardown, the base env never unbound the factory session. Every
-            # following scenario on the same xdist worker then errored with
-            # "Factory TenantFactory session already bound". One real failure
-            # became 443. An asymmetric enter/exit pair is the amplifier; this
-            # makes them symmetric.
-            # getattr, not a bare read: __enter__ starts these three in order,
-            # so a failure PART WAY THROUGH it leaves the later ones unset and an
-            # unconditional teardown would raise in a finally -- the same
-            # amplifier, reached by a different path (LR-06).
-            for started in ("_egress_hatches", "_origin_ctx", "_ssl_cert_file"):
-                resource = getattr(self, started, None)
-                if resource is None:
-                    continue
-                if started == "_origin_ctx":
-                    resource.__exit__(None, None, None)
-                else:
-                    resource.stop()
+    def _exit_origin(self) -> None:
+        """Close the origin context, discarding ``__exit__``'s suppression verdict.
+
+        A cleanup returns nothing: the registry is releasing resources, not
+        handling the exception, and letting a context manager's bool leak into
+        that position would silently mean "suppressed".
+        """
+        self._origin_ctx.__exit__(None, None, None)
 
     # -- The endpoint under test -------------------------------------------
 

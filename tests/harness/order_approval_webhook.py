@@ -37,27 +37,15 @@ Usage::
 
 from __future__ import annotations
 
-import os
-from typing import Any, Self
-from unittest.mock import patch
+from typing import Any
 
 from src.services.order_approval_service import _send_approval_webhook
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import LocalOriginMixin
-
-# Test-speed base for the egress seam's retry backoff. The seam's real base is
-# 1s (BR-RULE-029: 1s/2s/4s + jitter), which a retry case would otherwise pay in
-# wall time on every run. The shape and the jitter are NOT overridden — only the
-# base — and the schedule itself is graded once, in
-# tests/integration/test_outbound_http.py via tests/helpers/backoff_assertions.py.
-#
-# It is read by the seam at call time, so it takes effect only for a call site
-# that has actually been migrated; a call site still running its own
-# ``time.sleep(2**attempt)`` loop ignores it and its retry cases stay slow.
-_FAST_BACKOFF_BASE_SECONDS = "0.01"
+from tests.harness.egress import FastOutboundBackoffMixin
 
 
-class OrderApprovalWebhookEnv(LocalOriginMixin, IntegrationEnv):
+class OrderApprovalWebhookEnv(FastOutboundBackoffMixin, LocalOriginMixin, IntegrationEnv):
     """Integration test environment for ``_send_approval_webhook``.
 
     The webhook POST goes over real HTTP to a real local origin; the
@@ -74,20 +62,6 @@ class OrderApprovalWebhookEnv(LocalOriginMixin, IntegrationEnv):
     """
 
     MODULE = "src.services.order_approval_service"
-
-    def __enter__(self) -> Self:
-        self._fast_backoff = patch.dict(
-            os.environ,
-            {"ADCP_OUTBOUND_BACKOFF_BASE_SECONDS": _FAST_BACKOFF_BASE_SECONDS},
-        )
-        self._fast_backoff.start()
-        return super().__enter__()
-
-    def __exit__(self, *exc: object) -> bool:
-        try:
-            return super().__exit__(*exc)
-        finally:
-            self._fast_backoff.stop()
 
     def call_send_approval_webhook(
         self,
