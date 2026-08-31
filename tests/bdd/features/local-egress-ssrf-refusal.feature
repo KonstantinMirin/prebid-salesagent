@@ -52,7 +52,7 @@
 #
 # Why THESE causes: with the private-range escape hatch open — which is the
 # posture of docker-compose.e2e.yml and of run_all_tests_host.sh, and the ONLY
-# hatch left (salesagent-e6h0 deleted the scheme hatch: the seam now requires
+# hatch left (GH #1757 deleted the scheme hatch: the seam now requires
 # https unconditionally, no operator override) — a cloud-metadata address, an
 # unresolvable host, and a plaintext http scheme are all still refused (the SDK
 # checks BLOCKED_METADATA_IPS and raises on getaddrinfo failure upstream of the
@@ -60,9 +60,27 @@
 # All three grade the same production on every transport, so all three
 # scenarios pin the hatch ON.
 #
+# 100.64.0.1 (RFC 6598 CGNAT) is the FOURTH such cause, and the first one this
+# repo owns rather than inherits (GH #1802). adcp.signing does not
+# classify the six #974 supplement ranges at all — every one evaluates False on
+# every flag it tests — so nothing but this repo's own predicate in
+# src/core/security/egress/policy.py can refuse them, and that predicate is
+# unconditional: no posture, the open hatch included, reaches it. That is what
+# makes the row realizable in the e2e compose stack, whose hatch is open
+# permanently. It is graded here BECAUSE an immunity graded only in-process is
+# graded on the transport least like production.
+#
+# What a REGRESSION looks like on this row, stated accurately: if the
+# supplement check ever moves back behind the hatch, this row does not fail
+# fast. The address is accepted, the seam dials 100.64.0.1 for real with its
+# retry schedule, and the scenario fails as a delivery failure after connect
+# timeouts rather than as VALIDATION_ERROR. The refusal is pre-connection only
+# while the fix holds; a slow failure is still a failure, but do not read this
+# row as a promise that no packet ever leaves the stack.
+#
 # The plaintext-http scenario used to pin it OFF instead, deliberately, to keep
 # itself unrealizable over e2e_rest rather than silently xpassing there
-# (salesagent-qrqh). salesagent-pldmk.32 REVERSES that: the posture cannot
+# (GH #1417). GH #1802 REVERSES that: the posture cannot
 # change this scenario's outcome, because EgressPolicy.resolve_for_dial raises
 # on the scheme at src/core/security/egress/policy.py:322 — before
 # allow_private is read at all, at :331 and :333. Pinning the hatch OPEN is
@@ -114,6 +132,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
       | agent_url                    |
       | https://169.254.169.254      |
       | https://no-such-host.invalid |
+      | https://100.64.0.1           |
 
   @T-EGRESS-SSRF-refusal-discloses-nothing @egress @invariant
   Scenario Outline: the refusal discloses nothing and does not distinguish the cause
@@ -127,6 +146,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
       | agent_url                    |
       | https://169.254.169.254      |
       | https://no-such-host.invalid |
+      | https://100.64.0.1           |
 
   # The host RESOLVES, and is public, on purpose: scheme policy runs before
   # address validation, so a host that NXDOMAINs would be refused either way and
@@ -292,7 +312,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # surface's stake in the lane is structural (no URL-only path remains), not a
   # new refusal. (2) the scenario is still worth its keep as an OUTCOME guard: it
   # asserts the buyer is refused at this surface by SOME layer, and reddens exactly
-  # when no layer refuses any more. Measured (salesagent-iyiwh.7): relaxing the
+  # when no layer refuses any more. Measured: relaxing the
   # annotation to `dict` alone leaves it GREEN, because this lane's ingest gate then
   # catches the document; removing the gate alone leaves it GREEN, because the typed
   # model still refuses. It reddens only when BOTH stop refusing — which is the
@@ -329,7 +349,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
 
   # ── The CARDINALITY half, and the credential MINIMUM ───────────────
   #
-  # Epic D lane C3 (salesagent-fo99.3). The two scenarios below grade the two
+  # Epic D lane C3 (GH #1299). The two scenarios below grade the two
   # documents the PINNED schema forbids outright but which reach `_impl`
   # unvalidated today, because the A2A skill handler pops the buyer's raw dict
   # (`adcp_a2a_server.py`) and `create_media_buy_raw` / `sync_creatives_raw`

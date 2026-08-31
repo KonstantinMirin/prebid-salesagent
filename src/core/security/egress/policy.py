@@ -8,8 +8,8 @@ is the DNS-full, IP-pinning verdict a URL earns the moment something is
 actually about to dial it. Both read the SAME address predicate
 (:func:`_blocked_address`) and the SAME hostname blocklist and scheme rule —
 one shared value, not two independently-maintained copies, which is the
-disease this module exists to make structurally impossible (salesagent-tbrk.1,
-salesagent-634hc).
+disease this module exists to make structurally impossible (GH #974,
+GH #974).
 
 AdCP 3.1.1, ``building/by-layer/L1/security.mdx``: a fetcher MUST (1) reject
 non-HTTPS in production, (2) reject reserved ranges — including RFC 6598
@@ -41,6 +41,12 @@ logger = logging.getLogger(__name__)
 # adcontextprotocol/adcp-client-python#974 additions — verified directly
 # against the installed adcp SDK: every one of these evaluates False on every
 # flag the SDK checks.
+#
+# BECAUSE nothing else defends them, this set sits OUTSIDE the
+# ADCP_OUTBOUND_ALLOW_PRIVATE hatch: both verdicts refuse it under every
+# posture. The hatch relaxes the SDK's flag classes so a test can dial its own
+# loopback origin or the compose bridge; it must never relax a range whose only
+# line of defence is this list (GH #1802).
 _SUPPLEMENT_NETWORKS = frozenset(
     {
         ipaddress.ip_network("100.64.0.0/10"),  # CGNAT (RFC 6598)
@@ -131,6 +137,28 @@ class OutboundRequestBlocked(OutboundError, AdCPBlockedUrlError):
     """
 
 
+def _in_supplement_range(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """The half of the address predicate that NOTHING else defends.
+
+    Split out from :func:`_blocked_address` because the two halves have
+    different postures, not merely different membership:
+
+    * the FLAG half is re-checked by ``adcp.signing.resolve_and_validate_host``
+      itself, and ``allow_private=True`` deliberately relaxes it — that hatch is
+      what lets a test dial its own loopback origin or the compose bridge;
+    * this SUPPLEMENT half is the seam's own, carried precisely BECAUSE the SDK
+      does not classify these six ranges (every one evaluates False on every
+      flag the SDK checks). No posture relaxes it. There is no user of the
+      hatch in this tree that dials a supplement address — they dial loopback
+      and RFC 1918 bridge addresses, both of which the flag half covers.
+
+    Keeping the predicate spelled once means a mutation here reddens the
+    registration verdict, the hatch-closed dial verdict AND the hatch-open dial
+    verdict together.
+    """
+    return any(ip in network for network in _SUPPLEMENT_NETWORKS)
+
+
 def _blocked_address(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """One address predicate, applied identically by both verdicts.
 
@@ -144,7 +172,7 @@ def _blocked_address(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     only thing that still refuses a literal ``10.0.0.1`` or ``127.0.0.1``.
     """
     return (
-        any(ip in network for network in _SUPPLEMENT_NETWORKS)
+        _in_supplement_range(ip)
         or ip.is_private
         or ip.is_loopback
         or ip.is_link_local
@@ -155,12 +183,12 @@ def _blocked_address(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
 
 
 def _scheme_error(parsed: ParseResult) -> str | None:
-    """HTTPS is required, unconditionally — no escape hatch (salesagent-e6h0).
+    """HTTPS is required, unconditionally — no escape hatch (GH #1757).
 
     One spelling for the rule that used to live three times:
     ``outbound_http._require_tls``, ``url_validator._scheme_error`` (with a
     now-dead ``require_https=False`` branch — the seam has required https
-    unconditionally since salesagent-e6h0 deleted its own hatch, and
+    unconditionally since GH #1757 deleted its own hatch, and
     registration has required it unconditionally since the same change), and
     ``webhook_validator.WebhookURLValidator._require_https`` (a bare
     ``return True``).
@@ -181,7 +209,7 @@ def _is_rescuable_loopback(url: str) -> bool:
     range and every base RFC1918 address at registration, not just loopback).
 
     Must NOT rescue a scheme refusal: checked first, unconditionally, in
-    :func:`EgressPolicy.check_registration` — salesagent-e6h0 deleted the
+    :func:`EgressPolicy.check_registration` — GH #1757 deleted the
     scheme hatch entirely, so a plain ``http://`` URL is never rescued
     regardless of ``ADCP_TESTING``.
     """
@@ -295,9 +323,12 @@ class EgressPolicy:
         the single resolution :class:`adcp.signing.IpPinnedTransport` pins
         subsequent connects to, closing the DNS-rebinding TOCTOU a second
         resolution would reopen — then checks the resolved IP against the
-        shared :func:`_blocked_address` predicate. That last check is what
-        closes salesagent-634hc: the SDK call alone does not know about the
-        six supplement ranges.
+        address predicates. ``allow_private`` opens the SDK's flag classes —
+        that is what lets a test dial a loopback origin or a compose-bridge
+        address — but it NEVER opens the supplement set (checked
+        unconditionally below) and never reaches the SDK's own pre-hatch
+        metadata check. The supplement check is what the SDK call alone cannot
+        do: it does not know these six ranges (GH #1589, GH #1802).
 
         Returns a :class:`PinnedHost` so a caller building a pinned transport
         does not resolve a second time, and reads the two same-typed strings by
@@ -320,8 +351,18 @@ class EgressPolicy:
             logger.warning("Outbound request refused by address policy: %s", exc)
             raise OutboundRequestBlocked(field=field) from exc
 
-        if not allow_private and _blocked_address(ipaddress.ip_address(ip)):
+        ip_obj = ipaddress.ip_address(ip)
+
+        # UNCONDITIONAL, ahead of the hatch. The supplement set is the one thing
+        # no posture may open: it exists because the SDK does not classify these
+        # ranges, so `allow_private=True` used to skip the only check that knew
+        # them and turned refused into accepted.
+        if _in_supplement_range(ip_obj):
             logger.warning("Outbound request refused by address policy: matched the supplement range set")
+            raise OutboundRequestBlocked(field=field)
+
+        if not allow_private and _blocked_address(ip_obj):
+            logger.warning("Outbound request refused by address policy: address is in a blocked range")
             raise OutboundRequestBlocked(field=field)
 
         return PinnedHost(hostname=hostname, resolved_ip=ip)

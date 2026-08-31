@@ -23,9 +23,11 @@ code path and an untested one would ship the epic's defect in half the repo.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 import pytest
 from adcp.signing.canonical import build_signature_base, parse_signature_input_header
@@ -69,7 +71,7 @@ SEAM_LOGGER = "src.core.security.outbound_http"
 
 # The retry SCHEDULE's own logger — env_float's fallback warning for the
 # backoff-base knob logs from here now that egress.attempts owns the schedule
-# (salesagent-tbrk.2), not from SEAM_LOGGER.
+# (GH #1802), not from SEAM_LOGGER.
 SCHEDULE_LOGGER = "src.core.security.egress.attempts"
 
 # A rate-limited answer, as the origin sends it. The body is asserted against in
@@ -116,7 +118,7 @@ def set_flags(monkeypatch, *, private: bool = False) -> None:
     and literal come from :func:`tests.helpers.egress_hatches.egress_hatch_env`,
     which is the only place in the test tree that spells it.
 
-    There is no ``insecure`` parameter anymore (salesagent-e6h0): the scheme
+    There is no ``insecure`` parameter anymore (GH #1757): the scheme
     gate is unconditional in production, so there is nothing left to relax —
     a caller that used to pass ``insecure=True`` needed a real https origin
     (see the ``local_origin_tls`` fixture) instead.
@@ -135,7 +137,7 @@ def pin_jitter(monkeypatch, value: float) -> list[tuple]:
     The patch target is the module attribute ``egress.attempts.random``, which
     is also the string target the UC-004 circuit-breaker harness patches
     (``tests/harness/delivery_circuit_breaker.py``) — the schedule moved there
-    with ``_backoff_seconds`` (salesagent-tbrk.2). Pinning it here for the same
+    with ``_backoff_seconds`` (GH #1802). Pinning it here for the same
     obligation keeps the seam suite and the BDD suite grading one implementation:
     a ``from random import uniform`` in ``egress.attempts`` would break both at
     once, which is the point.
@@ -272,7 +274,7 @@ def was_refused_before_connecting(call) -> bool:
     ],
 )
 def test_non_https_scheme_is_refused_by_default(seam_call, url, monkeypatch):
-    """Anything that is not https:// is refused — unconditionally (salesagent-e6h0).
+    """Anything that is not https:// is refused — unconditionally (GH #1757).
 
     ``example.com`` is a public address, so nothing but the scheme rule can be
     refusing these — that is what makes this a scheme test rather than a
@@ -310,7 +312,7 @@ def test_cloud_metadata_address_is_refused(seam_call, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 3. The private-range escape hatch (salesagent-e6h0: the SCHEME hatch is gone
+# 3. The private-range escape hatch (GH #1757: the SCHEME hatch is gone
 #    entirely — https is required unconditionally, no flag relaxes it)
 #
 # Under default flags http://127.0.0.1:<port>/ is refused by BOTH the scheme
@@ -937,7 +939,7 @@ PRE_CONNECTION_CASES = {
     "cloud-metadata-private-hatch-open": (lambda origin: METADATA_URL, {"private": True}),
     "http-loopback-private-hatch-only": (lambda origin: f"{origin.base_url}/webhook", {"private": True}),
     # "http-loopback-insecure-hatch-only" and "http-loopback-both-hatches" were
-    # deleted (salesagent-e6h0): there is no insecure hatch left to construct
+    # deleted (GH #1757): there is no insecure hatch left to construct
     # either combination with, and the latter collapsed into an exact duplicate
     # of "http-loopback-private-hatch-only" the moment it did.
 }
@@ -1048,7 +1050,7 @@ def test_validate_url_refusal_envelope_hides_the_resolved_address_and_the_reason
 #
 # The last three arrived from tests/unit/test_ssrf_url_validator.py, which grades
 # them against ``check_url_ssrf`` — the second copy of address policy
-# salesagent-tbrk.1 deletes. They are not redundant here: they are the classes
+# GH #974 deletes. They are not redundant here: they are the classes
 # whose refusal that suite attributed to this repo's own CIDR list and which the
 # SDK in fact classifies on its own (multicast, multicast, reserved), so keeping
 # them means the deletion loses no live coverage.
@@ -1083,7 +1085,7 @@ def test_reserved_range_is_refused_by_validate_url(range_name, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 12. Verdict parity — one address predicate, two verdicts (salesagent-tbrk.1)
+# 12. Verdict parity — one address predicate, two verdicts (GH #974)
 #
 # The seam offers a resolve-and-dial verdict only. A URL that is STORED at ingest
 # and fetched later needs a second, DNS-FREE verdict at registration time,
@@ -1091,7 +1093,7 @@ def test_reserved_range_is_refused_by_validate_url(range_name, monkeypatch):
 # re-checked when it is actually dialled. That second verdict was built OUTSIDE
 # the seam (``src/core/security/url_validator.py``), and once outside it grew its
 # own range set — which then drifted: the six ranges below are refused at ingest
-# and dialled happily (salesagent-634hc, the live gap this section closes).
+# and dialled happily (GH #974, the live gap this section closes).
 #
 # So the obligation is not "each verdict refuses bad URLs". Two independent
 # copies of address policy satisfy that too, and that IS the disease. It is that
@@ -1117,6 +1119,21 @@ def test_reserved_range_is_refused_by_validate_url(range_name, monkeypatch):
 #     independently, and registration never reaches adcp.signing. That asymmetry
 #     is the proof the flag half is load-bearing for the DNS-free verdict
 #     specifically rather than decorative.
+#   * put the supplement half of the dial check back behind the private-range
+#     hatch and ``test_a_supplement_range_stays_refused_with_the_private_hatch_
+#     open`` reddens on all six rows while its hatch-CLOSED twin stays green.
+#     That pair is the proof the supplement set is outside the hatch rather
+#     than merely refused in the default posture: the hatch is the seam's ONE
+#     remaining posture knob, so a set no posture can open is a set nothing can
+#     open. Registration's column is unaffected by construction —
+#     ``check_registration`` takes no ``allow_private`` parameter at all.
+#   * add a range to the policy's frozenset without adding a row here, or
+#     delete a row here whose CIDR is still in production, and
+#     ``test_the_supplement_oracle_table_covers_the_production_set_exactly``
+#     reddens. That case is the CONVERSE of the hand-stated rule above and the
+#     only one that reads production: it computes no verdict, it asserts the
+#     two sets correspond one-to-one, so a new range cannot arrive ungraded and
+#     a row cannot outlive the range it grades.
 #
 # The dial half of every row is graded through ``validate_url`` rather than
 # ``send``/``asend`` for one reason: an accepted row would otherwise open a real
@@ -1133,7 +1150,7 @@ def test_reserved_range_is_refused_by_validate_url(range_name, monkeypatch):
 
 # The #974 supplement: reserved allocations ``adcp.signing`` does not classify,
 # so this repo carries them itself (``src/core/security/url_validator.py`` at
-# HEAD; ``src/core/security/egress/policy.py`` after salesagent-tbrk.1). CGNAT
+# HEAD; ``src/core/security/egress/policy.py`` after GH #974). CGNAT
 # leads the list because this file previously pinned it as an ACCEPTED gap
 # (``test_cgnat_is_the_one_documented_gap_not_refused_by_validate_url``, deleted
 # here per its own docstring instruction now that the gap closes rather than
@@ -1249,7 +1266,7 @@ def test_a_supplement_range_is_refused_at_registration(range_name, monkeypatch):
 def test_a_supplement_range_is_refused_at_dial(range_name, monkeypatch):
     """The same six ranges are refused when the destination is actually dialled.
 
-    RED at HEAD for all six, and that failure IS salesagent-634hc: the seam never
+    RED at HEAD for all six, and that failure IS GH #974: the seam never
     imports the supplement, so ``adcp.signing`` alone decides — and none of these
     ranges trips any flag it tests. A URL refused at ingest and dialled happily
     is not a partial fix, it is the gap wearing the fix's clothes: the buyer's
@@ -1261,6 +1278,76 @@ def test_a_supplement_range_is_refused_at_dial(range_name, monkeypatch):
     url = _SUPPLEMENT_RANGE_URLS[range_name]
 
     assert dial_refused(url), f"{range_name} ({url!r}) is accepted by the dial-time verdict"
+
+
+@pytest.mark.parametrize("range_name", sorted(_SUPPLEMENT_RANGE_URLS))
+def test_a_supplement_range_stays_refused_with_the_private_hatch_open(range_name, monkeypatch):
+    """The supplement set is outside the hatch — no flag reaches it, ALLOW_PRIVATE included.
+
+    The twin of ``test_cloud_metadata_stays_refused_with_the_private_hatch_open``
+    for the OTHER unconditional refusal, and the two are unconditional for
+    different reasons. Metadata immunity is the SDK's: ``resolve_and_validate_
+    host`` checks its metadata set BEFORE it reads ``allow_private`` at all, so
+    the seam inherits that immunity without owning it. This immunity is the
+    SEAM'S OWN: ``adcp.signing`` does not classify these six ranges (they
+    evaluate False on every flag it tests, which is why the supplement set
+    exists at all), so nothing but the seam's own predicate can refuse them —
+    and if that predicate sits behind the hatch, opening the hatch accepts them.
+
+    That is exactly what happens at HEAD: with ``ADCP_OUTBOUND_ALLOW_PRIVATE``
+    open, all six ranges are ACCEPTED at dial while ``check_registration``
+    refuses all six under every posture. The two verdicts of section 12 are
+    supposed to differ only on DNS and the loopback allowance; a posture that
+    flips one column and not the other is a third divergence nothing declared.
+
+    No socket in either state: ``dial_refused`` goes through ``validate_url``,
+    which reaches its verdict before any connection is attempted, so the RED
+    state costs a refused address rather than a connect timeout.
+    """
+    set_flags(monkeypatch, private=True)
+    url = _SUPPLEMENT_RANGE_URLS[range_name]
+
+    assert dial_refused(url), f"{range_name} ({url!r}) is accepted by the dial-time verdict with the private hatch open"
+
+
+def test_the_supplement_oracle_table_covers_the_production_set_exactly():
+    """``_SUPPLEMENT_RANGE_URLS`` and the production frozenset are in exact bijection.
+
+    The converse guard for the hand-stated table. The rows above stay hand-
+    stated so that deleting a CIDR from production reddens them (a row read out
+    of production would vanish with the CIDR it grades) — but hand-stated rows
+    have the opposite blind spot: a range ADDED to production with no row, or a
+    row whose address no longer lands in any production range, is graded by
+    nothing at all.
+
+    This is MEMBERSHIP, never derivation: no verdict is computed here. The rows
+    keep asserting refusal against the addresses they name; this case only
+    asserts that the set of names and the set of production CIDRs correspond
+    one-to-one, so every future range arrives with its own refusal rows.
+    """
+    from src.core.security.egress.policy import _SUPPLEMENT_NETWORKS
+
+    graded_ips = {
+        range_name: ipaddress.ip_address(urlparse(url).hostname) for range_name, url in _SUPPLEMENT_RANGE_URLS.items()
+    }
+
+    rows_by_network: dict[Any, list[str]] = {network: [] for network in _SUPPLEMENT_NETWORKS}
+    ungraded_rows = {}
+    for range_name, ip in graded_ips.items():
+        matches = [network for network in _SUPPLEMENT_NETWORKS if ip in network]
+        if not matches:
+            ungraded_rows[range_name] = str(ip)
+        for network in matches:
+            rows_by_network[network].append(range_name)
+
+    assert not ungraded_rows, (
+        f"table rows whose address is in no production range: {ungraded_rows} — "
+        "the row grades nothing, or the range was deleted from _SUPPLEMENT_NETWORKS"
+    )
+    assert all(len(rows) == 1 for rows in rows_by_network.values()), (
+        "every production supplement range needs exactly one graded row, got "
+        f"{ {str(network): rows for network, rows in rows_by_network.items()} }"
+    )
 
 
 @pytest.mark.parametrize("range_name", sorted(_RESERVED_RANGE_URLS))
@@ -1822,7 +1909,7 @@ def test_a_transport_failure_carries_no_client_error_status(seam_call, monkeypat
 
 
 # ---------------------------------------------------------------------------
-# 15. ONE retry state machine, stepped by both loops (salesagent-tbrk.2)
+# 15. ONE retry state machine, stepped by both loops (GH #1802)
 #
 # Every section above grades the retry policy's arithmetic: how many attempts,
 # how long between them, what an origin's Retry-After may do to that. This one
@@ -2081,7 +2168,7 @@ def test_both_paths_walk_retry_retry_success_through_the_same_machine(seam_call,
 
 
 # ---------------------------------------------------------------------------
-# Per-attempt signing (salesagent-47n9.22)
+# Per-attempt signing (GH #1441)
 #
 # The seam owns retry, so a signature computed once ABOVE the loop is replayed
 # on every attempt. That is valid for a legacy HMAC (body + timestamp, replay-
@@ -2138,7 +2225,7 @@ def test_each_retry_carries_a_distinct_signature_on_the_wire(seam_call, monkeypa
 def test_the_signer_is_given_the_exact_bytes_that_go_on_the_wire(seam_call, monkeypatch, local_origin_tls):
     """Signed bytes and transmitted bytes are one object, not two that agree.
 
-    This is the same invariant salesagent-47n9.1 established for the webhook
+    This is the same invariant GH #1095 established for the webhook
     body: a signer handed the pre-serialization payload would be trusting httpx
     to serialize it the same way, which is how #1441 happened.
     """
@@ -2200,7 +2287,7 @@ def test_omitting_the_signer_changes_nothing(seam_call, monkeypatch, local_origi
 
 
 # ---------------------------------------------------------------------------
-# The REAL consumer shape (salesagent-47n9.22)
+# The REAL consumer shape (GH #1441)
 #
 # Everything above drives a hand-rolled signer, which grades the seam's
 # mechanics but cannot grade the thing this hook exists for: that an ACTUAL
@@ -2395,7 +2482,7 @@ def test_a_content_body_without_a_content_type_signs_a_header_that_never_ships(
 
 @pytest.mark.parametrize("seam_call", SEAM_CALLS)
 def test_a_signer_returning_a_reserved_header_cannot_desync_the_body(seam_call, monkeypatch, local_origin_tls):
-    """A signer's headers may not re-frame the message (salesagent-47n9.22, ADJUST 4).
+    """A signer's headers may not re-frame the message (GH #1441, ADJUST 4).
 
     ``Transfer-Encoding: chunked`` merged verbatim next to the ``Content-Length``
     httpx computed makes the origin read the chunk-size line as body: it receives

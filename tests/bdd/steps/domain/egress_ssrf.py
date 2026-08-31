@@ -143,17 +143,20 @@ def _ip_addresses_in(text: str) -> list[str]:
 
 @given("the outbound private-range egress hatch is open")
 def given_egress_hatch_open(ctx: dict) -> None:
-    """Run this scenario with ADCP_OUTBOUND_ALLOW_PRIVATE on (salesagent-e6h0).
+    """Run this scenario with ADCP_OUTBOUND_ALLOW_PRIVATE on (GH #1757).
 
     The permissive posture is the DELIBERATE choice for a refusal that must mean
     the same thing everywhere: with the reserved-range gate disarmed, a refusal
     can only come from the causes that are immune to it — a blocked
-    cloud-metadata address, a host that does not resolve, and a plaintext http
-    scheme (checked before ``allow_private`` is read at all, at
-    ``src/core/security/egress/policy.py:322``). That is also the posture the
-    e2e stack runs in (this is the ONLY hatch left — the scheme hatch was
-    deleted, the seam now requires https unconditionally), so the in-process
-    transports and e2e_rest grade one production, not two.
+    cloud-metadata address, a host that does not resolve, a plaintext http
+    scheme (``_scheme_error`` in ``src/core/security/egress/policy.py``, checked
+    before ``allow_private`` is read at all), and a #974 supplement range such as
+    CGNAT 100.64.0.1, which ``adcp.signing`` does not classify at all and which
+    this repo's own ``_in_supplement_range`` refuses under every posture
+    (GH #1802). That is also the posture the e2e stack runs in (this
+    is the ONLY hatch left — the scheme hatch was deleted, the seam now requires
+    https unconditionally), so the in-process transports and e2e_rest grade one
+    production, not two.
     """
     ctx["env"].set_egress_hatches(private=True)
 

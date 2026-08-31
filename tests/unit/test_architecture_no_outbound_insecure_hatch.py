@@ -1,18 +1,18 @@
 """Structural guard: ADCP_OUTBOUND_ALLOW_INSECURE never comes back.
 
-salesagent-e6h0 deleted the scheme escape hatch entirely — both production
+GH #1757 deleted the scheme escape hatch entirely — both production
 read sites (``src/core/security/outbound_http.py``'s ``_require_tls``,
 ``src/core/webhook_validator.py``'s ``_require_https``) now require https
 unconditionally, and every test/infra site that used to set the flag either
-migrated to a real TLS-fronted origin (salesagent-40qh's primitive) or had its
+migrated to a real TLS-fronted origin (GH #1757's primitive) or had its
 assertion rewritten. A future change re-adding the env var to production code
 or to the compose/host-script/tox.ini config would silently reintroduce the
 plaintext-http escape hatch this ticket closed — this guard catches that at
 ``make quality`` time.
 
 ``.github/workflows/ci.yml``'s "creative" integration matrix group was the
-last holdout (salesagent-amht.1): it now consumes
-``scripts/creative-agent-stack.sh``'s own https TLS front (salesagent-40qh)
+last holdout (GH #1802): it now consumes
+``scripts/creative-agent-stack.sh``'s own https TLS front (GH #1757)
 via ``steps.creative_agent.outputs.url`` instead of a plaintext
 ``localhost:9999`` URL, so the flag has no remaining legitimate use anywhere
 in the repo.
@@ -83,7 +83,7 @@ def test_flag_does_not_reappear_in_production_or_infra_files() -> None:
     """None of the pinned production/infra files reference the deleted flag."""
     hits = find_flag_reintroductions(_REPO_ROOT, _MUST_NOT_CONTAIN)
     assert hits == [], (
-        f"ADCP_OUTBOUND_ALLOW_INSECURE reappeared in {hits} — salesagent-e6h0 deleted this "
+        f"ADCP_OUTBOUND_ALLOW_INSECURE reappeared in {hits} — GH #1757 deleted this "
         "escape hatch; re-adding it anywhere in these files silently reopens a plaintext-http "
         "bypass. If a file genuinely needs it again, that is a scope decision, not a silent revert."
     )
@@ -152,10 +152,15 @@ _ALLOWED_ALLOW_PRIVATE_SITES: frozenset[str] = frozenset(
         # policy here and nowhere else, so this is where the flag is read.
         "src/core/security/outbound_http.py",
         # Every origin in the e2e compose stack is on a private bridge network
-        # by construction, so the address gate would refuse all of them. The
-        # property that matters -- cloud-metadata addresses refused regardless
-        # -- holds with the hatch open, which is why the BDD egress scenarios
-        # pin it open rather than mocking a verdict.
+        # by construction, so the address gate would refuse all of them. TWO
+        # immunities survive the open hatch, and the BDD egress scenarios pin
+        # it open to grade them live rather than mocking a verdict:
+        # cloud-metadata addresses (the SDK's own check, ahead of the flag it
+        # reads) and the six #974 supplement ranges (this repo's own predicate,
+        # which sits outside the hatch entirely -- GH #1802). The
+        # second is the one this repo can regress on its own, and a regression
+        # there does NOT surface as a fast refusal: the address is accepted and
+        # dialled, so the scenario fails on a connect timeout instead.
         "docker-compose.e2e.yml",
         # pass_env, so the suites that run against that stack inherit it.
         "tox.ini",
