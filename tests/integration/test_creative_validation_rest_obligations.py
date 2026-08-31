@@ -197,7 +197,14 @@ class TestSyncCreativesRESTRoute:
                         "creative_id": "c_rest_sync_test",
                         "name": "REST Sync Test Creative",
                         "format_id": {"id": "display_300x250", "agent_url": DEFAULT_AGENT_URL},
-                        "media_url": "https://example.com/image.png",
+                        # `assets` is the AdCP 3.1.1 spelling; `media_url` is not a Creative
+                        # field in the pinned schema and never was one this route implemented.
+                        # It reached _impl only because the hand-written REST body typed
+                        # creatives as list[dict[str, Any]], so any key passed the boundary
+                        # untouched. The body is derived from the DTO now, and MCP has always
+                        # announced a typed Creative array, so both transports reject it in
+                        # dev/CI (extra="forbid"); production would ignore it (extra="ignore").
+                        "assets": build_assets(image_spec("image", url="https://example.com/image.png")),
                     }
                 ],
             )
