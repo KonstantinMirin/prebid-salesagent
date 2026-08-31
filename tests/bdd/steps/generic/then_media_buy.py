@@ -785,6 +785,13 @@ def then_error_has_retry_after(ctx: dict) -> None:
     call sites that still emit into the slot the spec does not model, and the
     reconstructed exception is the last resort for IMPL / no-wire scenarios
     (which have no envelope by definition).
+
+    **DORMANT — this body executes nowhere today.** ``then_media_buy`` is not in
+    ``tests/bdd/conftest.py``'s ``pytest_plugins``, so pytest-bdd never registers
+    this step; the ten feature usages either xfail at the harness gate (BR-UC-002)
+    or have no binding test module at all (BR-UC-016/020/022). Wiring the module
+    is #2132's scope. Stated here so a reader does not take the wire-authority
+    reasoning above as evidence that anything grades it.
     """
     from tests.bdd.steps._outcome_helpers import error_envelope_or_none
 

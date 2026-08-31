@@ -1,6 +1,6 @@
 """The webhook-capture / LocalOrigin TLS front, driven against the real production seam.
 
-salesagent-40qh (steps 1, 3, 4). The Core Invariant: every new TLS front the
+#1757 (steps 1, 3, 4). The Core Invariant: every new TLS front the
 e2e/bdd_e2e stack and its in-process fixtures gain must reuse the SAME
 generated CA/leaf material and the SAME trust mechanism (``SSL_CERT_FILE``),
 never a second parallel TLS mechanism, and no verification step may ever be
@@ -97,8 +97,8 @@ class TestLocalOriginTLSFront:
     """The primitive design steps 1, 3 and 4 create: a TLS-terminated ``LocalOrigin``.
 
     Every case opens the private-range hatch (loopback is a reserved address).
-    There is no scheme hatch to open or close anymore — salesagent-e6h0 deleted
-    it entirely, exactly because this front existing made it unnecessary.
+    There is no scheme hatch to open or close anymore — it was deleted
+    entirely, exactly because this front existing made it unnecessary.
     """
 
     @pytest.mark.parametrize(
@@ -111,7 +111,7 @@ class TestLocalOriginTLSFront:
         ``SSL_CERT_FILE`` trusts the generated CA — verification ON throughout,
         never ``verify=False`` anywhere in the call chain.
 
-        Parametrized over both files ``gen_test_tls`` produces (salesagent-amht.4):
+        Parametrized over both files ``gen_test_tls`` produces:
         the CA alone (``CA_CERT``) and the COMBINED bundle (``COMBINED_CERT``) —
         the literal file every dialing service's ``SSL_CERT_FILE`` actually points
         at in ``docker-compose.e2e.yml``. Proving only the CA-alone variant would
@@ -123,6 +123,16 @@ class TestLocalOriginTLSFront:
         gen_test_tls = load_gen_test_tls()
         gen_test_tls.ensure_test_tls()  # also (re)writes COMBINED_CERT as a side effect
         cert_path = getattr(gen_test_tls, cert_attr)
+        if cert_attr == "COMBINED_CERT":
+            # Without this the two arms are indistinguishable: _refresh_combined_cert
+            # returns silently when no public-root bundle is found, leaving COMBINED_CERT
+            # byte-identical to CA_CERT, and this arm then re-proves the ca-alone case
+            # while claiming to prove the outage in the docstring.
+            assert cert_path.read_bytes().count(b"-----BEGIN CERTIFICATE-----") > 1, (
+                f"{cert_path} holds only our private CA — the public roots half of the "
+                "bundle is missing, so SSL_CERT_FILE would again replace the process's "
+                "default cafile with a single-CA file"
+            )
         server_ctx = server_ssl_context(gen_test_tls)
 
         set_flags(monkeypatch, private=True)

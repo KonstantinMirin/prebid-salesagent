@@ -392,7 +392,7 @@ def _canonical_scheme(scheme: str) -> AuthenticationScheme:
     lookup that can drift. There used to be such a lookup here, mapping four
     Gherkin spellings onto two DB values; the drift it permitted is exactly how
     ``authentication_type="hmac"`` -- a fifth spelling matching nothing
-    production compares against -- reached the DB (salesagent-47n9.24, GH #1894).
+    production compares against -- reached the DB (GH #1894).
     A local table is not re-introduced: with none, a fifth spelling has nowhere
     to live.
     """
@@ -2144,7 +2144,7 @@ def then_hmac_computation(ctx: dict) -> None:
     Recomputes over the wire body (``deliveries[-1].body``), not a fresh
     ``json.dumps`` of the parsed payload — a recompute from the dict can
     silently agree with a sender that signed one serialization and
-    transmitted another, which is exactly the defect salesagent-47n9.1 fixed.
+    transmitted another, which is exactly the defect PR #1802 fixed.
     """
     import hashlib
     import hmac as hmac_lib
@@ -3237,6 +3237,10 @@ def _validate_reporting_webhook_credentials(ctx: dict, auth_scheme: str, credent
     accepted; an invalid one raises a ``ValidationError`` located on the credentials or
     scheme. Only credential/scheme errors count as the rejection under test; any other
     validation error means the test's base request is wrong (fail loudly).
+
+    FIXME(#2109): this grades a Pydantic constructor in the test process, not
+    production — nothing is dispatched, so the a2a/mcp/rest axis carries no
+    information for the 14 auth-scheme and credential rows that route here.
     """
     from datetime import UTC, datetime
 
