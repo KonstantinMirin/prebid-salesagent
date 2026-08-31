@@ -226,6 +226,44 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
     return _envelope_response(request, adcp_error_for(exc))
 
 
+#: Pydantic v2 error types that mean "the field is STRUCTURALLY fine, its VALUE is not".
+#: The pinned enums/error-code.json splits the two codes on exactly this line:
+#: VALIDATION_ERROR is "Request contains invalid field values ...", INVALID_REQUEST is
+#: "Request is malformed, missing required fields, or violates schema constraints".
+#:
+#: Deliberately an ALLOWLIST of value violations, not a denylist of structural ones: an
+#: unrecognised pydantic error type falls through to INVALID_REQUEST, which is the code
+#: this handler already emitted for everything, so a pydantic upgrade that adds a type
+#: cannot silently reclassify a rejection. Type-coercion failures (``*_type``,
+#: ``json_invalid``, ``model_attributes_type``) and structural failures (``missing``,
+#: ``extra_forbidden``, the ``union_tag_*`` family) stay INVALID_REQUEST by omission.
+_VALUE_VIOLATION_TYPES = frozenset(
+    {
+        # Closed vocabularies: the value is not one of the permitted members.
+        "enum",
+        "literal_error",
+        # Numeric range.
+        "greater_than",
+        "greater_than_equal",
+        "less_than",
+        "less_than_equal",
+        "multiple_of",
+        "finite_number",
+        # String shape.
+        "string_too_short",
+        "string_too_long",
+        "string_pattern_mismatch",
+        # Collection cardinality (minItems / maxItems).
+        "too_short",
+        "too_long",
+        # A field or model validator that raised ValueError -- a business-rule refusal,
+        # which is the second half of VALIDATION_ERROR's definition ("or violates business
+        # rules beyond schema validation").
+        "value_error",
+    }
+)
+
+
 @app.exception_handler(RequestValidationError)
 async def request_validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Translate FastAPI request-body schema failures into the AdCP envelope.
@@ -255,11 +293,27 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     # Code selection by failure semantics, grounded in the AdCP graded
     # error-compliance storyboard: a VALUE/enum/range violation on a
     # structurally-valid field is canonically VALIDATION_ERROR; a missing/
-    # malformed/unknown field (structural) is INVALID_REQUEST. The full
-    # value-vs-structural reclassification across all fields is a repo-wide
-    # follow-up; for now the attribution_window family — reconciled to
-    # VALIDATION_ERROR upstream in adcp-req — is mapped explicitly.
+    # malformed/unknown field (structural) is INVALID_REQUEST. That rule is now
+    # applied from the PYDANTIC ERROR TYPE (see _VALUE_VIOLATION_TYPES) rather
+    # than from a field-name prefix, which is what makes REST agree with the
+    # other transports instead of agreeing only about attribution_window.
+    #
+    # Why the prefix list had to go: REST bodies are DERIVED from their DTO now
+    # (src/routes/_derived_body.py), so a body field carries the DTO's annotation
+    # and FastAPI enforces the enum BEFORE any AdCP code runs. MCP and A2A hand the
+    # same value to the shared adcp_validation_boundary, which answers
+    # VALIDATION_ERROR. Classifying every FastAPI rejection as INVALID_REQUEST
+    # therefore made the SAME payload carry two different codes depending on
+    # transport -- caught by BR-UC-010 @T-UC-010-ext-d-invalid-value, which grades
+    # protocols:["marketing"] as VALIDATION_ERROR on all four transports and cites
+    # get-adcp-capabilities-request.json /properties/protocols/items/enum.
+    #
+    # attribution_window keeps its explicit mapping: those rejections are
+    # structural (a missing sub-field), not value violations, so the type rule
+    # alone would not reach them.
     if field and field.startswith("attribution_window"):
+        exc_cls = AdCPValidationError
+    elif str(first.get("type", "")) in _VALUE_VIOLATION_TYPES:
         exc_cls = AdCPValidationError
     else:
         exc_cls = AdCPInvalidRequestError
