@@ -781,7 +781,21 @@ class BaseTestEnv:
         # MCP tools accept individual params, not a request model.
         req = kwargs.pop("req", None)
         if req is not None and hasattr(req, "model_dump"):
+            # Narrowed to the tool's own parameters -- the same "DTO fields INTERSECT
+            # implementation arguments" rule production uses. The DTO is a SUPERSET of what
+            # a given tool implements (GetMediaBuysRequest declares include_history,
+            # pagination and more that get_media_buys does not take), so dumping it whole
+            # sends arguments the tool never advertised. In dev, extra="forbid" turns that
+            # into a VALIDATION_ERROR and the scenario fails for a reason it never intended
+            # to test; in production it would be silently ignored, which is worse -- the
+            # harness would be grading a request the buyer could not actually make.
+            import inspect as _inspect
+
             req_fields = req.model_dump(exclude_none=True)
+            tool_fn = getattr(self, "_mcp_tool_callable", None)
+            if tool_fn is not None:
+                accepted = set(_inspect.signature(tool_fn).parameters)
+                req_fields = {k: v for k, v in req_fields.items() if k in accepted}
             # kwargs override req fields (explicit > implicit)
             arguments = {**req_fields, **kwargs}
         else:

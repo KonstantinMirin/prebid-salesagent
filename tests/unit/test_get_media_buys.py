@@ -856,20 +856,41 @@ class TestGetMediaBuysResponseStructure:
 # ---------------------------------------------------------------------------
 
 
-class TestGetMediaBuysRequestRejectsInternalFlags:
-    """Regression: internal behavior flags must NOT be accepted by GetMediaBuysRequest.
+class TestGetMediaBuysRequestCarriesSpecFields:
+    """``include_snapshot`` is a SPEC field, so the request must carry it.
 
-    External callers must never control _impl behavior through the request object.
-    Flags like include_snapshot are passed as explicit _impl parameters by transport
-    wrappers, not embedded in the request.
+    This class previously asserted the opposite -- that GetMediaBuysRequest REJECTS
+    include_snapshot, on the reasoning that "external callers must never control _impl
+    behavior through the request object". AdCP 3.1.1 disagrees:
+    get-media-buys-request.json declares include_snapshot (alongside include_history,
+    include_webhook_activity, pagination and webhook_activity_limit), so it is buyer-facing
+    request data, not an internal flag.
+
+    The old belief was enforced by a hand-written GetMediaBuysRequest that subclassed
+    SalesAgentBaseModel instead of the library type and silently dropped six spec fields.
+    Restoring the inheritance made the spec's fields reachable and surfaced these tests as
+    encoding the wrong contract.
     """
 
-    def test_include_snapshot_rejected(self):
-        """include_snapshot must NOT be accepted by GetMediaBuysRequest."""
-        with pytest.raises(ValidationError):
-            GetMediaBuysRequest(include_snapshot=True)
+    def test_include_snapshot_is_accepted(self):
+        """The spec declares it, so the request model must take it."""
+        req = GetMediaBuysRequest(include_snapshot=True)
+        assert req.include_snapshot is True, (
+            "include_snapshot is declared in get-media-buys-request.json; refusing it means "
+            "a spec-conformant buyer cannot ask for snapshots"
+        )
 
-    def test_include_snapshot_false_also_rejected(self):
-        """Even include_snapshot=False must be rejected — the field doesn't belong here."""
+    def test_include_snapshot_false_is_accepted_and_preserved(self):
+        """False must round-trip as False, not be collapsed to the default."""
+        req = GetMediaBuysRequest(include_snapshot=False)
+        assert req.include_snapshot is False
+
+    def test_a_genuinely_unknown_field_is_still_rejected_in_dev(self):
+        """Widening to the spec must not become 'anything goes'.
+
+        Dev runs extra="forbid" (config.get_pydantic_extra_mode), so a field NEITHER the
+        spec nor this agent declares still fails fast here -- production's "ignore" is the
+        forward-compatibility half of that asymmetry, not a licence.
+        """
         with pytest.raises(ValidationError):
-            GetMediaBuysRequest(include_snapshot=False)
+            GetMediaBuysRequest(definitely_not_a_spec_field=True)

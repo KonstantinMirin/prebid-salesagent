@@ -373,6 +373,23 @@ class TestSchemaInheritance:
         # Each override must have a documented reason. Do NOT add new entries
         # without verifying the override is intentional.
         KNOWN_OVERRIDES: set[tuple[str, str]] = {
+            # RESHAPED AXIS: type widened, requiredness untouched.
+            # brand is a BrandReference object in AdCP 3.1.1 (core/brand-ref.json, whose
+            # `domain` is pinned to a lowercase-hostname pattern). This agent ALSO accepts
+            # the documented brand shorthand -- a bare domain, a URL, or a dict -- which
+            # to_brand_reference normalizes before the model is built.
+            #
+            # It is declared on the MODEL rather than only on the tool signature because the
+            # advertised shape is DERIVED from the model: if the model claimed only
+            # BrandReference while the tool accepted three forms, the advertised schema would
+            # be NARROWER than the implementation and FastMCP would reject the shorthand at
+            # the boundary before any tool code ran. That regression landed twice in
+            # salesagent-prkv.5 (18 mcp scenarios, then 16) before the widening moved here.
+            # Requiredness is NOT relaxed -- CreateMediaBuyRequest.brand stays required, as
+            # create-media-buy-request.json /required declares.
+            # Retiring the shorthand is a deletion here plus the tool signature.
+            ("CreateMediaBuyRequest", "brand"),
+            ("GetProductsRequest", "brand"),
             # Nested serialization overrides (Critical Pattern #4) —
             # Parent models re-declare list fields to use local subclass types
             ("GetMediaBuyDeliveryResponse", "media_buy_deliveries"),

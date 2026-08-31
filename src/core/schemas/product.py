@@ -6,6 +6,7 @@ All classes are re-exported from src.core.schemas for backward compatibility.
 
 from typing import Any
 
+from adcp.types import BrandReference as LibraryBrandReference
 from adcp.types import Catalog as LibraryCatalog
 from adcp.types import GetProductsResponse as LibraryGetProductsResponse
 from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
@@ -279,6 +280,24 @@ class GetProductsRequest(LibraryGetProductsRequest):
     push_notification_config is inherited from the adcp library parent (added in the
     6.6 SDK / spec 3.1.1); no local redeclaration.
     """
+
+    # Declared WIDER than the library on purpose, and declared HERE rather than only on the
+    # tool signature. AdCP 3.1.1 types brand as a BrandReference object; this agent also
+    # accepts the documented brand shorthand -- a bare domain string, a URL, or a dict --
+    # which `to_brand_reference` normalizes (lowercasing the host, stripping the scheme).
+    #
+    # The advertised shape is derived from THIS model, so if the model claimed only
+    # BrandReference while the tool accepted three forms, the advertised schema would be
+    # NARROWER than the implementation and FastMCP would reject the shorthand at the
+    # boundary before any tool code ran. That regression has now happened twice (18 mcp
+    # scenarios, then 16). Declaring the union here keeps advertised == accepted, which is
+    # the invariant that matters, and makes the non-spec extension VISIBLE in the model
+    # instead of hidden in a boundary helper -- so retiring it later is a one-line deletion
+    # here plus the tool signature, not an archaeology exercise.
+    brand: LibraryBrandReference | dict[str, Any] | str | None = Field(
+        default=None, description="Brand reference, or the shorthand this agent also accepts"
+    )
+
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 

@@ -56,6 +56,13 @@ class MediaBuyListDispatchMixin:
         """
         return self._run_a2a_handler("get_media_buys", GetMediaBuysResponse, **kwargs)
 
+    @property
+    def _mcp_tool_callable(self):
+        """The MCP tool this env dispatches -- its parameters are the accepted set."""
+        from src.core.tools.media_buy_list import get_media_buys
+
+        return get_media_buys
+
     def _call_list_mcp(self, **kwargs: Any) -> Any:
         """Dispatch get_media_buys through the REAL FastMCP ``Client`` pipeline.
 
@@ -108,7 +115,21 @@ class MediaBuyListDispatchMixin:
         """
         req = kwargs.get("req")
         if req is not None:
-            body = req.model_dump(mode="json", exclude_none=True)
+            # Narrowed to what the tool implements, the same "DTO fields INTERSECT
+            # parameters" rule the transports use. The DTO is a SUPERSET of what any one
+            # tool accepts -- GetMediaBuysRequest declares include_history,
+            # include_webhook_activity, pagination and more that get_media_buys does not
+            # take -- so dumping it whole sends fields the route rejects, and dev-mode
+            # extra="forbid" turns that into a VALIDATION_ERROR on a request the scenario
+            # never meant to make malformed.
+            import inspect as _inspect
+
+            from src.core.tools.media_buy_list import get_media_buys as _tool
+
+            accepted = set(_inspect.signature(_tool).parameters)
+            body = {
+                key: value for key, value in req.model_dump(mode="json", exclude_none=True).items() if key in accepted
+            }
         else:
             body = {}
             # "account" belongs here: the steps dispatch account={"account_id": ...}

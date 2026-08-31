@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 from adcp import Error as _LibraryError
 from adcp.types import AccountReference as LibraryAccountReference
+from adcp.types import BrandReference as LibraryBrandReference
 from adcp.types import (
     ContextObject,
     # DeliveryStatus / MediaBuyStatus are no longer referenced by a declaration in
@@ -43,6 +44,7 @@ from adcp.types import Format as LibraryFormat
 
 # Import types from stable API (per adcp 2.7.0+)
 from adcp.types import FormatId as LibraryFormatId
+from adcp.types import GetMediaBuysRequest as LibraryGetMediaBuysRequest
 from adcp.types import GetMediaBuysResponse as LibraryGetMediaBuysResponse
 from adcp.types import PackageRequest as LibraryPackageRequest
 
@@ -2177,6 +2179,19 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
     - reporting_webhook: dict (webhook configuration)
     """
 
+    # Same widening as GetProductsRequest.brand, for the same reason: this agent accepts the
+    # documented brand shorthand (bare domain, URL, or dict) which to_brand_reference
+    # normalizes, and the ADVERTISED shape is derived from this model. Declaring only the
+    # library's BrandReference would advertise narrower than the tool accepts and FastMCP
+    # would reject the shorthand at the boundary.
+    # REQUIRED, as the library declares it (create-media-buy-request.json /required lists
+    # brand). Only the TYPE is widened, never the requiredness -- redeclaring it optional
+    # would relax a spec constraint, which is the weakening the inheritance guard exists to
+    # catch and which broke test_brand_field_is_required_on_create_media_buy_request.
+    brand: LibraryBrandReference | dict[str, Any] | str = Field(
+        ..., description="Brand reference, or the shorthand this agent also accepts"
+    )
+
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     # AdCP 3.1.1 makes account and idempotency_key required (see the /required list of
@@ -3250,18 +3265,99 @@ class GetMediaBuysMediaBuy(AlwaysIncludeFieldsMixin, LibraryGetMediaBuysMediaBuy
         return result
 
 
-class GetMediaBuysRequest(SalesAgentBaseModel):
-    """Request to retrieve media buys.
+class ListTasksRequest(SalesAgentBaseModel):
+    """Request to list tasks -- OUR vocabulary, which is not yet the spec's.
 
-    Matches the adcp 3.6.0 GetMediaBuysRequest spec.
-    Defined locally because adcp 3.6.0 is not yet required.
+    The SDK ships a ListTasksRequest (filters, pagination, sort, include_history, account,
+    ext). This tool implements none of those: it takes object_id, object_type, status, limit
+    and offset. Registering against the SDK model would advertise their INTERSECTION --
+    ``context`` alone -- and the tool would be uncallable.
+
+    So this declares what we implement, and the gap is FILED, not hidden: implementing the
+    spec's filters/pagination/sort is the work that lets this model be deleted and the
+    library type used directly. Same re-base rule as GetTaskRequest -- when we implement the
+    spec shape, this becomes ``class ListTasksRequest(LibraryListTasksRequest)`` and the
+    local fields go.
     """
 
-    media_buy_ids: list[str] | None = Field(default=None, description="Specific media buy IDs to retrieve")
-    status_filter: Any | None = Field(default=None, description="Filter by status (MediaBuyStatus or list)")
-    account_id: str | None = Field(default=None, description="Account to filter to (legacy, prefer account)")
-    account: LibraryAccountReference | None = Field(default=None, description="Account reference (AdCP 3.x)")
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    object_id: str | None = Field(default=None, description="Filter to one object")
+    object_type: str | None = Field(default=None, description="Filter by object type")
+    status: str | None = Field(default=None, description="Filter by task status")
+    limit: int | None = Field(default=None, description="Maximum tasks to return")
+    offset: int | None = Field(default=None, description="Offset for paging")
     context: ContextObject | None = Field(default=None, description="Application-level context")
+
+
+class CompleteTaskRequestLocal(SalesAgentBaseModel):
+    """Request to complete a task -- OUR vocabulary, which is not the app CompleteTaskRequest.
+
+    ``src.core.schemas.CompleteTaskRequest`` declares resolution / resolution_detail /
+    resolved_by; this tool implements status / response_data / error_message. Registering
+    against that model would advertise ``task_id`` alone. The two vocabularies need
+    reconciling -- filed -- and until then this declares what the tool takes so the tool
+    stays callable and its advertised shape stays honest.
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    task_id: str = Field(..., description="The task to complete")
+    status: str | None = Field(default=None, description="Completion status")
+    response_data: dict[str, Any] | None = Field(default=None, description="Structured result payload")
+    error_message: str | None = Field(default=None, description="Failure detail, when the task failed")
+    context: ContextObject | None = Field(default=None, description="Application-level context")
+
+
+class GetTaskRequest(SalesAgentBaseModel):
+    """Request to retrieve one task.
+
+    Defined HERE because the pinned SDK (adcp 6.6.0, AdCP 3.1.1) ships no GetTaskRequest --
+    the "SDK does not provide a type the spec implies" case. OWNER DECISION 2026-08-31:
+    define ours now so get_task can register (a tool without a DTO cannot publish a derived
+    shape and is refused at registration), and when the SDK ships one, make it the BASE
+    CLASS of this model rather than maintaining a parallel definition:
+
+        class GetTaskRequest(LibraryGetTaskRequest):   # + our additions, if any
+
+    Fields mirror what get_task implements today; keep them in step with the tool's
+    arguments, since the advertised shape is their intersection.
+    """
+
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    task_id: str = Field(..., description="The task to retrieve")
+    context: ContextObject | None = Field(default=None, description="Application-level context")
+
+
+class GetMediaBuysRequest(LibraryGetMediaBuysRequest):
+    """Extends the library GetMediaBuysRequest.
+
+    Was hand-defined against SalesAgentBaseModel "because adcp 3.6.0 is not yet required" --
+    a comment that outlived its pin. The SDK (adcp 6.6.0, AdCP 3.1.1) ships this type, and
+    re-declaring the field set NARROWED it: ext, include_history, include_snapshot,
+    include_webhook_activity, pagination and webhook_activity_limit are all in
+    get-media-buys-request.json and were absent here, so they could not be advertised or
+    accepted on any transport. Inheriting is what critical pattern #1 requires, and it is
+    what stops the app model from silently shrinking the spec.
+
+    Adds:
+    - account_id: legacy non-spec filter, kept for callers that predate `account`
+
+    status_filter is NOT overridden. The hand-written class typed it ``Any`` "to accept a
+    MediaBuyStatus or a list", but the library already types it
+    ``MediaBuyStatus | StatusFilter | None`` -- which is that union, precisely. Re-declaring
+    it as ``Any`` only WEAKENED the constraint, which is what the schema-inheritance guard
+    exists to stop.
+    """
+
+    # The library sets extra="allow"; this agent uses the ENVIRONMENT-based mode (critical
+    # pattern #7): "ignore" in production for forward compatibility, "forbid" elsewhere so a
+    # typo or a stale field fails fast in dev and CI. Inheriting the library's config
+    # silently opted this model out of that -- an unknown field was accepted everywhere.
+    model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    account_id: str | None = Field(default=None, description="Account to filter to (legacy, prefer account)")
 
 
 class GetMediaBuysResponse(NestedModelSerializerMixin, LibraryGetMediaBuysResponse):

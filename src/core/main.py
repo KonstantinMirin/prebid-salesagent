@@ -329,8 +329,21 @@ def get_strategy_manager(context: Context | None) -> StrategyManager:
 # get agent-facing descriptions and annotations (readOnlyHint, destructiveHint,
 # idempotentHint). Non-matching tools keep their existing docstrings.
 from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
+
+# Request DTOs named explicitly for tools that do not reach one through a builder. The
+# advertised shape is "DTO fields INTERSECT the implementation's arguments", so the DTO is
+# not optional -- _register_tool refuses a tool without one.
 from mcp.types import ToolAnnotations
 
+from src.core.schemas import (
+    CompleteTaskRequestLocal,
+    GetTaskRequest,
+    ListAuthorizedPropertiesRequest,
+    SyncCreativesRequest,
+)
+from src.core.schemas import (
+    ListTasksRequest as LocalListTasksRequest,
+)
 from src.core.tool_error_logging import with_error_logging
 from src.core.tools._announced_shape import apply_dto_announced_shape
 from src.core.tools.accounts import list_accounts, sync_accounts
@@ -366,13 +379,17 @@ _sdk_tool_defs = {td["name"]: td for td in ADCP_TOOL_DEFINITIONS}
 _DTO_ANNOUNCED_TOOLS = frozenset({"get_adcp_capabilities", "get_products", "list_creative_formats", "list_creatives"})
 
 
-def _register_tool(fn: Any) -> None:
+def _register_tool(fn: Any, dto: type | None = None) -> None:
     """Register an MCP tool with SDK description, annotations and ADVERTISED SHAPE.
 
-    The shape is derived, not hand-written: the parameters this tool accepts, typed from
-    the SDK request DTO wherever it declares the field (see ``_announced_shape``). A DTO
-    field the tool does not implement is simply absent from the signature and therefore
-    never advertised, with no list of exclusions to maintain.
+    ``dto`` is REQUIRED -- either passed explicitly or resolvable from the builder the
+    wrapper calls. A tool that cannot name its request DTO cannot be registered.
+
+    This used to fall back silently: ``apply_dto_announced_shape`` returned False and
+    registration proceeded with the hand-written signature, so five tools quietly kept an
+    underived shape and nothing said so. A guard listing them would only have recorded the
+    violation; refusing to register is what makes the underived state unreachable. The cost
+    is that adding a tool now forces the DTO decision up front, which is the point.
     """
     tool_name = fn.__name__
     sdk_def = _sdk_tool_defs.get(tool_name)
@@ -382,7 +399,14 @@ def _register_tool(fn: Any) -> None:
         if sdk_def.get("annotations"):
             kwargs["annotations"] = ToolAnnotations(**sdk_def["annotations"])
     registered = with_error_logging(fn)
-    apply_dto_announced_shape(registered, fn)
+    if not apply_dto_announced_shape(registered, fn, dto):
+        raise RuntimeError(
+            f"{tool_name} cannot be registered: no request DTO. Its advertised shape is "
+            f"'DTO fields INTERSECT the implementation's arguments', so without a DTO there "
+            f"is nothing to derive from and the tool would publish a hand-written shape that "
+            f"can drift from the spec. Give it a build_*_request builder, or pass the model "
+            f"explicitly: _register_tool({tool_name}, SomeRequest)."
+        )
     mcp.tool(**kwargs)(registered)
 
 
@@ -391,14 +415,14 @@ _register_tool(sync_accounts)
 _register_tool(get_adcp_capabilities)
 _register_tool(get_products)
 _register_tool(list_creative_formats)
-_register_tool(sync_creatives)
+_register_tool(sync_creatives, SyncCreativesRequest)
 _register_tool(list_creatives)
-_register_tool(list_authorized_properties)
+_register_tool(list_authorized_properties, ListAuthorizedPropertiesRequest)
 _register_tool(create_media_buy)
 _register_tool(update_media_buy)
 _register_tool(get_media_buy_delivery)
 _register_tool(get_media_buys)
 _register_tool(update_performance_index)
-_register_tool(list_tasks)
-_register_tool(get_task)
-_register_tool(complete_task)
+_register_tool(list_tasks, LocalListTasksRequest)
+_register_tool(get_task, GetTaskRequest)
+_register_tool(complete_task, CompleteTaskRequestLocal)

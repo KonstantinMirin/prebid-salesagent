@@ -39,16 +39,12 @@ from __future__ import annotations
 import inspect
 import re
 import sys
-import types
 import typing
 from collections.abc import Callable
 from typing import Annotated, Any
 
 from pydantic import BaseModel
 from pydantic import Field as PydanticField
-
-#: Union origins, for deciding whether adopting a DTO type would narrow acceptance.
-_UNION_ORIGINS = (typing.Union, types.UnionType)
 
 
 def _is_injected(parameter: inspect.Parameter) -> bool:
@@ -68,7 +64,17 @@ def _is_injected(parameter: inspect.Parameter) -> bool:
     # advertising it.
     from fastmcp.server.context import Context as _FastMCPContext
 
-    return any(arg is _FastMCPContext for arg in (annotation, *typing.get_args(annotation)))
+    if any(arg is _FastMCPContext for arg in (annotation, *typing.get_args(annotation))):
+        return True
+    # Under `from __future__ import annotations` the annotation arrives as a STRING, so
+    # get_args() returns () and the type test above sees nothing. Modules differ on this,
+    # so the check must handle both: get_media_buys.ctx is 'Context | ToolContext | None'
+    # while get_adcp_capabilities.ctx is the resolved class. Missing the string form drops
+    # ctx from the derived signature, FastMCP then has nothing to inject, and every call
+    # arrives without identity -- AUTH_MISSING on a properly authenticated request.
+    if isinstance(annotation, str):
+        return bool(re.search(r"\bContext\b", annotation))
+    return False
 
 
 #: Names a builder. The tool -> DTO edge is read from the ARTIFACT -- the builder the
@@ -106,21 +112,6 @@ def request_model_for(fn: Callable[..., Any]) -> type[BaseModel] | None:
     return model if isinstance(model, type) and issubclass(model, BaseModel) else None
 
 
-def _union_members(annotation: Any) -> frozenset[Any]:
-    """The set of types an annotation admits, seeing through Annotated and unions."""
-    if typing.get_origin(annotation) is Annotated:
-        annotation = typing.get_args(annotation)[0]
-    args = typing.get_args(annotation)
-    if args and typing.get_origin(annotation) in _UNION_ORIGINS:
-        return frozenset(args)
-    return frozenset({annotation})
-
-
-def _would_narrow(declared: Any, dto: Any) -> bool:
-    """True when adopting ``dto`` would REJECT input ``declared`` accepts."""
-    return bool(_union_members(declared) - _union_members(dto))
-
-
 def _declared_description(annotation: Any) -> str | None:
     """The description already on the tool's own ``Annotated[...]``, if any.
 
@@ -141,17 +132,11 @@ def _declared_description(annotation: Any) -> str | None:
 def derived_signature(fn: Callable[..., Any], model: type[BaseModel]) -> inspect.Signature:
     """``fn``'s own parameters, retyped from ``model`` wherever it declares the field.
 
-    The DTO's type is adopted only when it does NOT narrow what the tool already accepts.
-    Some parameters deliberately admit more than the DTO: ``get_products.brand`` takes
-    ``BrandReference | dict | str`` so a buyer can pass the documented brand shorthand
-    ("acme.com"), while the DTO declares ``BrandReference`` alone. Narrowing the ADVERTISED
-    type there does not merely relabel it -- FastMCP validates against the advertised
-    schema, so the shorthand starts being REJECTED at the boundary. That is a buyer-visible
-    behaviour change wearing the costume of a type annotation, and it broke 18 brand
-    shorthand scenarios on mcp the first time this was applied.
-
-    Where the tool accepts a superset, its own annotation stands and only the DTO's
-    DESCRIPTION is adopted: the advertised schema keeps telling the truth about what lands.
+    The advertised type is the DTO's, always. Where this agent accepts MORE than the library
+    (the brand shorthand), the widening is declared ON THE MODEL, so advertised == accepted
+    without the derivation needing a narrowing rule. An earlier version guarded the narrow
+    direction here instead; that put the exception in the wrong place and the model went on
+    claiming a shape the tool did not implement.
     """
     signature = inspect.signature(fn)
     parameters = []
@@ -175,13 +160,15 @@ def derived_signature(fn: Callable[..., Any], model: type[BaseModel]) -> inspect
     return signature.replace(parameters=parameters)
 
 
-def apply_dto_announced_shape(target: Callable[..., Any], source_fn: Callable[..., Any]) -> bool:
+def apply_dto_announced_shape(
+    target: Callable[..., Any], source_fn: Callable[..., Any], dto: type[BaseModel] | None = None
+) -> bool:
     """Point ``target``'s advertised signature at the DTO. True when one was applied.
 
     ``target`` is what gets registered (the error-logging wrapper); ``source_fn`` is the
     undecorated tool, whose body names the builder.
     """
-    model = request_model_for(source_fn)
+    model = dto or request_model_for(source_fn)
     if model is None:
         return False
     signature = derived_signature(source_fn, model)

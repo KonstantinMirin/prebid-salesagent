@@ -5,10 +5,10 @@ Three properties, each of which failed at least once while this was being built:
 1. The derivation actually reaches FastMCP. Setting ``__signature__`` alone looks right
    under ``inspect.signature`` and changes nothing, because FastMCP resolves types with
    ``typing.get_type_hints`` (which reads ``__annotations__``).
-2. It never NARROWS. Adopting a DTO type where the tool deliberately accepts more turns a
-   type annotation into a buyer-visible rejection: doing that to ``get_products.brand``
-   broke 18 brand-shorthand scenarios on mcp, because FastMCP validates against the
-   advertised schema.
+2. Advertised == accepted. The advertised type is the DTO's, so where this agent accepts
+   more than the library (the brand shorthand) the widening is declared ON THE MODEL. If the
+   model claims less than the tool implements, FastMCP rejects valid input at the boundary
+   before any tool code runs -- that regression happened twice here, 18 scenarios then 16.
 3. A DTO field the tool does not accept is never advertised -- with no hand-maintained
    list of exclusions. Absence from the signature IS the statement.
 """
