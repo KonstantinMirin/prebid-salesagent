@@ -122,7 +122,7 @@ def test_update_media_buy_with_database_persisted_buy(test_tenant_setup):
             end_date=today + timedelta(days=30),
             start_time=today,
             end_time=today + timedelta(days=30),
-            end_time="2026-12-01T00:00:00Z",
+            budget=1000.0,
             currency="USD",
             raw_request={},
         )
