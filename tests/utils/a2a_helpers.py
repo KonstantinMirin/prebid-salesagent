@@ -17,26 +17,21 @@ from pydantic import BaseModel
 from src.a2a_server.adcp_a2a_server import restore_a2a_integer_types
 
 
-def assert_delivery_forwarded_account(mock_delivery, expected_account) -> None:
+def assert_delivery_forwarded_account(mock_delivery, expected_account, **forwarded) -> None:
     """Assert ``core_get_media_buy_delivery_tool`` was called once forwarding ``expected_account``.
 
-    Every other kwarg is ``ANY`` — the contract being pinned is that the *validated*
-    ``AccountReference`` reaches the core tool, not the raw dict that crashed
-    ``resolve_account`` (``account_ref.root`` on a dict). Shared by the handler-level
-    unit tests and the ``on_message_send`` wire test so the 10-kwarg assertion lives once.
+    The contract being pinned is that the *validated* ``AccountReference`` reaches the core
+    tool, not the raw dict that crashed ``resolve_account`` (``account_ref.root`` on a dict).
+    Shared by the handler-level unit tests and the ``on_message_send`` wire test so the
+    assertion lives once.
+
+    ``forwarded`` names the OTHER fields this caller's payload should produce. The A2A
+    handler now selects the request off ``GetMediaBuyDeliveryRequest`` intersected with the
+    callee's signature, so a field the buyer did not send is ABSENT from the call rather than
+    passed as an explicit ``None`` — which makes the call set exactly checkable. It used to be
+    eight blanket ``ANY``s, which passed whatever the handler happened to forward.
     """
-    mock_delivery.assert_called_once_with(
-        media_buy_ids=ANY,
-        status_filter=ANY,
-        start_date=ANY,
-        end_date=ANY,
-        reporting_dimensions=ANY,
-        attribution_window=ANY,
-        include_package_daily_breakdown=ANY,
-        account=expected_account,
-        context=ANY,
-        identity=ANY,
-    )
+    mock_delivery.assert_called_once_with(account=expected_account, identity=ANY, **forwarded)
 
 
 def extract_data_from_artifact(artifact: Artifact) -> dict[str, Any]:

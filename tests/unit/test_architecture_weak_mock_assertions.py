@@ -44,7 +44,6 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_a2a_brand_manifest_parameter.py", "test_handle_get_products_skill_extracts_all_parameters"),
     ("tests/unit/test_a2a_brand_manifest_parameter.py", "test_handle_get_products_skill_forwards_property_list"),
     ("tests/unit/test_a2a_brand_manifest_parameter.py", "test_handle_get_products_skill_passes_brand"),
-    ("tests/unit/test_a2a_parameter_mapping.py", "test_get_media_buy_delivery_optional_media_buy_ids"),
     ("tests/unit/test_a2a_parameter_mapping.py", "test_get_media_buy_delivery_uses_plural_media_buy_ids"),
     ("tests/unit/test_a2a_parameter_mapping.py", "test_update_media_buy_backward_compatibility_with_updates"),
     ("tests/unit/test_a2a_parameter_mapping.py", "test_update_media_buy_uses_packages_parameter"),
