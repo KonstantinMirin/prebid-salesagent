@@ -511,6 +511,8 @@ class TestUpdateMediaBuyCreativeAssignments:
         package_id = create_result.response.packages[0].package_id
 
         update_req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id=media_buy_id,
             packages=[
                 {
@@ -549,6 +551,8 @@ class TestUpdateMediaBuyCreativeAssignments:
         package_id = create_result.response.packages[0].package_id
 
         update_req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id=media_buy_id,
             packages=[
                 {
@@ -925,6 +929,8 @@ class TestUpdateMediaBuyOwnership:
             tenant=mb_tenant,
         )
         update_req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id=media_buy_id,
             paused=True,
         )
@@ -974,6 +980,8 @@ class TestUpdateMediaBuyAdapterError:
             mock_get_adapter.return_value = mock_adapter
 
             update_req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id=media_buy_id,
                 paused=True,
             )
@@ -1019,7 +1027,12 @@ class TestUpdateMediaBuyMissingPackageId:
         from src.core.schemas import UpdateMediaBuyRequest
 
         with pytest.raises(AdCPInvalidRequestError):
-            UpdateMediaBuyRequest(media_buy_id="mb_x", packages=[{"budget": 5000.0}])
+            UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id="mb_x",
+                packages=[{"budget": 5000.0}],
+            )
 
     def test_package_update_with_buyer_ref_but_no_package_id_is_rejected(self):
         """UC-003-H02: a package update identified by buyer_ref (not package_id) is
@@ -1037,7 +1050,12 @@ class TestUpdateMediaBuyMissingPackageId:
         from src.core.schemas import UpdateMediaBuyRequest
 
         with pytest.raises(AdCPInvalidRequestError):
-            UpdateMediaBuyRequest(media_buy_id="mb_x", packages=[{"buyer_ref": "pkg_ref_1", "budget": 5000.0}])
+            UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id="mb_x",
+                packages=[{"buyer_ref": "pkg_ref_1", "budget": 5000.0}],
+            )
 
 
 class TestGetMediaBuysStatusIsDateRefined:

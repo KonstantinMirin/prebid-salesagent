@@ -53,6 +53,9 @@ class TestA2AParameterMapping:
             # Simulate A2A request with AdCP v2.0+ 'packages' field
             parameters = {
                 "media_buy_id": "mb_123",
+                # AdCP 3.1.1 /required on update-media-buy-request.json
+                "account": {"account_id": "acct_test"},
+                "idempotency_key": "test-idem-key-0001",
                 "paused": False,  # adcp 2.12.0+: paused=False means resume
                 "packages": [{"package_id": "pkg_1", "paused": False}],  # AdCP v2.12.0+ field name
             }
@@ -101,6 +104,9 @@ class TestA2AParameterMapping:
             # Legacy request format with 'updates' wrapper
             parameters = {
                 "media_buy_id": "mb_123",
+                # AdCP 3.1.1 /required on update-media-buy-request.json
+                "account": {"account_id": "acct_test"},
+                "idempotency_key": "test-idem-key-0001",
                 "updates": {
                     "packages": [{"package_id": "pkg_1", "budget": 5000.0, "status": "active"}]
                 },  # Legacy wrapper

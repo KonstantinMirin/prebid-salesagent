@@ -2489,21 +2489,15 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # AdCP 3.1.1 makes account and idempotency_key required (see /required in the
-    # request schema).  Override as optional:
-    # identity is resolved at the transport boundary, and update_media_buy's
-    # required-key enforcement is a deliberate fast-follow — create_media_buy
-    # enforces it today; the update BDD contract still encodes optional keys.
-    # Removable when the update BDD contract requires keys (the update_media_buy
-    # required-key fast-follow), at which point the idempotency_key override goes
-    # away and the library's required field applies.
-    account: LibraryAccountReference | None = None  # type: ignore[assignment]
-    # Optional on update (identity resolves at the boundary). When a key IS
-    # provided it must satisfy the AdCP idempotency_key constraint
-    # (minLength 16, maxLength 255, ^[A-Za-z0-9_.:-]{16,255}$); enforced by
-    # ``_check_idempotency_key`` below so a violation surfaces a buyer-facing
-    # VALIDATION_ERROR + suggestion (a bare Field constraint cannot carry one).
-    idempotency_key: str | None = None  # type: ignore[assignment]
+    # account and idempotency_key are REQUIRED by AdCP 3.1.1
+    # (media-buy/update-media-buy-request.json /required = [idempotency_key, account,
+    # media_buy_id]) and are inherited as required from the library type. They were
+    # overridden to optional here, with the override itself noting it should go away "when
+    # the update BDD contract requires keys". Relaxing a REQUIRED field is not a neutral
+    # convenience: the spec makes idempotency_key CLIENT-generated so that resending after a
+    # lost response is at-most-once, and a key we do not demand is a guarantee we do not
+    # provide -- a retried update executes twice. Our job on a required field is compliance,
+    # not judgement, so the overrides are gone.
 
     # Override datetime fields to accept raw strings (A2A path sends ISO strings)
     start_time: datetime | Literal["asap"] | None = None  # type: ignore[assignment]

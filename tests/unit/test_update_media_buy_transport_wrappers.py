@@ -95,6 +95,8 @@ def test_mcp_wrapper_preserves_existing_currency_for_float_budget():
     with uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch:
         result = asyncio.run(
             update_media_buy(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_transport",
                 budget=5000.0,
                 ctx=mock_ctx,

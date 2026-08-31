@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from adcp import PushNotificationConfig
 from adcp.server.helpers import MEDIA_BUY_STATE_MACHINE, is_terminal_status, valid_actions_for_status
+from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import MediaBuyStatus
 from pydantic import Field
@@ -1410,6 +1411,7 @@ def _normalize_pacing(pacing: str | None) -> Literal["even", "asap", "daily_budg
 
 def _build_update_request(
     media_buy_id: str | None = None,
+    account: Any = None,
     paused: bool | None = None,
     flight_start_date: str | None = None,
     flight_end_date: str | None = None,
@@ -1468,6 +1470,8 @@ def _build_update_request(
 
     # Build request with only non-None values (strict validation in dev mode)
     request_params: dict[str, Any] = {}
+    if account is not None:
+        request_params["account"] = account
     if media_buy_id is not None:
         request_params["media_buy_id"] = media_buy_id
     if paused is not None:
@@ -1509,6 +1513,7 @@ def _build_update_request(
 
 async def update_media_buy(
     media_buy_id: Annotated[str | None, Field(description="Publisher media buy ID to update")] = None,
+    account: LibraryAccountReference | None = None,
     paused: Annotated[bool | None, Field(description="True to pause campaign delivery, False to resume")] = None,
     flight_start_date: Annotated[str | None, Field(description="New campaign start date in YYYY-MM-DD format")] = None,
     flight_end_date: Annotated[str | None, Field(description="New campaign end date in YYYY-MM-DD format")] = None,
@@ -1562,6 +1567,7 @@ async def update_media_buy(
     # FastMCP already coerced JSON inputs to typed Pydantic models
     req = _build_update_request(
         media_buy_id=media_buy_id,
+        account=account,
         paused=paused,
         flight_start_date=flight_start_date,
         flight_end_date=flight_end_date,
@@ -1588,6 +1594,7 @@ async def update_media_buy(
 
 def update_media_buy_raw(
     media_buy_id: str | None = None,
+    account: LibraryAccountReference | None = None,
     paused: bool = None,
     flight_start_date: str = None,
     flight_end_date: str = None,
@@ -1642,6 +1649,7 @@ def update_media_buy_raw(
     """
     req = _build_update_request(
         media_buy_id=media_buy_id,
+        account=account,
         paused=paused,
         flight_start_date=flight_start_date,
         flight_end_date=flight_end_date,

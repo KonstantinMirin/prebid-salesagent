@@ -111,7 +111,12 @@ class TestTypedAdCPErrorRaises:
         """
         identity = typed_raise_setup
         # update_media_buy needs ≥1 updatable field; ``paused`` passes pre-lookup validation.
-        req = UpdateMediaBuyRequest(media_buy_id="mb_nonexistent_typed_raise_pin", paused=True)
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
+            media_buy_id="mb_nonexistent_typed_raise_pin",
+            paused=True,
+        )
 
         with pytest.raises(AdCPMediaBuyNotFoundError) as exc_info:
             _update_media_buy_impl(req=req, identity=identity, context_id=None)

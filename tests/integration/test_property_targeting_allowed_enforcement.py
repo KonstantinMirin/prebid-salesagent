@@ -227,6 +227,8 @@ def test_update_rejects_property_list_when_product_disallows(property_targeting_
     media_buy_id = _seed_media_buy(TENANT_ID, "prod_no_property_targeting")
 
     request = UpdateMediaBuyRequest(
+        account={"account_id": "acct_test"},
+        idempotency_key="test-idem-key-0001",
         media_buy_id=media_buy_id,
         packages=[
             {
@@ -264,6 +266,8 @@ def test_update_accepts_collection_list_only(property_targeting_tenant):
     media_buy_id = _seed_media_buy(TENANT_ID, "prod_no_property_targeting", media_buy_id="mb_collection_only")
 
     request = UpdateMediaBuyRequest(
+        account={"account_id": "acct_test"},
+        idempotency_key="test-idem-key-0001",
         media_buy_id=media_buy_id,
         packages=[
             {

@@ -131,6 +131,8 @@ class TestUpdateMediaBuyDryRunNoPersistence:
 
             # Execute — impl now accepts identity instead of ctx
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_existing_123",
                 paused=True,
                 packages=[{"package_id": "pkg_1", "paused": True}],

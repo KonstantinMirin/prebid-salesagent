@@ -298,7 +298,9 @@ class TestSchemaConstructionValidation:
         from src.core.schemas import UpdateMediaBuyRequest
 
         # Test with only media_buy_id (required via oneOf constraint)
-        req = UpdateMediaBuyRequest(media_buy_id="test_buy_123")
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="test_buy_123"
+        )
 
         assert req.media_buy_id == "test_buy_123"
         assert req.paused is None  # adcp 2.12.0+: replaced 'active' with 'paused'
@@ -346,7 +348,9 @@ class TestParameterToSchemaMapping:
         }
 
         # Create request with valid fields only
-        req = UpdateMediaBuyRequest(**tool_params)
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", **tool_params
+        )
 
         # Valid fields should be set
         assert req.media_buy_id == "test_buy_123"

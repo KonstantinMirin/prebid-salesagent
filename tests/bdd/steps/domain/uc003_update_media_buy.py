@@ -801,7 +801,9 @@ def when_send_update_request(ctx: dict) -> None:
             if isinstance(pkg, dict) and "package_id" in pkg:
                 pkg["package_id"] = _resolve_package_id(ctx, pkg["package_id"])
     try:
-        req = UpdateMediaBuyRequest(**update_kwargs)
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", **update_kwargs
+        )
     except ValidationError as e:
         # Schema validation rejects the request before production code runs.
         # Store as ctx["error"] so Then steps can assert on it.

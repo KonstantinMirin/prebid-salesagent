@@ -463,7 +463,6 @@ class TestSchemaInheritance:
             # discriminator union at all. Deleting the redeclaration restores enum
             # validation and will surface any caller passing an arbitrary string.
             ("GetProductsRequest", "buying_mode"),
-            ("SyncCreativesRequest", "account"),  # optional override (library requires it)
             ("UpdateMediaBuyRequest", "end_time"),  # datetime|None (library uses AwareDatetime)
             ("UpdateMediaBuyRequest", "start_time"),  # datetime|Literal["asap"]|None (wider type)
             # AdCP 3.1.1 field overrides — the library made these required; we keep them
@@ -472,9 +471,6 @@ class TestSchemaInheritance:
             # (CreateMediaBuyRequest.idempotency_key now inherits the required field)
             ("Product", "reporting_capabilities"),  # optional override (not all products have it)
             ("SyncAccountsRequest", "idempotency_key"),  # optional override (required-key fast-follow)
-            ("SyncCreativesRequest", "idempotency_key"),  # optional override (required-key fast-follow)
-            ("UpdateMediaBuyRequest", "account"),  # optional override (resolved from identity)
-            ("UpdateMediaBuyRequest", "idempotency_key"),  # optional override (required-key fast-follow)
             # Pattern #4: ListAccountsResponse.accounts uses local Account subclass
             ("ListAccountsResponse", "accounts"),
             # Pattern #4: the get_media_buys item chain. ALL THREE narrowings below are

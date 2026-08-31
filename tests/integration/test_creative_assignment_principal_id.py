@@ -354,6 +354,8 @@ class TestCreativeAssignmentPrincipalIdUpdate:
 
         # Step 2: Update the media buy to add creative_ids
         update_req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id=media_buy_id,
             packages=[
                 {

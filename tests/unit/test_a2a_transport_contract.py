@@ -384,7 +384,15 @@ class TestA2AResponseShape:
             revision=1,
         )
 
-        payload = _build_jsonrpc("update_media_buy", {"media_buy_id": "mb-test-1", "paused": False})
+        payload = _build_jsonrpc(
+            "update_media_buy",
+            {
+                "account": {"account_id": "acct_test"},
+                "idempotency_key": "test-idem-key-0001",
+                "media_buy_id": "mb-test-1",
+                "paused": False,
+            },
+        )
         response = client.post("/a2a", json=payload, headers=auth_headers)
         body = response.json()
 
@@ -428,7 +436,10 @@ class TestA2AResponseShape:
 
         payload = _build_jsonrpc(
             "update_performance_index",
-            {"media_buy_id": "mb-test-1", "performance_data": [{"product_id": "p1", "performance_index": 1.2}]},
+            {
+                "media_buy_id": "mb-test-1",
+                "performance_data": [{"product_id": "p1", "performance_index": 1.2}],
+            },
         )
         response = client.post("/a2a", json=payload, headers=auth_headers)
         body = response.json()

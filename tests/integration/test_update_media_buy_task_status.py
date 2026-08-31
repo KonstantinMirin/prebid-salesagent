@@ -47,6 +47,8 @@ class TestUpdateMediaBuyWireTransportStatus:
         from src.core.schemas import UpdateMediaBuyRequest
 
         return UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id=media_buy.media_buy_id,
             budget=9999.0,
         )

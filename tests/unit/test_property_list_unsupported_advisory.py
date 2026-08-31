@@ -248,6 +248,8 @@ class TestUpdateRequestPackagesFlow:
 
     def test_advisory_fires_through_real_update_request(self):
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_1",
             packages=[
                 {
@@ -268,7 +270,9 @@ class TestUpdateRequestPackagesFlow:
     def test_update_without_packages_returns_empty(self):
         """An update with no ``packages`` (e.g. ``paused: true``) has nothing
         to advise about."""
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True)
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="mb_1", paused=True
+        )
         advisories = build_property_list_unsupported_advisories(req.packages, False)
         assert advisories == []
 

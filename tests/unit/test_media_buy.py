@@ -1357,10 +1357,30 @@ class TestIdempotencyKeyRequired:
         req = CreateMediaBuyRequest(**self._kwargs(idempotency_key="buy-2026-q3-abc123def"))
         assert req.idempotency_key == "buy-2026-q3-abc123def"
 
-    def test_update_request_key_still_optional(self):
-        """update_media_buy required-key enforcement is a deliberate fast-follow."""
-        req = UpdateMediaBuyRequest(media_buy_id="mb_update_optional")
-        assert req.idempotency_key is None
+    def test_update_request_requires_the_key_too(self):
+        """The update-side "fast-follow" is done: the key is REQUIRED there as well.
+
+        This asserted the opposite -- that update_media_buy "stays optional" -- which was
+        true only as a deferral, not as a contract. AdCP 3.1.1
+        media-buy/update-media-buy-request.json /required is
+        [idempotency_key, account, media_buy_id], and the field exists so that a retry after
+        a lost response is at-most-once. Leaving it optional meant a retried update executed
+        twice, so the deferral had a live cost and the test pinned it in place.
+        """
+        with pytest.raises(ValidationError) as exc_info:
+            UpdateMediaBuyRequest(account={"account_id": "acct_test"}, media_buy_id="mb_update_required")
+
+        assert "idempotency_key" in str(exc_info.value)
+
+    def test_update_request_accepts_a_spec_shaped_key(self):
+        """And a well-formed key is accepted -- the requirement is not merely strictness."""
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
+            media_buy_id="mb_update_ok",
+        )
+
+        assert req.idempotency_key == "test-idem-key-0001"
 
 
 class TestCreateMediaBuyIdempotency:
@@ -1702,7 +1722,12 @@ class TestUpdateMediaBuySchemaCompliance:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-request.json
         Covers: UC-003-MAIN-01
         """
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", packages=[{"package_id": "pkg_1"}])
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
+            media_buy_id="mb_1",
+            packages=[{"package_id": "pkg_1"}],
+        )
         assert req.media_buy_id == "mb_1"
 
     def test_update_request_parses_iso_datetime_strings(self):
@@ -1713,6 +1738,8 @@ class TestUpdateMediaBuySchemaCompliance:
         Covers: UC-003-ALT-UPDATE-TIMING-01
         """
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_1",
             start_time="2026-03-01T00:00:00+00:00",
             end_time="2026-03-31T00:00:00+00:00",
@@ -1727,7 +1754,12 @@ class TestUpdateMediaBuySchemaCompliance:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/core/start-timing.json
         Covers: UC-003-ALT-UPDATE-TIMING-02
         """
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", start_time="asap")
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
+            media_buy_id="mb_1",
+            start_time="asap",
+        )
         assert req.start_time == "asap"
 
     def test_update_buyer_campaign_ref_roundtrip(self):
@@ -1774,6 +1806,8 @@ class TestUpdateMediaBuySchemaCompliance:
         Covers: UC-003-MAIN-12
         """
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_1",
             ext={"custom_key": "custom_value"},
         )
@@ -1854,6 +1888,8 @@ class TestUpdateMediaBuyMainFlow:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_resolved",
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=3000.0)],
         )
@@ -1975,7 +2011,9 @@ class TestUpdateMediaBuyPauseResume:
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True)
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="mb_1", paused=True
+        )
         identity = _make_identity()
 
         adapter_result = UpdateMediaBuySuccess.carrier(
@@ -2039,7 +2077,9 @@ class TestUpdateMediaBuyPauseResume:
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=False)
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="mb_1", paused=False
+        )
         identity = _make_identity()
 
         adapter_result = UpdateMediaBuySuccess.carrier(
@@ -2102,7 +2142,9 @@ class TestUpdateMediaBuyPauseResume:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         # Pause request with no budget or date changes should not trigger currency validation
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True)
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="mb_1", paused=True
+        )
         identity = _make_identity()
 
         adapter_result = UpdateMediaBuySuccess.carrier(
@@ -2168,6 +2210,8 @@ class TestUpdateMediaBuyTiming:
         """
         # Schema accepts valid range
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_1",
             start_time="2026-03-01T00:00:00+00:00",
             end_time="2026-03-31T00:00:00+00:00",
@@ -2187,6 +2231,8 @@ class TestUpdateMediaBuyTiming:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_1",
             start_time="2026-04-15T00:00:00+00:00",
             end_time="2026-04-01T00:00:00+00:00",  # end before start
@@ -2262,6 +2308,8 @@ class TestUpdateMediaBuyTiming:
         # Shorten flight from 30 days to 2 days, same budget = higher daily spend
         # $5000 / 2 days = $2500/day > max_daily of $500
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_1",
             end_time="2026-03-03T00:00:00+00:00",  # much shorter than original
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=5000.0)],
@@ -2340,6 +2388,8 @@ class TestUpdateMediaBuyCampaignBudget:
 
         # Positive budget at campaign level is accepted
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_1",
             budget=Budget(total=5000.0, currency="USD"),
         )
@@ -2348,6 +2398,8 @@ class TestUpdateMediaBuyCampaignBudget:
 
         # Positive budget at package level is accepted
         req2 = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=3000.0)],
         )
@@ -2401,6 +2453,8 @@ class TestUpdateMediaBuyCreativeIds:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", creative_ids=["c_new1", "c_new2"])],
         )
@@ -2508,6 +2562,8 @@ class TestUpdateMediaBuyCreativeIds:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", creative_ids=["c_nonexistent"])],
         )
@@ -2576,6 +2632,8 @@ class TestUpdateMediaBuyCreativeIds:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", creative_ids=["c_err"])],
         )
@@ -2663,6 +2721,8 @@ class TestUpdateMediaBuyCreativeIds:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", creative_ids=["c_wrong_fmt"])],
         )
@@ -2751,6 +2811,8 @@ class TestUpdateMediaBuyCreativeIds:
 
         # Replace [c1, c2, c3] with [c2, c4]
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", creative_ids=["c2", "c4"])],
         )
@@ -2868,6 +2930,8 @@ class TestUpdateMediaBuyIdentification:
         # media_buy_id is now the sole identifier; omitting it is rejected
         with pytest.raises(ValidationError, match="media_buy_id"):
             UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 packages=[{"package_id": "pkg_1"}],
             )
 
@@ -2884,6 +2948,8 @@ class TestUpdateMediaBuyIdentification:
         # Per AdCP spec, media_buy_id is required for update
         with pytest.raises(ValidationError):
             UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 packages=[{"package_id": "pkg_1"}],
             )
 
@@ -2899,7 +2965,12 @@ class TestUpdateMediaBuyIdentification:
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(media_buy_id="mb_nonexistent", packages=[{"package_id": "pkg_1"}])
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
+            media_buy_id="mb_nonexistent",
+            packages=[{"package_id": "pkg_1"}],
+        )
         identity = _make_identity()
 
         with (
@@ -2940,7 +3011,11 @@ class TestUpdateMediaBuyIdentification:
         Covers: UC-003-EXT-B-02
         """
         with pytest.raises(ValidationError, match="media_buy_id"):
-            UpdateMediaBuyRequest(packages=[{"package_id": "pkg_1"}])
+            UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                packages=[{"package_id": "pkg_1"}],
+            )
 
 
 class TestUpdateMediaBuyOwnership:
@@ -2957,7 +3032,12 @@ class TestUpdateMediaBuyOwnership:
         """
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", packages=[{"package_id": "pkg_1"}])
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
+            media_buy_id="mb_1",
+            packages=[{"package_id": "pkg_1"}],
+        )
         identity = _make_identity(principal_id="different_principal")
 
         with (
@@ -3009,6 +3089,8 @@ class TestUpdateMediaBuyManualApproval:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=3000.0)],
         )
@@ -3081,6 +3163,8 @@ class TestUpdateMediaBuyManualApproval:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=3000.0)],
         )
@@ -3149,7 +3233,9 @@ class TestUpdateMediaBuyAdapterFailure:
         from src.core.schemas import Error
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        req = UpdateMediaBuyRequest(media_buy_id="mb_1", paused=True)
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="mb_1", paused=True
+        )
         identity = _make_identity()
 
         adapter_error = UpdateMediaBuyError(
@@ -3211,6 +3297,8 @@ class TestUpdateMediaBuyAdapterFailure:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=3000.0)],
         )
@@ -3295,6 +3383,8 @@ class TestUpdateMediaBuyAdapterFailure:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_1",
             packages=[AdCPPackageUpdate(package_id="pkg_1", budget=3000.0)],
         )

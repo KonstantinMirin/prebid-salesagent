@@ -639,9 +639,19 @@ class TestPydanticSchemaAlignment:
                 # If model requires MORE fields than spec, that's acceptable (business logic)
                 # Only fail if model requires FEWER fields than spec
                 if not_enforced and not unexpected:
-                    pytest.skip(
-                        f"{model_class.__name__} has optional fields where spec requires them: {not_enforced}. "
-                        f"This may be intentional for flexibility."
+                    # FAIL, not skip. The two lines above already say "Only fail if model
+                    # requires FEWER fields than spec" -- and this branch is exactly that
+                    # case, so skipping here contradicted the guard's own stated rule and
+                    # made it report green on the one thing it exists to catch. It hid two
+                    # real violations (SyncCreativesRequest and UpdateMediaBuyRequest both
+                    # relaxed the spec-required idempotency_key and account) behind the words
+                    # "may be intentional for flexibility" -- an assumption, not a finding.
+                    pytest.fail(
+                        f"{model_class.__name__} makes these OPTIONAL where the pinned schema "
+                        f"marks them REQUIRED: {sorted(not_enforced)}. Relaxing a required "
+                        f"field silently accepts non-conformant requests; if the field is "
+                        f"genuinely supplied at the boundary, supply it there rather than "
+                        f"making the contract optional."
                     )
 
                 if unexpected and not not_enforced:

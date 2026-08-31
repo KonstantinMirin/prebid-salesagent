@@ -164,6 +164,8 @@ class TestCrossPrincipalSecurity:
         # _verify_principal should raise AdCPAuthorizationError
         with pytest.raises(AdCPAuthorizationError):
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="media_buy_a",  # Owned by Principal A!
             )
             _update_media_buy_impl(req=req, identity=identity_b)

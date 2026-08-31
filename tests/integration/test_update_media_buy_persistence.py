@@ -147,6 +147,8 @@ def test_update_media_buy_with_database_persisted_buy(test_tenant_setup):
 
     # Test: Call update_media_buy (should not raise "Media buy not found")
     req = UpdateMediaBuyRequest(
+        account={"account_id": "acct_test"},
+        idempotency_key="test-idem-key-0001",
         media_buy_id=media_buy_id,
     )
     result = _update_media_buy_impl(req=req, identity=identity)
@@ -163,7 +165,9 @@ def test_update_media_buy_requires_context():
     """Test update_media_buy raises error when context is None."""
     # Provide only media_buy_id (the sole identifier).
     with pytest.raises(AdCPAuthenticationError):
-        req = UpdateMediaBuyRequest(media_buy_id="buy_test_123")
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="buy_test_123"
+        )
         _update_media_buy_impl(req=req)
 
 
@@ -179,5 +183,7 @@ def test_update_media_buy_requires_media_buy_id(test_tenant_setup):
 
     # media_buy_id that doesn't exist should raise AdCPMediaBuyNotFoundError
     with pytest.raises(AdCPMediaBuyNotFoundError):
-        req = UpdateMediaBuyRequest(media_buy_id="nonexistent_ref")
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="nonexistent_ref"
+        )
         _update_media_buy_impl(req=req, identity=identity)

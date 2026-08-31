@@ -18,6 +18,15 @@ from ._sync import _sync_creatives_impl
 
 async def sync_creatives(
     creatives: list[CreativeAsset],
+    idempotency_key: Annotated[
+        str,
+        Field(
+            description=(
+                "Client-generated key for safe retries; resending with the same key is "
+                "at-most-once. 16-255 chars, ^[A-Za-z0-9_.:-]{16,255}$. Required by AdCP 3.1.1."
+            )
+        ),
+    ],
     assignments: dict[str, list[str]] | None = None,
     creative_ids: list[str] | None = None,
     delete_missing: Annotated[
@@ -68,6 +77,7 @@ async def sync_creatives(
         validation_mode=validation_mode_str,
         push_notification_config=push_notification_config,
         context=context,
+        idempotency_key=idempotency_key,
         identity=identity,
     )
     return mcp_result(response)
@@ -85,6 +95,9 @@ def sync_creatives_raw(
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,
     account: LibraryAccountReference | None = None,
+    # AdCP 3.1.1 /required. Declared here too so a2a and rest accept the same request set
+    # as mcp -- a field one transport takes and another drops is silently lost for the buyer.
+    idempotency_key: str | None = None,
     ctx: Context | ToolContext | None = None,
     identity: IdentityOrNotProvided = NOT_PROVIDED,
 ):
@@ -123,5 +136,6 @@ def sync_creatives_raw(
         validation_mode=validation_mode,
         push_notification_config=push_notification_config,
         context=context,
+        idempotency_key=idempotency_key,
         identity=identity,
     )

@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from enum import Enum, StrEnum
 from typing import Any, Literal
 
-from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import CreativeAsset as LibraryCreativeAsset
 from adcp.types import CreativeStatus
 from adcp.types import Error as LibraryError
@@ -376,12 +375,14 @@ class SyncCreativesRequest(LibrarySyncCreativesRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # AdCP 3.1.1 makes account and idempotency_key required (sync-creatives-request.json
-    # /required).  Override as optional
-    # — identity is resolved at the transport boundary, and idempotency_key is
-    # generated at the transport boundary when not supplied by the caller.
-    account: LibraryAccountReference | None = None  # type: ignore[assignment]
-    idempotency_key: str | None = None  # type: ignore[assignment]
+    # account and idempotency_key are REQUIRED by AdCP 3.1.1
+    # (creative/sync-creatives-request.json /required = [idempotency_key, account,
+    # creatives]) and are inherited as required. The removed override claimed
+    # idempotency_key is "generated at the transport boundary when not supplied" -- which the
+    # code did not do for this tool, and which cannot work in principle: the spec makes the
+    # key CLIENT-generated precisely so a retry after a lost response carries the SAME key.
+    # A server-generated key differs on every retry, so it provides no at-most-once guarantee
+    # at all, and a sync retried after a timeout creates the creatives twice.
 
     creatives: list[CreativeAssetRequest] = Field(
         ..., min_length=1, max_length=100, description="Array of creative assets to sync (create or update)"

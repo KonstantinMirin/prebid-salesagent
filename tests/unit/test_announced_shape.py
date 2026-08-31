@@ -287,7 +287,12 @@ class TestAdvertisedTypesAreAccepted:
     def test_the_budget_object_we_advertise_is_accepted(self) -> None:
         from src.core.tools.media_buy_update import Budget, _build_update_request
 
-        req = _build_update_request(media_buy_id="mb_1", budget=Budget(total=5000, currency="EUR"))
+        req = _build_update_request(
+            media_buy_id="mb_1",
+            budget=Budget(total=5000, currency="EUR"),
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
+        )
 
         assert req.budget is not None
         assert float(req.budget.total) == 5000.0
@@ -338,7 +343,12 @@ class TestAdvertisedTypesAreAccepted:
         """
         from src.core.tools.media_buy_update import _build_update_request
 
-        req = _build_update_request(media_buy_id="mb_1", budget=5000)
+        req = _build_update_request(
+            media_buy_id="mb_1",
+            budget=5000,
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
+        )
 
         assert isinstance(req.budget, float)
         assert req.budget == 5000.0

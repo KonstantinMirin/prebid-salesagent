@@ -105,7 +105,9 @@ def test_workflow_step_receives_request_model_with_protocol_metadata():
     with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
         # Direct _impl call (not env.call_impl) to keep the ``req`` reference the
         # assert_called_once_with(request_data=req) check below needs.
-        req = UpdateMediaBuyRequest(media_buy_id="mb_workflow_meta")
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="mb_workflow_meta"
+        )
 
         _update_media_buy_impl(req=req, identity=env.identity)
 
@@ -164,6 +166,8 @@ def test_combined_campaign_and_package_update():
 
         identity = env.identity
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_combined",
             budget=Budget(total=5000.0, currency="USD", pacing="even"),
             packages=[{"package_id": "pkg_A", "budget": 2500.0}],
@@ -222,6 +226,8 @@ def test_multi_package_update_processes_all_packages():
 
         identity = env.identity
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_multi",
             packages=[
                 {"package_id": "pkg_1", "budget": 1000.0},
@@ -274,6 +280,8 @@ def test_main_flow_package_budget_update():
 
         identity = env.identity
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_main",
             packages=[{"package_id": "pkg_main_1", "budget": 15000.0}],
         )
@@ -331,6 +339,8 @@ class TestFlightDateValidationAndPersistence:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_dates",
                 start_time=start,
                 end_time=end,
@@ -370,6 +380,8 @@ class TestFlightDateValidationAndPersistence:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_dates_bad",
                 start_time=start,
                 end_time=end,
@@ -404,6 +416,8 @@ class TestFlightDateValidationAndPersistence:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_dates_equal",
                 start_time=same_time,
                 end_time=same_time,
@@ -443,6 +457,8 @@ class TestCampaignBudgetValidationAndPersistence:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_budget",
                 budget=Budget(total=10000.0, currency="USD", pacing="even"),
             )
@@ -486,6 +502,8 @@ def test_manual_approval_path_through_impl():
 
         identity = env.identity
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_manual",
         )
         result = _update_media_buy_impl(req=req, identity=identity)
@@ -529,6 +547,8 @@ def test_package_not_found_returns_error():
 
         identity = env.identity
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_pkg_nf",
             packages=[{"package_id": "pkg_nonexistent", "targeting_overlay": {"geo_countries": ["US"]}}],
         )
@@ -561,6 +581,8 @@ def test_pause_completes_workflow_step():
 
         identity = env.identity
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_pause",
             paused=True,
         )
@@ -604,6 +626,8 @@ def test_manual_approval_creates_object_workflow_mapping():
 
         identity = env.identity
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_approval_mapping",
             paused=True,
         )
@@ -654,6 +678,8 @@ def test_manual_approval_stores_raw_request():
 
         identity = env.identity
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_approval",
             paused=True,
         )
@@ -726,6 +752,8 @@ class TestTimezoneHandlingRegression:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_tz_end",
                 end_time=datetime(2025, 9, 1, tzinfo=UTC),  # Only end_time
             )
@@ -763,6 +791,8 @@ class TestTimezoneHandlingRegression:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_tz_start",
                 start_time=datetime(2025, 3, 1, tzinfo=UTC),  # Only start_time
             )
@@ -777,6 +807,8 @@ class TestTimezoneHandlingRegression:
         """
         with pytest.raises(ValidationError, match="start_time must be timezone-aware"):
             UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_naive",
                 start_time=datetime(2025, 6, 1),  # naive — no tzinfo
             )
@@ -785,6 +817,8 @@ class TestTimezoneHandlingRegression:
         """UpdateMediaBuyRequest must reject naive (no tzinfo) end_time."""
         with pytest.raises(ValidationError, match="end_time must be timezone-aware"):
             UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_naive",
                 end_time=datetime(2025, 6, 1),  # naive — no tzinfo
             )
@@ -822,6 +856,8 @@ class TestUC003MainObligations:
             identity = env.identity
             # daily = 50000/30 = 1666.67 > 1000
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_cur_limit",
                 packages=[{"package_id": "pkg_1", "budget": 50000.0}],
             )
@@ -850,6 +886,8 @@ class TestUC003MainObligations:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_no_max",
                 packages=[{"package_id": "pkg_1", "budget": 999999.0}],
             )
@@ -876,6 +914,8 @@ class TestUC003MainObligations:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_adapter",
                 packages=[{"package_id": "pkg_x", "budget": 5000.0}],
             )
@@ -905,6 +945,8 @@ class TestUC003MainObligations:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_persist",
                 packages=[{"package_id": "pkg_y", "budget": 7500.0}],
             )
@@ -921,7 +963,9 @@ class TestUC003MainObligations:
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
             identity = env.identity
-            req = UpdateMediaBuyRequest(media_buy_id="mb_status")
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="mb_status"
+            )
             result = _update_media_buy_impl(req=req, identity=identity)
 
             assert isinstance(result.response, UpdateMediaBuySuccess)
@@ -948,7 +992,12 @@ class TestUC003PauseResume:
             env.mock["adapter"].return_value.manual_approval_operations = ["update_media_buy"]
 
             identity = env.identity
-            req = UpdateMediaBuyRequest(media_buy_id="mb_pause_manual", paused=True)
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id="mb_pause_manual",
+                paused=True,
+            )
             result = _update_media_buy_impl(req=req, identity=identity)
 
             assert isinstance(result.response, UpdateMediaBuySubmitted)
@@ -992,7 +1041,13 @@ class TestUC003UpdateTiming:
             end = datetime(2025, 9, 1, tzinfo=UTC)
 
             identity = env.identity
-            req = UpdateMediaBuyRequest(media_buy_id="mb_both_dates", start_time=start, end_time=end)
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id="mb_both_dates",
+                start_time=start,
+                end_time=end,
+            )
             result = _update_media_buy_impl(req=req, identity=identity)
 
             assert isinstance(result.response, UpdateMediaBuySuccess)
@@ -1026,6 +1081,8 @@ class TestUC003UpdateTiming:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_no_adapter",
                 end_time=datetime(2025, 11, 1, tzinfo=UTC),
             )
@@ -1078,6 +1135,8 @@ class TestUC003CampaignLevelBudget:
             identity = env.identity
             # daily = 10000/10 = 1000 > 500
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_recalc",
                 packages=[{"package_id": "pkg_1", "budget": 10000.0}],
             )
@@ -1105,6 +1164,8 @@ class TestUC003CampaignLevelBudget:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_no_sync",
                 budget=Budget(total=5000.0, currency="USD", pacing="even"),
             )
@@ -1186,6 +1247,8 @@ class TestUC003UpdateCreativeIds:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_creative",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1", "C999"]}],
             )
@@ -1211,6 +1274,8 @@ class TestUC003UpdateCreativeIds:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_creative",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
             )
@@ -1234,6 +1299,8 @@ class TestUC003UpdateCreativeIds:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_creative",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
             )
@@ -1276,6 +1343,8 @@ class TestUC003UpdateCreativeIds:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_creative",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
             )
@@ -1323,6 +1392,8 @@ class TestUC003UpdateCreativeIds:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_creative",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
             )
@@ -1391,6 +1462,8 @@ class TestUC003UploadInlineCreatives:
             ) as mock_sync:
                 identity = env.identity
                 req = UpdateMediaBuyRequest(
+                    account={"account_id": "acct_test"},
+                    idempotency_key="test-idem-key-0001",
                     media_buy_id="mb_inline",
                     packages=[
                         {
@@ -1442,6 +1515,8 @@ class TestUC003UploadInlineCreatives:
             with patch("src.core.tools.media_buy_update._sync_creatives_impl", return_value=mock_sync_response):
                 identity = env.identity
                 req = UpdateMediaBuyRequest(
+                    account={"account_id": "acct_test"},
+                    idempotency_key="test-idem-key-0001",
                     media_buy_id="mb_additive",
                     packages=[
                         {
@@ -1490,6 +1565,8 @@ class TestUC003UploadInlineCreatives:
             with patch("src.core.tools.media_buy_update._sync_creatives_impl", return_value=mock_sync_response):
                 identity = env.identity
                 req = UpdateMediaBuyRequest(
+                    account={"account_id": "acct_test"},
+                    idempotency_key="test-idem-key-0001",
                     media_buy_id="mb_sync_fail",
                     packages=[
                         {
@@ -1562,6 +1639,8 @@ class TestUC003UpdateCreativeAssignments:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_assign",
                 packages=[
                     {
@@ -1603,6 +1682,8 @@ class TestUC003UpdateCreativeAssignments:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_no_placement",
                 packages=[
                     {
@@ -1647,6 +1728,8 @@ class TestUC003UpdateCreativeAssignments:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_assign_not_found",
                 packages=[
                     {
@@ -1683,6 +1766,8 @@ class TestUC003UpdateTargetingOverlay:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_targeting",
                 packages=[{"package_id": "pkg_1", "targeting_overlay": {"geo_countries": ["US"]}}],
             )
@@ -1706,6 +1791,8 @@ class TestUC003UpdateTargetingOverlay:
             # Bogus field names should now be caught at the boundary in dev/CI.
             with pytest.raises(ValidationError) as exc:
                 UpdateMediaBuyRequest(
+                    account={"account_id": "acct_test"},
+                    idempotency_key="test-idem-key-0001",
                     media_buy_id="mb_validate",
                     packages=[
                         {
@@ -1727,6 +1814,8 @@ class TestUC003UpdateTargetingOverlay:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_target_no_adapter",
                 packages=[{"package_id": "pkg_1", "targeting_overlay": {"geo_countries": ["US"]}}],
             )
@@ -1763,6 +1852,8 @@ class TestUC003UpdateTargetingOverlay:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_pta_reject",
                 packages=[
                     {
@@ -1841,6 +1932,8 @@ class TestUC003UpdateTargetingOverlay:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_coll_only",
                 packages=[
                     {
@@ -1898,6 +1991,8 @@ class TestUC003UpdateTargetingOverlay:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_pl_swap",
                 packages=[
                     {
@@ -1950,7 +2045,12 @@ class TestUC003ManualApproval:
             env.mock["adapter"].return_value.manual_approval_operations = ["update_media_buy"]
 
             identity = env.identity
-            req = UpdateMediaBuyRequest(media_buy_id="mb_deferred", paused=True)
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id="mb_deferred",
+                paused=True,
+            )
             result = _update_media_buy_impl(req=req, identity=identity)
 
             assert isinstance(result.response, UpdateMediaBuySubmitted)
@@ -1969,7 +2069,12 @@ class TestUC003ManualApproval:
             env.mock["adapter"].return_value.manual_approval_operations = ["update_media_buy"]
 
             identity = env.identity
-            req = UpdateMediaBuyRequest(media_buy_id="mb_reject_setup", paused=True)
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id="mb_reject_setup",
+                paused=True,
+            )
             result = _update_media_buy_impl(req=req, identity=identity)
 
             assert isinstance(result.response, UpdateMediaBuySubmitted)
@@ -1990,7 +2095,9 @@ class TestUC003ManualApproval:
             env.mock["adapter"].return_value.manual_approval_operations = ["update_media_buy"]
 
             identity = env.identity
-            req = UpdateMediaBuyRequest(media_buy_id="mb_poll")
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="mb_poll"
+            )
             result = _update_media_buy_impl(req=req, identity=identity)
 
             assert isinstance(result.response, UpdateMediaBuySubmitted)
@@ -2024,7 +2131,9 @@ class TestUC003ExtA:
         """
         with MediaBuyUpdateEnv(principal_id=None, tenant_id="tenant_test") as env:
             identity = env.identity
-            req = UpdateMediaBuyRequest(media_buy_id="mb_no_auth")
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="mb_no_auth"
+            )
 
             with pytest.raises(AdCPAuthenticationError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
@@ -2040,7 +2149,11 @@ class TestUC003ExtA:
             env.mock["principal"].return_value = None
 
             identity = env.identity
-            req = UpdateMediaBuyRequest(media_buy_id="mb_no_principal")
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id="mb_no_principal",
+            )
             with pytest.raises(AdCPAuthenticationError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
@@ -2055,7 +2168,9 @@ class TestUC003ExtA:
             env.mock["principal"].return_value = None
 
             identity = env.identity
-            req = UpdateMediaBuyRequest(media_buy_id="mb_auth_fail")
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="mb_auth_fail"
+            )
             with pytest.raises(AdCPAuthenticationError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
@@ -2085,7 +2200,9 @@ class TestUC003ExtC:
             )
 
             identity = env.identity
-            req = UpdateMediaBuyRequest(media_buy_id="mb_not_mine")
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="mb_not_mine"
+            )
 
             with pytest.raises(PermissionError):
                 _update_media_buy_impl(req=req, identity=identity)
@@ -2128,7 +2245,13 @@ class TestUC003ExtE:
             mock_session.scalars.return_value = mock_scalars
 
             identity = env.identity
-            req = UpdateMediaBuyRequest(media_buy_id="mb_eq", start_time=same_time, end_time=same_time)
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id="mb_eq",
+                start_time=same_time,
+                end_time=same_time,
+            )
             with pytest.raises(AdCPValidationError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
@@ -2159,6 +2282,8 @@ class TestUC003ExtE:
             identity = env.identity
             # Only end_time, before existing start_time
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_end_before",
                 end_time=datetime(2025, 3, 10, tzinfo=UTC),
             )
@@ -2192,6 +2317,8 @@ class TestUC003ExtE:
             identity = env.identity
             # Only start_time, after existing end_time
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_start_after",
                 start_time=datetime(2025, 4, 15, tzinfo=UTC),
             )
@@ -2224,6 +2351,8 @@ class TestUC003ExtF:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_gbp",
                 packages=[{"package_id": "pkg_1", "budget": 5000.0}],
             )
@@ -2258,6 +2387,8 @@ class TestUC003ExtG:
             identity = env.identity
             # daily = 10000/10 = 1000 > 500
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_daily",
                 packages=[{"package_id": "pkg_1", "budget": 10000.0}],
             )
@@ -2301,6 +2432,8 @@ class TestUC003ExtI:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_all_missing",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C999", "C998"]}],
             )
@@ -2348,6 +2481,8 @@ class TestUC003ExtJ:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_rejected",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
             )
@@ -2395,6 +2530,8 @@ class TestUC003ExtJ:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_multi_err",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1", "C2"]}],
             )
@@ -2438,6 +2575,8 @@ class TestUC003ExtK:
             with patch("src.core.tools.media_buy_update._sync_creatives_impl", return_value=mock_sync_response):
                 identity = env.identity
                 req = UpdateMediaBuyRequest(
+                    account={"account_id": "acct_test"},
+                    idempotency_key="test-idem-key-0001",
                     media_buy_id="mb_sync_err",
                     packages=[
                         {
@@ -2489,6 +2628,8 @@ class TestUC003ExtK:
             with patch("src.core.tools.media_buy_update._sync_creatives_impl", return_value=mock_sync_response):
                 identity = env.identity
                 req = UpdateMediaBuyRequest(
+                    account={"account_id": "acct_test"},
+                    idempotency_key="test-idem-key-0001",
                     media_buy_id="mb_no_modify",
                     packages=[
                         {
@@ -2537,6 +2678,8 @@ class TestUC003ExtL:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_wrong_pkg",
                 packages=[{"package_id": "pkg_99", "targeting_overlay": {"geo_countries": ["US"]}}],
             )
@@ -2555,6 +2698,8 @@ class TestUC003ExtL:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_no_pkg_exist",
                 packages=[{"package_id": "pkg_nonexistent", "targeting_overlay": {"geo_countries": ["US"]}}],
             )
@@ -2601,6 +2746,8 @@ class TestUC003ExtM:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_bad_placement",
                 packages=[
                     {
@@ -2642,6 +2789,8 @@ class TestUC003ExtM:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_no_placements",
                 packages=[
                     {
@@ -2688,6 +2837,8 @@ class TestUC003ExtN:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_priv",
                 packages=[{"package_id": "pkg_1", "budget": 5000.0}],
             )
@@ -2726,6 +2877,8 @@ class TestUC003ExtO:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_quota",
                 packages=[{"package_id": "pkg_1", "budget": 5000.0}],
             )
@@ -2748,7 +2901,12 @@ class TestUC003ExtO:
             )
 
             identity = env.identity
-            req = UpdateMediaBuyRequest(media_buy_id="mb_wf_fail", paused=True)
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id="mb_wf_fail",
+                paused=True,
+            )
 
             with pytest.raises(Exception, match="workflow step creation failed"):
                 _update_media_buy_impl(req=req, identity=identity)
@@ -2777,7 +2935,12 @@ class TestUC003StateMachine:
             env.mock["uow"].return_value.media_buys.get_by_id.return_value = terminal_mb
 
             identity = env.identity
-            req = UpdateMediaBuyRequest(media_buy_id="mb_terminal", paused=True)
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id="mb_terminal",
+                paused=True,
+            )
 
             with pytest.raises(AdCPGoneError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
@@ -2799,6 +2962,8 @@ class TestUC003StateMachine:
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_terminal_budget",
                 packages=[{"package_id": "pkg_001", "budget": 5000.0}],
             )
@@ -2824,7 +2989,12 @@ class TestUC003StateMachine:
             )
 
             identity = env.identity
-            req = UpdateMediaBuyRequest(media_buy_id="mb_active", paused=True)
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id="mb_active",
+                paused=True,
+            )
             result = _update_media_buy_impl(req=req, identity=identity)
 
             assert isinstance(result.response, UpdateMediaBuySuccess)
@@ -2838,7 +3008,12 @@ class TestUC003StateMachine:
             env.mock["uow"].return_value.media_buys.get_by_id.return_value = paused_mb
 
             identity = env.identity
-            req = UpdateMediaBuyRequest(media_buy_id="mb_paused", paused=True)
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id="mb_paused",
+                paused=True,
+            )
 
             with pytest.raises(AdCPGoneError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
@@ -2858,7 +3033,12 @@ class TestUC003StateMachine:
             )
 
             identity = env.identity
-            req = UpdateMediaBuyRequest(media_buy_id="mb_paused_resume", paused=False)
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id="mb_paused_resume",
+                paused=False,
+            )
             result = _update_media_buy_impl(req=req, identity=identity)
 
             assert isinstance(result.response, UpdateMediaBuySuccess)
@@ -2891,7 +3071,12 @@ class TestUC003StateMachine:
             )
 
             identity = env.identity
-            req = UpdateMediaBuyRequest(media_buy_id="mb_post_action", paused=True)
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id="mb_post_action",
+                paused=True,
+            )
             result = _update_media_buy_impl(req=req, identity=identity)
 
             assert isinstance(result.response, UpdateMediaBuySuccess)

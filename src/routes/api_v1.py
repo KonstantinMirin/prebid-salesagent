@@ -139,6 +139,7 @@ class UpdateMediaBuyBody(SalesAgentBaseModel):
     # a claim that concurrency is enforced.
     revision: int | None = None
     adcp_version: str = "1.0.0"
+    account: dict[str, Any] | None = None  # AccountReference; AdCP 3.1.1 /required
 
 
 class GetMediaBuyDeliveryBody(SalesAgentBaseModel):
@@ -441,6 +442,7 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         reporting_webhook = to_reporting_webhook(body.reporting_webhook)
     response = media_buy_update_module.update_media_buy_raw(
         media_buy_id=media_buy_id,
+        account=body.account,
         paused=body.paused,
         flight_start_date=body.flight_start_date,
         flight_end_date=body.flight_end_date,

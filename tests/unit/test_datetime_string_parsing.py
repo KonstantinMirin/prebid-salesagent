@@ -78,6 +78,8 @@ class TestDateTimeStringParsing:
     def test_update_media_buy_with_datetime_strings(self):
         """Test UpdateMediaBuyRequest with datetime strings."""
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_123",
             start_time="2025-03-01T00:00:00Z",
             end_time="2025-03-31T23:59:59Z",

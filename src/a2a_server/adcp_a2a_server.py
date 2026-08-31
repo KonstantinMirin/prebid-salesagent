@@ -1879,6 +1879,10 @@ class AdCPRequestHandler(RequestHandler):
             push_notification_config=parameters.get("push_notification_config"),
             context=context,
             account=to_account_reference(parameters.get("account")),
+            # AdCP 3.1.1 /required; forwarded like every other field so a2a accepts the same
+            # request set as mcp and rest -- a field one transport takes and another drops is
+            # silently lost for the buyer.
+            idempotency_key=parameters.get("idempotency_key"),
             identity=identity,
         )
 
@@ -1997,9 +2001,7 @@ class AdCPRequestHandler(RequestHandler):
         # request data -- they drive version negotiation and the unsupported-version
         # advisory. Selecting alone would silently disable that negotiation.
         response = await get_adcp_capabilities_raw(
-            **select_request_fields(
-                GetAdcpCapabilitiesRequest, parameters, accepted_kwargs(get_adcp_capabilities_raw)
-            ),
+            **select_request_fields(GetAdcpCapabilitiesRequest, parameters, accepted_kwargs(get_adcp_capabilities_raw)),
             adcp_version=parameters.get("adcp_version"),
             adcp_major_version=parameters.get("adcp_major_version"),
             identity=identity,
@@ -2127,8 +2129,17 @@ class AdCPRequestHandler(RequestHandler):
         # Validate top-level fields via typed model (packages validated by _raw
         # which handles legacy formats with extra fields like 'status')
         with adcp_validation_boundary():
+            # account and idempotency_key are AdCP 3.1.1 /required, so they must reach the
+            # model or every a2a update is refused. They were absent from this hand-picked
+            # list -- which sits directly above a comment praising the SELECTED half of this
+            # same function for not hand-listing. The two halves disagreed.
+            # Still hand-picked rather than model_validate(params): `packages` carries legacy
+            # shapes that update_media_buy_raw normalises, so validating the whole bag here
+            # would reject them. Converting this handler properly is salesagent-prkv.30.
             req = UpdateMediaBuyRequest(
                 media_buy_id=params.get("media_buy_id"),
+                account=params.get("account"),
+                idempotency_key=params.get("idempotency_key"),
                 paused=params.get("paused"),
                 start_time=params.get("start_time"),
                 end_time=params.get("end_time"),

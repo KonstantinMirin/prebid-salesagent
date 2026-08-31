@@ -308,7 +308,12 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         req = kwargs.pop("req", None)
         if req is None:
             identity = kwargs.pop("identity", self.identity)
-            req = UpdateMediaBuyRequest(media_buy_id=media_buy_id, **kwargs)
+            req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id=media_buy_id,
+                **kwargs,
+            )
         else:
             identity = kwargs.pop("identity", self.identity)
         return _update_media_buy_impl(req=req, identity=identity)

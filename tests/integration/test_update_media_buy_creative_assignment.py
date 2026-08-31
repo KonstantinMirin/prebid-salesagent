@@ -134,6 +134,8 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
 
         # Call update_media_buy with creative assignment
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="test_buy_123",
             packages=[
                 {
@@ -314,6 +316,8 @@ def test_update_media_buy_replaces_creatives(integration_db):
 
         # Call update_media_buy to replace creative_1 with creative_2 and creative_3
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="test_buy_456",
             packages=[
                 {
@@ -444,6 +448,8 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
 
         # Call update_media_buy with non-existent creative IDs — should raise.
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="test_buy_789",
             packages=[
                 {
@@ -574,6 +580,8 @@ def test_creative_assignments_with_weights(integration_db):
 
         # Call update_media_buy with creative_assignments (not creative_ids)
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="test_buy_weights",
             packages=[
                 {
@@ -734,6 +742,8 @@ def test_creative_assignments_replaces_all(integration_db):
 
         # Send creative_assignments with ONLY c2 and c3 — c1 should be REMOVED
         req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="test_buy_replace",
             packages=[
                 {
@@ -856,6 +866,8 @@ def test_approved_draft_transitions_to_pending_creatives(integration_db, creativ
 
         result = env.call_impl(
             req=UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id=media_buy_id,
                 packages=[{"package_id": package_id, **package_update}],
             )

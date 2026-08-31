@@ -204,7 +204,12 @@ class TestNonListRestRoutingIsPreserved:
 
     def test_update_request_still_routes_to_the_update_body_and_endpoint(self):
         env = MediaBuyCreateUpdateListEnv()
-        req = UpdateMediaBuyRequest(media_buy_id="mb_seeded", paused=True)
+        req = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
+            media_buy_id="mb_seeded",
+            paused=True,
+        )
 
         body = env.build_rest_body(req=req)
 

@@ -62,7 +62,14 @@ def test_manual_approval_update_via_real_a2a_pipeline_is_submitted_task_without_
         adapter.manual_approval_required = True
         adapter.manual_approval_operations = ["update_media_buy"]
 
-        result = env.call_a2a(req=UpdateMediaBuyRequest(media_buy_id=_MEDIA_BUY_ID, budget=15000.0))
+        result = env.call_a2a(
+            req=UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id=_MEDIA_BUY_ID,
+                budget=15000.0,
+            )
+        )
 
         task = env.last_a2a_task
         assert task is not None, "harness did not capture the A2A Task — did the dispatch bypass _run_a2a_handler?"

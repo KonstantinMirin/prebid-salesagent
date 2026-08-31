@@ -179,6 +179,8 @@ class TestUpdateMediaBuyCrossPrincipalCreative:
             env._seeded_media_buy_id = mb.media_buy_id
 
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id=mb.media_buy_id,
                 packages=[
                     {

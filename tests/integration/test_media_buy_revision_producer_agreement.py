@@ -207,8 +207,24 @@ def test_update_responses_and_get_media_buys_report_the_same_revision(integratio
         created = env.call_via(transport, **_create_kwargs(product, domain="revision-agreement.example.com"))
         media_buy_id = created.require_wire()["media_buy_id"]
 
-        first = env.call_via(transport, req=UpdateMediaBuyRequest(media_buy_id=media_buy_id, budget=20000.0))
-        second = env.call_via(transport, req=UpdateMediaBuyRequest(media_buy_id=media_buy_id, budget=30000.0))
+        first = env.call_via(
+            transport,
+            req=UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id=media_buy_id,
+                budget=20000.0,
+            ),
+        )
+        second = env.call_via(
+            transport,
+            req=UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id=media_buy_id,
+                budget=30000.0,
+            ),
+        )
         listed = env.call_via(transport, req=GetMediaBuysRequest(media_buy_ids=[media_buy_id]))
 
         first_revision = first.require_wire()["revision"]
@@ -315,7 +331,14 @@ def test_dry_run_update_reports_the_current_revision_and_moves_nothing(integrati
         buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active", revision=_SEEDED_REVISION)
         env._commit_factory_data()  # noqa: SLF001 — the harness's factory/session flush seam
 
-        simulated = env.call_impl(req=UpdateMediaBuyRequest(media_buy_id=buy.media_buy_id, budget=20000.0))
+        simulated = env.call_impl(
+            req=UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id=buy.media_buy_id,
+                budget=20000.0,
+            )
+        )
         listed = env.call_impl(req=GetMediaBuysRequest(media_buy_ids=[buy.media_buy_id]))
 
         # A failed update returns UpdateMediaBuyError in the same envelope, which
@@ -373,7 +396,15 @@ def test_update_raises_media_buy_not_found_when_the_row_vanishes_mid_transaction
         with vanish.patched() as patcher:
             patcher.setattr(MediaBuyRepository, "update_fields", vanish.arming(MediaBuyRepository.update_fields))
 
-            result = env.call_via(transport, req=UpdateMediaBuyRequest(media_buy_id=media_buy_id, budget=20000.0))
+            result = env.call_via(
+                transport,
+                req=UpdateMediaBuyRequest(
+                    account={"account_id": "acct_test"},
+                    idempotency_key="test-idem-key-0001",
+                    media_buy_id=media_buy_id,
+                    budget=20000.0,
+                ),
+            )
 
     vanish.assert_reported_not_found(result, transport)
 
@@ -410,8 +441,24 @@ def test_pause_resume_response_reports_the_rows_revision_and_agrees_with_get_med
         tenant, principal, _product, _pricing = env.setup_media_buy_data()
         buy = _seed_buy(env, tenant, principal, status=seeded_status)
 
-        bumped = env.call_via(transport, req=UpdateMediaBuyRequest(media_buy_id=buy.media_buy_id, budget=20000.0))
-        toggled = env.call_via(transport, req=UpdateMediaBuyRequest(media_buy_id=buy.media_buy_id, paused=paused))
+        bumped = env.call_via(
+            transport,
+            req=UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id=buy.media_buy_id,
+                budget=20000.0,
+            ),
+        )
+        toggled = env.call_via(
+            transport,
+            req=UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id=buy.media_buy_id,
+                paused=paused,
+            ),
+        )
         listed = env.call_via(transport, req=GetMediaBuysRequest(media_buy_ids=[buy.media_buy_id]))
 
         bumped_revision = bumped.require_wire()["revision"]
@@ -471,6 +518,14 @@ def test_pause_resume_reports_media_buy_not_found_when_the_row_vanishes_mid_tran
         adapter.update_media_buy.side_effect = vanish.arming(adapter.update_media_buy.side_effect)
 
         with vanish.patched():
-            result = env.call_via(transport, req=UpdateMediaBuyRequest(media_buy_id=buy.media_buy_id, paused=paused))
+            result = env.call_via(
+                transport,
+                req=UpdateMediaBuyRequest(
+                    account={"account_id": "acct_test"},
+                    idempotency_key="test-idem-key-0001",
+                    media_buy_id=buy.media_buy_id,
+                    paused=paused,
+                ),
+            )
 
     vanish.assert_reported_not_found(result, transport)

@@ -161,13 +161,17 @@ class TestMCPContractValidation:
     def test_update_media_buy_minimal(self):
         """Test update_media_buy requires media_buy_id (adcp 3.12)."""
         # media_buy_id is required in adcp 3.12
-        request = UpdateMediaBuyRequest(media_buy_id="test_buy_123")
+        request = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="test_buy_123"
+        )
         assert request.media_buy_id == "test_buy_123"
         assert request.paused is None
 
         # Missing media_buy_id → validation error
         with pytest.raises(ValidationError):
-            UpdateMediaBuyRequest(paused=False)
+            UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", paused=False
+            )
 
     def test_get_media_buy_delivery_minimal(self):
         """Test get_media_buy_delivery with no filters."""

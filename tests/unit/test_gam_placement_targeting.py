@@ -199,6 +199,8 @@ class TestPlacementIdsValidation:
             mock_session.scalars.return_value = mock_scalars
 
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_placement",
                 packages=[
                     {
@@ -311,6 +313,8 @@ class TestPlacementIdsValidation:
             mock_session.scalars.return_value = mock_scalars
 
             req = UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
                 media_buy_id="mb_no_placements",
                 packages=[
                     {

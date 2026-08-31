@@ -16,7 +16,11 @@ from src.core.errors.details import ValidationDetails
 from src.core.exceptions import AdCPSalesAgentError, adcp_error_for
 from src.core.helpers import log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
+from src.core.schemas import (
+    SyncCreativeResult,
+    SyncCreativesResponse,
+    validate_idempotency_key_shape,  # noqa: F401
+)
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 
@@ -59,6 +63,7 @@ def _sync_creatives_impl(
     validation_mode: str = "strict",
     push_notification_config: PushNotificationConfig | dict | None = None,
     context: ContextObject | dict | None = None,
+    idempotency_key: str | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
@@ -86,6 +91,17 @@ def _sync_creatives_impl(
     Returns:
         SyncCreativesResponse with synced creatives and assignments
     """
+
+    # AdCP 3.1.1 requires this key and defines it as CLIENT-generated so that resending
+    # after a lost response is at-most-once. Its SHAPE is enforced here so a malformed key
+    # is a buyer-facing VALIDATION_ERROR rather than silence.
+    #
+    # HONEST LIMIT: accepting the key is not yet honouring it. sync_creatives does not
+    # consult the IdempotencyAttempt replay cache that media_buy_create uses, so a retry
+    # carrying the same key still executes. Filed separately -- taking the key while not
+    # deduplicating on it is a promise we do not yet keep, and it is recorded rather than
+    # implied.
+    validate_idempotency_key_shape(idempotency_key)
     from pydantic import ValidationError
 
     # Phase 1a: Models flow through to helpers (which convert via isinstance guard).

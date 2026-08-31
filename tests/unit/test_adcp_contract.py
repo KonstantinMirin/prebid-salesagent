@@ -2576,6 +2576,8 @@ class TestAdCPContract:
 
         # Test AdCP-compliant request with media_buy_id (oneOf option 1)
         adcp_request_id = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_12345",
             paused=False,  # adcp 2.12.0+: replaced 'active' with 'paused'
             start_time=datetime(2025, 2, 1, 9, 0, 0, tzinfo=UTC),
@@ -2620,7 +2622,9 @@ class TestAdCPContract:
         from pydantic import ValidationError as PydanticValidationError
 
         with pytest.raises((PydanticValidationError, ValueError)):
-            UpdateMediaBuyRequest(paused=False)  # missing required media_buy_id
+            UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", paused=False
+            )  # missing required media_buy_id
 
     def test_task_status_mcp_integration(self):
         """Test TaskStatus integration with MCP response schemas (AdCP PR #77)."""
@@ -2728,6 +2732,8 @@ class TestAdCPContract:
 
         # Test with 'asap' start_time
         request = UpdateMediaBuyRequest(
+            account={"account_id": "acct_test"},
+            idempotency_key="test-idem-key-0001",
             media_buy_id="mb_test_123",
             start_time="asap",  # AdCP v1.7.0 supports literal "asap"
         )
