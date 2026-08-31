@@ -191,6 +191,31 @@ def _list_authorized_properties_impl(
         raise AdCPInternalError()
 
 
+def build_list_authorized_properties_request(
+    *,
+    publisher_domains: list[str] | None = None,
+    property_tags: list[str] | None = None,
+    context: ContextObject | None = None,
+) -> "ListAuthorizedPropertiesRequest":
+    """Build the shared list_authorized_properties request for transport wrappers.
+
+    Mirrors build_list_creative_formats_request / build_list_accounts_request: the ONE seam
+    every transport constructs the typed request through, so a future request field lands
+    here once instead of in wrapper lockstep. It is also what the REST body DERIVES from --
+    the raw wrapper takes an already-built ``req``, so intersecting a body against it would
+    yield the empty set.
+
+    ``ext`` is deliberately absent. ListAuthorizedPropertiesRequest declares it, but no
+    transport accepts it and ``_list_authorized_properties_impl`` never reads it; adding a
+    kwarg here would advertise an input whose only outcome is nothing happening.
+    """
+    return ListAuthorizedPropertiesRequest(
+        publisher_domains=publisher_domains,
+        property_tags=property_tags,
+        context=context,
+    )
+
+
 async def list_authorized_properties(
     publisher_domains: list[str] | None = None,
     property_tags: list[str] | None = None,
@@ -214,7 +239,7 @@ async def list_authorized_properties(
     # Same context string as the A2A handler and the REST route, so buyer-invalid input
     # produces a byte-identical envelope on every transport (#1882).
     with adcp_validation_boundary(context="list_authorized_properties request"):
-        req = ListAuthorizedPropertiesRequest(
+        req = build_list_authorized_properties_request(
             publisher_domains=publisher_domains,
             property_tags=property_tags,
             context=context,
