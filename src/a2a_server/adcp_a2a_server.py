@@ -5,7 +5,6 @@ Supports both standard A2A message format and JSON-RPC 2.0.
 """
 
 import copy
-import inspect
 import json
 import logging
 import uuid
@@ -73,6 +72,7 @@ from src.core.exceptions import (
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import (
+    accepted_kwargs,
     coerce_creative_filters,
     select_request_fields,
     to_account_reference,
@@ -129,14 +129,12 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 logger = logging.getLogger(__name__)
 
 
-#: Accepted-kwarg sets captured AT IMPORT from the real core functions. Handlers select
-#: against these rather than reading inspect.signature off the module attribute at call
-#: time: tests patch these names with Mocks, whose signature is (*args, **kwargs) and admits
-#: NOTHING, so a signature read at call time silently drops every field the buyer sent.
+#: These two handlers used to select against kwarg sets captured AT IMPORT, because a
+#: call-time signature read saw the Mock the tests patch in -- (*args, **kwargs), read as an
+#: empty NAME LIST -- and silently dropped every field the buyer sent. accepted_kwargs now
+#: reads that same signature as "accepts anything", so the timing no longer matters and the
+#: two handlers use the same call-time spelling as every other site.
 from src.core.schemas import ListCreativesRequest, UpdateMediaBuyRequest  # noqa: E402
-
-_LIST_CREATIVES_KWARGS = frozenset(inspect.signature(core_list_creatives_tool).parameters)
-_UPDATE_MEDIA_BUY_KWARGS = frozenset(inspect.signature(core_update_media_buy_tool).parameters)
 
 
 def _require_params(params: dict, required: list[str], *, field: str | None = None) -> None:
@@ -1906,7 +1904,7 @@ class AdCPRequestHandler(RequestHandler):
         # exposing them on A2A remains a deferred, buyer-visible change.
         # `filters` is set explicitly AFTER selection because it needs typed coercion
         # (invalid filters must raise AdCPValidationError, not reach the impl as a dict).
-        selected = select_request_fields(ListCreativesRequest, parameters, _LIST_CREATIVES_KWARGS)
+        selected = select_request_fields(ListCreativesRequest, parameters, accepted_kwargs(core_list_creatives_tool))
         selected["filters"] = filters
         response = core_list_creatives_tool(**selected, identity=identity)
 
@@ -1999,7 +1997,9 @@ class AdCPRequestHandler(RequestHandler):
         # request data -- they drive version negotiation and the unsupported-version
         # advisory. Selecting alone would silently disable that negotiation.
         response = await get_adcp_capabilities_raw(
-            **select_request_fields(GetAdcpCapabilitiesRequest, parameters),
+            **select_request_fields(
+                GetAdcpCapabilitiesRequest, parameters, accepted_kwargs(get_adcp_capabilities_raw)
+            ),
             adcp_version=parameters.get("adcp_version"),
             adcp_major_version=parameters.get("adcp_major_version"),
             identity=identity,
@@ -2028,7 +2028,7 @@ class AdCPRequestHandler(RequestHandler):
                 **select_request_fields(
                     ListCreativeFormatsRequest,
                     parameters,
-                    inspect.signature(build_list_creative_formats_request).parameters,
+                    accepted_kwargs(build_list_creative_formats_request),
                 )
             )
 
@@ -2048,7 +2048,9 @@ class AdCPRequestHandler(RequestHandler):
 
         # Same context string as the REST route's boundary (klkg parity).
         with adcp_validation_boundary(context="list_accounts request"):
-            request = build_list_accounts_request(**select_request_fields(ListAccountsRequest, parameters))
+            request = build_list_accounts_request(
+                **select_request_fields(ListAccountsRequest, parameters, accepted_kwargs(build_list_accounts_request))
+            )
         return core_list_accounts_tool(req=request, identity=identity)
 
     async def _handle_sync_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
@@ -2061,7 +2063,9 @@ class AdCPRequestHandler(RequestHandler):
 
         # Same context string as the REST route's boundary (klkg parity).
         with adcp_validation_boundary(context="sync_accounts request"):
-            request = build_sync_accounts_request(**select_request_fields(SyncAccountsRequest, parameters))
+            request = build_sync_accounts_request(
+                **select_request_fields(SyncAccountsRequest, parameters, accepted_kwargs(build_sync_accounts_request))
+            )
         return await core_sync_accounts_tool(req=request, identity=identity)
 
     async def _handle_list_authorized_properties_skill(
@@ -2090,7 +2094,11 @@ class AdCPRequestHandler(RequestHandler):
         # Same context string as the REST route's boundary (klkg parity).
         with adcp_validation_boundary(context="list_authorized_properties request"):
             request = ListAuthorizedPropertiesRequest.model_validate(
-                select_request_fields(ListAuthorizedPropertiesRequest, parameters)
+                # accepted=None because this site builds the DTO itself rather than calling a
+                # narrower callee -- there is no signature to intersect with, so the DTO alone
+                # decides. Stated rather than defaulted into: the unnarrowed form is a real
+                # answer here, and making it explicit is what keeps it from being the easy one.
+                select_request_fields(ListAuthorizedPropertiesRequest, parameters, None)
             )
 
         # Call core function with identity
@@ -2134,7 +2142,7 @@ class AdCPRequestHandler(RequestHandler):
         # update-media-buy-request.json /required, so a spec-conformant A2A buyer's
         # at-most-once key was being discarded, the same defect class as salesagent-e8wt.1.
         # media_buy_id comes from the validated model; the rest of the bag is selected.
-        selected = select_request_fields(UpdateMediaBuyRequest, params, _UPDATE_MEDIA_BUY_KWARGS)
+        selected = select_request_fields(UpdateMediaBuyRequest, params, accepted_kwargs(core_update_media_buy_tool))
         selected["media_buy_id"] = req.media_buy_id or ""
         response = core_update_media_buy_tool(**selected, identity=identity)
 

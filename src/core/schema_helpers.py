@@ -10,6 +10,7 @@ Philosophy:
 - Custom logic (validators, conversions) lives here, not in wrapper classes
 """
 
+import inspect
 from collections.abc import Container, Mapping
 from typing import Any
 from urllib.parse import urlparse
@@ -273,10 +274,43 @@ def create_get_products_request(
 _VERSION_ENVELOPE_FIELDS = frozenset({"adcp_version", "adcp_major_version"})
 
 
+def accepted_kwargs(callee: Any) -> frozenset[str] | None:
+    """The keyword names ``callee`` accepts, or ``None`` when it accepts any.
+
+    The INTERSECT half of the rule, expressed ONCE. It used to be re-derived at every
+    forwarding site in four different spellings -- import-time frozensets, call-time
+    ``inspect.signature(...).parameters``, and simply omitted -- which is how the rule came
+    to be enforced at some boundaries and not others.
+
+    ``None`` means UNBOUNDED, and it is a real answer rather than a failure: a callee
+    declaring ``**kwargs`` genuinely accepts every keyword, so the intersection is the
+    identity and the DTO alone decides.
+
+    That semantics also dissolves a hazard that used to need per-site mitigation. Tests patch
+    transport-module attributes with ``Mock``s, whose signature is ``(*args, **kwargs)``.
+    Read as a NAME LIST that is the empty set, so a call-time read silently dropped every
+    field the buyer sent -- the two import-time frozensets existed only to dodge that, and
+    only two of the four signature-reading sites had them. Read as ``**kwargs``, a Mock
+    correctly reports "accepts anything", so timing stops mattering and the frozensets are
+    unnecessary. The hazard was a property of the RULE, so the cure belongs with the rule.
+    """
+    try:
+        parameters = inspect.signature(callee).parameters
+    except (TypeError, ValueError):
+        return None
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        return None
+    return frozenset(
+        name
+        for name, p in parameters.items()
+        if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    )
+
+
 def select_request_fields(
     model: type[BaseModel],
     source: BaseModel | Mapping[str, Any],
-    accepted: "Container[str] | None" = None,
+    accepted: "Container[str] | None",
 ) -> dict[str, Any]:
     """The DTO's fields, out of a transport's raw bag, narrowed to what the callee accepts.
 
@@ -295,6 +329,14 @@ def select_request_fields(
     * A key the DTO does not declare is simply not forwarded -- no allowlist, no ledger.
       Non-spec input stops at the boundary instead of being quietly honoured.
 
+    ``accepted`` is REQUIRED, and deliberately has no default. It defaulted to ``None`` once,
+    which made the UNNARROWED form the easiest to write and left seven of ten sites silently
+    taking it -- forwarding fields the callee had no parameter for, whose only outcome is a
+    ``TypeError`` on a spec-conformant payload. Pass ``accepted_kwargs(callee)``; it returns
+    ``None`` for a genuinely unbounded callee, so the unnarrowed case is still expressible but
+    must now be DERIVED rather than defaulted into. This mirrors ``_register_tool``, which
+    refuses to register a tool whose DTO cannot be resolved instead of falling back quietly.
+
     Version-envelope fields are excluded (see ``_VERSION_ENVELOPE_FIELDS``): the transports
     spell them incompatibly and they are negotiated at the boundary, not carried as request
     data. A tool that genuinely negotiates on them forwards them explicitly.
@@ -308,6 +350,7 @@ def select_request_fields(
 
 
 __all__ = [
+    "accepted_kwargs",
     "is_url_shorthand",
     "brand_shorthand_to_domain",
     "to_account_reference",

@@ -15,8 +15,6 @@ Three properties, each of which failed at least once while this was being built:
 
 from __future__ import annotations
 
-import inspect
-
 import pytest
 
 from src.core.tools._announced_shape import (
@@ -128,7 +126,7 @@ class TestNarrowingIsGraded:
         from src.core.schemas import ListCreativesRequest
 
         bag = {"filters": {"tags": ["q1"]}, "sort": {"direction": "asc"}, "include_assignments": True}
-        wide = select_request_fields(ListCreativesRequest, bag)
+        wide = select_request_fields(ListCreativesRequest, bag, None)
         narrow = select_request_fields(ListCreativesRequest, bag, {"filters"})
 
         assert set(wide) == {"filters", "sort", "include_assignments"}, (
@@ -150,18 +148,23 @@ class TestNarrowingIsGraded:
 
         import pytest
 
-        from src.core.schema_helpers import create_get_products_request, select_request_fields
+        from src.core.schema_helpers import (
+            accepted_kwargs,
+            create_get_products_request,
+            select_request_fields,
+        )
         from src.core.schemas import GetProductsRequest
 
         bag = {"brief": "video", "catalog": {"id": "c1"}, "refine": True}
-        unnarrowed = select_request_fields(GetProductsRequest, bag)
+        # None is the explicit "unbounded" answer -- the only way to get the wide form now
+        # that `accepted` is required. That it must be SPELLED is the fix for this defect
+        # class: seven of ten production sites had reached the wide form by omission.
+        unnarrowed = select_request_fields(GetProductsRequest, bag, None)
         assert "catalog" in unnarrowed, "fixture stale: catalog must be a DTO field for this to grade"
         with pytest.raises(TypeError):
             create_get_products_request(**unnarrowed)
 
-        narrowed = select_request_fields(
-            GetProductsRequest, bag, inspect.signature(create_get_products_request).parameters
-        )
+        narrowed = select_request_fields(GetProductsRequest, bag, accepted_kwargs(create_get_products_request))
         create_get_products_request(**narrowed)  # must not raise
 
 
@@ -307,3 +310,62 @@ class TestAdvertisedTypesAreAccepted:
 
         assert isinstance(req.budget, float)
         assert req.budget == 5000.0
+
+
+class TestAcceptedKwargsIsTheOneSpelling:
+    """``accepted_kwargs`` is the INTERSECT half of the rule, expressed once.
+
+    Before it existed the same question -- "which keywords does this callee take?" -- was
+    answered in four different ways across ten forwarding sites: import-time frozensets,
+    call-time signature reads, and simply omitted. Enforcement was therefore partial, and the
+    omitted form was the easiest to write.
+
+    The Mock case is why the two import-time frozensets existed, and why they could be
+    retired: it is the difference between "this callee accepts nothing" and "this callee
+    accepts anything", from the identical signature.
+    """
+
+    def test_a_plain_callee_reports_its_keyword_names(self) -> None:
+        from src.core.schema_helpers import accepted_kwargs
+
+        def callee(alpha, beta, *, gamma=None): ...
+
+        assert accepted_kwargs(callee) == frozenset({"alpha", "beta", "gamma"})
+
+    def test_var_keyword_means_unbounded_not_the_literal_name(self) -> None:
+        """A **kwargs callee accepts every field -- not a field called "kwargs"."""
+        from src.core.schema_helpers import accepted_kwargs
+
+        def callee(alpha, **kwargs): ...
+
+        assert accepted_kwargs(callee) is None
+
+    def test_a_patched_mock_accepts_anything_rather_than_nothing(self) -> None:
+        """The hazard that used to force import-time capture, now handled by the rule.
+
+        Tests patch transport-module attributes with Mocks, whose signature is
+        ``(*args, **kwargs)``. Read as a name list that is empty, a call-time narrowing
+        silently dropped EVERY field the buyer sent -- so the two handlers that read at call
+        time needed frozensets captured at import, and the other two sites did not have them.
+        Reading it as unbounded makes the timing irrelevant.
+        """
+        from unittest.mock import Mock
+
+        from src.core.schema_helpers import accepted_kwargs
+
+        assert accepted_kwargs(Mock()) is None, (
+            "a Mock reported as a bounded empty set would make every narrowed forwarding site "
+            "drop the entire payload under test, silently and green"
+        )
+
+    def test_selection_through_a_mock_keeps_the_payload(self) -> None:
+        """The consequence, at the seam rather than on the primitive."""
+        from unittest.mock import Mock
+
+        from src.core.schema_helpers import accepted_kwargs, select_request_fields
+        from src.core.schemas import ListCreativesRequest
+
+        bag = {"filters": {"tags": ["q1"]}, "include_assignments": True}
+        selected = select_request_fields(ListCreativesRequest, bag, accepted_kwargs(Mock()))
+
+        assert set(selected) == {"filters", "include_assignments"}

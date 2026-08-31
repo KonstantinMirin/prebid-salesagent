@@ -7,7 +7,6 @@ and applies version compat at the boundary.
 
 from __future__ import annotations
 
-import inspect
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -24,6 +23,7 @@ from fastapi import APIRouter, Depends, Request
 
 from src.core.auth_context import require_auth, resolve_auth
 from src.core.schema_helpers import (
+    accepted_kwargs,
     coerce_creative_filters,
     select_request_fields,
     to_account_reference,
@@ -294,7 +294,7 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
             **select_request_fields(
                 GetProductsRequest,
                 body,
-                inspect.signature(products_module.create_get_products_request).parameters,
+                accepted_kwargs(products_module.create_get_products_request),
             )
         )
     response = await products_module._get_products_impl(req, identity)
@@ -323,7 +323,9 @@ async def post_capabilities(body: GetAdcpCapabilitiesBody, identity: ResolvedIde
     # Version pair forwarded explicitly -- see the A2A handler's note: the selector strips
     # the version-envelope fields by design, but this tool negotiates on them.
     response = await capabilities_module.get_adcp_capabilities_raw(
-        **select_request_fields(GetAdcpCapabilitiesRequest, body),
+        **select_request_fields(
+            GetAdcpCapabilitiesRequest, body, accepted_kwargs(capabilities_module.get_adcp_capabilities_raw)
+        ),
         adcp_version=body.adcp_version,
         adcp_major_version=body.adcp_major_version,
         identity=identity,
@@ -572,7 +574,7 @@ async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = r
     selected = select_request_fields(
         ListCreativesRequest,
         body,
-        inspect.signature(creatives_listing_module.list_creatives_raw).parameters,
+        accepted_kwargs(creatives_listing_module.list_creatives_raw),
     )
     selected["filters"] = filters
     response = creatives_listing_module.list_creatives_raw(**selected, identity=identity)
@@ -598,7 +600,9 @@ async def list_accounts(body: ListAccountsBody, identity: ResolvedIdentity = req
     from src.core.tools.accounts import build_list_accounts_request
 
     with adcp_validation_boundary(context="list_accounts request"):
-        req = build_list_accounts_request(**select_request_fields(ListAccountsRequest, body))
+        req = build_list_accounts_request(
+            **select_request_fields(ListAccountsRequest, body, accepted_kwargs(build_list_accounts_request))
+        )
     response = accounts_module.list_accounts_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
@@ -610,6 +614,8 @@ async def sync_accounts(body: SyncAccountsBody, identity: ResolvedIdentity = req
     from src.core.tools.accounts import build_sync_accounts_request
 
     with adcp_validation_boundary(context="sync_accounts request"):
-        req = build_sync_accounts_request(**select_request_fields(SyncAccountsRequest, body))
+        req = build_sync_accounts_request(
+            **select_request_fields(SyncAccountsRequest, body, accepted_kwargs(build_sync_accounts_request))
+        )
     response = await accounts_module.sync_accounts_raw(req=req, identity=identity)
     return response.model_dump(mode="json")

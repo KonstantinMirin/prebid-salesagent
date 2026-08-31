@@ -23,12 +23,12 @@ from payload, which the hand-written classes did not.
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel, create_model
 
+from src.core.schema_helpers import accepted_kwargs
 from src.core.schemas._base import SalesAgentBaseModel
 
 #: Carried so the route can negotiate, never forwarded as request data.
@@ -47,10 +47,15 @@ def derived_body_model(
     ``extra_fields`` is for values the ROUTE needs that are not request data -- keep it
     empty unless a route genuinely reads something the DTO does not describe.
     """
-    accepted = set(inspect.signature(impl).parameters)
+    # ONE definition of "what the impl accepts", shared with the forwarding seam and the MCP
+    # derivation, rather than a third independent signature read. It also gets the two cases a
+    # bare `set(inspect.signature(impl).parameters)` got wrong: a **kwargs impl (which accepts
+    # every field, not the literal name "kwargs") and a patched Mock (which accepts anything,
+    # not nothing).
+    accepted = accepted_kwargs(impl)
     fields: dict[str, tuple[Any, Any]] = {}
     for field_name, field in dto.model_fields.items():
-        if field_name not in accepted:
+        if accepted is not None and field_name not in accepted:
             continue  # declared by the spec, not implemented here -- so not accepted
         annotation = field.annotation
         fields[field_name] = (annotation if _is_optional(annotation) else annotation | None, None)
