@@ -187,9 +187,7 @@ def apply_dto_announced_shape(
     # unresolvable DTO: a list of known-broken tools records the violation, whereas refusing
     # makes the broken state unreachable.
     missing_required = {
-        name
-        for name, field in model.model_fields.items()
-        if field.is_required() and name not in signature.parameters
+        name for name, field in model.model_fields.items() if field.is_required() and name not in signature.parameters
     }
     if missing_required:
         raise RuntimeError(

@@ -298,7 +298,6 @@ class GetProductsRequest(LibraryGetProductsRequest):
         default=None, description="Brand reference, or the shorthand this agent also accepts"
     )
 
-
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
     # Widen buying_mode from Literal['wholesale'] to str|None (we accept any mode or none)

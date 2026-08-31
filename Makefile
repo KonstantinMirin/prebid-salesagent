@@ -16,6 +16,18 @@ quality-ci:
 	uv run ruff format --check .
 	uv run ruff check .
 	uv run mypy src/ --config-file=mypy.ini
+	# Layer-2 ratchets. These are declared stages:[pre-push] in .pre-commit-config.yaml, and
+	# this repo's documented workflow (ephemeral branches merged LOCALLY, `git push` never run)
+	# means the pre-push stage NEVER FIRES. They therefore ran nowhere, and drift accumulated
+	# unseen: measured on 2026-09-01, mypy --check-untyped-defs was 15 above its committed
+	# baseline on origin/main itself. Running them here is what makes `make quality` the gate
+	# the workflow already assumes it is (salesagent-aemue.13).
+	uv run python .pre-commit-hooks/check_type_ignore_count.py
+	uv run python .pre-commit-hooks/check_fixme_citation_count.py
+	uv run python .pre-commit-hooks/check_mypy_untyped_defs_count.py
+	uv run python .pre-commit-hooks/check_ruff_complexity_count.py
+	uv run python .pre-commit-hooks/check_route_conflicts.py
+	uv run python .pre-commit-hooks/check_migration_completeness.py
 	uv run python .pre-commit-hooks/check_code_duplication.py
 	uv run python .pre-commit-hooks/check-gam-auth-support.py
 	uv run python scripts/hooks/check_response_attribute_access.py $$(find src -name '*.py')

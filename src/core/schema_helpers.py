@@ -12,7 +12,7 @@ Philosophy:
 
 import inspect
 import logging
-from collections.abc import Container, Mapping
+from collections.abc import Collection, Mapping
 from typing import Any
 from urllib.parse import urlparse
 
@@ -313,7 +313,7 @@ def accepted_kwargs(callee: Any) -> frozenset[str] | None:
 def select_request_fields(
     model: type[BaseModel],
     source: BaseModel | Mapping[str, Any],
-    accepted: "Container[str] | None",
+    accepted: "Collection[str] | None",
 ) -> dict[str, Any]:
     """The DTO's fields, out of a transport's raw bag, narrowed to what the callee accepts.
 
