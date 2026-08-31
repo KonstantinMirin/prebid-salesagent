@@ -6,9 +6,9 @@ Mocked: the SEAM's ``time.sleep`` (so backoff is observable without waiting for
       it). Nothing else — the loopback allowance is the seam's own escape hatch,
       opened by ``LocalOriginMixin``.
 
-Nothing about the outbound transport is patched. That is the point: the same
-tests grade ``requests.post`` today and ``src.core.security.outbound_http.send``
-after the migration, because both must put the same bytes on the same socket.
+Nothing about the outbound transport is patched. That is the point: the tests
+grade the bytes ``src.core.security.outbound_http.send`` puts on the socket, not
+which client library puts them there.
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
 

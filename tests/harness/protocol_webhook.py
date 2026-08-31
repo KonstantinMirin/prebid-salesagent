@@ -4,9 +4,9 @@ Real: a local HTTP origin that actually serves the POST, the real database for
       the ``webhook_delivery_log`` rows the service writes, and a real
       ``ProtocolWebhookService`` instance.
 Mocked: nothing. There is no ``EXTERNAL_PATCHES`` entry on purpose — the whole
-      point of this env is that the transport is not substituted, so the same
-      assertions grade ``requests.Session.post`` today and
-      ``src.core.security.outbound_http.asend`` after the migration.
+      point of this env is that the transport is not substituted: the assertions
+      grade ``src.core.security.outbound_http.asend`` putting real bytes on a
+      real socket, indifferent to how the seam is implemented.
 
 Why an env rather than the bare ``local_origin`` fixture plus direct calls:
 ``ProtocolWebhookService`` writes its delivery log through

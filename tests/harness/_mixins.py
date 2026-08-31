@@ -426,10 +426,11 @@ class LocalOriginMixin:
     those symbols, so every one of those tests would have had to be rewritten as
     part of the migration, which is exactly when a rewrite is least trustworthy.
 
-    An origin that actually serves HTTP is neutral to that choice: it answers
-    ``requests.post`` today and ``send()`` tomorrow, and the assertions — how
-    many requests arrived, with which headers, carrying which bytes — mean the
-    same thing under both. That is why this lands before the migration and not
+    An origin that actually serves HTTP is neutral to that choice: it answered
+    ``requests.post`` before the migration and answers
+    ``src.core.security.outbound_http.send`` now, and the assertions — how many
+    requests arrived, with which headers, carrying which bytes — mean the same
+    thing under both. That is why this landed before the migration rather than
     with it.
 
     The origin serves real TLS off the generated CA/leaf (the primitive from

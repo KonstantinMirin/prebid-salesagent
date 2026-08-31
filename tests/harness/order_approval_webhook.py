@@ -3,9 +3,9 @@
 Real: a local HTTP origin that actually serves the POST, and the real database
       for the ``PushNotificationConfig`` lookup that builds the auth header.
 Mocked: nothing. There is no ``EXTERNAL_PATCHES`` entry on purpose — the whole
-      point of this env is that the transport is not substituted, so the same
-      assertions grade ``httpx.Client`` today and
-      ``src.core.security.outbound_http.send`` after the migration.
+      point of this env is that the transport is not substituted: the assertions
+      grade ``src.core.security.outbound_http.send`` putting real bytes on a real
+      socket, indifferent to how the seam is implemented.
 
 Why an env rather than the bare ``local_origin`` fixture plus a factory call:
 ``_send_approval_webhook`` reads its auth config out of the database
