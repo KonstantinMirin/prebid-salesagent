@@ -707,19 +707,21 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     (
         "T-UC-018-boundary-pagination",
         {
-            "max_results=0",
-            "max_results=1",
-            "max_results=100",
-            "max_results=101",
-            "limit=1000",
-            "limit=1001",
-            "sort_by='assignment_count'",
+            "assignment_count",
         },
-        "UC-018 pagination boundaries: max_results is a PaginationRequest field with no flat "
-        "equivalent on A2A/REST, the limit cap is unobservable below 1000 rows, and "
-        "assignment_count sorting is unimplemented (CreativeRepository.get_by_principal maps only "
-        "name/status/created_at). The sort_order/sort_by coercion rows are the ones this lane "
-        "grades — #1721",
+        # GRADUATED (2026-08-31, salesagent-prkv.5): the max_results rows are OUT of this
+        # entry because the gap it described is closed -- list_creatives_raw and
+        # ListCreativesBody now declare the spec's pagination object, so max_results has a
+        # path on A2A and REST and those rows XPASSed strict. The limit=1000/1001 rows are
+        # gone entirely: `limit` is not an AdCP 3.1.1 field, and the code cap they graded is
+        # not a spec behaviour.
+        # Still dormant: assignment_count sorting is genuinely unimplemented --
+        # CreativeRepository.get_by_principal maps only name/status/created_at -- so the
+        # enum's last member cannot be honoured yet. That is a real production gap, not a
+        # wiring one — #1721
+        "UC-018: assignment_count sorting is unimplemented (CreativeRepository."
+        "get_by_principal maps only name/status/created_at), so the last member of "
+        "creative-sort-field.json cannot be honoured — #1721",
     ),
     (
         "T-UC-005-partition-disclosure",

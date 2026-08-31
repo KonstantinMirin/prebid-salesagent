@@ -166,3 +166,57 @@ class TestLiveRegistryActuallyCarriesTheDerivation:
             "not reaching the live registry -- check apply_dto_announced_shape is called "
             "in _register_tool and that it sets __annotations__ as well as __signature__."
         )
+
+
+class TestNarrowingIsGraded:
+    """The `accepted` argument to select_request_fields must actually narrow.
+
+    A mutation review found that making select_request_fields IGNORE `accepted` reddened
+    nothing in the whole suite: uc018 and uc019 were byte-identical to baseline. The
+    narrowing is what stops a callee being handed a DTO field it cannot take -- the
+    difference between a dropped key and a TypeError 500 on a spec-conformant payload -- so
+    it needs a grader that fails when it stops happening.
+    """
+
+    def test_accepted_narrows_the_selection(self) -> None:
+        """Fields outside `accepted` must not be forwarded."""
+        from src.core.schema_helpers import select_request_fields
+        from src.core.schemas import ListCreativesRequest
+
+        bag = {"filters": {"tags": ["q1"]}, "sort": {"direction": "asc"}, "include_assignments": True}
+        wide = select_request_fields(ListCreativesRequest, bag)
+        narrow = select_request_fields(ListCreativesRequest, bag, {"filters"})
+
+        assert set(wide) == {"filters", "sort", "include_assignments"}, (
+            f"unnarrowed selection should carry every DTO field present in the bag; got {sorted(wide)}"
+        )
+        assert set(narrow) == {"filters"}, (
+            f"`accepted` must remove what the callee cannot take; got {sorted(narrow)}. If this "
+            f"equals the unnarrowed set, select_request_fields is ignoring its third argument "
+            f"and every converted call site is handing its callee unaccepted kwargs."
+        )
+
+    def test_a_real_call_site_would_break_without_narrowing(self) -> None:
+        """The concrete case: create_get_products_request takes 5 of GetProductsRequest's 20.
+
+        Splatting the unnarrowed selection into it raises TypeError -- which is precisely the
+        500-on-a-valid-payload the `accepted` argument exists to prevent. Proven by calling
+        it, not by reading the signature.
+        """
+        import inspect
+
+        import pytest
+
+        from src.core.schema_helpers import create_get_products_request, select_request_fields
+        from src.core.schemas import GetProductsRequest
+
+        bag = {"brief": "video", "catalog": {"id": "c1"}, "refine": True}
+        unnarrowed = select_request_fields(GetProductsRequest, bag)
+        assert "catalog" in unnarrowed, "fixture stale: catalog must be a DTO field for this to grade"
+        with pytest.raises(TypeError):
+            create_get_products_request(**unnarrowed)
+
+        narrowed = select_request_fields(
+            GetProductsRequest, bag, inspect.signature(create_get_products_request).parameters
+        )
+        create_get_products_request(**narrowed)  # must not raise

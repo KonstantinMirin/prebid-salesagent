@@ -216,15 +216,15 @@ Feature: BR-UC-018 List Creatives
 
     Examples: Boundary values
       | boundary_point                                    | request_params         | outcome                                                          |
-      | pagination.max_results=0 (below schema min of 1)   | pagination max_results 0    | error "VALIDATION_ERROR" with suggestion                    |
+      | pagination.max_results=0 (below schema min of 1)   | pagination max_results 0    | error "INVALID_REQUEST" with suggestion                     |
       | pagination.max_results=1 (schema minimum)          | pagination max_results 1    | 1 creative returned                                         |
       | pagination.max_results=100 (schema maximum)        | pagination max_results 100  | 60 creatives returned (all available)                        |
-      | pagination.max_results=101 (above schema maximum)  | pagination max_results 101  | error "VALIDATION_ERROR" with suggestion                     |
+      | pagination.max_results=101 (above schema maximum)  | pagination max_results 101  | error "INVALID_REQUEST" with suggestion                      |
       | sort.direction='asc' (valid enum)                  | sort direction "asc"        | creatives sorted ascending                                   |
       | sort.direction='desc' (valid enum, the default)    | sort direction "desc"       | creatives sorted descending                                  |
-      | sort.direction='random' (not in the enum)          | sort direction "random"     | error "VALIDATION_ERROR" with suggestion                     |
+      | sort.direction='random' (not in the enum)          | sort direction "random"     | error "INVALID_REQUEST" with suggestion                      |
       | sort.field='assignment_count' (last enum member)   | sort field "assignment_count" | creatives sorted by assignment_count                      |
-      | sort.field='unknown_field' (not in the enum)       | sort field "unknown_field"  | error "VALIDATION_ERROR" with suggestion                     |
+      | sort.field='unknown_field' (not in the enum)       | sort field "unknown_field"  | error "INVALID_REQUEST" with suggestion                      |
 
   @T-UC-018-partition-filters @partition @filter-semantics
   Scenario Outline: Filter semantics -- <partition>

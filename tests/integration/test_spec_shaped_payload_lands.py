@@ -109,12 +109,13 @@ class TestSpecShapedPayloadLands:
         assert data.get("media_buy") is not None, (
             f"[{transport}] protocols=['media_buy'] did not select the media_buy section"
         )
-        # The FILTER, not just the selection: asserting only that media_buy is present
-        # passes just as well when protocols is ignored entirely and every section is
-        # returned, which is what a mutation review found. The sections protocols did NOT
-        # name must be absent for the claim in this message to be true.
-        unselected = [section for section in ("signals", "creative", "curation") if data.get(section) is not None]
-        assert not unselected, (
-            f"[{transport}] protocols=['media_buy'] left {unselected} populated -- the "
-            "filter was ignored and the response is unfiltered, not selected."
-        )
+        # The protocols FILTER is deliberately NOT asserted here, and this comment is the
+        # record of why. Two earlier versions of that assertion were vacuous: checking only
+        # that media_buy is PRESENT passes when protocols is ignored and everything is
+        # returned; checking that signals/creative are ABSENT passes trivially because this
+        # fixture's tenant never declares them (the four declaration blocks are measurement,
+        # specialisms, supported_protocols and trusted_match -- none populates signals), so
+        # disabling the filter outright reddened nothing.
+        # It is graded properly, with a tenant that has sections to null out, by
+        # test_capabilities_rest_post_contract.py::test_post_capabilities_filters_sections_by_protocols.
+        # Duplicating it here in a form that cannot fail is worse than not asserting it.

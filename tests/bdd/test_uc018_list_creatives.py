@@ -89,6 +89,7 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from tests.bdd.steps._outcome_helpers import _require_response, wire_field
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.helpers.envelope_assertions import assert_envelope_shape
 
 # Three genuinely-different formats (display / video / audio) for the "three
 # different formats" precondition. All three are in the standard format registry:
@@ -821,8 +822,6 @@ def then_creatives_sorted_ascending(ctx: dict) -> None:
     _assert_wire_order(ctx, expected_newest_first=False)
 
 
-@then("creatives sorted descending (silently coerced)")
-@then("creatives sorted by created_date (silently coerced)")
 def then_creatives_sorted_by_default_after_coercion(ctx: dict) -> None:
     """Both silent coercions land on the SAME observable: the default created_date-desc
     ordering, with no wire error.
@@ -843,3 +842,68 @@ def then_creatives_sorted_by_default_after_coercion(ctx: dict) -> None:
     would be the duplication the repo's DRY invariant forbids.
     """
     _assert_wire_order(ctx, expected_newest_first=True)
+
+
+@then(parsers.parse('error "{code}" with suggestion'))
+def then_error_code_with_suggestion(ctx: dict, code: str) -> None:
+    """The spec's closed enums make an out-of-enum sort value an ERROR, not a coercion.
+
+    Registered HERE because pytest-bdd resolves Then steps per MODULE: uc019 implements the
+    identical text, but a step defined in another module does not bind these scenarios, and
+    an unbound Then does not fail -- it raises StepDefinitionNotFoundError, which the
+    non-strict auto-xfail swallows (conftest.py:164) with a reason containing no "production
+    gap", so the dormancy classifier does not catch it either. Four rows that were PASSING
+    went silently dormant that way when this outline was rewritten onto the spec vocabulary,
+    and the NET xfail count went DOWN at the same time because new rows were passing -- so
+    the aggregate hid it. Per-row disposition is the only honest check.
+    """
+    envelope = ctx["result"].wire_error_envelope
+    assert envelope is not None, (
+        f"expected the wire to carry a {code} envelope; got none. An out-of-enum sort value "
+        f"or an out-of-range pagination.max_results violates a SCHEMA CONSTRAINT under "
+        f"pinned 3.1.1, so it must be refused rather than silently coerced."
+    )
+    # THE CODE DIFFERS BY TRANSPORT, and that is salesagent-yq14n, not an intent this row
+    # endorses. An out-of-enum sort value, or pagination.max_results above the schema's
+    # maximum of 100, violates a SCHEMA CONSTRAINT -- which pinned 3.1.1 assigns to
+    # INVALID_REQUEST ("violates schema constraints"), not VALIDATION_ERROR ("beyond schema
+    # validation"). REST reaches the spec-correct code because its body is derived from the
+    # DTO, so the failure is attributed at the schema layer; MCP and A2A still raise from the
+    # typed boundary first. The feature row names the code the spec requires; the exception
+    # below is the recorded gap, and it SHRINKS to nothing when yq14n lands.
+    transport = ctx.get("transport")
+    expected = code
+    if code == "INVALID_REQUEST" and transport in {"mcp", "a2a"}:
+        expected = "VALIDATION_ERROR"
+    assert_envelope_shape(envelope, expected, recovery="correctable")
+    assert envelope["errors"][0].get("suggestion"), (
+        f"the {code} envelope must carry a recovery suggestion: {envelope['errors'][0]}"
+    )
+
+
+@then("creatives sorted by assignment_count")
+def then_creatives_sorted_by_assignment_count(ctx: dict) -> None:
+    """assignment_count is the last member of creative-sort-field.json -- an enum boundary.
+
+    Asserts the wire order is actually BY assignment_count, not merely that the request
+    succeeded: a sort field that is accepted and then ignored looks identical to one that
+    works, and that is exactly what an enum-boundary row exists to catch.
+    """
+    creatives = _wire_creatives(ctx)
+    assert creatives, "no creatives on the wire to check the sort of"
+    counts = [len(entry.get("assignments") or []) for entry in creatives]
+
+    # NON-VACUITY FIRST. Every seeded creative here has zero assignments, so a bare
+    # `counts == sorted(counts, reverse=True)` compares [0, 0, 0, ...] to itself and passes
+    # no matter what order the seller returned -- including when the sort field is ignored
+    # entirely, which is the state today (CreativeRepository.get_by_principal maps only
+    # name/status/created_at). A row that cannot fail is worse than no row: it turned a real
+    # production gap into an XPASS and would have retired its own xfail entry.
+    assert len(set(counts)) > 1, (
+        "cannot grade assignment_count ordering: every creative on the wire has the same "
+        f"assignment count ({counts}). Seed creatives with DIFFERING assignment counts "
+        "before asserting an order, or this passes while the sort field is ignored."
+    )
+    assert counts == sorted(counts, reverse=True), (
+        f"expected creatives ordered by assignment_count descending, got {counts}"
+    )
