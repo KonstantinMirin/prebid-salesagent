@@ -39,12 +39,16 @@ from __future__ import annotations
 import inspect
 import re
 import sys
+import types
 import typing
 from collections.abc import Callable
 from typing import Annotated, Any
 
 from pydantic import BaseModel
 from pydantic import Field as PydanticField
+
+#: Union origins, for deciding whether adopting a DTO type would narrow acceptance.
+_UNION_ORIGINS = (typing.Union, types.UnionType)
 
 #: Transport plumbing, never a buyer-facing parameter -- left exactly as declared.
 _NEVER_ANNOUNCED = frozenset({"ctx", "self", "identity", "req"})
@@ -84,8 +88,36 @@ def request_model_for(fn: Callable[..., Any]) -> type[BaseModel] | None:
     return model if isinstance(model, type) and issubclass(model, BaseModel) else None
 
 
+def _union_members(annotation: Any) -> frozenset[Any]:
+    """The set of types an annotation admits, seeing through Annotated and unions."""
+    if typing.get_origin(annotation) is Annotated:
+        annotation = typing.get_args(annotation)[0]
+    args = typing.get_args(annotation)
+    if args and typing.get_origin(annotation) in _UNION_ORIGINS:
+        return frozenset(args)
+    return frozenset({annotation})
+
+
+def _would_narrow(declared: Any, dto: Any) -> bool:
+    """True when adopting ``dto`` would REJECT input ``declared`` accepts."""
+    return bool(_union_members(declared) - _union_members(dto))
+
+
 def derived_signature(fn: Callable[..., Any], model: type[BaseModel]) -> inspect.Signature:
-    """``fn``'s own parameters, retyped from ``model`` wherever it declares the field."""
+    """``fn``'s own parameters, retyped from ``model`` wherever it declares the field.
+
+    The DTO's type is adopted only when it does NOT narrow what the tool already accepts.
+    Some parameters deliberately admit more than the DTO: ``get_products.brand`` takes
+    ``BrandReference | dict | str`` so a buyer can pass the documented brand shorthand
+    ("acme.com"), while the DTO declares ``BrandReference`` alone. Narrowing the ADVERTISED
+    type there does not merely relabel it -- FastMCP validates against the advertised
+    schema, so the shorthand starts being REJECTED at the boundary. That is a buyer-visible
+    behaviour change wearing the costume of a type annotation, and it broke 18 brand
+    shorthand scenarios on mcp the first time this was applied.
+
+    Where the tool accepts a superset, its own annotation stands and only the DTO's
+    DESCRIPTION is adopted: the advertised schema keeps telling the truth about what lands.
+    """
     signature = inspect.signature(fn)
     parameters = []
     for name, parameter in signature.parameters.items():
@@ -93,7 +125,9 @@ def derived_signature(fn: Callable[..., Any], model: type[BaseModel]) -> inspect
         if field is None:
             parameters.append(parameter)
             continue
-        annotation = field.annotation
+        declared = parameter.annotation
+        narrows = declared is not inspect.Parameter.empty and _would_narrow(declared, field.annotation)
+        annotation = declared if narrows else field.annotation
         if field.description:
             annotation = Annotated[annotation, PydanticField(description=field.description)]
         parameters.append(parameter.replace(annotation=annotation))
