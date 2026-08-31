@@ -14,7 +14,7 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from src.core.schemas._base import GetMediaBuysRequest
-from tests.bdd.steps._outcome_helpers import payload_or_none, wire_dict, wire_field
+from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload, wire_dict, wire_field
 from tests.bdd.steps.generic._create_request import build_create_request_kwargs
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _wire_code, _wire_error_object, _wire_suggestion
@@ -1792,8 +1792,7 @@ def then_error_contains(ctx: dict, fragment: str) -> None:
 @then(parsers.parse('the response errors array should include error code "{code}"'))
 def then_response_errors_include(ctx: dict, code: str) -> None:
     """Assert response.errors contains the specified error code."""
-    resp = payload_or_none(ctx)
-    assert resp is not None, f"Expected response, got error: {ctx.get('error')}"
+    resp = require_payload(ctx)
     errors = getattr(resp, "errors", None) or []
     codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
     assert code in codes, f"Expected error code '{code}' in response errors, got {codes}"
@@ -2194,8 +2193,7 @@ def then_response_count_scoped(ctx: dict, count: int, principal_id: str) -> None
 @then(parsers.parse('the response should contain "media_buys" array'))
 def then_response_has_media_buys_array(ctx: dict) -> None:
     """Assert response has a media_buys field that is a list (array)."""
-    resp = payload_or_none(ctx)
-    assert resp is not None, f"Expected response, got error: {ctx.get('error')}"
+    resp = require_payload(ctx)
     buys = getattr(resp, "media_buys", None)
     assert buys is not None, "Response missing media_buys field"
     assert isinstance(buys, list), f"Expected media_buys to be a list (array), got {type(buys).__name__}"
@@ -2208,8 +2206,7 @@ def then_sandbox_true(ctx: dict) -> None:
     Scenario-level xfail (T-UC-019-sandbox-happy) handles the expected failure
     when sandbox mode is not yet implemented in production.
     """
-    resp = payload_or_none(ctx)
-    assert resp is not None, f"Expected response, got error: {ctx.get('error')}"
+    resp = require_payload(ctx)
     sandbox = getattr(resp, "sandbox", None)
     assert sandbox is True, f"Expected sandbox=true, got {sandbox!r}"
 
@@ -2222,8 +2219,7 @@ def then_no_sandbox_field(ctx: dict) -> None:
     it anyway, this is a spec-production gap.
     """
 
-    resp = payload_or_none(ctx)
-    assert resp is not None, f"Expected response, got error: {ctx.get('error')}"
+    resp = require_payload(ctx)
     sandbox = getattr(resp, "sandbox", None)
     # Violation path: sandbox IS present when it should NOT be
     assert sandbox is None, (
@@ -2385,10 +2381,7 @@ def then_empty_with_error(ctx: dict, code: str) -> None:
     """Assert empty media_buys with specific error code in response."""
     buys = _get_media_buys(ctx)
     assert len(buys) == 0, f"Expected empty media_buys, got {len(buys)}"
-    resp = payload_or_none(ctx)
-    assert resp is not None, (
-        f"Expected response with empty media_buys and error '{code}', but response is None. Error: {ctx.get('error')}"
-    )
+    resp = require_payload(ctx)
     errors = getattr(resp, "errors", None) or []
     codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
     assert code in codes, f"Expected error '{code}' in errors, got {codes}"
@@ -2399,10 +2392,7 @@ def then_empty_buys_with_error(ctx: dict, code: str) -> None:
     """Assert empty media_buys with error (boundary table shorthand)."""
     buys = _get_media_buys(ctx)
     assert len(buys) == 0, f"Expected empty, got {len(buys)}"
-    resp = payload_or_none(ctx)
-    assert resp is not None, (
-        f"Expected response with empty media_buys and error '{code}', but response is None. Error: {ctx.get('error')}"
-    )
+    resp = require_payload(ctx)
     errors = getattr(resp, "errors", None) or []
     codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
     assert code in codes, f"Expected '{code}' in response errors, got {codes}"
