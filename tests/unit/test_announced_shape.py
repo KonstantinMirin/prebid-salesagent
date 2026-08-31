@@ -30,10 +30,7 @@ _LANE_D_TOOLS = ("get_adcp_capabilities", "get_products", "list_creative_formats
 
 
 def _tool(name: str):
-    import src.core.tools.capabilities as capabilities
-    import src.core.tools.creative_formats as creative_formats
-    import src.core.tools.creatives as creatives
-    import src.core.tools.products as products
+    from src.core.tools import capabilities, creative_formats, creatives, products
 
     return {
         "get_adcp_capabilities": capabilities.get_adcp_capabilities,
