@@ -20,8 +20,7 @@ import inspect
 import pytest
 
 from src.core.tools._announced_shape import (
-    _is_injected,
-    apply_dto_announced_shape,
+    derived_signature,
     request_model_for,
 )
 
@@ -72,61 +71,6 @@ def test_every_lane_d_tool_resolves_its_request_dto(tool_name: str) -> None:
     assert request_model_for(_tool(tool_name)) is not None, (
         f"{tool_name} no longer resolves to a request DTO -- the announced shape silently "
         "falls back to whatever the signature happens to say"
-    )
-
-
-def test_derivation_reaches_the_advertised_schema() -> None:
-    """Not just __signature__: FastMCP reads __annotations__, so both must move."""
-    from fastmcp.tools import Tool
-
-    from src.core.tool_error_logging import with_error_logging
-
-    fn = _tool("get_adcp_capabilities")
-    registered = with_error_logging(fn)
-    assert apply_dto_announced_shape(registered, fn) is True
-
-    advertised = Tool.from_function(registered, name="get_adcp_capabilities").parameters
-    context = advertised["properties"]["context"]
-    assert "$ref" in str(context), (
-        "context should be advertised as the DTO's ContextObject reference; a plain object "
-        "here means the derivation set __signature__ only and FastMCP never saw it"
-    )
-
-
-@pytest.mark.parametrize("tool_name", _DERIVED_TOOLS)
-def test_unimplemented_dto_fields_are_never_advertised(tool_name: str) -> None:
-    """The automatic half: absence from the signature is what excludes a field.
-
-    No list of "unimplemented" fields exists to be maintained, so this asserts the
-    property directly rather than against a fixture.
-    """
-    from fastmcp.tools import Tool
-
-    import src.core.main  # noqa: F401  (registers the tools)
-    from src.core.tool_error_logging import with_error_logging
-
-    fn = _resolve_tool(tool_name)
-    if fn is None:
-        pytest.skip(f"{tool_name} does not resolve a request DTO")
-    model = request_model_for(fn)
-    registered = with_error_logging(fn)
-    apply_dto_announced_shape(registered, fn)
-
-    advertised = set(Tool.from_function(registered, name=tool_name).parameters.get("properties", {}))
-    accepted = {n for n, p in inspect.signature(fn).parameters.items() if not _is_injected(p)}
-    unimplemented = set(model.model_fields) - accepted
-
-    leaked = advertised & unimplemented
-    assert not leaked, f"{tool_name} advertises {sorted(leaked)}, which it does not accept"
-
-    # The rule is an INTERSECTION, in both directions:
-    #   a DTO field the tool does not accept  -> not advertised (not implemented)
-    #   a tool parameter the DTO does not declare -> not advertised (not in the spec)
-    expected = set(model.model_fields) & accepted
-    assert advertised == expected, (
-        f"{tool_name} advertises {sorted(advertised ^ expected)} outside "
-        f"(DTO fields INTERSECT accepted parameters). Non-spec parameters must not be "
-        f"advertised, and neither must DTO fields the tool cannot take."
     )
 
 
@@ -203,7 +147,6 @@ class TestNarrowingIsGraded:
         500-on-a-valid-payload the `accepted` argument exists to prevent. Proven by calling
         it, not by reading the signature.
         """
-        import inspect
 
         import pytest
 
@@ -220,3 +163,98 @@ class TestNarrowingIsGraded:
             GetProductsRequest, bag, inspect.signature(create_get_products_request).parameters
         )
         create_get_products_request(**narrowed)  # must not raise
+
+
+class TestDerivationIsAPureFunction:
+    """The derivation is ``(signature, DTO) -> signature``: no I/O, no registry, no DB.
+
+    Graded here with a FIXTURE model and a LITERAL expectation, which is the whole point.
+    The tests these replace computed their expectation as ``set(model.model_fields) &
+    accepted`` -- exactly what production computes -- so both sides moved together and the
+    assertion was blind to the rule being wrong; it graded drift, not correctness. A mutation
+    review confirmed it: disabling ``_is_injected`` left them fully green.
+
+    Writing the expected parameters out by hand is what makes them able to fail. The fixture
+    deliberately contains BOTH exclusion directions, because the rule is an intersection and
+    a test that exercises only one half cannot tell an intersection from a union.
+    """
+
+    @staticmethod
+    def _fixture():
+        from pydantic import BaseModel, Field
+
+        class FixtureRequest(BaseModel):
+            alpha: str | None = Field(default=None, description="described by the DTO")
+            beta: int | None = None
+            gamma_unimplemented: bool | None = None  # DTO declares it; the tool does not take it
+
+        from fastmcp.server.context import Context
+
+        def fixture_tool(
+            alpha: str = "",
+            beta: int = 0,
+            legacy_not_in_dto: str = "",
+            ctx: Context | None = None,
+        ):
+            """A tool with one spec param the DTO lacks and one the DTO has."""
+
+        return fixture_tool, FixtureRequest
+
+    def test_derived_parameters_are_exactly_the_intersection(self) -> None:
+        fixture_tool, FixtureRequest = self._fixture()
+        sig = derived_signature(fixture_tool, FixtureRequest)
+        assert sorted(p for p in sig.parameters if p != "ctx") == ["alpha", "beta"], (
+            "expected exactly the DTO fields the tool accepts. "
+            "gamma_unimplemented is declared by the DTO but not taken by the tool; "
+            "legacy_not_in_dto is taken by the tool but not declared by the DTO."
+        )
+
+    def test_a_dto_field_the_tool_cannot_take_is_not_derived(self) -> None:
+        fixture_tool, FixtureRequest = self._fixture()
+        sig = derived_signature(fixture_tool, FixtureRequest)
+        assert "gamma_unimplemented" not in sig.parameters, (
+            "advertising a field the implementation does not accept offers buyers an input "
+            "whose only outcome is an error"
+        )
+
+    def test_a_tool_parameter_the_dto_does_not_declare_is_not_derived(self) -> None:
+        fixture_tool, FixtureRequest = self._fixture()
+        sig = derived_signature(fixture_tool, FixtureRequest)
+        assert "legacy_not_in_dto" not in sig.parameters, (
+            "a parameter outside the spec must not be advertised; absence from the DTO is "
+            "what retires it, with no list of legacy names to maintain"
+        )
+
+    def test_the_injected_context_parameter_survives(self) -> None:
+        """ctx is not a DTO field but must stay, or FastMCP has nothing to inject.
+
+        Dropping it is not a cosmetic bug: it broke authentication on 79 tests in this lane
+        (every call arrived without identity -> AUTH_MISSING) because the annotation arrived
+        as a STRING under postponed annotations and the type test missed it.
+        """
+        fixture_tool, FixtureRequest = self._fixture()
+        assert "ctx" in derived_signature(fixture_tool, FixtureRequest).parameters
+
+    def test_the_dto_supplies_the_description(self) -> None:
+        fixture_tool, FixtureRequest = self._fixture()
+        sig = derived_signature(fixture_tool, FixtureRequest)
+        assert "described by the DTO" in str(sig.parameters["alpha"].annotation)
+
+
+class TestAdvertisedSchemaIsPublished:
+    """What FastMCP actually publishes -- a request/response concern, not a pure one.
+
+    Separated from the derivation tests above on purpose: this needs the live registry, so it
+    can only assert what a buyer would really receive. Expectations are LITERAL for one tool,
+    not recomputed from the model.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_adcp_capabilities_publishes_exactly_its_five_fields(self) -> None:
+        from src.core import main
+
+        advertised = set((await main.mcp.get_tool("get_adcp_capabilities")).parameters["properties"])
+        assert advertised == {"protocols", "context", "adcp_version", "adcp_major_version", "ext"}, (
+            f"published shape drifted: {sorted(advertised)}. This is the buyer-visible schema, "
+            f"written out rather than recomputed, so it fails when the shape moves for any reason."
+        )
