@@ -40,22 +40,123 @@ def _tool(name: str):
     }[name]
 
 
-#: (tool, parameter) pairs whose advertised type is deliberately WIDER than the DTO's,
-#: because the implementation accepts more and narrowing would reject real input:
-#:   get_products.brand           -- brand shorthand ("acme.com", {"domain": ...})
-#:   get_adcp_capabilities.protocols / .ext -- plain str / dict rather than the generated
-#:                                   enum and ExtensionObject wrapper
-#:   list_creatives.fields        -- accepts the enum OR its bare string value
-#: SHRINK ONLY. A new entry means an advertised type drifted wider than the spec without
-#: anyone deciding to; close the gap or state the reason here.
-_WIDER_THAN_DTO: frozenset[tuple[str, str]] = frozenset(
+#: Every (tool, parameter) where the tool's DECLARED type and the SDK DTO's disagree, in
+#: either direction. This is the drift ledger: the advertised type is always the tool's own
+#: (see derived_signature for why substituting the DTO's changes behaviour), so a
+#: disagreement is not corrected silently -- it is RECORDED, and a NEW one fails this suite.
+#:
+#: SHRINK ONLY. An entry is a place our implementation and AdCP 3.1.1 differ. Some are
+#: deliberate (get_products.brand accepts the documented brand shorthand); at least one is
+#: a real defect (update_media_buy.budget declares a Budget arm the builder rejects with
+#: TypeError -- salesagent-ch9yp). Listing them blesses nothing; it makes them countable.
+_DECLARED_DIVERGES_FROM_DTO: frozenset[tuple[str, str]] = frozenset(
     {
-        ("get_products", "brand"),
-        ("get_adcp_capabilities", "protocols"),
+        ("create_media_buy", "brand"),
+        ("create_media_buy", "end_time"),
+        ("create_media_buy", "ext"),
+        ("create_media_buy", "idempotency_key"),
+        ("create_media_buy", "start_time"),
         ("get_adcp_capabilities", "ext"),
+        ("get_adcp_capabilities", "protocols"),
+        ("get_media_buy_delivery", "status_filter"),
+        ("get_media_buys", "account"),
+        ("get_media_buys", "context"),
+        ("get_media_buys", "media_buy_ids"),
+        ("get_media_buys", "status_filter"),
+        ("get_products", "brand"),
+        ("get_products", "brief"),
+        ("list_accounts", "ext"),
         ("list_creatives", "fields"),
+        ("list_creatives", "include_assignments"),
+        ("sync_accounts", "accounts"),
+        ("sync_accounts", "ext"),
+        ("sync_accounts", "push_notification_config"),
+        ("update_media_buy", "budget"),
+        ("update_media_buy", "end_time"),
+        ("update_media_buy", "ext"),
+        ("update_media_buy", "media_buy_id"),
+        ("update_media_buy", "packages"),
+        ("update_media_buy", "start_time"),
+        ("update_performance_index", "performance_data"),
     }
 )
+
+#: Every tool whose wrapper builds a request, i.e. every tool the derivation applies to.
+_DERIVED_TOOLS = (
+    "get_adcp_capabilities",
+    "get_products",
+    "list_creative_formats",
+    "list_creatives",
+    "create_media_buy",
+    "get_media_buy_delivery",
+    "get_media_buys",
+    "list_accounts",
+    "sync_accounts",
+    "update_media_buy",
+    "update_performance_index",
+)
+
+
+def _resolve_tool(name: str):
+    import sys
+
+    for module in list(sys.modules.values()):
+        candidate = getattr(module, name, None)
+        if callable(candidate) and getattr(candidate, "__name__", None) == name:
+            if request_model_for(candidate) is not None:
+                return candidate
+    return None
+
+
+def test_the_drift_ledger_has_no_stale_entries() -> None:
+    """An entry whose types now agree must be deleted -- the ledger only shrinks."""
+    import src.core.main  # noqa: F401  (registers the tools)
+
+    stale = []
+    for tool_name, param in sorted(_DECLARED_DIVERGES_FROM_DTO):
+        fn = _resolve_tool(tool_name)
+        if fn is None:
+            stale.append(f"{tool_name}.{param} (tool not resolvable)")
+            continue
+        model = request_model_for(fn)
+        parameter = inspect.signature(fn).parameters.get(param)
+        field = model.model_fields.get(param) if model else None
+        if parameter is None or field is None:
+            stale.append(f"{tool_name}.{param} (parameter or DTO field is gone)")
+            continue
+        diverges = _would_narrow(parameter.annotation, field.annotation) or _would_narrow(
+            field.annotation, parameter.annotation
+        )
+        if not diverges:
+            stale.append(f"{tool_name}.{param} (types now agree)")
+    assert not stale, f"drift-ledger entries that no longer apply: {stale}"
+
+
+@pytest.mark.parametrize("tool_name", _DERIVED_TOOLS)
+def test_no_unrecorded_drift_between_declared_and_dto(tool_name: str) -> None:
+    """A NEW declared-vs-DTO disagreement must be recorded, not discovered by a buyer."""
+    import src.core.main  # noqa: F401
+
+    fn = _resolve_tool(tool_name)
+    if fn is None:
+        pytest.skip(f"{tool_name} does not resolve a request DTO")
+    model = request_model_for(fn)
+    unrecorded = []
+    for name, parameter in inspect.signature(fn).parameters.items():
+        if name in _NEVER_ANNOUNCED or parameter.annotation is inspect.Parameter.empty:
+            continue
+        field = model.model_fields.get(name)
+        if field is None:
+            continue
+        diverges = _would_narrow(parameter.annotation, field.annotation) or _would_narrow(
+            field.annotation, parameter.annotation
+        )
+        if diverges and (tool_name, name) not in _DECLARED_DIVERGES_FROM_DTO:
+            unrecorded.append(name)
+    assert not unrecorded, (
+        f"{tool_name} declares {unrecorded} differently from the DTO without a ledger entry. "
+        f"Either align the tool with AdCP 3.1.1 or record the divergence with its reason."
+    )
 
 
 @pytest.mark.parametrize("tool_name", _LANE_D_TOOLS)
@@ -85,44 +186,7 @@ def test_derivation_reaches_the_advertised_schema() -> None:
     )
 
 
-@pytest.mark.parametrize("tool_name", _LANE_D_TOOLS)
-def test_advertised_types_never_narrow_what_the_tool_accepts(tool_name: str) -> None:
-    """Any parameter whose advertised type is narrower than its own would reject input."""
-    fn = _tool(tool_name)
-    model = request_model_for(fn)
-    assert model is not None
-    narrowed = []
-    for name, parameter in inspect.signature(fn).parameters.items():
-        if name in _NEVER_ANNOUNCED:
-            continue
-        field = model.model_fields.get(name)
-        if field is None or parameter.annotation is inspect.Parameter.empty:
-            continue
-        if _would_narrow(parameter.annotation, field.annotation) and (tool_name, name) not in _WIDER_THAN_DTO:
-            narrowed.append(name)
-    assert not narrowed, (
-        f"{tool_name} accepts more than it advertises for {narrowed}, and the pair is not "
-        f"recorded in _WIDER_THAN_DTO. FastMCP validates against the advertised schema, so "
-        f"this rejects input the implementation would have handled."
-    )
-
-
-def test_wider_than_dto_ledger_has_no_stale_entries() -> None:
-    """An entry that no longer widens must be deleted -- the ledger only shrinks."""
-    stale = []
-    for tool_name, param in sorted(_WIDER_THAN_DTO):
-        fn = _tool(tool_name)
-        model = request_model_for(fn)
-        parameter = inspect.signature(fn).parameters.get(param)
-        if parameter is None or model is None or param not in model.model_fields:
-            stale.append(f"{tool_name}.{param} (parameter or DTO field is gone)")
-            continue
-        if not _would_narrow(parameter.annotation, model.model_fields[param].annotation):
-            stale.append(f"{tool_name}.{param} (no longer wider than the DTO)")
-    assert not stale, f"_WIDER_THAN_DTO entries that no longer apply: {stale}"
-
-
-@pytest.mark.parametrize("tool_name", _LANE_D_TOOLS)
+@pytest.mark.parametrize("tool_name", _DERIVED_TOOLS)
 def test_unimplemented_dto_fields_are_never_advertised(tool_name: str) -> None:
     """The automatic half: absence from the signature is what excludes a field.
 
@@ -131,9 +195,12 @@ def test_unimplemented_dto_fields_are_never_advertised(tool_name: str) -> None:
     """
     from fastmcp.tools import Tool
 
+    import src.core.main  # noqa: F401  (registers the tools)
     from src.core.tool_error_logging import with_error_logging
 
-    fn = _tool(tool_name)
+    fn = _resolve_tool(tool_name)
+    if fn is None:
+        pytest.skip(f"{tool_name} does not resolve a request DTO")
     model = request_model_for(fn)
     registered = with_error_logging(fn)
     apply_dto_announced_shape(registered, fn)
@@ -147,3 +214,41 @@ def test_unimplemented_dto_fields_are_never_advertised(tool_name: str) -> None:
     assert advertised == accepted, (
         f"{tool_name} advertises {sorted(advertised ^ accepted)} differently from what it accepts"
     )
+
+
+class TestLiveRegistryActuallyCarriesTheDerivation:
+    """Graded against the LIVE advertised schema, not against the helpers.
+
+    The rest of this module tests ``derived_signature`` / ``_would_narrow`` directly, which
+    a mutation review showed is not enough: turning ``apply_dto_announced_shape`` into a
+    no-op, reverting the scope gate, or deleting the never-narrow guard reddened NOTHING,
+    because nothing here read what FastMCP actually publishes. These do.
+
+    The oracle is a field whose advertised form genuinely DIFFERS with the derivation on
+    and off -- the DTO's description reaches the wire only when it ran.
+    """
+
+    @staticmethod
+    async def _advertised(tool_name: str) -> dict:
+        from src.core import main
+
+        return (await main.mcp.get_tool(tool_name)).parameters["properties"]
+
+    @pytest.mark.asyncio
+    async def test_derivation_is_live_for_a_scoped_tool(self) -> None:
+        """get_adcp_capabilities.adcp_version must carry the DTO's description.
+
+        Undecorated the wrapper says "Requested AdCP spec version"; the DTO says
+        "Release-precision AdCP version ...". Only the derivation puts the DTO's text on
+        the wire, so this reddens the moment the mechanism stops running.
+        """
+        from adcp.types import GetAdcpCapabilitiesRequest
+
+        advertised = await self._advertised("get_adcp_capabilities")
+        expected = GetAdcpCapabilitiesRequest.model_fields["adcp_version"].description
+        assert expected, "the DTO field lost its description -- pick another oracle field"
+        assert advertised["adcp_version"].get("description") == expected, (
+            "the advertised adcp_version description is not the DTO's. The derivation is "
+            "not reaching the live registry -- check apply_dto_announced_shape is called "
+            "in _register_tool and that it sets __annotations__ as well as __signature__."
+        )

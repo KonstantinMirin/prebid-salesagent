@@ -92,6 +92,36 @@ def _mcp_tool_params() -> dict[str, set[str]]:
     return tools
 
 
+#: Callables whose presence means "this handler consumes the parameter bag wholesale".
+_WHOLESALE_CALLS = frozenset({"select_request_fields", "select_builder_kwargs", "model_validate"})
+
+#: Names that, splatted as ``**name``, mean the same thing.
+_WHOLESALE_SPLATS = frozenset({"parameters", "params"})
+
+
+def _consumes_bag_wholesale(node: ast.AST) -> bool:
+    """True when the handler really consumes the bag, read from CALL NODES.
+
+    Deliberately not a substring scan of the source segment: that was the previous
+    implementation, and it counted a mere MENTION. A handler whose body only names
+    ``select_request_fields`` in a COMMENT read as wholesale and was excused from the
+    divergence comparison entirely -- the exemption is the strongest thing this guard can
+    grant, so it must come from an actual call.
+    """
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call):
+            func = sub.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+            if name in _WHOLESALE_CALLS:
+                return True
+            for keyword in sub.keywords:
+                # ``**parameters`` is a keyword with arg=None.
+                if keyword.arg is None and isinstance(keyword.value, ast.Name):
+                    if keyword.value.id in _WHOLESALE_SPLATS:
+                        return True
+    return False
+
+
 def _a2a_skill_params() -> tuple[dict[str, set[str]], set[str]]:
     """Tool name -> keys the A2A handler names, plus the set of wholesale handlers."""
     source = A2A_SERVER.read_text()
@@ -105,8 +135,7 @@ def _a2a_skill_params() -> tuple[dict[str, set[str]], set[str]]:
         if not match:
             continue
         tool = match.group(1)
-        segment = ast.get_source_segment(source, node) or ""
-        if any(marker in segment for marker in WHOLESALE_MARKERS):
+        if _consumes_bag_wholesale(node):
             wholesale.add(tool)
         keys: set[str] = set()
         for sub in ast.walk(node):

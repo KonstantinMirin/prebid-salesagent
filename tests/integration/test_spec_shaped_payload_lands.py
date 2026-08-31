@@ -109,3 +109,12 @@ class TestSpecShapedPayloadLands:
         assert data.get("media_buy") is not None, (
             f"[{transport}] protocols=['media_buy'] did not select the media_buy section"
         )
+        # The FILTER, not just the selection: asserting only that media_buy is present
+        # passes just as well when protocols is ignored entirely and every section is
+        # returned, which is what a mutation review found. The sections protocols did NOT
+        # name must be absent for the claim in this message to be true.
+        unselected = [section for section in ("signals", "creative", "curation") if data.get(section) is not None]
+        assert not unselected, (
+            f"[{transport}] protocols=['media_buy'] left {unselected} populated -- the "
+            "filter was ignored and the response is unfiltered, not selected."
+        )

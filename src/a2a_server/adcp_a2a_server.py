@@ -2113,18 +2113,16 @@ class AdCPRequestHandler(RequestHandler):
                 context=params.get("context"),
             )
 
-        # Call core function with validated fields + raw nested structures and identity
-        response = core_update_media_buy_tool(
-            media_buy_id=req.media_buy_id or "",
-            paused=req.paused,
-            start_time=params.get("start_time"),
-            end_time=params.get("end_time"),
-            budget=params.get("budget"),
-            packages=params.get("packages"),
-            push_notification_config=params.get("push_notification_config"),
-            context=params.get("context"),
-            identity=identity,
-        )
+        # Selected off update_media_buy_raw's own signature rather than hand-listed. The
+        # eight-name list this replaces silently dropped currency, daily_budget, ext,
+        # flight_start_date, flight_end_date, idempotency_key and pacing -- all accepted on
+        # MCP and REST. idempotency_key is the costly one: AdCP 3.1.1 puts it in
+        # update-media-buy-request.json /required, so a spec-conformant A2A buyer's
+        # at-most-once key was being discarded, the same defect class as salesagent-e8wt.1.
+        # media_buy_id comes from the validated model; the rest of the bag is selected.
+        selected = select_builder_kwargs(core_update_media_buy_tool, params)
+        selected["media_buy_id"] = req.media_buy_id or ""
+        response = core_update_media_buy_tool(**selected, identity=identity)
 
         return response
 

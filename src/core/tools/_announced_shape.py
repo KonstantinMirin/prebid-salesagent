@@ -142,13 +142,25 @@ def derived_signature(fn: Callable[..., Any], model: type[BaseModel]) -> inspect
         if field is None:
             parameters.append(parameter)
             continue
+        # The TYPE is always the tool's own. It is the honest statement of what the
+        # implementation accepts, and FastMCP validates against the ADVERTISED schema, so
+        # substituting the DTO's type changes BEHAVIOUR in whichever direction they differ:
+        #   DTO narrower -> valid input starts being rejected (this narrowed
+        #                   get_products.brand and broke 18 brand-shorthand scenarios)
+        #   DTO wider    -> we advertise input the implementation cannot handle
+        #                   (update_media_buy.budget advertised a Budget the builder
+        #                   rejects with TypeError -- salesagent-ch9yp)
+        #   equal        -> substituting is a no-op
+        # So there is no case where taking the DTO's type is both safe and useful. What the
+        # DTO contributes is the DESCRIPTION; drift between the two types is caught by
+        # test_announced_shape's ledger, which fails on a NEW divergence rather than
+        # silently retyping one away.
         declared = parameter.annotation
-        narrows = declared is not inspect.Parameter.empty and _would_narrow(declared, field.annotation)
-        annotation = declared if narrows else field.annotation
         description = field.description or _declared_description(declared)
-        if description:
-            annotation = Annotated[annotation, PydanticField(description=description)]
-        parameters.append(parameter.replace(annotation=annotation))
+        if description and declared is not inspect.Parameter.empty:
+            parameters.append(parameter.replace(annotation=Annotated[declared, PydanticField(description=description)]))
+        else:
+            parameters.append(parameter)
     return signature.replace(parameters=parameters)
 
 

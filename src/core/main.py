@@ -382,8 +382,7 @@ def _register_tool(fn: Any) -> None:
         if sdk_def.get("annotations"):
             kwargs["annotations"] = ToolAnnotations(**sdk_def["annotations"])
     registered = with_error_logging(fn)
-    if tool_name in _DTO_ANNOUNCED_TOOLS:
-        apply_dto_announced_shape(registered, fn)
+    apply_dto_announced_shape(registered, fn)
     mcp.tool(**kwargs)(registered)
 
 
