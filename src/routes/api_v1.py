@@ -300,13 +300,31 @@ SyncAccountsBody = derived_body_model(
 )
 
 
-# DERIVED. Named for the TOOL, not the route: the transport-parity guard derives the body
-# class from the tool name (get_adcp_capabilities -> GetAdcpCapabilitiesBody), so the old
-# GetCapabilitiesBody spelling meant this tool never entered the comparison at all -- which
-# is why the dropped `ext` stayed invisible.
-GetAdcpCapabilitiesBody = derived_body_model(
-    "GetAdcpCapabilitiesBody", GetAdcpCapabilitiesRequest, capabilities_module.get_adcp_capabilities_raw
-)
+class GetAdcpCapabilitiesBody(SalesAgentBaseModel):
+    # Named for the TOOL, not the route: the transport-parity guard derives the body class
+    # from the tool name (get_adcp_capabilities -> GetAdcpCapabilitiesBody), so the old
+    # GetCapabilitiesBody spelling meant this tool never entered the comparison at all --
+    # which is why the dropped `ext` stayed invisible.
+    #
+    # NOT DERIVED. The field set already equals the derived set (graded by
+    # test_hand_written_bodies_carry_the_derived_field_set), but ``protocols`` must stay
+    # ``list[str]``. Bound to the DTO's Protocol enum, FastAPI rejects an unknown member
+    # before any AdCP code runs and REST answers INVALID_REQUEST, while impl/mcp/a2a reach
+    # the shared boundary and answer VALIDATION_ERROR -- which is what BR-UC-010
+    # @T-UC-010-ext-d-invalid-value grades, on all four transports, citing
+    # get-adcp-capabilities-request.json /properties/protocols/items/enum.
+    #
+    # Reclassifying FastAPI's enum rejection to VALIDATION_ERROR fixes that scenario and
+    # breaks two others: BR-UC-018's pagination-boundary examples grade an out-of-enum
+    # sort.direction / sort.field as INVALID_REQUEST. The two generated feature files
+    # disagree about the code for the SAME obligation class, so no boundary rule satisfies
+    # both -- reconciling them upstream is the fix, and until then the narrow choice is to
+    # keep REST out of the way of the shared boundary here.
+    protocols: list[str] | None = None
+    context: dict[str, Any] | None = None
+    adcp_version: str | None = None
+    adcp_major_version: int | None = None
+    ext: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +372,6 @@ async def post_capabilities(body: GetAdcpCapabilitiesBody, identity: ResolvedIde
     body, which a bare GET cannot carry — matches the POST+JSON-body
     convention every other route in this file follows.
     """
-    from adcp.types import GetAdcpCapabilitiesRequest
 
     # Version pair forwarded explicitly -- see the A2A handler's note: the selector strips
     # the version-envelope fields by design, but this tool negotiates on them.

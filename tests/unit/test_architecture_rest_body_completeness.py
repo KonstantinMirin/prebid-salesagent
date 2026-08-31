@@ -22,7 +22,7 @@ only ever notices a field the wrapper names and the body does not; a field the D
 under a spelling the wrapper does not take is invisible to it, which is how ``sort`` stayed
 absent from the old ListCreativesBody. Every body in api_v1 is therefore graded against
 ``DTO fields INTERSECT impl parameters`` by one of two tests -- the intersection test for
-generated bodies, ``test_hand_written_bodies_carry_the_derived_field_set`` for the four that
+generated bodies, ``test_hand_written_bodies_carry_the_derived_field_set`` for the five that
 cannot be generated -- and ``test_every_hand_written_body_is_either_derived_or_graded``
 refuses to let a new hand-written class escape both.
 """
@@ -31,6 +31,8 @@ from __future__ import annotations
 
 import inspect
 
+from adcp.types import GetAdcpCapabilitiesRequest
+
 from src.core.schemas import (
     CreateMediaBuyRequest,
     GetMediaBuyDeliveryRequest,
@@ -38,6 +40,7 @@ from src.core.schemas import (
     SalesAgentBaseModel,
     UpdateMediaBuyRequest,
 )
+from src.core.tools.capabilities import get_adcp_capabilities_raw
 from src.core.tools.creatives.listing import list_creatives_raw
 from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
 from src.core.tools.media_buy_create import create_media_buy_raw
@@ -47,6 +50,7 @@ from src.core.tools.media_buy_update import update_media_buy_raw
 from src.core.tools.performance import update_performance_index_raw
 from src.routes.api_v1 import (
     CreateMediaBuyBody,
+    GetAdcpCapabilitiesBody,
     GetMediaBuyDeliveryBody,
     GetMediaBuysBody,
     ListCreativesBody,
@@ -214,6 +218,14 @@ _HAND_WRITTEN_GRADED: list[tuple[type, type, object, frozenset[str], str]] = [
         "media_buy_ids/status_filter stay Any so _build_get_media_buys_request grades them "
         "(pinned by test_request_validation_failed[rest])",
     ),
+    (
+        GetAdcpCapabilitiesBody,
+        GetAdcpCapabilitiesRequest,
+        get_adcp_capabilities_raw,
+        frozenset(),
+        "protocols stays list[str] so the shared boundary grades an unknown member, which is "
+        "what BR-UC-010 @T-UC-010-ext-d-invalid-value requires on all four transports",
+    ),
 ]
 
 
@@ -232,10 +244,15 @@ def test_hand_written_bodies_carry_the_derived_field_set():
             f"{body_cls.__name__} is derived now -- move it out of _HAND_WRITTEN_GRADED so the "
             f"intersection test grades it instead."
         )
-        expected = (set(dto.model_fields) & set(inspect.signature(impl).parameters)) | set(extras)
+        # ``| _BODY_META`` exactly as in the derived test: every body carries adcp_version so
+        # the route can negotiate. Stripping it from ACTUAL instead would be wrong for a tool
+        # whose impl really takes it -- get_adcp_capabilities negotiates ON the version pair,
+        # so adcp_version is in the intersection there and a body that dropped it would have
+        # read as compliant.
+        expected = (set(dto.model_fields) & set(inspect.signature(impl).parameters)) | set(extras) | _BODY_META
         # media_buy_id travels in the URL path on the update route, never in the body.
         expected -= set(_ALLOWLIST.get(body_cls.__name__, {}))
-        actual = set(body_cls.model_fields) - _BODY_META
+        actual = set(body_cls.model_fields)
         assert actual == expected, (
             f"{body_cls.__name__} carries {sorted(actual - expected)} beyond, and is missing "
             f"{sorted(expected - actual)} from, (DTO fields INTERSECT {impl.__name__} parameters)"

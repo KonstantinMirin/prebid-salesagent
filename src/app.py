@@ -226,40 +226,6 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
     return _envelope_response(request, adcp_error_for(exc))
 
 
-#: Pydantic v2 error types this repo GRADES as VALIDATION_ERROR rather than INVALID_REQUEST.
-#: The pinned enums/error-code.json splits the two codes closely:
-#:   VALIDATION_ERROR "Request contains invalid field values or violates business rules
-#:                     beyond schema validation"
-#:   INVALID_REQUEST  "Request is malformed, missing required fields, or violates schema
-#:                     constraints"
-#: Read strictly, EVERY JSON-Schema keyword violation -- enum, minItems, minimum, pattern --
-#: "violates schema constraints" and would be INVALID_REQUEST. The set below is therefore
-#: not derived from the prose alone; it is the set the graded scenarios demand.
-#:
-#: Membership is limited to CLOSED VOCABULARIES, because that is what is graded:
-#: BR-UC-010 @T-UC-010-ext-d-invalid-value sends protocols ["marketing"] on all four
-#: transports and requires VALIDATION_ERROR, citing
-#: get-adcp-capabilities-request.json /properties/protocols/items/enum.
-#:
-#: Cardinality, range and length are DELIBERATELY absent, and that is graded too, in the
-#: opposite direction: test_list_creatives_concept_filter's
-#: test_empty_concept_ids_emits_validation_envelope requires INVALID_REQUEST on REST for
-#: filters={"concept_ids": []}, because creative-filters.json declares minItems:1 and an
-#: empty array violates a schema constraint. Adding ``too_short`` here moves the one
-#: transport that reaches the spec-correct code onto the wrong one.
-#:
-#: An ALLOWLIST, not a denylist of structural types: an unrecognised pydantic error type
-#: falls through to INVALID_REQUEST -- the code this handler already emitted for everything
-#: -- so a pydantic upgrade that introduces a type cannot silently reclassify a rejection.
-_VALUE_VIOLATION_TYPES = frozenset(
-    {
-        "enum",
-        # Pydantic's spelling for the same obligation on a ``Literal[...]`` annotation.
-        "literal_error",
-    }
-)
-
-
 @app.exception_handler(RequestValidationError)
 async def request_validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Translate FastAPI request-body schema failures into the AdCP envelope.
@@ -289,27 +255,11 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     # Code selection by failure semantics, grounded in the AdCP graded
     # error-compliance storyboard: a VALUE/enum/range violation on a
     # structurally-valid field is canonically VALIDATION_ERROR; a missing/
-    # malformed/unknown field (structural) is INVALID_REQUEST. That rule is now
-    # applied from the PYDANTIC ERROR TYPE (see _VALUE_VIOLATION_TYPES) rather
-    # than from a field-name prefix, which is what makes REST agree with the
-    # other transports instead of agreeing only about attribution_window.
-    #
-    # Why the prefix list had to go: REST bodies are DERIVED from their DTO now
-    # (src/routes/_derived_body.py), so a body field carries the DTO's annotation
-    # and FastAPI enforces the enum BEFORE any AdCP code runs. MCP and A2A hand the
-    # same value to the shared adcp_validation_boundary, which answers
-    # VALIDATION_ERROR. Classifying every FastAPI rejection as INVALID_REQUEST
-    # therefore made the SAME payload carry two different codes depending on
-    # transport -- caught by BR-UC-010 @T-UC-010-ext-d-invalid-value, which grades
-    # protocols:["marketing"] as VALIDATION_ERROR on all four transports and cites
-    # get-adcp-capabilities-request.json /properties/protocols/items/enum.
-    #
-    # attribution_window keeps its explicit mapping: those rejections are
-    # structural (a missing sub-field), not value violations, so the type rule
-    # alone would not reach them.
+    # malformed/unknown field (structural) is INVALID_REQUEST. The full
+    # value-vs-structural reclassification across all fields is a repo-wide
+    # follow-up; for now the attribution_window family — reconciled to
+    # VALIDATION_ERROR upstream in adcp-req — is mapped explicitly.
     if field and field.startswith("attribution_window"):
-        exc_cls = AdCPValidationError
-    elif str(first.get("type", "")) in _VALUE_VIOLATION_TYPES:
         exc_cls = AdCPValidationError
     else:
         exc_cls = AdCPInvalidRequestError
