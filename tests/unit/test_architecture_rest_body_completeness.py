@@ -35,6 +35,7 @@ from src.core.schemas import (
     CreateMediaBuyRequest,
     GetMediaBuyDeliveryRequest,
     GetMediaBuysRequest,
+    SalesAgentBaseModel,
     UpdateMediaBuyRequest,
 )
 from src.core.tools.creatives.listing import list_creatives_raw
@@ -87,6 +88,33 @@ _PAIRS = [
     (ListCreativesBody, list_creatives_raw),
     (UpdatePerformanceIndexBody, update_performance_index_raw),
 ]
+
+
+def _api_v1_bodies() -> list[type]:
+    """Every ``*Body`` model api_v1 defines, generated and hand-written alike.
+
+    Read off the live module rather than a list kept here: a body this file does not know
+    about is exactly the one that goes ungraded, and that is the failure mode the whole
+    module exists to prevent.
+
+    Membership is "declared in api_v1's namespace and is a SalesAgentBaseModel", not a
+    ``__module__`` test: ``create_model`` stamps a generated body with
+    ``src.routes._derived_body``, so a module test would have silently returned only the
+    hand-written four -- the derived ones, which are the majority, would have gone ungraded
+    while every test still passed.
+    """
+    from src.routes import api_v1
+
+    return [
+        obj
+        for name, obj in vars(api_v1).items()
+        if name.endswith("Body") and isinstance(obj, type) and issubclass(obj, SalesAgentBaseModel)
+    ]
+
+
+def _derived_bodies() -> list[type]:
+    """The ``*Body`` models produced by ``derived_body_model``."""
+    return [cls for cls in _api_v1_bodies() if getattr(cls, "__derived_from_dto__", None) is not None]
 
 
 def _raw_param_names(fn) -> set[str]:
@@ -241,18 +269,9 @@ def test_every_hand_written_body_is_either_derived_or_graded():
     hand-written class added to api_v1.py lands in neither and fails here, which is the
     point -- it is exactly how the 11 hand-maintained field lists accumulated.
     """
-    from src.routes import api_v1
-
     graded = {body_cls.__name__ for body_cls, *_ in _HAND_WRITTEN_GRADED}
-    ungraded = sorted(
-        name
-        for name, obj in vars(api_v1).items()
-        if name.endswith("Body")
-        and isinstance(obj, type)
-        and obj.__module__ == api_v1.__name__
-        and getattr(obj, "__derived_from_dto__", None) is None
-        and name not in graded
-    )
+    derived = {cls.__name__ for cls in _derived_bodies()}
+    ungraded = sorted(cls.__name__ for cls in _api_v1_bodies() if cls.__name__ not in graded | derived)
     assert not ungraded, (
         f"Hand-written REST bodies with no grading: {ungraded}. Generate them with "
         f"derived_body_model(), or add a row to _HAND_WRITTEN_GRADED naming why the DTO's "
@@ -267,20 +286,23 @@ def test_derived_bodies_carry_exactly_the_dto_fields_the_impl_accepts():
     HTTP against this same route and has no schema of its own. If the generator ever stops
     intersecting -- carrying a non-spec field, or dropping an implemented one -- REST starts
     disagreeing with MCP and this fails.
+
+    Discovered from the MODULE, not from ``_PAIRS``. Keyed on the hand-maintained pair list
+    it graded only the two derived bodies that happened to be in it, and every body derived
+    afterwards was checked by nothing -- a hand list guarding against hand lists.
     """
     import inspect
 
-    checked = 0
-    for body_cls, _raw_fn in _PAIRS:
-        derived = getattr(body_cls, "__derived_from_dto__", None)
-        if derived is None:
-            continue
-        dto, impl = derived
-        expected = set(dto.model_fields) & set(inspect.signature(impl).parameters)
-        actual = set(body_cls.model_fields) - _BODY_META - {"adcp_version"}
-        checked += 1
+    derived_bodies = _derived_bodies()
+    assert derived_bodies, "no derived REST body found -- the generator is not in use, so this grades nothing"
+    for body_cls in derived_bodies:
+        dto, impl = body_cls.__derived_from_dto__
+        # ``| _BODY_META``: the generator adds adcp_version back on purpose. It is NOT
+        # request data -- select_request_fields strips the version envelope -- but the
+        # routes negotiate on it, so the body has to carry it.
+        expected = (set(dto.model_fields) & set(inspect.signature(impl).parameters)) | _BODY_META
+        actual = set(body_cls.model_fields)
         assert actual == expected, (
             f"{body_cls.__name__} carries {sorted(actual ^ expected)} outside "
             f"(DTO fields INTERSECT {impl.__name__} parameters)."
         )
-    assert checked, "no derived REST body found -- the generator is not in use, so this grades nothing"
