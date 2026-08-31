@@ -786,10 +786,7 @@ def given_package_update_negative_keywords_remove(ctx: dict) -> None:
 @when("the Buyer Agent sends the update_media_buy request")
 def when_send_update_request(ctx: dict) -> None:
     """Build UpdateMediaBuyRequest and dispatch through harness."""
-    from pydantic import ValidationError
 
-    from src.core.exceptions import AdCPSalesAgentError
-    from src.core.schemas import UpdateMediaBuyRequest
 
     update_kwargs = ctx.get("update_kwargs", {})
     # Resolve Gherkin package_id labels ("pkg_001") to real factory-generated
@@ -800,30 +797,27 @@ def when_send_update_request(ctx: dict) -> None:
         for pkg in packages:
             if isinstance(pkg, dict) and "package_id" in pkg:
                 pkg["package_id"] = _resolve_package_id(ctx, pkg["package_id"])
-    try:
-        req = UpdateMediaBuyRequest(
-            **{
-                "account": {"account_id": "acct_test"},
-                "idempotency_key": "test-idem-key-0001",
-                **update_kwargs,
-            }  # scenario-supplied values win over the defaults
-        )
-    except ValidationError as e:
-        # Schema validation rejects the request before production code runs.
-        # Store as ctx["error"] so Then steps can assert on it.
-        ctx["error"] = e
-        return
-    except AdCPSalesAgentError as e:
-        # A schema-level validator raised a typed AdCP error (e.g. the immutable
-        # package-field guard → INVALID_REQUEST). It propagates as-is (not wrapped
-        # in ValidationError), so capture it the same way for the Then steps.
-        ctx["error"] = e
-        return
+    # Dispatch the RAW flat bag, not a locally-constructed model. Building
+    # UpdateMediaBuyRequest here meant a payload the schema rejects never reached a
+    # transport: the ValidationError was raised in the TEST process and stored as
+    # ctx["error"], so every "malformed input is rejected with X" scenario graded the
+    # harness's own exception -- keys ['code','message'], no suggestion -- instead of the
+    # wire envelope production actually emits, which does carry one. Such a test cannot fail
+    # when the server stops rejecting the payload, because the server was never asked.
+    #
+    # The harness already supports this form; _is_update_request's docstring says the raw
+    # dispatch exists precisely "for scenarios whose payload the LOCAL UpdateMediaBuyRequest
+    # must reject". The step simply was not using it.
+    raw: dict = {
+        "account": {"account_id": "acct_test"},
+        "idempotency_key": "test-idem-key-0001",
+        **update_kwargs,
+    }
 
     if ctx.get("has_auth") is False:
-        dispatch_request(ctx, req=req, identity=None)
+        dispatch_request(ctx, identity=None, **raw)
     else:
-        dispatch_request(ctx, req=req)
+        dispatch_request(ctx, **raw)
 
     # Post-process: promote error responses to ctx["error"]
     _promote_update_errors(ctx)
