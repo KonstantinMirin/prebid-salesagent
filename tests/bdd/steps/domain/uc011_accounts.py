@@ -2214,50 +2214,37 @@ def then_response_includes_context(ctx: dict, ctx_json: str) -> None:
 def then_context_identical(ctx: dict) -> None:
     """Assert the echoed context is exactly what was sent (deep equality).
 
-    Grades BOTH paths, mirroring ``then_response_includes_context`` above. The
-    success path compares the echoed context; the error path reads the context
-    off the error object and xfails explicitly where production cannot supply
-    one. Falling through the error path silently is what made this step pass
-    having asserted nothing.
+    REQUIRES the payload rather than tolerating its absence. Two facts settle
+    that, and they were measured rather than assumed:
+
+    1. Both scenarios using this step (BR-UC-011 ``context_provided`` and
+       ``context_nested``) run it as an ``And`` AFTER
+       ``the response includes context {...}``. That preceding Then owns the
+       error path, so by the time this step runs a payload exists or the
+       scenario has already ended.
+    2. The alternative — mirroring that sibling's inline ``pytest.xfail`` — is
+       forbidden by ``test_architecture_bdd_no_inline_xfail``: an inline xfail
+       registers nothing, is keyed to no scenario, and turns every later
+       assertion into dead code. The sibling's copy is a grandfathered
+       allowlist entry, not a pattern to follow, and allowlists here only
+       shrink.
+
+    Tolerating None was what let this step pass with zero assertions whenever
+    the dispatch errored (GH #1802).
     """
     sent = ctx.get("sent_context")
     assert sent is not None, "No sent_context to compare"
 
-    resp = payload_or_none(ctx)
-    if resp is not None:
-        resp_context = getattr(resp, "context", None)
-        assert resp_context is not None, "Response has no context"
-        if hasattr(resp_context, "model_dump"):
-            actual = resp_context.model_dump(mode="json", exclude_none=True)
-        elif isinstance(resp_context, dict):
-            actual = resp_context
-        else:
-            actual = dict(resp_context)
-        assert actual == sent, f"Context not identical: sent {sent}, got {actual}"
-        return
-
-    # Error path: read the echo off the error object, never off the sent value.
-    error = ctx.get("error")
-    assert error is not None, "No response and no error — cannot verify context echo"
-    error_context = getattr(error, "context", None)
-    if error_context is not None:
-        if hasattr(error_context, "model_dump"):
-            actual = error_context.model_dump(mode="json", exclude_none=True)
-        elif isinstance(error_context, dict):
-            actual = error_context
-        else:
-            actual = dict(error_context)
-        assert actual == sent, f"Error context not identical: sent {sent}, got {actual}"
-        return
-    # Production error objects (AdCPError) do not carry a context field yet, and
-    # the wire error envelope (a2a/mcp/rest) does not echo context on the error
-    # path — only impl carries context=req.context on the AdCPError. Tracked by
-    # #1417 (D2: envelope status/context on the wire error path).
-    pytest.xfail(
-        "SPEC-PRODUCTION GAP (D2): context not echoed on the wire "
-        "error envelope — AdCPError carries no context field on a2a/mcp/rest, "
-        "expected context echo on error responses"
-    )
+    resp = require_payload(ctx)
+    resp_context = getattr(resp, "context", None)
+    assert resp_context is not None, "Response has no context"
+    if hasattr(resp_context, "model_dump"):
+        actual = resp_context.model_dump(mode="json", exclude_none=True)
+    elif isinstance(resp_context, dict):
+        actual = resp_context
+    else:
+        actual = dict(resp_context)
+    assert actual == sent, f"Context not identical: sent {sent}, got {actual}"
 
 
 @then("the response does not include a context field")
