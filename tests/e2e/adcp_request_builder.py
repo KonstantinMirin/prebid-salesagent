@@ -10,7 +10,7 @@ import warnings
 from datetime import UTC, datetime
 from typing import Any
 
-from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.creative_asset import build_assets, image_spec, url_spec
 
 
 def generate_buyer_ref(prefix: str = "test") -> str:
@@ -147,7 +147,7 @@ def build_sync_creatives_request(
     creatives: list[dict[str, Any]],
     dry_run: bool = False,
     webhook_url: str | None = None,
-    assignments: dict[str, list[str]] | None = None,
+    assignments: list[dict[str, Any]] | None = None,
     creative_ids: list[str] | None = None,
     delete_missing: bool = False,
     validation_mode: str = "strict",
@@ -233,13 +233,19 @@ def build_creative(
         "creative_id": creative_id,
         "format_id": format_id,
         "name": name,
-        "content_uri": asset_url,  # Required top-level URL field per AdCP spec
         "assets": assets,
         "status": status,
     }
 
     if click_through_url:
-        creative["click_through_url"] = click_through_url
+        # 3.1 carries the click destination as a url ASSET, not a top-level key.
+        # core/asset-group-vocabulary.json names `landing_page_url` canonical and lists
+        # click_through_url only as a legacy alias; core/creative-asset.json declares
+        # neither it nor content_uri as properties.
+        creative["assets"] = build_assets(
+            image_spec("primary", url=asset_url, width=300, height=250),
+            url_spec("landing_page_url", url=click_through_url),
+        )
 
     return creative
 

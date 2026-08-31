@@ -98,6 +98,26 @@ def _e2e_unique_id(prefix: str) -> str:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _assignments_for_the_wire(assignments: dict[str, list[str]]) -> list[dict[str, str]]:
+    """The ctx map, as the AdCP 3.1 assignments ARRAY the transports accept.
+
+    The scenarios build (and two steps READ) assignments as the 2.5 map
+    {creative_id: [package_ids]}. 3.1 declares an array of {creative_id, package_id}, so the
+    map is rejected at the MCP and REST boundaries and the sync never runs -- which made two
+    transactional-ordering scenarios look like data-integrity failures when they were really
+    setup rejections. (a2a kept passing, since it forwards the raw bag to _impl; that is the
+    evidence the ordering behaviour itself is intact.)
+
+    Translated ONCE here rather than rewriting ~40 setup sites: the ctx shape stays map-like
+    for the two steps that index into it, and only the wire form changes.
+    """
+    return [
+        {"creative_id": creative_id, "package_id": package_id}
+        for creative_id, package_ids in assignments.items()
+        for package_id in package_ids
+    ]
+
+
 @given(parsers.parse('the request includes a push_notification_config with url "{url}"'))
 def given_push_notification_config_url(ctx: dict, url: str) -> None:
     """Attach push_notification_config to the upcoming sync_creatives dispatch."""
@@ -283,7 +303,7 @@ def when_sync_creative(ctx: dict) -> None:
     creatives = ctx.get("creatives", [])
     kwargs: dict = {"account": account_ref, "creatives": creatives}
     if "assignments" in ctx:
-        kwargs["assignments"] = ctx["assignments"]
+        kwargs["assignments"] = _assignments_for_the_wire(ctx["assignments"])
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
     if "idempotency_key" in ctx:
@@ -3115,7 +3135,7 @@ def when_sync_creative_with_assignments(ctx: dict) -> None:
     creatives = ctx.get("creatives", [])
     kwargs: dict = {"creatives": creatives}
     if "assignments" in ctx:
-        kwargs["assignments"] = ctx["assignments"]
+        kwargs["assignments"] = _assignments_for_the_wire(ctx["assignments"])
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
     dispatch_request(ctx, **kwargs)
@@ -3919,7 +3939,7 @@ def when_format_compatibility_checked(ctx: dict) -> None:
     creatives = ctx.get("creatives", [])
     kwargs: dict = {"creatives": creatives}
     if "assignments" in ctx:
-        kwargs["assignments"] = ctx["assignments"]
+        kwargs["assignments"] = _assignments_for_the_wire(ctx["assignments"])
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
     dispatch_request(ctx, **kwargs)

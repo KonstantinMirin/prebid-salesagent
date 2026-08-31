@@ -661,11 +661,16 @@ class TestGenerativeBuildUserAssetPriority:
                         "creative_id": "c_gen_08",
                         "name": "Asset Priority Test",
                         "format_id": fmt,
+                        # 3.1 has no top-level `url` on a creative -- core/creative-asset.json
+                        # declares none, and the media URL belongs in `assets`. Production
+                        # still derives the stored data["url"] from the assets block
+                        # (_assets.py _extract_url_from_assets), so the assertion below is
+                        # unchanged; only the retired spelling goes.
                         "assets": build_assets(
                             text_spec("message", content="Build me a banner"),
                             user_headline,
+                            image_spec("image", url="https://user.example.com/image.png"),
                         ),
-                        "url": "https://user.example.com/image.png",
                     }
                 ],
             )
@@ -1179,6 +1184,14 @@ class TestStaticPreviewFailed:
                         "creative_id": "c_no_preview",
                         "name": "No Preview Creative",
                         "format_id": DEFAULT_FORMAT_ID,
+                        # `assets` is spec-REQUIRED (core/creative-asset.json
+                        # required=[creative_id,name,assets]). Omitting it made this scenario
+                        # depend on a transport accident: a2a hit an impl-side
+                        # setdefault("assets", {}) and reached the no-preview logic, while
+                        # mcp/rest failed earlier with a mid-pipeline VALIDATION_ERROR. An
+                        # empty map is spec-legal (no minProperties) and lets all three
+                        # transports grade the obligation this test is actually about.
+                        "assets": {},
                     }
                 ],
                 validation_mode="lenient",

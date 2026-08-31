@@ -180,9 +180,7 @@ class TestCreativeAssignment:
                 dry_run=False,
                 validation_mode="lenient",
                 delete_missing=False,
-                assignments={
-                    creative_id: [package_id],  # Assign creative to package
-                },
+                assignments=[{"creative_id": creative_id, "package_id": package_id}],
             )
 
             print(f"   📋 Sync request: {json.dumps(sync_request, indent=2)}")
@@ -409,11 +407,16 @@ class TestCreativeAssignment:
             # Creative 1 → Package 1
             # Creative 2 → Package 2
             # Creative 3 → Both packages
-            assignments = {
-                creative1_id: [pkg1_ref],
-                creative2_id: [pkg2_ref],
-                creative3_id: [pkg1_ref, pkg2_ref],
-            }
+            # AdCP 3.1 assignments are an ARRAY of {creative_id, package_id} -- one entry per
+            # pair, so "creative 3 to both packages" is two entries. The 2.5 map form
+            # {creative_id: [package_ids]} is retired. The pinned schema's own example shows
+            # exactly this fan-out.
+            assignments = [
+                {"creative_id": creative1_id, "package_id": pkg1_ref},
+                {"creative_id": creative2_id, "package_id": pkg2_ref},
+                {"creative_id": creative3_id, "package_id": pkg1_ref},
+                {"creative_id": creative3_id, "package_id": pkg2_ref},
+            ]
 
             print("   📋 Assignment plan:")
             print(f"      • {creative1_id} → {pkg1_ref}")
