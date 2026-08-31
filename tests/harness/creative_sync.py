@@ -573,6 +573,37 @@ class CreativeSyncEnv(IntegrationEnv):
         """
         self.mock["run_async"].side_effect = lambda coro: formats
 
+    #: AdCP 3.1.1 makes idempotency_key REQUIRED on sync-creatives-request. Supplied here so
+    #: every scenario gets a spec-conformant request without each of ~200 call sites naming a
+    #: key it does not care about. A scenario that IS about the key overrides it, and its
+    #: value wins because setdefault only fills an absent one.
+    #: Shape-valid per the pin: ^[A-Za-z0-9_.:-]{16,255}$.
+    DEFAULT_IDEMPOTENCY_KEY = "harness-idem-key-0001"
+
+    def _with_required_request_fields(self, kwargs: dict) -> dict:
+        """Fill the spec-required fields a scenario has not set itself.
+
+        `account` needs care: steps pass it EXPLICITLY as None for scenarios that are not
+        about accounts (uc006_sync_creatives.py builds {"account": ctx.get("account_ref")}),
+        and an explicit None fails validation now that the field is required -- setdefault
+        would not see it. So a None is replaced, not merely defaulted.
+
+        The value comes from the caller's own identity rather than a literal: the account a
+        request names should be the account it is authenticated for, and a fabricated id
+        would resolve to nothing. A scenario that IS about accounts sets account_ref and
+        keeps it, because only a None is replaced.
+        """
+        kwargs.setdefault("creatives", [])
+        kwargs.setdefault("idempotency_key", self.DEFAULT_IDEMPOTENCY_KEY)
+        if kwargs.get("account") is None:
+            identity = kwargs.get("identity") or self.identity
+            account_id = getattr(identity, "account_id", None)
+            if account_id:
+                kwargs["account"] = {"account_id": account_id}
+            else:
+                kwargs.pop("account", None)
+        return kwargs
+
     def call_impl(self, **kwargs: Any) -> SyncCreativesResponse:
         """Call _sync_creatives_impl with real DB.
 
@@ -586,7 +617,7 @@ class CreativeSyncEnv(IntegrationEnv):
 
         self._commit_factory_data()
         kwargs.setdefault("identity", self.identity)
-        kwargs.setdefault("creatives", [])
+        kwargs = self._with_required_request_fields(kwargs)
 
         # Handle account kwarg — resolve at boundary, same as wrappers
         account = kwargs.pop("account", None)
@@ -599,7 +630,7 @@ class CreativeSyncEnv(IntegrationEnv):
 
     def call_a2a(self, **kwargs: Any) -> SyncCreativesResponse:
         """Dispatch through the real A2A pipeline (AdCPRequestHandler.on_message_send)."""
-        kwargs.setdefault("creatives", [])
+        kwargs = self._with_required_request_fields(kwargs)
         return self._run_a2a_handler("sync_creatives", SyncCreativesResponse, **kwargs)
 
     def call_mcp(self, **kwargs: Any) -> SyncCreativesResponse:
@@ -607,13 +638,14 @@ class CreativeSyncEnv(IntegrationEnv):
 
         No enum coercion needed — FastMCP's TypeAdapter handles it automatically.
         """
-        kwargs.setdefault("creatives", [])
+        kwargs = self._with_required_request_fields(kwargs)
         return self._run_mcp_client("sync_creatives", SyncCreativesResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to SyncCreativesBody shape for REST POST."""
         # The REST body expects 'creatives' as list[dict], matching SyncCreativesBody
-        body: dict[str, Any] = {}
+        kwargs = self._with_required_request_fields(dict(kwargs))
+        body: dict[str, Any] = {"idempotency_key": kwargs["idempotency_key"]}
         if "creatives" in kwargs:
             creatives = kwargs["creatives"]
             # Convert Pydantic models to dicts if needed

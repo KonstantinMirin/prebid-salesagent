@@ -73,13 +73,14 @@ class TestMCPToolRoundtripMinimal:
             result = await mcp_client.call_tool(
                 "create_media_buy",
                 {
+                    "account": {"account_id": "acct_test"},
                     "brand": {"domain": "testbrand.com"},
                     "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                     "packages": [
                         {
                             "product_id": product_id,
                             "pricing_option_id": "cpm_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
-                            "budget": 1000.0,
+                            "budget": 5000.0,
                         }
                     ],
                     "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
@@ -111,13 +112,14 @@ class TestMCPToolRoundtripMinimal:
             create_result = await mcp_client.call_tool(
                 "create_media_buy",
                 {
+                    "account": {"account_id": "acct_test"},
                     "brand": {"domain": "testbrand.com"},
                     "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                     "packages": [
                         {
                             "product_id": product_id,
                             "pricing_option_id": "cpm_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
-                            "budget": 1000.0,
+                            "budget": 5000.0,
                         }
                     ],
                     "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
@@ -133,8 +135,10 @@ class TestMCPToolRoundtripMinimal:
                 update_result = await mcp_client.call_tool(
                     "update_media_buy",
                     {
+                        "idempotency_key": "test-idem-key-0001",
+                        "account": {"account_id": "acct_test"},
                         "media_buy_id": create_content["media_buy_id"],
-                        "budget": 2000.0,  # update_budget is valid from pending_creatives
+                        "end_time": "2026-12-01T00:00:00Z",  # update_budget is valid from pending_creatives
                     },
                 )
 
@@ -188,6 +192,8 @@ class TestMCPToolRoundtripMinimal:
         result = await mcp_client.call_tool(
             "sync_creatives",
             {
+                "idempotency_key": "test-idem-key-0001",
+                "account": {"account_id": "acct_test"},
                 "creatives": [
                     {
                         "creative_id": "test_creative_001",
@@ -200,7 +206,7 @@ class TestMCPToolRoundtripMinimal:
                         },
                         "assets": build_assets(image_spec("image", url="https://example.com/preview.jpg")),
                     }
-                ]
+                ],
             },
         )
 
@@ -248,13 +254,14 @@ class TestMCPToolRoundtripMinimal:
             create_result = await mcp_client.call_tool(
                 "create_media_buy",
                 {
+                    "account": {"account_id": "acct_test"},
                     "brand": {"domain": "testbrand.com"},
                     "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                     "packages": [
                         {
                             "product_id": product_id,
                             "pricing_option_id": "cpm_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
-                            "budget": 1000.0,
+                            "budget": 5000.0,
                         }
                     ],
                     "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
@@ -311,13 +318,27 @@ class TestSchemaConstructionValidation:
         assert "today" not in req.model_dump()  # Excluded from output
 
     def test_all_request_schemas_have_optional_or_default_fields(self):
-        """Verify that all request schemas can be constructed without all fields."""
+        """Every request schema constructs from its REQUIRED fields alone.
+
+        "Minimal" means the spec's own /required set, not the empty set. UpdateMediaBuyRequest
+        used to appear here with only media_buy_id, which worked while account and
+        idempotency_key were wrongly overridden to optional; AdCP 3.1.1 lists both in
+        /required, so a request without them is not minimal, it is invalid. The obligation
+        that still matters -- no schema demands MORE than the spec does -- is unchanged.
+        """
         from src.core import schemas
 
         # Test schemas that should work with minimal params
         test_cases = [
             (schemas.GetProductsRequest, {"brand": {"domain": "testbrand.com"}}),
-            (schemas.UpdateMediaBuyRequest, {"media_buy_id": "test"}),
+            (
+                schemas.UpdateMediaBuyRequest,
+                {
+                    "media_buy_id": "test",
+                    "account": {"account_id": "acct_test"},
+                    "idempotency_key": "test-idem-key-0001",
+                },
+            ),
             (schemas.GetMediaBuyDeliveryRequest, {}),
             (schemas.ListCreativesRequest, {}),
             (schemas.ListAuthorizedPropertiesRequest, {}),
@@ -360,5 +381,7 @@ class TestParameterToSchemaMapping:
         assert req.start_time is None
         assert req.end_time is None
 
-        # budget field should be None since not provided
-        assert req.budget is None
+        # No top-level budget to assert: AdCP 3.1.1 does not define one on
+        # update-media-buy-request.json (budget is package-level), so the field was removed
+        # rather than left as a convenience. `packages` is where a budget update lives.
+        assert req.packages is None

@@ -213,7 +213,7 @@ def test_update_responses_and_get_media_buys_report_the_same_revision(integratio
                 account={"account_id": "acct_test"},
                 idempotency_key="test-idem-key-0001",
                 media_buy_id=media_buy_id,
-                budget=20000.0,
+                end_time="2026-12-01T00:00:00Z",
             ),
         )
         second = env.call_via(
@@ -222,7 +222,7 @@ def test_update_responses_and_get_media_buys_report_the_same_revision(integratio
                 account={"account_id": "acct_test"},
                 idempotency_key="test-idem-key-0001",
                 media_buy_id=media_buy_id,
-                budget=30000.0,
+                end_time="2026-12-15T00:00:00Z",
             ),
         )
         listed = env.call_via(transport, req=GetMediaBuysRequest(media_buy_ids=[media_buy_id]))
@@ -336,7 +336,7 @@ def test_dry_run_update_reports_the_current_revision_and_moves_nothing(integrati
                 account={"account_id": "acct_test"},
                 idempotency_key="test-idem-key-0001",
                 media_buy_id=buy.media_buy_id,
-                budget=20000.0,
+                end_time="2026-12-01T00:00:00Z",
             )
         )
         listed = env.call_impl(req=GetMediaBuysRequest(media_buy_ids=[buy.media_buy_id]))
@@ -402,7 +402,7 @@ def test_update_raises_media_buy_not_found_when_the_row_vanishes_mid_transaction
                     account={"account_id": "acct_test"},
                     idempotency_key="test-idem-key-0001",
                     media_buy_id=media_buy_id,
-                    budget=20000.0,
+                    end_time="2026-12-01T00:00:00Z",
                 ),
             )
 
@@ -447,7 +447,7 @@ def test_pause_resume_response_reports_the_rows_revision_and_agrees_with_get_med
                 account={"account_id": "acct_test"},
                 idempotency_key="test-idem-key-0001",
                 media_buy_id=buy.media_buy_id,
-                budget=20000.0,
+                end_time="2026-12-01T00:00:00Z",
             ),
         )
         toggled = env.call_via(

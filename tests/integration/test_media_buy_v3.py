@@ -225,7 +225,7 @@ class TestCreateMediaBuyCurrencyValidation:
             packages=[
                 {
                     "product_id": "eur_display",
-                    "budget": 5000.0,
+                    "end_time": "2026-12-01T00:00:00Z",
                     "pricing_option_id": "cpm_eur_fixed",
                 }
             ],
@@ -263,7 +263,7 @@ class TestCreateMediaBuyManualApproval:
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "budget": 5000.0,
+                    "end_time": "2026-12-01T00:00:00Z",
                     "pricing_option_id": "cpm_usd_fixed",
                 }
             ],
@@ -300,7 +300,7 @@ class TestCreateMediaBuyManualApproval:
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "budget": 3000.0,
+                    "end_time": "2026-12-01T00:00:00Z",
                     "pricing_option_id": "cpm_usd_fixed",
                 }
             ],
@@ -358,7 +358,7 @@ class TestCreateMediaBuyManualApproval:
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "budget": 5000.0,
+                    "end_time": "2026-12-01T00:00:00Z",
                     "pricing_option_id": "cpm_usd_fixed",
                 }
             ],
@@ -403,7 +403,7 @@ class TestCreateMediaBuyAdapterAtomicity:
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "budget": 5000.0,
+                    "end_time": "2026-12-01T00:00:00Z",
                     "pricing_option_id": "cpm_usd_fixed",
                 }
             ],
@@ -498,7 +498,7 @@ class TestUpdateMediaBuyCreativeAssignments:
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "budget": 5000.0,
+                    "end_time": "2026-12-01T00:00:00Z",
                     "pricing_option_id": "cpm_usd_fixed",
                 }
             ],
@@ -594,7 +594,7 @@ class TestGetMediaBuysResponseFields:
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "budget": 5000.0,
+                    "end_time": "2026-12-01T00:00:00Z",
                     "pricing_option_id": "cpm_usd_fixed",
                 }
             ],
@@ -653,7 +653,7 @@ class TestGetMediaBuysResponseFields:
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "budget": 5000.0,
+                    "end_time": "2026-12-01T00:00:00Z",
                     "pricing_option_id": "cpm_usd_fixed",
                 }
             ],
@@ -764,7 +764,7 @@ class TestGetMediaBuysResponseFields:
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "budget": 5000.0,
+                    "end_time": "2026-12-01T00:00:00Z",
                     "pricing_option_id": "cpm_usd_fixed",
                 }
             ],
@@ -864,7 +864,7 @@ class TestCreateMediaBuyFullRoundtrip:
             packages=[
                 {
                     "product_id": "guaranteed_display",
-                    "budget": 7500.0,
+                    "end_time": "2026-12-01T00:00:00Z",
                     "pricing_option_id": "cpm_usd_fixed",
                 }
             ],
