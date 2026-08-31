@@ -369,3 +369,64 @@ class TestAcceptedKwargsIsTheOneSpelling:
         selected = select_request_fields(ListCreativesRequest, bag, accepted_kwargs(Mock()))
 
         assert set(selected) == {"filters", "include_assignments"}
+
+
+class TestARequiredFieldCannotGoUnannounced:
+    """A tool may not announce a DTO whose REQUIRED fields it does not declare.
+
+    Such a tool is not merely under-specified, it is unusable: the wrapper never receives the
+    field, so the builder cannot populate it and EVERY call raises ValidationError. The
+    failure is loud but late -- it lands on a buyer's request, at call time, for a defect that
+    is one line at author time.
+
+    All 16 tools were measured clean when this refusal was added, which is the moment to fix
+    it in place: the check costs nothing today and the next tool cannot introduce the state.
+    Refusal rather than an allowlist, matching _register_tool's treatment of an unresolvable
+    DTO -- a list of known-broken tools records a violation; refusing makes it unreachable.
+    """
+
+    def test_registration_refuses_a_wrapper_missing_a_required_field(self) -> None:
+        import pytest
+        from pydantic import BaseModel
+
+        from src.core.tools._announced_shape import apply_dto_announced_shape
+
+        class NeedsAnId(BaseModel):
+            media_buy_id: str  # required
+            note: str | None = None
+
+        def wrapper_that_forgot_it(note: str | None = None):
+            """Declares the optional field but not the required one."""
+
+        def target(): ...
+
+        with pytest.raises(RuntimeError, match="media_buy_id"):
+            apply_dto_announced_shape(target, wrapper_that_forgot_it, NeedsAnId)
+
+    def test_a_wrapper_that_declares_it_registers_normally(self) -> None:
+        """The refusal must be specific to the defect, not merely strict."""
+        from pydantic import BaseModel
+
+        from src.core.tools._announced_shape import apply_dto_announced_shape
+
+        class NeedsAnId(BaseModel):
+            media_buy_id: str
+            note: str | None = None
+
+        def wrapper(media_buy_id: str = "", note: str | None = None): ...
+
+        def target(): ...
+
+        assert apply_dto_announced_shape(target, wrapper, NeedsAnId) is True
+        assert "media_buy_id" in target.__signature__.parameters
+
+    def test_every_registered_tool_announces_its_required_fields(self) -> None:
+        """The live statement, not a fixture: importing main registers all 16 tools.
+
+        Kept as its own test because the two above grade the RULE on a fixture, and this
+        grades the TREE. A rule that holds on a fixture while the tree violates it is the
+        failure mode a guard-with-an-allowlist would have hidden.
+        """
+        import src.core.main as main
+
+        assert main.mcp is not None

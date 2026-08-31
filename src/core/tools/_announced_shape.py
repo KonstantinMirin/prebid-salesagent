@@ -172,6 +172,29 @@ def apply_dto_announced_shape(
     if model is None:
         return False
     signature = derived_signature(source_fn, model)
+
+    # A REQUIRED DTO field the wrapper does not declare can never be populated: the builder
+    # never receives it, so every call raises ValidationError. That is a loud failure, but it
+    # arrives at CALL time, on a buyer's request, for a defect fixed in one line at author
+    # time. Measured across all 16 tools when this was added, no tool was in that state --
+    # which is exactly when to nail it down, since the refusal costs nothing today and the
+    # next tool cannot introduce it.
+    #
+    # Refusing rather than allowlisting, for the same reason _register_tool refuses an
+    # unresolvable DTO: a list of known-broken tools records the violation, whereas refusing
+    # makes the broken state unreachable.
+    missing_required = {
+        name
+        for name, field in model.model_fields.items()
+        if field.is_required() and name not in signature.parameters
+    }
+    if missing_required:
+        raise RuntimeError(
+            f"{source_fn.__name__} cannot announce {model.__name__}: it does not declare the "
+            f"REQUIRED field(s) {sorted(missing_required)}, so no call could ever construct a "
+            f"valid request. Add the parameter(s) to the wrapper and forward them to the builder."
+        )
+
     target.__signature__ = signature  # type: ignore[attr-defined]
     # __annotations__ too, and not merely for symmetry: FastMCP resolves parameter types
     # with typing.get_type_hints(), which reads __annotations__ and ignores __signature__.
