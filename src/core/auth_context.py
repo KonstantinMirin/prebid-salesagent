@@ -121,11 +121,18 @@ def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
     )
 
     if not identity.principal_id:
-        # Defensive/unreachable: resolve_identity(require_valid_token=True)
-        # already raises AdCPAuthenticationError (AUTH_INVALID) before
-        # returning if the token doesn't resolve. Kept as AUTH_MISSING-shaped
-        # for parity with the guard above should this branch ever fire.
-        raise AdCPAuthRequiredError()
+        # AUTH_INVALID, not AUTH_MISSING: the spec keys these on HEADER PRESENCE, and by this
+        # line a credential WAS presented -- the `not auth_ctx.auth_token` guard above is the
+        # one that owns the absent case. This raised AdCPAuthRequiredError (AUTH_MISSING),
+        # justified as "defensive/unreachable ... kept AUTH_MISSING-shaped for parity with the
+        # guard above". Parity with the wrong guard: the two branches answer different
+        # questions, so shaping the second like the first is what makes it wrong. A branch
+        # believed unreachable is exactly the one to shape correctly, because if it ever fires
+        # it will be telling a buyer who DID send a credential that they sent none, and they
+        # will retry the same way.
+        from src.core.exceptions import AdCPAuthenticationError
+
+        raise AdCPAuthenticationError()
 
     # Set tenant ContextVar at the REST transport boundary
     if identity.tenant:
