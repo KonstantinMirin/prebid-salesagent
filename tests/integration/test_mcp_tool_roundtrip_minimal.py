@@ -28,7 +28,7 @@ class TestMCPToolRoundtripMinimal:
     """
 
     @pytest.fixture
-    async def mcp_client(self, mcp_server, sample_tenant, sample_principal, sample_products):
+    async def mcp_client(self, mcp_server, sample_tenant, sample_principal, sample_account, sample_products):
         """Create MCP client for testing with test data."""
         # Use the mcp_server fixture which provides port and manages lifecycle
         headers = {"x-adcp-auth": sample_principal["access_token"]}
@@ -56,7 +56,7 @@ class TestMCPToolRoundtripMinimal:
         assert text != json.dumps(result.structured_content)
         assert not text.strip().startswith("{")
 
-    async def test_create_media_buy_minimal(self, mcp_client):
+    async def test_create_media_buy_minimal(self, sample_account, mcp_client):
         """Test create_media_buy with minimal required parameters."""
         # Get a product first
         products_result = await mcp_client.call_tool(
@@ -73,7 +73,7 @@ class TestMCPToolRoundtripMinimal:
             result = await mcp_client.call_tool(
                 "create_media_buy",
                 {
-                    "account": {"account_id": "acct_test"},
+                    "account": sample_account,
                     "brand": {"domain": "testbrand.com"},
                     "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                     "packages": [
@@ -92,7 +92,7 @@ class TestMCPToolRoundtripMinimal:
             content = result.structured_content if hasattr(result, "structured_content") else result
             assert "media_buy_id" in content or "status" in content
 
-    async def test_update_media_buy_minimal(self, mcp_client):
+    async def test_update_media_buy_minimal(self, sample_account, mcp_client):
         """Test update_media_buy with minimal parameters (no today field).
 
         This specifically tests the datetime.combine() bug fix where req.today
@@ -112,7 +112,7 @@ class TestMCPToolRoundtripMinimal:
             create_result = await mcp_client.call_tool(
                 "create_media_buy",
                 {
-                    "account": {"account_id": "acct_test"},
+                    "account": sample_account,
                     "brand": {"domain": "testbrand.com"},
                     "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                     "packages": [
@@ -136,7 +136,7 @@ class TestMCPToolRoundtripMinimal:
                     "update_media_buy",
                     {
                         "idempotency_key": "test-idem-key-0001",
-                        "account": {"account_id": "acct_test"},
+                        "account": sample_account,
                         "media_buy_id": create_content["media_buy_id"],
                         "end_time": "2026-12-01T00:00:00Z",  # update_budget is valid from pending_creatives
                     },
@@ -180,7 +180,7 @@ class TestMCPToolRoundtripMinimal:
         envelope = json.loads(str(exc_info.value))
         assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
 
-    async def test_sync_creatives_minimal(self, mcp_client):
+    async def test_sync_creatives_minimal(self, sample_account, mcp_client):
         """Test sync_creatives with minimal required parameters.
 
         Uses AdCP-compliant CreativeAsset schema which requires:
@@ -193,7 +193,7 @@ class TestMCPToolRoundtripMinimal:
             "sync_creatives",
             {
                 "idempotency_key": "test-idem-key-0001",
-                "account": {"account_id": "acct_test"},
+                "account": sample_account,
                 "creatives": [
                     {
                         "creative_id": "test_creative_001",
@@ -237,7 +237,7 @@ class TestMCPToolRoundtripMinimal:
             error_msg = str(e).lower()
             pass  # the operation must raise; its wording is not asserted
 
-    async def test_update_performance_index_minimal(self, mcp_client):
+    async def test_update_performance_index_minimal(self, sample_account, mcp_client):
         """Test update_performance_index with required parameters."""
         # First, create a media buy to update
         products_result = await mcp_client.call_tool(
@@ -254,7 +254,7 @@ class TestMCPToolRoundtripMinimal:
             create_result = await mcp_client.call_tool(
                 "create_media_buy",
                 {
-                    "account": {"account_id": "acct_test"},
+                    "account": sample_account,
                     "brand": {"domain": "testbrand.com"},
                     "idempotency_key": f"int-key-{uuid.uuid4().hex}",
                     "packages": [

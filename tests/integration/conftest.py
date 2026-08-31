@@ -396,6 +396,41 @@ def sample_principal(integration_db, sample_tenant):
 
 
 @pytest.fixture
+def sample_account(integration_db, sample_tenant, sample_principal):
+    """A real Account row the sample principal may act on.
+
+    AdCP 3.1.1 makes `account` REQUIRED on sync-creatives-request and
+    update-media-buy-request (/required), and production resolves the reference against the
+    database -- a fabricated id earns ACCOUNT_NOT_FOUND at the wire even though it satisfies
+    model construction. So a wire-level test needs a seeded account, not a literal.
+
+    Returns the AccountReference shape a request carries, ready to splat into a payload.
+    """
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import Account, AgentAccountAccess
+
+    with get_db_session() as session:
+        account = Account(
+            tenant_id=sample_tenant["tenant_id"],
+            account_id="acc_test_0001",
+            name="Test Account",
+            status="active",
+        )
+        session.add(account)
+        # Resolution checks the calling agent's access, not merely the row's existence.
+        session.add(
+            AgentAccountAccess(
+                tenant_id=sample_tenant["tenant_id"],
+                principal_id=sample_principal["principal_id"],
+                account_id=account.account_id,
+            )
+        )
+        session.commit()
+
+        return {"account_id": account.account_id}
+
+
+@pytest.fixture
 def sample_products(integration_db, sample_tenant):
     """Create sample products that comply with AdCP protocol."""
     from src.core.database.database_session import get_db_session
