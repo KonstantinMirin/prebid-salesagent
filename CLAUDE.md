@@ -98,7 +98,7 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | No raw MediaPackage select | All MediaPackage access goes through repository, not raw `select()` | `test_architecture_no_raw_media_package_select.py` |
 | No import-time filesystem I/O | `src/` and `scripts/` modules touch no files while being imported | `test_architecture_no_import_time_fs_io.py` |
 | No raw select outside repos | All ORM model queries go through repositories, not raw `select()` | `test_architecture_no_raw_select.py` |
-| No raw egress | All outbound HTTP goes through `src/core/security/outbound_http.py`, never raw `httpx`/`requests`/`urlopen`/`aiohttp` | `ruff-egress.toml` (TID251 over `src/`, in `make quality-ci`) + `test_ruff_egress_bans.py` |
+| No raw egress | All outbound HTTP goes through `src/core/security/outbound_http.py`, never raw `httpx`/`requests`/`urlopen`/`aiohttp` | `ruff-egress.toml` (TID251 over `src/` + `scripts/`, in `make quality-ci`) + `test_ruff_egress_bans.py` |
 | No destination rewrite | Nothing under `src/` rebuilds a URL or swaps its netloc/scheme ahead of the seam | `test_architecture_no_destination_rewrite.py` |
 | BDD no-op Then steps | Then steps must assert, not delegate to `_pending()`-like no-ops | `test_architecture_bdd_no_pass_steps.py` |
 | BDD trivial assertions | Then steps must compare values, not just check truthiness | `test_architecture_bdd_no_trivial_assertions.py` |

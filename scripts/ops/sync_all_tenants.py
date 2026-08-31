@@ -8,7 +8,7 @@ import logging
 import os
 import sys
 
-import requests
+import requests  # noqa: TID251 - ops-plane self-call to a hardcoded loopback URL; the seam's policy refuses loopback by design, so routing it through the seam would be wrong, not safer (GH #1802)
 
 # Add parent directory to path to import modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

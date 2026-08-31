@@ -15,7 +15,7 @@ creative-formats-refresh:
 quality-ci:
 	uv run ruff format --check .
 	uv run ruff check .
-	uv run ruff check --config ruff-egress.toml src/
+	uv run ruff check --config ruff-egress.toml --no-respect-gitignore src/ scripts/
 	uv run mypy src/ --config-file=mypy.ini
 	uv run python .pre-commit-hooks/check_code_duplication.py
 	uv run python .pre-commit-hooks/check-gam-auth-support.py

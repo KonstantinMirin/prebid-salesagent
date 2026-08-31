@@ -1,16 +1,33 @@
-# Src-scoped egress import bans (GH #1589).
+# Egress import bans for the shipped tree (GH #1589).
 #
-# Run as its own quality line: `uv run ruff check --config ruff-egress.toml src/`
-# (see Makefile `quality` / `quality-ci`). Scope is src/ ONLY — tests import
-# httpx/requests freely (TestClient, annotations, local origins); the seam
-# architecture governs production egress, not test tooling.
+# Run as its own quality line: `uv run ruff check --config ruff-egress.toml
+# --no-respect-gitignore src/ scripts/` (see Makefile `quality` / `quality-ci`).
+#
+# Scope: `src/` and `scripts/` — the code this repo ships and operates with.
+# `tests/` is deliberately out: tests import httpx/requests freely (TestClient,
+# annotations, local origins); the seam architecture governs production egress,
+# not test tooling. `alembic/` is deliberately out too: verified zero violations
+# under this config and zero `src/` imports of it, and `ipaddress` has legitimate
+# migration uses (CIDR columns), so extending there only invites false positives.
+#
+# `--no-respect-gitignore` is load-bearing, not decoration: ruff's directory walk
+# honors `.gitignore`, which hid the git-tracked `scripts/ops/sync_all_tenants.py`
+# from the scan (GH #1802 round-3 F2). The flag makes the walk indifferent to a
+# later `.gitignore` edit re-opening that hole.
+#
+# Residual, accepted and named: a dynamic import (`importlib.import_module("httpx")`)
+# evades this table. The threat model is honest drift, not an adversarial author —
+# and no in-repo gate survives its own author. CLAUDE.md pattern #9 forbids adding
+# a second RUNTIME egress mechanism to cover it.
 #
 # This table replaces the deleted AST scans #1 (raw network libs) and #2
 # (SDK/MCP client constructors) of tests/unit/test_architecture_no_raw_egress.py.
 # Non-vacuity is proven executable by tests/unit/test_ruff_egress_bans.py: every
-# entry must fire on every resolving import spelling, every `# noqa: TID251`
-# exemption must cover a live violation when stripped, and the exempt set is
-# closed to the recorded constant there.
+# entry must fire on every resolving import spelling; and the set of SUPPRESSED
+# violations is computed by ruff itself (`--ignore-noqa`), not by a regex that
+# mirrors ruff's noqa syntax — so every suppression spelling ruff honors is
+# visible to the proof by construction, and the exempt set is closed to the
+# recorded constant there.
 #
 # Symbol bans enumerate EVERY resolving import path (banned-api matches the
 # written path textually — a single-path ban is bypassable via re-exports).
@@ -42,6 +59,20 @@ select = ["TID251", "ANN401"]
 "requests".msg = "Outbound HTTP goes through src/core/security/outbound_http.py (send/asend) — the seam owns address, TLS, redirect and retry policy (GH #1589)."
 "aiohttp".msg = "aiohttp is a dropped dependency; outbound HTTP goes through src/core/security/outbound_http.py (GH #1589)."
 "urllib.request".msg = "Outbound HTTP goes through src/core/security/outbound_http.py (send/asend), never urlopen (GH #1589)."
+"httpcore".msg = "Outbound HTTP goes through src/core/security/outbound_http.py (send/asend) — the seam owns address, TLS, redirect and retry policy (GH #1589)."
+"urllib3".msg = "Outbound HTTP goes through src/core/security/outbound_http.py (send/asend) — the seam owns address, TLS, redirect and retry policy (GH #1589)."
+"http.client".msg = "Outbound HTTP goes through src/core/security/outbound_http.py (send/asend) — the seam owns address, TLS, redirect and retry policy (GH #1589)."
+"httpx2".msg = "Outbound HTTP goes through src/core/security/outbound_http.py (send/asend) — the seam owns address, TLS, redirect and retry policy (GH #1589)."
+"httpcore2".msg = "Outbound HTTP goes through src/core/security/outbound_http.py (send/asend) — the seam owns address, TLS, redirect and retry policy (GH #1589)."
+
+# Recorded non-additions (2026-08-31, GH #1802 round-3 F1). Deliberate, not
+# oversight — re-argue before adding:
+#   websockets                     — not HTTP-shaped; no feature uses it.
+#   socket / asyncio.open_connection — raw TCP is not an honest-mistake path to
+#                                    HTTP; `socket.gethostbyname` IS banned below
+#                                    because resolve-then-check is.
+#   ftplib / smtplib               — not HTTP.
+#   xmlrpc.client                  — rides `http.client`, banned above.
 
 # --- MCP transports: construct via the MCP seam (src/core/utils/mcp_client.py),
 # which validates the URL once and pins it with guarded_client_factory ---
@@ -71,3 +102,22 @@ select = ["TID251", "ANN401"]
 # a second range set added five CIDRs with no check going red. ---
 "ipaddress".msg = "Address classification belongs to adcp.signing + src/core/security/egress/policy.py's supplement/blocklist (GH #1589, adcontextprotocol/adcp-client-python#974). A second copy outside the egress package is the exact disease this backstop exists to prevent."
 "socket.gethostbyname".msg = "Resolve-then-check is a TOCTOU the egress package does not use (adcp.signing pins the resolved IP in one step). Address classification belongs to src/core/security/egress/policy.py (GH #1589)."
+
+# --- Re-export bans: banned-api matches the WRITTEN path textually, so a seam
+# that imports a banned name re-exports it under a path this table did not name.
+# `from src.core.security.outbound_http import httpx` resolves to the real
+# module and passed clean (GH #1802 round-3 finding 2b). One line per seam
+# re-export; the derivation test in tests/unit/test_ruff_egress_bans.py obliges
+# a new line the day a seam gains a new suppressed import. ---
+"src.core.security.outbound_http.httpx".msg = "Re-export of the seam's own import. Outbound HTTP goes through src/core/security/outbound_http.py's send/asend, not its httpx handle (GH #1589)."
+"src.core.security.egress.policy.ipaddress".msg = "Re-export of the egress package's own import. Address classification belongs inside src/core/security/egress/policy.py, not to its importers (GH #1589)."
+"src.core.utils.mcp_client.StreamableHttpTransport".msg = "Re-export of the MCP seam's own import. Construct via src.core.utils.mcp_client.create_mcp_client, which pins the validated URL with guarded_client_factory (GH #1589)."
+"src.core.utils.mcp_client.Client".msg = "Re-export of the MCP seam's own import. Construct via src.core.utils.mcp_client.create_mcp_client, which passes transport= — never a bare URL (GH #1589)."
+
+# --- fastmcp.Client itself: `Client(url)` INFERS an un-pinned
+# StreamableHttpTransport from a bare URL (verified at runtime), so banning the
+# transports without banning the constructor that manufactures one leaves the
+# hole open. The seam passes transport= only. ---
+"fastmcp.Client".msg = "Client(url) infers an un-pinned StreamableHttpTransport from a bare URL. Construct via src.core.utils.mcp_client.create_mcp_client, which passes a factory-pinned transport (GH #1589)."
+"fastmcp.client.Client".msg = "Client(url) infers an un-pinned StreamableHttpTransport from a bare URL. Construct via src.core.utils.mcp_client.create_mcp_client, which passes a factory-pinned transport (GH #1589)."
+"fastmcp.client.client.Client".msg = "Client(url) infers an un-pinned StreamableHttpTransport from a bare URL. Construct via src.core.utils.mcp_client.create_mcp_client, which passes a factory-pinned transport (GH #1589)."

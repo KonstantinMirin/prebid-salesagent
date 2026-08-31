@@ -36,7 +36,7 @@ from __future__ import annotations
 import contextlib
 import datetime as dt
 import fcntl
-import ipaddress
+import ipaddress  # noqa: TID251 - builds certificate IP SANs, not address classification (GH #1802)
 import os
 import uuid
 from pathlib import Path

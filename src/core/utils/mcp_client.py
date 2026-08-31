@@ -30,7 +30,9 @@ Usage:
 import logging
 from typing import Any
 
-from fastmcp.client import Client
+from fastmcp.client import (
+    Client,  # noqa: TID251 - the MCP seam; only constructed with transport=, never a URL (GH #1589)
+)
 from fastmcp.client.client import CallToolResult
 from fastmcp.client.transports import (
     StreamableHttpTransport,  # noqa: TID251 - the MCP seam; construction is factory-pinned below (GH #1589)
