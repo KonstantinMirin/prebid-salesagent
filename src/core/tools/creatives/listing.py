@@ -201,7 +201,6 @@ def _build_list_creatives_request(
     sort_order: str = "desc",
     sort: "Sort | None" = None,
     pagination: "PaginationRequest | None" = None,
-    accept_structured_sort: bool = False,
     context: ContextObject | None = None,
 ) -> "ListCreativesRequest":
     """Build a ListCreativesRequest from individual wire params.
@@ -223,31 +222,32 @@ def _build_list_creatives_request(
     # (field_mapping), sort_order not in {asc,desc} -> "desc", limit -> min(limit, 1000) --
     # each of which is a graded row in BR-UC-018 (prkv.5 F1).
     #
-    # Gated on accept_structured_sort because spec `sort`/`pagination` are NOT yet exposed
-    # on A2A/REST: that is a buyer-visible surface change deferred to its own ticket. MCP is
-    # the ONE caller that passes True. Expressed once here rather than as a per-transport
-    # hand-list of keys to strip.
-    if accept_structured_sort:
-        # Coerce the wire's JSON objects into the typed models before reading attributes.
-        # A2A and REST hand these through as plain dicts; only MCP's own validation builds
-        # the models for us. Without this the builder raised
-        # AttributeError: 'dict' object has no attribute 'field' -- an untyped 500 -- and
-        # constructing the model here also makes an out-of-enum value a proper
-        # ValidationError, which is what the spec's closed enums call for.
-        from adcp.types import PaginationRequest as _LibPagination
-        from adcp.types.generated_poc.creative.list_creatives_request import Sort as _LibSort
+    # Ungated. This was behind `accept_structured_sort`, whose comment said spec
+    # sort/pagination were "NOT yet exposed on A2A/REST" and that "MCP is the ONE caller that
+    # passes True". Both claims were false: BOTH callers passed True, so the False branch was
+    # unreachable, and list_creatives_raw declares sort/pagination while the derived REST body
+    # carries them -- so the deferred surface change had already shipped. A flag with one
+    # reachable value is not a gate, it is a comment that disagrees with its own code.
+    # Coerce the wire's JSON objects into the typed models before reading attributes.
+    # A2A and REST hand these through as plain dicts; only MCP's own validation builds
+    # the models for us. Without this the builder raised
+    # AttributeError: 'dict' object has no attribute 'field' -- an untyped 500 -- and
+    # constructing the model here also makes an out-of-enum value a proper
+    # ValidationError, which is what the spec's closed enums call for.
+    from adcp.types import PaginationRequest as _LibPagination
+    from adcp.types.generated_poc.creative.list_creatives_request import Sort as _LibSort
 
-        if isinstance(sort, dict):
-            sort = _LibSort(**sort)
-        if isinstance(pagination, dict):
-            pagination = _LibPagination(**pagination)
-        if sort is not None:
-            if sort.field is not None:
-                sort_by = enum_value(sort.field)
-            if sort.direction is not None:
-                sort_order = enum_value(sort.direction)
-        if pagination is not None and pagination.max_results is not None:
-            limit = pagination.max_results
+    if isinstance(sort, dict):
+        sort = _LibSort(**sort)
+    if isinstance(pagination, dict):
+        pagination = _LibPagination(**pagination)
+    if sort is not None:
+        if sort.field is not None:
+            sort_by = enum_value(sort.field)
+        if sort.direction is not None:
+            sort_order = enum_value(sort.direction)
+    if pagination is not None and pagination.max_results is not None:
+        limit = pagination.max_results
 
     from adcp.types import CreativeFilters as LibraryCreativeFilters
     from adcp.types import PaginationRequest as LibraryPagination
@@ -747,7 +747,6 @@ async def list_creatives(
     req = _build_list_creatives_request(
         sort=sort,
         pagination=pagination,
-        accept_structured_sort=True,
         media_buy_id=media_buy_id,
         media_buy_ids=media_buy_ids,
         status=status,
@@ -837,7 +836,6 @@ def list_creatives_raw(
     req = _build_list_creatives_request(
         sort=sort,
         pagination=pagination,
-        accept_structured_sort=True,
         media_buy_id=media_buy_id,
         media_buy_ids=media_buy_ids,
         status=status,
