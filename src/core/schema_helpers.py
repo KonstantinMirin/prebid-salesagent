@@ -11,6 +11,7 @@ Philosophy:
 """
 
 import inspect
+import logging
 from collections.abc import Container, Mapping
 from typing import Any
 from urllib.parse import urlparse
@@ -34,6 +35,8 @@ from src.core.errors.details import ValidationDetails
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas.product import GetProductsRequest
 from src.core.validation_helpers import adcp_validation_boundary
+
+logger = logging.getLogger(__name__)
 
 
 def _coerce_wire_object[ModelT: BaseModel](value: Any, model_cls: type[ModelT], context: str) -> ModelT | None:
@@ -346,7 +349,27 @@ def select_request_fields(
     names = set(model.model_fields) - _VERSION_ENVELOPE_FIELDS
     if accepted is not None:
         names &= set(accepted)
-    return {name: value for name, value in values.items() if name in names and value is not None}
+    selected = {name: value for name, value in values.items() if name in names and value is not None}
+
+    # Say what we did not carry. Dropping is the right BEHAVIOUR -- production runs
+    # extra="ignore" so a buyer on a newer spec version is tolerated rather than refused
+    # (critical pattern #7) -- but doing it in silence is not: a filter the buyer asked for
+    # that is quietly not applied returns 200 OK having done something other than what was
+    # asked. Measured instance: list_creatives with the retired flat `status` answered
+    # VALIDATION_ERROR on MCP and 200-with-the-filter-ignored on A2A and REST.
+    #
+    # This does not close the transport divergence itself (MCP's refusal is structural --
+    # FastMCP cannot accept a keyword the tool never advertised), only the silence on the
+    # other two. See salesagent-prkv.26.
+    dropped = sorted(k for k in values if k not in names and k not in _VERSION_ENVELOPE_FIELDS)
+    if dropped:
+        logger.info(
+            "%s: ignoring %d field(s) it does not define: %s",
+            model.__name__,
+            len(dropped),
+            ", ".join(dropped),
+        )
+    return selected
 
 
 __all__ = [

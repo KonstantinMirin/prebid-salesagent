@@ -421,3 +421,50 @@ class TestARequiredFieldCannotGoUnannounced:
         from src.core import main
 
         assert main.mcp is not None
+
+
+class TestDroppedFieldsAreReported:
+    """A field the seam does not carry is logged, never dropped in silence.
+
+    Dropping is the right BEHAVIOUR: production runs extra="ignore" so a buyer on a newer
+    spec version is tolerated rather than refused (critical pattern #7). Silence is not.
+    A buyer who sends a filter that is quietly not applied gets 200 OK and a result set that
+    answers a different question than the one asked -- which is how a single parametrized
+    test came to fail in three different ways across transports: VALIDATION_ERROR on MCP,
+    silently-ignored-with-200 on A2A and REST.
+    """
+
+    def test_an_undefined_field_is_logged(self, caplog) -> None:
+        import logging
+
+        from src.core.schema_helpers import accepted_kwargs, select_request_fields
+        from src.core.schemas import ListCreativesRequest
+        from src.core.tools.creatives import list_creatives_raw
+
+        with caplog.at_level(logging.INFO, logger="src.core.schema_helpers"):
+            selected = select_request_fields(
+                ListCreativesRequest,
+                {"status": "processing", "include_assignments": True},
+                accepted_kwargs(list_creatives_raw),
+            )
+
+        assert "status" not in selected, "a field the DTO does not define must not be forwarded"
+        assert any("status" in r.getMessage() for r in caplog.records), (
+            "dropping it silently is the defect; the operator must be able to see that a "
+            "buyer sent something we did not honour"
+        )
+
+    def test_a_carried_field_is_not_logged_as_dropped(self, caplog) -> None:
+        """The report must be specific, or it is noise that gets filtered out."""
+        import logging
+
+        from src.core.schema_helpers import accepted_kwargs, select_request_fields
+        from src.core.schemas import ListCreativesRequest
+        from src.core.tools.creatives import list_creatives_raw
+
+        with caplog.at_level(logging.INFO, logger="src.core.schema_helpers"):
+            select_request_fields(
+                ListCreativesRequest, {"include_assignments": True}, accepted_kwargs(list_creatives_raw)
+            )
+
+        assert not any("ignoring" in r.getMessage() for r in caplog.records)
