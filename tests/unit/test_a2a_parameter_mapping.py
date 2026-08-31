@@ -218,15 +218,19 @@ class TestA2AParameterMapping:
                 handler._handle_get_media_buy_delivery_skill(parameters=parameters, identity=_MOCK_IDENTITY)
             )
 
-            # Verify core function was called with filters
-            mock_delivery.assert_called_once()
-            call_kwargs = mock_delivery.call_args.kwargs
-
-            # Should pass None for media_buy_ids and include filters
-            assert call_kwargs["media_buy_ids"] is None, "media_buy_ids should be None when omitted"
-            assert call_kwargs["status_filter"] == "active", "Should pass status_filter"
-            assert call_kwargs["start_date"] == "2025-01-01", "Should pass start_date"
-            assert call_kwargs["end_date"] == "2025-01-31", "Should pass end_date"
+            # The filters reach the core tool and media_buy_ids does NOT appear at all, so
+            # the callee's own default (None) applies — an absent kwarg and an explicit
+            # ``media_buy_ids=None`` are the same call, and the handler now selects the
+            # request off GetMediaBuyDeliveryRequest rather than passing every name.
+            # Asserting the WHOLE call set (rather than three keys out of ten) is what
+            # proves nothing the buyer did not send was invented here.
+            mock_delivery.assert_called_once_with(
+                status_filter="active",
+                start_date="2025-01-01",
+                end_date="2025-01-31",
+                account=None,
+                identity=_MOCK_IDENTITY,
+            )
 
     def test_get_media_buy_delivery_forwards_typed_account_reference(self):
         """A2A get_media_buy_delivery must pass the validated account model."""

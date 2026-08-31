@@ -710,6 +710,12 @@ class TestA2ASkillInvocation:
             skill_params = {
                 "media_buy_id": "mb_test_123",
                 "budget": 15000.0,  # Float per AdCP spec, not Budget object
+                # AdCP 3.1.1 makes both /required on update-media-buy-request.json, and
+                # UpdateMediaBuyRequest stopped overriding them to optional. This payload
+                # was missed by that sweep, so the skill rejected it with VALIDATION_ERROR
+                # before reaching the wire assertions below.
+                "account": {"account_id": "acct_test"},
+                "idempotency_key": f"int-key-{uuid.uuid4().hex}",
             }
             message = create_a2a_message_with_skill("update_media_buy", skill_params)
             params = SendMessageRequest(message=message)
@@ -1020,7 +1026,7 @@ class TestA2ASkillInvocation:
             assert result.artifacts is not None
 
             expected = LibraryAccountReference.model_validate({"account_id": "acct-1"})
-            assert_delivery_forwarded_account(mock_delivery, expected)
+            assert_delivery_forwarded_account(mock_delivery, expected, media_buy_ids=["mb_test_123"])
 
     @pytest.mark.asyncio
     async def test_approve_creative_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):

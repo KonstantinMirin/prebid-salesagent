@@ -1697,17 +1697,16 @@ class AdCPRequestHandler(RequestHandler):
         NOTE: Authentication is OPTIONAL for this endpoint. Access depends on tenant's
         brand_manifest_policy setting (public/require_brand/require_auth).
         """
-        brief = parameters.get("brief", "")
-        brand = parameters.get("brand")
-        filters = parameters.get("filters")
+        from src.core.schemas.product import GetProductsRequest
 
+        # Selected off get_products_raw's own signature rather than hand-listed, so the set
+        # this transport forwards is "GetProductsRequest fields INTERSECT the callee's
+        # parameters" -- the same set MCP advertises. A hand-listed forward is the shape that
+        # silently drops every field added later (salesagent-e8wt.1), and this one already
+        # named five of the twenty-one fields the DTO declares.
         # Call core function with identity — _impl validates search criteria
         response = await core_get_products_tool(
-            brief=brief,
-            brand=brand,
-            filters=filters,
-            property_list=parameters.get("property_list"),
-            context=parameters.get("context"),
+            **select_request_fields(GetProductsRequest, parameters, accepted_kwargs(core_get_products_tool)),
             identity=identity,
         )
 
@@ -1789,27 +1788,32 @@ class AdCPRequestHandler(RequestHandler):
         # field + message + buyer-facing suggestion (AdCP POST-F3, #1417):
         # idempotency_key_missing / duplicate_product_id rejections include a
         # non-empty suggestion derived by adcp_validation_boundary.
+        # Validated for its rejection only: the values forwarded below are the wire values
+        # (create_media_buy_raw re-validates them through this same model), so the model is
+        # the boundary's gate rather than a container to pluck from.
         with adcp_validation_boundary():
-            req = CreateMediaBuyRequest.model_validate(params)
+            CreateMediaBuyRequest.model_validate(params)
 
         # Call core function with validated parameters and identity.
         # Per AdCP 3.1.1 (media-buy/package-update.json) targeting_overlay and budgets live on each
         # PackageRequest; only request-level spec fields are forwarded here.
+        #
+        # Selected off create_media_buy_raw's own signature rather than hand-listed. The
+        # ten-name list this replaces dropped `ext` and `paused` — both declared by
+        # CreateMediaBuyRequest AND accepted by the callee, so both were honoured on MCP and
+        # silently discarded on A2A. That is the same defect class as the missing
+        # idempotency_key on update_media_buy; the cure is to stop enumerating.
+        selected = select_request_fields(CreateMediaBuyRequest, params, accepted_kwargs(core_create_media_buy_tool))
+        # Wrap for boundary-pattern consistency with delivery/sync_creatives. A crash is
+        # structurally impossible here (create_media_buy_raw re-coerces via
+        # CreateMediaBuyRequest), and to_account_reference is idempotent on an already
+        # typed/dict account — but resolving at the boundary keeps all three handlers uniform.
+        selected["account"] = to_account_reference(params.get("account"))
         response = await core_create_media_buy_tool(
-            brand=params.get("brand"),
-            po_number=req.po_number,
-            packages=params["packages"],  # Required — validated above
-            start_time=params.get("start_time"),
-            end_time=params.get("end_time"),
+            **selected,
+            # Popped from params above: an A2A transport-layer parameter, forwarded as a
+            # SEPARATE argument exactly like the MCP wrapper does.
             push_notification_config=push_notification_config,
-            reporting_webhook=params.get("reporting_webhook"),
-            context=params.get("context"),
-            # Wrap for boundary-pattern consistency with delivery/sync_creatives. A crash is
-            # structurally impossible here (create_media_buy_raw re-coerces via
-            # CreateMediaBuyRequest), and to_account_reference is idempotent on an already
-            # typed/dict account — but resolving at the boundary keeps all three handlers uniform.
-            account=to_account_reference(params.get("account")),
-            idempotency_key=params.get("idempotency_key"),
             identity=identity,
             # The DataPart params AS SENT (pre-normalization, pre-mutation) are
             # the idempotency payload-hash input; the post-processed dict is the
@@ -1855,6 +1859,7 @@ class AdCPRequestHandler(RequestHandler):
         # asset with no error (salesagent-kyc89). Dumping keeps the rewrite and
         # leaves the request identical to the one MCP and REST build.
         from src.core.format_cache import upgrade_legacy_format_id
+        from src.core.schemas import SyncCreativesRequest
 
         with adcp_validation_boundary(context="sync_creatives request"):
             creatives = [
@@ -1867,24 +1872,23 @@ class AdCPRequestHandler(RequestHandler):
             ctx_param = parameters.get("context")
             context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param
 
-        # Call core function with spec-compliant parameters (AdCP v2.5)
-        response = core_sync_creatives_tool(
-            creatives=creatives,
-            # AdCP 2.5: Full upsert semantics (patch parameter removed)
-            creative_ids=parameters.get("creative_ids"),
-            assignments=parameters.get("assignments"),
-            delete_missing=parameters.get("delete_missing", False),
-            dry_run=parameters.get("dry_run", False),
-            validation_mode=parameters.get("validation_mode", "strict"),
-            push_notification_config=parameters.get("push_notification_config"),
-            context=context,
-            account=to_account_reference(parameters.get("account")),
-            # AdCP 3.1.1 /required; forwarded like every other field so a2a accepts the same
-            # request set as mcp and rest -- a field one transport takes and another drops is
-            # silently lost for the buyer.
-            idempotency_key=parameters.get("idempotency_key"),
-            identity=identity,
-        )
+        # Call core function with spec-compliant parameters (AdCP 2.5: full upsert
+        # semantics, patch parameter removed).
+        #
+        # Selected off sync_creatives_raw's own signature rather than hand-listed: the set
+        # forwarded is "SyncCreativesRequest fields INTERSECT the callee's parameters", the
+        # same set MCP advertises, so a field added to the DTO and the callee cannot reach
+        # one transport and not another (which is how idempotency_key -- AdCP 3.1.1
+        # /required -- was lost here until it was hand-added back).
+        #
+        # Three fields are set AFTER selection because they need boundary coercion the raw
+        # bag cannot carry: `creatives` (legacy format_id upgraded above), `context` (typed
+        # ContextObject) and `account` (typed AccountReference).
+        selected = select_request_fields(SyncCreativesRequest, parameters, accepted_kwargs(core_sync_creatives_tool))
+        selected["creatives"] = creatives
+        selected["context"] = context
+        selected["account"] = to_account_reference(parameters.get("account"))
+        response = core_sync_creatives_tool(**selected, identity=identity)
 
         return response
 
@@ -2128,23 +2132,21 @@ class AdCPRequestHandler(RequestHandler):
 
         # Validate top-level fields via typed model (packages validated by _raw
         # which handles legacy formats with extra fields like 'status')
+        # Selected off the DTO, not hand-listed. The seven-name list this replaces omitted
+        # `account` and `idempotency_key` until they were noticed and hand-added back, while
+        # sitting directly above a comment praising the SELECTED half of this same function
+        # for not hand-listing: the two halves of one function disagreed, which is the whole
+        # argument for having one rule.
+        #
+        # `packages` is the ONE documented exception and is excluded from the gate on
+        # purpose: it carries legacy shapes (extra keys like `status`) that
+        # update_media_buy_raw normalises downstream, so validating it here would reject
+        # requests the tool accepts. It is still FORWARDED below — excluded from the
+        # validation gate, not from the request.
+        validation_bag = select_request_fields(UpdateMediaBuyRequest, params, None)
+        validation_bag.pop("packages", None)
         with adcp_validation_boundary():
-            # account and idempotency_key are AdCP 3.1.1 /required, so they must reach the
-            # model or every a2a update is refused. They were absent from this hand-picked
-            # list -- which sits directly above a comment praising the SELECTED half of this
-            # same function for not hand-listing. The two halves disagreed.
-            # Still hand-picked rather than model_validate(params): `packages` carries legacy
-            # shapes that update_media_buy_raw normalises, so validating the whole bag here
-            # would reject them. Converting this handler properly is salesagent-prkv.30.
-            req = UpdateMediaBuyRequest(
-                media_buy_id=params.get("media_buy_id"),
-                account=params.get("account"),
-                idempotency_key=params.get("idempotency_key"),
-                paused=params.get("paused"),
-                start_time=params.get("start_time"),
-                end_time=params.get("end_time"),
-                context=params.get("context"),
-            )
+            req = UpdateMediaBuyRequest.model_validate(validation_bag)
 
         # Selected off update_media_buy_raw's own signature rather than hand-listed. The
         # eight-name list this replaces silently dropped currency, daily_budget, ext,
@@ -2200,27 +2202,22 @@ class AdCPRequestHandler(RequestHandler):
             req = GetMediaBuyDeliveryRequest.model_validate(params)
 
         # Call core function with validated fields (all optional per AdCP spec).
-        # Every _impl parameter MUST be forwarded (Critical Pattern #5 —
-        # transport boundary completeness): reporting_dimensions,
-        # attribution_window, include_package_daily_breakdown and account
-        # were previously dropped, silently discarding the buyer's
-        # requested attribution window (gh-#1299 follow-up).
-        # Pass raw values for fields where _raw handles its own type coercion
-        # (e.g., status_filter str→MediaBuyStatus, date str→date).
-        response = core_get_media_buy_delivery_tool(
-            media_buy_ids=req.media_buy_ids,
-            status_filter=params.get("status_filter"),
-            start_date=params.get("start_date"),
-            end_date=params.get("end_date"),
-            reporting_dimensions=req.reporting_dimensions,
-            attribution_window=req.attribution_window,
-            include_package_daily_breakdown=req.include_package_daily_breakdown,
-            # account is a typed AccountReference on GetMediaBuyDeliveryRequest (adcp SDK 5.7);
-            # forward the validated model field rather than re-coercing the raw dict (#1438).
-            account=req.account,
-            context=params.get("context"),
-            identity=identity,
+        # Selected off get_media_buy_delivery_raw's own signature rather than hand-listed:
+        # the nine-name list this replaces once dropped reporting_dimensions,
+        # attribution_window, include_package_daily_breakdown and account, silently
+        # discarding the buyer's requested attribution window (gh-#1299 follow-up). Selection
+        # makes that class of omission structurally impossible instead of re-audited.
+        # Raw values are forwarded for everything the callee coerces itself
+        # (status_filter str→MediaBuyStatus, dates, the dimension/window objects, which
+        # _build_get_media_buy_delivery_request validates into models).
+        selected = select_request_fields(
+            GetMediaBuyDeliveryRequest, params, accepted_kwargs(core_get_media_buy_delivery_tool)
         )
+        # account is a typed AccountReference on GetMediaBuyDeliveryRequest (adcp SDK 5.7);
+        # forward the validated model field rather than the raw dict, because the callee
+        # hands it straight to enrich_identity_with_account without coercing (#1438).
+        selected["account"] = req.account
+        response = core_get_media_buy_delivery_tool(**selected, identity=identity)
 
         return response
 
@@ -2231,16 +2228,20 @@ class AdCPRequestHandler(RequestHandler):
         # Parse parameters into typed request model (validation at A2A boundary)
         from src.core.schemas import UpdatePerformanceIndexRequest
 
+        # Validated for its rejection only: the values forwarded below are the wire values,
+        # so the model is the boundary's gate rather than a container to pluck from.
         with adcp_validation_boundary():
-            req = UpdatePerformanceIndexRequest.model_validate(parameters)
+            UpdatePerformanceIndexRequest.model_validate(parameters)
 
-        # Call core function with validated fields and identity
-        response = core_update_performance_index_tool(
-            media_buy_id=req.media_buy_id,
-            performance_data=[p.model_dump(mode="json") for p in req.performance_data],
-            context=req.context,
-            identity=identity,
+        # Call core function with the selected fields and identity. Selected off
+        # update_performance_index_raw's own signature rather than hand-listed, like every
+        # other handler here; the wire values are forwarded as sent because
+        # _build_update_performance_index_request model_validates each entry itself (it
+        # reads typed models and wire dicts alike, deliberately).
+        selected = select_request_fields(
+            UpdatePerformanceIndexRequest, parameters, accepted_kwargs(core_update_performance_index_tool)
         )
+        response = core_update_performance_index_tool(**selected, identity=identity)
 
         return response
 

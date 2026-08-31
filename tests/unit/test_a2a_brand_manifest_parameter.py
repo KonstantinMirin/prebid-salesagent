@@ -137,8 +137,13 @@ async def test_handle_get_products_skill_brand_manifest_not_converted():
         mock_core_tool.assert_called_once()
         call_kwargs = mock_core_tool.call_args.kwargs
 
-        # brand_manifest is ignored, brand is None
-        assert call_kwargs["brand"] is None
+        # brand_manifest is ignored, so the callee sees no brand at all. The handler now
+        # selects the request off GetProductsRequest, which drops absent/None fields so the
+        # callee's own default applies -- `brand` being ABSENT and `brand` being explicitly
+        # None are the same call. The obligation graded here is that brand_manifest is never
+        # converted into a brand, which `.get(...) is None` states without also pinning the
+        # forwarding mechanism.
+        assert call_kwargs.get("brand") is None
         assert call_kwargs["brief"] == "Display ads"
         assert "brand_manifest" not in call_kwargs
 
