@@ -349,6 +349,23 @@ from src.core.tools.task_management import complete_task, get_task, list_tasks
 _sdk_tool_defs = {td["name"]: td for td in ADCP_TOOL_DEFINITIONS}
 
 
+#: Tools whose advertised shape is DERIVED from the SDK request DTO. Deliberately the four
+#: this PR opened (salesagent-prkv.5 ruling R4), not every tool that happens to resolve a DTO.
+#: This is a SCOPE gate, not a list of implemented fields -- within a listed tool nothing is
+#: hand-maintained; the derivation reads the signature and the DTO.
+#:
+#: Applying it to all 12 resolvable tools put two defects in the tree while every suite
+#: stayed green, because the tests parametrize over these four:
+#:   * update_media_buy.budget was WIDENED from number to Budget|number by adopting the DTO
+#:     type. The impl does float(budget), so a Budget object raises TypeError -- we would
+#:     advertise an input whose only outcome is an untyped 500, the inverse of R4's rule.
+#:     The narrowing guard does not see the widening direction.
+#:   * five parameters silently lost their advertised description.
+#: Widening the scope means grading the other eight first (§3.4 ticket 6), including the
+#: DTO-wider-than-the-tool direction the ledger has no concept of yet.
+_DTO_ANNOUNCED_TOOLS = frozenset({"get_adcp_capabilities", "get_products", "list_creative_formats", "list_creatives"})
+
+
 def _register_tool(fn: Any) -> None:
     """Register an MCP tool with SDK description, annotations and ADVERTISED SHAPE.
 
@@ -365,7 +382,8 @@ def _register_tool(fn: Any) -> None:
         if sdk_def.get("annotations"):
             kwargs["annotations"] = ToolAnnotations(**sdk_def["annotations"])
     registered = with_error_logging(fn)
-    apply_dto_announced_shape(registered, fn)
+    if tool_name in _DTO_ANNOUNCED_TOOLS:
+        apply_dto_announced_shape(registered, fn)
     mcp.tool(**kwargs)(registered)
 
 

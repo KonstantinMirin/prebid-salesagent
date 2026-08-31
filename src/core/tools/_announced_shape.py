@@ -103,6 +103,23 @@ def _would_narrow(declared: Any, dto: Any) -> bool:
     return bool(_union_members(declared) - _union_members(dto))
 
 
+def _declared_description(annotation: Any) -> str | None:
+    """The description already on the tool's own ``Annotated[...]``, if any.
+
+    Taking the DTO's type must not silently erase buyer-facing text the tool wrote. A DTO
+    field with no description of its own would otherwise blank the wrapper's -- five
+    parameters lost their description that way before this existed, invisibly, because the
+    advertised schema still validated.
+    """
+    if typing.get_origin(annotation) is not Annotated:
+        return None
+    for meta in typing.get_args(annotation)[1:]:
+        description = getattr(meta, "description", None)
+        if description:
+            return str(description)
+    return None
+
+
 def derived_signature(fn: Callable[..., Any], model: type[BaseModel]) -> inspect.Signature:
     """``fn``'s own parameters, retyped from ``model`` wherever it declares the field.
 
@@ -128,8 +145,9 @@ def derived_signature(fn: Callable[..., Any], model: type[BaseModel]) -> inspect
         declared = parameter.annotation
         narrows = declared is not inspect.Parameter.empty and _would_narrow(declared, field.annotation)
         annotation = declared if narrows else field.annotation
-        if field.description:
-            annotation = Annotated[annotation, PydanticField(description=field.description)]
+        description = field.description or _declared_description(declared)
+        if description:
+            annotation = Annotated[annotation, PydanticField(description=description)]
         parameters.append(parameter.replace(annotation=annotation))
     return signature.replace(parameters=parameters)
 
