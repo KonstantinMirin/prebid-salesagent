@@ -235,7 +235,7 @@ class TestFilteredReadExcludesTheUnreadableRow:
     ``CreativeRepository.get_by_principal`` filters on the RAW persisted string, while the
     placeholder the reader renders is chosen at read time — so a row stored as an alien
     value is returned by an unfiltered read (rendered ``processing``) and is ABSENT from
-    ``list_creatives(status="processing")``.  That asymmetry is deliberate: a filtered read
+    ``list_creatives(filters={"statuses": ["processing"]})``.  That asymmetry is deliberate: a filtered read
     is scoped to a status the buyer NAMED, and an unreadable row is not known to be that
     status.  It is pinned here so it is a graded choice rather than an accident.
     """
@@ -250,7 +250,11 @@ class TestFilteredReadExcludesTheUnreadableRow:
                 status=CreativeStatus.processing.value,
             )
 
-            result = env.call_via(transport, status=CreativeStatus.processing.value)
+            # AdCP 3.1.1 spells this filters.statuses (PLURAL, an array):
+            # creative-filters.json declares `statuses` and no `status`, and
+            # list-creatives-request.json has no top-level status at all. The flat
+            # `status=` this used to pass was retired with the rest of the non-spec surface.
+            result = env.call_via(transport, filters={"statuses": [CreativeStatus.processing.value]})
 
             assert not result.is_error, f"{transport}: listing errored: {result.error!r}"
             returned = {record["creative_id"] for record in result.wire_response["creatives"]}

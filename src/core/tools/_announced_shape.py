@@ -22,9 +22,12 @@ every field it declares.** Both halves matter:
 * A parameter the DTO DOES declare takes the DTO's type. This is the half that cannot
   drift: bump the SDK and every advertised type moves with it.
 
-A parameter the DTO does not declare keeps its own annotation (legacy flat params on
-``list_creatives``, for example) and is still announced, because the tool does accept it.
-Our advertised shape is therefore always a SUBSET of the DTO, in exactly the DTO's form.
+A parameter the DTO does not declare is DROPPED from the announcement -- that is what
+retires a legacy flat name such as ``list_creatives(status=...)``: FastMCP never passes what
+it does not advertise, so there is no list of retired names to maintain. (This paragraph
+used to say such a parameter "is still announced"; it never did, and a reader debugging why
+a flat name stopped working was sent the wrong way by it.) Our advertised shape is therefore
+always a SUBSET of the DTO, in exactly the DTO's form.
 
 Transport independence
 ----------------------

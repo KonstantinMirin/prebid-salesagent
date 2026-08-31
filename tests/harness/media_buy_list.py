@@ -127,8 +127,13 @@ class MediaBuyListDispatchMixin:
             from src.core.tools.media_buy_list import get_media_buys as _tool
 
             accepted = set(_inspect.signature(_tool).parameters)
+            # exclude_UNSET, not exclude_none: GetMediaBuysRequest was re-based on the
+            # library type, so it now inherits include_snapshot with a default of False
+            # rather than None -- exclude_none stopped dropping it and the built body grew a
+            # key the caller never set. exclude_unset restores "send only what was set",
+            # which is also what the flat arm below already does.
             body = {
-                key: value for key, value in req.model_dump(mode="json", exclude_none=True).items() if key in accepted
+                key: value for key, value in req.model_dump(mode="json", exclude_unset=True).items() if key in accepted
             }
         else:
             body = {}

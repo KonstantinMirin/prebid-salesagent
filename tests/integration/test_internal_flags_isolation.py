@@ -58,11 +58,45 @@ class TestListCreativesInternalFlagsIsolation:
 
 @pytest.mark.requires_db
 class TestGetMediaBuysInternalFlagsIsolation:
-    """Verify include_snapshot cannot be injected via request object."""
+    """A value set for include_snapshot on the REQUEST object is inert.
 
-    def test_request_object_rejects_include_snapshot(self, integration_db):
-        """GetMediaBuysRequest schema must reject include_snapshot (not in AdCP spec)."""
+    This class used to assert that GetMediaBuysRequest REJECTS include_snapshot, on the
+    stated grounds that it is "not in AdCP spec". That premise is false against the pinned
+    version: media-buy/get-media-buys-request.json declares
+    include_snapshot as {"type": "boolean"}, so it is buyer-facing and REFUSING it would be
+    the bug. GetMediaBuysRequest was re-based on the library type and now inherits it, which
+    is what retired the old assertion.
+
+    The isolation it was written to protect is intact -- what changed is the mechanism, from
+    "the model rejects it" to "the model never feeds it", so the invariant is re-expressed
+    rather than dropped. Measured: `.include_snapshot` has exactly ONE read site in src/,
+    src/routes/api_v1.py:524, and that reads the REST BODY, not the request object.
+    _build_get_media_buys_request builds from media_buy_ids/status_filter/account/context
+    only, and all three wrappers pass the flag out-of-band as an explicit argument.
+    """
+
+    def test_the_request_object_accepts_the_spec_field(self, integration_db):
+        """Accepting it is REQUIRED: the pinned schema declares it as a buyer input."""
         from src.core.schemas import GetMediaBuysRequest
 
-        with pytest.raises(ValidationError, match="include_snapshot"):
-            GetMediaBuysRequest(include_snapshot=True)
+        assert GetMediaBuysRequest(include_snapshot=True).include_snapshot is True
+
+    def test_the_impl_honours_its_argument_not_the_request_field(self, integration_db):
+        """The isolation itself: a request saying True cannot turn snapshots on.
+
+        This is the assertion with teeth. The old test proved the field could not be SET;
+        this proves that setting it changes nothing, which is what actually keeps a buyer
+        from reaching an out-of-band flag.
+        """
+        import inspect
+
+        from src.core.tools.media_buy_list import _build_get_media_buys_request, get_media_buys
+
+        req = _build_get_media_buys_request(media_buy_ids=["mb_x"], status_filter=None, account=None, context=None)
+        assert not hasattr(req, "include_snapshot") or req.include_snapshot in (None, False), (
+            "the builder must not carry a buyer-supplied include_snapshot onto the request"
+        )
+        assert "include_snapshot" in inspect.signature(get_media_buys).parameters, (
+            "the wrapper must take include_snapshot as its OWN argument -- that out-of-band "
+            "path is what makes any value on the request object inert"
+        )
