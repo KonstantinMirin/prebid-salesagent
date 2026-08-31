@@ -2510,7 +2510,17 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
     # Campaign-level budget (not in library spec — convenience field)
     # Bare float is accepted so transport wrappers can preserve existing DB currency
     # when the caller updates only the amount.
-    budget: Budget | float | None = None
+    # `budget` is NOT declared here on purpose. AdCP 3.1.1
+    # media-buy/update-media-buy-request.json lists 16 properties and budget is not among
+    # them -- budget is PACKAGE-level (media-buy/package-update.json /properties/budget), and
+    # adcp.types.UpdateMediaBuyRequest declares none either. The schema and the SDK are the
+    # contract; a campaign-level budget update is expressed as packages[].budget, which this
+    # codebase implements (media_buy_update.py reads pkg_update.budget).
+    #
+    # The conformance storyboard DOES carry a top-level "Update campaign-level budget"
+    # scenario (BR-UC-003 @T-UC-003-alt-budget). That does not license a field the schema does
+    # not define: we do not support anything the schema rejects. The disagreement is upstream
+    # and is filed for reconciliation there, not accommodated here.
     # Internal testing field
     today: date | None = Field(None, exclude=True, description="For testing/simulation only - not part of AdCP spec")
 
@@ -2587,7 +2597,6 @@ class UpdateMediaBuyRequest(LibraryUpdateMediaBuyRequest):
                 self.start_time,
                 self.end_time,
                 self.packages,
-                self.budget,
                 self.push_notification_config,
                 self.reporting_webhook,
                 self.context,

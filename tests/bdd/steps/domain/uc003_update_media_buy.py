@@ -802,7 +802,11 @@ def when_send_update_request(ctx: dict) -> None:
                 pkg["package_id"] = _resolve_package_id(ctx, pkg["package_id"])
     try:
         req = UpdateMediaBuyRequest(
-            account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", **update_kwargs
+            **{
+                "account": {"account_id": "acct_test"},
+                "idempotency_key": "test-idem-key-0001",
+                **update_kwargs,
+            }  # scenario-supplied values win over the defaults
         )
     except ValidationError as e:
         # Schema validation rejects the request before production code runs.

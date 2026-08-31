@@ -1,4 +1,4 @@
-# Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
+# Generated from adcp-req @ cac2015cd7436b762053f469b952f94f262cf02f on 2026-08-31T20:30:38Z (merge mode)
 # DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 @analysis-2026-03-09 @schema-v3.1
@@ -26,8 +26,6 @@ Feature: BR-UC-003 Update Media Buy
     And the Buyer is authenticated with a valid principal_id
     And the Buyer owns an existing media buy with media_buy_id "mb_existing"
     And the media buy is in "active" status
-
-
 
   @T-UC-003-main @main-flow @post-s1 @post-s2 @post-s3 @post-s4 @post-s5 @post-s6
   Scenario: Package budget update -- auto-applied via media_buy_id
@@ -91,7 +89,10 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 25000       |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    | budget     | 25000 |
     And the budget 25000 is greater than zero
     When the Buyer Agent sends the update_media_buy request
     Then the response status should be "completed"
@@ -358,7 +359,7 @@ Feature: BR-UC-003 Update Media Buy
     Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | -100        |
+    | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
     Then the response should contain an "errors" array
     And the response should NOT contain "media_buy_id" field
@@ -474,16 +475,6 @@ Feature: BR-UC-003 Update Media Buy
 
   @T-UC-003-ext-a-unknown @extension @ext-a @error @post-f1 @post-f2 @post-f3
   Scenario: Authentication error -- principal not found in database
-    # NOTE (salesagent-mkso, salesagent-otc5, salesagent-z9e0): a principal_id
-    # with no backing DB row resolves to identity.principal_id=None (the real
-    # resolve_identity() nulls it on a failed token->principal lookup, and the
-    # BDD harness's identity_for() now mirrors that — salesagent-z9e0). So
-    # require_principal_id fires FIRST with AUTH_MISSING, before
-    # update_media_buy's ownership check (AdCPAuthorizationError /
-    # PERMISSION_DENIED, salesagent-otc5) is ever reached — that check only
-    # fires for a principal_id that resolved but doesn't own the media buy, a
-    # genuinely different case from "principal_id never resolved". This now
-    # matches the scenario's own title on every transport.
     Given the Buyer is authenticated as principal "unknown_principal"
     And the principal "unknown_principal" does not exist in the database
     And a valid update_media_buy request with:
@@ -494,6 +485,16 @@ Feature: BR-UC-003 Update Media Buy
     Then the operation should fail
     And the error code should be "AUTH_MISSING"
     And the error should include "suggestion" field
+    # NOTE (salesagent-mkso, salesagent-otc5, salesagent-z9e0): a principal_id
+    # with no backing DB row resolves to identity.principal_id=None (the real
+    # resolve_identity() nulls it on a failed token->principal lookup, and the
+    # BDD harness's identity_for() now mirrors that — salesagent-z9e0). So
+    # require_principal_id fires FIRST with AUTH_MISSING, before
+    # update_media_buy's ownership check (AdCPAuthorizationError /
+    # PERMISSION_DENIED, salesagent-otc5) is ever reached — that check only
+    # fires for a principal_id that resolved but doesn't own the media buy, a
+    # genuinely different case from "principal_id never resolved". This now
+    # matches the scenario's own title on every transport.
     # POST-F1: System state unchanged
     # POST-F2: Error explains principal not found
     # POST-F3: Suggestion for recovery
@@ -533,26 +534,39 @@ Feature: BR-UC-003 Update Media Buy
     Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 0           |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    | budget     | 0 |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "BUDGET_TOO_LOW"
     And the error should include "recovery" field with value "correctable"
     And the error should include "suggestion" field
-    And the error should include "field" field with value "budget"
+    And the error should include "field" field with value "packages[0].budget"
     # POST-F1: System state unchanged
     # POST-F2: Error code BUDGET_TOO_LOW
     # POST-F3: Suggestion to provide positive budget
 
   @T-UC-003-ext-d-negative @extension @ext-d @error @post-f1 @post-f2 @post-f3
-  Scenario: Budget validation -- campaign budget negative
+  # A NEGATIVE package budget is a SCHEMA violation, not a business-rule one:
+  # package-update.json declares budget as {"type": "number", "minimum": 0}, so the SDK model
+  # rejects it before any minimum-budget rule can run. BUDGET_TOO_LOW is what a budget that is
+  # schema-valid but below the tenant minimum earns; -5 never gets that far. (Whether a schema
+  # violation should surface as VALIDATION_ERROR or INVALID_REQUEST is salesagent-yq14n; the
+  # spec's enum descriptions say INVALID_REQUEST, and we currently emit VALIDATION_ERROR on
+  # mcp/a2a. This row records today's behavior, not an endorsement of the code.)
+  Scenario: Budget validation -- package budget negative is rejected by the schema
     Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | -500        |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    | budget     | -500 |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "BUDGET_TOO_LOW"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error code BUDGET_TOO_LOW
@@ -2002,7 +2016,10 @@ Feature: BR-UC-003 Update Media Buy
     Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 100         |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    | budget     | 100 |
     And the seller's minimum budget for this media buy is 500 USD
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
@@ -2023,7 +2040,7 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 25000       |
+    | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "CONFLICT"
@@ -2044,7 +2061,7 @@ Feature: BR-UC-003 Update Media Buy
     | field           | value             |
     | media_buy_id    | mb_existing       |
     | idempotency_key | upd-20260521-001  |
-    | budget          | 30000             |
+    | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "IDEMPOTENCY_CONFLICT"
@@ -2125,7 +2142,7 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 9000        |
+    | paused       | true        |
     And the request revision is set to <value>
     When the Buyer Agent sends the update_media_buy request
     Then the result should be <outcome>
@@ -2150,7 +2167,7 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 9000        |
+    | paused       | true        |
     And the request revision is set to <value>
     When the Buyer Agent sends the update_media_buy request
     Then the result should be <outcome>
@@ -2171,7 +2188,7 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 9000        |
+    | paused       | true        |
     And the request revision is set to 7
     When the Buyer Agent sends the update_media_buy request
     Then the response status should be "completed"
@@ -2190,7 +2207,7 @@ Feature: BR-UC-003 Update Media Buy
     | field           | value                                |
     | media_buy_id    | mb_existing                          |
     | idempotency_key | 550e8400-e29b-41d4-a716-446655440000 |
-    | budget          | 9000                                 |
+    | paused       | true        |
     And the request revision is set to 7
     When the Buyer Agent sends the update_media_buy request
     Then the response status should be "completed"
@@ -2205,7 +2222,7 @@ Feature: BR-UC-003 Update Media Buy
     | field             | value                  |
     | media_buy_id      | mb_existing            |
     | invoice_recipient | acme-finance-not-on-acct |
-    | budget            | 12000                  |
+    | paused       | true        |
     And the invoice_recipient "acme-finance-not-on-acct" is not authorized for this account
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
@@ -2224,7 +2241,7 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 12000       |
+    | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "BILLING_NOT_SUPPORTED"
@@ -2246,7 +2263,7 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 12000       |
+    | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "BILLING_NOT_PERMITTED_FOR_AGENT"
@@ -2264,7 +2281,7 @@ Feature: BR-UC-003 Update Media Buy
     And a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
-    | budget       | 12000       |
+    | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
     And the error code should be "BILLING_NOT_SUPPORTED"

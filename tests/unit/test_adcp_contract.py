@@ -2565,67 +2565,6 @@ class TestAdCPContract:
         # Verify field count
         assert len(adcp_response) >= 2, f"AdCP request should have at least 2 fields, got {len(adcp_response)}"
 
-    def test_update_media_buy_request_adcp_compliance(self):
-        """Test that UpdateMediaBuyRequest model complies with AdCP update-media-buy-request schema."""
-        # ✅ FIXED: Implementation now matches AdCP spec
-        # AdCP spec requires: media_buy_id, optional active/start_time/end_time/budget/packages
-
-        from datetime import UTC, datetime
-
-        from src.core.schemas import AdCPPackageUpdate, Budget, UpdateMediaBuyRequest
-
-        # Test AdCP-compliant request with media_buy_id (oneOf option 1)
-        adcp_request_id = UpdateMediaBuyRequest(
-            account={"account_id": "acct_test"},
-            idempotency_key="test-idem-key-0001",
-            media_buy_id="mb_12345",
-            paused=False,  # adcp 2.12.0+: replaced 'active' with 'paused'
-            start_time=datetime(2025, 2, 1, 9, 0, 0, tzinfo=UTC),
-            end_time=datetime(2025, 2, 28, 23, 59, 59, tzinfo=UTC),
-            budget=Budget(total=5000.0, currency="USD", pacing="even"),
-            packages=[AdCPPackageUpdate(package_id="pkg_123", paused=False, budget=2500.0)],  # adcp 2.12.0+
-        )
-
-        adcp_response_id = adcp_request_id.model_dump()
-
-        # ✅ VERIFY ADCP COMPLIANCE: media_buy_id is required
-        assert "media_buy_id" in adcp_response_id, "media_buy_id must be present"
-        assert adcp_response_id["media_buy_id"] is not None, "media_buy_id must not be None"
-
-        # ✅ VERIFY ADCP COMPLIANCE: Optional fields present when provided
-        optional_fields = ["paused", "start_time", "end_time", "budget", "packages"]  # adcp 2.12.0+
-        for field in optional_fields:
-            if getattr(adcp_request_id, field) is not None:
-                assert field in adcp_response_id, f"Optional AdCP field '{field}' missing from response"
-
-        # ✅ VERIFY start_time/end_time are datetime (not date)
-        if adcp_response_id.get("start_time"):
-            # Should be datetime object (model_dump preserves datetime objects)
-            start_time_obj = adcp_response_id["start_time"]
-            assert isinstance(start_time_obj, datetime), "start_time should be datetime object"
-
-        if adcp_response_id.get("end_time"):
-            # Should be datetime object (model_dump preserves datetime objects)
-            end_time_obj = adcp_response_id["end_time"]
-            assert isinstance(end_time_obj, datetime), "end_time should be datetime object"
-
-        # ✅ VERIFY packages array structure
-        if adcp_response_id.get("packages"):
-            assert isinstance(adcp_response_id["packages"], list), "packages must be array"
-            for package in adcp_response_id["packages"]:
-                # Each package must have package_id
-                has_package_id = package.get("package_id") is not None
-                assert has_package_id, "Each package must have package_id"
-
-        # media_buy_id is required for update
-        import pytest
-        from pydantic import ValidationError as PydanticValidationError
-
-        with pytest.raises((PydanticValidationError, ValueError)):
-            UpdateMediaBuyRequest(
-                account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", paused=False
-            )  # missing required media_buy_id
-
     def test_task_status_mcp_integration(self):
         """Test TaskStatus integration with MCP response schemas (AdCP PR #77)."""
 

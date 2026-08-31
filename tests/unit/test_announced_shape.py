@@ -271,35 +271,18 @@ class TestAdvertisedTypesAreAccepted:
     TYPES, and a type can widen while the implementation stays narrow. That direction had no
     grader, and it put a live defect in the tree.
 
-    update_media_buy advertised ``budget: Budget | number | null`` (from the DTO) while
-    ``_build_update_request`` still declared ``float | None`` and called ``float(budget)``. A
-    buyer sending the documented Budget object got ``TypeError: float() argument must be a
-    string or a real number, not 'Budget'`` -- an untyped 500 from the exact payload our own
-    schema told them to send. This is the precise inverse of the rule: an advertised input
-    whose only outcome is an error.
+    The original instance was update_media_buy.budget, which advertised
+    ``Budget | number | null`` while its builder declared ``float | None`` and called
+    ``float(budget)`` -- an untyped 500 on the payload our own schema documented. Those cases
+    are gone with the field: AdCP 3.1.1 defines no top-level budget on update_media_buy, so
+    the field was removed rather than repaired. The rule is now graded on
+    update_performance_index.performance_data, a field that does exist.
 
     Graded behaviorally -- construct the advertised type, call the real builder -- rather than
     by comparing annotations, because an annotation comparison cannot distinguish a real defect
     from a loose one (``typing.Any`` accepts everything; bare ``list`` differs from
     ``list[str]`` only on paper). Of 23 statically-suspicious sites, exactly one broke.
     """
-
-    def test_the_budget_object_we_advertise_is_accepted(self) -> None:
-        from src.core.tools.media_buy_update import Budget, _build_update_request
-
-        req = _build_update_request(
-            media_buy_id="mb_1",
-            budget=Budget(total=5000, currency="EUR"),
-            account={"account_id": "acct_test"},
-            idempotency_key="test-idem-key-0001",
-        )
-
-        assert req.budget is not None
-        assert float(req.budget.total) == 5000.0
-        assert req.budget.currency == "EUR", (
-            "the currency carried INSIDE the Budget object must survive; dropping it would "
-            "silently re-denominate the buy, which is worse than the TypeError it replaced"
-        )
 
     def test_the_typed_performance_entries_we_advertise_are_accepted(self) -> None:
         """The SECOND instance of this class, which the budget fix alone did not settle.
@@ -332,40 +315,6 @@ class TestAdvertisedTypesAreAccepted:
         req = _build_update_performance_index_request("mb_1", [{"product_id": "p1", "performance_index": 1.2}])
 
         assert req.performance_data[0].product_id == "p1"
-
-    def test_the_bare_number_form_still_works(self) -> None:
-        """The scalar form must keep reaching _impl as a bare float.
-
-        Not redundant with the case above: _impl branches on the type, and reusing the
-        existing media buy's currency (rather than forcing USD at the boundary) depends on
-        the bare float arriving bare. A fix that coerced everything into a Budget would pass
-        the test above and silently re-denominate every scalar update to USD.
-        """
-        from src.core.tools.media_buy_update import _build_update_request
-
-        req = _build_update_request(
-            media_buy_id="mb_1",
-            budget=5000,
-            account={"account_id": "acct_test"},
-            idempotency_key="test-idem-key-0001",
-        )
-
-        assert isinstance(req.budget, float)
-        assert req.budget == 5000.0
-
-
-class TestAcceptedKwargsIsTheOneSpelling:
-    """``accepted_kwargs`` is the INTERSECT half of the rule, expressed once.
-
-    Before it existed the same question -- "which keywords does this callee take?" -- was
-    answered in four different ways across ten forwarding sites: import-time frozensets,
-    call-time signature reads, and simply omitted. Enforcement was therefore partial, and the
-    omitted form was the easiest to write.
-
-    The Mock case is why the two import-time frozensets existed, and why they could be
-    retired: it is the difference between "this callee accepts nothing" and "this callee
-    accepts anything", from the identical signature.
-    """
 
     def test_a_plain_callee_reports_its_keyword_names(self) -> None:
         from src.core.schema_helpers import accepted_kwargs

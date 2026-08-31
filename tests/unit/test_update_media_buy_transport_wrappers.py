@@ -2,14 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
-
-from fastmcp.server.context import Context
-
-from src.core.tools.media_buy_update import update_media_buy
+from unittest.mock import MagicMock, patch
 
 MODULE = "src.core.tools.media_buy_update"
 
@@ -77,31 +72,3 @@ def _common_patches(mock_uow, protocol: str = "mcp"):
         identity,
         ctx_manager,
     )
-
-
-def test_mcp_wrapper_preserves_existing_currency_for_float_budget():
-    """MCP boundary should preserve the existing media buy currency on float-only budget updates."""
-    mock_uow = _mock_uow(
-        media_buy=_mock_media_buy(currency="EUR"),
-        currency_limit=_mock_currency_limit(),
-    )
-    uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch, identity, _ = _common_patches(
-        mock_uow
-    )
-
-    mock_ctx = MagicMock(spec=Context)
-    mock_ctx.get_state = AsyncMock(side_effect=[identity, "ctx_transport"])
-
-    with uow_patch, principal_patch, adapter_patch, ctx_patch, audit_patch, verify_patch:
-        result = asyncio.run(
-            update_media_buy(
-                account={"account_id": "acct_test"},
-                idempotency_key="test-idem-key-0001",
-                media_buy_id="mb_transport",
-                budget=5000.0,
-                ctx=mock_ctx,
-            )
-        )
-
-    assert result.structured_content["media_buy_id"] == "mb_transport"
-    mock_uow.media_buys.update_fields.assert_called_once_with("mb_transport", budget=5000.0, currency="EUR")

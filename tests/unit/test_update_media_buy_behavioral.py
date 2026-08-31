@@ -33,7 +33,6 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.schemas import (
-    Budget,
     Error,
     UpdateMediaBuyError,
     UpdateMediaBuyRequest,
@@ -126,71 +125,6 @@ def test_workflow_step_receives_request_model_with_protocol_metadata():
 # HIGH_RISK Test 2: Combined campaign + package update
 # BDD: T-UC-003-combined-update
 # ---------------------------------------------------------------------------
-
-
-def test_combined_campaign_and_package_update():
-    """When both total_budget and packages with budget provided,
-    both are applied; response has affected_packages for all packages."""
-    with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-        # Adapter returns success for package budget update
-        env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuySuccess.carrier(
-            media_buy_id="mb_combined",
-            affected_packages=[],
-        )
-
-        mock_session = env.mock["uow"].return_value.session
-
-        # Set up DB return values for the currency validation path:
-        # 1. uow.media_buys.get_by_id() -> media_buy (for currency check)
-        # 2. session.scalars().first() -> currency_limit (for daily spend check)
-        # 3. uow.media_buys.update_fields() -> updated media buy (for budget update)
-        # 4. uow.media_buys.get_packages() -> packages (for affected tracking)
-        mock_media_buy = _make_mock_media_buy("mb_combined")
-        mock_currency_limit = _make_mock_currency_limit(max_daily=100000)
-
-        # Configure repo mock for media buy lookups and writes
-        env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_media_buy
-        env.mock["uow"].return_value.media_buys.update_fields.return_value = mock_media_buy
-
-        # Mock packages for campaign-level budget affected tracking
-        mock_pkg_a = MagicMock()
-        mock_pkg_a.package_id = "pkg_A"
-        mock_pkg_b = MagicMock()
-        mock_pkg_b.package_id = "pkg_B"
-        env.mock["uow"].return_value.media_buys.get_packages.return_value = [mock_pkg_a, mock_pkg_b]
-
-        # Session scalars for currency limit lookup
-        mock_scalars = MagicMock()
-        mock_scalars.first.side_effect = repeat(mock_currency_limit)
-        mock_session.scalars.return_value = mock_scalars
-
-        identity = env.identity
-        req = UpdateMediaBuyRequest(
-            account={"account_id": "acct_test"},
-            idempotency_key="test-idem-key-0001",
-            media_buy_id="mb_combined",
-            budget=Budget(total=5000.0, currency="USD", pacing="even"),
-            packages=[{"package_id": "pkg_A", "budget": 2500.0}],
-        )
-        result = _update_media_buy_impl(req=req, identity=identity)
-
-        assert isinstance(result.response, UpdateMediaBuySuccess)
-        assert result.response.media_buy_id == "mb_combined"
-        # affected_packages should contain entries from both package-level and campaign-level updates
-        # Package budget update -> 1 entry for pkg_A
-        # Campaign budget update -> entries for pkg_A, pkg_B
-        assert len(result.response.affected_packages) >= 2
-        affected_pkg_ids = {ap.package_id for ap in result.response.affected_packages}
-        assert "pkg_A" in affected_pkg_ids
-        assert "pkg_B" in affected_pkg_ids
-        # The adapter should have been called for package budget update
-        env.mock["adapter"].return_value.update_media_buy.assert_called_once_with(
-            media_buy_id="mb_combined",
-            action="update_package_budget",
-            package_id="pkg_A",
-            budget=ANY,
-            today=ANY,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -432,57 +366,6 @@ class TestFlightDateValidationAndPersistence:
 # HIGH_RISK Test 7: Campaign budget validation and persistence
 # BDD: T-UC-003-alt-budget + T-UC-003-ext-d + T-UC-003-rule-008 (merged)
 # ---------------------------------------------------------------------------
-
-
-class TestCampaignBudgetValidationAndPersistence:
-    """Covers both positive (budget persisted) and negative (invalid budget rejected)."""
-
-    def test_positive_budget_persists_to_db(self):
-        """When total_budget > 0, persisted to DB, all packages affected."""
-        with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            mock_session = env.mock["uow"].return_value.session
-
-            # Currency validation: media buy via repo
-            env.mock["uow"].return_value.media_buys.get_by_id.return_value = _make_mock_media_buy("mb_budget")
-
-            mock_currency_limit = _make_mock_currency_limit()
-            mock_scalars = MagicMock()
-            mock_scalars.first.side_effect = repeat(mock_currency_limit)
-            mock_session.scalars.return_value = mock_scalars
-
-            # Mock packages for campaign budget affected tracking (via repo)
-            mock_pkg = MagicMock()
-            mock_pkg.package_id = "pkg_budget_1"
-            env.mock["uow"].return_value.media_buys.get_packages.return_value = [mock_pkg]
-
-            identity = env.identity
-            req = UpdateMediaBuyRequest(
-                account={"account_id": "acct_test"},
-                idempotency_key="test-idem-key-0001",
-                media_buy_id="mb_budget",
-                budget=Budget(total=10000.0, currency="USD", pacing="even"),
-            )
-            result = _update_media_buy_impl(req=req, identity=identity)
-
-            assert isinstance(result.response, UpdateMediaBuySuccess)
-            assert result.response.media_buy_id == "mb_budget"
-            # All packages should be listed as affected
-            assert len(result.response.affected_packages) >= 1
-            assert result.response.affected_packages[0].package_id == "pkg_budget_1"
-
-            # Budget should have been persisted via repository
-            env.mock["uow"].return_value.media_buys.update_fields.assert_called()
-            env.mock["uow"].return_value.media_buys.get_packages.assert_called_once_with("mb_budget")
-
-    def test_zero_budget_returns_error(self):
-        """When total_budget == 0, rejected at schema level (gt=0) per BR-RULE-008."""
-        with pytest.raises(ValidationError, match="greater_than"):
-            Budget(total=0.0, currency="USD", pacing="even")
-
-    def test_negative_budget_returns_error(self):
-        """When total_budget < 0, rejected at schema level (gt=0) per BR-RULE-008."""
-        with pytest.raises(ValidationError, match="greater_than"):
-            Budget(total=-500.0, currency="USD", pacing="even")
 
 
 # ---------------------------------------------------------------------------
@@ -1096,84 +979,6 @@ class TestUC003UpdateTiming:
 # ---------------------------------------------------------------------------
 # ALT: Campaign-Level Budget
 # ---------------------------------------------------------------------------
-
-
-class TestUC003CampaignLevelBudget:
-    """Campaign-level budget obligations."""
-
-    def test_campaign_budget_must_be_positive(self):
-        """Campaign budget=0 rejected with invalid_budget.
-
-        Covers: UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-02
-        """
-        with pytest.raises(ValidationError, match="greater_than"):
-            Budget(total=0.0, currency="USD", pacing="even")
-
-    def test_negative_campaign_budget_rejected(self):
-        """Negative campaign budget rejected.
-
-        Covers: UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-03
-        """
-        with pytest.raises(ValidationError, match="greater_than"):
-            Budget(total=-100.0, currency="USD", pacing="even")
-
-    def test_campaign_budget_update_recalculates_daily_spend(self):
-        """Campaign budget update triggers daily spend recalculation against max.
-
-        Covers: UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-04
-        """
-        with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            # 10-day flight, max_daily=$500
-            mock_mb = _make_mock_media_buy("mb_recalc")
-            mock_mb.start_time = datetime(2025, 1, 1, tzinfo=UTC)
-            mock_mb.end_time = datetime(2025, 1, 11, tzinfo=UTC)  # 10 days
-            env.mock["uow"].return_value.media_buys.get_by_id.return_value = mock_mb
-
-            mock_cl = _make_mock_currency_limit(max_daily=500)
-            env.mock["uow"].return_value.currency_limits.get_for_currency.return_value = mock_cl
-
-            identity = env.identity
-            # daily = 10000/10 = 1000 > 500
-            req = UpdateMediaBuyRequest(
-                account={"account_id": "acct_test"},
-                idempotency_key="test-idem-key-0001",
-                media_buy_id="mb_recalc",
-                packages=[{"package_id": "pkg_1", "budget": 10000.0}],
-            )
-            with pytest.raises(AdCPBudgetExceededError) as exc_info:
-                _update_media_buy_impl(req=req, identity=identity)
-
-            assert exc_info.value.error_code == "BUDGET_EXCEEDED"
-
-    def test_campaign_budget_no_adapter_call(self):
-        """Campaign budget update is database-only; no adapter call (gap G35).
-
-        Covers: UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-05
-        """
-        with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            mock_session = env.mock["uow"].return_value.session
-            env.mock["uow"].return_value.media_buys.get_by_id.return_value = _make_mock_media_buy("mb_no_sync")
-            mock_cl = _make_mock_currency_limit()
-            mock_scalars = MagicMock()
-            mock_scalars.first.return_value = mock_cl
-            mock_session.scalars.return_value = mock_scalars
-
-            mock_pkg = MagicMock()
-            mock_pkg.package_id = "pkg_1"
-            env.mock["uow"].return_value.media_buys.get_packages.return_value = [mock_pkg]
-
-            identity = env.identity
-            req = UpdateMediaBuyRequest(
-                account={"account_id": "acct_test"},
-                idempotency_key="test-idem-key-0001",
-                media_buy_id="mb_no_sync",
-                budget=Budget(total=5000.0, currency="USD", pacing="even"),
-            )
-            result = _update_media_buy_impl(req=req, identity=identity)
-
-            assert isinstance(result.response, UpdateMediaBuySuccess)
-            # Adapter should NOT be called for budget-only updates
-            env.mock["adapter"].return_value.update_media_buy.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

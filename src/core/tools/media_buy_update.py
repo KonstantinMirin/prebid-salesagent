@@ -88,7 +88,6 @@ from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AffectedPackage,
-    Budget,
     UpdateMediaBuyError,
     UpdateMediaBuyRequest,
     UpdateMediaBuyResult,
@@ -101,7 +100,6 @@ from src.core.tools.creatives import _sync_creatives_impl
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
     validate_budget_positive,
-    validate_max_campaign_budget,
     validate_max_daily_package_spend,
     validate_min_package_budget,
 )
@@ -162,7 +160,7 @@ def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
         actions.append("pause")
     if req.paused is False:
         actions.append("resume")
-    if req.budget is not None:
+    if req.packages and any(pkg.budget is not None for pkg in req.packages):
         actions.append("update_budget")
     if req.start_time is not None or req.end_time is not None:
         actions.append("update_dates")
@@ -605,25 +603,13 @@ def _update_media_buy_impl(
 
             # Validate currency limits if flight dates or budget changes
             # This prevents workarounds where buyers extend flight to bypass daily max
-            if (
-                req.start_time
-                or req.end_time
-                or req.budget
-                or (req.packages and any(pkg.budget for pkg in req.packages))
-            ):
+            if req.start_time or req.end_time or (req.packages and any(pkg.budget for pkg in req.packages)):
                 media_buy = uow.media_buys.get_by_id(req.media_buy_id)
 
                 if media_buy:
-                    request_currency: str
-                    if req.budget:
-                        if isinstance(req.budget, int | float):
-                            request_currency = str(media_buy.currency) if media_buy.currency else "USD"
-                        elif req.budget.currency:
-                            request_currency = str(req.budget.currency)
-                        else:
-                            request_currency = str(media_buy.currency) if media_buy.currency else "USD"
-                    else:
-                        request_currency = str(media_buy.currency) if media_buy.currency else "USD"
+                    # The buy's own currency: a package budget is denominated by its pricing
+                    # option, and there is no campaign-level budget to carry a currency.
+                    request_currency = str(media_buy.currency) if media_buy.currency else "USD"
 
                     assert uow.currency_limits is not None
                     currency_limit = uow.currency_limits.get_for_currency(request_currency)
@@ -665,7 +651,7 @@ def _update_media_buy_impl(
 
                     if currency_limit.max_daily_package_spend and req.packages:
                         for pkg_update in req.packages:
-                            if pkg_update.budget:
+                            if pkg_update.budget is not None:
                                 pkg_budget_amount: float
                                 if isinstance(pkg_update.budget, int | float):
                                     pkg_budget_amount = float(pkg_update.budget)
@@ -800,9 +786,29 @@ def _update_media_buy_impl(
                             budget_amount = float(pkg_update.budget.total)
                             currency = str(pkg_update.budget.currency) if pkg_update.budget.currency else "USD"
 
+                        # A zero or negative budget is BUDGET_TOO_LOW, not a fall-through.
+                        # This check existed only on the campaign-level path, which AdCP
+                        # 3.1.1 does not define -- so removing that path took the only
+                        # positivity guard with it, and `if pkg_update.budget:` skipped 0.0 as
+                        # falsy, leaving a zero budget to surface later as INVALID_STATE.
+                        budget_positive_err = validate_budget_positive(
+                            Decimal(str(budget_amount)), field=package_field_path("budget", pkg_index)
+                        )
+                        if budget_positive_err:
+                            raise AdCPBudgetTooLowError(
+                                field=package_field_path("budget", pkg_index),
+                                context=req.context,
+                            )
+
                         assert uow.currency_limits is not None
                         _cl = uow.currency_limits.get_for_currency(currency)
                         if _cl and _cl.min_package_budget:
+                            # `currency` is keyword-only and REQUIRED; this call omitted it.
+                            # It never raised because the enclosing guard was
+                            # `if pkg_update.budget:` -- truthy-only, so a 0 budget (the one
+                            # value that reliably reaches the minimum check) was skipped and
+                            # the broken call was unreachable. Fixing the guard to
+                            # `is not None` exposed it.
                             package_min_budget_error: str | None = validate_min_package_budget(
                                 package_budget=Decimal(str(budget_amount)),
                                 min_package_budget=Decimal(str(_cl.min_package_budget)),
@@ -1220,71 +1226,11 @@ def _update_media_buy_impl(
                             )
                         )
 
-            # Handle budget updates (handle both float and Budget object)
-            if req.budget is not None:
-                # Extract budget amount - handle both float and Budget object
-                total_budget: float
-                budget_currency: str  # Renamed to avoid redefinition
-                if isinstance(req.budget, int | float):
-                    total_budget = float(req.budget)
-                    # F-07: preserve existing DB currency rather than defaulting to USD
-                    _mb_for_currency = uow.media_buys.get_by_id(req.media_buy_id)
-                    budget_currency = (
-                        str(_mb_for_currency.currency) if _mb_for_currency and _mb_for_currency.currency else "USD"
-                    )
-                else:
-                    # Budget object with .total and .currency attributes
-                    total_budget = float(req.budget.total)
-                    budget_currency = str(req.budget.currency) if req.budget.currency else "USD"
-
-                budget_positive_err = validate_budget_positive(Decimal(str(total_budget)), field="budget")
-                if budget_positive_err:
-                    raise AdCPBudgetTooLowError(
-                        field="budget",
-                        context=req.context,
-                    )
-
-                budget_error = validate_max_campaign_budget(
-                    campaign_budget=Decimal(str(total_budget)),
-                    max_campaign_budget=MAX_CAMPAIGN_BUDGET,
-                    currency=budget_currency,
-                )
-                raise_if_validation_failed(budget_error, exc_type=AdCPBudgetExceededError, context=req.context)
-
-                # TODO: Sync budget change to GAM order
-                # Currently only updates database - does NOT sync to GAM API
-                # This creates data inconsistency between our database and GAM
-                # Need to implement: adapter.orders_manager.update_order_budget(order_id, total_budget)
-
-                # Persist top-level budget update to database via repository
-                if req.budget:
-                    uow.media_buys.update_fields(req.media_buy_id, budget=total_budget, currency=budget_currency)
-                    logger.warning(
-                        f"Updated MediaBuy {req.media_buy_id} budget to {total_budget} {budget_currency} in database ONLY"
-                    )
-                    logger.warning("GAM sync NOT implemented - GAM still has old budget")
-
-                    # Track top-level budget update in affected_packages
-                    # When top-level budget changes, all packages are affected
-                    packages_result = uow.media_buys.get_packages(req.media_buy_id)
-
-                    for pkg in packages_result:
-                        # MediaPackage uses package_id as primary identifier
-                        package_ref = pkg.package_id if pkg.package_id else None
-                        if package_ref:
-                            # Type narrowing: package_ref is guaranteed to be str at this point
-                            package_ref_str: str = package_ref
-                            affected_packages_list.append(
-                                AffectedPackage(
-                                    package_id=package_ref_str,  # Required: package identifier
-                                    paused=False,  # Package not paused (active)
-                                    buyer_package_ref=None,  # Internal field (not applicable for top-level budget updates)
-                                    changes_applied={
-                                        "budget": {"updated": total_budget, "currency": budget_currency}
-                                    },  # Internal tracking field
-                                )
-                            )
-
+            # A campaign-level budget update is not expressible in AdCP 3.1.1: the request
+            # schema declares no top-level budget, so the block that lived here -- validating
+            # and persisting req.budget, then marking every package affected -- had no way to
+            # be reached by a conformant buyer. Package budgets are handled above, per
+            # package, where the spec puts them (package-update.json /properties/budget).
             # Handle start_time/end_time updates
             if req.start_time is not None or req.end_time is not None:
                 # TODO: Sync date changes to GAM order
@@ -1387,7 +1333,7 @@ def _update_media_buy_impl(
                 details={
                     "media_buy_id": req.media_buy_id,
                     "affected_packages_count": len(affected_packages_list),
-                    "has_budget_update": req.budget is not None,
+                    "has_budget_update": bool(req.packages and any(pkg.budget is not None for pkg in req.packages)),
                     "has_pause_update": req.paused is not None,
                     "has_packages_update": req.packages is not None and len(req.packages) > 0,
                 },
@@ -1415,12 +1361,8 @@ def _build_update_request(
     paused: bool | None = None,
     flight_start_date: str | None = None,
     flight_end_date: str | None = None,
-    budget: Budget | float | None = None,
-    currency: str | None = None,
     start_time: str | None = None,
     end_time: str | None = None,
-    pacing: str | None = None,
-    daily_budget: float | None = None,
     packages: list | None = None,
     push_notification_config: Any = None,
     context: Any = None,
@@ -1438,36 +1380,11 @@ def _build_update_request(
     effective_start = start_time or flight_start_date
     effective_end = end_time or flight_end_date
 
-    # Preserve bare float budgets when no extra budget metadata is provided.
-    # This lets _impl reuse the existing media buy currency instead of forcing USD
-    # at the transport boundary.
-    budget_obj: Budget | float | None = None
-    if budget is not None:
-        if isinstance(budget, Budget):
-            # The DTO form, which the announced schema tells buyers to send
-            # (``budget: Budget | number``). This branch used to be absent, so the advertised
-            # payload reached float(Budget) and 500'd. Any flat metadata passed ALONGSIDE the
-            # object overlays it -- dropping an explicitly-passed currency would silently
-            # re-denominate the buy.
-            overlay: dict[str, Any] = {}
-            if currency is not None:
-                overlay["currency"] = currency
-            if pacing is not None:
-                overlay["pacing"] = _normalize_pacing(pacing)
-            if daily_budget is not None:
-                overlay["daily_cap"] = daily_budget
-            budget_obj = budget.model_copy(update=overlay) if overlay else budget
-        elif currency is None and pacing is None and daily_budget is None:
-            budget_obj = float(budget)
-        else:
-            budget_obj = Budget(
-                total=budget,
-                currency=currency or "USD",
-                pacing=_normalize_pacing(pacing),
-                daily_cap=daily_budget,
-                auto_pause_on_budget_exhaustion=None,
-            )
-
+    # No budget assembly. AdCP 3.1.1 has no top-level budget on update_media_buy, so the
+    # currency/pacing/daily_budget trio that existed only to fold into a campaign Budget
+    # object is gone with it -- keeping them would have left three parameters the tool
+    # accepts and silently ignores, which is the same defect in the other direction.
+    # Package budgets carry their own denomination via the pricing option.
     # Build request with only non-None values (strict validation in dev mode)
     request_params: dict[str, Any] = {}
     if account is not None:
@@ -1480,8 +1397,6 @@ def _build_update_request(
         request_params["start_time"] = effective_start
     if effective_end is not None:
         request_params["end_time"] = effective_end
-    if budget_obj is not None:
-        request_params["budget"] = budget_obj
     if packages is not None:
         request_params["packages"] = packages
     if push_notification_config is not None:
@@ -1517,12 +1432,8 @@ async def update_media_buy(
     paused: Annotated[bool | None, Field(description="True to pause campaign delivery, False to resume")] = None,
     flight_start_date: Annotated[str | None, Field(description="New campaign start date in YYYY-MM-DD format")] = None,
     flight_end_date: Annotated[str | None, Field(description="New campaign end date in YYYY-MM-DD format")] = None,
-    budget: Annotated[float | None, Field(description="New total campaign budget amount")] = None,
-    currency: Annotated[str | None, Field(description="ISO 4217 currency code (e.g. 'USD')")] = None,
     start_time: Annotated[str | None, Field(description="New campaign start time in ISO 8601 format")] = None,
     end_time: Annotated[str | None, Field(description="New campaign end time in ISO 8601 format")] = None,
-    pacing: Annotated[str | None, Field(description="Budget pacing strategy: 'even' or 'asap'")] = None,
-    daily_budget: Annotated[float | None, Field(description="Maximum daily spend cap")] = None,
     packages: list[UpdatePackage] | None = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # payload-level context
@@ -1542,7 +1453,6 @@ async def update_media_buy(
         paused: True to pause campaign, False to resume (adcp 2.12.0+)
         flight_start_date: Change start date (if not started)
         flight_end_date: Extend or shorten campaign
-        budget: Update total budget
         currency: Update currency (ISO 4217)
         start_time: Update start datetime
         end_time: Update end datetime
@@ -1571,12 +1481,8 @@ async def update_media_buy(
         paused=paused,
         flight_start_date=flight_start_date,
         flight_end_date=flight_end_date,
-        budget=budget,
-        currency=currency,
         start_time=start_time,
         end_time=end_time,
-        pacing=pacing,
-        daily_budget=daily_budget,
         packages=packages,
         push_notification_config=push_notification_config,
         context=context,
@@ -1598,12 +1504,8 @@ def update_media_buy_raw(
     paused: bool = None,
     flight_start_date: str = None,
     flight_end_date: str = None,
-    budget: float = None,
-    currency: str = None,
     start_time: str = None,
     end_time: str = None,
-    pacing: str = None,
-    daily_budget: float = None,
     # A2A/REST send wire dicts; UpdateMediaBuyRequest validates them as the
     # request's packages[] field.
     packages: list[UpdatePackage] | list[dict[str, Any]] | None = None,
@@ -1625,7 +1527,6 @@ def update_media_buy_raw(
         paused: True to pause campaign, False to resume (adcp 2.12.0+)
         flight_start_date: Change start date
         flight_end_date: Change end date
-        budget: Update total budget
         currency: Update currency
         start_time: Update start datetime
         end_time: Update end datetime
@@ -1653,12 +1554,8 @@ def update_media_buy_raw(
         paused=paused,
         flight_start_date=flight_start_date,
         flight_end_date=flight_end_date,
-        budget=budget,
-        currency=currency,
         start_time=start_time,
         end_time=end_time,
-        pacing=pacing,
-        daily_budget=daily_budget,
         packages=packages,
         push_notification_config=push_notification_config,
         context=context,

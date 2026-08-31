@@ -261,55 +261,27 @@ Source: UC-003-alt-timing.md
 
 ---
 
-### Alt: Campaign-Level Budget
+### Alt: Campaign-Level Budget -- RETIRED (not in AdCP 3.1.1)
+
 Source: UC-003-alt-budget.md
 
-#### Scenario: Update campaign-level budget
-**Obligation ID** UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-01
-**Layer** behavioral
-**Given** a media buy with campaign budget=$10,000
-**When** the buyer sends `update_media_buy` with top-level `budget=15000`
-**Then** the campaign budget is updated to $15,000 and the response has status `completed`
-**Business Rule** BR-RULE-008 (budget > 0), BR-RULE-018
-**Priority** P1
+The 5 obligations that lived here required `update_media_buy` to accept a TOP-LEVEL
+`budget` and update the campaign budget. AdCP 3.1.1 defines no such field:
+media-buy/update-media-buy-request.json declares 16 properties and budget is not among them,
+budget is package-level (media-buy/package-update.json /properties/budget), and
+adcp.types.UpdateMediaBuyRequest declares none either. A grep of the pinned compliance tree
+finds no graded top-level budget anywhere -- the only hits are package patch-semantics prose
+and create's total_budget.
 
-#### Scenario: Campaign budget must be positive
-**Obligation ID** UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-02
-**Layer** behavioral
-**Given** an authenticated buyer who owns a media buy
-**When** the buyer sends `update_media_buy` with `budget=0`
-**Then** the system rejects with `invalid_budget`
-**Business Rule** BR-RULE-008 (INV-2: budget <= 0 rejected)
-**Priority** P1
+They are removed rather than allowlisted: an obligation to implement a field the schema does
+not define is not an uncovered obligation, it is a retired one. A campaign-wide budget change
+is expressed as packages[].budget, which this codebase implements and which the sibling
+"Package budget update" obligations already grade.
 
-#### Scenario: Negative campaign budget rejected
-**Obligation ID** UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-03
-**Layer** behavioral
-**Given** an authenticated buyer who owns a media buy
-**When** the buyer sends `update_media_buy` with `budget=-100`
-**Then** the system rejects with `invalid_budget`
-**Business Rule** BR-RULE-008 (INV-2)
-**Priority** P2
+Tracked upstream: the BDD source (adcp-req) still carries the corresponding scenarios, which
+is a disagreement between the requirements repo and the schema. See salesagent-prkv for the
+reconciliation ticket.
 
-#### Scenario: Campaign budget update recalculates daily spend
-**Obligation ID** UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-04
-**Layer** behavioral
-**Given** a media buy with 10-day flight and max_daily_package_spend=$500
-**When** the buyer updates campaign budget to $10,000 (daily=$1,000)
-**Then** the system rejects with `budget_limit_exceeded`
-**Business Rule** BR-RULE-012
-**Priority** P1
-
-#### Scenario: Campaign budget update does NOT sync to ad server (known gap G35)
-**Obligation ID** UC-003-ALT-CAMPAIGN-LEVEL-BUDGET-05
-**Layer** behavioral
-**Given** a valid campaign budget update
-**When** the system processes the update
-**Then** the budget is updated in the database only; no adapter call is made
-**Business Rule** Known gap G35
-**Priority** P2
-
----
 
 ### Alt: Update Creative IDs
 Source: UC-003-alt-creative-ids.md
@@ -669,20 +641,28 @@ Source: UC-003-ext-c.md
 ### Extension *d: Budget Validation
 Source: UC-003-ext-d.md
 
-#### Scenario: Zero budget rejected for campaign-level update
+#### Scenario: Zero budget rejected for a package update
 **Obligation ID** UC-003-EXT-D-01
 **Layer** behavioral
-**Given** an authenticated buyer updating campaign budget
-**When** the buyer provides `budget: 0`
+**Given** an authenticated buyer updating a package budget
+**When** the buyer provides `packages[0].budget: 0`
+<!-- RE-LEVELLED, not retired: the RULE (a budget of 0 is rejected) is real and implemented;
+     the LEVEL was wrong. AdCP 3.1.1 puts budget on package-update.json, and
+     update-media-buy-request.json declares no top-level budget. Production now enforces
+     positivity on the package path -- that check previously existed only on the
+     campaign path, and `if pkg_update.budget:` skipped 0 as falsy. -->
 **Then** the system returns error `invalid_budget`
 **Business Rule** BR-RULE-008 (INV-2: budget <= 0)
 **Priority** P1
 
-#### Scenario: Negative budget rejected for campaign-level update
+#### Scenario: Negative budget rejected for a package update
 **Obligation ID** UC-003-EXT-D-02
 **Layer** behavioral
-**Given** an authenticated buyer updating campaign budget
-**When** the buyer provides `budget: -500`
+**Given** an authenticated buyer updating a package budget
+**When** the buyer provides `packages[0].budget: -500`
+<!-- RE-LEVELLED as above. Note the rejection happens at the SCHEMA boundary, not the
+     business rule: package-update.json declares budget with minimum 0, so a negative value
+     never reaches the minimum-budget check. -->
 **Then** the system returns error `invalid_budget`
 **Business Rule** BR-RULE-008 (INV-2)
 **Priority** P2

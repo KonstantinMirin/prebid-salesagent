@@ -1557,7 +1557,11 @@ def when_send_generic_request(ctx: dict) -> None:
         update_kwargs = ctx.get("update_kwargs", {})
         try:
             req = UpdateMediaBuyRequest(
-                account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", **update_kwargs
+                **{
+                    "account": {"account_id": "acct_test"},
+                    "idempotency_key": "test-idem-key-0001",
+                    **update_kwargs,
+                }  # scenario-supplied values win over the defaults
             )
         except Exception as exc:
             ctx["error"] = exc

@@ -9,8 +9,7 @@ from decimal import Decimal
 
 import pytest
 
-from src.core.exceptions import AdCPBudgetExceededError, AdCPBudgetTooLowError
-from src.core.schemas import Budget
+from src.core.exceptions import AdCPBudgetTooLowError
 from src.core.tools.media_buy_update import MAX_CAMPAIGN_BUDGET
 from tests.harness.media_buy_update import MediaBuyUpdateEnv
 
@@ -22,13 +21,6 @@ from tests.harness.media_buy_update import MediaBuyUpdateEnv
 def test_max_campaign_budget_constant_is_ten_million() -> None:
     """Default ceiling must be 10,000,000."""
     assert MAX_CAMPAIGN_BUDGET == Decimal("10000000")
-
-
-def test_extreme_budget_rejected() -> None:
-    """Budget exceeding MAX_CAMPAIGN_BUDGET must raise AdCPBudgetExceededError."""
-    with MediaBuyUpdateEnv() as env:
-        with pytest.raises(AdCPBudgetExceededError):
-            env.call_impl(budget=Budget(total=888_888_888, currency="USD"))
 
 
 # ---------------------------------------------------------------------------

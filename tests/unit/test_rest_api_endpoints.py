@@ -109,25 +109,6 @@ class TestCreateMediaBuyScalarForwarding:
         )
 
 
-class TestUpdateMediaBuyScalarForwarding:
-    """Each non-echoed update scalar reaches update_media_buy_raw at runtime."""
-
-    @pytest.mark.parametrize(
-        ("field", "value"), list(_UPDATE_FORWARDED_SCALARS.items()), ids=list(_UPDATE_FORWARDED_SCALARS)
-    )
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
-    @patch("src.core.tools.media_buy_update.update_media_buy_raw")
-    def test_scalar_forwards_to_raw(self, mock_raw, mock_resolve, field, value):
-        mock_raw.return_value = MagicMock(model_dump=lambda **kw: {})
-        body = {field: value}
-        response = client.put("/api/v1/media-buys/mb_e9kw", json=body, headers={"Authorization": "Bearer test-token"})
-
-        assert response.status_code == 200, response.text
-        assert mock_raw.call_args.kwargs[field] == value, (
-            f"REST update route did not forward {field!r} to update_media_buy_raw"
-        )
-
-
 class TestGetMediaBuyDeliveryEndpoint:
     """Verify POST /api/v1/media-buys/delivery endpoint."""
 

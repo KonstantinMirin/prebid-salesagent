@@ -106,11 +106,13 @@ class CreateMediaBuyBody(SalesAgentBaseModel):
 
 
 class UpdateMediaBuyBody(SalesAgentBaseModel):
+    # No budget/currency/pacing/daily_budget: AdCP 3.1.1 has no top-level budget on
+    # update_media_buy (it is package-level), and the other three existed only to assemble
+    # one. Keeping them would have REST advertising fields mcp does not, which is the
+    # divergence this seam exists to prevent.
     paused: bool | None = None
     flight_start_date: str | None = None
     flight_end_date: str | None = None
-    budget: float | None = None
-    currency: str | None = None
     start_time: str | None = None
     end_time: str | None = None
     # Fields update_media_buy_raw plumbs through to UpdateMediaBuyRequest. Raw dicts
@@ -119,8 +121,6 @@ class UpdateMediaBuyBody(SalesAgentBaseModel):
     # wrapper accepts them in its signature but drops them before _build_update_request,
     # so declaring them here would be a silent no-op (see #1417).
     packages: list[dict[str, Any]] | None = None
-    pacing: str | None = None
-    daily_budget: float | None = None
     push_notification_config: dict[str, Any] | None = None
     context: dict[str, Any] | None = None
     reporting_webhook: dict[str, Any] | None = None
@@ -446,12 +446,8 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         paused=body.paused,
         flight_start_date=body.flight_start_date,
         flight_end_date=body.flight_end_date,
-        budget=body.budget,
-        currency=body.currency,
         start_time=body.start_time,
         end_time=body.end_time,
-        pacing=body.pacing,
-        daily_budget=body.daily_budget,
         # packages stay wire dicts: UpdateMediaBuyRequest validates them as the
         # request's packages[] field, preserving full-request error field paths.
         packages=body.packages,
