@@ -32,6 +32,7 @@ from src.core.schema_helpers import (
     to_push_notification_config,
     to_reporting_webhook,
 )
+from src.core.schemas import ListCreativesRequest as ListCreativesRequestDTO
 from src.core.schemas import SalesAgentBaseModel
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
@@ -47,6 +48,7 @@ from src.core.tools.creatives import listing as creatives_listing_module
 from src.core.tools.creatives import sync_wrappers as creatives_sync_module
 from src.core.validation_helpers import adcp_validation_boundary
 from src.core.version_compat import apply_version_compat
+from src.routes._derived_body import derived_body_model
 
 logger = logging.getLogger(__name__)
 
@@ -182,36 +184,18 @@ class SyncCreativesBody(SalesAgentBaseModel):
     adcp_version: str = "1.0.0"
 
 
-class ListCreativesBody(SalesAgentBaseModel):
-    media_buy_id: str | None = None
-    media_buy_ids: list[str] | None = None
-    status: str | None = None
-    format: str | None = None
-    tags: list[str] | None = None
-    created_after: str | None = None
-    created_before: str | None = None
-    search: str | None = None
-    # Structured AdCP CreativeFilters object (statuses, concept_ids, format_ids, …);
-    # coerced at the route via coerce_creative_filters so REST honours the same
-    # structured filters as MCP/A2A (concept_ids threaded into the DB query, #1493).
-    filters: dict[str, Any] | None = None
-    # AdCP 3.1.1 sorts and paginates through OBJECTS (list-creatives-request.json
-    # /properties/sort, /properties/pagination). Declared here so a spec-shaped REST payload
-    # lands: the route forwards "DTO fields INTERSECT the raw wrapper's parameters", and a
-    # field this body does not declare never reaches that intersection -- `sort` was honoured
-    # on MCP and A2A and silently dropped on REST.
-    sort: dict[str, Any] | None = None
-    pagination: dict[str, Any] | None = None
-    fields: list[str] | None = None
-    include_performance: bool = False
-    include_assignments: bool = False
-    include_sub_assets: bool = False
-    page: int = 1
-    limit: int = 50
-    sort_by: str = "created_date"
-    sort_order: str = "desc"
-    context: dict[str, Any] | None = None
-    adcp_version: str = "1.0.0"
+# DERIVED, not hand-written: DTO fields INTERSECT list_creatives_raw's parameters, plus the
+# version envelope the route negotiates on. The 21-field class this replaces carried 15
+# parameters AdCP 3.1.1 does not define (media_buy_id, status, format, page, limit,
+# sort_by, sort_order, ...) and was MISSING `sort`, so a spec-shaped REST payload sorted on
+# MCP and A2A and silently did not here. REST and MCP now advertise the same set by
+# construction, and e2e_rest -- real HTTP against this route, with no schema of its own --
+# inherits it.
+ListCreativesBody = derived_body_model(
+    "ListCreativesBody",
+    ListCreativesRequestDTO,
+    creatives_listing_module.list_creatives_raw,
+)
 
 
 class UpdatePerformanceIndexBody(SalesAgentBaseModel):

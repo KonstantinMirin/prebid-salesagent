@@ -797,8 +797,8 @@ def list_creatives_raw(
     # so every transport honours the spec shape: the A2A and REST seams forward
     # "DTO fields INTERSECT this signature", so a field absent here cannot land -- which is
     # why `sort` used to be honoured on MCP alone.
-    sort: "Sort | dict[str, Any] | None" = None,
-    pagination: "PaginationRequest | dict[str, Any] | None" = None,
+    sort: "Sort | None" = None,
+    pagination: "PaginationRequest | None" = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
     identity: IdentityOrNotProvided = NOT_PROVIDED,

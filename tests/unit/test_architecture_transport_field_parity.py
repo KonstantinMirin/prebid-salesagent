@@ -62,19 +62,11 @@ WHOLESALE_MARKERS = (
 
 #: Known divergences, each citing the GitHub PR/issue that records them. SHRINK ONLY -- never add.
 #: Format: (tool, field) -> "#<issue> reason"
-ALLOWLIST: dict[tuple[str, str], str] = {
-    ("list_creatives", "pagination"): (
-        "#1721 pagination/sort exist only on the MCP surface, now BY CONSTRUCTION: the "
-        "structured->flat coercion lives in _build_list_creatives_request behind "
-        "accept_structured_sort, which only the MCP wrapper passes. The previous reason "
-        "said this 'needs a pinned-spec decision on whether they supersede "
-        "page/limit/sort_by/sort_order' -- that was factually wrong. The pin DECIDED: "
-        "ListCreativesRequest 3.1.1 declares pagination and sort and declares no page, "
-        "limit, sort_by or sort_order. Exposing them on A2A/REST is a buyer-visible "
-        "change on a non-titled surface and travels with its own ticket."
-    ),
-    ("list_creatives", "sort"): "#1721 see pagination above.",
-}
+#: Known divergences, each citing the GitHub PR/issue that records them. SHRINK ONLY.
+#: EMPTY as of prkv.5: the last two entries (list_creatives pagination/sort) are gone because
+#: REST now DERIVES its body from the DTO, so it declares them like every other transport.
+#: A divergence can no longer be papered over here -- it has to be fixed at the seam.
+ALLOWLIST: dict[tuple[str, str], str] = {}
 
 
 def _mcp_tool_params() -> dict[str, set[str]]:

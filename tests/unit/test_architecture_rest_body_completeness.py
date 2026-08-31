@@ -81,9 +81,17 @@ def _raw_param_names(fn) -> set[str]:
 
 
 def test_rest_bodies_forward_all_raw_wrapper_params():
-    """Every field-by-field REST Body must declare every param its raw wrapper accepts."""
+    """A HAND-WRITTEN REST Body must declare every param its raw wrapper accepts.
+
+    A DERIVED body (``derived_body_model``) is graded by the intersection rule instead, in
+    the test below. It deliberately declares LESS than the wrapper accepts: the wrapper's
+    non-spec parameters are exactly what it drops, and requiring them here would demand REST
+    advertise fields AdCP 3.1.1 does not define.
+    """
     violations = []
     for body_cls, raw_fn in _PAIRS:
+        if getattr(body_cls, "__derived_from_dto__", None) is not None:
+            continue
         body_fields = set(body_cls.model_fields) - _BODY_META
         allow = set(_ALLOWLIST.get(body_cls.__name__, {}))
         missing = _raw_param_names(raw_fn) - body_fields - allow
@@ -114,3 +122,29 @@ def test_rest_body_allowlist_has_no_stale_entries():
             elif param in body_fields:
                 stale.append(f"  {body_name}.{param}: now declared on the Body — remove from allowlist")
     assert not stale, "Stale REST-body allowlist entries:\n" + "\n".join(stale)
+
+
+def test_derived_bodies_carry_exactly_the_dto_fields_the_impl_accepts():
+    """A derived body IS ``DTO fields INTERSECT impl parameters`` -- graded, not assumed.
+
+    This is the invariant that makes REST drift-proof, and e2e_rest with it: e2e is real
+    HTTP against this same route and has no schema of its own. If the generator ever stops
+    intersecting -- carrying a non-spec field, or dropping an implemented one -- REST starts
+    disagreeing with MCP and this fails.
+    """
+    import inspect
+
+    checked = 0
+    for body_cls, _raw_fn in _PAIRS:
+        derived = getattr(body_cls, "__derived_from_dto__", None)
+        if derived is None:
+            continue
+        dto, impl = derived
+        expected = set(dto.model_fields) & set(inspect.signature(impl).parameters)
+        actual = set(body_cls.model_fields) - _BODY_META - {"adcp_version"}
+        checked += 1
+        assert actual == expected, (
+            f"{body_cls.__name__} carries {sorted(actual ^ expected)} outside "
+            f"(DTO fields INTERSECT {impl.__name__} parameters)."
+        )
+    assert checked, "no derived REST body found -- the generator is not in use, so this grades nothing"
