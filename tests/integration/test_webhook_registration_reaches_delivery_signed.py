@@ -1,6 +1,6 @@
 """A registration that asked for HMAC is DELIVERED signed — on every surface.
 
-Epic D lane C2 (salesagent-fo99.2). ``tests/integration/test_webhook_sender_auth_contract.py``
+Epic D lane C2. ``tests/integration/test_webhook_sender_auth_contract.py``
 already grades what a sender does with a STORED row, and
 ``tests/integration/test_webhook_hmac_credentials_ingest_refusal.py`` grades what
 ingest does with an unusable registration. Between them sits the gap this file
@@ -36,8 +36,6 @@ MUST STAY GREEN untouched, and deliberately not modified here:
 
 from __future__ import annotations
 
-import uuid
-from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -88,37 +86,6 @@ def _assert_delivered_signed(env: Any) -> None:
     assert_signature_verifies_over_wire_body(env.last_delivery, STRONG_SECRET)
 
 
-def _pricing_option_id(pricing_option: Any) -> str:
-    """The synthetic id the request names a seeded ``PricingOption`` by.
-
-    The ORM row has no id column of its own; the request-side identifier is
-    derived from (model, currency, fixed-vs-auction). Same derivation as
-    ``tests/bdd/steps/generic/given_media_buy.py`` — kept a local one-liner
-    rather than imported, because a BDD step module is not an API and importing
-    from one would make this file a downstream of the step registry.
-    """
-    return f"{pricing_option.pricing_model}_{pricing_option.currency.lower()}_" + (
-        "fixed" if pricing_option.is_fixed else "auction"
-    )
-
-
-def _create_kwargs(product: Any, pricing_option: Any) -> dict[str, Any]:
-    """The minimal valid create request against this env's seeded product chain."""
-    return {
-        "brand": {"domain": "testbrand.com"},
-        "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
-        "end_time": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
-        "idempotency_key": f"fo99-2-{uuid.uuid4().hex}",
-        "packages": [
-            {
-                "product_id": product.product_id,
-                "budget": 5000.0,
-                "pricing_option_id": _pricing_option_id(pricing_option),
-            }
-        ],
-    }
-
-
 def _register_via_create(env: MediaBuyPushRegistrationEnv, *, with_push_config: bool) -> Any:
     """Run a real create_media_buy over MCP, optionally registering the webhook.
 
@@ -127,7 +94,7 @@ def _register_via_create(env: MediaBuyPushRegistrationEnv, *, with_push_config: 
     OWN producer, not one create already made correct.
     """
     tenant, _principal, product, pricing_option = env.setup_media_buy_data()
-    kwargs = _create_kwargs(product, pricing_option)
+    kwargs = env.minimal_create_kwargs(product, pricing_option)
     if with_push_config:
         kwargs["push_notification_config"] = {
             "url": env.webhook_url,
@@ -339,7 +306,7 @@ class TestBlankUrlRegistrationIsNotPersisted:
     def test_whitespace_only_url_is_refused_and_writes_no_config_row(self, integration_db):
         with MediaBuyPushRegistrationEnv() as env:
             _, _principal, product, pricing_option = env.setup_media_buy_data()
-            kwargs = _create_kwargs(product, pricing_option)
+            kwargs = env.minimal_create_kwargs(product, pricing_option)
             kwargs["push_notification_config"] = {
                 "url": "   ",
                 "authentication": _tool_auth_block(),

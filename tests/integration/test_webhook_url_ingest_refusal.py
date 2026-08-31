@@ -6,7 +6,7 @@ is a URL we STORE now and FETCH later — an SSRF vector the egress seam
 buyer supplied it at ingest, on a request/response cycle where a correctable
 refusal is still possible. Accepting the URL with a 'success' and failing the
 delivery silently later gives the buyer no channel to learn the URL is wrong
-(salesagent-w97e; same obligation salesagent-nbbe implemented for
+(GH #1697; the same obligation GH #1589 implemented for
 ``property_list.agent_url``, the other buyer-supplied URL on the protocol
 surface — exemplar: ``tests/integration/test_property_list_resolver.py``
 ``TestRefusedBuyerUrlOnTheWire``).
@@ -55,12 +55,12 @@ v3.1.1:<path>``):
 
 Conformance storyboard: UNGRADED — nothing in ``dist/compliance/3.1.1/``
 grades a seller refusing a counterparty-supplied URL (same finding recorded
-for salesagent-nbbe).
+for GH #1589).
 
 No acceptance-path twin lives here on purpose: the ~38 existing suites that
 pass ``push_notification_config`` fixtures through these same surfaces are the
 acceptance coverage, and migrating their hatch-immune NXDOMAIN fixture hosts
-is budgeted as its own step of the salesagent-w97e plan (step 0) — grading
+is budgeted as its own step of the GH #1697 plan (step 0) — grading
 acceptance here against a resolvable host would re-decide that fixture policy
 in a second place.
 """
@@ -76,6 +76,7 @@ from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.media_buy_dual import MediaBuyDualEnv
 from tests.harness.transport import Transport
 from tests.helpers import assert_envelope_shape
+from tests.helpers.adcp_factories import create_test_media_buy_request_dict
 from tests.integration.property_list_helpers import enforce_egress_policy
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -99,7 +100,7 @@ _UPDATE_REPORTING_WEBHOOK_TRANSPORTS = [Transport.MCP, Transport.A2A, Transport.
 # The five ``192.x``/``2001:20::/28`` rows are the reserved ranges carried
 # verbatim from adcontextprotocol/adcp-client-python#974 into
 # ``egress.policy._SUPPLEMENT_NETWORKS`` rather than by bumping to adcp 7.x
-# (owner decision, salesagent-yw69 — that bump is a major version jump
+# (owner decision, GH #1792 — that bump is a major version jump
 # carrying far more than this SSRF fix). ``cgnat-metadata-address`` is the one
 # address the spike actually found leaking (Alibaba Cloud's metadata service at
 # 100.100.100.200, inside the CGNAT block) — it is graded on its own row,
@@ -206,7 +207,7 @@ def _assert_no_push_config_persisted(tenant_id: str, principal_id: str) -> None:
     """The refused URL left no push_notification_configs row.
 
     The repository upsert is the single write funnel for this table
-    (salesagent-w97e disposition row 19: the repository is the verification
+    (GH #1697 disposition row 19: the repository is the verification
     point, deliberately not the fix site), so an empty active list for the
     principal IS "the refusal preceded the store".
     """
@@ -223,17 +224,19 @@ def _assert_no_push_config_persisted(tenant_id: str, principal_id: str) -> None:
 def _create_kwargs(product) -> dict:
     """A fully valid create_media_buy request (real product/pricing chain).
 
-    Everything except the webhook config under test is acceptable, so the
-    refusal — not a package/pricing rejection — is the only possible error.
+    Everything except the webhook config under test comes from the shared
+    builder, so the refusal — not a package/pricing rejection — is the only
+    possible error. ``brand.domain`` and ``po_number`` are this file's own
+    labels and stay explicit; the dates and the idempotency key are not this
+    file's business and come from the factory's defaults.
     """
-    now = datetime.now(UTC)
-    return {
-        "brand": {"domain": "webhook-ingest.example.com"},
-        "packages": [{"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
-        "start_time": (now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "end_time": (now + timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "po_number": f"WEBHOOK-INGEST-{uuid.uuid4().hex[:8]}",
-    }
+    return create_test_media_buy_request_dict(
+        product_ids=[product.product_id],
+        pricing_option_id="cpm_usd_fixed",
+        total_budget=5000.0,
+        brand={"domain": "webhook-ingest.example.com"},
+        po_number=f"WEBHOOK-INGEST-{uuid.uuid4().hex[:8]}",
+    )
 
 
 class TestCreateMediaBuyRefusedPushNotificationConfigUrl:
@@ -267,7 +270,7 @@ class TestCreateMediaBuyRefusedPushNotificationConfigUrl:
         """100.100.100.200 (Alibaba Cloud metadata, inside the CGNAT block) is refused
         even with ADCP_OUTBOUND_ALLOW_PRIVATE=true.
 
-        This is the address the original spike actually found leaking (salesagent-yw69):
+        This is the address the original spike actually found leaking (GH #1792):
         the registration gate (``src/core/security/egress/policy.py``
         ``_SUPPLEMENT_NETWORKS``, read via ``EgressPolicy.check_registration``)
         never reads that hatch at all — it is a SEND-time seam knob — so this pins that
@@ -298,7 +301,7 @@ class TestCreateMediaBuyRefusedReportingWebhookUrl:
     the impl only warns about a non-daily frequency (media_buy_create.py:2034)
     and persists the webhook inside raw_request, where the nightly
     delivery_webhook_scheduler reads it back with no request left to refuse
-    into (salesagent-w97e disposition row 7).
+    into (GH #1697 disposition row 7).
     """
 
     @pytest.mark.parametrize("transport", _WIRE_TRANSPORTS, ids=lambda t: t.value)
@@ -329,7 +332,7 @@ class TestUpdateMediaBuyRefusedWebhookUrls:
     dials. Today the update accepts the refused URL and returns success. The
     refusal must sit ABOVE the UoW/state machine: a refused URL is a property
     of the request as sent, so it outranks any INVALID_STATE question
-    (salesagent-w97e plan step 4) — these tests use an active buy so no state
+    (GH #1697 plan step 4) — these tests use an active buy so no state
     refusal can mask a vacuous pass either way.
     """
 

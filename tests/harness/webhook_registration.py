@@ -1,6 +1,6 @@
 """Envs that carry a registration from INGEST to DELIVERY, over a real origin.
 
-Epic D lane C2 (salesagent-fo99.2) turns the persistence and stash boundaries
+Epic D lane C2 turns the persistence and stash boundaries
 into value-takers. Every one of those boundaries is INVISIBLE from either end
 in isolation: a repository test proves what a row holds, and a sender test
 proves what a sender does with a row, but neither can see a registration whose
@@ -30,6 +30,7 @@ from unittest.mock import patch
 from tests.harness._mixins import LocalOriginMixin
 from tests.harness.media_buy_dual import MediaBuyDualEnv
 from tests.harness.product import ProductEnv
+from tests.helpers.adcp_factories import create_test_media_buy_request_dict
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -222,25 +223,30 @@ class MediaBuyPushRegistrationEnv(LocalOriginMixin, MediaBuyDualEnv):
         against subtly different buys. ``idempotency_key`` is fresh per call, so
         a case that registers TWICE (row-identity) is two executions rather than
         one execution and one cached replay.
+
+        ``pricing_option_id`` is derived here rather than imported: the ORM row
+        has no id column of its own, so the request-side identifier is built from
+        (model, currency, fixed-vs-auction). The same derivation exists in
+        ``tests/bdd/steps/generic/given_media_buy.py``, and it is deliberately
+        NOT imported from there — a BDD step module is not an API, and importing
+        from one would make this harness a downstream of the step registry.
         """
-        kwargs: dict[str, Any] = {
-            "brand": {"domain": "testbrand.com"},
-            "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
-            "end_time": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
-            "idempotency_key": f"fo99-{uuid.uuid4().hex}",
-            "packages": [
-                {
-                    "product_id": product.product_id,
-                    "budget": 5000.0,
-                    "pricing_option_id": (
-                        f"{pricing_option.pricing_model}_{pricing_option.currency.lower()}_"
-                        + ("fixed" if pricing_option.is_fixed else "auction")
-                    ),
-                }
-            ],
-        }
-        kwargs.update(overrides)
-        return kwargs
+        return create_test_media_buy_request_dict(
+            product_ids=[product.product_id],
+            pricing_option_id=(
+                f"{pricing_option.pricing_model}_{pricing_option.currency.lower()}_"
+                + ("fixed" if pricing_option.is_fixed else "auction")
+            ),
+            total_budget=5000.0,
+            # Spread, not keywords: an ``overrides`` carrying ``start_time`` must
+            # OVERRIDE it, not raise "got multiple values for keyword argument".
+            **{
+                "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
+                "end_time": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
+                "idempotency_key": f"fo99-{uuid.uuid4().hex}",
+                **overrides,
+            },
+        )
 
     def widen_stashed_schemes(self, step: Any, schemes: list[str]) -> None:
         """Rewrite the stash's ``authentication.schemes`` to *schemes* — a LEGACY row.
