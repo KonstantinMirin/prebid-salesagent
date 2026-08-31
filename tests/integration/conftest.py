@@ -396,38 +396,37 @@ def sample_principal(integration_db, sample_tenant):
 
 
 @pytest.fixture
-def sample_account(integration_db, sample_tenant, sample_principal):
+def sample_account(integration_db, factory_session, sample_tenant, sample_principal):
     """A real Account row the sample principal may act on.
 
     AdCP 3.1.1 makes `account` REQUIRED on sync-creatives-request and
-    update-media-buy-request (/required), and production resolves the reference against the
-    database -- a fabricated id earns ACCOUNT_NOT_FOUND at the wire even though it satisfies
-    model construction. So a wire-level test needs a seeded account, not a literal.
+    update-media-buy-request (/required), and production RESOLVES the reference against the
+    database -- a fabricated id satisfies model construction and then earns
+    ACCOUNT_NOT_FOUND at the wire. So a wire-level test needs a seeded account, not a
+    plausible string. A test that only CONSTRUCTS models never reaches resolution and should
+    keep using a literal.
 
-    Returns the AccountReference shape a request carries, ready to splat into a payload.
+    Built with factories, not session.add(): the repository-pattern guard forbids new inline
+    session writes in tests, and it caught the first version of this fixture doing exactly
+    that. The sibling sample_tenant/sample_principal fixtures predate that rule and are
+    allowlisted; new code does not get to match them.
+
+    Requests ``factory_session``, which binds the shared session onto every factory; the
+    factories declare ``sqlalchemy_session = None`` and raise "No session provided" without it.
+
+    Returns the AccountReference shape a request carries.
     """
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import Account, AgentAccountAccess
+    from tests.factories import AccountFactory, AgentAccountAccessFactory
 
-    with get_db_session() as session:
-        account = Account(
-            tenant_id=sample_tenant["tenant_id"],
-            account_id="acc_test_0001",
-            name="Test Account",
-            status="active",
-        )
-        session.add(account)
-        # Resolution checks the calling agent's access, not merely the row's existence.
-        session.add(
-            AgentAccountAccess(
-                tenant_id=sample_tenant["tenant_id"],
-                principal_id=sample_principal["principal_id"],
-                account_id=account.account_id,
-            )
-        )
-        session.commit()
-
-        return {"account_id": account.account_id}
+    account = AccountFactory(tenant_id=sample_tenant["tenant_id"], account_id="acc_test_0001")
+    # Resolution checks the calling agent's ACCESS, not merely that the row exists -- seeding
+    # only the account fails in a way indistinguishable from not seeding at all.
+    AgentAccountAccessFactory(
+        tenant_id=sample_tenant["tenant_id"],
+        principal_id=sample_principal["principal_id"],
+        account_id=account.account_id,
+    )
+    return {"account_id": account.account_id}
 
 
 @pytest.fixture
