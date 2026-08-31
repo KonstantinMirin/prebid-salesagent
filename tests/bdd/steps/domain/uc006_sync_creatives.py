@@ -4315,6 +4315,9 @@ def then_valid_assignment_created(ctx: dict) -> None:
             f"SPEC-PRODUCTION GAP: lenient mode should create valid assignment to {valid_pkg}, "
             f"but assigned_to={assigned}"
         )
+    # The claim, stated on the path that RETURNS. The xfail above records the
+    # known gap; without this the satisfied path returned having graded nothing.
+    assert valid_pkg in assigned, f"expected assignment to {valid_pkg}, got assigned_to={assigned}"
 
 
 @then("the non-existent package should be reported as a warning")
@@ -6337,6 +6340,10 @@ def then_system_should_reject_validation_error(ctx: dict) -> None:
             f"SPEC-PRODUCTION GAP: expected error_code in {expected_codes}, "
             f"got '{actual_code}' ({type(error).__name__}: {error})"
         )
+    # The claim this step's text makes, stated on the path that RETURNS. The
+    # xfail above records the known gap; without this the accepted path returned
+    # having graded nothing.
+    assert actual_code in expected_codes, f"expected error_code in {expected_codes}, got {actual_code!r}"
 
 
 @then("preview URLs should be generated")

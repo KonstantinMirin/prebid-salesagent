@@ -776,12 +776,17 @@ def then_response_outcome(ctx: dict, outcome: str) -> None:
         else:
             # Parse expected count from outcome like "success with 50 accounts"
             match = re.search(r"(\d+)\s+account", outcome)
-            if match:
-                expected_count = int(match.group(1))
-                actual = len(resp.accounts)
-                assert actual == expected_count, (
-                    f"Expected {expected_count} accounts for outcome '{outcome}', got {actual}"
-                )
+            assert match, f"Outcome {outcome!r} names no account count this step can grade"
+            expected_count = int(match.group(1))
+            actual = len(resp.accounts)
+            assert actual == expected_count, f"Expected {expected_count} accounts for outcome '{outcome}', got {actual}"
+    else:
+        # An outcome this step does not recognise must FAIL, not pass silently.
+        # Without this arm a typo in a feature file — or a new outcome phrase
+        # nobody wired — produced a green step that graded nothing.
+        raise AssertionError(
+            f"Unhandled outcome {outcome!r}: this step grades 'validation error' and 'success with ...' only"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2625,12 +2630,13 @@ def when_resync_identical_all_fields(ctx: dict, domain: str) -> None:
 def then_none_have_brand_domain(ctx: dict, domain: str) -> None:
     """Assert no returned account has the specified brand domain."""
     resp = require_payload(ctx)
-    for acct in resp.accounts:
-        if hasattr(acct, "brand") and acct.brand and hasattr(acct.brand, "domain"):
-            assert acct.brand.domain != domain, (
-                f"Cross-agent leak: account {acct.account_id} has brand domain '{domain}' "
-                f"but should not be visible to this agent"
-            )
+    leaked = [
+        a for a in resp.accounts if hasattr(a, "brand") and a.brand and getattr(a.brand, "domain", None) == domain
+    ]
+    assert not leaked, (
+        f"Cross-agent leak: account(s) {[a.account_id for a in leaked]} carry brand domain "
+        f"'{domain}' but should not be visible to this agent"
+    )
 
 
 # ── delete_missing semantics steps ──────────────────────────────────

@@ -329,9 +329,11 @@ def then_db_no_account_with_domain(ctx: dict, domain: str) -> None:
     env = _env(ctx)
     with get_db_session() as session:
         accounts = session.scalars(select(Account).where(Account.tenant_id == env.tenant_id)).all()
-        for acct in accounts:
-            if acct.brand and acct.brand.domain == domain:
-                raise AssertionError(f"Found account with brand domain '{domain}' — should not exist")
+        offenders = [a for a in accounts if a.brand and a.brand.domain == domain]
+        assert not offenders, (
+            f"Found {len(offenders)} account(s) with brand domain '{domain}' — should not exist: "
+            f"{[a.account_id for a in offenders]}"
+        )
 
 
 @then(parsers.parse('the account "{name}" has brand domain "{domain}"'))
