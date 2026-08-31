@@ -100,13 +100,11 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | No raw select outside repos | All ORM model queries go through repositories, not raw `select()` | `test_architecture_no_raw_select.py` |
 | No raw egress | All outbound HTTP goes through `src/core/security/outbound_http.py`, never raw `httpx`/`requests`/`urlopen`/`aiohttp` | `ruff-egress.toml` (TID251 over `src/`, in `make quality-ci`) + `test_ruff_egress_bans.py` |
 | No destination rewrite | Nothing under `src/` rebuilds a URL or swaps its netloc/scheme ahead of the seam | `test_architecture_no_destination_rewrite.py` |
-| Obligation coverage | Behavioral obligations in docs have matching test coverage | `test_architecture_obligation_coverage.py` |
 | BDD no-op Then steps | Then steps must assert, not delegate to `_pending()`-like no-ops | `test_architecture_bdd_no_pass_steps.py` |
 | BDD trivial assertions | Then steps must compare values, not just check truthiness | `test_architecture_bdd_no_trivial_assertions.py` |
 | BDD no dict registry | Given steps must use factories, not raw dicts | `test_architecture_bdd_no_dict_registry.py` |
 | BDD no duplicate steps | No 3+ step functions with identical bodies | `test_architecture_bdd_no_duplicate_steps.py` |
 | BDD no silent env | No `ctx.get("env")` or `hasattr(env, ...)` in step functions | `test_architecture_bdd_no_silent_env.py` |
-| Obligation test quality | Obligation-tagged tests must CALL production code, not just import it | `test_architecture_obligation_test_quality.py` |
 | Code duplication (DRY) | Duplicate block count in src/ and tests/ cannot increase | `check_code_duplication.py` (make quality) |
 | Workflow tenant isolation | WorkflowRepository queries join DBContext for tenant scoping | `test_architecture_workflow_tenant_isolation.py` |
 | No split mock assertions | Tests use `assert_called_once_with()`, not `assert_called_once()` + `call_args` | `test_architecture_weak_mock_assertions.py` |

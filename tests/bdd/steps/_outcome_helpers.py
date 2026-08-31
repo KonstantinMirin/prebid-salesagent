@@ -120,6 +120,68 @@ def assert_wire_rejection(ctx: dict, code: str, *, recovery: str, field: str) ->
     assert_envelope_shape(envelope, code, recovery=recovery, field=field)
 
 
+def _real_wire_error_envelope(ctx: dict) -> dict | None:
+    """Read ``TransportResult.wire_error_envelope`` — the ONE attribute-access site.
+
+    Every reader of this field, anywhere in ``tests/bdd/steps/``, must go
+    through this module (:func:`wire_error_envelope_or_none` or
+    :func:`wire_error_dict`) rather than hand-rolling
+    ``getattr(result, "wire_error_envelope", None)`` — enforced by
+    ``test_architecture_bdd_wire_discipline.py``'s access-pattern check.
+    """
+    result = ctx.get("result")
+    return getattr(result, "wire_error_envelope", None) if result is not None else None
+
+
+def wire_error_envelope_or_none(ctx: dict) -> dict | None:
+    """Return the REAL wire error envelope (REST/A2A/MCP) captured for this dispatch, or ``None``.
+
+    No loud guard, no IMPL-synthesized fallback — the strict counterpart to
+    :func:`wire_error_dict`. Use this when a caller must distinguish "a real
+    wire envelope was captured" from "only the IMPL-synthesized one exists"
+    before delegating to ``TransportResult.assert_wire_error``, which reads
+    ``wire_error_envelope`` specifically and raises its own (misleading)
+    error if handed a synthesized-only result (``then_error_recovery``'s
+    reason for using this instead of ``wire_error_dict``). Returns ``None``
+    on IMPL and on any scenario where no wire envelope was captured —
+    callers fall back to the reconstructed ``ctx['error']``.
+    """
+    return _real_wire_error_envelope(ctx)
+
+
+def wire_error_dict(ctx: dict) -> dict:
+    """Return the full error-path wire envelope as the buyer sees it on the wire.
+
+    The error-path analogue of :func:`wire_dict` — the single guarded accessor
+    for ``TransportResult.wire_error_envelope``, which its own docstring names
+    "the canonical field for error verification" (``tests/CLAUDE.md`` § Error
+    Verification Policy) and whose ``assert_wire_error`` calls "the single
+    harness-provided way to verify an error on the wire — step definitions
+    must not hand-roll envelope parsing." Callers that only need to read a
+    field off the envelope (e.g. ``context.correlation_id`` echo checks) call
+    this directly; callers verifying the error SHAPE should prefer
+    ``result.assert_wire_error(...)``, the single shape authority.
+
+    Shares the same loud guard as ``wire_dict``: a dispatch that captured no
+    error envelope raises instead of silently asserting nothing — that
+    combination is a test bug (the operation should have failed through the
+    wire), not a legitimate no-wire case. IMPL has no wire, so it falls back to
+    the synthesized envelope (what the boundary translator WOULD emit against
+    the caught error), consistent with ``wire_dict``'s IMPL fallback to the
+    serialized typed payload.
+
+    Both halves of that guard live on ``TransportResult.error_envelope`` (#1941)
+    — the same reader ``error_envelope_or_none`` wraps — rather than being
+    re-derived here from ``ctx["transport"]``. Branching on transport IDENTITY
+    was the spelling ``wire_dict`` moved off: it infers wire-presence from which
+    enum member is in play instead of from the dispatcher's own ``has_wire``
+    declaration, and it reached for a ``synthesized_error_envelope`` attribute
+    that is now the private ``_synthesized_error_envelope``.
+    """
+    result = _require(ctx, "result", hint="expected an error dispatch")
+    return result.error_envelope()
+
+
 def _require(ctx: dict, key: str, *, hint: str | None = None) -> object:
     """Return ``ctx[key]``, failing with a diagnostic if it is absent.
 

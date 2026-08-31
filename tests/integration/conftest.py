@@ -91,7 +91,7 @@ def local_origin():
 
 @pytest.fixture
 def local_origin_tls(monkeypatch):
-    """An https sibling of :func:`local_origin` (salesagent-e6h0).
+    """An https sibling of :func:`local_origin` (#1757).
 
     Serves real TLS off the same generated CA/leaf every other front in the
     repo reuses (never a second mechanism) — verification is ON, exactly like
@@ -1317,6 +1317,43 @@ def seed_error_test_tenant(
         "principal_id": principal_id,
         "access_token": access_token,
     }
+
+
+@pytest.fixture
+def live_media_buy_env(integration_db):
+    """A ``MediaBuyDualEnv`` holding one ACTIVE, mid-flight media buy.
+
+    Shared by the two honor-side graders
+    (``test_spec_request_fields_accepted.py`` on the MCP path,
+    ``test_raw_wrapper_spec_fields_accepted.py`` on the raw A2A/REST path), so
+    the "a live buy that a cancellation must actually cancel" setup exists
+    once rather than per file.
+
+    Yields ``(env, media_buy)``. Callers that need the transport-generic
+    dispatcher wrap the env in ``AdCPTestClient`` themselves: the env's own
+    update dispatch flattens an ``UpdateMediaBuyRequest`` and pops
+    ``canceled``/``cancellation_reason`` on the way to the wire
+    (``tests/harness/media_buy_update.py`` ``_WRAPPER_UNSUPPORTED_FIELDS``),
+    which is the harness accommodating the very defect under test.
+    """
+    from datetime import timedelta
+
+    from tests.factories import MediaBuyFactory
+    from tests.harness.media_buy_dual import MediaBuyDualEnv
+
+    with MediaBuyDualEnv(tenant_id="honor-cancel", principal_id="test_principal") as env:
+        tenant, principal, _product, _pricing_option = env.setup_media_buy_data()
+        media_buy = MediaBuyFactory(
+            tenant=tenant,
+            principal=principal,
+            status="active",
+            currency="USD",
+            start_time=datetime.now(UTC) - timedelta(days=1),
+            end_time=datetime.now(UTC) + timedelta(days=30),
+        )
+        env._commit_factory_data()
+        env._seeded_media_buy_id = media_buy.media_buy_id
+        yield env, media_buy
 
 
 @pytest.fixture

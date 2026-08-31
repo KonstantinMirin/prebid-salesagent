@@ -23,12 +23,12 @@ So the MCP authenticity check below asserts round-trip fidelity (a fabricated or
 partial dict wouldn't parse back into the response type and re-dump identically)
 rather than envelope-only-key presence.
 
-``TransportResult.has_wire`` (salesagent-gra7.4) extends the same guarantee one
-level down. Wire-presence used to be INFERRED at the read site from a lookup miss
-keyed on ``Transport.IMPL``; the classes below pin the replacement: the dispatcher
-that produced a result DECLARES, positively and at construction, whether the bytes
-crossed a real wire, and the ``wire_field`` / ``wire_dict`` readers branch on that
-declaration instead of on which transport enum happens to be in play.
+``TransportResult.has_wire`` (#1802) extends the same guarantee one level down.
+Wire-presence used to be INFERRED at the read site from a lookup miss keyed on
+``Transport.IMPL``; the classes below pin the replacement: the dispatcher that
+produced a result DECLARES, positively and at construction, whether the bytes
+crossed a real wire, and the ``wire_field`` / ``wire_dict`` readers branch on
+that declaration instead of on which transport enum happens to be in play.
 """
 
 from __future__ import annotations
@@ -121,44 +121,58 @@ class TestWireResponseIsRealWire:
             assert result.wire_response is None
 
 
-# ── has_wire: the dispatcher-declared wire-presence predicate (salesagent-gra7.4) ──
+# ── has_wire: the dispatcher-declared wire-presence predicate (#1802) ──────────────
 
 _HARNESS_DIR = pathlib.Path(__file__).resolve().parents[1] / "harness"
 _DISPATCHERS_PY = _HARNESS_DIR / "dispatchers.py"
+_CLIENT_PY = _HARNESS_DIR / "client.py"
+#: The dispatch seam — the modules that DECLARE wire-presence for a real
+#: delivery. It is two modules, not one: #1858 relocated the transport-generic
+#: UNWRAP bodies out of ``dispatchers.py`` into ``client.py``, which is how the
+#: table below silently stopped covering nine of its sites. Every construction
+#: in BOTH is graded per-site by ``EXPECTED_SITES``.
+_SEAM_MODULES = (_DISPATCHERS_PY, _CLIENT_PY)
 _STEPS_DIR = pathlib.Path(__file__).resolve().parents[1] / "bdd" / "steps"
 _OUTCOME_HELPERS_PY = _STEPS_DIR / "_outcome_helpers.py"
 
 
-def _transport_result_sites(module_path: pathlib.Path) -> dict[tuple[str, int], ast.Call]:
-    """Map every ``TransportResult(...)`` construction to (class name, ordinal-in-class).
+def _transport_result_sites(module_path: pathlib.Path) -> dict[tuple[str, str, int], ast.Call]:
+    """Map every ``TransportResult(...)`` construction to (module, owner, ordinal).
 
-    The key is deliberately NOT a line number: the fix inserts a keyword at every
-    site and would shift them all. Ordinal-within-class (source order) is stable
-    under kwarg insertion and still names one unique site.
+    ``owner`` is the dotted chain of enclosing class/function names —
+    ``"A2ADispatcher.dispatch"``, ``"unwrap_rest_response"`` — or ``"<module>"``
+    for a construction at module level, so a site hiding outside any def still
+    gets a key and the sole-constructor scan below cannot miss it.
+
+    The key is deliberately NOT a line number: a fix that inserts a keyword at
+    every site would shift them all. Ordinal-within-owner (source order) is
+    stable under kwarg insertion. The ordinal is scoped to the enclosing
+    function rather than to the whole module on purpose: a module-wide ordinal
+    would let a newly inserted site renumber every later one onto a neighbour's
+    reason string, which can go green by coincidence when the neighbours share a
+    value.
     """
     tree = ast.parse(module_path.read_text())
     owner: dict[ast.Call, str] = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ClassDef):
-            continue
-        for inner in ast.walk(node):
-            if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name) and inner.func.id == "TransportResult":
-                owner.setdefault(inner, node.name)
 
-    sites: dict[tuple[str, int], ast.Call] = {}
+    def walk(node: ast.AST, scope: tuple[str, ...]) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                walk(child, (*scope, child.name))
+                continue
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name) and child.func.id == "TransportResult":
+                owner[child] = ".".join(scope) or "<module>"
+            walk(child, scope)
+
+    walk(tree, ())
+
+    sites: dict[tuple[str, str, int], ast.Call] = {}
     per_owner: dict[str, int] = {}
-    calls = [
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "TransportResult"
-    ]
-    for call in sorted(calls, key=lambda c: (c.lineno, c.col_offset)):
-        # A construction outside any class still gets a site key, so the
-        # sole-constructor scan below cannot miss one hiding at module level.
-        name = owner.get(call, "<module>")
+    for call in sorted(owner, key=lambda c: (c.lineno, c.col_offset)):
+        name = owner[call]
         ordinal = per_owner.get(name, 0)
         per_owner[name] = ordinal + 1
-        sites[(name, ordinal)] = call
+        sites[(module_path.name, name, ordinal)] = call
     return sites
 
 
@@ -166,82 +180,156 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
     """Every TransportResult construction declares has_wire, correctly, PER SITE.
 
     Per SITE, never per transport (Design Amendment v2, A2): ``has_wire=True``
-    only where the construction is downstream of an actual send/receive. Two
-    constructions inside wire dispatcher classes return before any bytes move —
-    RestDispatcher's catch-all (it wraps ``env.REST_ENDPOINT`` and
-    ``_run_rest_request`` whole, so it can fire pre-send) and RestE2EDispatcher's
-    missing-``e2e_config`` guard (ahead of every httpx call). Grading these "by
-    transport" would re-freeze, one layer up in the pin, exactly the identity
-    inference this lane deletes.
+    only where the construction is downstream of an actual send/receive. Several
+    constructions owned by a WIRE transport still return before any bytes move —
+    the three catch-all error unwraps (``unwrap_mcp_error`` / ``unwrap_a2a_error``
+    / ``unwrap_rest_error`` each wrap a whole delivery, so they can fire pre-send)
+    and ``RestE2EDispatcher``'s missing-``e2e_config`` guard (ahead of every httpx
+    call). Grading these "by transport" would re-freeze, one layer up in the pin,
+    exactly the identity inference this lane deletes.
 
-    McpE2EDispatcher and A2AE2EDispatcher are absent on purpose (A3): their
-    bodies are a bare ``raise NotImplementedError`` and they construct no
-    TransportResult at all.
+    The seam spans TWO modules (``_SEAM_MODULES``). #1858 moved the
+    transport-generic UNWRAP bodies — the four ``unwrap_rest_response`` branches,
+    the shared ``_unwrap_tool_success``, and the three catch-all error unwraps —
+    out of ``dispatchers.py`` into ``tests/harness/client.py``. Neither file
+    conflicted on the merge, so the table went stale without anyone editing it:
+    that is precisely the silent-drift failure this class exists to make loud, so
+    it grades both modules rather than the one that happened to hold the sites
+    first.
+
+    ``McpE2EDispatcher`` and ``A2AE2EDispatcher`` are absent on purpose (A3):
+    they construct no TransportResult at all — they delegate to
+    ``_dispatch_core``, which returns through client.py's sites below.
     """
 
-    # (class, ordinal-in-class) -> (expected has_wire, why this SITE is what it is)
-    EXPECTED_SITES: dict[tuple[str, int], tuple[bool, str]] = {
-        ("ImplDispatcher", 0): (False, "in-process _impl raised — no wire by definition"),
-        ("ImplDispatcher", 1): (False, "in-process _impl returned — no wire by definition"),
-        ("A2ADispatcher", 0): (False, "catch-all wrapping env.call_a2a whole — can fire before any bytes move"),
-        ("A2ADispatcher", 1): (True, "success, downstream of the A2A artifact DataPart capture"),
-        ("RestDispatcher", 0): (True, "HTTP >= 400 branch — the response was already received"),
-        ("RestDispatcher", 1): (True, "HTTP 2xx branch — the real HTTP JSON body"),
-        ("RestDispatcher", 2): (False, "catch-all wrapping REST_ENDPOINT/_run_rest_request — can fire pre-send"),
-        ("McpDispatcher", 0): (False, "catch-all wrapping env.call_mcp whole — can fire before any bytes move"),
-        ("McpDispatcher", 1): (True, "success, downstream of the structured_content capture"),
-        ("RestE2EDispatcher", 0): (False, "missing env.e2e_config — a pure config error, ahead of every httpx call"),
-        ("RestE2EDispatcher", 1): (True, "non-JSON >= 400 body — the HTTP response was received"),
-        ("RestE2EDispatcher", 2): (True, "structured >= 400 body — the HTTP response was received"),
-        ("RestE2EDispatcher", 3): (True, "parse failure on an already-received 2xx response"),
-        ("RestE2EDispatcher", 4): (True, "2xx success — the real HTTP body"),
+    # (module, owner, ordinal-in-owner) -> (expected has_wire, why this SITE is what it is)
+    EXPECTED_SITES: dict[tuple[str, str, int], tuple[bool, str]] = {
+        # ── tests/harness/dispatchers.py — the per-transport dispatch entry points ──
+        ("dispatchers.py", "ImplDispatcher.dispatch", 0): (
+            False,
+            "in-process _impl raised — no wire by definition",
+        ),
+        ("dispatchers.py", "ImplDispatcher.dispatch", 1): (
+            False,
+            "in-process _impl returned — no wire by definition",
+        ),
+        ("dispatchers.py", "A2ADispatcher.dispatch", 0): (
+            True,
+            "success, downstream of the A2A artifact DataPart capture",
+        ),
+        ("dispatchers.py", "McpDispatcher.dispatch", 0): (
+            True,
+            "success, downstream of the structured_content capture",
+        ),
+        ("dispatchers.py", "RestE2EDispatcher.dispatch", 0): (
+            False,
+            "missing env.e2e_config — a pure config error, ahead of every httpx call",
+        ),
+        # ── tests/harness/client.py — the transport-generic UNWRAP bodies (#1858) ──
+        ("client.py", "_unwrap_tool_success", 0): (
+            True,
+            "MCP/A2A success — downstream of DELIVER, the structured_content / artifact DataPart already came back",
+        ),
+        ("client.py", "unwrap_rest_response", 0): (
+            True,
+            "non-JSON >= 400 body — the HTTP response was received, only the AdCP envelope is unrecoverable",
+        ),
+        ("client.py", "unwrap_rest_response", 1): (
+            True,
+            "structured >= 400 body — the real HTTP response was received",
+        ),
+        ("client.py", "unwrap_rest_response", 2): (
+            True,
+            "parse failure on an already-received 2xx response — the wire happened, the harness-side parse did not",
+        ),
+        ("client.py", "unwrap_rest_response", 3): (True, "2xx success — the real HTTP JSON body"),
+        ("client.py", "unwrap_mcp_error", 0): (
+            False,
+            "catch-all wrapping the whole MCP delivery — can fire before any bytes move (the STRADDLE case: "
+            "it still hands back the REAL envelope it recovered)",
+        ),
+        ("client.py", "unwrap_a2a_error", 0): (
+            False,
+            "catch-all wrapping the whole A2A delivery — can fire before any bytes move (STRADDLE, as above)",
+        ),
+        ("client.py", "unwrap_rest_error", 0): (
+            False,
+            "REST DELIVER exception — no HTTP body existed at all, so nothing crossed the wire",
+        ),
     }
 
-    def test_dispatchers_is_still_the_only_constructor(self):
-        """The per-site table is exhaustive only while dispatchers.py is the sole constructor.
+    #: Modules OUTSIDE the seam that construct a TransportResult as TEST INPUT:
+    #: a fabricated result fed to a reader or a step, not a dispatcher declaring
+    #: what its own delivery did. Their has_wire is chosen to model the state
+    #: under test, so grading it against "did bytes actually move" would pin a
+    #: falsehood — hence an exemption rather than a table row. Named file by
+    #: file, never by directory or glob: a construction in any OTHER module
+    #: fails the scan below and must be tabled above or added here with its
+    #: reason. This mapping may shrink; it must never grow silently.
+    FIXTURE_CONSTRUCTORS: dict[str, str] = {
+        "tests/integration/test_harness_wire_response.py": (
+            "this module fabricates results to grade wire_field/wire_dict against a known declaration"
+        ),
+        "tests/unit/test_bdd_uc006_storyboard_dispatch_fault_is_not_xfail.py": (
+            "mutation grader: fabricates the ctx an injected REST 500 leaves behind (has_wire=True — that "
+            "body did come back over HTTP) and drives every UC-006 storyboard Then step through it"
+        ),
+    }
 
-        This module is excluded because the classes below construct a TransportResult
-        deliberately, to grade the readers against a known declaration.
+    def test_the_seam_is_still_the_only_constructor(self):
+        """The per-site table is exhaustive only while the seam is the sole declarer.
+
+        Two-directional: an unknown constructor means the table stopped covering
+        every construction (the #1858 drift), and a listed file that constructs
+        nothing means the exemption is stale and must be deleted.
         """
         repo_root = pathlib.Path(__file__).resolve().parents[2]
-        exempt = {_DISPATCHERS_PY, pathlib.Path(__file__).resolve()}
-        others = sorted(
+        seam = {str(path.relative_to(repo_root)) for path in _SEAM_MODULES}
+        allowed = seam | set(self.FIXTURE_CONSTRUCTORS)
+        constructors = {
             str(path.relative_to(repo_root))
             for path in repo_root.glob("tests/**/*.py")
-            if path not in exempt and _transport_result_sites(path)
+            if _transport_result_sites(path)
+        }
+        assert sorted(constructors - allowed) == [], (
+            f"TransportResult is constructed outside the seam {sorted(seam)}: "
+            f"{sorted(constructors - allowed)}. The per-site has_wire table above no longer covers every "
+            "construction — table the new sites, or, if they are test fixtures rather than dispatch "
+            "declarations, name the module in FIXTURE_CONSTRUCTORS with its reason."
         )
-        assert others == [], (
-            f"TransportResult is constructed outside tests/harness/dispatchers.py: {others}. "
-            "The per-site has_wire table below no longer covers every construction."
+        assert sorted(allowed - constructors) == [], (
+            f"listed as a TransportResult constructor but constructs none: {sorted(allowed - constructors)}. "
+            "Remove the stale entry so the exemption list keeps shrinking."
         )
 
     def test_every_site_is_in_the_table(self):
         """No site may be added or removed without a per-site has_wire decision."""
-        found = sorted(_transport_result_sites(_DISPATCHERS_PY))
+        found = sorted(key for module in _SEAM_MODULES for key in _transport_result_sites(module))
         assert found == sorted(self.EXPECTED_SITES), (
-            f"TransportResult construction sites in dispatchers.py changed: {found}. "
+            f"TransportResult construction sites across the seam changed: {found}. "
             "Every site needs an explicit per-site has_wire decision in EXPECTED_SITES."
         )
 
     def test_every_site_declares_has_wire_explicitly_and_correctly(self):
         """has_wire is passed as a literal at every site, with the value that SITE earns."""
-        sites = _transport_result_sites(_DISPATCHERS_PY)
-        declared: dict[tuple[str, int], object] = {}
+        sites = {key: call for module in _SEAM_MODULES for key, call in _transport_result_sites(module).items()}
+        declared: dict[tuple[str, str, int], object] = {}
         for key, call in sites.items():
+            where = f"{key[1]} site #{key[2]} ({key[0]}:{call.lineno})"
             kwarg = next((kw for kw in call.keywords if kw.arg == "has_wire"), None)
             assert kwarg is not None, (
-                f"{key[0]} site #{key[1]} (dispatchers.py:{call.lineno}) does not pass has_wire. "
+                f"{where} does not pass has_wire. "
                 "Wire-presence is DECLARED at construction — no site may rely on a default."
             )
             assert isinstance(kwarg.value, ast.Constant) and isinstance(kwarg.value.value, bool), (
-                f"{key[0]} site #{key[1]} (dispatchers.py:{call.lineno}) passes a computed has_wire "
-                f"({ast.dump(kwarg.value)}); it must be a literal True/False decided per site."
+                f"{where} passes a computed has_wire ({ast.dump(kwarg.value)}); "
+                "it must be a literal True/False decided per site."
             )
             declared[key] = kwarg.value.value
 
         expected = {key: value for key, (value, _) in self.EXPECTED_SITES.items()}
         assert declared == expected, "\n".join(
-            f"{key[0]} site #{key[1]} (dispatchers.py:{sites[key].lineno}): "
+            f"{key[1]} site #{key[2]} ({key[0]}:{sites[key].lineno}): "
             f"has_wire={declared[key]!r}, expected {expected[key]!r} — {self.EXPECTED_SITES[key][1]}"
             for key in sorted(expected)
             if declared.get(key) != expected[key]
@@ -254,7 +342,7 @@ class TestHasWireIsRequiredAtConstruction:
     A defaulted field is not a declaration (Design Amendment v2, A1). Omitting the
     kwarg would yield ``has_wire=False``, which routes the readers to the
     production serializer — a wire-shape assertion then passes vacuously against a
-    ``model_dump``. A forgetful 15th site must fail at construction, not go green.
+    ``model_dump``. A forgetful 14th site must fail at construction, not go green.
     """
 
     def test_omitting_has_wire_raises_type_error(self):

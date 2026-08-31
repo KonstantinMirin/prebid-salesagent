@@ -72,7 +72,7 @@ class GetProductsBody(SalesAgentBaseModel):
     filters: dict[str, Any] | None = None
     # Top-level property of get-products-request.json at AdCP 3.1.1. Omitting it
     # made the field MCP+A2A-only, which is a protocol gap rather than a REST
-    # limitation (salesagent-sxl4).
+    # limitation.
     property_list: dict[str, Any] | None = None
     adcp_version: str = "1.0.0"
 
@@ -256,7 +256,7 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
 
 
 @router.get("/capabilities")
-async def get_capabilities(identity: ResolvedIdentity | None = resolve_auth):
+async def get_adcp_capabilities(identity: ResolvedIdentity | None = resolve_auth):
     """Get AdCP capabilities (auth-optional discovery skill)."""
     response = await capabilities_module.get_adcp_capabilities_raw(identity=identity)
     return response.model_dump(mode="json")

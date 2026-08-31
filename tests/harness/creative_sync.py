@@ -54,6 +54,7 @@ from unittest.mock import AsyncMock, MagicMock
 from src.core.schemas import SyncCreativesResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness.egress import EgressHatchMixin
+from tests.harness.transport import DeliverResult
 
 # Kwargs ``IntegrationEnv._run_a2a_handler`` consumes itself (identity mock, protocol-level
 # push config, request model) rather than forwarding as skill parameters — see
@@ -195,19 +196,32 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
 
         return _sync_creatives_impl(**kwargs)
 
-    def call_a2a(self, **kwargs: Any) -> SyncCreativesResponse:
-        """Dispatch sync_creatives through the real A2A ``on_message_send`` pipeline.
+    def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
+        """Dispatch sync_creatives through the REAL A2A ``on_message_send`` pipeline.
 
-        Delegates to the base ``_run_a2a_handler`` (message parse → skill
-        routing → ``_handle_sync_creatives_skill`` → ``_serialize_for_a2a`` →
-        Task/Artifact DataPart), so the a2a seat grades the real handler
-        rather than standing in for it with an in-process ``_raw`` call.
+        This used to call ``sync_creatives_raw`` directly, routing AROUND
+        ``on_message_send``. The consequence (per tests/CLAUDE.md's own table:
+        A2A ``wire_response`` is populated ONLY when the env routes through
+        ``_run_a2a_handler``) was that the A2A leg produced no wire at all — so
+        every storyboard Then on this transport had nothing transport-observable
+        to assert and fell back to reading an in-memory object. Delegating to the
+        base ``_run_a2a_handler`` (message parse → skill routing →
+        ``_handle_sync_creatives_skill`` → ``_serialize_for_a2a`` →
+        Task/Artifact DataPart) makes the a2a seat grade the real handler,
+        per-item failures included, instead of standing in for it.
 
-        Outbound kwargs go through :meth:`_wire_value` first — everything but
-        the three keys ``_run_a2a_handler`` consumes itself becomes a skill
-        parameter and is JSON-serialized by ``_dict_to_value``, which would
-        turn a typed Pydantic model into a repr string instead of a document a
-        buyer could actually send.
+        Outbound kwargs are JSON-normalized through :meth:`_wire_value` — the
+        SAME normalizer the REST leg's ``build_rest_body`` uses, not a second
+        hand-rolled one — because they now travel via
+        ``create_a2a_message_with_skill`` -> ``_dict_to_value`` (protobuf),
+        which cannot carry the Pydantic models the raw wrapper accepted as live
+        Python objects (account, push_notification_config) and would otherwise
+        turn them into repr strings instead of a document a buyer could send.
+        Normalization is applied per-kwarg rather than by calling
+        ``build_rest_body``, because that helper SELECTS the REST body's keys:
+        routing through it would silently drop the three kwargs
+        ``_run_a2a_handler`` consumes itself (see ``_A2A_RESERVED_KWARGS``),
+        which must reach it untouched.
         """
         kwargs.setdefault("creatives", [])
         return self._run_a2a_handler(
@@ -216,7 +230,7 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
             **{k: v if k in _A2A_RESERVED_KWARGS else self._wire_value(v) for k, v in kwargs.items()},
         )
 
-    def call_mcp(self, **kwargs: Any) -> SyncCreativesResponse:
+    def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
         """Call sync_creatives via Client(mcp) — full pipeline dispatch.
 
         No enum coercion needed — FastMCP's TypeAdapter handles it automatically.
@@ -243,10 +257,16 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         # 'push_notification_config' and 'account' are declared by SyncCreativesBody and
         # forwarded by the route to sync_creatives_raw — dropping either here would make
         # any REST test of that behavior silently vacuous.
+        #
+        # 'idempotency_key' is schema-REQUIRED on sync_creatives (pinned_request_schema_fields
+        # reports it in the required set). It is carried by the acceptance seam rather than
+        # declared on SyncCreativesBody, so it must ride the REST body for the REST leg to
+        # grade idempotency at all — omitting it here would make every REST idempotency
+        # assertion vacuous.
         body: dict[str, Any] = {}
         if "creatives" in kwargs:
             body["creatives"] = self._wire_value(kwargs["creatives"])
-        for key in ("assignments", "creative_ids", "push_notification_config", "account"):
+        for key in ("assignments", "creative_ids", "push_notification_config", "account", "idempotency_key"):
             if kwargs.get(key) is not None:
                 body[key] = self._wire_value(kwargs[key])
         for key in ("delete_missing", "dry_run", "validation_mode"):

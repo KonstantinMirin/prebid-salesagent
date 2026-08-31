@@ -24,20 +24,15 @@ rename. Two invariants, enforced in two places:
 
 from pathlib import Path
 
+from tests.helpers.ledger import load_ledger_nodeids
 from tests.unit._architecture_helpers import collect_bdd_node_ids_with_e2e_enabled
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _LEDGER = _REPO_ROOT / "tests" / "bdd" / "e2e_rest_known_failures.txt"
 
 
-def _ledger_entries() -> list[str]:
-    return [
-        line.strip() for line in _LEDGER.read_text().splitlines() if line.strip() and not line.lstrip().startswith("#")
-    ]
-
-
 def test_every_ledger_entry_resolves_to_a_collected_item():
-    entries = set(_ledger_entries())
+    entries = load_ledger_nodeids(_LEDGER)
 
     collected = set(collect_bdd_node_ids_with_e2e_enabled("tests/bdd"))
     stale = sorted(e for e in entries if e not in collected)

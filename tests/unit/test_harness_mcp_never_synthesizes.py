@@ -6,7 +6,7 @@ honest: there is no wire by definition, so the synthesized value is the only vie
 that exists and its name says so. On MCP there IS a wire, so the field is either
 redundant (the wire is present) or a mask (the wire was lost) -- and a mask is
 what let ``MediaBuyListEnv`` declare a wire it never captured, right up until
-``salesagent-pldmk.24``.
+the fix in #1802.
 
 ``McpDispatcher``'s own comment already said "NEVER the synthesized fallback --
 a dead MCP wire path must yield None here". The construction two lines below it
@@ -26,22 +26,35 @@ def _raising_env(exc: Exception):
     """A stand-in env whose every transport entry point raises *exc*."""
 
     class _Env:
+        # The entry points the dispatchers ACTUALLY call. Stubbing anything
+        # else lets the dispatcher die on an AttributeError BEFORE it reaches
+        # the error arm under test, and the assertions below then hold for a
+        # reason unrelated to what they claim to test -- both of the "no
+        # envelope" ones pass by construction on a dispatch that never ran.
+        #
+        # #1858 renamed the env dispatch contract call_mcp/call_a2a ->
+        # deliver_mcp/deliver_a2a: the deliver_* pair is now THE override point
+        # (it returns a DeliverResult carrying payload AND wire), while
+        # call_mcp/call_a2a are defined once on BaseTestEnv as
+        # ``deliver_*(...).payload`` and are explicitly never overridden. This
+        # stub predates that rename. There is no deliver_rest -- RestDispatcher
+        # reads ``REST_ENDPOINT`` and then calls ``_run_rest_request`` -- and
+        # the IMPL leg still calls ``call_impl``.
+        REST_ENDPOINT = "/stub"
+
         def call_impl(self, **kwargs):
             raise exc
 
-        def call_mcp(self, **kwargs):
+        def deliver_mcp(self, **kwargs):
             raise exc
 
-        def call_a2a(self, **kwargs):
+        def deliver_a2a(self, **kwargs):
             raise exc
 
-        def call_rest(self, **kwargs):
+        def _run_rest_request(self, endpoint, **kwargs):
             raise exc
 
         def build_rest_body(self, **kwargs):
-            # Without this the REST leg never reaches the dispatcher's own error
-            # arm -- the stub raises AttributeError first and the assertion holds
-            # for a reason unrelated to what it claims to test.
             return {}
 
         def parse_rest_response(self, data):
@@ -105,7 +118,7 @@ class TestOnlyTheTransportWithNoWireMaySynthesize:
     A2A passing here does NOT mean A2A is clean. It leaves this field ``None``
     while putting a builder-regenerated envelope into ``wire_error_envelope``
     instead -- the same substitution under the name of the real thing, which is
-    strictly worse and is why it needs its own change (``salesagent-pldmk.26``).
+    strictly worse and is why it needs its own change (#1417).
     """
 
     def test_impl_still_synthesizes_because_it_has_no_wire_to_lose(self):

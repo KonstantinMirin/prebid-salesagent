@@ -47,7 +47,7 @@ from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_contex
 
 
 def _e2e_capture_url(env: Any) -> str:
-    """E2E realization of :attr:`LocalOriginMixin.webhook_url` (salesagent-pldmk.41).
+    """E2E realization of :attr:`LocalOriginMixin.webhook_url` (#2098).
 
     In process the endpoint is a loopback origin on the runner. The Docker server
     cannot reach that, so under e2e the endpoint is the compose stack's
@@ -381,10 +381,11 @@ class DeliveryPollMixin:
 
         # Pop identity — it's injected by call_via for transport dispatch
         # but is not a GetMediaBuyDeliveryRequest field.
-        # Use sentinel to distinguish "not provided" from "explicitly None".
-        _no_identity = object()
-        raw_identity = extra.pop("identity", _no_identity)
-        identity = self.identity if raw_identity is _no_identity else raw_identity  # type: ignore[attr-defined]
+        # Sentinel distinguishes "not provided" from "explicitly None".
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE
+
+        raw_identity = extra.pop("identity", NO_IDENTITY_OVERRIDE)
+        identity = self.identity if raw_identity is NO_IDENTITY_OVERRIDE else raw_identity  # type: ignore[attr-defined]
 
         kwargs: dict[str, Any] = {}
         if media_buy_ids is not None:
@@ -430,9 +431,9 @@ class LocalOriginMixin:
     same thing under both. That is why this lands before the migration and not
     with it.
 
-    The origin serves real TLS off the generated CA/leaf (salesagent-40qh's
-    primitive, reused here — never a second mechanism), so it no longer needs
-    the scheme hatch (deleted entirely, salesagent-e6h0); the private-range
+    The origin serves real TLS off the generated CA/leaf (the primitive from
+    #1757, reused here — never a second mechanism), so it no longer needs the
+    scheme hatch, which the same issue deleted entirely; the private-range
     hatch stays open for the duration of the env because the origin
     necessarily listens on loopback, which the seam refuses by default —
     opening it here is the same statement the seam's own integration tests
@@ -451,8 +452,8 @@ class LocalOriginMixin:
 
         This was a bare class annotation, so every read under e2e raised an
         anonymous ``AttributeError: 'CircuitBreakerEnv' object has no attribute
-        'origin'`` from wherever it happened to be reached. That is how
-        salesagent-sq8ib.12 happened: one step read it, the env then failed to
+        'origin'`` from wherever it happened to be reached. That is how the
+        cascade in #1802 happened: one step read it, the env then failed to
         unbind the factory session, and 5 failures became 443.
 
         A named failure instead. It does not make the attribute REACHABLE over
@@ -477,9 +478,9 @@ class LocalOriginMixin:
         if self.is_e2e:  # type: ignore[attr-defined]
             # No local origin under e2e: it would listen on the runner's loopback,
             # which the Docker server cannot reach — that unreachability is the
-            # whole defect salesagent-pldmk.41 exists to fix. The endpoint is the
-            # compose stack's webhook-capture service instead, addressed by a
-            # fresh per-scenario key so concurrent scenarios never share captures.
+            # whole defect #2098 exists to fix. The endpoint is the compose
+            # stack's webhook-capture service instead, addressed by a fresh
+            # per-scenario key so concurrent scenarios never share captures.
             from tests.e2e._webhook_capture import register_capture_key
 
             self._capture_key, _ = register_capture_key()
@@ -609,7 +610,7 @@ class WebhookOutcomeRowsMixin:
 
     Shared by the two senders' envs (``CircuitBreakerEnv``,
     ``ProtocolWebhookEnv``) because "what did production write down about this
-    delivery" is one question, and the whole point of lane salesagent-gra7.1 is
+    delivery" is one question, and the whole point of the lane in #1802 is
     that both senders must answer it through ONE recorder. A per-env copy of
     this read is how the two answers would be allowed to drift.
 

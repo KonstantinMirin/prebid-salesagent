@@ -1,6 +1,6 @@
 """Guard: BDD wire-discipline — error handling goes through the wire, not test-side.
 
-Three complementary checks, locking in the universal-wire-dispatch invariant after the
+Five complementary checks, locking in the universal-wire-dispatch invariant after the
 holdouts were migrated:
 
 A. **No test-side error construction** (dispatch-side). A step must NOT
@@ -27,7 +27,25 @@ C. **No private circuit-breaker state reached from a step** (arrange/assert-side
    production public API ``WebhookDeliveryService.get_circuit_breaker_state``. Allowlist is
    permanently EMPTY.
 
-All allowlists can only SHRINK. Each entry documents the production gap that keeps it.
+D. **No provenance-stripped ``ctx["response"]`` read** (assertion-side). Documented at its
+   definition below: a copy of the payload cannot tell a Then whether it holds a wire fact or an
+   in-process reconstruction. Steps read the dispatch's own ``TransportResult``.
+
+E. **No hand-rolled wire-envelope access** (access-pattern, not symbol-name). Check B only
+   fires when a step ALSO calls the reconstruction helpers — a step that hand-rolls
+   ``getattr(result, "wire_error_envelope", None)`` (or ``result.wire_error_envelope``)
+   instead of routing through the single guarded accessor
+   (``tests/bdd/steps/_outcome_helpers.py``'s ``wire_error_dict`` /
+   ``wire_error_envelope_or_none``) sails through Check B untouched, because it never
+   touches the reconstruction symbols Check B looks for. This was Finding 7
+   six sites duplicated the guard logic (loud-raise-on-missing /
+   IMPL-synthesized-fallback) that the accessor centralizes. ``_outcome_helpers.py`` (defines
+   the accessors) and ``_dispatch.py`` (the harness's sole producer that mirrors the field into
+   ``ctx``'s convenience keys) are the only sanctioned direct readers; everywhere else must
+   call the accessor.
+
+All allowlists can only SHRINK. Each entry documents the production gap or tracked follow-up
+that keeps it. A separate exact-match pin (below) holds the harness's own breaker write seam.
 """
 
 from __future__ import annotations
@@ -81,6 +99,39 @@ _PRIVATE_BREAKER_ATTR = "_circuit_breakers"
 # Keys carry line numbers (unlike checks A/B) precisely BECAUSE the allowlist is empty:
 # nothing is ever stored, so nothing can go stale, and the failure names the exact sites.
 _PRIVATE_BREAKER_ALLOWLIST: set[str] = set()
+
+# -- Check E: hand-rolled wire-envelope access (access pattern) ---------------
+# Keyed by "<relative path> <enclosing func>". Pre-existing sites found the moment
+# this check started scanning the ACCESS PATTERN instead of Check B's symbol names
+# — none introduced by that change. Tracked at
+# https://github.com/prebid/salesagent/issues/1995; remove each entry as it migrates
+# onto wire_error_dict / wire_error_envelope_or_none (_outcome_helpers.py).
+_WIRE_ENVELOPE_ACCESS_ALLOWLIST: set[str] = {
+    # FIXME(#1995): result.wire_error_envelope read directly instead of via the
+    # guarded accessor.
+    "bdd/steps/domain/uc002_create_media_buy.py _assert_error_outcome",
+    # FIXME(#1995): result.wire_error_envelope read directly instead of via the
+    # guarded accessor.
+    "bdd/steps/domain/uc019_query_media_buys.py then_real_validation_error",
+    # FIXME(#1995): result.wire_error_envelope read directly instead of via the
+    # guarded accessor (spec-production-gap steps — verify the gap assertion still
+    # holds once migrated, see issue for the caveat).
+    "bdd/steps/domain/uc002_nfr.py then_rate_limiting_enforced",
+    "bdd/steps/domain/uc002_nfr.py then_payload_size_limits",
+    "bdd/steps/domain/uc002_nfr.py then_budget_validated_against_min_order",
+}
+
+# The only two legitimate direct readers of TransportResult.wire_error_envelope:
+# _outcome_helpers.py defines the guarded accessors; _dispatch.py's
+# _populate_ctx_from_result is the harness's sole producer that mirrors the field
+# (and synthesized_error_envelope) into ctx's convenience keys — a passthrough copy,
+# not a re-implementation of the accessor's guard/fallback logic.
+_ACCESS_PATTERN_EXEMPT_MODULES = frozenset(
+    {
+        "bdd/steps/_outcome_helpers.py",
+        "bdd/steps/generic/_dispatch.py",
+    }
+)
 
 
 def _iter_step_modules() -> list[tuple[str, ast.Module]]:
@@ -451,5 +502,55 @@ def test_the_harness_breaker_write_seam_does_not_grow() -> None:
             "N successes lets a Then grade arithmetic the delivery layer never ran, so production "
             "can stop recording successes and the scenario stays green. Seeding is legitimate only "
             "for reaching a STARTING state a test cannot afford to spend real failures on."
+        ),
+    )
+
+
+def _is_wire_envelope_attr(node: ast.AST) -> bool:
+    """Match ``<anything>.wire_error_envelope`` attribute access."""
+    return isinstance(node, ast.Attribute) and node.attr == "wire_error_envelope"
+
+
+def _is_wire_envelope_getattr(node: ast.AST) -> bool:
+    """Match ``getattr(<anything>, "wire_error_envelope", ...)``."""
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "getattr"):
+        return False
+    return any(isinstance(arg, ast.Constant) and arg.value == "wire_error_envelope" for arg in node.args)
+
+
+def _find_hand_rolled_wire_envelope_access() -> set[str]:
+    """Find direct ``TransportResult.wire_error_envelope`` reads outside the guarded accessor.
+
+    Unlike Check B (symbol-name matching on the reconstruction helpers), this matches the
+    ACCESS PATTERN itself — attribute access or ``getattr`` on ``wire_error_envelope`` — so a
+    step that hand-rolls the read without ever touching the reconstruction symbols still
+    trips it. ``_ACCESS_PATTERN_EXEMPT_MODULES`` names the two sanctioned readers; every other
+    module is scanned in full, not gated behind ``@then``, because Finding 7's duplication
+    lived in plain helper functions (``_wire_code`` et al.), not directly inside
+    ``@then``-decorated steps.
+    """
+    found: set[str] = set()
+    for rel, tree in _iter_step_modules():
+        if rel in _ACCESS_PATTERN_EXEMPT_MODULES:
+            continue
+        for func in _enclosing_functions(tree):
+            for node in _own_nodes(func):
+                if _is_wire_envelope_attr(node) or _is_wire_envelope_getattr(node):
+                    found.add(f"{rel} {func.name}")
+    return found
+
+
+def test_no_hand_rolled_wire_envelope_access() -> None:
+    """TransportResult.wire_error_envelope has one reader — the guarded accessor."""
+    assert_violations_match_allowlist(
+        _find_hand_rolled_wire_envelope_access(),
+        _WIRE_ENVELOPE_ACCESS_ALLOWLIST,
+        fix_hint=(
+            "A step reads TransportResult.wire_error_envelope directly (getattr(result, "
+            "'wire_error_envelope', ...) or result.wire_error_envelope) instead of routing through the "
+            "single guarded accessor in tests/bdd/steps/_outcome_helpers.py: wire_error_dict(ctx) (loud "
+            "guard + IMPL-synthesized fallback) or wire_error_envelope_or_none(ctx) (no guard, real "
+            "envelope or None — use before delegating to result.assert_wire_error). "
+            "See then_error.py's _wire_code / _wire_suggestion / _wire_error_object / then_error_recovery."
         ),
     )

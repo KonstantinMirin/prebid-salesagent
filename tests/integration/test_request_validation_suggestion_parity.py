@@ -427,7 +427,7 @@ class TestSyncCreativesA2ASuggestionParity:
         earlier version of this test demanded a request-level VALIDATION_ERROR
         envelope, which is the inverse — and it passed only because the A2A
         handler constructed the whole creatives array eagerly and failed the
-        batch on any one bad item, the defect lane salesagent-gra7.2 removed.
+        batch on any one bad item, the defect the lane in #1802 removed.
         A2A was the ONLY transport doing that; impl and REST were always
         per-item.
 
@@ -444,17 +444,19 @@ class TestSyncCreativesA2ASuggestionParity:
         shared: impl, REST and A2A all emit it (MCP differs only because
         FastMCP's TypeAdapter rejects at the schema boundary before _impl). It
         is therefore not this lane's to fix — INVALID_REQUEST vs
-        VALIDATION_ERROR unification is Epic C's, and salesagent-gra7.2's bead
-        lists it under NOT IN THIS LANE. Asserting the wrong code here would
-        pin the defect open; asserting the right one would make this test a
-        RED grader for work another epic owns. It is named instead.
+        VALIDATION_ERROR unification is Epic C's, and #1802 lists it under NOT
+        IN THIS LANE. Asserting the wrong code here would pin the defect open;
+        asserting the right one would make this test a RED grader for work
+        another epic owns. It is named instead.
         """
         from src.core.schemas import SyncCreativesResponse
         from tests.harness.creative_sync import CreativeSyncEnv
         from tests.harness.transport import Transport
 
         class _RealA2AWireCreativeSyncEnv(CreativeSyncEnv):
-            def call_a2a(self, **kwargs):
+            # Overrides the DELIVER point; _run_a2a_handler already returns a
+            # DeliverResult carrying the real artifact wire.
+            def deliver_a2a(self, **kwargs):
                 return self._run_a2a_handler("sync_creatives", SyncCreativesResponse, **kwargs)
 
         with _RealA2AWireCreativeSyncEnv() as env:

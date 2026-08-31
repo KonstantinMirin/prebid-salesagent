@@ -6,6 +6,8 @@ from pathlib import Path
 
 import adcp
 
+from scripts.audit.storyboard_spec import pinned_version
+
 EXPECTED_SPEC_VERSION = "3.1.1"
 
 _REPO = Path(__file__).resolve().parents[2]
@@ -43,16 +45,14 @@ def _pyproject_adcp_pin() -> str:
     return pins[0]
 
 
-# Lines that assert what this project targets NOW. The headline claim
-# ("targets **AdCP spec version X**") and any prose calling a version the
-# CURRENT/pinned one. Deliberately narrow: the version-history table row and
+# Prose calling a version the CURRENT/pinned one, in the shapes no primitive
+# reads. The headline claim ("targets **AdCP spec version X**") is deliberately
+# NOT here: storyboard_spec.pinned_version() already owns that read out of this
+# same doc, and a local copy of its regex is a second implementation of one
+# fact. Deliberately narrow otherwise: the version-history table row and
 # past-tense prose about an older version ("Then (3.1.0-beta.3): ...") stay
 # legal, because naming history IS that prose's job.
-_PIN_CLAIM = re.compile(
-    r"(targets \*\*AdCP spec version [^*]+\*\*)"
-    r"|(\*\*pin\*\*\s*\([^)]+\))"
-    r"|(\*\*Now \(pinned [^)]+\):?\*\*)"
-)
+_PIN_CLAIM = re.compile(r"(\*\*pin\*\*\s*\([^)]+\))|(\*\*Now \(pinned [^)]+\):?\*\*)")
 
 
 def test_claude_md_states_the_pinned_versions() -> None:
@@ -99,6 +99,16 @@ def test_spec_version_doc_presents_only_the_pinned_version_as_current() -> None:
     did something ("Then (3.1.0-beta.3): ...") is likewise legitimate. What is
     banned is bolding another version as **the** pin.
     """
+    # The headline claim ("targets **AdCP spec version X**") is graded by the
+    # primitive that owns that read: pinned_version() parses this same doc and
+    # raises when the sentence disagrees with the installed SDK.
+    documented = pinned_version(_REPO)
+    assert documented == EXPECTED_SPEC_VERSION, (
+        f"docs/adcp-spec-version.md's headline claim tracks AdCP {documented}, but "
+        f"this codebase targets {EXPECTED_SPEC_VERSION}. Update the prose in the "
+        f"same change as the pin bump."
+    )
+
     doc = (_REPO / "docs" / "adcp-spec-version.md").read_text(encoding="utf-8")
 
     # Check the CLAIM, not the whole line: a line may legitimately mention the

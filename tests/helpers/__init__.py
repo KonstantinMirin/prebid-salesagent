@@ -88,6 +88,7 @@ _LAZY_EXPORTS: dict[str, str] = {
     "create_test_product": "tests.helpers.adcp_factories",
     "create_test_property": "tests.helpers.adcp_factories",
     "create_test_property_dict": "tests.helpers.adcp_factories",
+    "load_ledger_nodeids": "tests.helpers.ledger",
     "make_active_cached_success": "tests.helpers.idempotency_seeds",
     "rendered_log_calls": "tests.helpers.log_assertions",
     "seed_cached_success": "tests.helpers.idempotency_seeds",
@@ -122,6 +123,8 @@ __all__ = [
     "TIMESTAMP_HEADER",
     "assert_signature_verifies_over_wire_body",
     "assert_delivered_unsigned",
+    # Known-failures ledger parsing
+    "load_ledger_nodeids",
     # Log-call assertions
     "rendered_log_calls",
     # Idempotency cache seeding

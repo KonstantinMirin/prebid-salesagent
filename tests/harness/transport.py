@@ -14,6 +14,7 @@ Usage::
 from __future__ import annotations
 
 import functools
+import json
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -62,6 +63,83 @@ def extract_wire_suggestion(envelope: dict | None) -> str | None:
     return errors[0].get("suggestion") or adcp_error.get("suggestion")
 
 
+def _envelope_from_adcp_error(exc: Exception) -> dict[str, Any] | None:
+    """Build a SYNTHESIZED envelope from an AdCPError instance.
+
+    Used by ImplDispatcher (``tests/harness/dispatchers.py``) to populate the
+    separate ``synthesized_error_envelope`` field — IMPL has no wire by
+    definition and ``wire_error_envelope`` is reserved for real wire bytes
+    captured by REST/MCP/A2A. Production code uses the same
+    ``build_two_layer_error_envelope`` helper at the boundary, so the
+    synthesized envelope matches what production would emit for the same
+    exception. It does NOT verify that a regression in
+    ``build_two_layer_error_envelope`` actually reaches the wire.
+
+    ImplDispatcher is its ONLY caller, and deliberately so: no other transport
+    may hand a rebuilt envelope to a test. It lives here rather than in
+    ``dispatchers.py`` because this module is the dispatch-core both
+    ``dispatchers.py`` and ``client.py`` import from; housing it in either would
+    force the other to reach back across that boundary, which is exactly the
+    mutual-lazy-import cycle this module breaks.
+
+    A2A and REST tests asserting on ``result.wire_error_envelope`` see
+    REAL wire bytes:
+        - A2A: the artifact DataPart, attached to the reconstructed
+          ``AdCPError`` as ``_wire_error_envelope`` by
+          ``tests.harness._base._envelope_to_adcp_error``.
+        - REST: the HTTP response body, captured directly by RestDispatcher.
+        - MCP: the JSON string in ``ToolError``, parsed by McpDispatcher.
+    """
+    from src.core.exceptions import AdCPError, build_two_layer_error_envelope
+
+    if isinstance(exc, AdCPError):
+        return build_two_layer_error_envelope(exc)
+    return None
+
+
+def _wire_envelope_from_exception(exc: Exception) -> dict[str, Any] | None:
+    """The REAL wire envelope stashed by the harness, or None. NEVER synthesized.
+
+    When the A2A pipeline reconstructs an AdCPError from a failed Task's
+    artifact DataPart, ``tests.harness._base._envelope_to_adcp_error`` attaches
+    the captured envelope to the exception as ``_wire_error_envelope``. That
+    stash — real bytes that actually came back — is the only thing this helper
+    will hand out.
+
+    It used to fall back to ``_envelope_from_adcp_error`` above, the same builder
+    production calls, and return the result under ``wire_error_envelope`` — the
+    field named for what actually crossed the wire. A scenario asserting on that
+    field then graded the harness rebuilding an envelope from the exception it
+    had just caught, which passes whether or not production emitted anything at
+    all. Making the synthesized field private did not close
+    that channel: the laundered copy arrives under the name of the thing it is
+    impersonating.
+
+    ``None`` is the honest answer when nothing crossed the wire. A transport that
+    genuinely has no wire says so through ``has_wire=False`` and offers
+    ``_synthesized_error_envelope`` under its OWN name, as ImplDispatcher does.
+    Do not reintroduce the fallback here; pinned by
+    ``tests/unit/test_harness_mcp_never_synthesizes.py``.
+    """
+    real_wire = getattr(exc, "_wire_error_envelope", None)
+    return real_wire if isinstance(real_wire, dict) else None
+
+
+def _envelope_from_mcp_error(exc: Exception) -> dict[str, Any] | None:
+    """Extract the wire envelope from an MCP ToolError's JSON string."""
+    from fastmcp.exceptions import ToolError
+
+    if not isinstance(exc, ToolError):
+        return None
+    try:
+        envelope = json.loads(str(exc))
+        if isinstance(envelope, dict) and "errors" in envelope:
+            return envelope
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return None
+
+
 class Transport(StrEnum):
     """Dispatch transports for behavioral tests."""
 
@@ -86,6 +164,38 @@ TRANSPORT_PROTOCOL: dict[Transport, str] = {
 }
 
 
+# The ONE identity-argument omission sentinel for the whole dispatch core
+# (tests/harness/client.py, dispatchers.py, _base.py, _mixins.py — plus
+# tests/helpers/mcp_envelope_capture.py, which carries the same distinction
+# outside tests/harness/). Distinguishes "the caller did not pass identity="
+# (fall back to whatever default THAT call site uses — env.identity_for(),
+# self.identity, delegate-by-omission, PrincipalFactory.make_identity(), ...)
+# from an EXPLICIT identity=None (deliberately unauthenticated dispatch).
+# Previously reimplemented as a private object() in seven different function
+# bodies plus two other module-level sentinels (client.py, mcp_envelope_
+# capture.py) — this is the one shared object identity every comparison uses;
+# each call site keeps its OWN fallback logic when it detects the sentinel,
+# never folded into this constant. Scoped to the identity-argument omission
+# disease specifically — other object()-as-sentinel uses in tests/harness/
+# for unrelated fields (e.g. media_buy_create.py's OMIT_IDEMPOTENCY_KEY) are
+# a different sentinel family and are not consolidated here.
+NO_IDENTITY_OVERRIDE = object()
+
+
+class MissingToolNameError(NotImplementedError):
+    """A legacy ``env.call_via(transport, **kwargs)`` E2E dispatch had no way to
+    derive the tool/skill name (no ``tool_name=`` kwarg, no per-env attribute
+    to introspect it from).
+
+    The ONE exception type for this failure mode, replacing what used to be a
+    per-dispatcher fork (``TypeError`` in one, ``NotImplementedError`` in the
+    other). Subclasses ``NotImplementedError`` deliberately: that is the one
+    exception ``AdCPTestClient.call()`` re-raises as a hard wiring failure
+    instead of downgrading into an error ``TransportResult`` — a missing tool
+    name is a harness bug, not a simulated AdCP rejection.
+    """
+
+
 @dataclass(frozen=True)
 class E2EConfig:
     """Configuration for E2E transport dispatch.
@@ -97,7 +207,7 @@ class E2EConfig:
         tls_base_url: The SECOND origin the same stack serves, over real TLS at a
             dotted host (e.g. ``https://proxy.adcp.test:8443``). ``None`` when the
             stack publishes no TLS listener. Additive: only scenarios that need a
-            real handshake read it (salesagent-tgzb).
+            real handshake read it (#1291).
         ca_bundle: ABSOLUTE path to the CA that signed the stack's leaf. Absolute
             because pytest does not always run from the repo root. ``None`` when
             there is no TLS listener to verify.
@@ -107,6 +217,74 @@ class E2EConfig:
     postgres_url: str
     tls_base_url: str | None = None
     ca_bundle: str | None = None
+
+
+# Fields `_serialize_for_a2a` adds to an A2A artifact DataPart. They are
+# populated by the PROTOCOL layer (the pin's Protocol Envelope arm) and are not
+# declared on any Pydantic response model, so they must come off before a body
+# is validated — under extra="forbid" they are a hard ValidationError. The
+# captured `wire_response` keeps them: siblings assert on the full envelope.
+A2A_PROTOCOL_ENVELOPE_FIELDS = ("message", "success")
+
+
+def strip_a2a_protocol_fields(data: dict[str, Any]) -> dict[str, Any]:
+    """A copy of *data* without the A2A protocol-envelope fields.
+
+    One definition, three call sites (``_run_a2a_handler``, the client's
+    ``_deliver_a2a``, and ``BaseTestEnv._deliver_via_client``). Each used to
+    spell the same two ``pop`` calls itself, so adding a third protocol field
+    would have needed finding all of them.
+    """
+    return {k: v for k, v in data.items() if k not in A2A_PROTOCOL_ENVELOPE_FIELDS}
+
+
+# The two values TransportResult.envelope["status"] may take. A DERIVED enum,
+# never a synthesized HTTP status_code: fabricating an integer for MCP/A2A would
+# turn today's silent no-op into a loud tautology — the harness asserting != 500
+# against a number the harness itself invented.
+DERIVED_STATUS_ADCP_ERROR = "adcp_error"
+DERIVED_STATUS_TRANSPORT_FAULT = "transport_fault"
+
+
+def derive_error_status(wire_error_envelope: dict[str, Any] | None) -> str:
+    """Did the seller answer with a structured AdCP envelope, or fault?
+
+    Reads each transport's OWN authentic evidence, because that is exactly what
+    ``wire_error_envelope`` is built from — REST's real HTTP body, A2A's failed
+    Task artifact DataPart, MCP's ToolError JSON. Recovering an envelope from any
+    of them means the seller produced a structured AdCP rejection; recovering
+    none means the request died as a transport fault before any envelope existed.
+
+    This is the signal the storyboard Then actually means by "not a 500 or
+    non-AdCP error shape", expressed so it grades on all three transports instead
+    of only the one that happens to carry an HTTP status.
+    """
+    return DERIVED_STATUS_ADCP_ERROR if wire_error_envelope else DERIVED_STATUS_TRANSPORT_FAULT
+
+
+@dataclass(frozen=True)
+class DeliverResult:
+    """What one transport delivery produced: the parsed payload AND its wire bytes.
+
+    The harness used to carry these on two different channels — the payload came
+    back as the return value of ``env.call_mcp``/``call_a2a``, while the wire was
+    stashed on ``env._last_wire_response`` and read back ACROSS the object
+    boundary by the dispatchers. Two channels for one delivery is what let a
+    second writer appear (six sites on BaseTestEnv, three more in client.py) and
+    what let the wire silently go stale, since nothing tied a stash to the call
+    that produced it.
+
+    One return value closes that structurally: there is no attribute for a second
+    writer to write. ``wire_response`` is None where no wire exists (IMPL) or
+    where the dispatch path does not observe one (the legacy
+    ``_run_mcp_wrapper``).
+
+    The #1858 round-2 remediation;
+    pinned by ``test_architecture_harness_single_dispatch``.
+    """
+
+    payload: Any
+    wire_response: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -157,7 +335,7 @@ class TransportResult:
 
             SCOPE — this predicate governs the SUCCESS path only, and
             deliberately does NOT feed ``assert_wire_error``'s no-envelope
-            diagnostic (which lane salesagent-gra7.4 originally specified).
+            diagnostic (which the lane in #1802 originally specified).
             The reason is concrete: a dispatcher's catch-all arm declares
             ``has_wire=False`` because it may fire before anything was sent, yet
             it can still derive a ``wire_error_envelope`` from the exception —
