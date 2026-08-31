@@ -1399,12 +1399,21 @@ def _update_media_buy_impl(
         return UpdateMediaBuyResult(response=final_response, status=AdcpTaskStatus.completed.value)
 
 
+def _normalize_pacing(pacing: str | None) -> Literal["even", "asap", "daily_budget"]:
+    """Coerce the flat pacing string to the Budget literal, defaulting to even."""
+    if pacing == "asap":
+        return "asap"
+    if pacing == "daily_budget":
+        return "daily_budget"
+    return "even"
+
+
 def _build_update_request(
     media_buy_id: str | None = None,
     paused: bool | None = None,
     flight_start_date: str | None = None,
     flight_end_date: str | None = None,
-    budget: float | None = None,
+    budget: Budget | float | None = None,
     currency: str | None = None,
     start_time: str | None = None,
     end_time: str | None = None,
@@ -1432,18 +1441,27 @@ def _build_update_request(
     # at the transport boundary.
     budget_obj: Budget | float | None = None
     if budget is not None:
-        if currency is None and pacing is None and daily_budget is None:
+        if isinstance(budget, Budget):
+            # The DTO form, which the announced schema tells buyers to send
+            # (``budget: Budget | number``). This branch used to be absent, so the advertised
+            # payload reached float(Budget) and 500'd. Any flat metadata passed ALONGSIDE the
+            # object overlays it -- dropping an explicitly-passed currency would silently
+            # re-denominate the buy.
+            overlay: dict[str, Any] = {}
+            if currency is not None:
+                overlay["currency"] = currency
+            if pacing is not None:
+                overlay["pacing"] = _normalize_pacing(pacing)
+            if daily_budget is not None:
+                overlay["daily_cap"] = daily_budget
+            budget_obj = budget.model_copy(update=overlay) if overlay else budget
+        elif currency is None and pacing is None and daily_budget is None:
             budget_obj = float(budget)
         else:
-            pacing_val: Literal["even", "asap", "daily_budget"] = "even"
-            if pacing == "asap":
-                pacing_val = "asap"
-            elif pacing == "daily_budget":
-                pacing_val = "daily_budget"
             budget_obj = Budget(
                 total=budget,
                 currency=currency or "USD",
-                pacing=pacing_val,
+                pacing=_normalize_pacing(pacing),
                 daily_cap=daily_budget,
                 auto_pause_on_budget_exhaustion=None,
             )

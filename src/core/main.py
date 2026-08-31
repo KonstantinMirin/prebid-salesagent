@@ -362,21 +362,19 @@ from src.core.tools.task_management import complete_task, get_task, list_tasks
 _sdk_tool_defs = {td["name"]: td for td in ADCP_TOOL_DEFINITIONS}
 
 
-#: Tools whose advertised shape is DERIVED from the SDK request DTO. Deliberately the four
-#: this PR opened (salesagent-prkv.5 ruling R4), not every tool that happens to resolve a DTO.
-#: This is a SCOPE gate, not a list of implemented fields -- within a listed tool nothing is
-#: hand-maintained; the derivation reads the signature and the DTO.
+#: The scope gate that used to live here is gone: the derivation now applies to EVERY tool,
+#: and _register_tool refuses to register one whose DTO cannot be resolved, so there is no
+#: unlisted-tool state left for a gate to describe.
 #:
-#: Applying it to all 12 resolvable tools put two defects in the tree while every suite
-#: stayed green, because the tests parametrize over these four:
-#:   * update_media_buy.budget was WIDENED from number to Budget|number by adopting the DTO
-#:     type. The impl does float(budget), so a Budget object raises TypeError -- we would
-#:     advertise an input whose only outcome is an untyped 500, the inverse of R4's rule.
-#:     The narrowing guard does not see the widening direction.
-#:   * five parameters silently lost their advertised description.
-#: Widening the scope means grading the other eight first (§3.4 ticket 6), including the
-#: DTO-wider-than-the-tool direction the ledger has no concept of yet.
-_DTO_ANNOUNCED_TOOLS = frozenset({"get_adcp_capabilities", "get_products", "list_creative_formats", "list_creatives"})
+#: It documented two defects that widening the scope would cause. Both have been settled
+#: rather than avoided, which is why the gate could go:
+#:   * update_media_buy.budget widened from number to Budget|number by adopting the DTO type,
+#:     while _build_update_request still did float(budget) -- the advertised payload 500'd.
+#:     The builder now takes the object it advertises; graded by
+#:     TestAdvertisedTypesAreAccepted, which constructs the advertised type and calls the real
+#:     builder. That test exists because the name-dimension rule could not see a TYPE widening.
+#:   * some object-typed parameters carry their description on the referenced $def rather than
+#:     inline. Cosmetic, tracked separately; it never affected what buyers may send.
 
 
 def _register_tool(fn: Any, dto: type | None = None) -> None:

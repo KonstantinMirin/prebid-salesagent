@@ -258,3 +258,52 @@ class TestAdvertisedSchemaIsPublished:
             f"published shape drifted: {sorted(advertised)}. This is the buyer-visible schema, "
             f"written out rather than recomputed, so it fails when the shape moves for any reason."
         )
+
+
+class TestAdvertisedTypesAreAccepted:
+    """Every TYPE we advertise must be one the implementation actually takes.
+
+    The lane's rule -- advertise (DTO fields) INTERSECT (impl arguments) -- was enforced in the
+    NAME dimension only. Names are not the whole shape: adopting the DTO also adopts the DTO's
+    TYPES, and a type can widen while the implementation stays narrow. That direction had no
+    grader, and it put a live defect in the tree.
+
+    update_media_buy advertised ``budget: Budget | number | null`` (from the DTO) while
+    ``_build_update_request`` still declared ``float | None`` and called ``float(budget)``. A
+    buyer sending the documented Budget object got ``TypeError: float() argument must be a
+    string or a real number, not 'Budget'`` -- an untyped 500 from the exact payload our own
+    schema told them to send. This is the precise inverse of the rule: an advertised input
+    whose only outcome is an error.
+
+    Graded behaviorally -- construct the advertised type, call the real builder -- rather than
+    by comparing annotations, because an annotation comparison cannot distinguish a real defect
+    from a loose one (``typing.Any`` accepts everything; bare ``list`` differs from
+    ``list[str]`` only on paper). Of 23 statically-suspicious sites, exactly one broke.
+    """
+
+    def test_the_budget_object_we_advertise_is_accepted(self) -> None:
+        from src.core.tools.media_buy_update import Budget, _build_update_request
+
+        req = _build_update_request(media_buy_id="mb_1", budget=Budget(total=5000, currency="EUR"))
+
+        assert req.budget is not None
+        assert float(req.budget.total) == 5000.0
+        assert req.budget.currency == "EUR", (
+            "the currency carried INSIDE the Budget object must survive; dropping it would "
+            "silently re-denominate the buy, which is worse than the TypeError it replaced"
+        )
+
+    def test_the_bare_number_form_still_works(self) -> None:
+        """The scalar form must keep reaching _impl as a bare float.
+
+        Not redundant with the case above: _impl branches on the type, and reusing the
+        existing media buy's currency (rather than forcing USD at the boundary) depends on
+        the bare float arriving bare. A fix that coerced everything into a Budget would pass
+        the test above and silently re-denominate every scalar update to USD.
+        """
+        from src.core.tools.media_buy_update import _build_update_request
+
+        req = _build_update_request(media_buy_id="mb_1", budget=5000)
+
+        assert isinstance(req.budget, float)
+        assert req.budget == 5000.0
