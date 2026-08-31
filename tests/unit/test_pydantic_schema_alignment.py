@@ -1999,3 +1999,40 @@ class TestPinnedBoundsUnreachableFromAnyRequest:
 if __name__ == "__main__":
     # Run tests with verbose output
     pytest.main([__file__, "-v", "--tb=short"])
+
+
+class TestNoNonSpecFieldsAreAdvertised:
+    """A local subclass must not declare a field the pinned schema does not define.
+
+    This is the EXTRA direction, and it had no grader. The suite already checked that our
+    models ACCEPT every spec field (test_model_accepts_all_schema_fields) and REQUIRE what the
+    spec requires (test_model_has_all_required_fields, after its inverted branch was fixed).
+    Nothing checked the other way, so a field we invented locally was published to buyers as
+    though the spec defined it -- the announced shape derives from OUR model, not the library's.
+
+    The instance that motivated this: UpdateMediaBuyRequest carried a top-level `budget`,
+    commented "not in library -- convenience field". AdCP 3.1.1 defines no such field (budget
+    is package-level), the SDK declares none, and the compliance tree grades none -- yet it
+    was advertised on MCP and REST. It has been removed.
+
+    `exclude=True` fields are exempt by design: they are internal (principal_id, today) and
+    never reach a buyer, which is exactly the difference between an internal field and an
+    invented spec field.
+    """
+
+    @pytest.mark.parametrize("schema_ref,model_class", SCHEMA_TO_MODEL_MAP.items())
+    def test_model_declares_no_field_absent_from_the_schema(self, schema_ref: str, model_class: type) -> None:
+        schema = load_json_schema(schema_ref)
+        spec_fields = set(schema.get("properties", {}))
+        if not spec_fields:
+            pytest.skip(f"{schema_ref} declares no properties to compare against")
+
+        buyer_visible = {name for name, field in model_class.model_fields.items() if not field.exclude}
+        extra = sorted(buyer_visible - spec_fields - _VERSION_FIELDS)
+
+        assert not extra, (
+            f"{model_class.__name__} declares {extra}, which {schema_ref} does not define. "
+            f"The advertised shape derives from this model, so a field invented here is "
+            f"published to buyers as if it were spec. Either remove it, or mark it "
+            f"exclude=True if it is genuinely internal and must never reach a buyer."
+        )
