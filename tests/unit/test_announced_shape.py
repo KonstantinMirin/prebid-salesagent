@@ -469,6 +469,6 @@ class TestARequiredFieldCannotGoUnannounced:
         grades the TREE. A rule that holds on a fixture while the tree violates it is the
         failure mode a guard-with-an-allowlist would have hidden.
         """
-        import src.core.main as main
+        from src.core import main
 
         assert main.mcp is not None
