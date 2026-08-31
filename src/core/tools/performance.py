@@ -19,7 +19,12 @@ from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories import MediaBuyUoW
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas import PackagePerformance, UpdatePerformanceIndexRequest, UpdatePerformanceIndexResponse
+from src.core.schemas import (
+    PackagePerformance,
+    ProductPerformance,
+    UpdatePerformanceIndexRequest,
+    UpdatePerformanceIndexResponse,
+)
 from src.core.tools._mcp import mcp_result
 from src.core.tools.media_buy_update import _verify_principal
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
@@ -28,19 +33,26 @@ from src.core.validation_helpers import adcp_validation_boundary
 
 def _build_update_performance_index_request(
     media_buy_id: str,
-    performance_data: list[dict[str, Any]],
+    performance_data: list[ProductPerformance | dict[str, Any]],
     context: ContextObject | None = None,
 ) -> UpdatePerformanceIndexRequest:
     """Build an UpdatePerformanceIndexRequest from individual wire params.
 
-    Coerces dict performance_data into ProductPerformance objects and translates
-    Pydantic ValidationError into AdCPValidationError. Shared by both transport
-    wrappers (MCP + A2A) so the construction + error translation lives in one place.
-    """
-    from src.core.schemas import ProductPerformance
+    Entries arrive TYPED from MCP -- the advertised shape derives from the DTO, whose
+    performance_data is list[ProductPerformance], so FastMCP validates the buyer's JSON into
+    models before the call -- and as raw dicts from A2A and REST, which hand the builder the
+    wire payload. model_validate reads both; ``ProductPerformance(**perf)`` read only dicts
+    and raised ``argument after ** must be a mapping, not ProductPerformance`` on MCP,
+    i.e. an untyped 500 on the exact payload our published schema documents.
 
+    This is the second instance of one class: the DTO's TYPE is adopted at the boundary while
+    the builder stays narrow. The first was update_media_buy.budget. Both were named in a
+    27-entry type-divergence ledger that was deleted rather than worked through -- correctly,
+    since a type mismatch is a bug and not something to record, but the deletion only settled
+    the entry that had a test.
+    """
     with adcp_validation_boundary(context="update_performance_index request"):
-        performance_objects = [ProductPerformance(**perf) for perf in performance_data]
+        performance_objects = [ProductPerformance.model_validate(perf) for perf in performance_data]
         return UpdatePerformanceIndexRequest(
             media_buy_id=media_buy_id, performance_data=performance_objects, context=context
         )

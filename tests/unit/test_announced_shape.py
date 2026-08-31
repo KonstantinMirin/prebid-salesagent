@@ -296,6 +296,38 @@ class TestAdvertisedTypesAreAccepted:
             "silently re-denominate the buy, which is worse than the TypeError it replaced"
         )
 
+    def test_the_typed_performance_entries_we_advertise_are_accepted(self) -> None:
+        """The SECOND instance of this class, which the budget fix alone did not settle.
+
+        update_performance_index advertises performance_data as list[ProductPerformance]
+        (the DTO's type), so FastMCP validates the buyer's JSON into MODELS before the call.
+        The builder then did ``ProductPerformance(**perf)`` and raised "argument after **
+        must be a mapping, not ProductPerformance" -- an untyped 500 on MCP, while A2A and
+        REST passed because they hand the builder raw dicts.
+
+        Both this and budget were named in a 27-entry type-divergence ledger. The ledger was
+        deleted rather than worked through, which was right -- a type mismatch is a bug, not
+        something to record -- but only the entry that had a test got fixed. This is that
+        test for the other entry.
+        """
+        from src.core.schemas import ProductPerformance
+        from src.core.tools.performance import _build_update_performance_index_request
+
+        req = _build_update_performance_index_request(
+            "mb_1", [ProductPerformance(product_id="p1", performance_index=1.2)]
+        )
+
+        assert len(req.performance_data) == 1
+        assert req.performance_data[0].product_id == "p1"
+
+    def test_the_dict_performance_entries_still_work(self) -> None:
+        """A2A and REST hand the builder wire dicts; the fix must read both shapes."""
+        from src.core.tools.performance import _build_update_performance_index_request
+
+        req = _build_update_performance_index_request("mb_1", [{"product_id": "p1", "performance_index": 1.2}])
+
+        assert req.performance_data[0].product_id == "p1"
+
     def test_the_bare_number_form_still_works(self) -> None:
         """The scalar form must keep reaching _impl as a bare float.
 
