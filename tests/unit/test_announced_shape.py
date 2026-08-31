@@ -211,8 +211,15 @@ def test_unimplemented_dto_fields_are_never_advertised(tool_name: str) -> None:
 
     leaked = advertised & unimplemented
     assert not leaked, f"{tool_name} advertises {sorted(leaked)}, which it does not accept"
-    assert advertised == accepted, (
-        f"{tool_name} advertises {sorted(advertised ^ accepted)} differently from what it accepts"
+
+    # The rule is an INTERSECTION, in both directions:
+    #   a DTO field the tool does not accept  -> not advertised (not implemented)
+    #   a tool parameter the DTO does not declare -> not advertised (not in the spec)
+    expected = set(model.model_fields) & accepted
+    assert advertised == expected, (
+        f"{tool_name} advertises {sorted(advertised ^ expected)} outside "
+        f"(DTO fields INTERSECT accepted parameters). Non-spec parameters must not be "
+        f"advertised, and neither must DTO fields the tool cannot take."
     )
 
 

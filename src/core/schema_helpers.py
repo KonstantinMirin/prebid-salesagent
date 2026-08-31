@@ -10,8 +10,7 @@ Philosophy:
 - Custom logic (validators, conversions) lives here, not in wrapper classes
 """
 
-import inspect
-from collections.abc import Callable, Mapping
+from collections.abc import Container, Mapping
 from typing import Any
 from urllib.parse import urlparse
 
@@ -274,69 +273,38 @@ def create_get_products_request(
 _VERSION_ENVELOPE_FIELDS = frozenset({"adcp_version", "adcp_major_version"})
 
 
-def select_request_fields(model: type[BaseModel], source: BaseModel | Mapping[str, Any]) -> dict[str, Any]:
-    """Select a request model's own fields out of a transport's raw parameter bag.
+def select_request_fields(
+    model: type[BaseModel],
+    source: BaseModel | Mapping[str, Any],
+    accepted: "Container[str] | None" = None,
+) -> dict[str, Any]:
+    """The DTO's fields, out of a transport's raw bag, narrowed to what the callee accepts.
 
-    A transport wrapper that names each field it forwards is the shape that silently drops
-    every field added later: the request model grows, the wrapper does not, and the buyer's
-    value vanishes with no error. That is how sync_accounts' spec-required idempotency_key
-    came to behave three different ways on three transports (salesagent-e8wt.1), and how
-    list_creative_formats' A2A handler still dropped two of its builder's kwargs after a
-    shared builder had already been introduced.
+    ONE rule, everywhere: the request DTO is the vocabulary, and ``accepted`` (the callee's
+    parameter names, when it takes fewer) removes what is declared but NOT IMPLEMENTED. So
+    the set a transport forwards is ``DTO fields INTERSECT _impl arguments`` -- which is the
+    same set the MCP tool advertises (see ``tools/_announced_shape.py``). Announcement and
+    acceptance cannot drift because they are computed from the same two artifacts.
 
-    Selecting by ``model_fields`` cannot drift -- a newly declared field is forwarded the
-    moment it exists. ``source`` may be a REST body model or an A2A ``parameters`` dict;
-    keys the request model does not declare are left behind, as are the version-envelope
-    fields (see ``_VERSION_ENVELOPE_FIELDS``), and ``None`` values are dropped so the model's
-    own defaults apply.
+    Two consequences worth stating, because both replaced earlier machinery:
+
+    * There is no plumbing denylist. ``ctx``/``identity``/``self``/``req`` are not DTO
+      fields, so buyer input can never be selected into them. A previous signature-keyed
+      selector needed an explicit denylist precisely because it keyed off the wrong
+      artifact; keying off the DTO makes the exclusion structural.
+    * A key the DTO does not declare is simply not forwarded -- no allowlist, no ledger.
+      Non-spec input stops at the boundary instead of being quietly honoured.
+
+    Version-envelope fields are excluded (see ``_VERSION_ENVELOPE_FIELDS``): the transports
+    spell them incompatibly and they are negotiated at the boundary, not carried as request
+    data. A tool that genuinely negotiates on them forwards them explicitly.
+    ``None`` values are dropped so the model's own defaults apply.
     """
     values = source.model_dump(exclude_none=True) if isinstance(source, BaseModel) else source
-    return {
-        name: value
-        for name, value in values.items()
-        if name in model.model_fields and name not in _VERSION_ENVELOPE_FIELDS and value is not None
-    }
-
-
-#: Transport plumbing and identity -- never buyer request data. Excluded from
-#: ``select_builder_kwargs`` because that helper selects by the FUNCTION SIGNATURE, and a
-#: raw wrapper's signature contains ``ctx``/``identity`` alongside its request params. A
-#: buyer bag carrying an ``identity`` key would otherwise be forwarded as a real kwarg --
-#: either colliding with the identity the transport resolved (TypeError) or, worse, being
-#: accepted as one. Identity is resolved at the boundary and passed explicitly; it is never
-#: selected out of buyer input.
-_NON_REQUEST_PARAMS = frozenset({"ctx", "self", "identity", "req"})
-
-
-def select_builder_kwargs(builder: Callable[..., Any], source: BaseModel | Mapping[str, Any]) -> dict[str, Any]:
-    """Select the kwargs a ``build_*_request`` helper actually accepts, out of a raw bag.
-
-    The companion to ``select_request_fields``, for the case where the builder's signature
-    and the request model's fields are NOT the same set. ``build_list_creative_formats_request``
-    is the live example: ``ListCreativeFormatsRequest`` declares ``ext``, ``pagination``,
-    ``property_id`` and ``publisher_domain``, and the builder takes none of them. Selecting
-    by ``model_fields`` there would hand the builder four kwargs it cannot accept and turn a
-    key that is merely IGNORED today into a ``TypeError`` -- a buyer-visible 500 on a
-    spec-conformant payload, which is a worse failure than the drop it was meant to fix.
-
-    So the builder's own signature is the contract: whatever it declares is forwarded, the
-    rest is left behind exactly as it is today. A field added to the builder later is picked
-    up the moment it exists, which is the drift-proofing that matters.
-
-    Version-envelope fields are excluded on the same grounds as ``select_request_fields``
-    (see ``_VERSION_ENVELOPE_FIELDS``), and ``None`` values are dropped so the builder's own
-    defaults apply.
-    """
-    values = source.model_dump(exclude_none=True) if isinstance(source, BaseModel) else source
-    accepted = inspect.signature(builder).parameters
-    return {
-        name: value
-        for name, value in values.items()
-        if name in accepted
-        and name not in _VERSION_ENVELOPE_FIELDS
-        and name not in _NON_REQUEST_PARAMS
-        and value is not None
-    }
+    names = set(model.model_fields) - _VERSION_ENVELOPE_FIELDS
+    if accepted is not None:
+        names &= set(accepted)
+    return {name: value for name, value in values.items() if name in names and value is not None}
 
 
 __all__ = [
@@ -351,7 +319,6 @@ __all__ = [
     "coerce_creative_filters",
     "create_get_products_request",
     "select_request_fields",
-    "select_builder_kwargs",
     # Re-export types for type hints
     "BrandReference",
     "CreativeFilters",

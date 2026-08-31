@@ -7,6 +7,7 @@ and applies version compat at the boundary.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 from typing import TYPE_CHECKING, Any
@@ -24,7 +25,6 @@ from fastapi import APIRouter, Depends, Request
 from src.core.auth_context import require_auth, resolve_auth
 from src.core.schema_helpers import (
     coerce_creative_filters,
-    select_builder_kwargs,
     select_request_fields,
     to_account_reference,
     to_brand_reference,
@@ -292,13 +292,19 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
     ``ToolError`` propagates to the global handler in ``src.app`` for envelope
     translation; no defensive catch needed here.
     """
+    from src.core.schemas import GetProductsRequest
+
     with adcp_validation_boundary(context="get_products request"):
         # Selected off the BUILDER's signature, not GetProductsRequest's fields: the model
         # declares 13 fields this builder does not take (catalog, refine, pagination, ...),
         # and handing it those would turn a key that is ignored today into a TypeError --
         # a 500 on a spec-conformant payload (salesagent-prkv.5 Lane D / F3).
         req = products_module.create_get_products_request(
-            **select_builder_kwargs(products_module.create_get_products_request, body)
+            **select_request_fields(
+                GetProductsRequest,
+                body,
+                inspect.signature(products_module.create_get_products_request).parameters,
+            )
         )
     response = await products_module._get_products_impl(req, identity)
     result = response.model_dump(mode="json")

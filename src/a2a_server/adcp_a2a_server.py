@@ -5,6 +5,7 @@ Supports both standard A2A message format and JSON-RPC 2.0.
 """
 
 import copy
+import inspect
 import json
 import logging
 import uuid
@@ -73,7 +74,6 @@ from src.core.exceptions import (
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import (
     coerce_creative_filters,
-    select_builder_kwargs,
     select_request_fields,
     to_account_reference,
     to_brand_reference,
@@ -127,6 +127,16 @@ from src.core.webhook_validator import (
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
+
+
+#: Accepted-kwarg sets captured AT IMPORT from the real core functions. Handlers select
+#: against these rather than reading inspect.signature off the module attribute at call
+#: time: tests patch these names with Mocks, whose signature is (*args, **kwargs) and admits
+#: NOTHING, so a signature read at call time silently drops every field the buyer sent.
+from src.core.schemas import ListCreativesRequest, UpdateMediaBuyRequest  # noqa: E402
+
+_LIST_CREATIVES_KWARGS = frozenset(inspect.signature(core_list_creatives_tool).parameters)
+_UPDATE_MEDIA_BUY_KWARGS = frozenset(inspect.signature(core_update_media_buy_tool).parameters)
 
 
 def _require_params(params: dict, required: list[str], *, field: str | None = None) -> None:
@@ -1896,7 +1906,7 @@ class AdCPRequestHandler(RequestHandler):
         # exposing them on A2A remains a deferred, buyer-visible change.
         # `filters` is set explicitly AFTER selection because it needs typed coercion
         # (invalid filters must raise AdCPValidationError, not reach the impl as a dict).
-        selected = select_builder_kwargs(core_list_creatives_tool, parameters)
+        selected = select_request_fields(ListCreativesRequest, parameters, _LIST_CREATIVES_KWARGS)
         selected["filters"] = filters
         response = core_list_creatives_tool(**selected, identity=identity)
 
@@ -2005,6 +2015,7 @@ class AdCPRequestHandler(RequestHandler):
         # Identity already resolved at transport boundary (on_message_send)
 
         # Build request from parameters (all optional).
+        from src.core.schemas import ListCreativeFormatsRequest
         from src.core.tools.creative_formats import build_list_creative_formats_request
 
         # Same context string as the REST route's boundary so buyer-invalid
@@ -2014,7 +2025,11 @@ class AdCPRequestHandler(RequestHandler):
         # all of which ListCreativeFormatsRequest declares (salesagent-prkv.5 Lane D).
         with adcp_validation_boundary(context="list_creative_formats request"):
             req = build_list_creative_formats_request(
-                **select_builder_kwargs(build_list_creative_formats_request, parameters)
+                **select_request_fields(
+                    ListCreativeFormatsRequest,
+                    parameters,
+                    inspect.signature(build_list_creative_formats_request).parameters,
+                )
             )
 
         # Call core function with identity
@@ -2088,7 +2103,6 @@ class AdCPRequestHandler(RequestHandler):
         # Identity already resolved at transport boundary (on_message_send)
 
         # Parse parameters into typed request model (validation at A2A boundary)
-        from src.core.schemas import UpdateMediaBuyRequest
 
         # Pre-process: support legacy 'updates.packages' → 'packages'
         params = {**parameters}
@@ -2120,7 +2134,7 @@ class AdCPRequestHandler(RequestHandler):
         # update-media-buy-request.json /required, so a spec-conformant A2A buyer's
         # at-most-once key was being discarded, the same defect class as salesagent-e8wt.1.
         # media_buy_id comes from the validated model; the rest of the bag is selected.
-        selected = select_builder_kwargs(core_update_media_buy_tool, params)
+        selected = select_request_fields(UpdateMediaBuyRequest, params, _UPDATE_MEDIA_BUY_KWARGS)
         selected["media_buy_id"] = req.media_buy_id or ""
         response = core_update_media_buy_tool(**selected, identity=identity)
 

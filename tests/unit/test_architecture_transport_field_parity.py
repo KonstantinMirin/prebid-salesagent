@@ -33,6 +33,8 @@ import re
 
 import pytest
 
+from tests.unit._architecture_helpers import iter_call_expressions
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 A2A_SERVER = REPO_ROOT / "src/a2a_server/adcp_a2a_server.py"
 API_V1 = REPO_ROOT / "src/routes/api_v1.py"
@@ -108,17 +110,16 @@ def _consumes_bag_wholesale(node: ast.AST) -> bool:
     divergence comparison entirely -- the exemption is the strongest thing this guard can
     grant, so it must come from an actual call.
     """
-    for sub in ast.walk(node):
-        if isinstance(sub, ast.Call):
-            func = sub.func
-            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
-            if name in _WHOLESALE_CALLS:
-                return True
-            for keyword in sub.keywords:
-                # ``**parameters`` is a keyword with arg=None.
-                if keyword.arg is None and isinstance(keyword.value, ast.Name):
-                    if keyword.value.id in _WHOLESALE_SPLATS:
-                        return True
+    for call in iter_call_expressions(node):
+        func = call.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+        if name in _WHOLESALE_CALLS:
+            return True
+        for keyword in call.keywords:
+            # ``**parameters`` is a keyword with arg=None.
+            if keyword.arg is None and isinstance(keyword.value, ast.Name):
+                if keyword.value.id in _WHOLESALE_SPLATS:
+                    return True
     return False
 
 
@@ -256,6 +257,30 @@ def test_allowlist_entries_cite_a_github_issue() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_model(name: str):
+    """A request model by name: app schemas first (they extend the library types)."""
+    import adcp.types as _sdk
+
+    from src.core import schemas as _app
+
+    return getattr(_app, name, None) or getattr(_sdk, name, None)
+
+
+def _resolve_callable(name: str):
+    """Resolve a callee by DEFINITION site -- these are often imported function-locally."""
+    import importlib
+    import re as _re
+
+    for path in sorted((REPO_ROOT / "src").rglob("*.py")):
+        if not _re.search(rf"^(async )?def {_re.escape(name)}\(", path.read_text(), _re.M):
+            continue
+        module = importlib.import_module(str(path.relative_to(REPO_ROOT)).removesuffix(".py").replace("/", "."))
+        found = getattr(module, name, None)
+        if found is not None:
+            return found
+    return None
+
+
 class TestDetectorMetaTests:
     """Positive, negative, and near-miss cases for the AST detectors."""
 
@@ -324,107 +349,68 @@ class TestDetectorMetaTests:
         assert fields == {"alpha", "beta"}
 
     def test_builder_kwargs_match_their_request_models(self) -> None:
-        """A builder splatted with ``select_request_fields(Model, ...)`` must accept every
-        field of Model -- otherwise a newly declared field becomes a TypeError at request
-        time instead of being forwarded.
+        """An UNNARROWED model splat requires the callee to accept every DTO field.
 
-        The rule is CONDITIONAL ON THE SELECTOR, which is the whole point. Two builders
-        deliberately accept LESS than their model declares (``create_get_products_request``
-        takes 5 of 18; ``build_list_creative_formats_request`` rejects ext, pagination,
-        property_id and publisher_domain). Splatting those by model_fields would turn a key
-        that is merely IGNORED today into a 500 on a spec-conformant payload, so their call
-        sites use ``select_builder_kwargs``, which selects by SIGNATURE. Asserting full
-        coverage for every builder would therefore demand exactly the change that breaks
-        them; asserting it for none would lose the guarantee where it holds.
-
-        Builders are discovered from the ARTIFACT -- each ``build_*_request`` /
-        ``create_*_request`` and its return annotation -- not from a hand-list, so a new
-        builder is covered the moment it exists (prkv.5 F4).
+        ``select_request_fields(Model, source)`` forwards every field the DTO declares, so
+        a callee that cannot take one raises TypeError the moment a buyer sends it -- a 500
+        on a spec-conformant payload. The three-argument form
+        ``select_request_fields(Model, source, accepted)`` narrows to what the callee takes,
+        so it is safe by construction and is exempt. Arity is read from the AST, not guessed
+        from the text.
         """
         import ast as _ast
-        import importlib
         import inspect
 
-        import adcp.types as _sdk
-
-        from src.core import schemas as _app
-
-        scan_roots = [*sorted(TOOLS_DIR.rglob("*.py")), REPO_ROOT / "src/core/schema_helpers.py"]
-
-        def _resolve(name: str):
-            name = name.strip("\"'")
-            return getattr(_app, name, None) or getattr(_sdk, name, None)
-
-        builders: dict[str, tuple[object, object]] = {}
-        for path in scan_roots:
-            tree = _ast.parse(path.read_text())
-            for node in _ast.walk(tree):
-                if not isinstance(node, _ast.FunctionDef | _ast.AsyncFunctionDef) or not node.returns:
-                    continue
-                if not re.fullmatch(r"_?build_\w+_request|create_\w+_request", node.name):
-                    continue
-                model = _resolve(_ast.unparse(node.returns))
-                if model is None or not hasattr(model, "model_fields"):
-                    continue
-                module = importlib.import_module(str(path.relative_to(REPO_ROOT)).removesuffix(".py").replace("/", "."))
-                fn = getattr(module, node.name, None)
-                if fn is not None:
-                    builders[node.name] = (fn, model)
-
-        assert builders, "discovered no build_*_request at all -- the scan is broken, not the tree"
-
-        # The invariant is not about builders specifically -- it is about ANY callable
-        # splatted with select_request_fields(Model, ...). Our own capabilities conversions
-        # splat get_adcp_capabilities_raw, not its builder, so a builder-only scan would
-        # miss precisely the call sites this lane added.
-        call_sites: set[tuple[str, str, str]] = set()
-        for path in sorted((REPO_ROOT / "src").rglob("*.py")):
-            text = path.read_text()
-            for m in re.finditer(r"(\w+)\(\s*\*\*select_request_fields\(\s*(\w+)", text):
-                call_sites.add((m.group(1), m.group(2), str(path.relative_to(REPO_ROOT))))
-
-        assert call_sites, (
-            "found no select_request_fields splat anywhere in src/ -- either the seam was "
-            "removed or this scan is broken; both are worth failing on."
-        )
-
-        modmap = {
-            str(p.relative_to(REPO_ROOT)): str(p.relative_to(REPO_ROOT)).removesuffix(".py").replace("/", ".")
-            for p in sorted((REPO_ROOT / "src").rglob("*.py"))
-        }
         checked = 0
-        for callee_name, model_name, rel in sorted(call_sites):
-            model = _resolve(model_name)
-            if model is None or not hasattr(model, "model_fields"):
-                continue
-            # Resolve by DEFINITION site, not by the calling module: these callees are
-            # imported function-locally at several call sites, so getattr(caller, name)
-            # is None and a naive lookup silently grades nothing.
-            callee = None
-            for cand in sorted((REPO_ROOT / "src").rglob("*.py")):
-                text_c = cand.read_text()
-                if not re.search(rf"^(async )?def {re.escape(callee_name)}\(", text_c, re.M):
+        narrowed = 0
+        for path in sorted((REPO_ROOT / "src").rglob("*.py")):
+            tree = _ast.parse(path.read_text())
+            # map each select_request_fields call to the callee it is splatted into
+            splat_parent: dict[int, str] = {}
+            for outer in iter_call_expressions(tree):
+                for kw in outer.keywords:
+                    if kw.arg is None and isinstance(kw.value, _ast.Call):
+                        inner = kw.value
+                        fname = (
+                            inner.func.attr
+                            if isinstance(inner.func, _ast.Attribute)
+                            else getattr(inner.func, "id", None)
+                        )
+                        if fname == "select_request_fields":
+                            parent = (
+                                outer.func.attr
+                                if isinstance(outer.func, _ast.Attribute)
+                                else getattr(outer.func, "id", None)
+                            )
+                            if parent:
+                                splat_parent[id(inner)] = parent
+
+            for call in iter_call_expressions(tree, "select_request_fields"):
+                if len(call.args) >= 3:
+                    narrowed += 1
                     continue
-                mod = importlib.import_module(str(cand.relative_to(REPO_ROOT)).removesuffix(".py").replace("/", "."))
-                callee = getattr(mod, callee_name, None)
-                if callee is not None:
-                    break
-            if callee is None:
-                continue
-            kwargs = set(inspect.signature(callee).parameters)
-            if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in inspect.signature(callee).parameters.values()):
-                continue  # **kwargs absorbs anything; nothing to pin
-            missing = set(model.model_fields) - kwargs - NON_REQUEST_PARAMS - _VERSION_ENVELOPE
-            checked += 1
-            assert not missing, (
-                f"{rel}: {callee_name}(**select_request_fields({model_name}, ...)) cannot accept "
-                f"{sorted(missing)} declared on {model_name}; that splat raises TypeError the "
-                f"moment a buyer sends one. Widen the callee, or use select_builder_kwargs, "
-                f"which selects by signature instead."
-            )
-        assert checked >= 4, (
-            f"only {checked} select_request_fields splats were graded; the seam is used at more "
-            f"sites than that, so the scan has gone blind"
+                parent_name = splat_parent.get(id(call))
+                if parent_name is None or not call.args or not isinstance(call.args[0], _ast.Name):
+                    continue
+                model = _resolve_model(call.args[0].id)
+                callee = _resolve_callable(parent_name)
+                if model is None or callee is None:
+                    continue
+                signature = inspect.signature(callee)
+                if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()):
+                    continue  # **kwargs absorbs anything
+                missing = set(model.model_fields) - set(signature.parameters) - _VERSION_ENVELOPE
+                checked += 1
+                assert not missing, (
+                    f"{path.relative_to(REPO_ROOT)}: {parent_name}(**select_request_fields("
+                    f"{call.args[0].id}, ...)) cannot accept {sorted(missing)}; that splat "
+                    f"raises TypeError the moment a buyer sends one. Pass the callee's "
+                    f"accepted parameter names as the third argument to narrow it."
+                )
+
+        assert checked or narrowed, (
+            "found no select_request_fields call in src/ -- either the seam was removed or "
+            "this scan is broken; both are worth failing on."
         )
 
 
