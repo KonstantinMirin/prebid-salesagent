@@ -5930,7 +5930,12 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
     pkg = MediaPackageFactory(media_buy=media_buy)
     env._commit_factory_data()
     ctx["xp_package_id"] = pkg.package_id
-    dispatch_request(ctx, creatives=[], assignments={"creative-xp": [pkg.package_id]}, validation_mode="lenient")
+    dispatch_request(
+        ctx,
+        creatives=[],
+        assignments=[{"creative_id": "creative-xp", "package_id": pkg.package_id}],
+        validation_mode="lenient",
+    )
 
 
 @then("the sync operation should not fail")

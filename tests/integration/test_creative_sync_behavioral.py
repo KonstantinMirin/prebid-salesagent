@@ -354,7 +354,7 @@ class TestValidationModeSemantics:
             result = env.call_via(
                 transport,
                 creatives=[],
-                assignments={"c_never_synced": [pkg.package_id]},
+                assignments=[{"creative_id": "c_never_synced", "package_id": pkg.package_id}],
                 validation_mode="strict",
             )
 
@@ -400,7 +400,7 @@ class TestValidationModeSemantics:
 
             response = env.call_impl(
                 creatives=[],
-                assignments={"c_never_synced": [pkg.package_id]},
+                assignments=[{"creative_id": "c_never_synced", "package_id": pkg.package_id}],
                 validation_mode="lenient",
             )
 
@@ -445,7 +445,7 @@ class TestValidationModeSemantics:
 
             response = env.call_impl(
                 creatives=[],
-                assignments={"c_exists_in_library": ["pkg_does_not_exist"]},
+                assignments=[{"creative_id": "c_exists_in_library", "package_id": "pkg_does_not_exist"}],
                 validation_mode="lenient",
             )
 
@@ -738,7 +738,7 @@ class TestDryRunMode:
             # ...then a PREVIEW carries assignments for it.
             response = env.call_impl(
                 creatives=[_make_creative_asset(creative_id="c_dry_assign", name="Existing")],
-                assignments={"c_dry_assign": [pkg_id]},
+                assignments=[{"creative_id": "c_dry_assign", "package_id": pkg_id}],
                 validation_mode="lenient",
                 dry_run=True,
             )
@@ -1060,7 +1060,7 @@ class TestDryRunPreviewMatchesLiveRun:
             seed=seed,
             setup=setup,
             creatives=payload,
-            assignments={"asg_a": [pkg]},
+            assignments=[{"creative_id": "asg_a", "package_id": pkg}],
             validation_mode="lenient",
         )
 
@@ -1098,7 +1098,7 @@ class TestDryRunPreviewMatchesLiveRun:
             "asg_b",
             setup=setup,
             creatives=payload,
-            assignments={"asg_b": [pkg]},
+            assignments=[{"creative_id": "asg_b", "package_id": pkg}],
             validation_mode="lenient",
         )
 
@@ -1139,7 +1139,7 @@ class TestDryRunPreviewMatchesLiveRun:
             seed=seed,
             setup=setup,
             creatives=payload,
-            assignments={"asg_b2": [pkg]},
+            assignments=[{"creative_id": "asg_b2", "package_id": pkg}],
             validation_mode="lenient",
         )
 
@@ -1161,7 +1161,7 @@ class TestDryRunPreviewMatchesLiveRun:
         preview, live = _preview_and_live(
             "asg_c",
             creatives=payload,
-            assignments={"asg_c": ["pkg_void_c"]},
+            assignments=[{"creative_id": "asg_c", "package_id": "pkg_void_c"}],
             validation_mode="lenient",
         )
 
@@ -1176,7 +1176,7 @@ class TestDryRunPreviewMatchesLiveRun:
         preview, live = _preview_and_live(
             "asg_d",
             creatives=[],
-            assignments={"asg_d_ghost": ["pkg_asg_d"]},
+            assignments=[{"creative_id": "asg_d_ghost", "package_id": "pkg_asg_d"}],
             validation_mode="lenient",
         )
 
@@ -1199,7 +1199,7 @@ class TestDryRunPreviewMatchesLiveRun:
         payload = [_make_creative_asset(creative_id="asg_e", name="Strict")]
         kwargs = {
             "creatives": payload,
-            "assignments": {"asg_e": ["pkg_void_e"]},
+            "assignments": [{"creative_id": "asg_e", "package_id": "pkg_void_e"}],
             "validation_mode": "strict",
         }
 
@@ -1230,7 +1230,7 @@ class TestDryRunPreviewMatchesLiveRun:
             "asg_f",
             setup=setup,
             creatives=payload,
-            assignments={"asg_f": [pkg]},
+            assignments=[{"creative_id": "asg_f", "package_id": pkg}],
             validation_mode="lenient",
         )
 
@@ -1349,7 +1349,7 @@ class TestAssignmentProcessing:
 
             env.call_impl(
                 creatives=[_make_creative_asset(creative_id="c_assign", name="Assigned")],
-                assignments={"c_assign": [pkg_id]},
+                assignments=[{"creative_id": "c_assign", "package_id": pkg_id}],
                 validation_mode="lenient",
             )
 
@@ -1414,7 +1414,10 @@ class TestAssignmentProcessing:
             result = env.call_via(
                 Transport.REST,
                 creatives=[],
-                assignments={"c_owned_by_other": [pkg_id], "c_mine": [pkg_id]},
+                assignments=[
+                    {"creative_id": "c_owned_by_other", "package_id": pkg_id},
+                    {"creative_id": "c_mine", "package_id": pkg_id},
+                ],
                 validation_mode="lenient",
             )
 
@@ -1498,7 +1501,7 @@ class TestAssignmentProcessing:
             result = env.call_via(
                 Transport.REST,
                 creatives=[],
-                assignments={orphan_creative_id: [pkg_id]},
+                assignments=[{"creative_id": orphan_creative_id, "package_id": pkg_id}],
                 validation_mode="lenient",
             )
 
@@ -1548,7 +1551,7 @@ class TestAssignmentProcessing:
             result = env.call_via(
                 Transport.REST,
                 creatives=[],
-                assignments={"c_preexisting": [pkg_id]},
+                assignments=[{"creative_id": "c_preexisting", "package_id": pkg_id}],
                 validation_mode="lenient",
             )
 
@@ -1602,12 +1605,12 @@ class TestAssignmentProcessing:
             # Assign twice
             env.call_impl(
                 creatives=[_make_creative_asset(creative_id="c_idem", name="Idempotent")],
-                assignments={"c_idem": [pkg_id]},
+                assignments=[{"creative_id": "c_idem", "package_id": pkg_id}],
                 validation_mode="lenient",
             )
             env.call_impl(
                 creatives=[_make_creative_asset(creative_id="c_idem", name="Idempotent")],
-                assignments={"c_idem": [pkg_id]},
+                assignments=[{"creative_id": "c_idem", "package_id": pkg_id}],
                 validation_mode="lenient",
             )
 
@@ -1638,7 +1641,7 @@ class TestAssignmentProcessing:
             # Empty name → validation failure → creative is skipped from persistence.
             response = env.call_impl(
                 creatives=[_make_creative_asset(creative_id="c_bad", name="")],
-                assignments={"c_bad": [pkg_id]},
+                assignments=[{"creative_id": "c_bad", "package_id": pkg_id}],
                 validation_mode="lenient",
             )
 
@@ -1672,7 +1675,10 @@ class TestAssignmentProcessing:
                     _make_creative_asset(creative_id="c_ok", name="Valid Creative"),
                     _make_creative_asset(creative_id="c_bad", name=""),  # invalid
                 ],
-                assignments={"c_ok": [pkg_id], "c_bad": [pkg_id]},
+                assignments=[
+                    {"creative_id": "c_ok", "package_id": pkg_id},
+                    {"creative_id": "c_bad", "package_id": pkg_id},
+                ],
                 validation_mode="lenient",
             )
 
@@ -1856,7 +1862,7 @@ class TestSyncExtensions:
 
             response = env.call_impl(
                 creatives=[_make_creative_asset(creative_id="c1", name="OK Creative")],
-                assignments={"c1": ["missing_pkg"]},
+                assignments=[{"creative_id": "c1", "package_id": "missing_pkg"}],
                 validation_mode="lenient",
             )
 
@@ -1874,7 +1880,7 @@ class TestSyncExtensions:
             with pytest.raises(AdCPNotFoundError):
                 env.call_impl(
                     creatives=[_make_creative_asset(creative_id="c1", name="OK")],
-                    assignments={"c1": ["PKG-GONE"]},
+                    assignments=[{"creative_id": "c1", "package_id": "PKG-GONE"}],
                     validation_mode="strict",
                 )
 
@@ -1906,7 +1912,7 @@ class TestSyncExtensions:
                             format_id=AdcpFormatId(agent_url=DEFAULT_AGENT_URL, id="video_30s"),
                         )
                     ],
-                    assignments={"c_vid": [pkg_id]},
+                    assignments=[{"creative_id": "c_vid", "package_id": pkg_id}],
                     validation_mode="strict",
                 )
 
@@ -1935,7 +1941,7 @@ class TestSyncExtensions:
                         format_id=AdcpFormatId(agent_url=DEFAULT_AGENT_URL, id="video_30s"),
                     )
                 ],
-                assignments={"c_vid": [pkg_id]},
+                assignments=[{"creative_id": "c_vid", "package_id": pkg_id}],
                 validation_mode="lenient",
             )
 
@@ -2084,7 +2090,7 @@ class TestMediaBuyStatusOnSync:
 
             env.call_impl(
                 creatives=[_make_creative_asset(creative_id="c_mb", name="MB Test")],
-                assignments={"c_mb": [pkg_id]},
+                assignments=[{"creative_id": "c_mb", "package_id": pkg_id}],
                 validation_mode="lenient",
             )
 
@@ -2115,7 +2121,7 @@ class TestMediaBuyStatusOnSync:
 
             env.call_impl(
                 creatives=[_make_creative_asset(creative_id="c_mb2", name="MB Test 2")],
-                assignments={"c_mb2": [pkg_id]},
+                assignments=[{"creative_id": "c_mb2", "package_id": pkg_id}],
                 validation_mode="lenient",
             )
 
@@ -2148,7 +2154,7 @@ class TestMediaBuyStatusOnSync:
 
             env.call_impl(
                 creatives=[_make_creative_asset(creative_id="c_mb3", name="MB Test 3")],
-                assignments={"c_mb3": [pkg_id]},
+                assignments=[{"creative_id": "c_mb3", "package_id": pkg_id}],
                 validation_mode="lenient",
             )
 
@@ -2182,13 +2188,13 @@ class TestMediaBuyStatusOnSync:
             # First assignment
             env.call_impl(
                 creatives=[_make_creative_asset(creative_id="c_upsert_mb", name="Upsert MB")],
-                assignments={"c_upsert_mb": [pkg_id]},
+                assignments=[{"creative_id": "c_upsert_mb", "package_id": pkg_id}],
                 validation_mode="lenient",
             )
             # Second assignment (upsert) — status transition should still work
             env.call_impl(
                 creatives=[_make_creative_asset(creative_id="c_upsert_mb", name="Upsert MB")],
-                assignments={"c_upsert_mb": [pkg_id]},
+                assignments=[{"creative_id": "c_upsert_mb", "package_id": pkg_id}],
                 validation_mode="lenient",
             )
 
@@ -2237,7 +2243,7 @@ class TestFormatCompatibilityExtended:
                         format_id=AdcpFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250"),
                     )
                 ],
-                assignments={"c_norm": [pkg.package_id]},
+                assignments=[{"creative_id": "c_norm", "package_id": pkg.package_id}],
                 validation_mode="strict",
             )
 
@@ -2269,7 +2275,7 @@ class TestFormatCompatibilityExtended:
                         format_id=AdcpFormatId(agent_url="https://random.agent.com", id="exotic_format"),
                     )
                 ],
-                assignments={"c_any_fmt": [pkg.package_id]},
+                assignments=[{"creative_id": "c_any_fmt", "package_id": pkg.package_id}],
                 validation_mode="strict",
             )
 
@@ -2302,7 +2308,7 @@ class TestFormatCompatibilityExtended:
                         format_id=AdcpFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250"),
                     )
                 ],
-                assignments={"c_dual": [pkg.package_id]},
+                assignments=[{"creative_id": "c_dual", "package_id": pkg.package_id}],
                 validation_mode="strict",
             )
 
@@ -2328,7 +2334,7 @@ class TestFormatCompatibilityExtended:
                         name="No Product Check",
                     )
                 ],
-                assignments={"c_no_prod": [pkg.package_id]},
+                assignments=[{"creative_id": "c_no_prod", "package_id": pkg.package_id}],
                 validation_mode="strict",
             )
 

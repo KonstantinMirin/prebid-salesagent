@@ -718,3 +718,57 @@ class TestAssignmentsListFormNormalization:
         )
 
         assert assignment_list == []
+
+
+class TestTypedAssignmentsAreHonored:
+    """Assignments must survive arriving as TYPED objects, not only as raw dicts.
+
+    The normalisation that turns the AdCP 3.1 array into the internal
+    ``{creative_id: [package_ids]}`` map read entries with ``isinstance(entry, dict)``. Every
+    transport whose shape is derived from the DTO delivers ``Assignment`` MODELS, so each
+    entry failed that test, the coerced map stayed empty, and the code then treated an empty
+    map as "no assignments given" -- setting ``assignments = None``.
+
+    The buyer's assignments were therefore dropped in full, with no error, no failed result
+    and no log line: the response looked like a successful sync that simply assigned nothing.
+    Adopting the DTO at the boundary is exactly what changed dicts into models, so the defect
+    arrived silently with the announcement work rather than with any change to this file.
+    """
+
+    def test_typed_assignment_models_are_normalised(self) -> None:
+        from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
+
+        from src.core.tools.creatives._assignments import _normalise_assignments
+
+        got = _normalise_assignments(
+            [
+                Assignment(creative_id="c1", package_id="pkg_a"),
+                Assignment(creative_id="c1", package_id="pkg_b"),
+                Assignment(creative_id="c2", package_id="pkg_a"),
+            ]
+        )
+
+        assert got == {"c1": ["pkg_a", "pkg_b"], "c2": ["pkg_a"]}, (
+            f"typed entries must normalise like dict entries; got {got}. An empty result here "
+            f"is the silent-drop bug: the caller reads it as 'no assignments requested'."
+        )
+
+    def test_raw_dict_entries_still_work(self) -> None:
+        """Hand-built lists stay supported -- the fix widens, it does not swap one shape for another."""
+        from src.core.tools.creatives._assignments import _normalise_assignments
+
+        assert _normalise_assignments([{"creative_id": "c1", "package_id": "pkg_a"}]) == {"c1": ["pkg_a"]}
+
+    def test_an_unreadable_entry_is_reported_not_swallowed(self, caplog) -> None:
+        """An entry we cannot apply is a buyer instruction we are not carrying out."""
+        import logging
+
+        from src.core.tools.creatives._assignments import _normalise_assignments
+
+        with caplog.at_level(logging.WARNING):
+            got = _normalise_assignments([{"creative_id": "c1"}])  # no package_id
+
+        assert got == {}
+        assert any("could not be applied" in r.getMessage() for r in caplog.records), (
+            "an undeliverable assignment must be said out loud"
+        )

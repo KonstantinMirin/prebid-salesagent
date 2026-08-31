@@ -32,6 +32,42 @@ def _resolve_creative_for_assignment(assignment_repo, creative_id: str, principa
     return assignment_repo.get_creative_by_id(creative_id, principal_id)
 
 
+def _normalise_assignments(entries: list[Any]) -> dict[str, list[str]]:
+    """The AdCP 3.1 assignment ARRAY, as the internal ``{creative_id: [package_ids]}`` map.
+
+    Entries arrive TYPED (adcp ``Assignment``) from every transport whose shape is derived
+    from the DTO, and as raw dicts from callers that build the list by hand. Both must work.
+
+    Reading only dicts is what made this a silent defect: typed entries failed the isinstance
+    check, the map came back empty, and the caller read an empty map as "no assignments
+    requested" -- so a buyer's assignments vanished with no error, no failed result and no log
+    line, behind a response that looked like a clean sync. Adopting the DTO at the boundary is
+    precisely what turned those dicts into models, so the failure arrived with the
+    announcement work rather than with any edit here.
+    """
+    coerced: dict[str, list[str]] = {}
+    dropped = 0
+    for entry in entries:
+        if isinstance(entry, dict):
+            creative_id, package_id = entry.get("creative_id"), entry.get("package_id")
+        else:
+            creative_id = getattr(entry, "creative_id", None)
+            package_id = getattr(entry, "package_id", None)
+        if creative_id and package_id:
+            coerced.setdefault(creative_id, []).append(package_id)
+        else:
+            dropped += 1
+    if dropped:
+        # Never silent: an entry we cannot read is a buyer instruction we are not carrying
+        # out, so it is said out loud rather than left to be inferred from a short result.
+        logger.warning(
+            "sync_creatives: %d assignment entr%s lacked a readable creative_id/package_id and could not be applied",
+            dropped,
+            "y" if dropped == 1 else "ies",
+        )
+    return coerced
+
+
 def _process_assignments(
     assignments: dict | list | None,
     results: list[SyncCreativeResult],
@@ -73,10 +109,7 @@ def _process_assignments(
     # AdCP v3 spec defines assignments as list[{creative_id, package_id, ...}];
     # normalise to dict form {creative_id: [package_ids]} for internal processing.
     if assignments and isinstance(assignments, list):
-        coerced: dict[str, list[str]] = {}
-        for entry in assignments:
-            if isinstance(entry, dict) and "creative_id" in entry and "package_id" in entry:
-                coerced.setdefault(entry["creative_id"], []).append(entry["package_id"])
+        coerced = _normalise_assignments(assignments)
         assignments = coerced if coerced else None
 
     # Creatives whose sync failed were never persisted; we must not attempt to

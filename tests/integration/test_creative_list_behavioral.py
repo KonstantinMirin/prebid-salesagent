@@ -17,6 +17,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from adcp.types import CreativeFilters
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from tests.factories import (
@@ -725,8 +726,16 @@ class TestListTransportParity:
                 status="approved",
             )
 
-            impl_response = env.call_impl(status="approved")
-            mcp_response = env.call_mcp(status="approved")
+            # Spec vocabulary (AdCP 3.1.1): status is a member of `filters`, not a
+            # top-level request field. The flat spelling was retired with the rest of the
+            # non-spec surface; the MCP path rejects it at the wire (VALIDATION_ERROR on
+            # /status, additionalProperties) precisely because the announced shape is now
+            # derived from the DTO. call_impl still tolerated the flat form, which is why
+            # only the wire-crossing half of this parity test failed.
+            # call_impl takes the TYPED filter (it hands the object straight to _impl);
+            # call_mcp takes the wire dict, which FastMCP coerces. Same field either way.
+            impl_response = env.call_impl(filters=CreativeFilters(status=["approved"]))
+            mcp_response = env.call_mcp(filters={"status": ["approved"]})
 
         assert len(impl_response.creatives) == len(mcp_response.creatives)
         assert impl_response.creatives[0].creative_id == mcp_response.creatives[0].creative_id

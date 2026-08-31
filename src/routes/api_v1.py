@@ -34,6 +34,7 @@ from src.core.schema_helpers import (
 )
 from src.core.schemas import ListCreativesRequest as ListCreativesRequestDTO
 from src.core.schemas import SalesAgentBaseModel
+from src.core.schemas.creative import SyncCreativesRequest as LocalSyncCreativesRequest
 from src.core.tools import accounts as accounts_module
 from src.core.tools import capabilities as capabilities_module
 from src.core.tools import creative_formats as creative_formats_module
@@ -171,17 +172,16 @@ class GetMediaBuysBody(SalesAgentBaseModel):
     adcp_version: str = "1.0.0"
 
 
-class SyncCreativesBody(SalesAgentBaseModel):
-    creatives: list[dict[str, Any]] = []
-    assignments: dict[str, Any] | None = None
-    creative_ids: list[str] | None = None
-    delete_missing: bool = False
-    dry_run: bool = False
-    validation_mode: str = "strict"
-    push_notification_config: dict[str, Any] | None = None
-    context: dict[str, Any] | None = None
-    account: dict[str, Any] | None = None  # AccountReference; resolved at the transport boundary
-    adcp_version: str = "1.0.0"
+# DERIVED, like ListCreativesBody below. Hand-written, this class declared
+# `assignments: dict[str, Any]` -- the AdCP 2.5 map form ({creative_id: [package_ids]}),
+# retired in 3.x, which the pinned 3.1 schema replaces with an ARRAY of
+# {creative_id, package_id, weight?, placement_ids?}. MCP announced the 3.1 array (its shape
+# comes from the DTO) while REST went on advertising the 2.5 map, so the SAME spec-conformant
+# payload was accepted on one transport and rejected as INVALID_REQUEST on the other. That is
+# the divergence deriving both from one artifact exists to make unrepresentable.
+SyncCreativesBody = derived_body_model(
+    "SyncCreativesBody", LocalSyncCreativesRequest, creatives_sync_module.sync_creatives_raw
+)
 
 
 # DERIVED, not hand-written: DTO fields INTERSECT list_creatives_raw's parameters, plus the
