@@ -1005,9 +1005,9 @@ def when_evaluate_circuit_breaker(ctx: dict) -> None:
     """
     env = ctx["env"]
     endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
-    ctx["cb_can_attempt"] = env.drive_breaker_transition(endpoint_key)
+    env.drive_breaker_transition(endpoint_key)
     try:
-        ctx["circuit_result"] = env.call_send()
+        env.call_send()
     except Exception as exc:
         ctx["error"] = exc
 

@@ -823,21 +823,27 @@ class CircuitBreakerMixin(LocalOriginMixin):
         """
         self._breaker_for(endpoint_key).last_failure_time = datetime.now(UTC) - timedelta(seconds=seconds)
 
-    def drive_breaker_transition(self, endpoint_key: str) -> bool:
-        """Ask the breaker whether an attempt is allowed, driving OPEN -> HALF_OPEN.
+    def drive_breaker_transition(self, endpoint_key: str) -> None:
+        """Drive the breaker's OPEN -> HALF_OPEN transition. Returns nothing.
 
         ``can_attempt()`` is not a pure read: it is where an OPEN breaker whose
         timeout has elapsed becomes HALF_OPEN, so a scenario that says "the
-        timeout elapsed, now evaluate" must call it to get the transition.
+        timeout elapsed, now evaluate" must call it to get the transition. It is
+        called here for that side effect alone.
 
-        ACKNOWLEDGED RESIDUE: the bool is returned because one consumer,
-        ``then_single_probe`` (tests/bdd/steps/domain/uc004_delivery.py), still
-        asserts on it. That step is outside this lane's six migration sites, and
-        its assertion sits in a branch that immediately ``pytest.xfail``s on a
-        harness gap, so it grades nothing today. Observe the RESULTING STATE via
-        :meth:`breaker_snapshot`; do not add new assertions on this bool.
+        The verdict is deliberately DISCARDED, not returned. Asserting on it
+        would grade the gate's own opinion of itself, which is unfalsifiable
+        across a process boundary — under e2e_rest the breaker being consulted
+        is the test process's, not the server's.
+
+        Observe the CONSEQUENCE instead. :meth:`breaker_snapshot` is the better
+        state read, because it goes through the production public API rather
+        than the private dict — but it resolves the same test-process breaker,
+        so it does not escape that boundary either. The only observation that
+        does is what the endpoint actually saw: an admitted probe, a delivery
+        count.
         """
-        return self._breaker_for(endpoint_key).can_attempt()
+        self._breaker_for(endpoint_key).can_attempt()
 
     def breaker_snapshot(self, endpoint_url: str | None = None) -> tuple[CircuitState, int]:
         """(state, failure_count) for *endpoint_url*, via the PRODUCTION public API.
