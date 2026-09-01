@@ -638,11 +638,18 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     (
         "T-UC-003-partition-targeting-overlay",
         {
-            "unknown_field",
-            "managed_only_dimension",
+            # GRADUATED on every transport: unknown_field, managed_only_dimension and
+            # proximity_method_conflict. The recorded gap was "pydantic extra='forbid'
+            # raising a raw ValidationError before dispatch", i.e. a rejection that never
+            # reached the buyer as an envelope. It does now.
+            #
+            # Reached by measuring three times, not by deleting the entry: a2a xpassed
+            # first, so the rows were split per transport; that run showed mcp xpassing
+            # too; removing mcp showed rest xpassing as well. Splitting first is what made
+            # each transport's evidence separable -- graduating the bare label on a2a's
+            # xpass alone would have been right by luck.
             "multiple_dimensions",
             "device_type_overlap",
-            "proximity_method_conflict",
             "proximity_geometry",
             "proximity_radius",
             "proximity_travel_time",
@@ -655,13 +662,12 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     (
         "T-UC-003-boundary-targeting-overlay",
         {
-            "unknown field name",
-            "managed-only dimension",
+            # GRADUATED on every transport, same three-step measurement as the partition
+            # entry above.
             "device_type include/exclude overlap",
             "with travel_time only",
             "with radius only",
             "with geometry only",
-            "with travel_time AND radius",
             "frequency_cap max_impressions without per",
             "keyword_targets with duplicate",
         },
