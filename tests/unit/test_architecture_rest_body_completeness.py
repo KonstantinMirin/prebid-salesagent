@@ -35,7 +35,6 @@ from adcp.types import GetAdcpCapabilitiesRequest
 
 from src.core.schemas import (
     CreateMediaBuyRequest,
-    GetMediaBuysRequest,
     SalesAgentBaseModel,
     UpdateMediaBuyRequest,
 )
@@ -44,14 +43,12 @@ from src.core.tools.creatives.listing import list_creatives_raw
 from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
 from src.core.tools.media_buy_create import create_media_buy_raw
 from src.core.tools.media_buy_delivery import get_media_buy_delivery_raw
-from src.core.tools.media_buy_list import get_media_buys_raw
 from src.core.tools.media_buy_update import update_media_buy_raw
 from src.core.tools.performance import update_performance_index_raw
 from src.routes.api_v1 import (
     CreateMediaBuyBody,
     GetAdcpCapabilitiesBody,
     GetMediaBuyDeliveryBody,
-    GetMediaBuysBody,
     ListCreativesBody,
     SyncCreativesBody,
     UpdateMediaBuyBody,
@@ -204,14 +201,6 @@ _HAND_WRITTEN_GRADED: list[tuple[type, type, object, frozenset[str], str]] = [
         "a campaign-level Budget, and AdCP 3.1.1 defines no top-level budget on "
         "update_media_buy, so they went with it. The allowlist shrank because the violation "
         "was fixed, not because the rule was widened",
-    ),
-    (
-        GetMediaBuysBody,
-        GetMediaBuysRequest,
-        get_media_buys_raw,
-        frozenset(),
-        "media_buy_ids/status_filter stay Any so _build_get_media_buys_request grades them "
-        "(pinned by test_request_validation_failed[rest])",
     ),
     (
         GetAdcpCapabilitiesBody,

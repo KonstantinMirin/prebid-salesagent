@@ -29,6 +29,7 @@ from src.core.schema_helpers import (
     to_reporting_webhook,
 )
 from src.core.schemas import GetMediaBuyDeliveryRequest as GetMediaBuyDeliveryRequestDTO
+from src.core.schemas import GetMediaBuysRequest as GetMediaBuysRequestDTO
 from src.core.schemas import GetProductsRequest as GetProductsRequestDTO
 from src.core.schemas import ListAuthorizedPropertiesRequest as ListAuthorizedPropertiesRequestDTO
 from src.core.schemas import ListCreativeFormatsRequest as ListCreativeFormatsRequestDTO
@@ -194,30 +195,25 @@ else:
     )
 
 
-class GetMediaBuysBody(SalesAgentBaseModel):
-    # NOT DERIVED, deliberately -- the one body in this file where the DTO's own
-    # annotations must NOT reach the wire.
+if TYPE_CHECKING:
+    # TYPE-CHECKER ONLY; the runtime class is the derivation in the else branch.
+    class GetMediaBuysBody(DerivedBodyEnvelope, GetMediaBuysRequestDTO): ...
+
+else:
+    # DERIVED. It was hand-written to keep media_buy_ids/status_filter as ``Any``, because a
+    # typed field made FastAPI reject a bad value with INVALID_REQUEST while mcp and a2a
+    # rejected the same request inside adcp_validation_boundary with VALIDATION_ERROR --
+    # one request, two codes, chosen by transport.
     #
-    # `Any`, not `list[str] | None`, and for the same reason status_filter is Any:
-    # a typed field here makes FASTAPI reject a bad value before any AdCP code
-    # runs, which returns INVALID_REQUEST, while MCP and A2A reject the identical
-    # request inside adcp_validation_boundary and return VALIDATION_ERROR. Same
-    # request, two different codes depending on transport -- exactly what "each
-    # transport returns the same typed response" forbids. Keeping it permissive
-    # defers validation to the ONE shared boundary in _build_get_media_buys_request,
-    # so all three answer alike. Surfaced by test_request_validation_failed[rest]
-    # once UC-019 regained REST coverage.
-    #
-    # The FIELD SET is still graded against the DTO -- see
-    # test_hand_written_bodies_carry_the_derived_field_set in
-    # tests/unit/test_architecture_rest_body_completeness.py -- so this exemption
-    # buys permissive TYPES, not the freedom to drop a field.
-    media_buy_ids: Any = None
-    status_filter: Any = None
-    include_snapshot: bool | None = None
-    account: dict[str, Any] | None = None
-    context: dict[str, Any] | None = None
-    adcp_version: str | None = None
+    # That premise no longer holds: adcp_error_for maps a pydantic ValidationError to
+    # AdCPInvalidRequestError, so the boundary answers INVALID_REQUEST too, and
+    # src/app.py no longer special-cases which FastAPI rejections get which code. The
+    # transports agree, so the body can carry the DTO's own types instead of hiding them.
+    GetMediaBuysBody = derived_body_model(
+        "GetMediaBuysBody",
+        GetMediaBuysRequestDTO,
+        media_buy_list_module.get_media_buys_raw,
+    )
 
 
 # DERIVED, like ListCreativesBody below. Hand-written, this class declared
