@@ -704,6 +704,17 @@ def _update_media_buy_impl(
                     # Fall back to the current state-machine target only if the DB
                     # row is missing (e.g., adapter deleted it under us) — no row
                     # means no dates to refine.
+                    # Persist the pause/resume OURSELVES. The adapter call above changes the
+                    # ad server, not our row -- and this branch wrote nothing, so two things
+                    # were silently lost. ``is_paused`` is read by _adcp_status_and_actions
+                    # to derive the status we report, so a paused buy kept reporting as
+                    # un-paused; and ``revision`` is the buyer's optimistic-concurrency
+                    # token, which update-media-buy-response.json defines as "Revision
+                    # number after this update", so the response returned the value from
+                    # BEFORE the write. update_fields sets the column, bumps the revision and
+                    # flushes, so the read below sees both.
+                    uow.media_buys.update_fields(media_buy_id, is_paused=bool(req.paused))
+
                     _post_action_mb = uow.media_buys.get_by_id_or_raise(media_buy_id, context=req.context)
                     _post_action_revision = _post_action_mb.revision
                     _post_action_mbs, _post_action_actions = _adcp_status_and_actions(_post_action_mb)
