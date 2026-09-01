@@ -1181,12 +1181,20 @@ def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPSalesAgentEr
     if isinstance(exc, AdCPSalesAgentError):
         _log_internal_detail(exc)
         return exc
+    # A pydantic ValidationError is BY CONSTRUCTION a schema-constraint violation, and
+    # 3.1/enums/error-code.json is explicit about which code that earns:
+    #   INVALID_REQUEST  "malformed, missing required fields, or violates SCHEMA CONSTRAINTS"
+    #   VALIDATION_ERROR "invalid field values or violates business rules BEYOND schema validation"
+    # So this branch maps to INVALID_REQUEST; the plain-ValueError branch below stays
+    # VALIDATION_ERROR, because a ValueError our own business logic raises is exactly the
+    # "beyond schema validation" case. REST already answered INVALID_REQUEST here, so this
+    # also closes the MCP/A2A-vs-REST divergence rather than merely documenting it.
     if isinstance(exc, ValidationError):
         # ValidationError is checked BEFORE ValueError deliberately: a pydantic
         # ValidationError IS a ValueError subclass, so the order decides whether a
         # buyer gets the field and issues or a bare VALIDATION_ERROR.
         errors = exc.errors()
-        return AdCPValidationError(
+        return AdCPInvalidRequestError(
             field=field if field is not None else first_validation_error_field(exc),
             issues=issues_from_validation_error(errors),
         )

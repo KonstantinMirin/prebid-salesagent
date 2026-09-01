@@ -386,7 +386,7 @@ class TestHighRiskA2A:
             )
 
         assert exc_info.value.field == "media_buy_id"
-        assert exc_info.value.error_code == "VALIDATION_ERROR"
+        assert exc_info.value.error_code == "INVALID_REQUEST"
 
     # H9 ---------------------------------------------------------------
     @pytest.mark.asyncio

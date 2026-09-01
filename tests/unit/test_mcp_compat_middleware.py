@@ -56,10 +56,10 @@ class _ValidationErrorRecord:
     """Matcher that pins the typed boundary error passed to the recorder."""
 
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, AdCPValidationError) and other.error_code == "VALIDATION_ERROR"
+        return isinstance(other, AdCPValidationError) and other.error_code == "INVALID_REQUEST"
 
     def __repr__(self) -> str:
-        return "AdCPValidationError(error_code='VALIDATION_ERROR')"
+        return "AdCPValidationError(error_code='INVALID_REQUEST')"
 
 
 class TestMiddlewareCallsNormalizer:
@@ -224,7 +224,7 @@ class TestTypeAdapterValidationEnvelope:
 
         assert_envelope_shape(
             exc_info.value,
-            "VALIDATION_ERROR",
+            "INVALID_REQUEST",
             recovery="correctable",
             check_mcp_tool_error=True,
         )

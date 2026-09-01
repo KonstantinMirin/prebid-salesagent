@@ -337,7 +337,7 @@ class TestSyncCreativesFormatValidation:
             # The advisory now runs through the SAME adcp_error_for the
             # request-level boundary uses, so a pydantic failure is VALIDATION_ERROR with
             # its field — not the SERVICE_UNAVAILABLE default it used to inherit.
-            assert advisory_missing.code == "VALIDATION_ERROR"
+            assert advisory_missing.code == "INVALID_REQUEST"
             assert "format_id" in str(advisory_missing.details or {}) or advisory_missing.field == "format_id"
 
     def test_error_messages_distinguish_scenarios(self, identity, mock_tenant):
