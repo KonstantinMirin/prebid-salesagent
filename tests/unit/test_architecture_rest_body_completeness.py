@@ -31,13 +31,10 @@ from __future__ import annotations
 
 import inspect
 
-from adcp.types import GetAdcpCapabilitiesRequest
-
 from src.core.schemas import (
     CreateMediaBuyRequest,
     SalesAgentBaseModel,
 )
-from src.core.tools.capabilities import get_adcp_capabilities_raw
 from src.core.tools.creatives.listing import list_creatives_raw
 from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
 from src.core.tools.media_buy_create import create_media_buy_raw
@@ -46,7 +43,6 @@ from src.core.tools.media_buy_update import update_media_buy_raw
 from src.core.tools.performance import update_performance_index_raw
 from src.routes.api_v1 import (
     CreateMediaBuyBody,
-    GetAdcpCapabilitiesBody,
     GetMediaBuyDeliveryBody,
     ListCreativesBody,
     SyncCreativesBody,
@@ -188,14 +184,6 @@ _HAND_WRITTEN_GRADED: list[tuple[type, type, object, frozenset[str], str]] = [
         frozenset(),
         "packages/start_time/end_time must stay wire-shaped so CreateMediaBuyRequest, not "
         "FastAPI, produces the graded rejection",
-    ),
-    (
-        GetAdcpCapabilitiesBody,
-        GetAdcpCapabilitiesRequest,
-        get_adcp_capabilities_raw,
-        frozenset(),
-        "protocols stays list[str] so the shared boundary grades an unknown member, which is "
-        "what BR-UC-010 @T-UC-010-ext-d-invalid-value requires on all four transports",
     ),
 ]
 

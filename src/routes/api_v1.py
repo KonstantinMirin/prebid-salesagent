@@ -15,6 +15,9 @@ if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
 from adcp.types import BrandReference, GetAdcpCapabilitiesRequest
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_request import (
+    GetAdcpCapabilitiesRequest as GetAdcpCapabilitiesRequestDTO,
+)
 from fastapi import APIRouter, Depends, Request
 
 from src.core.auth_context import require_auth, resolve_auth
@@ -359,32 +362,25 @@ else:
     )
 
 
-class GetAdcpCapabilitiesBody(SalesAgentBaseModel):
-    # Named for the TOOL, not the route: the transport-parity guard derives the body class
-    # from the tool name (get_adcp_capabilities -> GetAdcpCapabilitiesBody), so the old
-    # GetCapabilitiesBody spelling meant this tool never entered the comparison at all --
-    # which is why the dropped `ext` stayed invisible.
-    #
-    # NOT DERIVED. The field set already equals the derived set (graded by
-    # test_hand_written_bodies_carry_the_derived_field_set), but ``protocols`` must stay
-    # ``list[str]``. Bound to the DTO's Protocol enum, FastAPI rejects an unknown member
-    # before any AdCP code runs and REST answers INVALID_REQUEST, while impl/mcp/a2a reach
-    # the shared boundary and answer VALIDATION_ERROR -- which is what BR-UC-010
-    # @T-UC-010-ext-d-invalid-value grades, on all four transports, citing
-    # get-adcp-capabilities-request.json /properties/protocols/items/enum.
-    #
-    # Reclassifying FastAPI's enum rejection to VALIDATION_ERROR fixes that scenario and
-    # breaks two others: BR-UC-018's pagination-boundary examples grade an out-of-enum
-    # sort.direction / sort.field as INVALID_REQUEST. The two generated feature files
-    # disagree about the code for the SAME obligation class, so no boundary rule satisfies
-    # both -- reconciling them upstream is the fix, and until then the narrow choice is to
-    # keep REST out of the way of the shared boundary here.
-    protocols: list[str] | None = None
-    context: dict[str, Any] | None = None
-    adcp_version: str | None = None
-    adcp_major_version: int | None = None
-    ext: dict[str, Any] | None = None
+if TYPE_CHECKING:
+    # TYPE-CHECKER ONLY; the runtime class is the derivation in the else branch.
+    class GetAdcpCapabilitiesBody(DerivedBodyEnvelope, GetAdcpCapabilitiesRequestDTO): ...
 
+else:
+    # DERIVED. It was hand-written to keep ``protocols`` a bare list[str], because bound to
+    # the DTO's enum FastAPI rejected an unknown member with INVALID_REQUEST while
+    # impl/mcp/a2a reached the shared boundary and answered VALIDATION_ERROR.
+    #
+    # That is the same violation graded two ways, and the spec settles which: an
+    # out-of-enum value violates a SCHEMA constraint, and 3.1/enums/error-code.json assigns
+    # those to INVALID_REQUEST -- which is exactly what BR-UC-018's pagination rows already
+    # demand for an out-of-enum sort.direction. Keeping this body permissive preserved the
+    # disagreement rather than resolving it.
+    GetAdcpCapabilitiesBody = derived_body_model(
+        "GetAdcpCapabilitiesBody",
+        GetAdcpCapabilitiesRequestDTO,
+        capabilities_module.get_adcp_capabilities_raw,
+    )
 
 # ---------------------------------------------------------------------------
 # Discovery endpoints (auth-optional)
