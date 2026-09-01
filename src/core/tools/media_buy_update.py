@@ -55,6 +55,8 @@ from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
+from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
+
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
     require_identity,
@@ -736,7 +738,7 @@ def _update_media_buy_impl(
             if req.packages:
                 # enumerate so a per-package rejection can name WHICH package failed:
                 # the pointer is packages[N].package_id, never packages[].package_id,
-                # which named neither the array nor an element (salesagent-rfxfu).
+                # which named neither the array nor an element.
                 for pkg_index, pkg_update in enumerate(req.packages):
                     # Handle paused state
                     if pkg_update.paused is not None:
@@ -977,9 +979,17 @@ def _update_media_buy_impl(
                         # Sync creatives (upload/update)
                         sync_response = _sync_creatives_impl(
                             creatives=pkg_update.creatives,
-                            assignments={
-                                c.creative_id: [pkg_update.package_id] for c in pkg_update.creatives if c.creative_id
-                            },
+                            # The typed Assignment the request model declares, not the
+                            # {creative_id: [package_id]} map this used to build. That map
+                            # was a second, internal-only spelling of the same relation, and
+                            # it forced _sync_creatives_impl to accept a dict as well as the
+                            # spec's list -- so the one internal caller widened the type for
+                            # every transport.
+                            assignments=[
+                                Assignment(creative_id=c.creative_id, package_id=pkg_update.package_id)
+                                for c in pkg_update.creatives
+                                if c.creative_id
+                            ],
                             identity=identity,
                         )
 

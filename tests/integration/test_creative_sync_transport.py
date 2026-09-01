@@ -87,16 +87,24 @@ class TestSyncCreativeCreateTransport:
             assert db_creative.name == "Transport Test Creative"
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
-    def test_empty_creative_list_returns_success(self, integration_db, transport):
-        """Empty creative list is a valid no-op across all transports."""
+    def test_empty_creative_list_is_rejected(self, integration_db, transport):
+        """An empty creative list is not a no-op -- the schema forbids it.
+
+        sync-creatives-request.json declares ``creatives: {minItems: 1, maxItems: 100}``,
+        so ``[]`` violates a SCHEMA CONSTRAINT, which 3.1/enums/error-code.json assigns to
+        INVALID_REQUEST. This asserted the opposite until now -- that an empty list "is a
+        valid no-op" returning success -- and passed because no transport built
+        SyncCreativesRequest on this path: the constraint was declared and never enforced.
+        Every transport builds it through build_sync_creatives_request now, so the same
+        request gets the same answer on all four.
+        """
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
             result = env.call_via(transport, creatives=[])
 
-        assert result.is_success
-        assert_envelope(result, transport)
-        assert len(result.payload.creatives) == 0
+        assert not result.is_success, "an empty creatives array violates minItems: 1"
+        result.assert_wire_error("INVALID_REQUEST", recovery="correctable")
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_dry_run_does_not_persist(self, integration_db, transport):
@@ -253,7 +261,7 @@ class TestSyncStrictModeAbortTransport:
 
         assert result.is_error, "Strict mode should error on missing package"
         # Graded on the CODE the buyer received, not on the class of an exception the
-        # harness used to rebuild from wire bytes (salesagent-3dawm.15). Production
+        # harness used to rebuild from wire bytes. Production
         # raises AdCPPackageNotFoundError here (_assignments.py:163), which is more
         # specific than the AdCPNotFoundError this used to accept.
         assert result.error_code() == "PACKAGE_NOT_FOUND", f"Expected PACKAGE_NOT_FOUND, got {result.error_code()!r}"
@@ -751,7 +759,7 @@ class TestFormatValidationUnreachable:
         """Typed transient from registry.get_format → SERVICE_UNAVAILABLE, recovery=transient."""
         if transport is Transport.A2A:
             pytest.xfail(
-                "salesagent-b2wny: A2A emits no wire envelope for a tool-internal "
+                "a recorded gap: A2A emits no wire envelope for a tool-internal "
                 "SERVICE_UNAVAILABLE — the raw AdCPServiceUnavailableError escapes instead "
                 "of becoming a failed Task with an artifact DataPart. This leg only ever "
                 "looked green because two synthesizing fallbacks (dispatchers' "
@@ -790,7 +798,7 @@ class TestFormatValidationUnreachable:
 class TestTypedTransientSurvivesCreativeBuild:
     """A typed transient from the creative agent keeps its own code on the wire.
 
-    Covers salesagent-w4x1. The generative build/preview path caught EVERY exception
+    Covers . The generative build/preview path caught EVERY exception
     from registry.build_creative / preview_creative and rebuilt it as
     SERVICE_UNAVAILABLE. A rate-limited agent therefore reached the buyer as a
     generic outage: "retry with backoff" instead of "wait, you are over quota", and

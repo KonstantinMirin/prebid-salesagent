@@ -787,7 +787,6 @@ def given_package_update_negative_keywords_remove(ctx: dict) -> None:
 def when_send_update_request(ctx: dict) -> None:
     """Build UpdateMediaBuyRequest and dispatch through harness."""
 
-
     update_kwargs = ctx.get("update_kwargs", {})
     # Resolve Gherkin package_id labels ("pkg_001") to real factory-generated
     # package_ids before sending the request to production code. See

@@ -293,14 +293,14 @@ def get_strategy_manager(context: Context | None) -> StrategyManager:
     """Get strategy manager for current context."""
     identity = resolve_identity_from_context(context, require_valid_token=True, protocol="mcp")
 
-    # AUTH_MISSING/AUTH_INVALID split (salesagent-mkso), completed for the
-    # tenant-resolution axis (salesagent-otc5). The signal is whether a
+    # AUTH_MISSING/AUTH_INVALID split, completed for the
+    # tenant-resolution axis. The signal is whether a
     # credential was PRESENTED (``identity.auth_token``), matching
     # require_tenant() in src/core/auth.py: no token at all -> AUTH_MISSING
     # (correctable); a token was presented but tenant still didn't resolve ->
     # AUTH_INVALID (terminal). Full tenant-axis semantics beyond this
     # credential-presence split remain tracked under TENANT_REQUIRED
-    # (salesagent-40kk).
+    # .
     if not identity or not identity.tenant_id:
         if not identity or not identity.auth_token:
             raise AdCPAuthRequiredError()
@@ -337,9 +337,6 @@ from mcp.types import ToolAnnotations
 
 from src.core.schemas import (
     ListTasksRequest as LocalListTasksRequest,
-)
-from src.core.schemas import (
-    SyncCreativesRequest,
 )
 from src.core.tool_error_logging import with_error_logging
 from src.core.tools._announced_shape import apply_dto_announced_shape
@@ -410,11 +407,13 @@ _register_tool(sync_accounts)
 _register_tool(get_adcp_capabilities)
 _register_tool(get_products)
 _register_tool(list_creative_formats)
-_register_tool(sync_creatives, SyncCreativesRequest)
+# No explicit DTO: both wrappers now call build_sync_creatives_request, so the model
+# resolves from the builder like every other template-following tool.
+_register_tool(sync_creatives)
 _register_tool(list_creatives)
 # No explicit DTO: the wrapper now calls build_list_authorized_properties_request, so the
 # model resolves from the builder like every other template-following tool. One fewer user of
-# the escape hatch salesagent-prkv.29 exists to delete.
+# the escape hatch exists to delete.
 _register_tool(list_authorized_properties)
 _register_tool(create_media_buy)
 _register_tool(update_media_buy)

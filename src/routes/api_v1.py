@@ -587,7 +587,10 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         reporting_webhook = to_reporting_webhook(body.reporting_webhook)
     response = media_buy_update_module.update_media_buy_raw(
         media_buy_id=media_buy_id,
-        account=body.account,
+        # Through the same converter the sync route uses, rather than handing the wrapper a
+        # raw dict where it declares AccountReference. The converter is also where a
+        # malformed account object is rejected with the message every other route gives it.
+        account=to_account_reference(body.account),
         paused=body.paused,
         flight_start_date=body.flight_start_date,
         flight_end_date=body.flight_end_date,
@@ -695,6 +698,11 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
         push_notification_config=push_notification_config,
         context=context,
         account=account_ref,
+        # The buyer's key was NOT forwarded here. sync-creatives-request.json lists
+        # idempotency_key in /required and the body carried it, but the route dropped it on
+        # the way to the wrapper -- so a REST caller retrying with the same key got a second
+        # sync instead of the first one's response, which is the entire point of the field.
+        idempotency_key=body.idempotency_key,
         identity=identity,
     )
     return response.model_dump(mode="json")

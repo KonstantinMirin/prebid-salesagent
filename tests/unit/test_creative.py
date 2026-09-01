@@ -4539,6 +4539,10 @@ class TestA2ATransportGaps:
         )
 
         with (
+            patch(
+                "src.core.transport_helpers.enrich_identity_with_account",
+                side_effect=lambda ident, _account: ident,
+            ),
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
@@ -4572,6 +4576,13 @@ class TestA2ATransportGaps:
 
             result = sync_creatives_raw(
                 creatives=[_make_creative_asset()],
+                # sync-creatives-request.json lists both in /required, and every transport
+                # builds SyncCreativesRequest now, so omitting either is a rejected request
+                # rather than a call that reaches the impl. Resolving the account opens an
+                # AccountUoW, which a unit test must not do, so the enrichment is patched
+                # above -- what this test grades is the A2A path, not account resolution.
+                idempotency_key="unit-a2a-sync-key-01",
+                account={"account_id": "acc_unit_a2a"},
                 identity=identity,
             )
 

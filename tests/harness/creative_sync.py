@@ -53,6 +53,8 @@ from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+from adcp.types import AccountReference
+
 from src.core.schemas import SyncCreativesResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import e2e_unsupported, realize_e2e
@@ -101,7 +103,7 @@ class CommittedAIReview:
     #: REVERTS a committed verdict's status to ``pending_review`` and writes this
     #: key, WITHOUT clearing ``ai_review``. A test that checks only ``verdict``
     #: therefore reads "approved" from a review that actually blew up
-    #: (salesagent-prkv.14) -- so the absence of this key is part of the grade.
+    #: -- so the absence of this key is part of the grade.
     error: dict[str, Any] | None = None
 
 
@@ -598,10 +600,18 @@ class CreativeSyncEnv(IntegrationEnv):
         if kwargs.get("account") is None:
             identity = kwargs.get("identity") or self.identity
             account_id = getattr(identity, "account_id", None)
-            if account_id:
-                kwargs["account"] = {"account_id": account_id}
-            else:
-                kwargs.pop("account", None)
+            if not account_id:
+                # No account on the identity: seed one and use it. Dropping the key was
+                # viable only while the field was optional -- sync-creatives-request.json
+                # lists account in /required, so an absent account is now a request the
+                # schema rejects, and every scenario not ABOUT accounts would fail on a
+                # missing field before reaching what it grades.
+                account_id = self.setup_default_account().account_id
+            # The TYPED reference, not a bare dict: the wrappers hand this straight to
+            # enrich_identity_with_account, which reads AccountReference.root. A dict gets
+            # as far as "'dict' object has no attribute 'root'". build_rest_body serialises
+            # it for the wire itself.
+            kwargs["account"] = AccountReference(root={"account_id": account_id})
         return kwargs
 
     def call_impl(self, **kwargs: Any) -> SyncCreativesResponse:
