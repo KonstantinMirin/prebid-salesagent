@@ -15,6 +15,7 @@ from tests.e2e.adcp_request_builder import (
     build_creative,
     build_default_campaign_request,
     build_sync_creatives_request,
+    build_update_media_buy_request,
     parse_tool_result,
 )
 from tests.e2e.utils import make_mcp_client
@@ -179,16 +180,18 @@ class TestAdCPReferenceImplementation:
 
             print("\n💰 PHASE 5: Update Campaign Budget (configures push_notification_config)")
 
+            # Through the shared builder, which supplies the required `account` and
+            # `idempotency_key`. The hand-built dict this replaces sent neither, and sent a
+            # top-level `budget` that update-media-buy-request.json does not declare at all
+            # -- budgets live on the package entries. The request was refused with
+            # INVALID_REQUEST on /budget before any of Phase 5 ran.
             update_result = await client.call_tool(
                 "update_media_buy",
-                {
-                    "media_buy_id": media_buy_id,
-                    "budget": 7500.0,
-                    "context": {"e2e": "update_media_buy"},
-                    "push_notification_config": {
-                        "url": webhook_server["url"],
-                    },
-                },
+                build_update_media_buy_request(
+                    media_buy_id=media_buy_id,
+                    webhook_url=webhook_server["url"],
+                    context={"e2e": "update_media_buy"},
+                ),
             )
             update_data = parse_tool_result(update_result)
 
@@ -291,12 +294,11 @@ class TestAdCPReferenceImplementation:
                 update_data = parse_tool_result(
                     await client.call_tool(
                         "update_media_buy",
-                        {
-                            "media_buy_id": media_buy_id,
-                            "budget": 7500.0,
-                            "context": {"e2e": "update_webhook"},
-                            "push_notification_config": {"url": webhook["url"]},
-                        },
+                        build_update_media_buy_request(
+                            media_buy_id=media_buy_id,
+                            webhook_url=webhook["url"],
+                            context={"e2e": "update_webhook"},
+                        ),
                     )
                 )
                 assert update_data.get("media_buy_id") == media_buy_id

@@ -210,6 +210,8 @@ def build_sync_creatives_request(
         # default RFC 9421 webhook-signing profile. The legacy {schemes,
         # credentials} block is only needed when opting into Bearer/HMAC.
         request["push_notification_config"] = {"url": webhook_url}
+    if context is not None:
+        request["context"] = context
 
     return request
 
@@ -268,6 +270,7 @@ def build_update_media_buy_request(
     active: bool | None = None,
     packages: list[dict[str, Any]] | None = None,
     webhook_url: str | None = None,
+    context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Build a valid AdCP update_media_buy request.
