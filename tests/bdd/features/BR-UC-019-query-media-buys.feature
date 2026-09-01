@@ -138,7 +138,7 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: Request validation failed - invalid parameter values
     Given an authenticated Buyer with principal_id "buyer-001"
     When the Buyer Agent sends a get_media_buys request with invalid parameter types
-    Then the operation should fail with error code "VALIDATION_ERROR"
+    Then the operation should fail with error code "INVALID_REQUEST"
     And the error message should include field-level validation details
     And the error should include a "recovery" field indicating correctable failure
     And the error should include a "suggestion" field

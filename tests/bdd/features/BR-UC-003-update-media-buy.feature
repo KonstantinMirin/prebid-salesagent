@@ -566,7 +566,7 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | -500 |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error code BUDGET_TOO_LOW
@@ -846,7 +846,7 @@ Feature: BR-UC-003 Update Media Buy
     | idempotency_key | abc1234     |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     # BR-RULE-081 INV-3: key < 16 chars → rejected (schema minLength 16; value/format → VALIDATION_ERROR)
@@ -862,7 +862,7 @@ Feature: BR-UC-003 Update Media Buy
     | idempotency_key | <256 character string>   |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     # BR-RULE-081 INV-4: key > 255 chars → rejected (schema maxLength 255; value/format → VALIDATION_ERROR)

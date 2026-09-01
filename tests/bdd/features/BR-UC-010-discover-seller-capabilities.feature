@@ -593,7 +593,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
     When the Buyer Agent calls get_adcp_capabilities with protocols filter ["marketing"]
-    Then the wire error envelope should carry code "VALIDATION_ERROR" with recovery "correctable"
+    Then the wire error envelope should carry code "INVALID_REQUEST" with recovery "correctable"
     # Graduated: build_get_adcp_capabilities_request now constructs a real typed
     # GetAdcpCapabilitiesRequest — Pydantic enforces the protocols enum, so "marketing"
     # (outside the closed 5-value enum) is rejected.
@@ -607,7 +607,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
     When the Buyer Agent calls get_adcp_capabilities with protocols filter []
-    Then the wire error envelope should carry code "VALIDATION_ERROR" with recovery "correctable"
+    Then the wire error envelope should carry code "INVALID_REQUEST" with recovery "correctable"
     # Graduated: build_get_adcp_capabilities_request now constructs a real typed
     # GetAdcpCapabilitiesRequest — Pydantic enforces minItems:1, so an empty protocols
     # array is rejected. Inverted 2026-07-13 from a @known-gap pin.
