@@ -494,6 +494,10 @@ rm -f .tox/*.json
 
 dc run --rm --use-aliases $E2E_ENV_ARGS tests tox -p -e "$SUITES" || RC=$?
 
+# Which reports this run should publish. Equal to $SUITES unless a merge
+# below renames one, which is why it is a separate variable.
+_REPORT_SUITES="$SUITES"
+
 # Merge the BDD shard reports back into one bdd_inprocess.json. Every downstream
 # reader globs FILES, not env names -- the `cp .tox/*.json` below, the RC
 # reconciliation further down, and scripts/check_truncated_reports.py -- and each
@@ -525,6 +529,25 @@ if ls .tox/bdd-inprocess-s*.json >/dev/null 2>&1; then
         RC=1
     else
         rm -f .tox/bdd-inprocess-s*.json
+        # The merge RENAMES the suite's report, so the copy loop below -- which
+        # looks for `.tox/<name>.json` once per name in $SUITES -- must be told
+        # the new name. Without this it looks for the two shard files the merge
+        # just deleted, reports both as "no JSON report", sets RC=1 on a run
+        # where every suite passed, and never publishes bdd_inprocess.json at
+        # all: the BDD suite silently drops out of the results directory.
+        #
+        # Two names collapse to one deliberately. $SUITES stays untouched and is
+        # what `.suites` records, because that is the honest answer to "what did
+        # this invocation run"; $_REPORT_SUITES is the answer to "what reports
+        # should exist", and after a merge those are different questions.
+        # Derived, not a two-name literal: SHARD_COUNTS["bdd"] is read above
+        # and a third shard must not leave a `bdd-inprocess-s3` behind here.
+        _kept=""
+        for _s in ${_REPORT_SUITES//,/ }; do
+            case "$_s" in bdd-inprocess-s*) continue ;; esac
+            _kept="${_kept:+$_kept,}$_s"
+        done
+        _REPORT_SUITES="bdd_inprocess${_kept:+,$_kept}"
     fi
 fi
 
@@ -569,9 +592,18 @@ mkdir -p "$RESULTS_DIR"
 # a long serial run" (measured: a genuine unit report was 16 min behind the
 # newest, a stale storyboard one 28 min — overlapping bands, so any threshold
 # misfires both ways). An explicit manifest is exact.
-printf '%s\n' "$SUITES" > "$RESULTS_DIR/.suites"
+#
+# $_REPORT_SUITES, not $SUITES: the consumer joins this list against the report
+# FILENAMES beside it (cassini results.summarize() unions `.suites` with the run
+# manifest and renders any report whose suite is in neither as "STALE -- this
+# suite did NOT run in this invocation"). After the shard merge the BDD report is
+# published as bdd_inprocess.json, so a $SUITES-shaped list naming the two shards
+# would mark a freshly measured suite stale -- the same false reading this file
+# is written to prevent, only inverted. bdd_inprocess is also the honest name:
+# the suite did run, and that is the name its numbers are published under.
+printf '%s\n' "$_REPORT_SUITES" > "$RESULTS_DIR/.suites"
 _missing_reports=""
-for _suite in ${SUITES//,/ }; do
+for _suite in ${_REPORT_SUITES//,/ }; do
     if [ -f ".tox/${_suite}.json" ]; then
         cp ".tox/${_suite}.json" "$RESULTS_DIR/" || _missing_reports="$_missing_reports $_suite(copy-failed)"
     else
