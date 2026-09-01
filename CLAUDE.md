@@ -98,10 +98,10 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | No raw MediaPackage select | All MediaPackage access goes through repository, not raw `select()` | `test_architecture_no_raw_media_package_select.py` |
 | No import-time filesystem I/O | `src/` and `scripts/` modules touch no files while being imported | `test_architecture_no_import_time_fs_io.py` |
 | No raw select outside repos | All ORM model queries go through repositories, not raw `select()` | `test_architecture_no_raw_select.py` |
-| No raw egress | All outbound HTTP goes through `src/core/security/outbound_http.py`, never raw `httpx`/`requests`/`urlopen`/`aiohttp` | `ruff-egress.toml` (TID251 over `src/` + `scripts/`, in `make quality-ci`) + `test_ruff_egress_bans.py` |
+| No raw egress | All outbound HTTP goes through `src/core/security/outbound_http.py`; the seams bind their imports privately so re-export is an ImportError | `ruff-egress.toml` (TID251 over `src/` + `scripts/`, `--ignore-noqa`, in `make quality-ci`) + `test_ruff_egress_bans.py` |
 | No destination rewrite | Nothing under `src/` rebuilds a URL or swaps its netloc/scheme ahead of the seam | `test_architecture_no_destination_rewrite.py` |
 | BDD no-op Then steps | Then steps must assert, not delegate to `_pending()`-like no-ops | `test_architecture_bdd_no_pass_steps.py` |
-| BDD trivial assertions | Then steps must compare values, not just check truthiness | `test_architecture_bdd_no_trivial_assertions.py` |
+| BDD assertion reachability | A Then must not be able to RETURN without executing a meaningful assertion — presence is not enough | `test_architecture_bdd_no_trivial_assertions.py` |
 | BDD no dict registry | Given steps must use factories, not raw dicts | `test_architecture_bdd_no_dict_registry.py` |
 | BDD no duplicate steps | No 3+ step functions with identical bodies | `test_architecture_bdd_no_duplicate_steps.py` |
 | BDD no silent env | No `ctx.get("env")` or `hasattr(env, ...)` in step functions | `test_architecture_bdd_no_silent_env.py` |
@@ -379,7 +379,34 @@ async with httpx.AsyncClient() as client:
     await client.post(url, json=payload)
 ```
 
-- **Enforced by:** `ruff-egress.toml` — src-scoped TID251 import bans run by `make quality-ci`; `tests/unit/test_ruff_egress_bans.py` proves every ban fires and every `# noqa: TID251` exemption is live, not prose; `tests/unit/test_architecture_no_destination_rewrite.py` keeps destinations unrewritten ahead of the seam
+**Three layers stop the wrong call. Reach for the strongest one available.**
+
+1. **Unrepresentable.** The seams bind what they wrap PRIVATELY (`import httpx as _httpx`),
+   so `from src.core.security.outbound_http import httpx` is an `ImportError`, not a lint
+   finding. Four paths are closed this way — `outbound_http.httpx`,
+   `egress.policy.ipaddress`, `mcp_client.Client`, `mcp_client.StreamableHttpTransport`.
+   **If you write a seam around a dangerous dependency, bind its import privately** so the
+   seam cannot re-export the thing it exists to contain.
+2. **Banned.** `ruff-egress.toml` bans the modules outright (`httpx`, `requests`, `aiohttp`,
+   `urllib.request`, `httpcore`, `urllib3`, `http.client`, `httpx2`, `httpcore2`) plus
+   `fastmcp.Client` and the MCP transports. Third-party names are not ours to rebind, so a
+   ban list is the only mechanism for that half.
+3. **Exempted — and you cannot do it yourself.** The gate runs `--ignore-noqa`, which makes
+   `# noqa` INERT for this config in every spelling. **Adding a `# noqa` for TID251/ANN401
+   does nothing.** The only exemption channel is a row in `[lint.per-file-ignores]` in
+   `ruff-egress.toml`, which is a review conversation.
+
+- **Enforced by:** `ruff-egress.toml` — TID251/ANN401 over `src/` AND `scripts/`, run by
+  `make quality-ci` with `--ignore-noqa --no-respect-gitignore`;
+  `tests/unit/test_ruff_egress_bans.py` proves every ban FIRES on every resolving spelling
+  (ruff does not validate `banned-api` keys, so a typo'd row is silently inert);
+  `tests/unit/test_architecture_no_destination_rewrite.py` keeps destinations unrewritten
+  ahead of the seam
+- **Full architecture:** [docs/security/outbound-egress.md](docs/security/outbound-egress.md)
+  (the rule and its enforcement) and
+  [docs/design/egress-sdk-boundary.md](docs/design/egress-sdk-boundary.md)
+  (module map, what the `adcp` SDK owns, the registration-vs-dial split, and what is
+  carried here only until an upstream release)
 
 ---
 

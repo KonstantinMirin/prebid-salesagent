@@ -133,6 +133,30 @@ Tenants without configured ad servers show a "Pending Configuration" page instea
 - Includes timestamp, user, action, and result
 - Used for compliance and security monitoring
 
+## Outbound Egress (SSRF)
+
+Every outbound HTTP request goes through one seam,
+`src/core/security/outbound_http.py` (`send` / `asend`), which owns the address,
+TLS, redirect and retry decision together. Call sites do not validate URLs, and
+adding a private-IP check or hostname blocklist at a call site is a defect
+rather than defence in depth — it re-opens the resolve-then-connect TOCTOU the
+seam closes by pinning the resolved IP.
+
+The seam refuses on two verdicts that share one address predicate:
+`check_registration` (DNS-free, grades a buyer-supplied URL before storage) and
+`resolve_for_dial` (resolves once, pins, refuses on the resolved address). Six
+supplement ranges the SDK does not classify — CGNAT and five others — are
+refused under **every** posture, including the test-only
+`ADCP_OUTBOUND_ALLOW_PRIVATE` hatch, because nothing else defends them.
+
+Enforcement is layered: the seams bind their imports privately so a re-export is
+an `ImportError`; `ruff-egress.toml` bans the raw client modules; and the gate
+runs `--ignore-noqa`, so a file cannot exempt itself — exemptions are rows in
+`[lint.per-file-ignores]` that land in a reviewed diff.
+
+**Full architecture, including how to add a new outbound call:**
+[security/outbound-egress.md](security/outbound-egress.md)
+
 ## Security Testing Requirements
 
 All authentication changes must include tests for:

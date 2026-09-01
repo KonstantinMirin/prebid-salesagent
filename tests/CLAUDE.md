@@ -418,6 +418,24 @@ on a rebuilt shape; `error_envelope_or_none()` is the sibling for callers that
 branch on envelope-presence as control flow. The underlying field is private:
 reading it directly re-opens the substitution this pair exists to close.
 
+### TransportResult.has_wire — declared, never defaulted
+
+`has_wire` is **required and keyword-only**. A default would make omission mean
+"this transport has no wire", and omission is the one thing that must not be
+silent — so leaving it out is a `TypeError`.
+
+It is declared **per construction site, not per dispatcher class**. A wire
+dispatcher legitimately builds results for requests that never left: a
+missing-config guard, or a catch-all firing before anything was sent. Those are
+`False` even on REST. The arm where a 2xx arrived and parsing then threw is
+`True`, because the bytes did cross.
+
+**Do not branch on `has_wire` to decide whether to read a rebuilt envelope.** It
+is `False` on every A2A, MCP and IMPL error, so keying on it alone hands back a
+rebuilt envelope on transports that *do* have a wire, and discards a real
+captured one. What isolates IMPL is that IMPL is the only dispatcher populating
+the private synthesized field.
+
 ### TransportResult.wire_response (success-path wire)
 
 `TransportResult` also exposes `wire_response: dict | None` — the **serialized
