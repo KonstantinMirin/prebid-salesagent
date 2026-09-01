@@ -135,10 +135,14 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         # the E2E error path calls parse_rest_error, which would leave a stale flag).
         if _is_update_request(kwargs):
             self._active_update = True
+            # The id in the URL must be the one the SCENARIO asked for, from wherever it
+            # supplied it: a typed ``req`` or a plain ``media_buy_id`` kwarg. Reading only
+            # ``req`` meant a kwarg-style call silently fell back to the seeded buy -- so
+            # "Media buy not found -- by media_buy_id" PUT to the EXISTING media buy and
+            # got a success, while the same scenario failed correctly on every other
+            # transport because they carry the id in the body rather than the path.
             req = kwargs.get("req")
-            target = self._seeded_media_buy_id
-            if req is not None and getattr(req, "media_buy_id", None):
-                target = req.media_buy_id
+            target = getattr(req, "media_buy_id", None) or kwargs.get("media_buy_id") or self._seeded_media_buy_id
             self._update_target_id = target
             return self._build_update_rest_body(**kwargs)
         self._active_update = False
@@ -256,10 +260,15 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
                 headers["x-adcp-tenant"] = identity.tenant_id
 
         body = self._build_update_rest_body(**kwargs)
+        # Same rule as REST_ENDPOINT above: the id in the URL is the one the SCENARIO
+        # named, from a typed ``req`` OR a plain ``media_buy_id`` kwarg. Reading only
+        # ``req`` sent a kwarg-style call to the SEEDED buy, so "Media buy not found --
+        # by media_buy_id" PUT to an existing media buy and got a success. It passed on
+        # a2a/mcp because they carry the id in the body; only REST puts it in the path,
+        # which is why one transport disagreed with the other two about a request the
+        # scenario had specified unambiguously.
         req = kwargs.get("req")
-        media_buy_id = self._seeded_media_buy_id
-        if req is not None and hasattr(req, "media_buy_id") and req.media_buy_id:
-            media_buy_id = req.media_buy_id
+        media_buy_id = getattr(req, "media_buy_id", None) or kwargs.get("media_buy_id") or self._seeded_media_buy_id
         endpoint = f"/api/v1/media-buys/{media_buy_id}"
         return client.put(endpoint, json=body, headers=headers)
 
