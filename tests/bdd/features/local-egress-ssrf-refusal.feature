@@ -289,10 +289,19 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   # immediately before this one, so the ONLY thing that can refuse these requests
   # is the credential half — a green here cannot be the URL gate firing by luck.
 
-  # RUNS BOTH HALVES TODAY: media_buy_create.py calls the credential gate inline
-  # after the URL gate. Kept as the characterization guard the per-surface
-  # mutation check binds to at this surface — comment that call out and this
-  # scenario must redden.
+  # GRADES THE REQUEST MODEL, NOT THE INGEST GATE — measured, not assumed.
+  # A credential-less document never reaches the gate: `create_media_buy_raw`
+  # coerces into the typed request for a2a/rest and FastMCP's TypeAdapter
+  # refuses on mcp, both before `_impl` runs. Bypassing the
+  # `accept_push_notification_config` call in `_create_media_buy_impl` leaves
+  # this scenario GREEN on all three
+  # transports (verified by mutation: 6 failed / 41 passed, and all six are the
+  # URL scenario below). So the per-surface mutation check cannot bind here —
+  # `credentials` is required AND `minLength: 32`, so no document that survives
+  # the request model can reach the credential gate with a missing secret.
+  # What this scenario does grade is still worth having: that the refusal is a
+  # correctable VALIDATION_ERROR naming the credentials field, on every
+  # transport, rather than a 500 or a silent acceptance.
   @T-EGRESS-CREDS-create-media-buy @egress_create @invariant
   Scenario: a credential-less HMAC-SHA256 registration is refused at create ingest
     When the buyer creates a media buy registering HMAC-SHA256 with no credentials
