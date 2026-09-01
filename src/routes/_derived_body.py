@@ -53,6 +53,7 @@ def derived_body_model(
     impl: Callable[..., Any],
     *,
     extra_fields: dict[str, tuple[Any, Any]] | None = None,
+    path_fields: frozenset[str] = frozenset(),
 ) -> type[BaseModel]:
     """A request body carrying exactly ``DTO fields INTERSECT impl parameters``.
 
@@ -69,6 +70,12 @@ def derived_body_model(
     for field_name, field in dto.model_fields.items():
         if accepted is not None and field_name not in accepted:
             continue  # declared by the spec, not implemented here -- so not accepted
+        if field_name in path_fields:
+            # Carried in the URL, so it is not a BODY field. Declaring it here would make a
+            # REST caller send the same value twice -- and since requiredness is preserved,
+            # a required path field would become a required body field, rejecting the
+            # spec-legal request that puts it only in the path.
+            continue
         # field.annotation is Optional[type] on the pydantic side: a field declared with no
         # annotation at all reads back None, which is not a type and cannot take `| None`.
         annotation: Any = Any if field.annotation is None else field.annotation
@@ -93,6 +100,11 @@ def derived_body_model(
     # wrapper's non-spec parameters, which is the point -- so it is graded by the
     # intersection rule instead.
     model.__derived_from_dto__ = (dto, impl)  # type: ignore[attr-defined]
+    # The two DELIBERATE departures from "DTO fields INTERSECT impl parameters", recorded on
+    # the class so the completeness guard can grade them instead of being widened to tolerate
+    # any difference. An undeclared extra field, or a silently dropped one, still fails.
+    model.__derived_extra_fields__ = frozenset(extra_fields or ())  # type: ignore[attr-defined]
+    model.__derived_path_fields__ = frozenset(path_fields)  # type: ignore[attr-defined]
     return model
 
 

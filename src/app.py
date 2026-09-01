@@ -225,6 +225,22 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
     return _envelope_response(request, adcp_error_for(exc))
 
 
+def _jsonpath_lite(loc: list[str]) -> str:
+    """Join a pydantic ``loc`` into the JSONPath-lite form ``field`` is specified in.
+
+    core/error.json: "Field path ... in JSONPath-lite format (e.g., 'packages[0].targeting')".
+    Numeric segments are array indices and are bracketed onto the preceding segment; every
+    other segment is dot-joined.
+    """
+    out: list[str] = []
+    for seg in loc:
+        if seg.isdigit() and out:
+            out[-1] = f"{out[-1]}[{seg}]"
+        else:
+            out.append(seg)
+    return ".".join(out)
+
+
 @app.exception_handler(RequestValidationError)
 async def request_validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Translate FastAPI request-body schema failures into the AdCP envelope.
@@ -249,7 +265,11 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     # position would erase a body field literally named "query"/"body"/"path".
     raw_loc = [str(p) for p in first.get("loc", ())]
     loc = raw_loc[1:] if raw_loc and raw_loc[0] in ("body", "query", "path") else raw_loc
-    field = ".".join(loc) or None
+    # JSONPath-lite, so an ARRAY INDEX is bracketed: core/error.json's own example is
+    # 'packages[0].targeting'. Dot-joining every segment produced 'packages.0.package_id'
+    # here while mcp and a2a produced 'packages[0].package_id' for the identical rejection
+    # -- one buyer-facing pointer per transport, from a formatting detail.
+    field = _jsonpath_lite(loc) or None
     message = first.get("msg") or "Request failed schema validation"
     # A rejection raised by request-schema validation is, by construction, a
     # SCHEMA-constraint violation: FastAPI only ever raises it for what the

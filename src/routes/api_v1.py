@@ -35,6 +35,7 @@ from src.core.schemas import ListAuthorizedPropertiesRequest as ListAuthorizedPr
 from src.core.schemas import ListCreativeFormatsRequest as ListCreativeFormatsRequestDTO
 from src.core.schemas import ListCreativesRequest as ListCreativesRequestDTO
 from src.core.schemas import SalesAgentBaseModel
+from src.core.schemas import UpdateMediaBuyRequest as UpdateMediaBuyRequestDTO
 from src.core.schemas import UpdatePerformanceIndexRequest as UpdatePerformanceIndexRequestDTO
 from src.core.schemas.account import ListAccountsRequest as ListAccountsRequestDTO
 from src.core.schemas.account import SyncAccountsRequest as SyncAccountsRequestDTO
@@ -133,47 +134,32 @@ class CreateMediaBuyBody(SalesAgentBaseModel):
     adcp_version: str | None = None
 
 
-class UpdateMediaBuyBody(SalesAgentBaseModel):
-    # NOT DERIVED, and the reason narrowed while this branch was in flight.
+if TYPE_CHECKING:
+    # TYPE-CHECKER ONLY; the runtime class is the derivation in the else branch.
+    class UpdateMediaBuyBody(DerivedBodyEnvelope, UpdateMediaBuyRequestDTO): ...
+
+else:
+    # DERIVED. Two things blocked it, and both are expressed here rather than by
+    # hand-writing the whole model:
     #
-    # The agent that converted the other bodies found FIVE fields here that are not
-    # UpdateMediaBuyRequest fields at all -- flight_start_date, flight_end_date, currency,
-    # pacing, daily_budget -- flat aliases the builder folded into the spec-nested shape, so
-    # deriving would have deleted five working REST inputs.
+    # ``flight_start_date`` / ``flight_end_date`` are flat DATE ALIASES that
+    # _build_update_request folds into start_time/end_time. They are live REST inputs and
+    # not UpdateMediaBuyRequest fields, so they come in as extra_fields -- the one thing a
+    # derived body cannot know from the DTO.
     #
-    # Three of those are now gone: currency/pacing/daily_budget existed ONLY to assemble a
-    # campaign-level Budget, and AdCP 3.1.1 defines no top-level budget on update_media_buy
-    # (it is package-level), so the budget and its three helpers were removed rather than
-    # kept as a convenience. What remains blocking derivation is the two flat DATE aliases,
-    # which are live and which the DTO does not declare -- plus media_buy_id, which the
-    # derivation would add even though it is the URL path segment, not a body field.
-    paused: bool | None = None
-    flight_start_date: str | None = None
-    flight_end_date: str | None = None
-    start_time: str | None = None
-    end_time: str | None = None
-    # Fields update_media_buy_raw plumbs through to UpdateMediaBuyRequest. Raw dicts
-    # are coerced downstream (Pattern #7 extra policy inherited from SalesAgentBaseModel).
-    packages: list[dict[str, Any]] | None = None
-    push_notification_config: dict[str, Any] | None = None
-    context: dict[str, Any] | None = None
-    reporting_webhook: dict[str, Any] | None = None
-    ext: dict[str, Any] | None = None
-    idempotency_key: str | None = None
-    # The buyer's expected-current optimistic-concurrency token. Declared because the
-    # pinned update-media-buy-request.json defines it ("Expected current revision for
-    # optimistic concurrency ... Obtain from get_media_buys or the most recent
-    # create/update response") and this model is extra="forbid" — so omitting it did
-    # not make the field optional over REST, it made a spec-legal request a hard
-    # INVALID_REQUEST. A buyer that read the token off a create/update response and
-    # handed it back, exactly as the spec instructs, was rejected for doing so.
-    #
-    # The seller does not yet ACT on it — the stale-token CONFLICT check is a separate,
-    # still-xfailed gap (BR-RULE-215 partitions). Accepting it is transport parity, not
-    # a claim that concurrency is enforced.
-    revision: int | None = None
-    adcp_version: str | None = None
-    account: dict[str, Any] | None = None  # AccountReference; AdCP 3.1.1 /required
+    # ``media_buy_id`` is the URL PATH segment. Deriving it would make a REST caller send
+    # the same value twice, and since requiredness is preserved it would turn a spec-legal
+    # request that puts the id only in the path into an INVALID_REQUEST.
+    UpdateMediaBuyBody = derived_body_model(
+        "UpdateMediaBuyBody",
+        UpdateMediaBuyRequestDTO,
+        media_buy_update_module.update_media_buy_raw,
+        extra_fields={
+            "flight_start_date": (str | None, None),
+            "flight_end_date": (str | None, None),
+        },
+        path_fields=frozenset({"media_buy_id"}),
+    )
 
 
 if TYPE_CHECKING:

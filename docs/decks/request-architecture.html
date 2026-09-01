@@ -258,12 +258,33 @@ for authored in ("Please choose a product with compatible pricing",
 </section>
 
 <section>
+  <div class="kicker">The same disease, one level up</div>
+  <h2>A tool nobody can find is a tool that does not exist</h2>
+  <p>Deriving shapes from the DTO forced us to ask, for every tool, &ldquo;which spec tool <em>is</em> this?&rdquo; That question had never been asked out loud. Asking it found capabilities we had fully implemented and made undiscoverable by naming them ourselves.</p>
+  <p>A buyer finds a tool by its name. A name that appears in no version of the spec is, from outside, an absence.</p>
+  <table>
+    <thead><tr><th>We publish</th><th>The spec calls it</th><th>Status</th><th>What it actually takes</th></tr></thead>
+    <tbody>
+      <tr><td><code>get_task</code></td><td><code>tasks/get</code> · <code>get_task_status</code></td><td>in 3.1, both namespaces</td><td><strong>close to a rename</strong> — same required <code>task_id</code>; we also gain three optional fields we already could serve</td></tr>
+      <tr><td><code>update_performance_index</code></td><td><code>provide_performance_feedback</code></td><td>in <strong>2.5, 3.0 and 3.1</strong></td><td>rename <em>and</em> reshape — the spec takes one scalar reading per call with a required measurement period; we take a list of per-product indices</td></tr>
+      <tr><td><code>list_authorized_properties</code></td><td>— (was 2.5; dropped in 3.0)</td><td>the inverse: stale, not hidden</td><td>a decision, not a rename — we are publishing a tool the spec retired</td></tr>
+      <tr><td><code>list_tasks</code></td><td><code>tasks/list</code> <em>and</em> <code>list_tasks</code></td><td>genuinely overloaded upstream</td><td>a namespace question — this is why it is the last tool off the escape hatch</td></tr>
+    </tbody>
+  </table>
+  <div class="warn">
+    <p style="margin:0 0 .6rem"><strong>The one worth stopping on.</strong> A shipped docstring on <code>build_get_task_request</code> states that <code>get_task</code> &ldquo;appears in neither the pinned 3.1 schema tree nor <code>ADCP_TOOL_DEFINITIONS</code> — so a local DTO is its <em>final shape</em>, not a placeholder waiting for an SDK type.&rdquo;</p>
+    <p style="margin:0">The 3.1 tree files it under <code>tasks-get</code> and <code>get-task-status</code>. The lookup that returned &ldquo;absent&rdquo; had searched for <strong>our</strong> name. A negative result became a written architectural conclusion — <em>this shape is final</em> — which closed off three optional spec fields the tool could already have served.</p>
+  </div>
+  <div class="note"><strong>Absence is not evidence when you searched for your own name.</strong> Every &ldquo;the spec doesn&rsquo;t have this&rdquo; in a comment or a ticket is only as good as the string that was grepped — and our own vocabulary is the one string guaranteed not to appear in someone else&rsquo;s document.</div>
+</section>
+
+<section>
   <div class="kicker">Where we actually are</div>
   <h2>Most of the way, and the remainder is named</h2>
   <table>
     <thead><tr><th>Surface</th><th>Derived</th><th>Remaining</th><th>What&rsquo;s blocking it</th></tr></thead>
     <tbody>
-      <tr><td>MCP tools</td><td class="num"><strong>15 / 16</strong></td><td><code>list_tasks</code></td><td>ours and the spec&rsquo;s <code>list_tasks</code> are different tools sharing a name</td></tr>
+      <tr><td>MCP tools</td><td class="num"><strong>15 / 16</strong></td><td><code>list_tasks</code></td><td>the spec carries <code>tasks/list</code> <em>and</em> <code>list_tasks</code> — a namespace decision, not a rename</td></tr>
       <tr><td>REST bodies</td><td class="num"><strong>9 / 13</strong></td><td>create · update · get media buys, capabilities</td><td>nothing structural — the conversion work</td></tr>
       <tr><td>A2A skill handlers</td><td class="num"><strong>3 builders</strong></td><td>6 hand-parsed payloads</td><td>handlers reimplement fields the builder already knows</td></tr>
       <tr><td>Refusal maps / ledgers / analyzer</td><td class="num"><strong>all gone</strong></td><td>—</td><td>—</td></tr>
@@ -281,6 +302,7 @@ for authored in ("Please choose a product with compatible pricing",
     <li><strong>Adding a tool? Name the request DTO first.</strong> Write <code>build_&lt;tool&gt;_request</code> returning the SDK type, with the return annotation importable at module scope. Registration refuses anything else, so this is not advice — it is the only path.</li>
     <li><strong>Never write a request shape twice.</strong> If you are typing field names into a REST <code>Body</code> or a signature, and the SDK ships a DTO for that tool, you are creating the drift this whole deck is about. <code>derived_body_model(name, dto, impl)</code>.</li>
     <li><strong>Exposing a new spec field = making the impl accept it.</strong> There is no second place to update. No ledger, no unsupported map, no announcement to edit.</li>
+    <li><strong>Before writing &ldquo;the spec doesn&rsquo;t have this&rdquo; — grep the spec&rsquo;s vocabulary, not ours.</strong> Search the schema tree by <em>capability</em> (<code>task</code>, <code>performance</code>, <code>propert</code>), not by our tool name. A tool published under a name that is in no spec version is undiscoverable, and that is a compliance defect, not a cosmetic one.</li>
     <li><strong>Schema violation is <code>INVALID_REQUEST</code>. Business rule is <code>VALIDATION_ERROR</code>.</strong> If a Pydantic model raised it, it is the first one. Always. On every transport.</li>
     <li><strong>Put facts in <code>ErrorProblem</code>, never in a sentence.</strong> If you are reaching for an f-string to describe a rejection, the fields you are interpolating are the fields the buyer wanted. Ship those.</li>
     <li><strong>Grade it with a BDD scenario on the wire envelope.</strong> Not a unit test about how a tool uses an SDK class. If the behavior is not observable through BDD, it is an integration test — and nothing else.</li>

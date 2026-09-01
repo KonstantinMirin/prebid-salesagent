@@ -36,7 +36,6 @@ from adcp.types import GetAdcpCapabilitiesRequest
 from src.core.schemas import (
     CreateMediaBuyRequest,
     SalesAgentBaseModel,
-    UpdateMediaBuyRequest,
 )
 from src.core.tools.capabilities import get_adcp_capabilities_raw
 from src.core.tools.creatives.listing import list_creatives_raw
@@ -191,18 +190,6 @@ _HAND_WRITTEN_GRADED: list[tuple[type, type, object, frozenset[str], str]] = [
         "FastAPI, produces the graded rejection",
     ),
     (
-        UpdateMediaBuyBody,
-        UpdateMediaBuyRequest,
-        update_media_buy_raw,
-        frozenset({"flight_start_date", "flight_end_date"}),
-        "two flat date aliases _build_update_request folds into start_time/end_time; they are "
-        "not UpdateMediaBuyRequest fields but the MCP wrapper announces both. This row listed "
-        "FIVE until currency/pacing/daily_budget were removed: those existed only to assemble "
-        "a campaign-level Budget, and AdCP 3.1.1 defines no top-level budget on "
-        "update_media_buy, so they went with it. The allowlist shrank because the violation "
-        "was fixed, not because the rule was widened",
-    ),
-    (
         GetAdcpCapabilitiesBody,
         GetAdcpCapabilitiesRequest,
         get_adcp_capabilities_raw,
@@ -301,9 +288,16 @@ def test_derived_bodies_carry_exactly_the_dto_fields_the_impl_accepts():
         # ``| _BODY_META``: the generator adds adcp_version back on purpose. It is NOT
         # request data -- select_request_fields strips the version envelope -- but the
         # routes negotiate on it, so the body has to carry it.
-        expected = (set(dto.model_fields) & set(inspect.signature(impl).parameters)) | _BODY_META
+        # A derivation may depart from the intersection in exactly two RECORDED ways, and
+        # both are graded here rather than tolerated: ``extra_fields`` for inputs the DTO
+        # does not declare (flat aliases the builder folds in), and ``path_fields`` for
+        # values the URL carries, which are not body fields at all. An UNDECLARED extra, or
+        # a silently dropped field, still fails -- which is the whole point of this test.
+        extras = getattr(body_cls, "__derived_extra_fields__", frozenset())
+        path = getattr(body_cls, "__derived_path_fields__", frozenset())
+        expected = ((set(dto.model_fields) & set(inspect.signature(impl).parameters)) - path) | _BODY_META | extras
         actual = set(body_cls.model_fields)
         assert actual == expected, (
             f"{body_cls.__name__} carries {sorted(actual ^ expected)} outside "
-            f"(DTO fields INTERSECT {impl.__name__} parameters)."
+            f"(DTO fields INTERSECT {impl.__name__} parameters, minus path_fields, plus extra_fields)."
         )
