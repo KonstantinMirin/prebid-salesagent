@@ -2598,10 +2598,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # examples that expect INVALID_REQUEST/ACCOUNT_NOT_FOUND but production
         # doesn't validate. Only xfail the failing subset; valid-value examples pass.
         _UC004_PARTITION_SELECTIVE: list[tuple[str, set[str], str]] = [
-            # reporting_dimensions: production doesn't validate missing geo_level, limit<=0, etc.
+            # Graduated: geo_missing_geo_level, limit_zero, limit_negative. The reason here
+            # -- "production accepts invalid configs" -- is no longer true of them: they
+            # XPASS on a2a, mcp AND rest, so all three now reject the config and answer
+            # INVALID_REQUEST with a suggestion, which is what the rows assert. This entry
+            # is the non-strict twin of the one in _UC004_GENUINE_XFAIL_ROWS; both listed
+            # the same four rows, so leaving this one in place turned the strict
+            # graduation into a silent XPASS instead of a pass.
+            # geo_metro_missing_system stays: it does not XPASS, so production still
+            # accepts it and the reason still holds for that row alone.
             (
                 "T-UC-004-partition-reporting-dims",
-                {"geo_missing_geo_level", "geo_metro_missing_system", "limit_zero", "limit_negative"},
+                {"geo_metro_missing_system"},
                 "reporting_dimensions validation not implemented — production accepts invalid configs",
             ),
             # Graduated: T-UC-004-partition-attribution
