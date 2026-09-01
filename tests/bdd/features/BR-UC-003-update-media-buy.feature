@@ -653,15 +653,17 @@ Feature: BR-UC-003 Update Media Buy
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
-    And the error should include "field" field with value "package_id"
-    # ENTRY-RELATIVE, and measured rather than assumed: the rejection comes from the
-    # PackageUpdate model validator (schemas/_base.py), which sees one entry and
-    # cannot know its position in the request's list -- so it names the field within
-    # the entry and the index comes from the boundary's own loc. Same rooting rule
-    # GateFailure documents ("never request-rooted with an accounts[i]. prefix").
-    # The indexed form packages[N].package_id belongs to the _impl-layer loop in
-    # media_buy_update.py, which this input never reaches. The old
-    # "packages[].package_id" was neither (salesagent-rfxfu).
+    And the error should include "field" field with value "packages[0].package_id"
+    # REQUEST-ROOTED, per core/error.json: `field` is "JSONPath-lite" and the spec's own
+    # example is 'packages[0].targeting'. A bare 'package_id' names a field without saying
+    # which package it belonged to, which for a multi-package update is not actionable.
+    #
+    # This row previously read 'package_id', on the argument that the validator "sees one
+    # entry and cannot know its position". That premise no longer holds: the validator
+    # raises a pydantic error carrying loc=("package_id",), and pydantic nests it under the
+    # enclosing collection, so the index is supplied by pydantic itself. The same change is
+    # what gets this rejection an ENVELOPE at all on MCP -- a typed error raised inside a
+    # TypeAdapter run was masked by FastMCP into a prose ToolError with no code or field.
     # POST-F1: System state unchanged
     # POST-F2: Error explains missing package identifier
     # POST-F3: Suggestion for recovery

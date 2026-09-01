@@ -102,9 +102,7 @@ from adcp.types.generated_poc.media_buy.get_media_buys_response import (
 from src.core.config import get_pydantic_extra_mode
 from src.core.errors.codes import CODE_TABLE, ErrorCodeT
 from src.core.errors.details import ErrorDetails
-from src.core.errors.issues import ErrorIssue, JsonPointer
 from src.core.exceptions import (
-    AdCPInvalidRequestError,
     AdCPNotFoundError,
     AdCPSalesAgentError,
     AdCPValidationError,
@@ -150,6 +148,8 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
+from pydantic_core import InitErrorDetails, PydanticCustomError
+from pydantic_core import ValidationError as PydanticCoreValidationError
 
 # The pricing option types (nine local member subclasses, the AdCPPricingOption
 # union, and the PricingOption wrapper) live in src.core.schemas.pricing; the
@@ -2418,24 +2418,50 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
           a generic VALIDATION_ERROR / silent drop.
         """
         if isinstance(data, dict):
-            # ENTRY-RELATIVE, with no array prefix: this validator sees ONE package
-            # entry and cannot know its position in the request's list -- the index
-            # belongs to the enclosing collection, and the boundary-derived path
-            # supplies it from pydantic's own loc. Emitting "packages[].package_id"
-            # here invented a prefix that named neither the array nor an element
-            # (salesagent-rfxfu). Same rooting rule GateFailure documents: entry-
-            # relative, never request-rooted.
+            # Raised as a PYDANTIC error, not a typed AdCPInvalidRequestError, and the
+            # loc is what makes it correct on both counts.
+            #
+            # WHY NOT THE TYPED ERROR: this validator runs inside pydantic, which FastMCP
+            # drives through a TypeAdapter BEFORE the tool body. A typed error raised there
+            # never passes with_error_logging (the tool has not been entered) and is not a
+            # pydantic ValidationError either, so RequestCompatMiddleware's converter skips
+            # it too -- FastMCP masked it into a prose ToolError and the buyer received no
+            # envelope at all: no code, no field, no suggestion. A pydantic error is the one
+            # shape every boundary already converts.
+            #
+            # WHY THE loc: core/error.json defines `field` as "JSONPath-lite" and its own
+            # example is request-rooted -- 'packages[0].targeting'. Naming the loc here lets
+            # pydantic nest it under the enclosing collection, so the buyer gets
+            # 'packages[0].package_id'. The previous entry-relative 'package_id' named a
+            # field without saying which package it belonged to, which for a multi-package
+            # update is not actionable.
             if not data.get("package_id"):
-                raise AdCPInvalidRequestError(field="package_id")
+                raise PydanticCoreValidationError.from_exception_data(
+                    "UpdateMediaBuyPackage",
+                    [
+                        InitErrorDetails(
+                            type=PydanticCustomError("missing", "package_id is required on a package update"),
+                            loc=("package_id",),
+                            input=data,
+                        )
+                    ],
+                )
             present = sorted(f for f in cls._IMMUTABLE_PACKAGE_FIELDS if f in data)
             if present:
-                # A list of field names beside `field=present[0]` IS the pin's
-                # "populate field from issues[0]" MUST, written out by hand. issues[]
-                # is the channel for a multi-field rejection, and `field` now derives
-                # from issues[0].pointer instead of being indexed here.
-                raise AdCPInvalidRequestError(
-                    issues=[
-                        ErrorIssue.of(pointer=JsonPointer.of(name).pointer, keyword="readOnly") for name in present
+                # One entry per immutable field, each carrying its own loc, so `issues[]`
+                # names every offender and `field` derives from issues[0] as the pin's
+                # "populate field from issues[0]" MUST requires.
+                raise PydanticCoreValidationError.from_exception_data(
+                    "UpdateMediaBuyPackage",
+                    [
+                        InitErrorDetails(
+                            type=PydanticCustomError(
+                                "readOnly", "{name} is immutable on a package update", {"name": name}
+                            ),
+                            loc=(name,),
+                            input=data,
+                        )
+                        for name in present
                     ],
                 )
         return data
