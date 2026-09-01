@@ -168,8 +168,8 @@ Feature: BR-UC-018 List Creatives
 
     Examples: Invalid partitions
       | partition             | request_params                      | outcome                                               |
-      | invalid_status_enum   | statuses filter ["unknown"]         | error "VALIDATION_ERROR" with suggestion               |
-      | empty_statuses_array  | statuses filter as empty array      | error "VALIDATION_ERROR" with suggestion               |
+      | invalid_status_enum   | statuses filter ["unknown"]         | error "INVALID_REQUEST" with suggestion               |
+      | empty_statuses_array  | statuses filter as empty array      | error "INVALID_REQUEST" with suggestion               |
 
   @T-UC-018-boundary-default-query @boundary @default-query-behavior
   Scenario Outline: Default query behavior boundary -- <boundary_point>
@@ -181,9 +181,9 @@ Feature: BR-UC-018 List Creatives
       | boundary_point                                        | request_params                                                                       | outcome                                                  |
       | Empty request (no parameters at all)                  | no parameters                                                                        | all non-archived creatives returned                       |
       | statuses=['archived'] — only archived creatives returned | statuses filter ["archived"]                                                         | only archived creatives returned                          |
-      | statuses=[] — empty array violates minItems:1         | statuses filter as empty array                                                       | error "VALIDATION_ERROR" with suggestion                  |
+      | statuses=[] — empty array violates minItems:1         | statuses filter as empty array                                                       | error "INVALID_REQUEST" with suggestion                  |
       | filters={} — empty filters object, defaults apply     | empty filters object                                                                 | all non-archived creatives returned (defaults apply)      |
-      | statuses=['unknown'] — invalid enum value             | statuses filter ["unknown"]                                                          | error "VALIDATION_ERROR" with suggestion                  |
+      | statuses=['unknown'] — invalid enum value             | statuses filter ["unknown"]                                                          | error "INVALID_REQUEST" with suggestion                  |
       | All 5 statuses explicitly listed — includes archived  | statuses filter ["processing", "approved", "rejected", "pending_review", "archived"] | all 5 creatives including archived returned               |
 
   @T-UC-018-partition-pagination @partition @pagination-sorting
@@ -203,10 +203,10 @@ Feature: BR-UC-018 List Creatives
 
     Examples: Invalid partitions
       | partition                | request_params                    | outcome                                     |
-      | max_results_zero         | pagination max_results 0          | error "VALIDATION_ERROR" with suggestion     |
-      | max_results_negative     | pagination max_results -1         | error "VALIDATION_ERROR" with suggestion     |
-      | non_integer_max_results  | pagination max_results "abc"      | error "VALIDATION_ERROR" with suggestion     |
-      | max_results_above_max    | pagination max_results 101        | error "VALIDATION_ERROR" with suggestion     |
+      | max_results_zero         | pagination max_results 0          | error "INVALID_REQUEST" with suggestion     |
+      | max_results_negative     | pagination max_results -1         | error "INVALID_REQUEST" with suggestion     |
+      | non_integer_max_results  | pagination max_results "abc"      | error "INVALID_REQUEST" with suggestion     |
+      | max_results_above_max    | pagination max_results 101        | error "INVALID_REQUEST" with suggestion     |
 
   @T-UC-018-boundary-pagination @boundary @pagination-sorting
   Scenario Outline: Pagination boundary -- <boundary_point>
@@ -247,7 +247,7 @@ Feature: BR-UC-018 List Creatives
     Examples: Invalid partitions
       | partition                | request_params                             | outcome                                            |
       | invalid_date_format      | created_after "not-a-date"                 | error "INVALID_REQUEST" with suggestion          |
-      | empty_tags_array         | tags filter as empty array                 | error "VALIDATION_ERROR" with suggestion             |
+      | empty_tags_array         | tags filter as empty array                 | error "INVALID_REQUEST" with suggestion             |
       | creative_ids_over_limit  | creative_ids with 101 items                | error "VALIDATION_ERROR" with suggestion             |
 
   @T-UC-018-boundary-filters @boundary @filter-semantics
@@ -285,8 +285,8 @@ Feature: BR-UC-018 List Creatives
 
     Examples: Invalid partitions
       | partition         | request_params                      | outcome                                         |
-      | empty_array       | fields as empty array               | error "VALIDATION_ERROR" with suggestion         |
-      | unknown_field     | fields ["creative_id", "thumbnail"] | error "VALIDATION_ERROR" with suggestion         |
+      | empty_array       | fields as empty array               | error "INVALID_REQUEST" with suggestion         |
+      | unknown_field     | fields ["creative_id", "thumbnail"] | error "INVALID_REQUEST" with suggestion         |
       | non_string_item   | fields containing integer 123       | error "VALIDATION_ERROR" with suggestion         |
 
   @T-UC-018-boundary-field-selector @boundary @field-selector
@@ -299,8 +299,8 @@ Feature: BR-UC-018 List Creatives
       | boundary_point                                            | request_params                                  | outcome                                                  |
       | ['creative_id'] (single field, minItems boundary)         | fields ["creative_id"]                          | only creative_id field in response                        |
       | All 13 enum values (max enum coverage)                    | fields with all 13 enum values                  | all 13 fields included                                    |
-      | [] (empty array, violates minItems: 1)                    | fields as empty array                           | error "VALIDATION_ERROR" with suggestion                  |
-      | ['creative_id', 'thumbnail'] (unknown enum value)         | fields ["creative_id", "thumbnail"]             | error "VALIDATION_ERROR" with suggestion                  |
+      | [] (empty array, violates minItems: 1)                    | fields as empty array                           | error "INVALID_REQUEST" with suggestion                  |
+      | ['creative_id', 'thumbnail'] (unknown enum value)         | fields ["creative_id", "thumbnail"]             | error "INVALID_REQUEST" with suggestion                  |
       | fields omitted entirely (all fields returned)             | no fields parameter                             | all fields included in response                            |
       | include_assignments=false (overrides default true)         | include_assignments false                       | assignment data excluded                                   |
       | DB status='unknown_value' (mapped to pending_review)      | database has creative with unrecognized status  | status mapped to "pending_review" in response              |
@@ -562,8 +562,8 @@ Feature: BR-UC-018 List Creatives
       | ["creative_id"] (single field, minimum valid)                                                                                           | fields ["creative_id"]                        | only creative_id returned                  |
       | ["creative_id", "name", "format_id", "status", "created_date", "updated_date", "tags", "assignments", "snapshot", "items", "variables", "concept", "pricing_options"] (all 13 fields) | fields with all 13 enum values                | all 13 fields returned                     |
       | Not provided (all fields returned)                                                                                                      | no fields parameter                           | all fields returned                        |
-      | ["creative_id", "thumbnail"] (unknown field in array)                                                                                   | fields ["creative_id", "thumbnail"]           | error "VALIDATION_ERROR" with suggestion   |
-      | [] (empty array, violates minItems)                                                                                                     | fields as empty array                         | error "VALIDATION_ERROR" with suggestion   |
+      | ["creative_id", "thumbnail"] (unknown field in array)                                                                                   | fields ["creative_id", "thumbnail"]           | error "INVALID_REQUEST" with suggestion   |
+      | [] (empty array, violates minItems)                                                                                                     | fields as empty array                         | error "INVALID_REQUEST" with suggestion   |
 
   @T-UC-018-boundary-sort-field @boundary @creative-sort-field
   Scenario Outline: Creative sort field boundary -- <boundary_point>

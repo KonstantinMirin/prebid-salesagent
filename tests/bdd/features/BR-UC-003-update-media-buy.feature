@@ -961,7 +961,7 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Invalid partitions
       | partition      | value          | outcome                                              |
       | empty_string   |                | error "VALIDATION_ERROR" with suggestion              |
-      | too_short      | abc1234        | error "VALIDATION_ERROR" with suggestion              |
+      | too_short      | abc1234        | error "INVALID_REQUEST" with suggestion              |
       | too_long       | <256 character string> | error "VALIDATION_ERROR" with suggestion      |
 
   @T-UC-003-boundary-idempotency-key @boundary @idempotency_key

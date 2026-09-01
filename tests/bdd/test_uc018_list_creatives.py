@@ -539,7 +539,7 @@ def then_none_belong_to(ctx: dict, principal_id: str) -> None:
 
 # ── #1721 lane D: rows whose behavior the transport-seam conversion can delete ──
 #
-# salesagent-prkv.5 converts _handle_list_creatives_skill (and the other handlers this
+# converts _handle_list_creatives_skill (and the other handlers this
 # PR opened) to build the typed request through the shared build_*_request seam, and
 # moves the MCP structured->flat sort/pagination coercion into
 # _build_list_creatives_request. Two families of behavior are silently deletable by
@@ -863,19 +863,18 @@ def then_error_code_with_suggestion(ctx: dict, code: str) -> None:
         f"or an out-of-range pagination.max_results violates a SCHEMA CONSTRAINT under "
         f"pinned 3.1.1, so it must be refused rather than silently coerced."
     )
-    # THE CODE DIFFERS BY TRANSPORT, and that is salesagent-yq14n, not an intent this row
-    # endorses. An out-of-enum sort value, or pagination.max_results above the schema's
-    # maximum of 100, violates a SCHEMA CONSTRAINT -- which pinned 3.1.1 assigns to
-    # INVALID_REQUEST ("violates schema constraints"), not VALIDATION_ERROR ("beyond schema
-    # validation"). REST reaches the spec-correct code because its body is derived from the
-    # DTO, so the failure is attributed at the schema layer; MCP and A2A still raise from the
-    # typed boundary first. The feature row names the code the spec requires; the exception
-    # below is the recorded gap, and it SHRINKS to nothing when yq14n lands.
-    transport = ctx.get("transport")
-    expected = code
-    if code == "INVALID_REQUEST" and transport in {"mcp", "a2a"}:
-        expected = "VALIDATION_ERROR"
-    assert_envelope_shape(envelope, expected, recovery="correctable")
+    # The code no longer differs by transport, so the row's code is asserted as written.
+    # An out-of-enum sort value, or pagination.max_results above the schema's maximum of
+    # 100, violates a SCHEMA CONSTRAINT -- which pinned 3.1.1 assigns to INVALID_REQUEST
+    # ("violates schema constraints"), not VALIDATION_ERROR ("beyond schema validation").
+    # This step used to downgrade the expectation to VALIDATION_ERROR on mcp and a2a,
+    # because only REST reached the spec-correct code (its body is derived from the DTO,
+    # so the failure was attributed at the schema layer while the others raised from the
+    # typed boundary first). That exception was recorded as shrinking to nothing once the
+    # transports agreed. They now do -- adcp_error_for maps a pydantic ValidationError to
+    # AdCPInvalidRequestError -- so it is gone rather than left to rot into a downgrade
+    # that hides a future regression.
+    assert_envelope_shape(envelope, code, recovery="correctable")
     assert envelope["errors"][0].get("suggestion"), (
         f"the {code} envelope must carry a recovery suggestion: {envelope['errors'][0]}"
     )
