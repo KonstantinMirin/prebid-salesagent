@@ -6,6 +6,10 @@ import time
 from datetime import UTC
 from pathlib import Path
 
+#: Used by the table-cleanup except blocks below, which referenced it undefined --
+#: a NameError there would have masked the delete failure it exists to report.
+logger = logging.getLogger(__name__)
+
 import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session as SASession

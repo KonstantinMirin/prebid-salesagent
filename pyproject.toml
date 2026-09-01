@@ -159,7 +159,6 @@ ignore = [
     "E501",    # Handled by ruff formatter; manual enforcement would conflict
     "E402",    # Flask app (admin_ui.py) requires imports after app config
     "E722",    # Bare excepts in error-recovery paths (adapters, auth) — prefer specific exceptions
-    "F821",    # False positives from conditional imports and TYPE_CHECKING blocks
     "F403",    # Star imports in __init__.py re-exports — prefer explicit imports when touching
     "F405",    # Consequence of F403
     "E741",    # Short `l` in math-heavy loops — renaming hurts readability
@@ -181,7 +180,28 @@ max-statements = 50
 "inspect.getsource".msg = "inspect.getsource() is banned in tests. Write behavioral tests that exercise the actual code path instead of asserting strings exist in source code. See salesagent-gqzp."
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["E722", "F821"]
+# F821 is no longer ignored globally. It was, on the stated grounds of "false positives
+# from conditional imports and TYPE_CHECKING blocks" -- but almost nothing it flagged was
+# that. Turning it on surfaced 9 real undefined names under tests/, every one a latent
+# NameError: a `logger` referenced by two except blocks that would have masked the very
+# delete failure they report, an `AdCPSalesAgentError` raised but never imported, a
+# `wire_absent` step helper never imported into two step modules, and three missing
+# annotation imports. All nine are fixed rather than pinned.
+#
+# The ignore also cost a live bug: a `context` block edited into the wrong builder
+# function referenced an undeclared name, ruff stayed silent, and it surfaced as four
+# NameErrors only after a 25-minute in-network e2e run.
+#
+# The 9 remaining violations are all in src/ and are likewise NOT the documented false
+# positive -- they are undefined names (`oauth_client_id`, `formats`, `_inspect`, ...)
+# that look latent-real but sit in admin code this change does not touch. They are pinned
+# per FILE so the rule stays live everywhere else and this list can only shrink.
+# FIXME(#2099): investigate and remove these four entries.
+"src/admin/blueprints/api.py" = ["F821"]
+"src/admin/blueprints/products.py" = ["F821"]
+"src/admin/tests/unit/test_auth.py" = ["F821"]
+"src/core/schemas/__init__.py" = ["F821"]
+"tests/*" = ["E722"]
 "admin_ui.py" = ["E402", "E722"]
 
 # ─── Coverage configuration ──────────────────────────────────────

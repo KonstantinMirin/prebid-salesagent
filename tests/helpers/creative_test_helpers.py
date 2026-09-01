@@ -11,11 +11,15 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from tests.factories.creative_asset import AssetSpec, assert_assets, build_assets, image_spec
 from tests.harness import make_mock_uow
 from tests.helpers.adcp_factories import create_test_format_id
+
+if TYPE_CHECKING:
+    from src.core.schemas import Creative
 
 
 def make_creative_dict(creative_id: str = "c1", name: str = "Test Banner") -> dict:
@@ -208,7 +212,7 @@ def make_test_creative(
     status: str = "approved",
     tags: list[str] | None = None,
     assets: dict | None = None,
-) -> Creative:  # type: ignore[name-defined]
+) -> Creative:
     """Build a Creative model with standard fields for serialization tests.
 
     Shared between test_creative_response_serialization and test_list_creatives_serialization.

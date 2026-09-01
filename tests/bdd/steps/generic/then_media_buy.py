@@ -761,3 +761,4 @@ def then_error_has_retry_after(ctx: dict) -> None:
 
 # Single source of truth lives in _outcome_helpers; re-exported for backward compat.
 from tests.bdd.steps._outcome_helpers import _get_response_field as _get_response_field  # noqa: F811, PLC0414
+from tests.bdd.steps._outcome_helpers import wire_absent

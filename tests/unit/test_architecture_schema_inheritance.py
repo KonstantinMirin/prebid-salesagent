@@ -14,10 +14,13 @@ the corresponding local class inherits from it.
 import importlib
 import inspect
 from collections.abc import Sequence
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import annotated_types
 import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from tests.unit._architecture_helpers import assert_violations_match_allowlist
 

@@ -699,6 +699,10 @@ class BaseTestEnv:
 
         from src.core.errors.codes import AppErrorCode
 
+        # Raised a few lines below and never imported -- the A2A-task-failed branch would
+        # have died with a NameError instead of the error it means to raise.
+        from src.core.exceptions import AdCPSalesAgentError
+
         if task_result.status.state == TaskState.TASK_STATE_FAILED:
             if task_result.artifacts:
                 envelope = _wire_envelope(extract_data_from_artifact(task_result.artifacts[0]))

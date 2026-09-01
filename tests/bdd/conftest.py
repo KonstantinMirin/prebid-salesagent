@@ -23,7 +23,7 @@ import re
 from collections.abc import Generator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import pytest
 
