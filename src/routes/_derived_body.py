@@ -35,6 +35,18 @@ from src.core.schemas._base import SalesAgentBaseModel
 _ENVELOPE_FIELDS: dict[str, tuple[Any, Any]] = {"adcp_version": (str | None, None)}
 
 
+class DerivedBodyEnvelope(BaseModel):
+    """Type-checker-visible mirror of ``_ENVELOPE_FIELDS``.
+
+    ``derived_body_model`` builds its classes at runtime, so their names are variables and
+    cannot be used as annotations. Route modules declare TYPE_CHECKING-only stand-ins that
+    inherit this plus the DTO. Keep the two in step: a field added to ``_ENVELOPE_FIELDS``
+    belongs here too, or the checker will not know the derived bodies carry it.
+    """
+
+    adcp_version: str | None = None
+
+
 def derived_body_model(
     name: str,
     dto: type[BaseModel],

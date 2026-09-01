@@ -55,7 +55,7 @@ from src.core.tools.creatives import listing as creatives_listing_module
 from src.core.tools.creatives import sync_wrappers as creatives_sync_module
 from src.core.validation_helpers import adcp_validation_boundary
 from src.core.version_compat import apply_version_compat
-from src.routes._derived_body import derived_body_model
+from src.routes._derived_body import DerivedBodyEnvelope, derived_body_model
 
 logger = logging.getLogger(__name__)
 
@@ -84,9 +84,21 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 # fields (is_fixed/rate/price_guidance) that the pinned 3.1.1 schema does not define, while
 # MCP and A2A (which read an ABSENT version as None) served the pinned shape. Deriving the
 # envelope removes the guess: absent means absent on every transport.
-GetProductsBody = derived_body_model(
-    "GetProductsBody", GetProductsRequestDTO, products_module.create_get_products_request
-)
+if TYPE_CHECKING:
+    # TYPE-CHECKER ONLY. The runtime class is the derivation in the else branch; this says
+    # what it reads as, because derived_body_model returns a VARIABLE holding a class and a
+    # variable cannot annotate a route parameter. Not a second field-set definition: nothing
+    # here exists at runtime, and test_architecture_rest_body_completeness.py still grades the
+    # real class via __derived_from_dto__. Imprecision is deliberate and one-way -- a derived
+    # body is DTO fields INTERSECT impl parameters, a SUBSET, so the checker may believe in a
+    # field the body dropped; it never hides a field the body has.
+
+    class GetProductsBody(DerivedBodyEnvelope, GetProductsRequestDTO): ...
+
+else:
+    GetProductsBody = derived_body_model(
+        "GetProductsBody", GetProductsRequestDTO, products_module.create_get_products_request
+    )
 
 
 class CreateMediaBuyBody(SalesAgentBaseModel):
@@ -228,9 +240,21 @@ class GetMediaBuysBody(SalesAgentBaseModel):
 # comes from the DTO) while REST went on advertising the 2.5 map, so the SAME spec-conformant
 # payload was accepted on one transport and rejected as INVALID_REQUEST on the other. That is
 # the divergence deriving both from one artifact exists to make unrepresentable.
-SyncCreativesBody = derived_body_model(
-    "SyncCreativesBody", LocalSyncCreativesRequest, creatives_sync_module.sync_creatives_raw
-)
+if TYPE_CHECKING:
+    # TYPE-CHECKER ONLY. The runtime class is the derivation in the else branch; this says
+    # what it reads as, because derived_body_model returns a VARIABLE holding a class and a
+    # variable cannot annotate a route parameter. Not a second field-set definition: nothing
+    # here exists at runtime, and test_architecture_rest_body_completeness.py still grades the
+    # real class via __derived_from_dto__. Imprecision is deliberate and one-way -- a derived
+    # body is DTO fields INTERSECT impl parameters, a SUBSET, so the checker may believe in a
+    # field the body dropped; it never hides a field the body has.
+
+    class SyncCreativesBody(DerivedBodyEnvelope, LocalSyncCreativesRequest): ...
+
+else:
+    SyncCreativesBody = derived_body_model(
+        "SyncCreativesBody", LocalSyncCreativesRequest, creatives_sync_module.sync_creatives_raw
+    )
 
 
 # DERIVED, not hand-written: DTO fields INTERSECT list_creatives_raw's parameters, plus the
@@ -240,20 +264,44 @@ SyncCreativesBody = derived_body_model(
 # MCP and A2A and silently did not here. REST and MCP now advertise the same set by
 # construction, and e2e_rest -- real HTTP against this route, with no schema of its own --
 # inherits it.
-ListCreativesBody = derived_body_model(
-    "ListCreativesBody",
-    ListCreativesRequestDTO,
-    creatives_listing_module.list_creatives_raw,
-)
+if TYPE_CHECKING:
+    # TYPE-CHECKER ONLY. The runtime class is the derivation in the else branch; this says
+    # what it reads as, because derived_body_model returns a VARIABLE holding a class and a
+    # variable cannot annotate a route parameter. Not a second field-set definition: nothing
+    # here exists at runtime, and test_architecture_rest_body_completeness.py still grades the
+    # real class via __derived_from_dto__. Imprecision is deliberate and one-way -- a derived
+    # body is DTO fields INTERSECT impl parameters, a SUBSET, so the checker may believe in a
+    # field the body dropped; it never hides a field the body has.
+
+    class ListCreativesBody(DerivedBodyEnvelope, ListCreativesRequestDTO): ...
+
+else:
+    ListCreativesBody = derived_body_model(
+        "ListCreativesBody",
+        ListCreativesRequestDTO,
+        creatives_listing_module.list_creatives_raw,
+    )
 
 
 # DERIVED: UpdatePerformanceIndexRequest fields INTERSECT update_performance_index_raw's
 # parameters -- the same three names, now typed off the DTO.
-UpdatePerformanceIndexBody = derived_body_model(
-    "UpdatePerformanceIndexBody",
-    UpdatePerformanceIndexRequestDTO,
-    performance_module.update_performance_index_raw,
-)
+if TYPE_CHECKING:
+    # TYPE-CHECKER ONLY. The runtime class is the derivation in the else branch; this says
+    # what it reads as, because derived_body_model returns a VARIABLE holding a class and a
+    # variable cannot annotate a route parameter. Not a second field-set definition: nothing
+    # here exists at runtime, and test_architecture_rest_body_completeness.py still grades the
+    # real class via __derived_from_dto__. Imprecision is deliberate and one-way -- a derived
+    # body is DTO fields INTERSECT impl parameters, a SUBSET, so the checker may believe in a
+    # field the body dropped; it never hides a field the body has.
+
+    class UpdatePerformanceIndexBody(DerivedBodyEnvelope, UpdatePerformanceIndexRequestDTO): ...
+
+else:
+    UpdatePerformanceIndexBody = derived_body_model(
+        "UpdatePerformanceIndexBody",
+        UpdatePerformanceIndexRequestDTO,
+        performance_module.update_performance_index_raw,
+    )
 
 
 # DERIVED against the shared BUILDER, not the ``req=``-taking raw wrapper: the wrapper's
@@ -261,37 +309,85 @@ UpdatePerformanceIndexBody = derived_body_model(
 # set. ``build_list_creative_formats_request`` is the seam A2A already selects against
 # (_handle_list_creative_formats_skill), so REST and A2A now compute their field sets from
 # the same two artifacts.
-ListCreativeFormatsBody = derived_body_model(
-    "ListCreativeFormatsBody",
-    ListCreativeFormatsRequestDTO,
-    creative_formats_module.build_list_creative_formats_request,
-)
+if TYPE_CHECKING:
+    # TYPE-CHECKER ONLY. The runtime class is the derivation in the else branch; this says
+    # what it reads as, because derived_body_model returns a VARIABLE holding a class and a
+    # variable cannot annotate a route parameter. Not a second field-set definition: nothing
+    # here exists at runtime, and test_architecture_rest_body_completeness.py still grades the
+    # real class via __derived_from_dto__. Imprecision is deliberate and one-way -- a derived
+    # body is DTO fields INTERSECT impl parameters, a SUBSET, so the checker may believe in a
+    # field the body dropped; it never hides a field the body has.
+
+    class ListCreativeFormatsBody(DerivedBodyEnvelope, ListCreativeFormatsRequestDTO): ...
+
+else:
+    ListCreativeFormatsBody = derived_body_model(
+        "ListCreativeFormatsBody",
+        ListCreativeFormatsRequestDTO,
+        creative_formats_module.build_list_creative_formats_request,
+    )
 
 
 # DERIVED against the builder, same as ListCreativeFormatsBody above. The builder was added
 # for this: list_authorized_properties had none, so every transport re-enumerated the three
 # fields by hand (the MCP wrapper, the A2A handler, and this body), which is the enumeration
 # this work exists to delete.
-ListAuthorizedPropertiesBody = derived_body_model(
-    "ListAuthorizedPropertiesBody",
-    ListAuthorizedPropertiesRequestDTO,
-    properties_module.build_list_authorized_properties_request,
-)
+if TYPE_CHECKING:
+    # TYPE-CHECKER ONLY. The runtime class is the derivation in the else branch; this says
+    # what it reads as, because derived_body_model returns a VARIABLE holding a class and a
+    # variable cannot annotate a route parameter. Not a second field-set definition: nothing
+    # here exists at runtime, and test_architecture_rest_body_completeness.py still grades the
+    # real class via __derived_from_dto__. Imprecision is deliberate and one-way -- a derived
+    # body is DTO fields INTERSECT impl parameters, a SUBSET, so the checker may believe in a
+    # field the body dropped; it never hides a field the body has.
+
+    class ListAuthorizedPropertiesBody(DerivedBodyEnvelope, ListAuthorizedPropertiesRequestDTO): ...
+
+else:
+    ListAuthorizedPropertiesBody = derived_body_model(
+        "ListAuthorizedPropertiesBody",
+        ListAuthorizedPropertiesRequestDTO,
+        properties_module.build_list_authorized_properties_request,
+    )
 
 
 # DERIVED: ListAccountsRequest fields INTERSECT build_list_accounts_request's kwargs. The
 # hand-written class dropped ``adcp_major_version``, which the builder accepts and the DTO
 # declares -- the version envelope's other half, so a buyer could negotiate by version
 # string here but not by major version.
-ListAccountsBody = derived_body_model(
-    "ListAccountsBody", ListAccountsRequestDTO, accounts_module.build_list_accounts_request
-)
+if TYPE_CHECKING:
+    # TYPE-CHECKER ONLY. The runtime class is the derivation in the else branch; this says
+    # what it reads as, because derived_body_model returns a VARIABLE holding a class and a
+    # variable cannot annotate a route parameter. Not a second field-set definition: nothing
+    # here exists at runtime, and test_architecture_rest_body_completeness.py still grades the
+    # real class via __derived_from_dto__. Imprecision is deliberate and one-way -- a derived
+    # body is DTO fields INTERSECT impl parameters, a SUBSET, so the checker may believe in a
+    # field the body dropped; it never hides a field the body has.
+
+    class ListAccountsBody(DerivedBodyEnvelope, ListAccountsRequestDTO): ...
+
+else:
+    ListAccountsBody = derived_body_model(
+        "ListAccountsBody", ListAccountsRequestDTO, accounts_module.build_list_accounts_request
+    )
 
 
 # DERIVED: SyncAccountsRequest fields INTERSECT build_sync_accounts_request's kwargs.
-SyncAccountsBody = derived_body_model(
-    "SyncAccountsBody", SyncAccountsRequestDTO, accounts_module.build_sync_accounts_request
-)
+if TYPE_CHECKING:
+    # TYPE-CHECKER ONLY. The runtime class is the derivation in the else branch; this says
+    # what it reads as, because derived_body_model returns a VARIABLE holding a class and a
+    # variable cannot annotate a route parameter. Not a second field-set definition: nothing
+    # here exists at runtime, and test_architecture_rest_body_completeness.py still grades the
+    # real class via __derived_from_dto__. Imprecision is deliberate and one-way -- a derived
+    # body is DTO fields INTERSECT impl parameters, a SUBSET, so the checker may believe in a
+    # field the body dropped; it never hides a field the body has.
+
+    class SyncAccountsBody(DerivedBodyEnvelope, SyncAccountsRequestDTO): ...
+
+else:
+    SyncAccountsBody = derived_body_model(
+        "SyncAccountsBody", SyncAccountsRequestDTO, accounts_module.build_sync_accounts_request
+    )
 
 
 class GetAdcpCapabilitiesBody(SalesAgentBaseModel):
