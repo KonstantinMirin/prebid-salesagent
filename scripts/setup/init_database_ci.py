@@ -9,6 +9,11 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 
+#: Referenced by tests/e2e/adcp_request_builder.py's CI_TEST_ACCOUNT. Both must agree;
+#: the E2E builders send this id and this script is what makes it resolvable.
+CI_TEST_ACCOUNT_ID = "ci-test-account"
+
+
 def init_db_ci():
     """Initialize database with migrations only for CI testing."""
     try:
@@ -16,11 +21,14 @@ def init_db_ci():
         import uuid
         from datetime import UTC, datetime
 
+        from adcp.types import BrandReference
         from sqlalchemy import select
 
         from scripts.ops.migrate import run_migrations
         from src.core.database.database_session import get_db_session
         from src.core.database.models import (
+            Account,
+            AgentAccountAccess,
             AuthorizedProperty,
             CurrencyLimit,
             GAMInventory,
@@ -273,6 +281,47 @@ def init_db_ci():
                     stmt_tag = select(PropertyTag).filter_by(tenant_id=tenant_id, tag_id="all_inventory")
                     existing_tag = session.scalars(stmt_tag).first()
                     print("   Using existing currency limit and property tag")
+
+            # Account for the CI principal — placed HERE, after both the existing-tenant
+            # and new-tenant branches, because this is where tenant_id and principal_id are
+            # finally settled. `account` is in /required on sync-creatives-request.json,
+            # create-media-buy-request.json and update-media-buy-request.json, so without
+            # this row every E2E call to those tools is refused with INVALID_REQUEST before
+            # reaching the behavior under test.
+            #
+            # It belongs to the CI tenant, NOT to "default": this script MOVES the
+            # ci-test-token principal into a fresh tenant when it finds it elsewhere, so a
+            # grant pinned to "default" would block that very move with a
+            # ForeignKeyViolation and take down initialization.
+            stmt_account = select(Account).filter_by(tenant_id=tenant_id, account_id=CI_TEST_ACCOUNT_ID)
+            if not session.scalars(stmt_account).first():
+                session.add(
+                    Account(
+                        tenant_id=tenant_id,
+                        account_id=CI_TEST_ACCOUNT_ID,
+                        name="CI Test Account",
+                        status="active",
+                        operator="testbrand.com",
+                        brand=BrandReference(domain="testbrand.com"),
+                    )
+                )
+                # Both parents must be ON the database before the association row: its FKs
+                # are composite and AgentAccountAccess declares no ORM relationship to
+                # either, so the unit of work has nothing to order the INSERTs by.
+                session.flush()
+
+            # Resolution is gated on the GRANT, not on the account row alone —
+            # _require_account_access rejects a principal with no grant, so the account
+            # without this would resolve to AUTHORIZATION_ERROR rather than succeed.
+            stmt_grant = select(AgentAccountAccess).filter_by(
+                tenant_id=tenant_id, principal_id=principal_id, account_id=CI_TEST_ACCOUNT_ID
+            )
+            if not session.scalars(stmt_grant).first():
+                session.add(
+                    AgentAccountAccess(tenant_id=tenant_id, principal_id=principal_id, account_id=CI_TEST_ACCOUNT_ID)
+                )
+            session.commit()
+            print(f"  ✓ CI account ready: {CI_TEST_ACCOUNT_ID} (granted to {principal_id})")
 
             # Validate prerequisites before creating products
             print("Validating prerequisites for product creation...")
