@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 
 from src.admin.services import DashboardService
 from src.admin.utils import require_tenant_access
-from src.admin.utils.audit_decorator import log_admin_action
+from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, Principal, PushNotificationConfig, Tenant
 from src.core.database.repositories.push_notification_config import PushNotificationConfigRepository
@@ -655,7 +655,7 @@ def register_webhook(tenant_id, principal_id):
         # rendered from AuthenticationScheme itself (webhook_management.html), so it
         # is already the pinned spelling. Nothing is translated here on purpose: a
         # route-side lookup table is exactly the drift that put a fifth spelling in
-        # the database once already (salesagent-47n9.24, GH #1894).
+        # the database once already (GH #1894).
         scheme = None if auth_type == NO_AUTHENTICATION else auth_type
         credentials = request.form.get("hmac_secret") if scheme else None
 
@@ -742,6 +742,10 @@ def register_webhook(tenant_id, principal_id):
     # single row look like a validation problem for months.
     except AdCPValidationError as e:
         logger.warning("Rejected webhook registration for principal %r: %s", principal_id, e)
+        # The operator gets a flash, not a 500 — so this returns normally, which
+        # means the audit decorator would otherwise record the refusal as a
+        # SUCCESSFUL admin action. Say the action failed explicitly.
+        record_admin_action_failure(e)
         flash(f"Error registering webhook: {str(e)}", "error")
         return redirect(url_for("principals.manage_webhooks", tenant_id=tenant_id, principal_id=principal_id))
 
