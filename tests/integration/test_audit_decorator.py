@@ -338,15 +338,17 @@ def test_decorator_records_failure_when_the_handler_catches_and_returns(integrat
         response = client.post("/test/test_tenant_handled_failure")
         assert response.status_code == 200, "the operator gets a redirect, not a 500 — that is the point"
 
-    with get_db_session() as db_session:
-        stmt = select(AuditLog).filter_by(tenant_id="test_tenant_handled_failure", operation="AdminUI.handled_refusal")
-        audit_log = db_session.scalars(stmt).first()
+    # The decorator's audit logger committed on its own session; expire ours so the
+    # read is a fresh one rather than this transaction's earlier snapshot.
+    bound_factory_session.expire_all()
+    stmt = select(AuditLog).filter_by(tenant_id="test_tenant_handled_failure", operation="AdminUI.handled_refusal")
+    audit_log = bound_factory_session.scalars(stmt).first()
 
-        assert audit_log is not None, "no audit row was written at all"
-        assert audit_log.success is False, (
-            "a refused admin action was audited as SUCCESSFUL — the handler returned "
-            "normally, so the decorator never saw an exception"
-        )
-        assert "restricted range" in (audit_log.error_message or ""), (
-            f"the audit row must carry the refusal reason, got error_message={audit_log.error_message!r}"
-        )
+    assert audit_log is not None, "no audit row was written at all"
+    assert audit_log.success is False, (
+        "a refused admin action was audited as SUCCESSFUL — the handler returned "
+        "normally, so the decorator never saw an exception"
+    )
+    assert "restricted range" in (audit_log.error_message or ""), (
+        f"the audit row must carry the refusal reason, got error_message={audit_log.error_message!r}"
+    )
