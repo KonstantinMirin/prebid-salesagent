@@ -385,7 +385,9 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the error should indicate minimum credential length is 32 characters
     # Boundary: 31 chars (min-1)
     # Production rejects the short credential at the create_media_buy Pydantic
-    # boundary (Authentication.credentials MinLen=32) with VALIDATION_ERROR; the
+    # boundary (Authentication.credentials MinLen=32) with INVALID_REQUEST -- the wire
+    # carries issues[].keyword = minLength, a JSON Schema keyword, which is what makes it
+    # a schema-constraint rejection rather than a business-rule one; the
     # 32-char minimum is carried in the error MESSAGE. The RequestValidationError
     # envelope emits no suggestion for this path.
 

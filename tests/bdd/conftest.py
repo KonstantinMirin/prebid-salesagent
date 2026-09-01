@@ -1820,8 +1820,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # FIXME: These production features are not yet implemented.
         # strict=True: test MUST fail. strict=False: test MAY pass (some examples work).
         _UC004_XFAIL_TAGS: dict[str, tuple[str, bool]] = {
-            # Empty array validation: schema allows [] but spec says reject
-            "T-UC-004-identify-empty": ("empty media_buy_ids=[] not rejected by schema", True),
+            # Graduated: T-UC-004-identify-empty. The reason -- "empty media_buy_ids=[] not
+            # rejected by schema" -- no longer holds. The a2a boundary log shows the real
+            # thing on this path: "A2A boundary translating AdCPInvalidRequestError to
+            # envelope: INVALID_REQUEST (operation=get_media_buy_delivery)", i.e. a typed
+            # error reaching the wire, which is what the scenario asserts. Strict XPASS, so
+            # the pass is graded on the envelope rather than a reconstruction.
             "T-UC-004-identify-buyer-refs-empty": (
                 "buyer_refs removed in adcp 3.12 — empty buyer_refs=[] is now an unknown field, silently ignored",
                 True,
@@ -1834,7 +1838,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # reject invalid values; the REST wire already returns 400.
             # Suggestion parity for this path is pinned by
             # tests/integration/test_request_validation_suggestion_parity.py.
-            "T-UC-004-filter-invalid": ("step shadowing: generic request_params step drops status_filter", True),
+            # Graduated: T-UC-004-filter-invalid. This entry recorded a TEST defect, not a
+            # production gap -- the generic 'with {request_params}' When step shadowed the
+            # specific status_filter step and parsed 'status_filter "X"' (no '=') to {}, so
+            # the request dispatched with no params and succeeded. The generic step now
+            # requires the \w+=... key=value form, which is mutually exclusive with the
+            # space form, so the specific step matches and the invalid value reaches
+            # GetMediaBuyDeliveryRequest -- which, as the comment above always said, DOES
+            # reject it. Strict XPASS on a2a.
             # Date range validation: production doesn't validate start>end
             "T-UC-004-daterange-invalid": ("date range validation (start>end) not implemented", True),
             "T-UC-004-daterange-equal": ("date range validation (start==end) not implemented", True),
@@ -2235,10 +2246,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     # single_pending now normalizes on all wire transports (wire-drop
                     # confirmed XPASS, #1417) — removed. empty_array/unknown_value
                     # still raise ValidationError-not-AdCPSalesAgentError on a2a/mcp/rest, kept.
-                    "a2a-empty_array",
+                    # Graduated: a2a-empty_array and a2a-unknown_value. Their half of the
+                    # reason is the C4 gap "ValidationError not
+                    # AdCPSalesAgentError(INVALID_REQUEST)", which adcp_error_for closed --
+                    # both are strict XPASS on a2a now. mcp and rest are KEPT: they did not
+                    # xpass, so whatever still blocks them there is not the code mapping and
+                    # has not been shown to be closed. Graduating them together on the
+                    # strength of a2a's evidence is exactly the bulk-removal the protocol
+                    # warns about.
                     "mcp-empty_array",
                     "[rest-empty_array",
-                    "a2a-unknown_value",
                     "mcp-unknown_value",
                     "[rest-unknown_value",
                 },

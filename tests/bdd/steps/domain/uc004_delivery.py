@@ -1920,7 +1920,7 @@ def then_circuit_healthy(ctx: dict) -> None:
 
 @then("the configuration should be rejected")
 def then_config_rejected(ctx: dict) -> None:
-    """Assert production rejected the webhook config on the wire (VALIDATION_ERROR).
+    """Assert production rejected the webhook config on the wire (INVALID_REQUEST).
 
     The short credential is rejected by production's Pydantic boundary
     (Authentication.credentials MinLen=32) — assert the real two-layer AdCP
@@ -1935,7 +1935,13 @@ def then_config_rejected(ctx: dict) -> None:
     which is what core/error.json asks for -- "drawn from the JSON Schema
     vocabulary ... Matches the keyword names emitted by JSON Schema validators".
     """
-    ctx["result"].assert_wire_error("VALIDATION_ERROR", recovery="correctable", issues=[{"keyword": "minLength"}])
+    # INVALID_REQUEST, and this step's OWN evidence is why: it asserts
+    # issues[].keyword == "minLength", a JSON Schema keyword. A rejection carrying a JSON
+    # Schema keyword is by definition a "violates schema constraints" rejection, which
+    # 3.1/enums/error-code.json assigns to INVALID_REQUEST. VALIDATION_ERROR is for
+    # business rules "beyond schema validation" -- there is no such rule here, only
+    # Authentication.credentials MinLen=32.
+    ctx["result"].assert_wire_error("INVALID_REQUEST", recovery="correctable", issues=[{"keyword": "minLength"}])
 
 
 @then("the error should indicate minimum credential length is 32 characters")
@@ -1951,7 +1957,10 @@ def then_error_min_credential_length(ctx: dict) -> None:
     keyword refers to -- in JSON Schema terms, the keyword's value in the schema.
     Pinned to the credentials pointer specifically, as before.
     """
-    issues = ctx["result"].wire_error_issues("VALIDATION_ERROR", recovery="correctable")
+    # Same code as the rejection step above, for the same reason: the constraint that
+    # failed is MinLen=32, reported on the wire as issues[].keyword = minLength, so it is a
+    # schema-constraint rejection -> INVALID_REQUEST.
+    issues = ctx["result"].wire_error_issues("INVALID_REQUEST", recovery="correctable")
     credentials_entry = next(
         (i for i in issues if "credentials" in str(i.get("pointer", ""))),
         None,
@@ -2724,7 +2733,7 @@ def _delivery_boundary_handler(ctx: dict, field: str, expected: str) -> bool:
 
     if expected.strip().lower() in ("invalid", "error", "rejected"):
         # The rejection is graded on the WIRE: a code the buyer actually received,
-        # not the class of a reconstructed exception (salesagent-3dawm.18). The
+        # not the class of a reconstructed exception. The
         # in-process branch survives only for a request that never reached the wire
         # -- a pydantic failure while BUILDING it -- which is a genuinely different
         # outcome, not a lenient fallback for the same one.
@@ -2915,7 +2924,7 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
     # What is NOT accepted any more is the old `isinstance(error, (AdCPSalesAgentError,
     # ValidationError))`: admitting AdCPSalesAgentError there let a scenario that DID dispatch,
     # and produced no wire bytes, pass on the strength of a reconstructed exception
-    # (salesagent-3dawm.18).
+    # .
     from pydantic import ValidationError as PydanticValidationError
 
     error = ctx.get("error")
@@ -2951,7 +2960,7 @@ def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknow
         # inside a test, where the unmigrated majority graded a rebuilt object instead
         # of the buyer's envelope. Deleted rather than shrunk: measured first that no
         # BR-UC-004 scenario names a code absent from CODE_TABLE, so nothing here
-        # depended on the lenient branch (salesagent-3dawm.18).
+        # depended on the lenient branch.
         _assert_error_outcome(ctx, code, field, require_suggestion=require_suggestion)
         return
 
