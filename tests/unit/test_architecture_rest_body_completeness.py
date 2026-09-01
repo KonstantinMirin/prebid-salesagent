@@ -35,7 +35,6 @@ from adcp.types import GetAdcpCapabilitiesRequest
 
 from src.core.schemas import (
     CreateMediaBuyRequest,
-    GetMediaBuyDeliveryRequest,
     GetMediaBuysRequest,
     SalesAgentBaseModel,
     UpdateMediaBuyRequest,
@@ -205,14 +204,6 @@ _HAND_WRITTEN_GRADED: list[tuple[type, type, object, frozenset[str], str]] = [
         "a campaign-level Budget, and AdCP 3.1.1 defines no top-level budget on "
         "update_media_buy, so they went with it. The allowlist shrank because the violation "
         "was fixed, not because the rule was widened",
-    ),
-    (
-        GetMediaBuyDeliveryBody,
-        GetMediaBuyDeliveryRequest,
-        get_media_buy_delivery_raw,
-        frozenset(),
-        "account/status_filter stay permissive so the shared AdCP boundary, not FastAPI, "
-        "grades them -- which is what the A2A handler does for the same payload",
     ),
     (
         GetMediaBuysBody,

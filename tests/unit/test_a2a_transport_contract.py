@@ -28,30 +28,35 @@ _MOCK_IDENTITY = PrincipalFactory.make_identity(
     protocol="a2a",
 )
 
+
 # ---------------------------------------------------------------------------
-# All 13 A2A skills from the dispatch map (adcp_a2a_server.py:1416-1438)
+# The A2A skills, read from the server rather than copied.
+#
+# This was a hand-maintained list, and it was the THIRD copy of the same set -- the
+# dispatch map and the agent card being the other two. Deleting the non-spec skills from
+# those two left this one stale, which is the whole failure mode: a copy does not know it
+# is out of date. The agent card is the artifact a buyer actually reads, so it is the one
+# worth reading here.
 # ---------------------------------------------------------------------------
-ALL_SKILLS = [
-    "get_adcp_capabilities",
-    "get_products",
-    "create_media_buy",
-    "list_creative_formats",
-    "list_authorized_properties",
-    "update_media_buy",
-    "get_media_buy_delivery",
-    "update_performance_index",
-    "sync_creatives",
-    "list_creatives",
-    "approve_creative",
-    "get_media_buy_status",
-    "optimize_media_buy",
-]
+def _advertised_skills() -> list[str]:
+    from src.a2a_server.adcp_a2a_server import create_agent_card
+
+    return [s.name for s in create_agent_card().skills]
+
+
+ALL_SKILLS = _advertised_skills()
 
 DISCOVERY_SKILLS = [
     "get_adcp_capabilities",
     "list_creative_formats",
     "list_authorized_properties",
     "get_products",
+    # list_accounts only. Auth is OPTIONAL there per BR-RULE-055 -- an unauthenticated
+    # call returns an empty account list rather than a rejection. sync_accounts is NOT in
+    # this set: it writes, and it rejects an unauthenticated caller. Both were absent from
+    # the old hand-copied ALL_SKILLS, which is why deriving the list from the agent card
+    # surfaced the distinction at all.
+    "list_accounts",
 ]
 
 AUTH_REQUIRED_SKILLS = [s for s in ALL_SKILLS if s not in DISCOVERY_SKILLS]

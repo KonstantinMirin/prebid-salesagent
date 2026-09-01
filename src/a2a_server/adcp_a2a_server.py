@@ -442,7 +442,7 @@ class AdCPRequestHandler(RequestHandler):
             # resolve_identity raises AdCPAuthenticationError (AUTH_INVALID)
             # for a presented-but-invalid token. Route through the same
             # two-layer envelope builder used elsewhere in this file instead
-            # of dropping the wire code entirely (salesagent-mkso — this
+            # of dropping the wire code entirely (a recorded gap — this
             # branch previously re-wrapped as a bare InvalidRequestError with
             # no error_code/wire-code field at all).
             raise InvalidRequestError(message=str(e), data=build_two_layer_error_envelope(e)) from e
@@ -458,7 +458,7 @@ class AdCPRequestHandler(RequestHandler):
 
             if not identity.tenant:
                 # DEFER: tenant-axis, out of scope for the AUTH_MISSING/
-                # AUTH_INVALID split (salesagent-40kk) — left unchanged.
+                # AUTH_INVALID split — left unchanged.
                 raise InvalidRequestError(
                     message=f"Unable to determine tenant from authentication. Principal: {identity.principal_id}"
                 )
@@ -716,7 +716,7 @@ class AdCPRequestHandler(RequestHandler):
             # AUTH_MISSING code + suggestion reach the A2A wire — matching
             # REST's no-identity envelope (auth_context.py), which the bare
             # A2AError previously dropped. (#1417; split to AUTH_MISSING per
-            # v3.1.1 error-code.json — salesagent-mkso)
+            # v3.1.1 error-code.json — )
             if requires_auth and not auth_token:
                 raise InvalidRequestError(
                     message="Missing authentication token - Bearer token required in Authorization header",
@@ -748,7 +748,7 @@ class AdCPRequestHandler(RequestHandler):
                 # reused `requires_auth` (skill-based) here, so an invalid
                 # token on a discovery-only request was silently swallowed as
                 # anonymous by resolve_identity()'s require_valid_token=False
-                # path instead of being rejected (salesagent-7moz).
+                # path instead of being rejected.
                 identity = self._resolve_a2a_identity(auth_token, require_valid_token=True, context=context)
             elif not requires_auth:
                 # Unauthenticated discovery request — resolve tenant from headers only
@@ -1607,7 +1607,7 @@ class AdCPRequestHandler(RequestHandler):
         # principal_id resolved at all -> AUTH_MISSING per v3.1.1
         # error-code.json. Previously a bare InvalidRequestError with no
         # error_code/wire-code field at all — same layering violation as
-        # the :282-283/:286-287 sites above (salesagent-mkso).
+        # the :282-283/:286-287 sites above.
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
             raise InvalidRequestError(
                 message="Authentication required for skill invocation",
@@ -1637,12 +1637,7 @@ class AdCPRequestHandler(RequestHandler):
             # AdCP Spec Creative Management (centralized library approach)
             "sync_creatives": self._handle_sync_creatives_skill,
             "list_creatives": self._handle_list_creatives_skill,
-            "create_creative": self._handle_create_creative_skill,
-            "assign_creative": self._handle_assign_creative_skill,
             # Creative Management & Approval
-            "approve_creative": self._handle_approve_creative_skill,
-            "get_media_buy_status": self._handle_get_media_buy_status_skill,
-            "optimize_media_buy": self._handle_optimize_media_buy_skill,
             # Note: signals skills removed - should come from dedicated signals agents
             # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead
         }
@@ -1702,7 +1697,7 @@ class AdCPRequestHandler(RequestHandler):
         # Selected off get_products_raw's own signature rather than hand-listed, so the set
         # this transport forwards is "GetProductsRequest fields INTERSECT the callee's
         # parameters" -- the same set MCP advertises. A hand-listed forward is the shape that
-        # silently drops every field added later (salesagent-e8wt.1), and this one already
+        # silently drops every field added later, and this one already
         # named five of the twenty-one fields the DTO declares.
         # Call core function with identity — _impl validates search criteria
         response = await core_get_products_tool(
@@ -1856,7 +1851,7 @@ class AdCPRequestHandler(RequestHandler):
         # transport whose CreativeAsset.format_id was a different CLASS. Pydantic v2
         # equality is class-sensitive, so the registry match in _processing then
         # found nothing and every generative creative was written as a plain static
-        # asset with no error (salesagent-kyc89). Dumping keeps the rewrite and
+        # asset with no error. Dumping keeps the rewrite and
         # leaves the request identical to the one MCP and REST build.
         from src.core.format_cache import upgrade_legacy_format_id
         from src.core.schemas import SyncCreativesRequest
@@ -1906,7 +1901,7 @@ class AdCPRequestHandler(RequestHandler):
         # Call core function with optional parameters (fixing original validation bug)
         # Selected off list_creatives_raw's own signature rather than hand-listed. The 20-name
         # list this replaces is the shape that silently drops every field added later, which
-        # is how an A2A buyer's media_buy_ids came to be ignored (salesagent-e8wt.1 row 11).
+        # is how an A2A buyer's media_buy_ids came to be ignored (a recorded gap row 11).
         # Selecting by signature also keeps spec sort/pagination OFF this surface for free:
         # list_creatives_raw does not declare them, so they cannot be forwarded here while
         # exposing them on A2A remains a deferred, buyer-visible change.
@@ -1917,71 +1912,6 @@ class AdCPRequestHandler(RequestHandler):
         response = core_list_creatives_tool(**selected, identity=identity)
 
         return response
-
-    async def _handle_create_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
-        """Handle explicit create_creative skill invocation."""
-        tool_context = self._make_tool_context(identity, "create_creative")
-
-        # Map A2A parameters - format_id, content_uri, and name are required.
-        # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
-        _require_params(parameters, ["format_id", "content_uri", "name"])
-
-        # TODO: Implement create_creative tool
-        # Call core function with individual parameters
-        # response = core_create_creative_tool(...)
-        raise UnsupportedOperationError(message="create_creative skill not yet implemented")
-
-    async def _handle_get_creatives_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
-        """Handle explicit get_creatives skill invocation."""
-        tool_context = self._make_tool_context(identity, "get_creatives")
-
-        # TODO: Implement get_creatives tool
-        # identity already resolved at transport boundary
-        # response = core_get_creatives_tool(
-        #     group_id=parameters.get("group_id"),
-        #     media_buy_id=parameters.get("media_buy_id"),
-        #     status=parameters.get("status"),
-        #     tags=parameters.get("tags", []),
-        #     include_assignments=parameters.get("include_assignments", False),
-        #     identity=identity,
-        # )
-        raise UnsupportedOperationError(message="get_creatives skill not yet implemented")
-
-    async def _handle_assign_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
-        """Handle explicit assign_creative skill invocation."""
-        tool_context = self._make_tool_context(identity, "assign_creative")
-
-        # Map A2A parameters - media_buy_id, package_id, and creative_id are required.
-        # Raise typed AdCPValidationError so the outer dispatcher emits a two-layer envelope.
-        _require_params(parameters, ["media_buy_id", "package_id", "creative_id"])
-
-        # TODO: Implement assign_creative tool
-        # identity already resolved at transport boundary
-        # response = core_assign_creative_tool(
-        #     media_buy_id=parameters["media_buy_id"],
-        #     package_id=parameters["package_id"],
-        #     creative_id=parameters["creative_id"],
-        #     weight=parameters.get("weight", 100),
-        #     percentage_goal=parameters.get("percentage_goal"),
-        #     rotation_type=parameters.get("rotation_type", "weighted"),
-        #     override_click_url=parameters.get("override_click_url"),
-        #     identity=identity,
-        # )
-        raise UnsupportedOperationError(message="assign_creative skill not yet implemented")
-
-    async def _handle_approve_creative_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
-        """Handle explicit approve_creative skill invocation."""
-        raise UnsupportedOperationError(message="approve_creative skill not yet implemented")
-
-    # Signals skill handlers removed - should come from dedicated signals agents
-
-    async def _handle_get_media_buy_status_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
-        """Handle explicit get_media_buy_status skill invocation."""
-        raise UnsupportedOperationError(message="get_media_buy_status skill not yet implemented")
-
-    async def _handle_optimize_media_buy_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
-        """Handle explicit optimize_media_buy skill invocation."""
-        raise UnsupportedOperationError(message="optimize_media_buy skill not yet implemented")
 
     async def _handle_get_adcp_capabilities_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
         """Handle explicit get_adcp_capabilities skill invocation (CRITICAL AdCP discovery endpoint).
@@ -1998,7 +1928,7 @@ class AdCPRequestHandler(RequestHandler):
 
         # Consume the parameter bag wholesale rather than naming each field: a handler
         # that enumerates is the shape that silently drops every field added later --
-        # which is exactly how `ext` went missing here (salesagent-prkv.5 Lane D).
+        # which is exactly how `ext` went missing here (a recorded gap Lane D).
         # adcp_version / adcp_major_version are forwarded EXPLICITLY: select_request_fields
         # strips the version-envelope pair by design (a REST body defaults adcp_version to
         # "1.0.0", which the envelope pattern rejects), but for THIS tool they are real
@@ -2028,7 +1958,7 @@ class AdCPRequestHandler(RequestHandler):
         # input produces a byte-identical envelope on every transport (klkg).
         # Selected off the request model rather than hand-listed: the 13-name list this
         # replaces already dropped ext, pagination, property_id and publisher_domain,
-        # all of which ListCreativeFormatsRequest declares (salesagent-prkv.5 Lane D).
+        # all of which ListCreativeFormatsRequest declares (a recorded gap Lane D).
         with adcp_validation_boundary(context="list_creative_formats request"):
             req = build_list_creative_formats_request(
                 **select_request_fields(
@@ -2153,7 +2083,7 @@ class AdCPRequestHandler(RequestHandler):
         # flight_start_date, flight_end_date, idempotency_key and pacing -- all accepted on
         # MCP and REST. idempotency_key is the costly one: AdCP 3.1.1 puts it in
         # update-media-buy-request.json /required, so a spec-conformant A2A buyer's
-        # at-most-once key was being discarded, the same defect class as salesagent-e8wt.1.
+        # at-most-once key was being discarded, the same defect class as .
         # media_buy_id comes from the validated model; the rest of the bag is selected.
         selected = select_request_fields(UpdateMediaBuyRequest, params, accepted_kwargs(core_update_media_buy_tool))
         selected["media_buy_id"] = req.media_buy_id or ""
@@ -2460,24 +2390,6 @@ def create_agent_card() -> AgentCard:
                 tags=["creative", "library", "search", "adcp", "spec"],
             ),
             # Creative Management & Approval
-            AgentSkill(
-                id="approve_creative",
-                name="approve_creative",
-                description="Review and approve/reject creative assets (admin only)",
-                tags=["creative", "approval", "review", "adcp"],
-            ),
-            AgentSkill(
-                id="get_media_buy_status",
-                name="get_media_buy_status",
-                description="Check status and performance of media buys",
-                tags=["status", "performance", "tracking", "adcp"],
-            ),
-            AgentSkill(
-                id="optimize_media_buy",
-                name="optimize_media_buy",
-                description="Optimize media buy performance and targeting",
-                tags=["optimization", "performance", "targeting", "adcp"],
-            ),
             # Note: signals skills removed - should come from dedicated signals agents
             # Note: legacy get_pricing/get_targeting removed - use get_products and get_adcp_capabilities instead
         ],
