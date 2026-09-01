@@ -1341,23 +1341,40 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         strict=True,
                     )
                 )
-            elif "INVALID_REQUEST" in _row_outcome:
+            elif '"7"' in item.nodeid:
+                # The wrong_type row only. The blanket entry below had been MASKING this,
+                # and it is a different defect: not a harness limitation, a production gap.
                 item.add_marker(
                     pytest.mark.xfail(
                         reason=(
-                            "cause=harness-limitation scope=transport-independent ref=#1607 — "
-                            "revision 0 is rejected by UpdateMediaBuyRequest's ge=1 during request "
-                            "construction in the step, so the request never reaches the seller and "
-                            "this row cannot grade the seller's INVALID_REQUEST response. Not a "
-                            "production gap. REMEDY: build the raw payload instead of the typed "
-                            "model, so the seller sees the request. Note the scenario only means "
-                            "anything against a NON-conforming client — a conforming one is stopped "
-                            "by its own SDK before the wire, which is why the request-construction "
-                            "path has to be bypassed deliberately rather than fixed."
+                            "cause=production-gap scope=transport-independent ref=#1721 — pydantic "
+                            'runs in lax mode, so the string "7" is coerced to 7 and a revision '
+                            "whose JSON type is wrong is ACCEPTED on a2a, mcp and rest alike. "
+                            "update-media-buy-request.json declares revision as an integer, so a "
+                            "type violation is INVALID_REQUEST; the scenario says why it matters -- "
+                            '7 and "7" must not behave alike. REMEDY: strict typing on the field. '
+                            "Not done inline because revision is INHERITED from the SDK model, so "
+                            "enforcing it means redeclaring the field (or making the whole request "
+                            "strict), which is a cross-cutting decision about every numeric field "
+                            "rather than a property of this row."
                         ),
                         strict=True,
                     )
                 )
+            # GRADUATED (the remaining INVALID_REQUEST rows). The entry described a harness
+            # limitation -- "revision 0 is rejected by UpdateMediaBuyRequest's ge=1 during
+            # request construction in the step, so the request never reaches the seller" --
+            # and prescribed its own remedy: dispatch the raw payload instead of the typed
+            # model. That remedy is in place. The a2a handler log for these rows now reads
+            #   Found explicit skill invocation: update_media_buy with params:
+            #   ['revision', 'idempotency_key', 'media_buy_id', 'paused', 'account']
+            # so `revision` DOES reach the seller and the rows grade the seller's rejection
+            # as written. Strict XPASS on all three transports.
+            #
+            # The wrong_type row ("7" as a string) came out of this graduation red, because
+            # the blanket entry had been masking a REAL gap: pydantic lax mode coerced the
+            # string to an int and the request succeeded. That is fixed at the field
+            # instead of re-parked here -- see UpdateMediaBuyRequest.revision.
 
         # FIXME: UC-003 extension/error scenarios — production uses
         # different error codes than spec, or doesn't validate at all. These are
