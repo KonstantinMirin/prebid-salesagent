@@ -2117,35 +2117,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # ValidationError instead of AdCPSalesAgentError(INVALID_REQUEST/
             # ACCOUNT_NOT_FOUND). Substrings are transport-prefixed so only
             # the genuinely-failing rows are marked (impl valid rows pass).
-            (
-                "T-UC-004-partition-account",
-                {
-                    "impl-invalid_oneOf_both",
-                    "impl-account_not_found",
-                    "impl-empty_object",
-                    # valid rows (explicit_account_id / natural_key) now resolve the
-                    # account on a2a/mcp/rest — the delivery When seeds the named valid
-                    # accounts via _seed_valid_account_if_named / seed_account_with_access
-                    # (#1545), which is exactly the "seed the account in the
-                    # delivery Given" follow-up the e2e-harness-wiring branch flagged as the
-                    # condition for graduation. That seeding is present in the merged tree,
-                    # so the earlier REVERT no longer applies — the valid rows are removed.
-                    # account_not_found now correctly raises ACCOUNT_NOT_FOUND on
-                    # a2a/mcp/rest once resolution runs (seeded siblings exist, the unseeded
-                    # id 404s) — removed. Only invalid_oneOf_both / empty_object still raise
-                    # ValidationError-not-AdCPSalesAgentError on the wire, kept (impl path also fails).
-                    "a2a-invalid_oneOf_both",
-                    "a2a-empty_object",
-                    "mcp-invalid_oneOf_both",
-                    "mcp-empty_object",
-                    "[rest-invalid_oneOf_both",
-                    "[rest-empty_object",
-                },
-                "a2a/mcp/rest do not parse/resolve the invalid oneOf/empty account "
-                "reference into an AdCPSalesAgentError(INVALID_REQUEST) at the transport boundary; "
-                "these rows raise ValidationError instead. "
-                "See docs/test-debt-bdd-strict-markers.md items C1/C2/C4.",
-            ),
+            # GRADUATED (whole entry removed, not emptied): the invalid-oneOf / empty
+            # account reference now resolves into a typed AdCPSalesAgentError and reaches
+            # the wire as INVALID_REQUEST. NOTE FOR NEXT TIME -- the rows cannot simply be
+            # deleted one by one: this matcher reads
+            #     if not substrings or any(s in nodeid for s in substrings)
+            # so an entry whose set becomes EMPTY xfails EVERY row carrying its tag, and
+            # rows that were passing turn into strict xpasses. Thinning this set to zero
+            # produced 12 failures, including a row graduated earlier. Remove the entry.
             (
                 "T-UC-004-boundary-account",
                 {
@@ -2184,12 +2163,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "a2a-stratified",
                     "a2a-recent",
                     "a2a-failures_only",
-                    "a2a-unknown_value-systematic",
+                    # Graduated: a2a-unknown_value-systematic. An unknown sampling_method
+                    # value now rejects on a2a with a typed error on the wire. The set keeps
+                    # its other rows, so it stays non-empty -- emptying it would xfail every
+                    # row carrying this tag (see the account entry above).
                     "mcp-random-random",
                     "mcp-stratified",
                     "mcp-recent",
                     "mcp-failures_only",
-                    "mcp-unknown_value-systematic",
                     "[rest-unknown_value-systematic",
                 },
                 "sampling_method is unimplemented in get_media_buy_delivery (no schema "
@@ -2263,31 +2244,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # partition: impl now genuinely PASSES single_pending (production
             # normalizes the legacy 'pending_activation' label). a2a/mcp/rest
             # still fail on the unknown-value/empty-array C4 normalization.
-            (
-                "T-UC-004-partition-status-filter",
-                {
-                    # single_pending now normalizes on all wire transports (wire-drop
-                    # confirmed XPASS, #1417) — removed. empty_array/unknown_value
-                    # still raise ValidationError-not-AdCPSalesAgentError on a2a/mcp/rest, kept.
-                    # Graduated: a2a-empty_array and a2a-unknown_value. Their half of the
-                    # reason is the C4 gap "ValidationError not
-                    # AdCPSalesAgentError(INVALID_REQUEST)", which adcp_error_for closed --
-                    # both are strict XPASS on a2a now. mcp and rest are KEPT: they did not
-                    # xpass, so whatever still blocks them there is not the code mapping and
-                    # has not been shown to be closed. Graduating them together on the
-                    # strength of a2a's evidence is exactly the bulk-removal the protocol
-                    # warns about.
-                    "mcp-empty_array",
-                    "[rest-empty_array",
-                    "mcp-unknown_value",
-                    "[rest-unknown_value",
-                },
-                "single_pending: Gherkin 'pending_activation' is not a valid AdCP "
-                "MediaBuyStatus (item B1) — impl normalizes the legacy label, "
-                "a2a/mcp/rest do not. empty_array/unknown_value: ValidationError "
-                "not AdCPSalesAgentError(INVALID_REQUEST) (item C4). "
-                "See docs/test-debt-bdd-strict-markers.md.",
-            ),
+            # GRADUATED (whole entry removed, not emptied). Both halves of its bundled
+            # reason are closed: single_pending's legacy-label normalization was retired
+            # earlier, and the empty_array / unknown_value rows now reach the wire as a
+            # typed AdCPSalesAgentError on a2a, mcp AND rest. The entry is DELETED rather
+            # than left with an empty set, because this matcher reads
+            #     if not substrings or any(s in nodeid for s in substrings)
+            # so an empty set xfails EVERY row carrying the tag.
             # boundary: pending_activation fails everywhere; the 'failed' /
             # '[] (empty array...)' rows pass on impl/rest (ValidationError
             # satisfies 'invalid') but fail on a2a/mcp — transport-prefixed
