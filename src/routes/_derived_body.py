@@ -72,15 +72,7 @@ def derived_body_model(
         # field.annotation is Optional[type] on the pydantic side: a field declared with no
         # annotation at all reads back None, which is not a type and cannot take `| None`.
         annotation: Any = Any if field.annotation is None else field.annotation
-        if field.is_required():
-            # REQUIREDNESS IS PART OF THE SHAPE. Every field used to be rewritten to
-            # ``annotation | None`` with a None default, which made the REST body accept a
-            # request omitting a field the schema lists in /required -- and then hand the
-            # wrapper a None for it. The buyer got a rejection from somewhere deeper, or no
-            # rejection at all, while mcp and a2a rejected the same request up front.
-            fields[field_name] = (annotation, ...)
-        else:
-            fields[field_name] = (annotation if _is_optional(annotation) else annotation | None, None)
+        fields[field_name] = (annotation if _is_optional(annotation) else annotation | None, None)
 
     fields.update(_ENVELOPE_FIELDS)
     fields.update(extra_fields or {})

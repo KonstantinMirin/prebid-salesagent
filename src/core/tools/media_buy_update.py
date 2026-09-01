@@ -55,8 +55,6 @@ from src.core.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
-from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
-
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
     require_identity,
@@ -979,17 +977,9 @@ def _update_media_buy_impl(
                         # Sync creatives (upload/update)
                         sync_response = _sync_creatives_impl(
                             creatives=pkg_update.creatives,
-                            # The typed Assignment the request model declares, not the
-                            # {creative_id: [package_id]} map this used to build. That map
-                            # was a second, internal-only spelling of the same relation, and
-                            # it forced _sync_creatives_impl to accept a dict as well as the
-                            # spec's list -- so the one internal caller widened the type for
-                            # every transport.
-                            assignments=[
-                                Assignment(creative_id=c.creative_id, package_id=pkg_update.package_id)
-                                for c in pkg_update.creatives
-                                if c.creative_id
-                            ],
+                            assignments={
+                                c.creative_id: [pkg_update.package_id] for c in pkg_update.creatives if c.creative_id
+                            },
                             identity=identity,
                         )
 

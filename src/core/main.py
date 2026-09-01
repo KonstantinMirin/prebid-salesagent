@@ -338,6 +338,9 @@ from mcp.types import ToolAnnotations
 from src.core.schemas import (
     ListTasksRequest as LocalListTasksRequest,
 )
+from src.core.schemas import (
+    SyncCreativesRequest,
+)
 from src.core.tool_error_logging import with_error_logging
 from src.core.tools._announced_shape import apply_dto_announced_shape
 from src.core.tools.accounts import list_accounts, sync_accounts
@@ -407,9 +410,7 @@ _register_tool(sync_accounts)
 _register_tool(get_adcp_capabilities)
 _register_tool(get_products)
 _register_tool(list_creative_formats)
-# No explicit DTO: both wrappers now call build_sync_creatives_request, so the model
-# resolves from the builder like every other template-following tool.
-_register_tool(sync_creatives)
+_register_tool(sync_creatives, SyncCreativesRequest)
 _register_tool(list_creatives)
 # No explicit DTO: the wrapper now calls build_list_authorized_properties_request, so the
 # model resolves from the builder like every other template-following tool. One fewer user of

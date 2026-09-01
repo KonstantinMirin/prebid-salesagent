@@ -1,16 +1,14 @@
 """MCP and A2A wrapper functions for sync_creatives."""
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from adcp import PushNotificationConfig
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import ContextObject, ValidationMode
-from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
+from adcp.types import ContextObject, CreativeAsset, ValidationMode
 from fastmcp.server.context import Context
 from pydantic import Field
 
 from src.core.helpers import enum_value
-from src.core.schemas.creative import CreativeAssetRequest, SyncCreativesRequest
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
@@ -18,59 +16,8 @@ from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, reso
 from ._sync import _sync_creatives_impl
 
 
-def build_sync_creatives_request(
-    *,
-    creatives: list[CreativeAssetRequest],
-    idempotency_key: str | None = None,
-    account: LibraryAccountReference | None = None,
-    assignments: list[Assignment] | None = None,
-    creative_ids: list[str] | None = None,
-    delete_missing: bool | None = None,
-    dry_run: bool | None = None,
-    validation_mode: ValidationMode | None = None,
-    push_notification_config: PushNotificationConfig | None = None,
-    context: ContextObject | None = None,
-) -> SyncCreativesRequest:
-    """Build the shared sync_creatives request for transport wrappers.
-
-    The ONE seam every transport constructs the typed request through, matching
-    build_list_authorized_properties_request and friends. It is what makes the tool's
-    ADVERTISED shape derivable: _register_tool resolves the DTO from the builder a wrapper
-    calls, so with this in place sync_creatives no longer needs the explicit ``dto=``
-    escape hatch.
-
-    ``account`` and ``idempotency_key`` are typed OPTIONAL here and REQUIRED by
-    SyncCreativesRequest, which lists both in /required. That split is deliberate: a
-    transport wrapper cannot make them positional-required without reordering its whole
-    signature, and the DTO is the one place the requirement should live anyway. Passing
-    None reaches the model and comes back as an INVALID_REQUEST naming the field -- which
-    is what a buyer omitting a required field should get. Before anything built the DTO,
-    the same omission was simply accepted.
-    """
-    return SyncCreativesRequest(
-        # Normalised to the request item type. A wire dict pydantic coerces on its own, but
-        # a MODEL instance of a different class it does not -- and in-process callers hand
-        # over library CreativeAsset objects, which would fail validation against
-        # CreativeAssetRequest despite carrying the same data. Coercing here keeps that
-        # detail at the boundary instead of making every caller convert.
-        creatives=[
-            c if isinstance(c, CreativeAssetRequest) else CreativeAssetRequest.model_validate(c, from_attributes=True)
-            for c in creatives
-        ],
-        idempotency_key=idempotency_key,
-        account=account,
-        assignments=assignments,
-        creative_ids=creative_ids,
-        delete_missing=delete_missing,
-        dry_run=dry_run,
-        validation_mode=validation_mode,
-        push_notification_config=push_notification_config,
-        context=context,
-    )
-
-
 async def sync_creatives(
-    creatives: list[CreativeAssetRequest],
+    creatives: list[CreativeAsset],
     idempotency_key: Annotated[
         str,
         Field(
@@ -80,7 +27,7 @@ async def sync_creatives(
             )
         ),
     ],
-    assignments: list[Assignment] | None = None,
+    assignments: dict[str, list[str]] | None = None,
     creative_ids: list[str] | None = None,
     delete_missing: Annotated[
         bool, Field(description="Delete creatives not in the sync payload (use with caution)")
@@ -118,33 +65,19 @@ async def sync_creatives(
 
     identity = enrich_identity_with_account(identity, account)
 
-    # Build the typed request FIRST, so the schema's own rules (idempotency_key's pattern,
-    # account's presence, the assignments item shape) are enforced here rather than only on
-    # whichever transport happened to construct the model. This is also the seam that makes
-    # the advertised shape derivable -- _register_tool reads the DTO off this builder.
-    req = build_sync_creatives_request(
+    # Phase 1a: Pass typed models directly to impl (no more model_dump conversion)
+    validation_mode_str = enum_value(validation_mode) or "strict"
+
+    response = _sync_creatives_impl(
         creatives=creatives,
-        idempotency_key=idempotency_key,
-        account=account,
         assignments=assignments,
         creative_ids=creative_ids,
         delete_missing=delete_missing,
         dry_run=dry_run,
-        validation_mode=validation_mode,
+        validation_mode=validation_mode_str,
         push_notification_config=push_notification_config,
         context=context,
-    )
-
-    response = _sync_creatives_impl(
-        creatives=req.creatives,
-        assignments=req.assignments,
-        creative_ids=req.creative_ids,
-        delete_missing=bool(req.delete_missing),
-        dry_run=bool(req.dry_run),
-        validation_mode=enum_value(req.validation_mode) or "strict",
-        push_notification_config=req.push_notification_config,
-        context=req.context,
-        idempotency_key=req.idempotency_key,
+        idempotency_key=idempotency_key,
         identity=identity,
     )
     return mcp_result(response)
@@ -153,12 +86,12 @@ async def sync_creatives(
 def sync_creatives_raw(
     # A2A/REST send wire dicts; _sync_creatives_impl validates each entry
     # individually (partial-success semantics with per-creative results).
-    creatives: list[CreativeAssetRequest],
-    assignments: list[Assignment] | None = None,
+    creatives: list[CreativeAsset] | list[dict[str, Any]],
+    assignments: dict = None,
     creative_ids: list[str] = None,
-    delete_missing: bool | None = None,
-    dry_run: bool | None = None,
-    validation_mode: ValidationMode | None = None,
+    delete_missing: bool = False,
+    dry_run: bool = False,
+    validation_mode: str = "strict",
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,
     account: LibraryAccountReference | None = None,
@@ -194,14 +127,8 @@ def sync_creatives_raw(
 
     identity = enrich_identity_with_account(identity, account)
 
-    # Through the SAME builder the MCP wrapper uses, so one tool has one shape on every
-    # transport. Possible once derived_body_model stopped rewriting every field to optional:
-    # while it did, REST accepted a request omitting a field the schema lists in /required
-    # and handed this wrapper a None for it.
-    req = build_sync_creatives_request(
+    return _sync_creatives_impl(
         creatives=creatives,
-        idempotency_key=idempotency_key,
-        account=account,
         assignments=assignments,
         creative_ids=creative_ids,
         delete_missing=delete_missing,
@@ -209,17 +136,6 @@ def sync_creatives_raw(
         validation_mode=validation_mode,
         push_notification_config=push_notification_config,
         context=context,
-    )
-
-    return _sync_creatives_impl(
-        creatives=req.creatives,
-        assignments=req.assignments,
-        creative_ids=req.creative_ids,
-        delete_missing=bool(req.delete_missing),
-        dry_run=bool(req.dry_run),
-        validation_mode=enum_value(req.validation_mode) or "strict",
-        push_notification_config=req.push_notification_config,
-        context=req.context,
-        idempotency_key=req.idempotency_key,
+        idempotency_key=idempotency_key,
         identity=identity,
     )

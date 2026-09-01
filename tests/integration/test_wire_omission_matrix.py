@@ -150,12 +150,9 @@ def _performance_env() -> Iterator[tuple[object, dict]]:
 @contextmanager
 def _sync_creatives_env() -> Iterator[tuple[object, dict]]:
     with CreativeSyncEnv() as env:
-        # account is in sync-creatives-request.json /required, so the call cannot be built
-        # without one. setup_default_account seeds the row and hands back the matching
-        # reference; setup_default_data runs inside it, so the tenant the FK names exists.
-        account = env.default_account_reference()
+        env.setup_default_data()
         creative = CreativeAssetFactory(creative_id="c_mcp_wire_shape", name="MCP Wire Shape Creative")
-        yield env, {"creatives": [creative], "account": account}
+        yield env, {"creatives": [creative]}
 
 
 _CASES = [

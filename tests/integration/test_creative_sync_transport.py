@@ -87,24 +87,16 @@ class TestSyncCreativeCreateTransport:
             assert db_creative.name == "Transport Test Creative"
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
-    def test_empty_creative_list_is_rejected(self, integration_db, transport):
-        """An empty creative list is not a no-op -- the schema forbids it.
-
-        sync-creatives-request.json declares ``creatives: {minItems: 1, maxItems: 100}``,
-        so ``[]`` violates a SCHEMA CONSTRAINT, which 3.1/enums/error-code.json assigns to
-        INVALID_REQUEST. This asserted the opposite until now -- that an empty list "is a
-        valid no-op" returning success -- and passed because no transport built
-        SyncCreativesRequest on this path: the constraint was declared and never enforced.
-        Every transport builds it through build_sync_creatives_request now, so the same
-        request gets the same answer on all four.
-        """
+    def test_empty_creative_list_returns_success(self, integration_db, transport):
+        """Empty creative list is a valid no-op across all transports."""
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
             result = env.call_via(transport, creatives=[])
 
-        assert not result.is_success, "an empty creatives array violates minItems: 1"
-        result.assert_wire_error("INVALID_REQUEST", recovery="correctable")
+        assert result.is_success
+        assert_envelope(result, transport)
+        assert len(result.payload.creatives) == 0
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_dry_run_does_not_persist(self, integration_db, transport):
