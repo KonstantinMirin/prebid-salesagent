@@ -434,7 +434,7 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_hybrid_invocation(
-        self, handler, sample_tenant, sample_principal, mock_identity, sample_products, validator
+        self, handler, sample_tenant, sample_principal, sample_account, mock_identity, sample_products, validator
     ):
         """Test hybrid invocation with both text and skill."""
         # Mock authentication token
@@ -647,7 +647,7 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_update_media_buy_skill(
-        self, handler, sample_tenant, sample_principal, mock_identity, sample_products, validator
+        self, handler, sample_tenant, sample_principal, mock_identity, sample_products, validator, sample_account
     ):
         """Test update_media_buy skill invocation."""
         # Create a media buy in database first
@@ -854,7 +854,7 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_sync_creatives_skill(
-        self, handler, sample_tenant, sample_principal, mock_identity, sample_products, validator
+        self, handler, sample_tenant, sample_principal, mock_identity, sample_products, validator, sample_account
     ):
         """Test sync_creatives skill invocation."""
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
@@ -878,7 +878,11 @@ class TestA2ASkillInvocation:
                         "format_id": "display_300x250",
                         "assets": build_assets(image_spec("asset_1", url="https://example.com/creative.jpg")),
                     }
-                ]
+                ],
+                # sync-creatives-request.json /required.
+                "idempotency_key": "a2a-sync-key-000001",
+                # The SEEDED account -- production resolves the reference against the DB.
+                "account": sample_account,
             }
             message = create_a2a_message_with_skill("sync_creatives", skill_params)
             params = SendMessageRequest(message=message)

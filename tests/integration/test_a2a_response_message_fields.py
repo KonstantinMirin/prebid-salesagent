@@ -115,7 +115,9 @@ class TestA2AMessageFieldValidation:
             assert_valid_skill_response(result, "create_media_buy")
 
     @pytest.mark.asyncio
-    async def test_sync_creatives_message_field_exists(self, handler, mock_auth_context, sample_principal):
+    async def test_sync_creatives_message_field_exists(
+        self, handler, mock_auth_context, sample_principal, sample_account
+    ):
         """Test sync_creatives returns a valid message field.
 
         SyncCreativesResponse also doesn't have a .message field, uses __str__
@@ -134,6 +136,11 @@ class TestA2AMessageFieldValidation:
                     }
                 ],
                 "validation_mode": "strict",
+                # sync-creatives-request.json /required.
+                "idempotency_key": "a2a-fields-key-000001",
+                # The SEEDED account: production resolves the reference against the DB, so a
+                # fabricated id constructs fine and then earns ACCOUNT_NOT_FOUND at the wire.
+                "account": sample_account,
             }
 
             # Call handler directly - may fail if external creative agent is unavailable

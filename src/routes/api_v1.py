@@ -15,10 +15,6 @@ if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
 from adcp.types import BrandReference, GetAdcpCapabilitiesRequest
-from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
-    AttributionWindow,
-    ReportingDimensions,
-)
 from fastapi import APIRouter, Depends, Request
 
 from src.core.auth_context import require_auth, resolve_auth
@@ -32,6 +28,7 @@ from src.core.schema_helpers import (
     to_push_notification_config,
     to_reporting_webhook,
 )
+from src.core.schemas import GetMediaBuyDeliveryRequest as GetMediaBuyDeliveryRequestDTO
 from src.core.schemas import GetProductsRequest as GetProductsRequestDTO
 from src.core.schemas import ListAuthorizedPropertiesRequest as ListAuthorizedPropertiesRequestDTO
 from src.core.schemas import ListCreativeFormatsRequest as ListCreativeFormatsRequestDTO
@@ -178,33 +175,23 @@ class UpdateMediaBuyBody(SalesAgentBaseModel):
     account: dict[str, Any] | None = None  # AccountReference; AdCP 3.1.1 /required
 
 
-class GetMediaBuyDeliveryBody(SalesAgentBaseModel):
-    # NOT DERIVED, for the same reason as GetMediaBuysBody below: the field SET already
-    # equals ``GetMediaBuyDeliveryRequest fields INTERSECT get_media_buy_delivery_raw
-    # parameters`` and is graded against it by
-    # test_hand_written_bodies_carry_the_derived_field_set, but one field's DTO annotation
-    # must not reach the wire.
-    #
-    # ``account`` stays ``dict``: bound to AccountReference, FastAPI rejects ``{}`` before
-    # any AdCP code runs and the route answers INVALID_REQUEST, while the A2A handler for
-    # the same payload rejects it inside ``to_account_reference`` and answers
-    # VALIDATION_ERROR (pinned by test_get_media_buy_delivery_rejects_malformed_account).
-    # INVALID_REQUEST is the better code -- ``{}`` is literally "missing required fields",
-    # which the pinned enums/error-code.json assigns to INVALID_REQUEST, not to
-    # VALIDATION_ERROR ("invalid field values ... beyond schema validation") -- but the fix
-    # is the missing-vs-value split in ``adcp_error_for``, which moves every transport at
-    # once. Typing it here would move REST alone, spreading the split that /creatives/sync
-    # (whose derived body types ``account``) already exhibits.
-    media_buy_ids: list[str] | None = None
-    status_filter: Any = None
-    start_date: str | None = None
-    end_date: str | None = None
-    reporting_dimensions: ReportingDimensions | None = None
-    attribution_window: AttributionWindow | None = None
-    include_package_daily_breakdown: bool | None = None
-    account: dict[str, Any] | None = None
-    context: dict[str, Any] | None = None
-    adcp_version: str | None = None
+if TYPE_CHECKING:
+    # TYPE-CHECKER ONLY; the runtime class is the derivation in the else branch.
+    class GetMediaBuyDeliveryBody(DerivedBodyEnvelope, GetMediaBuyDeliveryRequestDTO): ...
+
+else:
+    # DERIVED. It was hand-written to keep ``account`` a bare dict so FastAPI would not
+    # reject ``{}`` before AdCP code ran -- because A2A answered VALIDATION_ERROR for the
+    # same payload and typing it here would have moved REST alone. That comment named the
+    # real fix itself: the missing-vs-value split belongs in adcp_error_for, where it moves
+    # every transport at once. Keeping the body permissive worked around a divergence
+    # instead of removing it, and a permissive REST body is exactly how a required field
+    # goes unenforced on one transport.
+    GetMediaBuyDeliveryBody = derived_body_model(
+        "GetMediaBuyDeliveryBody",
+        GetMediaBuyDeliveryRequestDTO,
+        media_buy_delivery_module.get_media_buy_delivery_raw,
+    )
 
 
 class GetMediaBuysBody(SalesAgentBaseModel):

@@ -17,7 +17,8 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types import MediaBuyStatus
+from adcp.types import AccountReference, MediaBuyStatus
+from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 from sqlalchemy import func, select
 
 from src.core.database.database_session import get_db_session
@@ -34,6 +35,7 @@ from src.core.schemas import (
     UpdateMediaBuyRequest,
 )
 from src.core.testing_hooks import AdCPTestContext
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.helpers.media_buy_approval import run_approval
 from tests.integration.media_buy_helpers import (
     _get_tenant_dict,
@@ -636,7 +638,9 @@ class TestGetMediaBuysResponseFields:
             )
 
     @pytest.mark.asyncio
-    async def test_creative_approvals_populated(self, mb_tenant, mb_principal, mb_products, mb_identity):
+    async def test_creative_approvals_populated(
+        self, mb_tenant, mb_principal, mb_products, mb_identity, sample_account
+    ):
         """GMB-RS04: creative approval status per package.
 
         Creates a media buy, syncs creatives and assigns them to the package,
@@ -683,13 +687,18 @@ class TestGetMediaBuysResponseFields:
                             "agent_url": "https://creative.adcontextprotocol.org",
                             "id": "display_300x250",
                         },
-                        "assets": {},
-                        "url": "https://example.com/banner.png",
-                        "width": 300,
-                        "height": 250,
+                        # 3.1.1 puts the media reference inside ``assets``; the flat
+                        # url/width/height are pre-3.x and CreativeAssetRequest forbids extras.
+                        "assets": build_assets(image_spec("banner")),
                     }
                 ],
-                assignments={"c_approval_test": [package_id]},
+                # list[Assignment], not the internal {creative_id: [package_id]} map.
+                assignments=[Assignment(creative_id="c_approval_test", package_id=package_id)],
+                # sync-creatives-request.json /required.
+                idempotency_key="mbv3-sync-key-000001",
+                # The SEEDED account -- production resolves the reference against the DB, so a
+                # fabricated id constructs fine and then earns ACCOUNT_NOT_FOUND at the wire.
+                account=AccountReference(root=sample_account),
                 identity=mb_identity,
             )
 
