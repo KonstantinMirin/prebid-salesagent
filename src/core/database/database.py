@@ -126,6 +126,13 @@ def init_db(exit_on_error=False):
                 )
                 db_session.add(ci_test_account)
 
+                # Both parents must be ON the database before the association row: its
+                # FKs are COMPOSITE (tenant_id, principal_id) and (tenant_id, account_id),
+                # and AgentAccountAccess declares no ORM relationship to either, so the
+                # unit of work has nothing to order the INSERTs by and emitted the child
+                # first -- a ForeignKeyViolation that failed init_db outright.
+                db_session.flush()
+
                 # Resolution is gated on AgentAccountAccess, not on the account row
                 # alone: _require_account_access rejects a principal with no grant, so
                 # the account without this row would resolve to AUTHORIZATION_ERROR.
