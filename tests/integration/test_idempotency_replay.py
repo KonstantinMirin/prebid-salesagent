@@ -292,7 +292,7 @@ class TestMissingKeyRejectedAtWire:
 
         assert result.is_error, f"Missing idempotency_key must reject, got success: {result.payload}"
         result.assert_wire_error(
-            "VALIDATION_ERROR",
+            "INVALID_REQUEST",
             recovery="correctable",
         )
 

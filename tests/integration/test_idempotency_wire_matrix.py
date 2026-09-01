@@ -228,9 +228,14 @@ class TestMissingKeyWireMatrix:
         # never the synthesized fallback (a dead wire path must fail here).
         envelope = result.wire_error_envelope
         assert envelope is not None, f"missing-key rejection must carry the wire envelope on {transport.value}"
+        # INVALID_REQUEST, not VALIDATION_ERROR: idempotency_key is in
+        # create-media-buy-request.json /required, so its absence violates a SCHEMA
+        # CONSTRAINT, which 3.1/enums/error-code.json assigns to INVALID_REQUEST.
+        # VALIDATION_ERROR is reserved for business rules "beyond schema validation",
+        # and a required-field check is not beyond it.
         assert_envelope_shape(
             envelope,
-            "VALIDATION_ERROR",
+            "INVALID_REQUEST",
             recovery="correctable",
         )
         assert envelope["errors"][0].get("field") == "idempotency_key"

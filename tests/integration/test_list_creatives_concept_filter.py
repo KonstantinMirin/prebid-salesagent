@@ -150,17 +150,19 @@ class TestConceptIdsFilterValidation:
     def test_empty_concept_ids_emits_validation_envelope(self, integration_db, transport):
         """Wire transports surface the two-layer envelope with a suggestion.
 
-        THE CODE DIFFERS BY TRANSPORT TODAY, and that is a recorded bug (salesagent-yq14n),
-        not an intent this test endorses. creative-filters.json declares
-        ``concept_ids: {minItems: 1}``, so an empty array violates a SCHEMA CONSTRAINT --
-        which pinned 3.1.1 assigns to INVALID_REQUEST ("violates schema constraints"),
-        not VALIDATION_ERROR ("beyond schema validation").
+        creative-filters.json declares ``concept_ids: {minItems: 1}``, so an empty array
+        violates a SCHEMA CONSTRAINT -- which pinned 3.1.1 assigns to INVALID_REQUEST
+        ("violates schema constraints"), not VALIDATION_ERROR ("beyond schema validation").
 
-        REST reaches the spec-correct code because its body is derived from the DTO, so
-        FastAPI attributes the failure at the schema layer. MCP and A2A still raise from
-        coerce_creative_filters before any schema check, and emit VALIDATION_ERROR. The
-        expectation is per-transport here so the divergence is VISIBLE and one transport is
-        already right; unifying them is yq14n's job, not this test's.
+        The code is now the SAME on every transport. It was not: REST reached the
+        spec-correct code because its body is derived from the DTO, while MCP and A2A
+        raised from coerce_creative_filters before any schema check and answered
+        VALIDATION_ERROR. This test carried a per-transport expectation to keep that
+        divergence visible. It is gone -- adcp_error_for now maps a pydantic
+        ValidationError to AdCPInvalidRequestError, so the schema layer is attributed the
+        same way whichever transport the request arrived on -- so the expectation is
+        uniform again. Keep it uniform: a per-transport code here means one buyer gets a
+        different answer than another for the identical request.
         """
         with CreativeListEnv() as env:
             _seed_authenticated_principal(env)
@@ -169,8 +171,7 @@ class TestConceptIdsFilterValidation:
 
             envelope = result.wire_error_envelope
             assert envelope is not None, f"{transport}: no wire error envelope captured"
-            expected_code = "INVALID_REQUEST" if transport == "rest" else "VALIDATION_ERROR"
-            assert_envelope_shape(envelope, expected_code, recovery="correctable")
+            assert_envelope_shape(envelope, "INVALID_REQUEST", recovery="correctable")
             # POST-F3: the buyer is told how to recover. wire_error_envelope is always
             # a dict here (the AdCPToolError accessor lives in assert_envelope_shape).
             assert envelope["errors"][0].get("suggestion"), (

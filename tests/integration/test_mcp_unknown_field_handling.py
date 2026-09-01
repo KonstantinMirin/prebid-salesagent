@@ -24,7 +24,7 @@ def _create_tenant_with_product():
 
     Includes a Principal row matching ProductEnv's default principal_id
     ("test_principal") — the harness's identity_for() now nulls principal_id
-    when no matching DB row exists (salesagent-z9e0), so a real row is
+    when no matching DB row exists, so a real row is
     required for these calls to actually authenticate rather than fall
     through to the tenant's default require_auth brand_manifest_policy gate.
     """
@@ -48,7 +48,14 @@ class TestMcpDevMode:
             assert result is not None
 
     def test_unknown_field_rejected(self, integration_db):
-        """Dev mode: unknown field fails loudly for schema drift detection."""
+        """Dev mode: unknown field fails loudly for schema drift detection.
+
+        INVALID_REQUEST, not VALIDATION_ERROR. 3.1/enums/error-code.json splits the two by
+        WHERE the rule lives: INVALID_REQUEST is "violates schema constraints",
+        VALIDATION_ERROR is for business rules "beyond schema validation". A field the
+        schema does not declare is rejected BY the schema (extra="forbid" in dev), so it is
+        the former -- there is no business rule involved to be beyond.
+        """
         from tests.harness.product import ProductEnv
 
         with ProductEnv(tenant_id=TENANT_ID) as env:
@@ -57,7 +64,7 @@ class TestMcpDevMode:
 
             assert result.is_error
             result.assert_wire_error(
-                "VALIDATION_ERROR",
+                "INVALID_REQUEST",
                 recovery="correctable",
                 field="nonsense_field",
             )
