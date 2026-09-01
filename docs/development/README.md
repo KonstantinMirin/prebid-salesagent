@@ -18,6 +18,7 @@ See [Getting Started](GETTING_STARTED.md) for prerequisites, manual setup, testi
 - **[Patterns Reference](patterns-reference.md)** - Canonical examples for every key pattern (start here for new contributors)
 - **[Contributing](contributing.md)** - Development workflows, testing, code style
 - **[Structural Guards](structural-guards.md)** - Automated architecture enforcement tests
+- **[End-to-end testing](e2e-testing.md)** - The e2e stack, the two "e2e" suites, and how to run and debug them
 - **[Troubleshooting](troubleshooting.md)** - Common development issues
 
 ## Key Resources

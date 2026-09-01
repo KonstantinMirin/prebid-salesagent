@@ -56,7 +56,10 @@ with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
 ### Transport dispatching
 
 Every `_impl` function is wrapped by MCP, A2A, and REST transports. Tests should verify
-behavior across all transports. The `Transport` enum has four values:
+behavior across the transports that grade them. The `Transport` enum has seven
+members — the four in-process ones (`IMPL`, `A2A`, `MCP`, `REST`) plus three
+`E2E_*` variants that dispatch over real HTTP (`tests/harness/transport.py`).
+A unit or integration test may loop over the in-process transports directly:
 
 ```python
 from tests.harness.transport import Transport
@@ -66,7 +69,11 @@ for transport in [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]:
     assert result.is_success
 ```
 
-BDD tests do this automatically via `pytest_generate_tests()` parametrization.
+What the enum contains and what BDD auto-parametrizes are different claims:
+BDD's `pytest_generate_tests()` parametrizes **a2a/mcp/rest only** (plus
+`e2e_rest` when the in-network stack enables it) — BDD grades AdCP *wire*
+conformance, and IMPL has no wire. IMPL stays available to unit and
+integration tests through the harness.
 
 ### Symbol index
 
@@ -104,8 +111,9 @@ Step definitions are organized in two layers:
 - **`tests/bdd/steps/generic/`** — Reusable steps (auth, entity setup, assertions)
 - **`tests/bdd/steps/domain/`** — Use-case-specific steps (delivery, creative formats)
 
-Every BDD scenario is automatically parametrized across all 4 transports (IMPL, A2A, MCP, REST)
-unless tagged with a specific transport. The `ctx` fixture is a mutable dict shared across steps,
+Every BDD scenario is automatically parametrized across the wire transports (A2A, MCP, REST —
+plus `e2e_rest` in-network) unless tagged with a specific transport; IMPL is not
+auto-parametrized. The `ctx` fixture is a mutable dict shared across steps,
 with `ctx["env"]` holding the harness environment.
 
 ```bash
@@ -163,13 +171,11 @@ to all factories automatically. Just use factories inside a `with env:` block.
 ## Obligation Tests
 
 Tests tagged with `Covers: <obligation-id>` verify behavioral contracts.
-
-The obligation DOCUMENTS these ids referred to are no longer committed: they were
-generated reports, and a generated report kept in the tree drifts from its
-generator. `docs/test-obligations/` now holds only curated inputs
+`docs/test-obligations/` holds curated inputs only
 (`storyboard-issue-map.yaml`, `storyboard-wireability.yaml`,
-`bdd-traceability.yaml`). The rules below still bind any test carrying a
-`Covers:` tag; do not add new tags against a document that no longer exists.
+`bdd-traceability.yaml`); there is no committed obligation document to tag
+against, so do not add new `Covers:` tags. The rules below bind any test that
+carries one.
 
 ### Five hard rules
 
@@ -179,86 +185,27 @@ generator. `docs/test-obligations/` now holds only curated inputs
 4. MUST use factory-boy factories for data setup
 5. MUST NOT be mock-echo only (asserting mock return values)
 
-Rule 4 was "MUST have a `Covers:` tag". It is gone: there is no longer a document
-to tag against, and the guard that graded it was deleted with those documents.
-Telling a contributor both to add a tag and not to add one is worse than neither.
+## Test Data and Sessions: Factories and the Harness Only
 
-
-## Anti-Patterns in This Codebase
-
-The following patterns exist in older code but **MUST NOT be used in new tests**.
-Structural guards (`test_architecture_repository_pattern.py`) catch new violations.
-
-### `session.add()` in test bodies
+Create all test data with the factory-boy factories imported from
+`tests/factories` (never from `tests/fixtures`, whose dict-based namesakes
+return plain dicts, not ORM models), inside a harness env. Do not call
+`session.add()` or `get_db_session()` in test bodies — the harness owns the
+session and binds it to the factories — and do not hand-roll `mock.patch`
+stacks for dependencies the env already manages.
 
 ```python
-# WRONG — exists in tests/conftest_db.py and many integration tests
-with get_db_session() as session:
-    tenant = Tenant(tenant_id="test", name="Test", subdomain="test", ...)
-    session.add(tenant)
-    session.commit()
-
-# CORRECT — use factories inside harness
+# One env, factories, harness-managed mocks and session
 with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
     tenant = TenantFactory(tenant_id="t1")
-```
-
-### `get_db_session()` in test bodies
-
-```python
-# WRONG — exists in 130+ test files
-from src.core.database.database_session import get_db_session
-with get_db_session() as session:
-    result = session.scalars(select(MediaBuy).filter_by(...)).first()
-
-# CORRECT — use harness or integration_db fixture
-# The harness manages the session; factories commit via the bound session
-```
-
-### Dict-based factories from `tests/fixtures/`
-
-```python
-# WRONG — legacy dict factories, returns plain dicts not ORM models
-from tests.fixtures import TenantFactory  # This is the WRONG TenantFactory
-
-# CORRECT — factory-boy ORM factories
-from tests.factories import TenantFactory  # This is the RIGHT TenantFactory
-```
-
-### Raw dict construction instead of factories
-
-```python
-# WRONG
-tenant_data = {"tenant_id": "test", "name": "Test", "subdomain": "test", ...}
-
-# CORRECT
-tenant = TenantFactory(tenant_id="test")
-```
-
-### Manual mock setup instead of harness
-
-```python
-# WRONG — 15 lines of mock.patch scattered in test body
-with patch("src.core.tools.delivery._get_adapter") as mock_adapter:
-    with patch("src.core.database.database_session.get_db_session") as mock_db:
-        mock_adapter.return_value.get_delivery_metrics.return_value = {...}
-        ...
-
-# CORRECT — harness manages all patches
-with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
     env.set_adapter_response(buy_id, impressions=5000)
     result = env.call_impl(media_buy_ids=[buy_id])
 ```
 
-## Why these anti-patterns exist
-
-These are **pre-existing debt**, not established patterns. They predate the harness system
-and factory-boy migration. They are tracked in guard allowlists with `FIXME` comments and
-shrink over time. The structural guard `test_architecture_repository_pattern.py` has an
-allowlist of files permitted to use `get_db_session()` — **new files are never added**.
-
-**When you see existing tests using these patterns: do not copy them.** Use the harness
-and factories regardless of what the surrounding tests do.
+The structural guard `test_architecture_repository_pattern.py` fails new
+violations at `make quality`; its allowlist only shrinks. Tests that predate
+the harness and factories are legacy — do not copy their setup; all new work
+follows the pattern above.
 
 ## Quick Reference: Writing a New Test
 
@@ -270,10 +217,7 @@ from tests.factories import TenantFactory, PrincipalFactory, MediaBuyFactory
 
 @pytest.mark.requires_db
 class TestDeliveryReturnsMetrics:
-    """Delivery poll returns adapter metrics for active media buys.
-
-    Covers: UC-004-MAIN-POLL-01
-    """
+    """Delivery poll returns adapter metrics for active media buys."""
 
     def test_returns_impressions(self, integration_db):
         from tests.harness import DeliveryPollEnv
@@ -360,24 +304,12 @@ and the wire is exactly the regression this helper exists to catch.
 | Message | Human-readable content | `assert_envelope_shape(envelope, code, recovery=..., message_substr="...")` |
 | Recovery | Buyer retry semantics | `assert_envelope_shape(envelope, code, recovery="correctable")` |
 
-### What NOT to assert on (in new error tests)
-
-- `isinstance(error, AdCPValidationError)` — verifies reconstruction, not wire
-- `error.error_code == "VALIDATION_ERROR"` — verifies reconstructed attribute, not wire
-- `error.recovery == "correctable"` — same issue
-
-These patterns are acceptable ONLY in `_impl`-level tests (no wire involved) and in
-existing tests that predate this policy.
-
-### Migration path
-
-Existing tests (~660 call sites, ~80 BDD steps) use `ctx["error"]` or `result.error`
-(reconstructed exceptions). These are NOT broken — they continue to work. Migration is
-incremental:
-
-1. **New error tests**: MUST use `result.wire_error_envelope` + `assert_envelope_shape()`
-2. **Existing tests**: Migrate when touched for other reasons (boy-scout rule)
-3. **BDD Then steps**: Add wire-envelope variants alongside existing exception-based steps
+Assertions on the reconstructed exception — `isinstance(error, ...)`,
+`error.error_code == ...`, `error.recovery == ...` — verify the
+reconstruction layer, not the wire; they are valid only in `_impl`-level
+tests, where no wire exists. Tests that predate this policy still assert on
+reconstructed exceptions; migrate them to the envelope when touched, and
+never write a new one.
 
 ### TransportResult.wire_error_envelope
 
@@ -395,11 +327,9 @@ on success. This is the canonical field for error verification.
 | A2A       | Failed Task's artifact DataPart, stashed by `_envelope_to_adcp_error` | `None`                                                                | `on_message_send` + `_serialize_for_a2a` + envelope build |
 | IMPL      | `None` (no wire by definition)                                        | Built via `build_two_layer_error_envelope` against the caught error   | `build_two_layer_error_envelope` only                     |
 
-Only IMPL synthesizes, and only because it has no wire to lose. MCP used to
-populate this column as well; that made the field a mask rather than a view,
-because on a transport that HAS a wire the synthesized value is either
-redundant or it is hiding a lost capture. It hid exactly that until
-`MediaBuyListEnv` was fixed to capture its MCP wire.
+Only IMPL synthesizes, and only because it has no wire to lose. On a
+transport that HAS a wire, a synthesized value would be either redundant or a
+mask over a lost capture — which is why the private field stays `None` there.
 
 IMPL has no wire. `result.error_envelope()` returns the builder's envelope
 there — that is the only branch on which it may — so you see what production
@@ -410,8 +340,8 @@ synthesized value moves in lockstep with whatever the builder produces.
 Tests that need to catch real wire-shape regressions must run on REST,
 MCP, or A2A — only those transports observe actual wire bytes.
 
-`result.error` (reconstructed exception) remains available for backward
-compatibility. Reconstruction is lossy — assert on `result.error_envelope()`,
+`result.error` (reconstructed exception) exists for tests that predate this
+policy. Reconstruction is lossy — assert on `result.error_envelope()`,
 which returns the real wire wherever one exists and the builder's envelope only
 on IMPL. It RAISES when there is none, rather than letting a dead wire path pass
 on a rebuilt shape; `error_envelope_or_none()` is the sibling for callers that
@@ -420,9 +350,9 @@ reading it directly re-opens the substitution this pair exists to close.
 
 ### TransportResult.has_wire — declared, never defaulted
 
-`has_wire` is **required and keyword-only**. A default would make omission mean
-"this transport has no wire", and omission is the one thing that must not be
-silent — so leaving it out is a `TypeError`.
+`has_wire` is **required and keyword-only**. A default turns omission into a
+silent claim — "this transport has no wire" — and omission is the one thing
+that must not be silent, so leaving it out is a `TypeError`.
 
 It is declared **per construction site, not per dispatcher class**. A wire
 dispatcher legitimately builds results for requests that never left: a
@@ -431,10 +361,11 @@ missing-config guard, or a catch-all firing before anything was sent. Those are
 `True`, because the bytes did cross.
 
 **Do not branch on `has_wire` to decide whether to read a rebuilt envelope.** It
-is `False` on every A2A, MCP and IMPL error, so keying on it alone hands back a
+is `False` on every A2A, MCP, and IMPL error, so keying on it alone hands back a
 rebuilt envelope on transports that *do* have a wire, and discards a real
 captured one. What isolates IMPL is that IMPL is the only dispatcher populating
-the private synthesized field.
+the private synthesized field — an invariant pinned by
+`tests/unit/test_harness_mcp_never_synthesizes.py`.
 
 ### TransportResult.wire_response (success-path wire)
 
@@ -444,7 +375,7 @@ Populated on success by the REST dispatcher (HTTP body) and by the A2A/MCP
 dispatchers **only when the env routes through `_run_a2a_handler` /
 `_run_mcp_client`** (which stash the wire). Legacy `_run_mcp_wrapper` and the
 direct `*_raw` wrappers do not stash, so `wire_response` is `None` there — as it
-is on error and on IMPL. Today `CreativeFormatsEnv` and `CreativeListEnv` read it.
+is on error and on IMPL. `CreativeFormatsEnv` and `CreativeListEnv` read it.
 Use it to assert the **actual serialized shape** a buyer receives (e.g. the v3.1
 `format_id` `{agent_url, id}` federation contract on `list_creative_formats`)
 rather than the typed `payload`, whose fields are already coerced to their

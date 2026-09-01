@@ -136,7 +136,7 @@ fails on pin drift.
 
 - **Which version is authoritative:** the version the repo currently PINS — *unless* there is active work to comply with a different target version (a bump/migration in flight), in which case that TARGET version is the pin. Confirm which applies first.
 - **Where the spec lives** (`github.com/adcontextprotocol/adcp`): prose at `dist/docs/<version>/building/implementation/*.mdx`; the graded, executable contract at `dist/compliance/<version>/*.yaml`. The installed `adcp` SDK — codes, types, even reference implementations such as `adcp.server.idempotency` — is a CROSS-CHECK, **not** the authority; it can diverge from the spec.
-- **Why:** grounding protocol behavior in downstream artifacts (an internal contract item, or the mere existence of an SDK error code) instead of the spec prose + storyboard has produced an entire feature built inverse to the spec. The spec is the contract; everything else is derived.
+- **Why:** grounding protocol behavior in downstream artifacts (an internal contract item, or the mere existence of an SDK error code) instead of the spec prose + storyboard produces features built inverse to the spec. The spec is the contract; everything else is derived.
 - **Enforcement:** reviewers reject protocol-behavior changes that don't cite the spec; this complements the pin-drift guard above. Background: [docs/adcp-spec-version.md](docs/adcp-spec-version.md).
 
 ---
@@ -164,13 +164,10 @@ class Product(LibraryProduct):
   model_dump survival graded against the PINNED SCHEMA — and by
   `tests/unit/test_architecture_schema_inheritance.py`, which grades redeclarations
   against the library parent.
-- The inheritance guard was once deleted on the ground that such a guard "has to
-  enumerate how this repo spells its imports — every spelling it does not know is a
-  silent hole." The premise was true of the old implementation and is no longer true of
-  this one: the REDEFINITION rule decides membership by walking the live MRO and testing
-  `__module__`, so it consults no import spelling and has no spelling to miss. The
-  companion `test_all_library_types_have_local_subclass` is still alias-keyed, and is the
-  remaining place where a differently-spelled import goes unexamined.
+- The inheritance guard's REDEFINITION rule decides membership by walking the live
+  MRO and testing `__module__`, so it consults no import spelling and has no spelling
+  to miss. The companion `test_all_library_types_have_local_subclass` is alias-keyed,
+  and is the one place where a differently-spelled import goes unexamined.
 - A redeclaration needs an allowlist row unless it is **neither reshaped nor weakened**:
   same annotation (or a subclass), nullability not added, `is_required()` not relaxed,
   metadata a superset, no default introduced. A redeclaration that keeps the parent's
@@ -359,8 +356,8 @@ httpx owns the response state machine (including NOT following redirects). If yo
 writing `ipaddress`, `socket.gethostbyname`, or a hostname blocklist in `src/`, stop: that logic
 is already owned elsewhere.
 
-**Why:** address, TLS, redirect and retry policy re-decided at each call site is exactly how SSRF
-kept recurring here (#1589) — one call site always forgets one of them. One seam, one decision.
+**Why:** address, TLS, redirect and retry policy re-decided at each call site is how SSRF
+happens — one call site always forgets one of them. One seam, one decision.
 
 ```python
 # CORRECT: the seam decides address, TLS, redirect and retry policy
@@ -389,14 +386,16 @@ async with httpx.AsyncClient() as client:
    seam cannot re-export the thing it exists to contain.
 2. **Banned.** `ruff-egress.toml` bans the modules outright (`httpx`, `requests`, `aiohttp`,
    `urllib.request`, `httpcore`, `urllib3`, `http.client`, `httpx2`, `httpcore2`) plus
-   `fastmcp.Client` and the MCP transports. Third-party names are not ours to rebind, so a
-   ban list is the only mechanism for that half.
+   `fastmcp.Client`, the MCP transports, the un-pinnable `adcp` clients, `ipaddress`, and
+   `socket.gethostbyname`. A third-party name cannot be rebound from this repo, so a ban
+   list is the only mechanism for that half.
 3. **Exempted — and you cannot do it yourself.** The gate runs `--ignore-noqa`, which makes
    `# noqa` INERT for this config in every spelling. **Adding a `# noqa` for TID251/ANN401
    does nothing.** The only exemption channel is a row in `[lint.per-file-ignores]` in
    `ruff-egress.toml`, which is a review conversation.
 
-- **Enforced by:** `ruff-egress.toml` — TID251/ANN401 over `src/` AND `scripts/`, run by
+- **Enforced by:** `ruff-egress.toml` — TID251 over `src/` AND `scripts/`, plus ANN401
+  scoped to the outbound chain (`src/core/security`, `src/adapters`), run by
   `make quality-ci` with `--ignore-noqa --no-respect-gitignore`;
   `tests/unit/test_ruff_egress_bans.py` proves every ban FIRES on every resolving spelling
   (ruff does not validate `banned-api` keys, so a typo'd row is silently inert);
@@ -559,7 +558,7 @@ Tenant → CurrencyLimit (USD required for budget validation)
 **New error-path tests must assert on the wire envelope, not reconstructed exceptions.**
 The test harness reconstructs `AdCPError` from wire responses, but this reconstruction is lossy.
 Use `assert_envelope_shape(result.wire_error_envelope, code, recovery=...)` as the primary authority.
-See `tests/CLAUDE.md` § "Error Verification Policy" for the full policy, helpers, and migration path.
+See `tests/CLAUDE.md` § "Error Verification Policy" for the full policy and helpers.
 
 ### Entity Markers
 Tests are auto-tagged with entity markers by filename pattern. Use `-m` to run entity-scoped slices:
@@ -701,7 +700,7 @@ APPROXIMATED_API_KEY=your-approximated-api-key
 ### Database Schema
 - **Core**: tenants, principals, products, media_buys, creatives, audit_logs
 - **Workflow**: workflow_steps, object_workflow_mapping (human-in-the-loop approvals)
-- **Note**: the legacy `tasks` and `human_tasks` tables no longer exist in the schema — don't reference them
+- **Note**: there are no `tasks` or `human_tasks` tables in the schema — don't reference them
 
 ---
 

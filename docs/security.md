@@ -133,14 +133,17 @@ Tenants without configured ad servers show a "Pending Configuration" page instea
 - Includes timestamp, user, action, and result
 - Used for compliance and security monitoring
 
-## Outbound Egress (SSRF)
+## Outbound egress (SSRF)
 
 Every outbound HTTP request goes through one seam,
-`src/core/security/outbound_http.py` (`send` / `asend`), which owns the address,
-TLS, redirect and retry decision together. Call sites do not validate URLs, and
-adding a private-IP check or hostname blocklist at a call site is a defect
-rather than defence in depth — it re-opens the resolve-then-connect TOCTOU the
-seam closes by pinning the resolved IP.
+`src/core/security/outbound_http.py` (`send` / `asend`), which owns the
+address, TLS, redirect, and retry decision together. The few sanctioned
+dialers outside it are recorded, with reasons, in the seam's module docstring.
+Call sites do not validate URLs. Adding a private-IP check or hostname
+blocklist at a call site
+is a defect rather than defence in depth — it re-opens the resolve-then-connect
+TOCTOU (time-of-check to time-of-use) hole the seam closes by pinning the
+resolved IP.
 
 The seam refuses on two verdicts that share one address predicate:
 `check_registration` (DNS-free, grades a buyer-supplied URL before storage) and
@@ -155,7 +158,7 @@ runs `--ignore-noqa`, so a file cannot exempt itself — exemptions are rows in
 `[lint.per-file-ignores]` that land in a reviewed diff.
 
 **Full architecture, including how to add a new outbound call:**
-[security/outbound-egress.md](security/outbound-egress.md)
+[Outbound egress: one seam](security/outbound-egress.md)
 
 ## Security Testing Requirements
 
