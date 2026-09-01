@@ -41,7 +41,6 @@ from src.core.errors.issues import issues_from_validation_error
 from src.core.exceptions import (
     AdCPInvalidRequestError,
     AdCPSalesAgentError,
-    AdCPValidationError,
     adcp_error_for,
     build_two_layer_error_envelope,
 )
@@ -252,18 +251,19 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     loc = raw_loc[1:] if raw_loc and raw_loc[0] in ("body", "query", "path") else raw_loc
     field = ".".join(loc) or None
     message = first.get("msg") or "Request failed schema validation"
-    # Code selection by failure semantics, grounded in the AdCP graded
-    # error-compliance storyboard: a VALUE/enum/range violation on a
-    # structurally-valid field is canonically VALIDATION_ERROR; a missing/
-    # malformed/unknown field (structural) is INVALID_REQUEST. The full
-    # value-vs-structural reclassification across all fields is a repo-wide
-    # follow-up; for now the attribution_window family — reconciled to
-    # VALIDATION_ERROR upstream in adcp-req — is mapped explicitly.
-    if field and field.startswith("attribution_window"):
-        exc_cls = AdCPValidationError
-    else:
-        exc_cls = AdCPInvalidRequestError
-    adcp_exc = exc_cls(
+    # A rejection raised by request-schema validation is, by construction, a
+    # SCHEMA-constraint violation: FastAPI only ever raises it for what the
+    # pinned JSON Schema declares (3.1/core/duration.json gives interval
+    # {"minimum": 1} and unit an enum, so interval=0 and unit="weeks" are
+    # schema violations, not business-rule ones). INVALID_REQUEST is the code
+    # for that per 3.1/enums/error-code.json, and it is what MCP and A2A
+    # already emit for the same payload -- this path previously special-cased
+    # the attribution_window family to VALIDATION_ERROR, which made one request
+    # answer with two different codes depending on the transport it arrived on.
+    # Cross-field rules JSON Schema cannot express (a "campaign"-unit Duration
+    # must have interval == 1) are NOT reached here: they are enforced after
+    # the model validates, and correctly raise AdCPValidationError there.
+    adcp_exc = AdCPInvalidRequestError(
         field=field,
         issues=issues_from_validation_error(errors),
     )

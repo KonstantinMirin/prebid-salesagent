@@ -722,7 +722,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | interval_negative | {"post_click": {"interval": -1, "unit": "days"}} | error "INVALID_REQUEST" with suggestion |
       | invalid_unit | {"post_click": {"interval": 1, "unit": "weeks"}} | error "INVALID_REQUEST" with suggestion |
       | invalid_model | {"model": "last_click"} | error "INVALID_REQUEST" with suggestion |
-      | campaign_interval_not_one | {"post_click": {"interval": 2, "unit": "campaign"}} | error "INVALID_REQUEST" with suggestion |
+      | campaign_interval_not_one | {"post_click": {"interval": 2, "unit": "campaign"}} | error "VALIDATION_ERROR" with suggestion |
 
   @T-UC-004-boundary-attribution @boundary @attribution_window @BR-RULE-092
   Scenario Outline: Attribution window boundary - <boundary_point>
@@ -739,7 +739,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | both windows with model=last_touch | {"post_click": {"interval": 14, "unit": "days"}, "post_view": {"interval": 1, "unit": "days"}, "model": "last_touch"} | valid |
       | model only (data_driven) | {"model": "data_driven"} | valid |
       | unit=campaign with interval=1 | {"post_click": {"interval": 1, "unit": "campaign"}} | valid |
-      | unit=campaign with interval=2 (desc says must be 1) | {"post_click": {"interval": 2, "unit": "campaign"}} | error "INVALID_REQUEST" |
+      | unit=campaign with interval=2 (desc says must be 1) | {"post_click": {"interval": 2, "unit": "campaign"}} | error "VALIDATION_ERROR" |
       | interval=0 (below minimum) | {"post_click": {"interval": 0, "unit": "days"}} | error "INVALID_REQUEST" |
       | interval=1 (minimum boundary) | {"post_click": {"interval": 1, "unit": "days"}} | valid |
       | unit=weeks (not in enum) | {"post_click": {"interval": 1, "unit": "weeks"}} | error "INVALID_REQUEST" |
