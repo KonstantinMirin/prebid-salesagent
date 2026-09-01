@@ -423,7 +423,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     # empty file — so the next artifact regeneration silently reports liveness
     # as 0 for every check.
     #
-    # This is not hypothetical. tests/unit/test_architecture_env_route_agreement.py
+    # This is not hypothetical. tests/collection/test_architecture_env_route_agreement.py
     # shells out to `pytest tests/bdd --collect-only` to derive its marker sets,
     # which means `make quality` destroyed the liveness artifact on every run and
     # the published "graded by a LIVE scenario" figure could not be reproduced by

@@ -416,7 +416,7 @@ or as part of `make quality`.
 | `test_architecture_query_type_safety.py` | `enforce-sqlalchemy-2-0` (partial) | `test_no_legacy_session_query`, `test_models_use_mapped_not_column` |
 | `test_architecture_pre_commit_hook_count.py` | — | Commit-stage hook count ≤12 (D27) |
 | `test_architecture_pre_commit_no_additional_deps.py` | — | No `additional_dependencies` in pre-commit config (PR 2) |
-| `test_architecture_ci_bdd_shard_manifest.py` | — | BDD CI shards partition suite; matrix matches `SHARD_COUNTS` |
+| `tests/collection/test_architecture_ci_bdd_shard_manifest.py` | — | BDD CI shards partition suite; matrix matches `SHARD_COUNTS` |
 | `test_architecture_repo_invariants.py` | `repo-invariants` (partial) | Self-tests for `.fn()` detection in consolidated hook |
 
 Shared AST helpers live in `tests/unit/_architecture_helpers.py`. Guards use the

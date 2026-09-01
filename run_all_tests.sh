@@ -158,7 +158,7 @@ echo "Parallelism source: ${_parallelism_source}; worker cap derived from barrie
 # The in-network path always builds the full compose stack, so it can't honor
 # the "quick == no Docker" or the targeted contracts — those delegate to the
 # verbatim host runner that already implements them (DRY, single source).
-ALL_SUITES="unit,integration,bdd,admin,e2e,ui"
+ALL_SUITES="unit,integration,bdd,admin,e2e,ui,collection"
 DELEGATE=0
 case "${1:-ci}" in
     quick) DELEGATE=1 ;;
@@ -193,7 +193,7 @@ if [ "${E2E_WORKERS:-0}" -gt 0 ] 2>/dev/null; then
     # all 7223 items to run a slice of them -- 162.5 s per worker against 57.9 s
     # to import -- so collection cost was O(items x workers). The split is the
     # committed one at SHARD_COUNTS["bdd"]=2, the same assignment CI's matrix
-    # runs, so tests/unit/test_architecture_ci_bdd_shard_manifest.py already
+    # runs, so tests/collection/test_architecture_ci_bdd_shard_manifest.py already
     # grades the exact partition used here.
     #
     # A REAL NUMBER, not `auto`. `auto` resolves through
@@ -242,6 +242,13 @@ mkdir -p "$RESULTS_DIR"
 # unconditional, and unconditional is what makes it there when a slow run needs
 # explaining after the fact rather than only when someone predicted it.
 export PYTEST_WORKER_PROFILE="${PYTEST_WORKER_PROFILE:-/app/$RESULTS_DIR/worker-profile}"
+
+# What this run's sessions COLLECTED, published so the observers of a collection
+# do not each have to re-collect it in a subprocess. Same unconditional
+# reasoning as the profile above: the cost is one JSON write per process at
+# session end, and the artifact is only useful if it is there without anyone
+# having predicted they would need it. See tests/_collection_manifest.py.
+export PYTEST_COLLECTION_MANIFEST="${PYTEST_COLLECTION_MANIFEST:-/app/$RESULTS_DIR/collection-manifest}"
 
 dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile runner "$@"; }
 
