@@ -338,7 +338,12 @@ _XFAIL_TAGS: dict[str, str] = {
     # ext-g: _validate_creatives_before_adapter_call raises INVALID_CREATIVES without suggestion
     # ext-h: plain string format_id caught by Pydantic, not structured AdCPSalesAgentError
     # ext-h-agent: _validate_and_convert_format_ids is dead code — unregistered agent not detected
-    "T-UC-002-ext-h": "plain string format_id produces Pydantic error, not AdCPSalesAgentError with suggestion",
+    # Graduated 2026-09-01: the reason named the defect exactly -- "produces Pydantic error,
+    # not AdCPSalesAgentError with suggestion". d2d6609da maps a pydantic ValidationError to
+    # AdCPInvalidRequestError, so the boundary now emits the typed error WITH a suggestion and
+    # the scenario's three wire assertions (fails, code INVALID_REQUEST, suggestion present)
+    # all hold. Inspected per .claude/rules/workflows/xpass-graduation.md: the assertions are
+    # wire-level, not truthiness, so the pass is not vacuous.
     "T-UC-002-ext-h-agent": "unregistered agent_url validation not wired — _validate_and_convert_format_ids is dead code",
     # FIXME: auth error lacks suggestion field
     # AdCPAuthenticationError("Principal ID not found...") has no details["suggestion"].
@@ -358,7 +363,10 @@ _XFAIL_TAGS: dict[str, str] = {
     # PackageRequest(extra='forbid') rejects the field with generic validation error,
     # not spec-expected UNSUPPORTED_FEATURE / INVALID_REQUEST with structured codes.
     "T-UC-002-ext-u": "optimization_goals not in production schemas — spec-production gap",
-    "T-UC-002-ext-u-event": "optimization_goals not in production schemas — spec-production gap",
+    # Graduated 2026-09-01 with T-UC-002-ext-h above, same cause: the scenario asserts the
+    # operation fails with INVALID_REQUEST, recovery correctable, and a suggestion -- which is
+    # what the boundary now emits for a schema rejection. T-UC-002-ext-u (the non-event row)
+    # stays ledgered: it is a different assertion and has not been shown to pass.
     # RESOLVED: optimization_goals now accepted by production schemas (UC-003).
     # Removed stale xfails: T-UC-002-partition-optimization-goals, T-UC-002-boundary-optimization-goals
     # Valid rows now pass; invalid rows xfail via _assert_error_outcome _SPEC_PRODUCTION_CODE_MAP.
