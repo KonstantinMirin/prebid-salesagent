@@ -1232,7 +1232,7 @@ class IntegrationEnv(BaseTestEnv):
             principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
         return tenant, principal
 
-    def setup_default_account(self) -> Any:
+    def setup_default_account(self, principal_id: str | None = None) -> Any:
         """Get-or-create the default Account (plus this principal's access to it).
 
         AdCP 3.1.1 makes ``account`` REQUIRED on several requests (sync-creatives-request
@@ -1254,6 +1254,11 @@ class IntegrationEnv(BaseTestEnv):
         from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
         tenant, principal = self.setup_default_data()
+        # Access is granted to the principal that will actually SEND the request, which is
+        # not always the env's default: a cross-principal isolation test drives a second
+        # principal, and an account its principal cannot reach comes back as
+        # AdCPAuthorizationError rather than the behaviour under test.
+        grantee = principal_id or principal.principal_id
 
         account = self._session.scalars(select(Account).filter_by(tenant_id=self._tenant_id)).first()
         if account is None:
@@ -1262,17 +1267,28 @@ class IntegrationEnv(BaseTestEnv):
             # that object at flush and silently relocate the row (see AccountFactory.Meta).
             account = AccountFactory(tenant_id=tenant.tenant_id)
 
+        # Only a principal that EXISTS can be granted access: agent_account_access carries
+        # an FK to principals, and several scenarios drive a deliberately unknown identity
+        # (tenant-not-found, unauthenticated) whose principal has no row. For those the
+        # grant is skipped -- the account still exists so the request is well-formed, and
+        # the scenario reaches the auth rejection it is actually about.
+        from src.core.database.models import Principal
+
+        grantee_exists = (
+            self._session.scalars(select(Principal).filter_by(tenant_id=self._tenant_id, principal_id=grantee)).first()
+            is not None
+        )
         access = self._session.scalars(
             select(AgentAccountAccess).filter_by(
                 tenant_id=self._tenant_id,
-                principal_id=principal.principal_id,
+                principal_id=grantee,
                 account_id=account.account_id,
             )
         ).first()
-        if access is None:
+        if access is None and grantee_exists:
             AgentAccountAccessFactory(
                 tenant_id=tenant.tenant_id,
-                principal_id=principal.principal_id,
+                principal_id=grantee,
                 account_id=account.account_id,
             )
         self._commit_factory_data()
