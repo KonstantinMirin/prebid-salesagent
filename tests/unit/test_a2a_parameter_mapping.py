@@ -15,6 +15,7 @@ from unittest.mock import patch
 import pytest
 from adcp.types import AccountReference as LibraryAccountReference
 
+from src.core.schemas import GetMediaBuyDeliveryRequest
 from tests.factories.principal import PrincipalFactory
 from tests.utils.a2a_helpers import assert_delivery_forwarded_account
 
@@ -179,13 +180,13 @@ class TestA2AParameterMapping:
                 handler._handle_get_media_buy_delivery_skill(parameters=parameters, identity=_MOCK_IDENTITY)
             )
 
-            # Verify core function was called with correct parameter
-            mock_delivery.assert_called_once()
-            call_kwargs = mock_delivery.call_args.kwargs
-
-            # Should use plural 'media_buy_ids' per AdCP spec
-            assert "media_buy_ids" in call_kwargs, "Should pass 'media_buy_ids' (plural) per AdCP spec"
-            assert call_kwargs["media_buy_ids"] == parameters["media_buy_ids"]
+            # Verify the BUILT REQUEST carries the parameter. The handler hands the
+            # wrapper a request now, so the plural spelling is graded where it lives --
+            # on the request -- rather than on a kwarg the wrapper no longer takes.
+            # Should use plural 'media_buy_ids' per AdCP spec -- graded on the built
+            # request, which is what the wrapper takes now.
+            expected_req = GetMediaBuyDeliveryRequest(media_buy_ids=parameters["media_buy_ids"])
+            mock_delivery.assert_called_once_with(req=expected_req, identity=_MOCK_IDENTITY)
 
     def test_get_media_buy_delivery_optional_media_buy_ids(self):
         """
@@ -218,19 +219,16 @@ class TestA2AParameterMapping:
                 handler._handle_get_media_buy_delivery_skill(parameters=parameters, identity=_MOCK_IDENTITY)
             )
 
-            # The filters reach the core tool and media_buy_ids does NOT appear at all, so
-            # the callee's own default (None) applies — an absent kwarg and an explicit
-            # ``media_buy_ids=None`` are the same call, and the handler now selects the
-            # request off GetMediaBuyDeliveryRequest rather than passing every name.
-            # Asserting the WHOLE call set (rather than three keys out of ten) is what
-            # proves nothing the buyer did not send was invented here.
-            mock_delivery.assert_called_once_with(
-                status_filter="active",
-                start_date="2025-01-01",
-                end_date="2025-01-31",
-                account=None,
-                identity=_MOCK_IDENTITY,
+            # The filters reach the core tool ON the built request, and media_buy_ids
+            # stays None — the buyer omitted it, so nothing may invent one. Grading the
+            # whole request (rather than three fields out of fourteen) is what proves
+            # nothing the buyer did not send was manufactured here.
+            expected_req = GetMediaBuyDeliveryRequest(
+                status_filter="active", start_date="2025-01-01", end_date="2025-01-31"
             )
+            mock_delivery.assert_called_once_with(req=expected_req, identity=_MOCK_IDENTITY)
+            # media_buy_ids and account stay at their defaults on expected_req, so the
+            # equality above is what proves the omitted fields were not invented.
 
     def test_get_media_buy_delivery_forwards_typed_account_reference(self):
         """A2A get_media_buy_delivery must pass the validated account model."""

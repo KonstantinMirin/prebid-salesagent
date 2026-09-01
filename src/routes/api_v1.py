@@ -169,7 +169,8 @@ else:
     GetMediaBuyDeliveryBody = derived_body_model(
         "GetMediaBuyDeliveryBody",
         GetMediaBuyDeliveryRequestDTO,
-        media_buy_delivery_module.get_media_buy_delivery_raw,
+        # The BUILDER -- the raw wrapper takes the built request now.
+        media_buy_delivery_module._build_get_media_buy_delivery_request,
     )
 
 
@@ -190,7 +191,7 @@ else:
     GetMediaBuysBody = derived_body_model(
         "GetMediaBuysBody",
         GetMediaBuysRequestDTO,
-        media_buy_list_module.get_media_buys_raw,
+        media_buy_list_module._build_get_media_buys_request,
     )
 
 
@@ -370,7 +371,9 @@ else:
     GetAdcpCapabilitiesBody = derived_body_model(
         "GetAdcpCapabilitiesBody",
         GetAdcpCapabilitiesRequestDTO,
-        capabilities_module.get_adcp_capabilities_raw,
+        # The BUILDER, not the raw wrapper: the wrapper takes the built request now, so
+        # intersecting the DTO with its signature would announce an empty body.
+        capabilities_module.build_get_adcp_capabilities_request,
     )
 
 # ---------------------------------------------------------------------------
@@ -405,7 +408,14 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
 @router.get("/capabilities")
 async def get_capabilities(identity: ResolvedIdentity | None = resolve_auth):
     """Get AdCP capabilities (auth-optional discovery skill)."""
-    response = await capabilities_module.get_adcp_capabilities_raw(identity=identity)
+    # Parameterless, but still built through the shared builder: the wrapper takes a
+    # request, and an empty one is what "no filters" means. Calling with no request at all
+    # is the shape that made this route the odd one out. The boundary wraps it even though
+    # there is no buyer input to reject -- the rule is uniform per route, so a later
+    # argument added here cannot quietly escape it.
+    with adcp_validation_boundary(context="get_adcp_capabilities request"):
+        req = capabilities_module.build_get_adcp_capabilities_request()
+    response = await capabilities_module.get_adcp_capabilities_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
 
@@ -419,16 +429,20 @@ async def post_capabilities(body: GetAdcpCapabilitiesBody, identity: ResolvedIde
     convention every other route in this file follows.
     """
 
+    # Through the shared builder, selected off "DTO fields INTERSECT builder kwargs" --
+    # the same two steps the A2A handler takes, so neither transport can construct a
+    # different request from the same payload.
+    #
     # Version pair forwarded explicitly -- see the A2A handler's note: the selector strips
     # the version-envelope fields by design, but this tool negotiates on them.
-    response = await capabilities_module.get_adcp_capabilities_raw(
-        **select_request_fields(
-            GetAdcpCapabilitiesRequest, body, accepted_kwargs(capabilities_module.get_adcp_capabilities_raw)
-        ),
-        adcp_version=body.adcp_version,
-        adcp_major_version=body.adcp_major_version,
-        identity=identity,
-    )
+    builder = capabilities_module.build_get_adcp_capabilities_request
+    with adcp_validation_boundary(context="get_adcp_capabilities request"):
+        req = builder(
+            **select_request_fields(GetAdcpCapabilitiesRequest, body, accepted_kwargs(builder)),
+            adcp_version=body.adcp_version,
+            adcp_major_version=body.adcp_major_version,
+        )
+    response = await capabilities_module.get_adcp_capabilities_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
 
@@ -569,16 +583,12 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
 @router.post("/media-buys/delivery")
 async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: ResolvedIdentity = require_auth):
     """Get delivery metrics for media buys (auth required)."""
-    if body.account is not None:
-        from src.core.transport_helpers import enrich_identity_with_account
-
-        with adcp_validation_boundary(context="get_media_buy_delivery request"):
-            account_ref = to_account_reference(body.account)
-        enriched = enrich_identity_with_account(identity, account_ref)
-        assert enriched is not None  # identity is non-None (from require_auth)
-        identity = enriched
-
-    response = media_buy_delivery_module.get_media_buy_delivery_raw(
+    # Builds through the shared builder and hands the request over. The account
+    # enrichment this route used to perform inline now happens once, inside
+    # get_media_buy_delivery_raw, off req.account.
+    with adcp_validation_boundary(context="get_media_buy_delivery request"):
+        account_ref = to_account_reference(body.account) if body.account is not None else None
+    req = media_buy_delivery_module._build_get_media_buy_delivery_request(
         media_buy_ids=body.media_buy_ids,
         status_filter=body.status_filter,
         start_date=body.start_date,
@@ -586,9 +596,10 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
         reporting_dimensions=body.reporting_dimensions,
         attribution_window=body.attribution_window,
         include_package_daily_breakdown=body.include_package_daily_breakdown,
+        account=account_ref,
         context=to_context_object(body.context),
-        identity=identity,
     )
+    response = media_buy_delivery_module.get_media_buy_delivery_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
 
@@ -620,14 +631,16 @@ async def get_media_buys(body: GetMediaBuysBody, identity: ResolvedIdentity = re
         with adcp_validation_boundary(context="get_media_buys request"):
             account_ref = to_account_reference(body.account)
 
-    response = media_buy_list_module.get_media_buys_raw(
-        media_buy_ids=body.media_buy_ids,
-        status_filter=body.status_filter,
-        include_snapshot=bool(body.include_snapshot),
-        account=account_ref,
-        context=to_context_object(body.context),
-        identity=identity,
+    # Built through the SHARED builder, then handed over as the request -- the same two
+    # steps a2a and mcp take, instead of this route re-listing the DTO's fields.
+    req = media_buy_list_module._build_get_media_buys_request(
+        body.media_buy_ids,
+        body.status_filter,
+        account_ref,
+        to_context_object(body.context),
+        bool(body.include_snapshot),
     )
+    response = media_buy_list_module.get_media_buys_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
 

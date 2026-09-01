@@ -710,14 +710,17 @@ def _get_media_buy_delivery_impl(
 
 
 def _build_get_media_buy_delivery_request(
-    media_buy_ids: list[str] | None,
-    status_filter: MediaBuyStatus | list[MediaBuyStatus] | None,
-    start_date: str | None,
-    end_date: str | None,
-    reporting_dimensions: ReportingDimensions | None,
-    attribution_window: AttributionWindow | None,
-    include_package_daily_breakdown: bool | None,
-    context: ContextObject | None,
+    media_buy_ids: list[str] | None = None,
+    status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    reporting_dimensions: ReportingDimensions | None = None,
+    attribution_window: AttributionWindow | None = None,
+    include_package_daily_breakdown: bool | None = None,
+    account: LibraryAccountReference | None = None,
+    include_window_breakdown: bool | None = None,
+    time_granularity: Any | None = None,
+    context: ContextObject | None = None,
 ) -> GetMediaBuyDeliveryRequest:
     """Build a GetMediaBuyDeliveryRequest from individual wire params.
 
@@ -726,17 +729,31 @@ def _build_get_media_buy_delivery_request(
     wrapper built the request unprotected and REST leaked a raw pydantic
     ``ValidationError`` with no top-level suggestion (#1417).
     """
+    # account / include_window_breakdown / time_granularity are DECLARED
+    # GetMediaBuyDeliveryRequest fields this builder used to drop, so the request it
+    # returned did not hold what its own model announced. `account` is the one that
+    # mattered: the raw wrapper took it as a SEPARATE parameter beside the request purely
+    # to enrich identity, which is how this tool ended up with two carriers for one field.
+    fields = {
+        "media_buy_ids": media_buy_ids,
+        "status_filter": cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
+        "start_date": start_date,
+        "end_date": end_date,
+        "reporting_dimensions": reporting_dimensions,
+        "attribution_window": attribution_window,
+        "include_package_daily_breakdown": include_package_daily_breakdown,
+        "account": account,
+        "include_window_breakdown": include_window_breakdown,
+        "time_granularity": time_granularity,
+        "context": cast(ContextObject | None, context),
+    }
+    # A None parameter means the buyer did not send that field, so it is OMITTED and the
+    # model's own default applies. Passing it through as an explicit None instead would
+    # OVERWRITE a non-None default: include_package_daily_breakdown and
+    # include_window_breakdown both default to False, and forwarding None turned a
+    # documented False into a null on every request that left them out.
     with adcp_validation_boundary(context="get_media_buy_delivery request"):
-        return GetMediaBuyDeliveryRequest(
-            media_buy_ids=media_buy_ids,
-            status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
-            start_date=start_date,
-            end_date=end_date,
-            reporting_dimensions=reporting_dimensions,
-            attribution_window=attribution_window,
-            include_package_daily_breakdown=include_package_daily_breakdown,
-            context=cast(ContextObject | None, context),
-        )
+        return GetMediaBuyDeliveryRequest(**{k: v for k, v in fields.items() if v is not None})
 
 
 async def get_media_buy_delivery(
@@ -774,12 +791,11 @@ async def get_media_buy_delivery(
     """
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
-    # Handle account resolution at boundary (same as sync_creatives pattern)
-    if account is not None and identity is not None:
-        from src.core.transport_helpers import enrich_identity_with_account
-
-        identity = enrich_identity_with_account(identity, account)
-
+    # Builds, then hands the request over -- account travels ON it, and the account
+    # enrichment lives in get_media_buy_delivery_raw. This wrapper used to carry its own
+    # copy of that enrichment, as did the REST route: three transports, three copies of
+    # one rule. An explicit identity=None is passed through unchanged by
+    # resolve_identity_if_not_provided, so the anonymous path is preserved.
     req = _build_get_media_buy_delivery_request(
         media_buy_ids=media_buy_ids,
         status_filter=status_filter,
@@ -788,37 +804,24 @@ async def get_media_buy_delivery(
         reporting_dimensions=reporting_dimensions,
         attribution_window=attribution_window,
         include_package_daily_breakdown=include_package_daily_breakdown,
+        account=account,
         context=context,
     )
-    response = _get_media_buy_delivery_impl(req, identity)
-    return mcp_result(response)
+    return mcp_result(get_media_buy_delivery_raw(req=req, identity=identity))
 
 
 def get_media_buy_delivery_raw(
-    media_buy_ids: list[str] | None = None,
-    status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
-    start_date: str | None = None,
-    end_date: str | None = None,
-    reporting_dimensions: ReportingDimensions | None = None,
-    attribution_window: AttributionWindow | None = None,
-    include_package_daily_breakdown: bool | None = None,
-    account: LibraryAccountReference | None = None,
-    context: ContextObject | None = None,
+    req: GetMediaBuyDeliveryRequest,
     ctx: Context | ToolContext | None = None,
     identity: IdentityOrNotProvided = NOT_PROVIDED,
 ):
     """Get delivery metrics for media buys (raw function for A2A server use).
 
     Args:
-        media_buy_ids: Array of publisher media buy IDs to get delivery data for (optional)
-        status_filter: Filter by status - single status or array of MediaBuyStatus enums (optional)
-        start_date: Start date for reporting period in YYYY-MM-DD format (optional)
-        end_date: End date for reporting period in YYYY-MM-DD format (optional)
-        reporting_dimensions: Request dimensional breakdowns (optional)
-        attribution_window: Attribution window configuration (optional)
-        include_package_daily_breakdown: Include daily breakdown per package (optional)
-        account: Account reference for multi-account scenarios (optional)
-        context: Application level context (ContextObject)
+        req: The built GetMediaBuyDeliveryRequest -- every wire field, ``account``
+            included, travels ON it. Callers build it with
+            ``_build_get_media_buy_delivery_request``, the one builder all three
+            transports share.
         ctx: Context for authentication
         identity: Pre-resolved identity (preferred over ctx)
 
@@ -827,22 +830,14 @@ def get_media_buy_delivery_raw(
     """
     identity = resolve_identity_if_not_provided(identity, ctx)
 
-    # Handle account resolution at boundary (same as sync_creatives pattern)
-    if account is not None and identity is not None:
+    # Account resolution at the boundary, read OFF the request. It used to arrive as a
+    # parameter beside the request, so the same buyer field had two carriers and only the
+    # parameter one enriched identity.
+    if req.account is not None and identity is not None:
         from src.core.transport_helpers import enrich_identity_with_account
 
-        identity = enrich_identity_with_account(identity, account)
+        identity = enrich_identity_with_account(identity, req.account)
 
-    req = _build_get_media_buy_delivery_request(
-        media_buy_ids=media_buy_ids,
-        status_filter=status_filter,
-        start_date=start_date,
-        end_date=end_date,
-        reporting_dimensions=reporting_dimensions,
-        attribution_window=attribution_window,
-        include_package_daily_breakdown=include_package_daily_breakdown,
-        context=context,
-    )
     return _get_media_buy_delivery_impl(req, identity)
 
 

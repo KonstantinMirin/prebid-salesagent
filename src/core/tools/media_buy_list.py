@@ -158,14 +158,12 @@ from src.core.validation_helpers import adcp_validation_boundary
 def _get_media_buys_impl(
     req: GetMediaBuysRequest,
     identity: ResolvedIdentity | None = None,
-    include_snapshot: bool = False,
 ) -> GetMediaBuysResponse:
     """Get media buys with status, creative approval state, and optional delivery snapshots.
 
     Args:
         req: Validated GetMediaBuysRequest with all protocol fields
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
-        include_snapshot: When True, include near-real-time delivery stats per package.
             This is an internal flag controlled by transport wrappers, not by the request object.
 
     Returns:
@@ -230,7 +228,7 @@ def _get_media_buys_impl(
     snapshot_data: dict[str, dict[str, Snapshot | None]] = {}  # media_buy_id -> package_id -> Snapshot
     unavailable_reason: SnapshotUnavailableReason | None = None
 
-    if include_snapshot:
+    if req.include_snapshot:
         adapter = get_adapter(
             principal,
             dry_run=testing_ctx.dry_run if testing_ctx else False,
@@ -272,7 +270,7 @@ def _get_media_buys_impl(
             # Get snapshot for this package
             snapshot = buy_snapshots.get(pkg_id)
             snapshot_unavailable = None
-            if include_snapshot and snapshot is None:
+            if req.include_snapshot and snapshot is None:
                 snapshot_unavailable = unavailable_reason or SnapshotUnavailableReason.SNAPSHOT_TEMPORARILY_UNAVAILABLE
 
             # Materialize targeting_overlay from package_config so callers can verify
@@ -364,7 +362,7 @@ def _get_media_buys_impl(
                     targeting_overlay=targeting_overlay,
                     creative_approvals=approvals if approvals else None,
                     snapshot=snapshot,
-                    snapshot_unavailable_reason=snapshot_unavailable if include_snapshot else None,
+                    snapshot_unavailable_reason=snapshot_unavailable if req.include_snapshot else None,
                 )
             )
 
@@ -414,10 +412,11 @@ def _get_media_buys_impl(
 
 
 def _build_get_media_buys_request(
-    media_buy_ids: list[str] | None,
-    status_filter: MediaBuyStatus | list[MediaBuyStatus] | None,
-    account: LibraryAccountReference | None,
-    context: ContextObject | None,
+    media_buy_ids: list[str] | None = None,
+    status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
+    account: LibraryAccountReference | None = None,
+    context: ContextObject | None = None,
+    include_snapshot: bool | None = None,
 ) -> GetMediaBuysRequest:
     """Build a GetMediaBuysRequest from individual wire params.
 
@@ -432,6 +431,10 @@ def _build_get_media_buys_request(
             status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
             account=account,
             context=cast(ContextObject | None, context),
+            # A GetMediaBuysRequest field, so the BUILT request carries it. It used to
+            # travel as a separate parameter beside the request, which meant the model
+            # declared a field the built instance never held.
+            include_snapshot=include_snapshot,
         )
 
 
@@ -450,9 +453,8 @@ async def get_media_buys(
     MCP tool wrapper that resolves identity and delegates to the shared implementation.
 
     Args:
-        media_buy_ids: Array of publisher media buy IDs to retrieve (optional)
-        status_filter: Filter by status - single status or array of MediaBuyStatus values (optional)
-        include_snapshot: When true, include near-real-time delivery stats per package (default: false)
+        req: The built GetMediaBuysRequest -- filters, account and include_snapshot all
+            travel on it, so this wrapper has no per-field parameters to document.
         account: Account reference per AdCP 3.x (optional). Legacy account_id is normalized by middleware.
         context: Application level context object (optional)
         ctx: FastMCP context (automatically provided)
@@ -460,30 +462,24 @@ async def get_media_buys(
     Returns:
         ToolResult with GetMediaBuysResponse data
     """
-    req = _build_get_media_buys_request(media_buy_ids, status_filter, account, context)
+    req = _build_get_media_buys_request(media_buy_ids, status_filter, account, context, include_snapshot)
     # Read identity pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
-    response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
+    response = _get_media_buys_impl(req, identity=identity)
     return mcp_result(response)
 
 
 def get_media_buys_raw(
-    media_buy_ids: list[str] | None = None,
-    status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
-    include_snapshot: bool = False,
-    account: LibraryAccountReference | None = None,
-    context: ContextObject | None = None,
+    req: GetMediaBuysRequest,
     ctx: Context | ToolContext | None = None,
     identity: IdentityOrNotProvided = NOT_PROVIDED,
 ):
     """Get media buys (raw function for A2A server use).
 
     Args:
-        media_buy_ids: Array of publisher media buy IDs to retrieve (optional)
-        status_filter: Filter by status - single status or array of MediaBuyStatus values (optional)
-        include_snapshot: When true, include near-real-time delivery stats per package (default: false)
-        account: Account reference per AdCP 3.x (optional). Legacy account_id is normalized by middleware.
-        context: Application level context (optional)
+        req: The built GetMediaBuysRequest -- filters, account, context and
+            include_snapshot all travel ON it, so this wrapper documents no
+            per-field parameters.
         ctx: Context for authentication (used if identity not pre-resolved)
         identity: Pre-resolved identity (preferred over ctx)
 
@@ -492,8 +488,7 @@ def get_media_buys_raw(
     """
     identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=True, protocol="a2a")
 
-    req = _build_get_media_buys_request(media_buy_ids, status_filter, account, context)
-    return _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
+    return _get_media_buys_impl(req, identity=identity)
 
 
 # --- Helper functions ---

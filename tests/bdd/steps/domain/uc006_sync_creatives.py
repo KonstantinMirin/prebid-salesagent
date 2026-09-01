@@ -5930,9 +5930,17 @@ def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: s
 
 @when('the Buyer Agent syncs an assignment of creative "creative-xp" to a package owned by the authenticated principal')
 def when_sync_cross_principal_assignment(ctx: dict) -> None:
-    """Dispatch sync_creatives with ONLY an assignment referencing another
-    principal's creative (no creatives array) — the cross-principal FK-500
-    surface (local feature; upstream storyboard gap, PR #1430 review).
+    """Dispatch sync_creatives carrying the caller's OWN creative plus an assignment
+    referencing another principal's creative — the cross-principal FK-500 surface
+    (local feature; upstream storyboard gap, PR #1430 review).
+
+    The caller's own creative is present because the PIN REQUIRES it: in
+    3.1/media-buy/sync-creatives-request.json, ``creatives`` is in ``required`` and
+    carries ``minItems: 1``. This step used to send ``creatives=[]``, so every
+    transport correctly refused the whole request with INVALID_REQUEST before the
+    assignment logic was ever reached — the scenario could not observe the skip it
+    exists to grade, and the refusal it got instead read as a production bug.
+    A spec-valid request is the only one that reaches the behavior under test.
     """
     from src.core.database.models import Principal
     from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory
@@ -5950,9 +5958,17 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
     pkg = MediaPackageFactory(media_buy=media_buy)
     env._commit_factory_data()
     ctx["xp_package_id"] = pkg.package_id
+    format_id, agent_url, assets = _format_payload(ctx, env)
+    own_creative = {
+        "creative_id": "creative-own-b",
+        "name": "Own Creative",
+        "format_id": {"id": format_id, "agent_url": agent_url},
+        "assets": assets,
+    }
+    ctx["own_creative_id"] = own_creative["creative_id"]
     dispatch_request(
         ctx,
-        creatives=[],
+        creatives=[own_creative],
         assignments=[{"creative_id": "creative-xp", "package_id": pkg.package_id}],
         validation_mode="lenient",
     )

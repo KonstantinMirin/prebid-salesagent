@@ -2286,15 +2286,22 @@ def then_validation_error(ctx: dict) -> None:
 def then_real_validation_error(ctx: dict) -> None:
     """Assert error is a real validation error (not simulated sandbox response).
 
-    Wire-first: a "real" validation error is an actual wire REJECTION — a
-    two-layer error envelope carrying VALIDATION_ERROR with correctable
-    recovery (BR-RULE-209 INV-7: sandbox inputs are validated like production;
-    a simulated sandbox response would come back as a success payload instead).
+    Wire-first: a "real" validation error is an actual wire REJECTION — a two-layer
+    error envelope rather than a success payload (BR-RULE-209 INV-7: sandbox inputs are
+    validated like production; a SIMULATED sandbox response would come back as a success
+    payload instead). That contrast — rejection vs. success payload — is the whole of
+    INV-7, and it is what this step grades.
+
+    It asserts NO code. It used to assert VALIDATION_ERROR, which made it a second,
+    hidden code claim that could contradict the one its own scenario states: the
+    sandbox scenario sends an out-of-enum status_filter, which is INVALID_REQUEST under
+    the pinned split ("violates schema constraints" vs "beyond schema validation"), and
+    this step failed it while the scenario's own `the error code should be "..."` step
+    passed. Which code is owed belongs in the scenario, where a reader can see it.
     No-wire fallback: the typed production exception.
     """
     result = ctx.get("result")
     if result is not None and result.wire_error_envelope is not None:
-        result.assert_wire_error("VALIDATION_ERROR")
         return
 
     raise AssertionError(

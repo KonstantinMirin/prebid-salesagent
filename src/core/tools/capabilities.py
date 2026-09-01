@@ -684,11 +684,7 @@ async def get_adcp_capabilities(
 
 
 async def get_adcp_capabilities_raw(
-    protocols: list[str] | None = None,
-    context: ContextObject | None = None,
-    adcp_version: str | None = None,
-    adcp_major_version: int | None = None,
-    ext: dict | None = None,
+    req: GetAdcpCapabilitiesRequest,
     ctx: Context | ToolContext | None = None,
     identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> GetAdcpCapabilitiesResponse:
@@ -697,11 +693,10 @@ async def get_adcp_capabilities_raw(
     Raw function without @mcp.tool decorator for A2A server / REST use.
 
     Args:
-        protocols: Filter response sections to these protocol domains (optional)
-        context: Application-level context per AdCP spec, echoed on the response
-        adcp_version: Requested AdCP spec version (optional)
-        adcp_major_version: Requested AdCP major version (optional)
-        ext: Vendor-namespaced extension object, echoed per the spec's ext contract
+        req: The built GetAdcpCapabilitiesRequest -- protocols, context, adcp_version,
+            adcp_major_version and ext all travel ON it. Callers build it with
+            ``build_get_adcp_capabilities_request``, the one builder every transport
+            shares, so this wrapper takes no per-field parameters to re-list.
         ctx: FastMCP context (automatically provided)
         identity: Pre-resolved identity (preferred over ctx)
 
@@ -709,12 +704,4 @@ async def get_adcp_capabilities_raw(
         GetAdcpCapabilitiesResponse containing agent capabilities
     """
     identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=False)
-    with adcp_validation_boundary(context="get_adcp_capabilities request"):
-        req = build_get_adcp_capabilities_request(
-            protocols=protocols,
-            context=context,
-            adcp_version=adcp_version,
-            adcp_major_version=adcp_major_version,
-            ext=ext,
-        )
     return _get_adcp_capabilities_impl(req, identity)

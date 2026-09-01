@@ -126,8 +126,11 @@ class TestGetMediaBuyDeliveryEndpoint:
 
     @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.core.transport_helpers.enrich_identity_with_account")
-    @patch("src.core.tools.media_buy_delivery.get_media_buy_delivery_raw")
+    @patch("src.core.tools.media_buy_delivery._get_media_buy_delivery_impl")
     def test_account_is_coerced_before_enriching_identity(self, mock_impl, mock_enrich, mock_resolve):
+        # Patches _impl, NOT get_media_buy_delivery_raw: enrichment lives in the raw
+        # wrapper now (one site, off req.account, instead of a copy per transport), so
+        # mocking the wrapper out would make mock_enrich unreachable and the test vacuous.
         enriched_identity = _MOCK_IDENTITY.model_copy(update={"account_id": "acct-1"})
         mock_enrich.return_value = enriched_identity
         mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"media_buys": []})
@@ -145,8 +148,12 @@ class TestGetMediaBuyDeliveryEndpoint:
         expected_account = LibraryAccountReference.model_validate(
             {"brand": {"domain": "example.com"}, "operator": "op-1", "sandbox": False}
         )
+        # The COERCED, typed AccountReference is what reaches enrichment -- the raw dict
+        # is what used to crash resolve_account on ``account_ref.root``.
         mock_enrich.assert_called_once_with(_MOCK_IDENTITY, expected_account)
-        assert mock_impl.call_args.kwargs["identity"] is enriched_identity
+        # And it rides on the request, so every transport carries it the one way.
+        assert mock_impl.call_args[0][0].account == expected_account
+        assert mock_impl.call_args[0][1] is enriched_identity
 
     @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.core.transport_helpers.enrich_identity_with_account")

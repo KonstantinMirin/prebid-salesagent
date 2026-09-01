@@ -471,7 +471,7 @@ class TestGetMediaBuysImpl:
 
         with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
             req = self._make_request()
-            _get_media_buys_impl(req, identity=make_identity(), include_snapshot=False)
+            _get_media_buys_impl(req.model_copy(update={"include_snapshot": False}), identity=make_identity())
 
         mock_adapter.get_packages_snapshot.assert_not_called()
 
@@ -495,7 +495,7 @@ class TestGetMediaBuysImpl:
 
         with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
             req = self._make_request()
-            response = _get_media_buys_impl(req, identity=make_identity(), include_snapshot=True)
+            response = _get_media_buys_impl(req.model_copy(update={"include_snapshot": True}), identity=make_identity())
 
         mock_adapter.get_packages_snapshot.assert_called_once()
         # The package_refs passed should include the platform_line_item_id
@@ -517,7 +517,7 @@ class TestGetMediaBuysImpl:
 
         with patch("src.core.tools.media_buy_list.get_adapter", return_value=mock_adapter):
             req = self._make_request()
-            response = _get_media_buys_impl(req, identity=make_identity(), include_snapshot=True)
+            response = _get_media_buys_impl(req.model_copy(update={"include_snapshot": True}), identity=make_identity())
 
         pkg_response = response.media_buys[0].packages[0]
         assert pkg_response.snapshot is None

@@ -1443,11 +1443,22 @@ Feature: BR-UC-019 Query Media Buys
   Scenario: Sandbox account with invalid request returns real validation error
     Given the request targets a sandbox account
     When the Buyer Agent sends a get_media_buys request with invalid status filter
-    Then the response should indicate a validation error
+    Then the error code should be "INVALID_REQUEST"
     And the error should be a real validation error, not simulated
     And the error should include a suggestion for how to fix the issue
     # BR-RULE-209 INV-7: sandbox validation errors are real
     # POST-F3: suggestion field present
+    #
+    # NAMES the code rather than saying "a validation error" and letting a shared step
+    # pick one. The step it used to route to hardcoded VALIDATION_ERROR; the pinned split
+    # puts this vector on the OTHER side. The When sends status_filter=["invalid_status"],
+    # a value outside the MediaBuyStatus enum -- INVALID_REQUEST is "malformed, missing
+    # required fields, or violates SCHEMA CONSTRAINTS", while VALIDATION_ERROR is "invalid
+    # field values or violates business rules BEYOND schema validation". An out-of-enum
+    # member is the first. The invariant this scenario actually grades is INV-7 (the
+    # sandbox error is REAL, not simulated), which the following two steps carry; the
+    # code was incidental to it and is now stated instead of guessed.
+    # @source repo=adcp ref=v3.1.1 path=core/error.json (code enum + descriptions)
 
   @T-UC-019-boundary-sandbox @boundary @sandbox @br-rule-209
   Scenario Outline: sandbox response semantics boundary - <boundary_point>

@@ -37,13 +37,18 @@ class MediaBuyListDispatchMixin:
 
         self._commit_factory_data()
         identity = kwargs.pop("identity", self.identity)
-        include_snapshot = kwargs.pop("include_snapshot", False)
+        # include_snapshot is a GetMediaBuysRequest FIELD, so it rides on the request
+        # rather than beside it -- the same change the transports made. Callers may still
+        # pass it as a kwarg here; it is folded into the request instead of forwarded.
+        include_snapshot = kwargs.pop("include_snapshot", None)
 
         req = kwargs.pop("req", None)
         if req is None:
             req = GetMediaBuysRequest(**kwargs)
+        if include_snapshot is not None:
+            req = req.model_copy(update={"include_snapshot": include_snapshot})
 
-        return _get_media_buys_impl(req=req, identity=identity, include_snapshot=include_snapshot)
+        return _get_media_buys_impl(req=req, identity=identity)
 
     def _call_list_a2a(self, **kwargs: Any) -> Any:
         """Dispatch get_media_buys through the REAL A2A pipeline (on_message_send).

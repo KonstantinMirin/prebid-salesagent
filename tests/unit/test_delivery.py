@@ -46,6 +46,7 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_delivery import (
+    _build_get_media_buy_delivery_request,
     _get_media_buy_delivery_impl,
     get_media_buy_delivery,
     get_media_buy_delivery_raw,
@@ -861,18 +862,21 @@ class TestDeliveryStatusFilter:
 
         Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-07
 
-        Route: a2a -- A2A raw function accepts each MediaBuyStatus enum value.
+        Route: a2a -- the A2A path builds through the shared builder and hands the raw
+        function the built request, so each MediaBuyStatus value is exercised where it
+        now travels: on the request.
         """
         for status in MediaBuyStatus:
             with DeliveryPollEnv() as env:
                 env.add_buy(media_buy_id="mb_a2a")
                 env.set_adapter_response("mb_a2a", impressions=100)
 
-                response = get_media_buy_delivery_raw(
+                req = _build_get_media_buy_delivery_request(
                     media_buy_ids=["mb_a2a"],
                     status_filter=status,
-                    identity=env.identity,
                 )
+                assert req.status_filter == status
+                response = get_media_buy_delivery_raw(req=req, identity=env.identity)
                 assert isinstance(response, GetMediaBuyDeliveryResponse)
 
 

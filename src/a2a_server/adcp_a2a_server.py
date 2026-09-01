@@ -88,6 +88,9 @@ from src.core.tools import (
     get_media_buy_delivery_raw as core_get_media_buy_delivery_tool,
 )
 from src.core.tools import (
+    get_media_buys_raw as core_get_media_buys_tool,
+)
+from src.core.tools import (
     get_products_raw as core_get_products_tool,
 )
 from src.core.tools import (
@@ -115,6 +118,9 @@ from src.core.tools import (
 )
 from src.core.tools import (
     update_performance_index_raw as core_update_performance_index_tool,
+)
+from src.core.tools.media_buy_delivery import (
+    _build_get_media_buy_delivery_request,
 )
 from src.core.validation_helpers import (
     adcp_validation_boundary,
@@ -1924,7 +1930,10 @@ class AdCPRequestHandler(RequestHandler):
         # Import and call the core implementation
         from adcp.types import GetAdcpCapabilitiesRequest
 
-        from src.core.tools.capabilities import get_adcp_capabilities_raw
+        from src.core.tools.capabilities import (
+            build_get_adcp_capabilities_request,
+            get_adcp_capabilities_raw,
+        )
 
         # Consume the parameter bag wholesale rather than naming each field: a handler
         # that enumerates is the shape that silently drops every field added later --
@@ -1934,12 +1943,15 @@ class AdCPRequestHandler(RequestHandler):
         # "1.0.0", which the envelope pattern rejects), but for THIS tool they are real
         # request data -- they drive version negotiation and the unsupported-version
         # advisory. Selecting alone would silently disable that negotiation.
-        response = await get_adcp_capabilities_raw(
-            **select_request_fields(GetAdcpCapabilitiesRequest, parameters, accepted_kwargs(get_adcp_capabilities_raw)),
-            adcp_version=parameters.get("adcp_version"),
-            adcp_major_version=parameters.get("adcp_major_version"),
-            identity=identity,
-        )
+        with adcp_validation_boundary(context="get_adcp_capabilities request"):
+            req = build_get_adcp_capabilities_request(
+                **select_request_fields(
+                    GetAdcpCapabilitiesRequest, parameters, accepted_kwargs(build_get_adcp_capabilities_request)
+                ),
+                adcp_version=parameters.get("adcp_version"),
+                adcp_major_version=parameters.get("adcp_major_version"),
+            )
+        response = await get_adcp_capabilities_raw(req=req, identity=identity)
 
         return response
 
@@ -2092,19 +2104,21 @@ class AdCPRequestHandler(RequestHandler):
         return response
 
     async def _handle_get_media_buys_skill(self, parameters: dict, identity: ResolvedIdentity) -> Any:
-        """Handle get_media_buys skill invocation."""
+        """Handle get_media_buys skill invocation.
+
+        Builds through the SHARED builder and hands the wrapper the built request, like REST
+        and MCP. ``include_snapshot`` travels IN the request now -- it is a GetMediaBuysRequest
+        field, and popping it out here was how this transport came to carry it separately.
+        """
         from src.core.schemas import GetMediaBuysRequest
-        from src.core.tools.media_buy_list import _get_media_buys_impl
+        from src.core.tools.media_buy_list import _build_get_media_buys_request
 
-        params = {**parameters}
-        include_snapshot = params.pop("include_snapshot", False)
-        # No REST route exists for get_media_buys; context string follows the
-        # same "<tool> request" convention as the sibling boundaries (klkg).
         with adcp_validation_boundary(context="get_media_buys request"):
-            req = GetMediaBuysRequest.model_validate(params)
-        response = _get_media_buys_impl(req, identity=identity, include_snapshot=include_snapshot)
-
-        return response
+            GetMediaBuysRequest.model_validate(parameters)
+            req = _build_get_media_buys_request(
+                **select_request_fields(GetMediaBuysRequest, parameters, accepted_kwargs(_build_get_media_buys_request))
+            )
+        return core_get_media_buys_tool(req=req, identity=identity)
 
     async def _handle_get_media_buy_delivery_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
         """Handle explicit get_media_buy_delivery skill invocation (CRITICAL for monitoring).
@@ -2128,26 +2142,25 @@ class AdCPRequestHandler(RequestHandler):
         if "media_buy_ids" not in params and "media_buy_id" in params:
             params["media_buy_ids"] = [params.pop("media_buy_id")]
 
-        with adcp_validation_boundary():
-            req = GetMediaBuyDeliveryRequest.model_validate(params)
-
-        # Call core function with validated fields (all optional per AdCP spec).
-        # Selected off get_media_buy_delivery_raw's own signature rather than hand-listed:
+        # Builds through the SHARED builder and hands the wrapper the built request -- the
+        # same two steps REST and MCP take. Selection is against the BUILDER's signature:
         # the nine-name list this replaces once dropped reporting_dimensions,
         # attribution_window, include_package_daily_breakdown and account, silently
-        # discarding the buyer's requested attribution window (gh-#1299 follow-up). Selection
-        # makes that class of omission structurally impossible instead of re-audited.
-        # Raw values are forwarded for everything the callee coerces itself
-        # (status_filter str→MediaBuyStatus, dates, the dimension/window objects, which
-        # _build_get_media_buy_delivery_request validates into models).
-        selected = select_request_fields(
-            GetMediaBuyDeliveryRequest, params, accepted_kwargs(core_get_media_buy_delivery_tool)
-        )
-        # account is a typed AccountReference on GetMediaBuyDeliveryRequest (adcp SDK 5.7);
-        # forward the validated model field rather than the raw dict, because the callee
-        # hands it straight to enrich_identity_with_account without coercing (#1438).
-        selected["account"] = req.account
-        response = core_get_media_buy_delivery_tool(**selected, identity=identity)
+        # discarding the buyer's requested attribution window (gh-#1299 follow-up).
+        # Deriving the field set makes that class of omission structurally impossible.
+        # Raw values are forwarded for everything the builder coerces itself
+        # (status_filter str→MediaBuyStatus, dates, the dimension/window objects).
+        with adcp_validation_boundary():
+            req = GetMediaBuyDeliveryRequest.model_validate(params)
+            selected = select_request_fields(
+                GetMediaBuyDeliveryRequest, params, accepted_kwargs(_build_get_media_buy_delivery_request)
+            )
+            # account is a typed AccountReference on GetMediaBuyDeliveryRequest (adcp SDK
+            # 5.7); forward the VALIDATED model field rather than the raw dict, because it
+            # reaches enrich_identity_with_account uncoerced (#1438).
+            selected["account"] = req.account
+            req = _build_get_media_buy_delivery_request(**selected)
+        response = core_get_media_buy_delivery_tool(req=req, identity=identity)
 
         return response
 

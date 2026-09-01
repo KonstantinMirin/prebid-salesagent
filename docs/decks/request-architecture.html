@@ -67,10 +67,32 @@ footer{padding:3rem 0;color:var(--muted);font-size:.85rem}
 <section>
   <div class="kicker">Internal engineering brief · Prebid Sales Agent · part two</div>
   <h1>One shape for the request.<br>One table for the refusal.</h1>
-  <p class="lede">Last time we deleted the ability to write a buyer-facing error message. This time we deleted the ability to hand-write a tool&rsquo;s request shape. Same move, one level up.</p>
-  <div class="grid" style="margin-top:2.5rem">
-    <div class="card"><div class="n">13 / 13</div><div class="l">REST bodies generated from their DTO — hand-written bodies now zero</div></div>
-    <div class="card"><div class="n">4 &rarr; 0</div><div class="l">hand-maintained field ledgers, refusal maps and the analyzer that policed them</div></div>
+  <p class="lede">Last time we deleted the ability to write a buyer-facing error message. This time we deleted the ability to hand-write a tool&rsquo;s request shape — on all three transports.</p>
+
+  <table style="margin-top:2rem">
+    <thead><tr><th style="width:5.5rem">Transport</th><th>Before — three hand-written opinions</th><th>Now — one derived shape</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>MCP</strong></td>
+        <td>Shape published from the wrapper&rsquo;s hand-typed signature. <code>protocols: list[str]</code> where the DTO says a typed enum; <code>ext: dict</code> where it says <code>ExtensionObject</code>. Five tools silently kept an underived shape — registration fell back without a word.</td>
+        <td><strong>15 / 16</strong> derive from the builder. A tool that cannot name its DTO <strong>cannot register at all</strong>.</td>
+      </tr>
+      <tr>
+        <td><strong>A2A</strong></td>
+        <td>Keys plucked from the payload by hand — <code>update_media_buy</code> reimplemented 5 of ~10 fields. Six skills advertised that appear in <em>no</em> 3.1 schema. Two real capabilities published under names in no spec version.</td>
+        <td>Surface is <strong>spec-only</strong>: 6 phantom skills, 5 dispatch entries and 3 card advertisements deleted. The renames are scheduled.</td>
+      </tr>
+      <tr>
+        <td><strong>REST</strong></td>
+        <td>All <strong>13</strong> bodies hand-written, re-listing fields the DTO already declares. <code>get_products</code> bypassed the shared seam entirely. A required <code>idempotency_key</code> dropped before anything read it.</td>
+        <td><strong>13 / 13</strong> generated from the DTO. Hand-written bodies <strong>5 &rarr; 0</strong>; departures declared and graded.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="grid" style="margin-top:1.6rem">
+    <div class="card"><div class="n">10 &rarr; 0</div><div class="l">tool modules carrying a hand-maintained refusal map</div></div>
+    <div class="card"><div class="n">3 of 4</div><div class="l">architecture guards <em>deleted</em> — their violation is now unrepresentable</div></div>
     <div class="card"><div class="n">1</div><div class="l">error code for a schema violation — the same one on every transport</div></div>
   </div>
 </section>

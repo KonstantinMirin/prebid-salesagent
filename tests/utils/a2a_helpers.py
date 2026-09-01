@@ -25,13 +25,21 @@ def assert_delivery_forwarded_account(mock_delivery, expected_account, **forward
     Shared by the handler-level unit tests and the ``on_message_send`` wire test so the
     assertion lives once.
 
-    ``forwarded`` names the OTHER fields this caller's payload should produce. The A2A
-    handler now selects the request off ``GetMediaBuyDeliveryRequest`` intersected with the
-    callee's signature, so a field the buyer did not send is ABSENT from the call rather than
-    passed as an explicit ``None`` — which makes the call set exactly checkable. It used to be
-    eight blanket ``ANY``s, which passed whatever the handler happened to forward.
+    ``forwarded`` names the OTHER request fields this caller's payload should produce, as
+    field-name -> expected-value. The handler builds through the shared builder and hands
+    the wrapper ONE ``req``, so the account and its siblings are graded on the request
+    rather than on wrapper kwargs. Anything the buyer did not send must still be None on
+    the request — that is what proves nothing was manufactured. This used to assert eight
+    blanket ``ANY``s, which passed whatever the handler happened to forward.
     """
-    mock_delivery.assert_called_once_with(account=expected_account, identity=ANY, **forwarded)
+    from src.core.schemas import GetMediaBuyDeliveryRequest
+
+    # The WHOLE request is the expectation, not a few fields off call_args: every field the
+    # caller did not name must come back at its default, which is what proves the handler
+    # invented nothing. Building the expected request and comparing it wholesale also keeps
+    # this a single assert_called_once_with, the form the weak-mock guard requires.
+    expected_req = GetMediaBuyDeliveryRequest(account=expected_account, **forwarded)
+    mock_delivery.assert_called_once_with(req=expected_req, identity=ANY)
 
 
 def extract_data_from_artifact(artifact: Artifact) -> dict[str, Any]:

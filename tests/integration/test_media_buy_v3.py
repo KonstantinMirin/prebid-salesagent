@@ -618,7 +618,7 @@ class TestGetMediaBuysResponseFields:
             media_buy_ids=[media_buy_id],
             status_filter=all_statuses,
         )
-        response = _get_media_buys_impl(get_req, identity=mb_identity, include_snapshot=True)
+        response = _get_media_buys_impl(get_req.model_copy(update={"include_snapshot": True}), identity=mb_identity)
 
         assert len(response.media_buys) == 1, (
             f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"

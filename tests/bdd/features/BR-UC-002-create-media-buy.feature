@@ -1925,10 +1925,20 @@ Feature: BR-UC-002 Create Media Buy
     Given a create_media_buy request with the idempotency_key field omitted
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the response should indicate a validation error
+    Then the error code should be "INVALID_REQUEST"
     And the error should reference the missing "idempotency_key" field
     And the error should include "suggestion" field
     # v3.1: idempotency_key is required on create-media-buy-request
+    #
+    # NAMES the code instead of saying "a validation error" and letting a shared step
+    # pick one. The step it used to route to hardcoded VALIDATION_ERROR; the pinned split
+    # puts a MISSING REQUIRED FIELD on the other side, verbatim: INVALID_REQUEST is
+    # "malformed, MISSING REQUIRED FIELDS, or violates schema constraints", while
+    # VALIDATION_ERROR is "invalid field values or violates business rules beyond schema
+    # validation". An omitted required idempotency_key is the first, and all four
+    # transports (impl/mcp/a2a/rest and e2e_rest) already emit INVALID_REQUEST in
+    # agreement -- the scenario was the only thing asking for the other code.
+    # @source repo=adcp ref=v3.1.1 path=core/error.json (code enum + descriptions)
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/create-media-buy-request.json
 
   @T-UC-002-v31-idempotency-pattern-invalid @v31 @idempotency-key @validation @post-f2 @ext-w

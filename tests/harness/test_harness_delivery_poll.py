@@ -6,10 +6,16 @@ but have no ``Covers:`` tags — they test infrastructure, not obligations.
 
 from __future__ import annotations
 
+import inspect
 from datetime import UTC, date, datetime
 
 from src.core.schemas import GetMediaBuyDeliveryResponse
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
+
+#: adcp_version / adcp_major_version / ext are the version-envelope trio every request
+#: model carries; they are transport-envelope concerns, not per-tool buyer fields, and no
+#: builder in this codebase takes them positionally.
+_VERSION_ENVELOPE_FIELDS = {"adcp_version", "adcp_major_version", "ext"}
 
 
 class TestDeliveryPollEnvContract:
@@ -206,24 +212,42 @@ class TestDeliveryPollEnvContract:
             assert len(response.media_buy_deliveries) >= 1
 
     def test_wrappers_accept_adcp_request_params(self):
-        """A2A/MCP wrappers must accept all GetMediaBuyDeliveryRequest params.
+        """The shared BUILDER must accept every GetMediaBuyDeliveryRequest param.
 
         BDD scenarios dispatch with reporting_dimensions, attribution_window,
-        include_package_daily_breakdown, etc. The wrappers must accept these
-        params and forward to the request — not reject with TypeError.
+        include_package_daily_breakdown, etc. Those names must be constructible —
+        not rejected with TypeError.
+
+        The obligation moved from the wrappers to the builder: the wrappers take the
+        built request now, so the builder is the ONE place a buyer field can go missing,
+        and it is what this grades. Every declared field is passed, so a field the
+        builder drops from its signature fails here rather than silently vanishing.
         """
-        from src.core.tools.media_buy_delivery import get_media_buy_delivery_raw
+        from src.core.schemas import GetMediaBuyDeliveryRequest
+        from src.core.tools.media_buy_delivery import (
+            _build_get_media_buy_delivery_request,
+            get_media_buy_delivery_raw,
+        )
 
         with DeliveryPollEnv() as env:
             env.add_buy(media_buy_id="mb_001")
             env.set_adapter_response("mb_001", impressions=5000)
 
-            # include_package_daily_breakdown is a simple bool — no schema complexity
-            response = get_media_buy_delivery_raw(
+            req = _build_get_media_buy_delivery_request(
                 media_buy_ids=["mb_001"],
                 include_package_daily_breakdown=True,
-                identity=env.identity,
             )
+            assert req.media_buy_ids == ["mb_001"]
+            assert req.include_package_daily_breakdown is True
+
+            # Every field the model DECLARES must be a name the builder takes; otherwise
+            # a buyer can send it, the model can hold it, and the builder still drops it
+            # on the floor (which is exactly how include_snapshot and account were lost).
+            buildable = set(inspect.signature(_build_get_media_buy_delivery_request).parameters)
+            declared = set(GetMediaBuyDeliveryRequest.model_fields) - _VERSION_ENVELOPE_FIELDS
+            assert declared <= buildable, f"builder cannot construct declared fields: {declared - buildable}"
+
+            response = get_media_buy_delivery_raw(req=req, identity=env.identity)
 
             assert isinstance(response, GetMediaBuyDeliveryResponse)
 
