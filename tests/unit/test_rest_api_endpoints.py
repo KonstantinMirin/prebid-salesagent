@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from adcp.types import AccountReference as LibraryAccountReference
-from adcp.types import ContextObject, PushNotificationConfig, ReportingWebhook
+from adcp.types import ContextObject, ExtensionObject, PushNotificationConfig, ReportingWebhook
 from starlette.testclient import TestClient
 
 from src.app import app
@@ -74,7 +74,13 @@ _CREATE_FORWARDED_SCALARS = {
     "reporting_webhook": (_CREATE_WEBHOOK_WIRE, ReportingWebhook.model_validate(_CREATE_WEBHOOK_WIRE)),
     "push_notification_config": (_CREATE_PNC_WIRE, PushNotificationConfig.model_validate(_CREATE_PNC_WIRE)),
     "context": (_CREATE_CONTEXT_WIRE, ContextObject.model_validate(_CREATE_CONTEXT_WIRE)),
-    "ext": ({"e9kw_marker": "create-value"}, {"e9kw_marker": "create-value"}),
+    # Coerced, like ``context`` above: the REST body is DERIVED from the DTO now, so ``ext``
+    # arrives as the DTO's ExtensionObject rather than a bare dict. That is the DTO's type
+    # reaching the wrapper, which is the point of deriving.
+    "ext": (
+        {"e9kw_marker": "create-value"},
+        ExtensionObject.model_validate({"e9kw_marker": "create-value"}),
+    ),
 }
 
 _UPDATE_FORWARDED_SCALARS = {
@@ -99,6 +105,12 @@ class TestCreateMediaBuyScalarForwarding:
             "packages": [],
             "start_time": "2026-01-01T00:00:00Z",
             "end_time": "2026-02-01T00:00:00Z",
+            # create-media-buy-request.json /required. The body is DERIVED from the DTO now,
+            # so requiredness is enforced at the REST edge as it already was on mcp and a2a
+            # -- a payload missing these is not a valid request on any transport.
+            "idempotency_key": "rest-create-key-000001",
+            "brand": {"domain": "example.com"},
+            "account": {"account_id": "acct_rest_test"},
             field: wire_value,
         }
         response = client.post("/api/v1/media-buys", json=body, headers={"Authorization": "Bearer test-token"})

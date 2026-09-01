@@ -257,7 +257,16 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
     envelope). Surfacing the first failure's pointer as ``field`` keeps the
     response actionable; the full list is preserved under ``details``.
     """
-    errors = exc.errors()
+    # FastAPI prefixes every loc with the request LOCATION ("body"/"query"/"path"). That is
+    # a framework detail, not part of the buyer's document, so it is stripped once here --
+    # for the issues[] pointers as well as for ``field``, which used to strip it alone and
+    # left issues reading "/body/idempotency_key" where the pin wants "/idempotency_key".
+    errors = [
+        {**e, "loc": tuple(e.get("loc", ())[1:])}
+        if e.get("loc") and str(e["loc"][0]) in ("body", "query", "path")
+        else e
+        for e in exc.errors()
+    ]
     first = errors[0] if errors else {}
     # Drop ONLY the leading "body"/"query"/"path" location segment (the FastAPI
     # location prefix); join the rest into the JSONPath-lite ``field`` the envelope

@@ -32,7 +32,6 @@ from __future__ import annotations
 import inspect
 
 from src.core.schemas import (
-    CreateMediaBuyRequest,
     SalesAgentBaseModel,
 )
 from src.core.tools.creatives.listing import list_creatives_raw
@@ -176,16 +175,7 @@ def test_rest_body_allowlist_has_no_stale_entries():
 #: which is a LAG check -- it never notices a body that is missing a field the DTO declares
 #: and the impl accepts under a different spelling, and it is what let ``sort`` go absent
 #: from the old ListCreativesBody while every other transport carried it.
-_HAND_WRITTEN_GRADED: list[tuple[type, type, object, frozenset[str], str]] = [
-    (
-        CreateMediaBuyBody,
-        CreateMediaBuyRequest,
-        create_media_buy_raw,
-        frozenset(),
-        "packages/start_time/end_time must stay wire-shaped so CreateMediaBuyRequest, not "
-        "FastAPI, produces the graded rejection",
-    ),
-]
+_HAND_WRITTEN_GRADED: list[tuple[type, type, object, frozenset[str], str]] = []
 
 
 def test_hand_written_bodies_carry_the_derived_field_set():

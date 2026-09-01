@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
-from adcp.types import BrandReference, GetAdcpCapabilitiesRequest
+from adcp.types import GetAdcpCapabilitiesRequest
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_request import (
     GetAdcpCapabilitiesRequest as GetAdcpCapabilitiesRequestDTO,
 )
@@ -31,13 +31,13 @@ from src.core.schema_helpers import (
     to_push_notification_config,
     to_reporting_webhook,
 )
+from src.core.schemas import CreateMediaBuyRequest as CreateMediaBuyRequestDTO
 from src.core.schemas import GetMediaBuyDeliveryRequest as GetMediaBuyDeliveryRequestDTO
 from src.core.schemas import GetMediaBuysRequest as GetMediaBuysRequestDTO
 from src.core.schemas import GetProductsRequest as GetProductsRequestDTO
 from src.core.schemas import ListAuthorizedPropertiesRequest as ListAuthorizedPropertiesRequestDTO
 from src.core.schemas import ListCreativeFormatsRequest as ListCreativeFormatsRequestDTO
 from src.core.schemas import ListCreativesRequest as ListCreativesRequestDTO
-from src.core.schemas import SalesAgentBaseModel
 from src.core.schemas import UpdateMediaBuyRequest as UpdateMediaBuyRequestDTO
 from src.core.schemas import UpdatePerformanceIndexRequest as UpdatePerformanceIndexRequestDTO
 from src.core.schemas.account import ListAccountsRequest as ListAccountsRequestDTO
@@ -103,39 +103,28 @@ else:
     )
 
 
-class CreateMediaBuyBody(SalesAgentBaseModel):
-    # NOT DERIVED, deliberately. The field SET matches ``CreateMediaBuyRequest fields
-    # INTERSECT create_media_buy_raw parameters`` exactly -- and is graded against it by
-    # test_hand_written_bodies_carry_the_derived_field_set -- but the DTO's ANNOTATIONS
-    # must not reach the wire here:
-    #
-    #   * ``packages`` stays ``list[dict]`` so CreateMediaBuyRequest validates it as the
-    #     request's packages[] field. Binding it to list[PackageRequest] would make FastAPI
-    #     reject a bad package before any AdCP code runs, replacing the full-request error
-    #     field path (packages.0.budget...) with a FastAPI location and the graded code with
-    #     INVALID_REQUEST.
-    #   * ``start_time``/``end_time`` stay ``str`` -- the DTO types them StartTiming /
-    #     AwareDatetime, and the raw wrapper (which every transport shares) declares ``str``.
-    #
-    # dict BrandReference or string domain/URL shorthand (#1324); coerced to
-    # BrandReference at the boundary via to_brand_reference.
-    brand: BrandReference | dict[str, Any] | str | None = None  # adcp 3.6.0: BrandReference with domain field
-    packages: list[dict[str, Any]] = []  # Validated downstream by CreateMediaBuyRequest
-    start_time: str | None = None
-    end_time: str | None = None
-    po_number: str | None = None
-    account: dict[str, Any] | None = None  # AccountReference; resolved at the transport boundary
-    reporting_webhook: dict[str, Any] | None = None
-    push_notification_config: dict[str, Any] | None = None
-    context: dict[str, Any] | None = None
-    ext: dict[str, Any] | None = None
-    idempotency_key: str | None = None
-    # AdCP 3.1.1 create-in-paused-state; accepted, validated, and forwarded to the
-    # raw wrapper on all transports for wire parity, but pause-on-create is not yet
-    # honored by _impl — see #1619.
-    paused: bool | None = None
-    adcp_version: str | None = None
+if TYPE_CHECKING:
+    # TYPE-CHECKER ONLY; the runtime class is the derivation in the else branch.
+    class CreateMediaBuyBody(DerivedBodyEnvelope, CreateMediaBuyRequestDTO): ...
 
+else:
+    # DERIVED. It was hand-written to keep the DTO's annotations off the wire, and each
+    # reason has since stopped holding:
+    #
+    #   packages / the error shape -- binding it was said to replace the full-request field
+    #   path with a FastAPI location and the graded code with INVALID_REQUEST. The pointer
+    #   is JSONPath-lite on every transport now (src/app.py), and INVALID_REQUEST is what a
+    #   schema violation is supposed to answer, so both halves of that objection are gone.
+    #
+    #   start_time / end_time -- the DTO types them StartTiming / AwareDatetime while
+    #   create_media_buy_raw declares ``str``. That is the WRAPPER having drifted from the
+    #   DTO, not a reason for the body to hide the DTO's types; deriving makes the drift
+    #   visible instead of preserving it.
+    CreateMediaBuyBody = derived_body_model(
+        "CreateMediaBuyBody",
+        CreateMediaBuyRequestDTO,
+        media_buy_create_module.create_media_buy_raw,
+    )
 
 if TYPE_CHECKING:
     # TYPE-CHECKER ONLY; the runtime class is the derivation in the else branch.
