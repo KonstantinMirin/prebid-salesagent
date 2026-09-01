@@ -52,8 +52,7 @@ class WireError(Exception):
     ``pytest.raises(AdCPNotFoundError)`` through a transport; that map covered 20 of
     43 classes, was silent about the other 23, and its own docstring conceded the
     reconstruction was lossy. Grading OUR class hierarchy through a lossy copy of
-    production's constructor is not the same as grading the buyer's contract
-    (salesagent-3dawm.15).
+    production's constructor is not the same as grading the buyer's contract.
 
     This type carries no code-to-class knowledge at all. It exists so a failed wire
     dispatch can still raise -- callers up the stack expect an exception -- while the
@@ -75,7 +74,7 @@ def _mcp_wire_envelope(exc: Exception) -> dict | None:
     so FastMCP serializes ``str(exc)`` as the JSON-encoded envelope. This parses that
     JSON and RETURNS IT. It does not rebuild an exception: the envelope is what the
     buyer received, and it already carries code, message, recovery, suggestion, field
-    and details (salesagent-3dawm.15).
+    and details.
 
     Falls back to the legacy tuple-string shape for any plain ``ToolError`` raised
     outside the boundary translator, and finally to ``extract_error_info`` for the
@@ -143,7 +142,7 @@ def _wire_envelope(envelope: dict) -> dict | None:
     docstring conceded the reconstruction was "lossy by construction"; and it was the
     only place outside production that called an ``AdCPSalesAgentError`` constructor, which made
     it the only place that could drift from a signature change -- and it did, twice,
-    the second time costing 469 tests (salesagent-3dawm.15).
+    the second time costing 469 tests.
 
     Arming a fault still needs a real typed exception; the adapter genuinely raises
     one. ASSERTING an outcome never does: the envelope IS what the buyer received.
@@ -176,7 +175,7 @@ def _a2a_wire_envelope(exc: Exception) -> dict | None:
     ``InvalidRequestError`` -> AdCPAuthenticationError, ``InvalidParamsError`` ->
     AdCPValidationError, ``InternalError`` -> RuntimeError -- is gone with it: those
     were hand-maintained guesses at what the wire meant, and a guess is not evidence
-    of what the buyer received (salesagent-3dawm.15).
+    of what the buyer received.
     """
     from a2a.utils.errors import A2AError
 
@@ -393,7 +392,7 @@ class BaseTestEnv:
                         # 168-172), which nulls principal_id on a failed token->principal
                         # lookup, so in-process transports agree with e2e_rest's real DB
                         # lookup instead of diverging on the deleted-principal case
-                        # (salesagent-z9e0).
+                        # .
                         principal_id = None
 
             self._identity_cache[protocol] = PrincipalFactory.make_identity(
@@ -676,7 +675,7 @@ class BaseTestEnv:
             # The ORIGINAL exception propagates. It used to be translated into a
             # reconstructed AdCPSalesAgentError so callers could catch domain exceptions; the
             # dispatcher now reads the envelope off the A2AError instead
-            # (salesagent-3dawm.15), and a genuine in-process production error --
+            # , and a genuine in-process production error --
             # which is what the IMPL path raises -- is unaffected either way.
             envelope = _a2a_wire_envelope(exc)
             if envelope is not None:
@@ -989,7 +988,7 @@ class BaseTestEnv:
         404 -> AdCPNotFoundError, and five more -- is DELETED. It was the same design
         mistake as the code-to-class map in a second spelling: an HTTP status guessed
         back into an AdCP class. A status is not a code, and a guess is not evidence of
-        what the buyer received (salesagent-3dawm.15). A body with no recoverable code
+        what the buyer received. A body with no recoverable code
         yields ``None``, and the dispatcher reports the raw HTTP failure instead.
         """
         return _wire_envelope(data)
@@ -1232,6 +1231,63 @@ class IntegrationEnv(BaseTestEnv):
         if principal is None:
             principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
         return tenant, principal
+
+    def setup_default_account(self) -> Any:
+        """Get-or-create the default Account (plus this principal's access to it).
+
+        AdCP 3.1.1 makes ``account`` REQUIRED on several requests (sync-creatives-request
+        and update-media-buy-request both list it in /required), so a scenario that does
+        not seed one cannot build a valid request at all -- it fails on a missing field
+        before reaching the behaviour it means to grade.
+
+        Must be called inside the ``with env:`` block, and it calls
+        ``setup_default_data`` first: the Account row carries a tenant_id FK, so seeding
+        it against a tenant that does not exist yet is the FK violation this method
+        exists to make unreachable.
+
+        Idempotent, like ``setup_default_data`` -- reuses an existing row so repeated
+        Given steps do not collide.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.models import Account, AgentAccountAccess
+        from tests.factories.account import AccountFactory, AgentAccountAccessFactory
+
+        tenant, principal = self.setup_default_data()
+
+        account = self._session.scalars(select(Account).filter_by(tenant_id=self._tenant_id)).first()
+        if account is None:
+            # tenant_id, never tenant= -- Account.tenant is a real relationship, so handing
+            # it a SubFactory's throwaway Tenant makes SQLAlchemy re-sync tenant_id FROM
+            # that object at flush and silently relocate the row (see AccountFactory.Meta).
+            account = AccountFactory(tenant_id=tenant.tenant_id)
+
+        access = self._session.scalars(
+            select(AgentAccountAccess).filter_by(
+                tenant_id=self._tenant_id,
+                principal_id=principal.principal_id,
+                account_id=account.account_id,
+            )
+        ).first()
+        if access is None:
+            AgentAccountAccessFactory(
+                tenant_id=tenant.tenant_id,
+                principal_id=principal.principal_id,
+                account_id=account.account_id,
+            )
+        self._commit_factory_data()
+        return account
+
+    def default_account_reference(self) -> Any:
+        """The seeded account as the AccountReference a request field wants.
+
+        core/account-ref.json is a oneOf: {account_id} or {brand, operator, sandbox?}.
+        The account_id form is the one a seeded row can satisfy exactly, so steps get
+        that rather than reconstructing a brand/operator pair the DB may not agree with.
+        """
+        from adcp.types import AccountReference
+
+        return AccountReference(root={"account_id": self.setup_default_account().account_id})
 
     def configure_tenant_field(self, field: str, value: Any) -> None:
         """Write a tenant-level config field for both auth paths.
