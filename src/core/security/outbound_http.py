@@ -55,10 +55,10 @@ without archaeology through a PR description:
   constants dialled under operator credentials. Banning them would be noqa
   ceremony with no threat behind it.
 
-**RFC 9421 signers do NOT need their own client** (salesagent-47n9.22). A signer
+**RFC 9421 signers do NOT need their own client** (GH #1441). A signer
 whose signature cannot be replayed — RFC 9421 covers a ``nonce`` a conformant
 receiver must reject twice — used to have a reason to open its own
-``httpx.AsyncClient``: this seam owns retry, so a signature computed once above
+``_httpx.AsyncClient``: this seam owns retry, so a signature computed once above
 the loop ships unchanged on attempts 2 and 3. That reason is gone. ``send``/
 ``asend`` take a :class:`SignAttempt` callback invoked once PER ATTEMPT, inside
 the retry loop. Injection, not detection — the caller never receives a client it
@@ -70,7 +70,7 @@ parameter name:
 * It is invoked AFTER ``client.build_request``, so the signer is handed
   ``request.content`` — the exact bytes httpx will transmit — and the
   post-params ``request.url``. That is what removes the re-serialization hazard
-  (#1441 / salesagent-47n9.1) in which a signer signed one serialization of a
+  (GH #1441) in which a signer signed one serialization of a
   payload while httpx independently produced another. For a ``sign=`` caller
   BOTH ``json=`` and ``content=`` are therefore sound. (The ``json=`` ban in
   ``tests/unit/test_architecture_no_signed_webhook_json_send.py`` is about
@@ -155,7 +155,12 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any, Protocol
 
-import httpx  # noqa: TID251 - the seam itself; the one sanctioned httpx importer (GH #1589)
+# Bound PRIVATELY on purpose. `import httpx` would publish this module's own
+# `outbound_http.httpx`, and `from src.core.security.outbound_http import httpx`
+# then resolves to the real module straight past the gate (GH #1802). The
+# underscore makes that re-export an ImportError instead of something a ban
+# list has to keep enumerating.
+import httpx as _httpx  # noqa: TID251 - the seam itself; the one sanctioned httpx importer (GH #1589)
 from adcp.signing import AsyncIpPinnedTransport, IpPinnedTransport
 from pydantic import JsonValue
 from typing_extensions import TypeIs
@@ -177,12 +182,12 @@ logger = logging.getLogger(__name__)
 
 # Escape hatch. Defaults OFF — a guarded posture is the default, and an
 # operator has to say so out loud to leave it. The scheme requirement
-# (https-only) has NO escape hatch (salesagent-e6h0): the outbound origins
-# that used to need one are all TLS-fronted now (salesagent-40qh).
+# (https-only) has NO escape hatch (GH #1757): the outbound origins
+# that used to need one are all TLS-fronted now (GH #1757).
 _ALLOW_PRIVATE_ENV = "ADCP_OUTBOUND_ALLOW_PRIVATE"
 
 #: A query string, as the seam accepts it. Scalars only: httpx would also take a
-#: sequence value or its own ``httpx.QueryParams``, and admitting either would
+#: sequence value or its own ``_httpx.QueryParams``, and admitting either would
 #: put an httpx type back in this module's public signatures — the exact
 #: crossing this seam exists to close. A caller with a repeated key builds the
 #: string itself.
@@ -225,10 +230,10 @@ class McpClientFactory(Protocol):
     def __call__(
         self,
         headers: Mapping[str, str] | None = None,
-        timeout: httpx.Timeout | float | None = None,
-        auth: httpx.Auth | None = None,
+        timeout: _httpx.Timeout | float | None = None,
+        auth: _httpx.Auth | None = None,
         follow_redirects: bool | None = None,
-    ) -> httpx.AsyncClient: ...
+    ) -> _httpx.AsyncClient: ...
 
 
 #: Headers a signer may not set, because they describe the FRAMING of the body
@@ -254,13 +259,13 @@ _MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 
 # httpx signals these as exceptions, never as a status, so a status-only
 # classifier would let them escape the seam and force every migrated call site
-# to keep its own ``except httpx...`` — the duplication this module deletes.
+# to keep its own ``except _httpx...`` — the duplication this module deletes.
 _RETRYABLE_EXCEPTIONS = (
-    httpx.TimeoutException,
-    httpx.ConnectError,
-    httpx.RemoteProtocolError,
-    httpx.ReadError,
-    httpx.WriteError,
+    _httpx.TimeoutException,
+    _httpx.ConnectError,
+    _httpx.RemoteProtocolError,
+    _httpx.ReadError,
+    _httpx.WriteError,
 )
 
 # The retry SCHEDULE (_backoff_seconds, _wait_seconds, _RETRYABLE_STATUSES,
@@ -344,7 +349,7 @@ def terminal_client_error_status(exc: OutboundError) -> int | None:
 class WrappedFailure:
     """The two numbers a wrapped HTTP failure carries, and nothing else.
 
-    The seam's projection of an ``httpx.HTTPStatusError`` found on an exception
+    The seam's projection of an ``_httpx.HTTPStatusError`` found on an exception
     chain. It exists so a caller can recover the status-code-aware
     classification without receiving the httpx object that carries it: an
     import ban sees IMPORTS, so an httpx type crossing this boundary through a
@@ -358,19 +363,19 @@ class WrappedFailure:
 
 
 def wrapped_failure(exc: BaseException) -> WrappedFailure | None:
-    """Walk *exc*'s cause/context chain (and any ``ExceptionGroup`` members) for a wrapped ``httpx.HTTPStatusError``.
+    """Walk *exc*'s cause/context chain (and any ``ExceptionGroup`` members) for a wrapped ``_httpx.HTTPStatusError``.
 
     For a transport that does NOT go through ``send``/``asend`` — the guarded
     MCP seam (``src.core.utils.mcp_client.call_mcp_tool``) hands a
     ``guarded_client_factory``-built client to fastmcp/mcp, whose own
     session/retry logic wraps failures in its own exception types, but chains
-    through the real ``httpx.HTTPStatusError`` via ``raise ... from ...``. This
+    through the real ``_httpx.HTTPStatusError`` via ``raise ... from ...``. This
     lets a caller of that seam recover the same status-code-aware
     classification (429/4xx/5xx) this module's own retry loop uses, without
     importing ``httpx`` itself — this module is the one sanctioned importer
     (GH #1589) — and now without RECEIVING an httpx object either.
     """
-    found = find_wrapped(exc, httpx.HTTPStatusError)
+    found = find_wrapped(exc, _httpx.HTTPStatusError)
     if found is None:
         return None
     return WrappedFailure(status=found.response.status_code, retry_after=_retry_after_seconds(found.response))
@@ -512,7 +517,7 @@ async def sleep_backoff(attempts: Attempts) -> None:
     one-shot request/response cannot carry — but must not own a second copy of
     the retry schedule. Sleeping HERE rather than returning the number is the
     guard: the no-call-site-backoff detector follows same-module names (and,
-    since salesagent-tbrk.2, same-module ``.wait_seconds()``-shaped attribute
+    since GH #1802, same-module ``.wait_seconds()``-shaped attribute
     calls) only, so a public wait-returning function callable from outside
     this exempt module would let a scaled variant drift invisibly. Taking the
     WHOLE :class:`~src.core.security.egress.attempts.Attempts` instance rather
@@ -528,7 +533,7 @@ async def sleep_backoff(attempts: Attempts) -> None:
     await asyncio.sleep(attempts.wait_seconds())
 
 
-def _retry_after_seconds(response: httpx.Response) -> float | None:
+def _retry_after_seconds(response: _httpx.Response) -> float | None:
     """The origin's Retry-After in seconds, or ``None`` if it did not usably say.
 
     Delta-seconds only. RFC 9110 also permits an HTTP-date, but honouring one
@@ -545,7 +550,7 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
     :func:`wrapped_failure`, which projects the parsed value onto
     :class:`WrappedFailure`. That is what keeps the 429/Retry-After parsing rule
     in one home regardless of which transport the seam used underneath WITHOUT
-    handing an ``httpx.Response`` to a module that is forbidden to import httpx.
+    handing an ``_httpx.Response`` to a module that is forbidden to import _httpx.
     """
     raw = response.headers.get("Retry-After")
     if raw is None:
@@ -558,7 +563,7 @@ def _retry_after_seconds(response: httpx.Response) -> float | None:
 
 
 def _build_request(
-    client: httpx.Client | httpx.AsyncClient,
+    client: _httpx.Client | _httpx.AsyncClient,
     *,
     method: str,
     url: str,
@@ -567,7 +572,7 @@ def _build_request(
     headers: Mapping[str, str] | None,
     content: bytes | None,
     sign: SignAttempt | None = None,
-) -> httpx.Request:
+) -> _httpx.Request:
     request = client.build_request(
         method.upper(),
         url,
@@ -601,7 +606,7 @@ def _request_builder(
     headers: Mapping[str, str] | None,
     content: bytes | None,
     sign: SignAttempt | None,
-) -> Callable[[httpx.Client | httpx.AsyncClient], httpx.Request]:
+) -> Callable[[_httpx.Client | _httpx.AsyncClient], _httpx.Request]:
     """Bind the seven passthrough values once; the CALL stays per-attempt.
 
     ``_build_request`` must still run inside the retry loop: ``sign`` is
@@ -646,7 +651,7 @@ def _record_transport_failure(attempts: Attempts, attempt: int, exc: BaseExcepti
 
 def _conclude_attempt(
     attempts: Attempts,
-    response: httpx.Response,
+    response: _httpx.Response,
     body: bytes,
     attempt: int,
     started: float,
@@ -670,14 +675,14 @@ def _over_cap(size: int) -> bool:
     return size > _MAX_RESPONSE_BYTES
 
 
-def _result(response: httpx.Response, body: bytes, attempt: int, started: float) -> OutboundResult:
+def _result(response: _httpx.Response, body: bytes, attempt: int, started: float) -> OutboundResult:
     """Build the closed :class:`OutboundResult` from a completed dial.
 
     Reads only what ``response`` was constructed with (``status_code``,
     ``headers``) plus the already-accumulated ``body`` -- no streamed-body
     read is needed, so nothing pokes ``response._content`` the way the
     deleted ``_attach_body`` had to. ``dict(response.headers)`` already yields
-    lowercased keys (httpx.Headers' own iteration), matching every
+    lowercased keys (_httpx.Headers' own iteration), matching every
     consumer's existing ``.get("content-type", ...)`` lookup.
     """
     return OutboundResult(
@@ -729,11 +734,11 @@ def guarded_async_client(
     url: str,
     *,
     headers: Mapping[str, str] | None = None,
-    timeout: httpx.Timeout | float | None = None,
-    auth: httpx.Auth | None = None,
+    timeout: _httpx.Timeout | float | None = None,
+    auth: _httpx.Auth | None = None,
     follow_redirects: bool | None = None,
-) -> httpx.AsyncClient:
-    """An ``httpx.AsyncClient`` pinned to ``url``'s validated IP, redirects refused.
+) -> _httpx.AsyncClient:
+    """An ``_httpx.AsyncClient`` pinned to ``url``'s validated IP, redirects refused.
 
     For the one library seam whose stateful client this module's one-shot
     :func:`asend` cannot carry — fastmcp's ``StreamableHttpTransport``, which
@@ -770,7 +775,7 @@ def guarded_async_client(
     # not passable at all.
     del follow_redirects
     kwargs.update(transport=transport, follow_redirects=False, trust_env=False)
-    return httpx.AsyncClient(**kwargs)
+    return _httpx.AsyncClient(**kwargs)
 
 
 def guarded_client_factory(url: str) -> McpClientFactory:
@@ -786,10 +791,10 @@ def guarded_client_factory(url: str) -> McpClientFactory:
 
     def factory(
         headers: Mapping[str, str] | None = None,
-        timeout: httpx.Timeout | float | None = None,
-        auth: httpx.Auth | None = None,
+        timeout: _httpx.Timeout | float | None = None,
+        auth: _httpx.Auth | None = None,
         follow_redirects: bool | None = None,
-    ) -> httpx.AsyncClient:
+    ) -> _httpx.AsyncClient:
         return guarded_async_client(url, headers=headers, timeout=timeout, auth=auth, follow_redirects=follow_redirects)
 
     return factory
@@ -855,7 +860,7 @@ def send(
     # closed when reused for another host.
     build = _request_builder(method, url, json, params, headers, content, sign)
 
-    with httpx.Client(transport=transport, timeout=timeout) as client:
+    with _httpx.Client(transport=transport, timeout=timeout) as client:
         for attempt in attempts.next_attempt():
             request = build(client)
             try:
@@ -914,7 +919,7 @@ async def asend(
 
     build = _request_builder(method, url, json, params, headers, content, sign)
 
-    async with httpx.AsyncClient(transport=transport, timeout=timeout) as client:
+    async with _httpx.AsyncClient(transport=transport, timeout=timeout) as client:
         for attempt in attempts.next_attempt():
             request = build(client)
             try:

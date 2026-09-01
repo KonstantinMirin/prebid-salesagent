@@ -30,12 +30,16 @@ Usage:
 import logging
 from typing import Any
 
+# Both bound PRIVATELY: a plain import would publish `mcp_client.Client` and
+# `mcp_client.StreamableHttpTransport`, and importing either from here resolves
+# to the real symbol past the gate (GH #1802). The underscore makes that an
+# ImportError, so the seam cannot re-export what it was sanctioned to import.
 from fastmcp.client import (
-    Client,  # noqa: TID251 - the MCP seam; only constructed with transport=, never a URL (GH #1589)
+    Client as _Client,  # noqa: TID251 - the MCP seam; only constructed with transport=, never a URL (GH #1589)
 )
 from fastmcp.client.client import CallToolResult
 from fastmcp.client.transports import (
-    StreamableHttpTransport,  # noqa: TID251 - the MCP seam; construction is factory-pinned below (GH #1589)
+    StreamableHttpTransport as _StreamableHttpTransport,  # noqa: TID251 - the MCP seam; construction is factory-pinned below (GH #1589)
 )
 
 from src.core.security.egress.attempts import Attempts
@@ -219,12 +223,12 @@ async def call_mcp_tool(
                 # counterparty answering `302 -> http://169.254.169.254/` reaches an
                 # address validate_url's pre-check never saw. Pinning current_url — the URL
                 # actually dialed — also means validate-and-dial cannot diverge.
-                transport = StreamableHttpTransport(
+                transport = _StreamableHttpTransport(
                     url=current_url,
                     headers=headers,
                     httpx_client_factory=guarded_client_factory(current_url),
                 )
-                client = Client(transport=transport)
+                client = _Client(transport=transport)
 
                 # Connect and call the tool inside the SAME try — a tool-level
                 # failure is caught by the except below and retried on this

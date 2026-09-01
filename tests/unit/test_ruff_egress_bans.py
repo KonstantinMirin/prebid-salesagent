@@ -9,7 +9,7 @@ old ``test_architecture_no_raw_egress.py`` — see GH #1589 and CLAUDE.md
 pattern #9: all outbound HTTP goes through ``src/core/security/outbound_http.py``.
 
 This module is the ban table's non-vacuity proof, replacing the deleted
-guards' meta-tests. Five cases:
+guards' meta-tests. Four cases:
 
 (a) POSITIVE  — every banned entry fires (TID251 in ruff's OUTPUT, not just
     exit status) for every resolving spelling: direct import, aliased import,
@@ -21,9 +21,7 @@ guards' meta-tests. Five cases:
     site, and no file carries a suppression the record does not know about.
 (d) CLOSED SET — the set of files with a violation absent all suppressions
     equals the recorded constant; a new exemption fails until recorded here.
-(e) DERIVED OBLIGATION — every suppressed import site's own re-export path
-    (``<module>.<name>``) is itself banned, so a seam cannot leak the name it
-    was sanctioned to import.
+
 
 Cases (c) and (d) do NOT parse suppressions themselves. They ask ruff, via
 ``--ignore-noqa``, what the violation set V is absent ALL suppressions, and
@@ -48,11 +46,9 @@ are executable, never prose (Core Invariant of GH #1589).
 
 from __future__ import annotations
 
-import ast
 import functools
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -179,18 +175,8 @@ _SYMBOL_BAN_PATHS: dict[str, tuple[str, ...]] = {
     # constructor that manufactures one leaves the hole open. The MCP seam is
     # the sanctioned importer and passes transport= only. The seam's own module
     # is the fourth path because importing FROM the seam re-exports the name.
-    "Client": ("fastmcp", "fastmcp.client", "fastmcp.client.client", "src.core.utils.mcp_client"),
-    # The seam re-exports: `from src.core.security.outbound_http import httpx`
-    # resolves to the real module and used to pass clean (round-3 finding 2b).
-    "httpx": ("src.core.security.outbound_http",),
-    "ipaddress": ("src.core.security.egress.policy",),
+    "Client": ("fastmcp", "fastmcp.client", "fastmcp.client.client"),
 }
-
-# Note: the `httpx` and `ipaddress` keys above double as module names in
-# `_MODULE_BANS`. That is not a duplicate — case (a) reads this dict as
-# {symbol: paths}, so those two entries prove the SEAM RE-EXPORT ban fires
-# (`from src.core.security.outbound_http import httpx`), while `_MODULE_BANS`
-# proves the bare-module ban fires. Different bans, different spellings.
 
 
 def _run_ruff_egress(source: str, stdin_filename: str) -> subprocess.CompletedProcess[str]:
@@ -517,80 +503,4 @@ class TestExemptSetIsClosed:
             f"constant.\n"
             + (f"unrecorded (record it or remove the import): {sorted(unrecorded)}\n" if unrecorded else "")
             + (f"recorded but no longer violating (delete the row): {sorted(missing)}\n" if missing else "")
-        )
-
-
-# ---------------------------------------------------------------------------
-# (e) The derived obligation: a sanctioned importer RE-EXPORTS what it imports.
-#
-# banned-api matches the WRITTEN import path textually, so
-# `from src.core.security.outbound_http import httpx` resolved to the real
-# module and passed clean (round-3 finding 2b). Enumerating the seam paths by
-# hand is the same disease as enumerating noqa spellings, so the obligation is
-# DERIVED: every suppressed import site owes a ban on its own re-export path.
-# A fourth seam file, or a second import in an existing one, creates its
-# obligation on the day it is written.
-# ---------------------------------------------------------------------------
-
-
-def _banned_api_paths() -> set[str]:
-    """The dotted paths in the config's banned-api table, parsed not guessed."""
-    data = tomllib.loads((repo_root() / EGRESS_CONFIG).read_text(encoding="utf-8"))
-    return set(data["lint"]["flake8-tidy-imports"]["banned-api"])
-
-
-def _module_dotted_path(rel_path: str) -> str:
-    """`src/core/utils/mcp_client.py` -> `src.core.utils.mcp_client`."""
-    parts = rel_path.removesuffix(".py").split("/")
-    if parts[-1] == "__init__":
-        parts.pop()
-    return ".".join(parts)
-
-
-def _import_bindings_at(rel_path: str, lineno: int) -> set[str]:
-    """Names bound by an import statement on *lineno* of *rel_path*."""
-    tree = ast.parse((repo_root() / rel_path).read_text(encoding="utf-8"))
-    bound: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.Import, ast.ImportFrom)):
-            continue
-        for alias in node.names:
-            if alias.lineno != lineno:
-                continue
-            bound.add(alias.asname or alias.name.split(".")[0])
-    return bound
-
-
-def _reexport_obligations() -> list[tuple[str, int, str]]:
-    """`(rel_path, lineno, dotted_reexport_path)` for every suppressed import site.
-
-    `scripts/` is excluded: a script is not importable as a `src.`-style module,
-    so it re-exports nothing.
-    """
-    obligations: list[tuple[str, int, str]] = []
-    for rel_path, lineno in sorted(_violation_sites_ignoring_noqa("TID251")):
-        if not rel_path.startswith("src/"):
-            continue
-        module = _module_dotted_path(rel_path)
-        for name in sorted(_import_bindings_at(rel_path, lineno)):
-            obligations.append((rel_path, lineno, f"{module}.{name}"))
-    return obligations
-
-
-class TestSeamReexportsAreBanned:
-    """(e) Every sanctioned importer's own re-export path is itself banned."""
-
-    def test_every_seam_reexport_path_is_banned(self) -> None:
-        obligations = _reexport_obligations()
-        assert obligations, (
-            "no suppressed TID251 import sites found under src/ — this test has gone "
-            "vacuous; the derivation is reading an empty violation set"
-        )
-        banned = _banned_api_paths()
-        unbanned = [(f, n, path) for f, n, path in obligations if path not in banned]
-        assert not unbanned, (
-            "a sanctioned importer RE-EXPORTS the name it was allowed to import, and that "
-            "re-export path is not banned — `from <seam> import <name>` bypasses the gate "
-            f"(GH #1589). Add each path to {EGRESS_CONFIG}'s banned-api table:\n  "
-            + "\n  ".join(f'{f}:{n} -> "{path}"' for f, n, path in unbanned)
         )

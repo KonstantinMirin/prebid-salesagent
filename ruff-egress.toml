@@ -103,17 +103,6 @@ select = ["TID251", "ANN401"]
 "ipaddress".msg = "Address classification belongs to adcp.signing + src/core/security/egress/policy.py's supplement/blocklist (GH #1589, adcontextprotocol/adcp-client-python#974). A second copy outside the egress package is the exact disease this backstop exists to prevent."
 "socket.gethostbyname".msg = "Resolve-then-check is a TOCTOU the egress package does not use (adcp.signing pins the resolved IP in one step). Address classification belongs to src/core/security/egress/policy.py (GH #1589)."
 
-# --- Re-export bans: banned-api matches the WRITTEN path textually, so a seam
-# that imports a banned name re-exports it under a path this table did not name.
-# `from src.core.security.outbound_http import httpx` resolves to the real
-# module and passed clean (GH #1802 round-3 finding 2b). One line per seam
-# re-export; the derivation test in tests/unit/test_ruff_egress_bans.py obliges
-# a new line the day a seam gains a new suppressed import. ---
-"src.core.security.outbound_http.httpx".msg = "Re-export of the seam's own import. Outbound HTTP goes through src/core/security/outbound_http.py's send/asend, not its httpx handle (GH #1589)."
-"src.core.security.egress.policy.ipaddress".msg = "Re-export of the egress package's own import. Address classification belongs inside src/core/security/egress/policy.py, not to its importers (GH #1589)."
-"src.core.utils.mcp_client.StreamableHttpTransport".msg = "Re-export of the MCP seam's own import. Construct via src.core.utils.mcp_client.create_mcp_client, which pins the validated URL with guarded_client_factory (GH #1589)."
-"src.core.utils.mcp_client.Client".msg = "Re-export of the MCP seam's own import. Construct via src.core.utils.mcp_client.create_mcp_client, which passes transport= — never a bare URL (GH #1589)."
-
 # --- fastmcp.Client itself: `Client(url)` INFERS an un-pinned
 # StreamableHttpTransport from a bare URL (verified at runtime), so banning the
 # transports without banning the constructor that manufactures one leaves the

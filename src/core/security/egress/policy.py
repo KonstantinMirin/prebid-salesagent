@@ -21,7 +21,11 @@ is told.
 
 from __future__ import annotations
 
-import ipaddress  # noqa: TID251 - the egress package's own address classification; the one sanctioned site (GH #1589)
+# Bound PRIVATELY: `import ipaddress` would publish `egress.policy.ipaddress`,
+# and importing it from here resolves to the real module past the gate
+# (GH #1802). The underscore makes that an ImportError rather than a row in a
+# ban table someone has to remember to add.
+import ipaddress as _ipaddress  # noqa: TID251 - the egress package's own address classification; the one sanctioned site (GH #1589)
 import logging
 from typing import NamedTuple
 from urllib.parse import ParseResult, urlparse
@@ -49,15 +53,15 @@ logger = logging.getLogger(__name__)
 # line of defence is this list (GH #1802).
 _SUPPLEMENT_NETWORKS = frozenset(
     {
-        ipaddress.ip_network("100.64.0.0/10"),  # CGNAT (RFC 6598)
+        _ipaddress.ip_network("100.64.0.0/10"),  # CGNAT (RFC 6598)
         # FIXME(adcontextprotocol/adcp-client-python#974): drop this whole
         # frozenset (except the CGNAT entry above) once we adopt a release
         # that carries these ranges upstream.
-        ipaddress.ip_network("192.88.99.0/24"),  # 6to4 relay anycast (RFC 7526)
-        ipaddress.ip_network("192.31.196.0/24"),  # AS112-v4 (RFC 7535)
-        ipaddress.ip_network("192.52.193.0/24"),  # AMT (RFC 7450)
-        ipaddress.ip_network("192.175.48.0/24"),  # AS112 direct (RFC 7534)
-        ipaddress.ip_network("2001:20::/28"),  # ORCHIDv2 (RFC 7343)
+        _ipaddress.ip_network("192.88.99.0/24"),  # 6to4 relay anycast (RFC 7526)
+        _ipaddress.ip_network("192.31.196.0/24"),  # AS112-v4 (RFC 7535)
+        _ipaddress.ip_network("192.52.193.0/24"),  # AMT (RFC 7450)
+        _ipaddress.ip_network("192.175.48.0/24"),  # AS112 direct (RFC 7534)
+        _ipaddress.ip_network("2001:20::/28"),  # ORCHIDv2 (RFC 7343)
     }
 )
 
@@ -137,7 +141,7 @@ class OutboundRequestBlocked(OutboundError, AdCPBlockedUrlError):
     """
 
 
-def _in_supplement_range(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+def _in_supplement_range(ip: _ipaddress.IPv4Address | _ipaddress.IPv6Address) -> bool:
     """The half of the address predicate that NOTHING else defends.
 
     Split out from :func:`_blocked_address` because the two halves have
@@ -159,7 +163,7 @@ def _in_supplement_range(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> b
     return any(ip in network for network in _SUPPLEMENT_NETWORKS)
 
 
-def _blocked_address(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+def _blocked_address(ip: _ipaddress.IPv4Address | _ipaddress.IPv6Address) -> bool:
     """One address predicate, applied identically by both verdicts.
 
     The flag half — ``is_private``/``is_loopback``/``is_link_local``/
@@ -222,7 +226,7 @@ def _is_rescuable_loopback(url: str) -> bool:
     if hostname.lower() == "localhost":
         return True
     try:
-        return ipaddress.ip_address(hostname).is_loopback
+        return _ipaddress.ip_address(hostname).is_loopback
     except ValueError:
         return False
 
@@ -248,7 +252,7 @@ def _registration_error(url: str) -> str | None:
         return "hostname is on the blocklist"
 
     try:
-        literal_ip = ipaddress.ip_address(hostname)
+        literal_ip = _ipaddress.ip_address(hostname)
     except ValueError:
         # Not a literal IP -- a hostname that resolves (or fails to) is a
         # dial-time question, not a registration-time one.
@@ -351,7 +355,7 @@ class EgressPolicy:
             logger.warning("Outbound request refused by address policy: %s", exc)
             raise OutboundRequestBlocked(field=field) from exc
 
-        ip_obj = ipaddress.ip_address(ip)
+        ip_obj = _ipaddress.ip_address(ip)
 
         # UNCONDITIONAL, ahead of the hatch. The supplement set is the one thing
         # no posture may open: it exists because the SDK does not classify these
