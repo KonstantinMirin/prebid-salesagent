@@ -695,6 +695,14 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
         push_notification_config=push_notification_config,
         context=context,
         account=account_ref,
+        # The buyer's key was NOT forwarded here. SyncCreativesBody carries it and
+        # sync-creatives-request.json lists it in /required, but the route omitted it from
+        # this call, so a REST buyer's key was discarded before anything looked at it --
+        # while mcp and a2a both forward it. What that costs today is the shape check:
+        # _sync_creatives_impl runs validate_idempotency_key_shape, so a malformed key was
+        # rejected on mcp and a2a and silently accepted on REST. It does NOT yet buy replay:
+        # sync_creatives, unlike create_media_buy, does not implement one.
+        idempotency_key=body.idempotency_key,
         identity=identity,
     )
     return response.model_dump(mode="json")

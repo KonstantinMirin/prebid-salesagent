@@ -1528,3 +1528,31 @@ class TestAsyncLifecycleInputRequired:
             assert isinstance(result.payload, SyncCreativesInputRequired)
             # BDD: "indicates what input is needed"
             assert result.payload.reason == Reason.APPROVAL_REQUIRED
+
+
+@pytest.mark.requires_db
+class TestRestForwardsIdempotencyKey:
+    """The REST route must hand the buyer's idempotency_key to the wrapper.
+
+    It did not. SyncCreativesBody carried the field and sync-creatives-request.json lists
+    it in /required, but the route omitted it from the sync_creatives_raw call, so the key
+    a REST buyer sent was discarded before anything looked at it. mcp and a2a both forward
+    it, which is why no cross-transport test caught the difference.
+
+    What that costs today is the SHAPE check: _sync_creatives_impl runs
+    validate_idempotency_key_shape on the key, so a malformed one is rejected on mcp and
+    a2a and was silently accepted on REST -- the same request answered two ways depending
+    on the transport. Note it is only the shape check: sync_creatives does NOT implement
+    replay (unlike create_media_buy), so forwarding the key does not yet make a retry
+    replay the first response.
+    """
+
+    def test_rest_rejects_a_malformed_key_like_the_other_transports(self, integration_db):
+        """A too-short key is a value violation on every transport, REST included."""
+        with CreativeSyncEnv() as env:
+            env.setup_default_data()
+
+            result = env.call_via(Transport.REST, creatives=[_creative(creative_id="c_idem")], idempotency_key="short")
+
+        assert not result.is_success, "a malformed idempotency_key must be rejected on REST too"
+        result.assert_wire_error("VALIDATION_ERROR", recovery="correctable")
