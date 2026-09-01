@@ -89,8 +89,17 @@ def _is_injected(parameter: inspect.Parameter) -> bool:
 _BUILDER_NAME = re.compile(r"^(_?build_\w+_request|create_\w+_request)$")
 
 
-def request_model_for(fn: Callable[..., Any]) -> type[BaseModel] | None:
-    """The request DTO a tool builds, or None when it builds none."""
+def builder_for(fn: Callable[..., Any]) -> Callable[..., Any] | None:
+    """The ONE builder a tool constructs its request through, or None when it has none.
+
+    This is the tool -> builder edge, and every transport reads it rather than re-deriving
+    "params to request" for itself. That is the whole point: a transport that looks the
+    builder up cannot pick a different spelling, because there is nothing to pick.
+
+    Resolved from the ARTIFACT -- the builder named in the wrapper's BYTECODE -- never from
+    the tool's name. Name-joining would be fooled by the real cases: ``_build_update_request``
+    returns ``UpdateMediaBuyRequest``.
+    """
     builder_name = next((n for n in fn.__code__.co_names if _BUILDER_NAME.match(n)), None)
     if builder_name is None:
         return None
@@ -105,6 +114,16 @@ def request_model_for(fn: Callable[..., Any]) -> type[BaseModel] | None:
             if candidate is not None and getattr(candidate, "__name__", None) == builder_name:
                 builder = candidate
                 break
+    return builder
+
+
+def request_model_for(fn: Callable[..., Any]) -> type[BaseModel] | None:
+    """The request DTO a tool builds, or None when it builds none.
+
+    Derived from ``builder_for`` so the DTO and the builder can never disagree about which
+    seam a tool uses -- they are the same lookup, read once.
+    """
+    builder = builder_for(fn)
     if builder is None:
         return None
     try:
