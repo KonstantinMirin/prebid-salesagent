@@ -45,6 +45,13 @@ def parse_tool_result(result: Any) -> dict[str, Any]:
     )
 
 
+#: The account seeded for the demo tenant by init_db() beside "ci-test-principal".
+#: `account` is REQUIRED on sync-creatives-request.json and create-media-buy-request.json,
+#: so a builder that omits it produces a request every transport refuses with
+#: INVALID_REQUEST before any behavior under test runs.
+CI_TEST_ACCOUNT: dict[str, Any] = {"account_id": "ci-test-account"}
+
+
 def build_adcp_media_buy_request(
     product_ids: list[str],
     total_budget: float,
@@ -102,6 +109,8 @@ def build_adcp_media_buy_request(
     # Note: ALL budgets are plain numbers per spec (currency from pricing_option_id)
     # Per AdCP spec: Package requires product_id (singular) and pricing_option_id
     request: dict[str, Any] = {
+        # Required on create-media-buy-request.json, same as on sync-creatives.
+        "account": CI_TEST_ACCOUNT,
         "brand": brand,  # AdCP 3.6.0: BrandReference with domain
         "packages": [
             {
@@ -180,6 +189,7 @@ def build_sync_creatives_request(
         )
 
     request: dict[str, Any] = {
+        "account": CI_TEST_ACCOUNT,
         "creatives": creatives,
         "dry_run": dry_run,
         "validation_mode": validation_mode,
@@ -269,6 +279,8 @@ def build_update_media_buy_request(
     """
     request: dict[str, Any] = {
         "media_buy_id": media_buy_id,
+        # Required on update-media-buy-request.json too.
+        "account": CI_TEST_ACCOUNT,
         # update-media-buy-request.json /required lists idempotency_key. Unique per call --
         # a reused key replays the original response instead of applying the update.
         "idempotency_key": f"e2e-update-{uuid.uuid4().hex}",

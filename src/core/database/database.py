@@ -2,12 +2,15 @@ import os
 import secrets
 from datetime import UTC, datetime
 
+from adcp.types import BrandReference
 from sqlalchemy import func, select
 
 from scripts.ops.migrate import run_migrations
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
+    Account,
     AdapterConfig,
+    AgentAccountAccess,
     AuthorizedProperty,
     CurrencyLimit,
     Principal,
@@ -106,6 +109,33 @@ def init_db(exit_on_error=False):
                     access_token="ci-test-token",  # Fixed token for E2E tests
                 )
                 db_session.add(ci_test_principal)
+
+                # Account for the CI test principal. `account` is REQUIRED on
+                # sync-creatives-request.json and its siblings, so without a seeded
+                # account no E2E test can call those tools at all -- every one of them
+                # was refused with INVALID_REQUEST before reaching any behavior under
+                # test. Seeded here, beside the principal it belongs to, because this
+                # block already exists to make the demo tenant usable by E2E.
+                ci_test_account = Account(
+                    tenant_id="default",
+                    account_id="ci-test-account",
+                    name="CI Test Account",
+                    status="active",
+                    operator="testbrand.com",
+                    brand=BrandReference(domain="testbrand.com"),
+                )
+                db_session.add(ci_test_account)
+
+                # Resolution is gated on AgentAccountAccess, not on the account row
+                # alone: _require_account_access rejects a principal with no grant, so
+                # the account without this row would resolve to AUTHORIZATION_ERROR.
+                db_session.add(
+                    AgentAccountAccess(
+                        tenant_id="default",
+                        principal_id="ci-test-principal",
+                        account_id="ci-test-account",
+                    )
+                )
 
                 # Add currency limits for demo
                 for currency in ["USD", "EUR", "GBP"]:
