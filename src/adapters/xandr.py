@@ -48,7 +48,7 @@ class MediaBuy:
     status: str
     details: Any | None
 
-    def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401 — vendor response stub: absorbs arbitrary Xandr fields via setattr, so no value type exists to state. Retire with a typed response model (salesagent-pldmk.37).
+    def __init__(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
@@ -59,7 +59,7 @@ class MediaBuyDetails:
     total_budget: float | None
     status: str | None
 
-    def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401 — vendor response stub: absorbs arbitrary Xandr fields via setattr, so no value type exists to state. Retire with a typed response model (salesagent-pldmk.37).
+    def __init__(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
@@ -76,7 +76,7 @@ class MediaBuyStatus:
     end_date: datetime
     approval_status: str
 
-    def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401 — vendor response stub: absorbs arbitrary Xandr fields via setattr, so no value type exists to state. Retire with a typed response model (salesagent-pldmk.37).
+    def __init__(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
@@ -95,7 +95,7 @@ class PackageStatus:
     is_editable: bool
     delivery_percentage: float
 
-    def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401 — vendor response stub: absorbs arbitrary Xandr fields via setattr, so no value type exists to state. Retire with a typed response model (salesagent-pldmk.37).
+    def __init__(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
@@ -111,7 +111,7 @@ class MediaBuyDeliveryData:
     pacing: Any
     alerts: list[Any]
 
-    def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401 — vendor response stub: absorbs arbitrary Xandr fields via setattr, so no value type exists to state. Retire with a typed response model (salesagent-pldmk.37).
+    def __init__(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
@@ -123,7 +123,7 @@ class HourlyDelivery:
     impressions: int
     spend: float
 
-    def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401 — vendor response stub: absorbs arbitrary Xandr fields via setattr, so no value type exists to state. Retire with a typed response model (salesagent-pldmk.37).
+    def __init__(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
@@ -137,7 +137,7 @@ class CreativeDelivery:
     clicks: int
     spend: float
 
-    def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401 — vendor response stub: absorbs arbitrary Xandr fields via setattr, so no value type exists to state. Retire with a typed response model (salesagent-pldmk.37).
+    def __init__(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
@@ -151,7 +151,7 @@ class PacingAnalysis:
     projected_delivery: float
     recommendation: str
 
-    def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401 — vendor response stub: absorbs arbitrary Xandr fields via setattr, so no value type exists to state. Retire with a typed response model (salesagent-pldmk.37).
+    def __init__(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
@@ -164,7 +164,7 @@ class PerformanceAlert:
     message: str
     recommendation: str
 
-    def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401 — vendor response stub: absorbs arbitrary Xandr fields via setattr, so no value type exists to state. Retire with a typed response model (salesagent-pldmk.37).
+    def __init__(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
@@ -178,7 +178,7 @@ class DeliveryMetrics:
     cpm: float
     ctr: float
 
-    def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401 — vendor response stub: absorbs arbitrary Xandr fields via setattr, so no value type exists to state. Retire with a typed response model (salesagent-pldmk.37).
+    def __init__(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
@@ -196,7 +196,7 @@ class CreativeAsset:
     duration: int | None
     package_assignments: list[str]
 
-    def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401 — vendor response stub: absorbs arbitrary Xandr fields via setattr, so no value type exists to state. Retire with a typed response model (salesagent-pldmk.37).
+    def __init__(self, **kwargs: Any) -> None:
         for k, v in kwargs.items():
             setattr(self, k, v)
 

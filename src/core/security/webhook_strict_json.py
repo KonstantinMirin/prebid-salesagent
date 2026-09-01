@@ -1,6 +1,6 @@
 """The one place this codebase decides what a duplicate JSON object key means.
 
-Core Invariant (salesagent-47n9.19): duplicate-key detection is a property of
+Core Invariant (GH #1802): duplicate-key detection is a property of
 the ONE parse that turns webhook bytes into a value — a single strict-parse
 primitive, built on the stdlib ``object_pairs_hook`` the spec itself
 prescribes, never a hand-rolled recursive walker, and never re-decided at a
@@ -22,7 +22,7 @@ this package's charter to wire bytes in BOTH directions (egress via
 ``webhook_egress.py``, ingress via this module), not egress only. It does
 **not** own every untrusted JSON parse in ``src/`` — notably
 ``outbound_http.OutboundResult.json()`` (external HTTP response bytes, no
-spec MUST, stays lenient — see salesagent-ortg) and
+spec MUST, stays lenient — see GH #1802) and
 ``core.helpers.mcp_tool_payload.extract_tool_payload`` (external MCP text
 content, a different DRY primitive for a different untrusted-but-unsigned
 input class) are deliberately out of this module's scope.
@@ -137,7 +137,7 @@ def _reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def loads_rejecting_duplicate_keys(data: bytes | str) -> Any:  # noqa: ANN401 — decoded-JSON return: the inbound twin of the outbound narrowing. Honest type is JsonValue, but narrowing it cascades to every response.json()[...] reader (salesagent-pldmk.37).
+def loads_rejecting_duplicate_keys(data: bytes | str) -> Any:
     """``json.loads`` that rejects a JSON object repeating a key, at any depth.
 
     Raises :class:`DuplicateKeyInput` — never a generic parse error — when a

@@ -42,7 +42,7 @@ select = ["TID251", "ANN401"]
 # CANNOT make unrepresentable. `send`/`asend` declare `json: JsonValue | None`,
 # but a NEW forwarder declaring `json: Any` and passing it straight through
 # type-checks clean, and mypy reports Success while a `datetime` reaches the
-# wire (GH #1802 / salesagent-pldmk.37). That is the same defect pldmk.23 just
+# wire (GH #1802 / GH #1802). That is the same defect pldmk.23 just
 # removed from `VendorHttpClient.call` -- eliminated at every existing site,
 # while remaining writable at the next one.
 #
@@ -50,8 +50,52 @@ select = ["TID251", "ANN401"]
 # known files: a forwarder added to a NEW module under either directory is
 # covered on the day it is written. src/ as a whole is 209 violations and not
 # this backstop's business; these two directories are 25.
+# ---------------------------------------------------------------------------
+# EXEMPTIONS LIVE HERE, and only here.
+#
+# The gate runs with `--ignore-noqa` (Makefile), which makes `# noqa` INERT for
+# this config. That is the point: a file cannot exempt itself. The only way to
+# be exempt is a row below, which lands in a reviewed diff instead of in a
+# comment nobody sees.
+#
+# The cost, stated: these rows are FILE-granular where a noqa was line-granular.
+# That is the trade for deleting the ~150 lines of machinery that used to audit
+# whether every scattered noqa was recorded and still live — the audit is
+# unnecessary once self-exemption is impossible rather than merely detectable
+# (GH #1802).
+#
+# Rows only ever leave this list. Adding one is a review conversation.
+# ---------------------------------------------------------------------------
 [lint.per-file-ignores]
+# ANN401 is scoped to the outbound chain, not all of src/.
 "!{src/core/security,src/adapters}/**" = ["ANN401"]
+
+# TID251 — the sanctioned importers of what the seam wraps. A seam architecture
+# must have exactly these; the set is a floor, not debt.
+"src/core/security/outbound_http.py" = ["TID251"]
+"src/core/security/egress/policy.py" = ["TID251"]
+"src/core/utils/mcp_client.py" = ["TID251"]
+
+# TID251 — scripts/ debt, NOT a seam. Retire these, do not grow them.
+#   gen_test_tls.py      builds certificate IP SANs, not address classification
+#   sync_all_tenants.py  ops-plane self-call to a hardcoded loopback URL; the
+#                        seam refuses loopback by design, so routing it through
+#                        the seam would be wrong rather than safer
+"scripts/dev/gen_test_tls.py" = ["TID251"]
+"scripts/ops/sync_all_tenants.py" = ["TID251"]
+
+# ANN401 — `Any` that PREDATES the ban: **kwargs response stubs, -> Any decode
+# returns, and genuinely dynamic logging/serializer inputs. Shrinks only.
+"src/adapters/base_inventory.py" = ["ANN401"]
+"src/adapters/broadstreet/client.py" = ["ANN401"]
+"src/adapters/gam/managers/targeting.py" = ["ANN401"]
+"src/adapters/gam/utils/error_handler.py" = ["ANN401"]
+"src/adapters/gam/utils/formatters.py" = ["ANN401"]
+"src/adapters/gam/utils/logging.py" = ["ANN401"]
+"src/adapters/gam_orders_discovery.py" = ["ANN401"]
+"src/adapters/xandr.py" = ["ANN401"]
+"src/core/security/egress/response.py" = ["ANN401"]
+"src/core/security/webhook_strict_json.py" = ["ANN401"]
 
 [lint.flake8-tidy-imports.banned-api]
 # --- Module bans: the bare import fires, so verb/class enumeration is moot ---
@@ -92,7 +136,7 @@ select = ["TID251", "ANN401"]
 
 # --- adcp SDK signer footgun: discards the body bytes it signs, so its own
 # docstring's recommended usage reintroduces the signed-bytes-vs-wire-bytes
-# divergence bug (GH #1802 / salesagent-47n9.1) ---
+# divergence bug (GH #1802 / GH #1095) ---
 "adcp.webhooks.get_adcp_signed_headers_for_webhook".msg = "Discards the signed body bytes -- its own docstring example re-sends json=payload separately, reintroducing the signed-bytes-vs-wire-bytes divergence bug (GH #1802). Sign and send via src/core/security/outbound_http.py's send/asend with the signed byte string, not this helper."
 "adcp.get_adcp_signed_headers_for_webhook".msg = "Discards the signed body bytes -- its own docstring example re-sends json=payload separately, reintroducing the signed-bytes-vs-wire-bytes divergence bug (GH #1802). Sign and send via src/core/security/outbound_http.py's send/asend with the signed byte string, not this helper."
 

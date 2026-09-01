@@ -28,7 +28,7 @@ class BaseInventoryManager(ABC):
 
     def __init__(
         self,
-        client: Any | None,  # noqa: ANN401 — opaque third-party client handle, not a payload.
+        client: Any | None,
         identifier: str,
         dry_run: bool = False,
         log_func: Callable[[str], None] | None = None,

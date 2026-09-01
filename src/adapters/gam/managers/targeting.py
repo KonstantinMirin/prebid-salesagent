@@ -34,7 +34,7 @@ class GAMTargetingManager:
     def __init__(
         self,
         tenant_id: str,
-        gam_client: Any | None = None,  # noqa: ANN401 — opaque third-party client handle, not a payload.
+        gam_client: Any | None = None,
         targeting_config: dict[str, Any] | None = None,
     ):
         """Initialize targeting manager.

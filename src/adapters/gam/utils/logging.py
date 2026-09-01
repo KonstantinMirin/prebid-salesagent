@@ -387,7 +387,7 @@ def log_dry_run(operation: str, details: dict[str, Any]):
     )
 
 
-def log_validation_error(field: str, value: Any, reason: str):  # noqa: ANN401 — genuinely dynamic input, not a payload: this parameter accepts any object by design.
+def log_validation_error(field: str, value: Any, reason: str):
     """Log validation errors consistently."""
     logger.error(
         f"Validation error: {field}",

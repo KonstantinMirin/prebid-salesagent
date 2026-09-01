@@ -160,7 +160,7 @@ from typing import Any, Protocol
 # then resolves to the real module straight past the gate (GH #1802). The
 # underscore makes that re-export an ImportError instead of something a ban
 # list has to keep enumerating.
-import httpx as _httpx  # noqa: TID251 - the seam itself; the one sanctioned httpx importer (GH #1589)
+import httpx as _httpx
 from adcp.signing import AsyncIpPinnedTransport, IpPinnedTransport
 from pydantic import JsonValue
 from typing_extensions import TypeIs

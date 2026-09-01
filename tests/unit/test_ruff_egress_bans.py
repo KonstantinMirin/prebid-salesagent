@@ -35,10 +35,6 @@ construction, because ruff computes it.
 ``[lint.per-file-ignores]``, so the ANN401 negated-glob scoping in the config
 still holds (verified).
 
-The scan set is ``_SCAN_DIRS`` HERE, not the Makefile line — so reverting the
-Makefile to ``src/``-only does not hide a ``scripts/`` violation from this
-proof. ``--no-respect-gitignore`` is likewise load-bearing: ruff's walk honors
-``.gitignore``, which hid a git-tracked ``scripts/`` file from the scan.
 
 Every case shells out to the real ruff with the real config — the exemptions
 are executable, never prose (Core Invariant of GH #1589).
@@ -46,10 +42,8 @@ are executable, never prose (Core Invariant of GH #1589).
 
 from __future__ import annotations
 
-import functools
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -62,75 +56,13 @@ EGRESS_CONFIG = "ruff-egress.toml"
 # tests/ is deliberately out of scope; tests import httpx/requests freely).
 _SYNTHETIC_PATH = "src/core/_synthetic_egress_probe.py"
 
-# The scan set. This constant, not the Makefile line, is the authority: a
-# revert of Makefile:18 to src/-only still leaves any scripts/ violation inside
-# V, so case (d) catches it. Mirrors of a gate drift; a gate that owns its own
-# scope does not.
-_SCAN_DIRS: tuple[str, ...] = ("src/", "scripts/")
-
-# Path a synthetic snippet is presented under to prove the bans are not
-# path-scoped: banned-api entries apply wherever the config is applied.
+# The same probe under scripts/, proving the bans are not path-scoped: they apply
+# wherever the gate points, and the gate points at src/ AND scripts/.
 _SYNTHETIC_SCRIPTS_PATH = "scripts/_synthetic_egress_probe.py"
 
-_NOQA_MARKER = "# noqa: TID251"
 
-# The same three properties, for the second rule this config carries. ANN401
-# bans `Any` in a signature across the outbound chain (GH #1802):
-# `Any` is an opt-out of type checking, assignable to and
-# from everything, so it is the one value the seam's own JsonValue signatures
-# cannot make unrepresentable — a NEW forwarder declaring `json: Any` and
 # passing it straight to send() type-checks clean under mypy.
-_ANY_NOQA_MARKER = "# noqa: ANN401"
 
-
-# The two adcp SDK client constructions were removed (GH #1589), so neither
-# file constructs one anymore — the set SHRANK from 4 to 2, per this module's
-# own non-vacuity contract (case c/d): removing a noqa without a live
-# violation is required, not merely permitted. It does not grow beyond the
-# two seam definitions.
-#
-# src/core/security/egress/policy.py was ADDED (3 -> the set now carries this
-# third entry) once ``ipaddress`` joined the module bans below: the egress
-# package is the one sanctioned site for address classification (GH #1589),
-# so its own ``import ipaddress`` line-scoped noqa is the live violation case
-# (c) proves. The set grows here by exactly this one entry, not by a fourth.
-# ---------------------------------------------------------------------------
-SEAM_FILES: frozenset[str] = frozenset(
-    {
-        "src/core/security/outbound_http.py",
-        "src/core/utils/mcp_client.py",
-        "src/core/security/egress/policy.py",
-    }
-)
-
-# ---------------------------------------------------------------------------
-# scripts/ exemptions — a SHRINK-ONLY debt list, deliberately NOT SEAM_FILES.
-#
-# SEAM_FILES is a floor: a seam architecture must have sanctioned importers of
-# the thing it wraps, so that set never empties. These two mean the opposite:
-# "recorded debt, retire me". They exist because `scripts/` used to be outside
-# the scan entirely — an unbounded, unscanned implicit exemption. Scanning it
-# with two recorded, line-scoped, liveness-proven rows SHRINKS the exempt
-# surface; it does not grow an allowlist (GH #1802 round-3 F2).
-#
-#   scripts/dev/gen_test_tls.py     — `import ipaddress` builds certificate IP
-#                                     SANs. Not address classification, so the
-#                                     egress package is not where it belongs.
-#   scripts/ops/sync_all_tenants.py — `import requests` for an ops-plane
-#                                     self-call to a hardcoded loopback URL.
-#                                     The seam's policy refuses loopback BY
-#                                     DESIGN, so routing this through the seam
-#                                     would be wrong, not safer. Retiring this
-#                                     row means an in-process invocation.
-#
-# Entries leave one at a time, with evidence. They must not grow.
-# ---------------------------------------------------------------------------
-SCRIPT_EXEMPT_FILES: frozenset[str] = frozenset(
-    {
-        "scripts/dev/gen_test_tls.py",
-        "scripts/ops/sync_all_tenants.py",
-    }
-)
 
 # Module-level bans: the bare import fires, so verb enumeration is moot.
 _MODULE_BANS: tuple[str, ...] = (
@@ -284,223 +216,3 @@ class TestCleanCodePasses:
             f"--- ruff stdout ---\n{proc.stdout}\n--- ruff stderr ---\n{proc.stderr}"
         )
         assert "TID251" not in proc.stdout, f"clean snippet was flagged:\n{proc.stdout}"
-
-
-# ---------------------------------------------------------------------------
-# The derived violation set V.
-#
-# Cases (c), (d) and (e) all rest on ONE question, asked of ruff rather than
-# answered by a regex: which (file, line) pairs violate *code* when EVERY
-# inline suppression is ignored? A hand-written mirror of ruff's noqa syntax
-# is the thing this module used to carry, and it missed four spellings
-# (GH #1802 round-3 finding 2a). `--ignore-noqa` cannot miss one.
-# ---------------------------------------------------------------------------
-
-
-def _scanned_python_files() -> list[Path]:
-    """Every .py file ruff sees under `_SCAN_DIRS` (gitignore deliberately ignored)."""
-    repo = repo_root()
-    files: list[Path] = []
-    for scan_dir in _SCAN_DIRS:
-        files.extend((repo / scan_dir.rstrip("/")).rglob("*.py"))
-    return sorted(files)
-
-
-@functools.cache
-def _violation_sites_ignoring_noqa(code: str) -> frozenset[tuple[str, int]]:
-    """Every ``(relpath, lineno)`` where *code* fires absent ALL suppressions.
-
-    One ruff invocation per rule, over the real tree, with the real config.
-    ``--no-respect-gitignore`` is required: ruff's walk honors ``.gitignore``,
-    which hid the git-tracked ``scripts/ops/sync_all_tenants.py`` from the scan
-    (round-3 F2). Cached — the two cases below ask the same question.
-    """
-    proc = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "ruff",
-            "check",
-            "--config",
-            EGRESS_CONFIG,
-            "--ignore-noqa",
-            "--no-respect-gitignore",
-            "--output-format",
-            "concise",
-            *_SCAN_DIRS,
-        ],
-        capture_output=True,
-        text=True,
-        cwd=repo_root(),
-        check=False,
-    )
-    assert proc.returncode in (0, 1), (
-        f"ruff did not run (config missing/broken?): rc={proc.returncode}\n"
-        f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
-    )
-    sites: set[tuple[str, int]] = set()
-    for line in proc.stdout.splitlines():
-        # concise format: path:line:col: CODE message
-        parts = line.split(":", 3)
-        if len(parts) < 4:
-            continue
-        rel_path, lineno, _col, rest = parts
-        if not lineno.isdigit() or rest.strip().split(" ", 1)[0] != code:
-            continue
-        sites.add((rel_path, int(lineno)))
-    return frozenset(sites)
-
-
-def _marker_lines(marker: str) -> list[tuple[str, int]]:
-    """Every ``(relpath, 1-based lineno)`` under `_SCAN_DIRS` carrying *marker*.
-
-    The canonical spelling only. Its incompleteness is now HARMLESS: an
-    exemption written in any other spelling still appears in V, so the count
-    equality below breaks. The marker exists to locate what the record claims,
-    not to define what a suppression is.
-    """
-    repo = repo_root()
-    sites: list[tuple[str, int]] = []
-    for path in _scanned_python_files():
-        rel = str(path.relative_to(repo))
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-            if marker in line:
-                sites.append((rel, lineno))
-    return sorted(sites)
-
-
-# ---------------------------------------------------------------------------
-# ANN401's exempt set — an allowlist that SHRINKS, unlike SEAM_FILES's floor.
-#
-# SEAM_FILES is a floor: a seam architecture must have sanctioned importers of
-# the thing it wraps, so that set never empties. This set is the opposite — it
-# records `Any` that PREDATES the ban, in three groups, none of which is a
-# payload parameter on the outbound chain (pldmk.23 removed the last of those):
-#
-#   xandr.py                     — 11 `**kwargs: Any` response stubs that absorb
-#                                  arbitrary vendor fields by setattr. No value
-#                                  type exists to state; retiring them means a
-#                                  typed response model, not an annotation.
-#   *.py `-> Any` decode returns — OutboundResult.json() and its readers. The
-#                                  honest type is JsonValue; narrowing it
-#                                  cascades to every response.json()[...] reader
-#                                  in the adapters, so it is its own change.
-#   logging/serializer/handles   — genuinely dynamic inputs; a log sanitizer
-#                                  legitimately accepts any object.
-#
-# Every entry is liveness-proven by case (c). Entries leave this set as
-# pldmk.37's follow-ups land. It must not grow — a new file needing `Any` in a
-# signature under these two directories is the very thing the ban refuses.
-# ---------------------------------------------------------------------------
-ANY_EXEMPT_FILES: frozenset[str] = frozenset(
-    {
-        "src/adapters/base_inventory.py",
-        "src/adapters/broadstreet/client.py",
-        "src/adapters/gam/managers/targeting.py",
-        "src/adapters/gam/utils/error_handler.py",
-        "src/adapters/gam/utils/formatters.py",
-        "src/adapters/gam/utils/logging.py",
-        "src/adapters/gam_orders_discovery.py",
-        "src/adapters/xandr.py",
-        "src/core/security/egress/response.py",
-        "src/core/security/webhook_strict_json.py",
-    }
-)
-
-# One parametrization for both rules this config carries — the DRY invariant.
-# `recorded` is the file set the rule's exemptions are closed to.
-_RULES: tuple[tuple[str, str, frozenset[str]], ...] = (
-    ("TID251", _NOQA_MARKER, SEAM_FILES | SCRIPT_EXEMPT_FILES),
-    ("ANN401", _ANY_NOQA_MARKER, ANY_EXEMPT_FILES),
-)
-_RULE_IDS = [code for code, _, _ in _RULES]
-
-# The two liveness cases below compare V against the MARKERS, not against the
-# recorded file set, so they take a projection rather than an unread third
-# parameter. Derived from `_RULES` — one source, no second list to drift.
-_RULE_MARKERS: tuple[tuple[str, str], ...] = tuple((code, marker) for code, marker, _ in _RULES)
-
-
-class TestExemptionsAreExecutable:
-    """(c) Every suppression is RECORDED, and every recorded marker is LIVE."""
-
-    @pytest.mark.parametrize(("code", "marker"), _RULE_MARKERS, ids=_RULE_IDS)
-    def test_no_dead_marker(self, code: str, marker: str) -> None:
-        """A canonical marker on a line that does not violate is dead prose."""
-        violations = _violation_sites_ignoring_noqa(code)
-        dead = [site for site in _marker_lines(marker) if site not in violations]
-        assert not dead, (
-            f"{len(dead)} '{marker}' marker(s) sit on lines that do NOT violate {code} "
-            f"with all suppressions ignored — the exemption is DEAD prose, not a live "
-            f"exemption. Delete it.\n  " + "\n  ".join(f"{f}:{n}" for f, n in dead)
-        )
-
-    @pytest.mark.parametrize(("code", "marker"), _RULE_MARKERS, ids=_RULE_IDS)
-    def test_no_unrecorded_suppression(self, code: str, marker: str) -> None:
-        """Per file, ruff's violation count equals the canonical-marker count.
-
-        This is what retires the noqa regex. A second suppression in a recorded
-        file — written ``# ruff: noqa``, bare ``# noqa``, ``# noqa:TID251``, or
-        ``# flake8: noqa``, none of which the marker matches — still lands in V
-        and breaks this equality. So does a RAW, unsuppressed violation that
-        someone added without a marker: the file's V-count exceeds its marker
-        count either way.
-        """
-        violations = _violation_sites_ignoring_noqa(code)
-        markers = _marker_lines(marker)
-        by_file_v: dict[str, int] = {}
-        for rel_path, _lineno in violations:
-            by_file_v[rel_path] = by_file_v.get(rel_path, 0) + 1
-        by_file_m: dict[str, int] = {}
-        for rel_path, _lineno in markers:
-            by_file_m[rel_path] = by_file_m.get(rel_path, 0) + 1
-        mismatched = {
-            rel_path: (by_file_v.get(rel_path, 0), by_file_m.get(rel_path, 0))
-            for rel_path in set(by_file_v) | set(by_file_m)
-            if by_file_v.get(rel_path, 0) != by_file_m.get(rel_path, 0)
-        }
-        assert not mismatched, (
-            f"{code}: per-file violation count (suppressions ignored) must equal the "
-            f"'{marker}' count. A mismatch means an UNRECORDED suppression in some other "
-            f"spelling, or a raw violation with no marker at all.\n  "
-            + "\n  ".join(f"{f}: {v} violation(s) vs {m} marker(s)" for f, (v, m) in sorted(mismatched.items()))
-        )
-
-    @pytest.mark.parametrize(("code", "marker", "recorded"), _RULES, ids=_RULE_IDS)
-    def test_every_recorded_file_carries_a_line_scoped_marker(
-        self, code: str, marker: str, recorded: frozenset[str]
-    ) -> None:
-        """A recorded exemption must exist as a LINE, not as an entry in a set."""
-        missing = []
-        for rel_path in sorted(recorded):
-            path = repo_root() / rel_path
-            assert path.is_file(), f"recorded {code} exemption does not exist: {rel_path}"
-            if marker not in path.read_text(encoding="utf-8"):
-                missing.append(rel_path)
-        assert not missing, (
-            f"recorded as sanctioned {code} exemptions but carrying no line-scoped "
-            f"'{marker}' — the exemption must be executable, not prose: {missing}"
-        )
-
-
-class TestExemptSetIsClosed:
-    """(d) The violating-file set is exactly the recorded constant — no silent growth."""
-
-    @pytest.mark.parametrize(("code", "marker", "recorded"), _RULES, ids=_RULE_IDS)
-    def test_violating_files_equal_recorded_constant(self, code: str, marker: str, recorded: frozenset[str]) -> None:
-        """Derived from ruff, not from a marker scan — so it is spelling-blind.
-
-        Strictly stronger than the old file-carries-a-marker form in two ways:
-        an exemption written in ANY spelling shows up here, and a RAW violation
-        shows up here too — so this catches a reverted Makefile gate line
-        independently of the Makefile.
-        """
-        found = {rel_path for rel_path, _lineno in _violation_sites_ignoring_noqa(code)}
-        unrecorded = found - recorded
-        missing = recorded - found
-        assert not unrecorded and not missing, (
-            f"files violating {code} with all suppressions ignored must equal the recorded "
-            f"constant.\n"
-            + (f"unrecorded (record it or remove the import): {sorted(unrecorded)}\n" if unrecorded else "")
-            + (f"recorded but no longer violating (delete the row): {sorted(missing)}\n" if missing else "")
-        )

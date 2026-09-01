@@ -35,11 +35,11 @@ from typing import Any
 # to the real symbol past the gate (GH #1802). The underscore makes that an
 # ImportError, so the seam cannot re-export what it was sanctioned to import.
 from fastmcp.client import (
-    Client as _Client,  # noqa: TID251 - the MCP seam; only constructed with transport=, never a URL (GH #1589)
+    Client as _Client,
 )
 from fastmcp.client.client import CallToolResult
 from fastmcp.client.transports import (
-    StreamableHttpTransport as _StreamableHttpTransport,  # noqa: TID251 - the MCP seam; construction is factory-pinned below (GH #1589)
+    StreamableHttpTransport as _StreamableHttpTransport,
 )
 
 from src.core.security.egress.attempts import Attempts

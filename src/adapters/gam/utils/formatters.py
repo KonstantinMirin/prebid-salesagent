@@ -215,7 +215,7 @@ def format_number_with_commas(number: int | float) -> str:
     return f"{number:,}"
 
 
-def sanitize_for_logging(data: Any, max_length: int = 200) -> str:  # noqa: ANN401 — genuinely dynamic input, not a payload: this parameter accepts any object by design.
+def sanitize_for_logging(data: Any, max_length: int = 200) -> str:
     """
     Sanitize data for safe logging.
 

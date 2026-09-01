@@ -362,7 +362,7 @@ class GAMOperationTracker:
         }
 
 
-def validate_gam_response(response: Any, expected_fields: list[str]) -> None:  # noqa: ANN401 — genuinely dynamic input, not a payload: this parameter accepts any object by design.
+def validate_gam_response(response: Any, expected_fields: list[str]) -> None:
     """
     Validate GAM API response has expected structure.
 

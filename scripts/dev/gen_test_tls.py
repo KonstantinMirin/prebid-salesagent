@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the test stacks' private CA and server certificate (salesagent-tgzb).
+"""Generate the test stacks' private CA and server certificate (GH #1291).
 
 WHY THIS EXISTS. ``_get_protocol_for_domain`` (``src/core/domain_config.py``)
 publishes ``https`` only for a dotted, non-loopback host — deliberately, because
@@ -36,7 +36,7 @@ from __future__ import annotations
 import contextlib
 import datetime as dt
 import fcntl
-import ipaddress  # noqa: TID251 - builds certificate IP SANs, not address classification (GH #1802)
+import ipaddress
 import os
 import uuid
 from pathlib import Path
@@ -57,7 +57,7 @@ _LOCK_FILE = TLS_DIR / ".gen-lock"
 # CA_CERT alone (private CA only) is deliberately what `--cacert` flags and
 # E2E_CA_BUNDLE use — a caller checking one of the new TLS fronts should trust
 # ONLY this stack's own leaf, not the whole public web. COMBINED_CERT below is
-# a DIFFERENT use: SSL_CERT_FILE (salesagent-40qh) replaces the process's
+# a DIFFERENT use: SSL_CERT_FILE (GH #1757) replaces the process's
 # entire default cafile, so anything else in that process needing REAL public
 # HTTPS (uv sync fetching from pypi.org, in particular — this broke a full
 # suite run before this file learned to produce it) needs the public roots
@@ -90,7 +90,7 @@ SAN_DNS_NAMES = (
     "agent.localhost",
     "*.localhost",
 )
-# 127.0.0.2 (salesagent-e6h0): a SECOND loopback address, distinct from
+# 127.0.0.2 (GH #1757): a SECOND loopback address, distinct from
 # 127.0.0.1, that tests/integration/test_protocol_webhook_egress.py needs to
 # prove a per-host IP pin actually pins per host — two origins that differed
 # only by port would share the same pinned address and grade nothing.

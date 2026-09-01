@@ -25,7 +25,7 @@ from __future__ import annotations
 # and importing it from here resolves to the real module past the gate
 # (GH #1802). The underscore makes that an ImportError rather than a row in a
 # ban table someone has to remember to add.
-import ipaddress as _ipaddress  # noqa: TID251 - the egress package's own address classification; the one sanctioned site (GH #1589)
+import ipaddress as _ipaddress
 import logging
 from typing import NamedTuple
 from urllib.parse import ParseResult, urlparse

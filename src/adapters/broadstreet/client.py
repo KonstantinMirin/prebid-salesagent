@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 class BroadstreetAPIError(Exception):
     """Exception raised for Broadstreet API errors."""
 
-    def __init__(self, message: str, status_code: int | None = None, response_body: Any = None):  # noqa: ANN401 — genuinely dynamic input, not a payload: this parameter accepts any object by design.
+    def __init__(self, message: str, status_code: int | None = None, response_body: Any = None):
         super().__init__(message)
         self.status_code = status_code
         self.response_body = response_body
@@ -86,7 +86,7 @@ class BroadstreetClient:
         path: str,
         data: dict[str, JsonValue] | None = None,
         query_params: QueryParams | None = None,
-    ) -> Any:  # noqa: ANN401 — decoded-JSON return: the inbound twin of the outbound narrowing. Honest type is JsonValue, but narrowing it cascades to every response.json()[...] reader (salesagent-pldmk.37).
+    ) -> Any:
         """Make an API request.
 
         Args:
@@ -116,19 +116,19 @@ class BroadstreetClient:
         body = result.json() if result.content else None
         return body
 
-    def get(self, path: str, query_params: QueryParams | None = None) -> Any:  # noqa: ANN401 — decoded-JSON return: the inbound twin of the outbound narrowing. Honest type is JsonValue, but narrowing it cascades to every response.json()[...] reader (salesagent-pldmk.37).
+    def get(self, path: str, query_params: QueryParams | None = None) -> Any:
         """Make a GET request."""
         return self._request("GET", path, query_params=query_params)
 
-    def post(self, path: str, data: dict[str, JsonValue]) -> Any:  # noqa: ANN401 — decoded-JSON return: the inbound twin of the outbound narrowing. Honest type is JsonValue, but narrowing it cascades to every response.json()[...] reader (salesagent-pldmk.37).
+    def post(self, path: str, data: dict[str, JsonValue]) -> Any:
         """Make a POST request."""
         return self._request("POST", path, data=data)
 
-    def put(self, path: str, data: dict[str, JsonValue]) -> Any:  # noqa: ANN401 — decoded-JSON return: the inbound twin of the outbound narrowing. Honest type is JsonValue, but narrowing it cascades to every response.json()[...] reader (salesagent-pldmk.37).
+    def put(self, path: str, data: dict[str, JsonValue]) -> Any:
         """Make a PUT request."""
         return self._request("PUT", path, data=data)
 
-    def delete(self, path: str) -> Any:  # noqa: ANN401 — decoded-JSON return: the inbound twin of the outbound narrowing. Honest type is JsonValue, but narrowing it cascades to every response.json()[...] reader (salesagent-pldmk.37).
+    def delete(self, path: str) -> Any:
         """Make a DELETE request."""
         return self._request("DELETE", path)
 
