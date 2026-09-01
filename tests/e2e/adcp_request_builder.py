@@ -184,6 +184,9 @@ def build_sync_creatives_request(
         "dry_run": dry_run,
         "validation_mode": validation_mode,
         "delete_missing": delete_missing,
+        # sync-creatives-request.json /required lists idempotency_key. Unique per call --
+        # a reused key replays the original response instead of performing the sync.
+        "idempotency_key": f"e2e-sync-{uuid.uuid4().hex}",
     }
 
     if assignments:
@@ -253,30 +256,27 @@ def build_creative(
 def build_update_media_buy_request(
     media_buy_id: str,
     active: bool | None = None,
-    budget: dict[str, Any] | None = None,
     packages: list[dict[str, Any]] | None = None,
     webhook_url: str | None = None,
 ) -> dict[str, Any]:
     """
     Build a valid AdCP update_media_buy request.
 
-    Args:
-        media_buy_id: Media buy ID to update (required)
-        active: Optional active status update
-        budget: Optional budget update
-        packages: Optional package updates
-        webhook_url: Optional webhook for async notifications
-
-    Returns:
-        Valid AdCP UpdateMediaBuyRequest dict
+    NOTE: there is no top-level ``budget``. update-media-buy-request.json declares
+    no such property -- budgets live on the package entries -- so sending one is
+    rejected outright under the dev extra="forbid" mode. The parameter used to exist
+    here and was removed with the field itself.
     """
-    request: dict[str, Any] = {"media_buy_id": media_buy_id}
+    request: dict[str, Any] = {
+        "media_buy_id": media_buy_id,
+        # update-media-buy-request.json /required lists idempotency_key. Unique per call --
+        # a reused key replays the original response instead of applying the update.
+        "idempotency_key": f"e2e-update-{uuid.uuid4().hex}",
+    }
 
     # Add optional fields
     if active is not None:
         request["active"] = active
-    if budget is not None:
-        request["budget"] = budget
     if packages is not None:
         request["packages"] = packages
     if webhook_url:
