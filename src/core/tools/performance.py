@@ -5,7 +5,6 @@ implementation pattern from CLAUDE.md.
 """
 
 import logging
-from typing import Any
 
 from adcp.types import ContextObject
 from fastmcp.server.context import Context
@@ -33,7 +32,7 @@ from src.core.validation_helpers import adcp_validation_boundary
 
 def _build_update_performance_index_request(
     media_buy_id: str,
-    performance_data: list[ProductPerformance | dict[str, Any]],
+    performance_data: list[ProductPerformance],
     context: ContextObject | None = None,
 ) -> UpdatePerformanceIndexRequest:
     """Build an UpdatePerformanceIndexRequest from individual wire params.
@@ -136,7 +135,7 @@ def _update_performance_index_impl(
 
 async def update_performance_index(
     media_buy_id: str,
-    performance_data: list[dict[str, Any]],
+    performance_data: list[ProductPerformance],
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
 ):
@@ -161,7 +160,7 @@ async def update_performance_index(
 
 def update_performance_index_raw(
     media_buy_id: str,
-    performance_data: list[dict[str, Any]],
+    performance_data: list[ProductPerformance],
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
     identity: IdentityOrNotProvided = NOT_PROVIDED,

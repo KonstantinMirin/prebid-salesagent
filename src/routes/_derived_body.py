@@ -24,7 +24,7 @@ from payload, which the hand-written classes did not.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, create_model
 
@@ -57,12 +57,17 @@ def derived_body_model(
     for field_name, field in dto.model_fields.items():
         if accepted is not None and field_name not in accepted:
             continue  # declared by the spec, not implemented here -- so not accepted
-        annotation = field.annotation
+        # field.annotation is Optional[type] on the pydantic side: a field declared with no
+        # annotation at all reads back None, which is not a type and cannot take `| None`.
+        annotation: Any = Any if field.annotation is None else field.annotation
         fields[field_name] = (annotation if _is_optional(annotation) else annotation | None, None)
 
     fields.update(_ENVELOPE_FIELDS)
     fields.update(extra_fields or {})
-    model = create_model(name, __base__=SalesAgentBaseModel, **fields)
+    # create_model's overloads cannot express "a mapping of field name -> (type, default)"
+    # splatted as keywords, so the precise dict type never matches one. The values are
+    # already the (annotation, default) pairs it documents.
+    model = create_model(name, __base__=SalesAgentBaseModel, **cast(dict[str, Any], fields))
     # Marks the body as DERIVED. The completeness guard asserts hand-written bodies do not
     # LAG their raw wrapper; a derived body deliberately declares LESS -- it drops the
     # wrapper's non-spec parameters, which is the point -- so it is graded by the
