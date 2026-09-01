@@ -159,9 +159,7 @@ async def update_performance_index(
 
 
 def update_performance_index_raw(
-    media_buy_id: str,
-    performance_data: list[ProductPerformance],
-    context: ContextObject | None = None,
+    req: UpdatePerformanceIndexRequest,
     ctx: Context | ToolContext | None = None,
     identity: IdentityOrNotProvided = NOT_PROVIDED,
 ):
@@ -169,9 +167,13 @@ def update_performance_index_raw(
 
     Delegates to the shared implementation.
 
+    Takes the BUILT request. Every transport constructs it through
+    _build_update_performance_index_request, so the wrapper has one parameter shape rather
+    than re-listing the DTO's fields -- a list that drifts from the DTO the moment the spec
+    adds one.
+
     Args:
-        media_buy_id: The ID of the media buy to update performance for
-        performance_data: List of performance data objects
+        req: The built UpdatePerformanceIndexRequest
         ctx: Context for authentication
         identity: Pre-resolved identity (if available)
 
@@ -179,7 +181,6 @@ def update_performance_index_raw(
         UpdatePerformanceIndexResponse
     """
     identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=True)
-    req = _build_update_performance_index_request(media_buy_id, performance_data, context)
     return _update_performance_index_impl(req=req, identity=identity)
 
 

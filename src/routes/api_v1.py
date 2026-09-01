@@ -244,8 +244,10 @@ else:
     )
 
 
-# DERIVED: UpdatePerformanceIndexRequest fields INTERSECT update_performance_index_raw's
-# parameters -- the same three names, now typed off the DTO.
+# DERIVED against the shared BUILDER, not the ``req=``-taking raw wrapper: the wrapper's only
+# request parameter is the already-built model, so intersecting with it would yield the empty
+# set. The builder is the seam every transport constructs through, so it is what defines the
+# body's field set.
 if TYPE_CHECKING:
     # TYPE-CHECKER ONLY. The runtime class is the derivation in the else branch; this says
     # what it reads as, because derived_body_model returns a VARIABLE holding a class and a
@@ -261,7 +263,7 @@ else:
     UpdatePerformanceIndexBody = derived_body_model(
         "UpdatePerformanceIndexBody",
         UpdatePerformanceIndexRequestDTO,
-        performance_module.update_performance_index_raw,
+        performance_module._build_update_performance_index_request,
     )
 
 
@@ -692,10 +694,15 @@ async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = r
 @router.post("/performance-index")
 async def update_performance_index(body: UpdatePerformanceIndexBody, identity: ResolvedIdentity = require_auth):
     """Update performance index for a media buy (auth required)."""
+    # Built through the SHARED builder, exactly as a2a and mcp do, then handed over as the
+    # request. The route no longer re-lists the DTO's fields on the way in.
+    req = performance_module._build_update_performance_index_request(
+        body.media_buy_id,
+        body.performance_data,
+        to_context_object(body.context),
+    )
     response = performance_module.update_performance_index_raw(
-        media_buy_id=body.media_buy_id,
-        performance_data=body.performance_data,
-        context=to_context_object(body.context),
+        req=req,
         identity=identity,
     )
     return response.model_dump(mode="json")

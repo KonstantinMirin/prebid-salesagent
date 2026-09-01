@@ -69,7 +69,7 @@ footer{padding:3rem 0;color:var(--muted);font-size:.85rem}
   <h1>One shape for the request.<br>One table for the refusal.</h1>
   <p class="lede">Last time we deleted the ability to write a buyer-facing error message. This time we deleted the ability to hand-write a tool&rsquo;s request shape. Same move, one level up.</p>
   <div class="grid" style="margin-top:2.5rem">
-    <div class="card"><div class="n">15 / 16</div><div class="l">MCP tools whose advertised shape is derived, not written</div></div>
+    <div class="card"><div class="n">13 / 13</div><div class="l">REST bodies generated from their DTO — hand-written bodies now zero</div></div>
     <div class="card"><div class="n">4 &rarr; 0</div><div class="l">hand-maintained field ledgers, refusal maps and the analyzer that policed them</div></div>
     <div class="card"><div class="n">1</div><div class="l">error code for a schema violation — the same one on every transport</div></div>
   </div>
@@ -267,7 +267,7 @@ for authored in ("Please choose a product with compatible pricing",
     <tbody>
       <tr><td><code>get_task</code></td><td><code>tasks/get</code> · <code>get_task_status</code></td><td>in 3.1, both namespaces</td><td><strong>close to a rename</strong> — same required <code>task_id</code>; we also gain three optional fields we already could serve</td></tr>
       <tr><td><code>update_performance_index</code></td><td><code>provide_performance_feedback</code></td><td>in <strong>2.5, 3.0 and 3.1</strong></td><td>rename <em>and</em> reshape — the spec takes one scalar reading per call with a required measurement period; we take a list of per-product indices</td></tr>
-      <tr><td><code>list_authorized_properties</code></td><td>— (was 2.5; dropped in 3.0)</td><td>the inverse: stale, not hidden</td><td>a decision, not a rename — we are publishing a tool the spec retired</td></tr>
+      <tr><td><code>list_authorized_properties</code></td><td><code>list_property_lists</code> · <code>get_property_list</code></td><td>2.5 name; the capability lives on in 3.1 under two</td><td>a rename onto real spec operations — one old tool maps to two new ones</td></tr>
       <tr><td><code>list_tasks</code></td><td><code>tasks/list</code> <em>and</em> <code>list_tasks</code></td><td>genuinely overloaded upstream</td><td>a namespace question — this is why it is the last tool off the escape hatch</td></tr>
     </tbody>
   </table>
@@ -275,7 +275,29 @@ for authored in ("Please choose a product with compatible pricing",
     <p style="margin:0 0 .6rem"><strong>The one worth stopping on.</strong> A shipped docstring on <code>build_get_task_request</code> states that <code>get_task</code> &ldquo;appears in neither the pinned 3.1 schema tree nor <code>ADCP_TOOL_DEFINITIONS</code> — so a local DTO is its <em>final shape</em>, not a placeholder waiting for an SDK type.&rdquo;</p>
     <p style="margin:0">The 3.1 tree files it under <code>tasks-get</code> and <code>get-task-status</code>. The lookup that returned &ldquo;absent&rdquo; had searched for <strong>our</strong> name. A negative result became a written architectural conclusion — <em>this shape is final</em> — which closed off three optional spec fields the tool could already have served.</p>
   </div>
+  <h3>And the inverse: tools we published that the spec never defined</h3>
+  <p>On A2A, <strong>tool == skill == RPC route</strong> — so a skill the pinned schema does not define has no business on the surface. Six had none anywhere in 3.1: <code>approve_creative</code>, <code>assign_creative</code>, <code>create_creative</code>, <code>get_media_buy_status</code>, <code>optimize_media_buy</code>, <code>get_creatives</code>. Deleted, with their 5 dispatch entries and 3 agent-card advertisements. The A2A surface is spec-only now.</p>
   <div class="note"><strong>Absence is not evidence when you searched for your own name.</strong> Every &ldquo;the spec doesn&rsquo;t have this&rdquo; in a comment or a ticket is only as good as the string that was grepped — and our own vocabulary is the one string guaranteed not to appear in someone else&rsquo;s document.</div>
+</section>
+
+<section>
+  <div class="kicker">The payoff</div>
+  <h2>Every body we derived surfaced a bug that was already shipping</h2>
+  <p>This is the argument for doing it, and it is not theoretical. Deriving a shape does not just prevent future drift — it <em>reveals the drift already there</em>, because the derived shape and the hand-written one disagree out loud instead of silently.</p>
+
+  <h3>A required field the buyer sent, discarded before anything looked at it</h3>
+  <p><code>SyncCreativesBody</code> carried <code>idempotency_key</code>, and <code>sync-creatives-request.json</code> lists it in <code>/required</code> — but the REST route omitted it from the call. MCP and A2A both forwarded it, <strong>which is exactly why no cross-transport test caught the difference.</strong> A malformed key was rejected on two transports and silently accepted on the third: the same request answered two ways depending only on how it arrived.</p>
+
+  <h3>Two code paths for one concept, one of them fixed years ago</h3>
+  <p>The error pointer carried FastAPI&rsquo;s location prefix — <code>/body/idempotency_key</code> where the pin wants <code>/idempotency_key</code>. The <code>field</code> key had stripped that <em>for years</em>. <code>issues[]</code> never did. Same fact, two renderings, and only one of them had received the fix. Stripped once now, so both read the same document.</p>
+
+  <h3>A test list that was a third copy of the roster</h3>
+  <p>The A2A contract test hand-listed the skills, so deleting six from the dispatch map and the agent card left it stale — <strong>a copy does not know it is out of date.</strong> It reads the agent card now, which is the artifact a buyer actually sees. Deriving it paid on the first run: the hand-copied list had been <em>missing <code>list_accounts</code> and <code>sync_accounts</code> entirely</em>, so their auth contract had never been graded. Grading them showed the two legitimately differ — <code>list_accounts</code> permits an unauthenticated call and returns an empty list; <code>sync_accounts</code> writes, and rejects one.</p>
+
+  <h3>A payload that outlived the field it names</h3>
+  <p>A test still sent <code>"budget": 15000.0</code> under the comment <em>&ldquo;Float per AdCP spec, not Budget object&rdquo;</em>. True of 2.x — which is precisely why it survived. 3.1.1 defines no top-level <code>budget</code> at all, so the request was refused before reaching the assertions and surfaced as a <code>KeyError</code> on an unrelated key.</p>
+
+  <div class="note">Read the last one twice. The comment was not wrong when it was written, and that is what made it durable. A statement about the spec with no version attached becomes false silently, on someone else&rsquo;s release schedule — and the code around it keeps passing until something forces the question.</div>
 </section>
 
 <section>
@@ -285,10 +307,10 @@ for authored in ("Please choose a product with compatible pricing",
     <thead><tr><th>Surface</th><th>Derived</th><th>Remaining</th><th>What&rsquo;s blocking it</th></tr></thead>
     <tbody>
       <tr><td>MCP tools</td><td class="num"><strong>15 / 16</strong></td><td><code>list_tasks</code></td><td>the spec carries <code>tasks/list</code> <em>and</em> <code>list_tasks</code> — a namespace decision, not a rename</td></tr>
-      <tr><td>REST bodies</td><td class="num"><strong>9 / 13</strong></td><td>create · update · get media buys, capabilities</td><td>nothing structural — the conversion work</td></tr>
-      <tr><td>A2A skill handlers</td><td class="num"><strong>3 builders</strong></td><td>6 hand-parsed payloads</td><td>handlers reimplement fields the builder already knows</td></tr>
+      <tr><td>REST bodies</td><td class="num"><strong>13 / 13</strong></td><td>none — hand-written bodies 5 &rarr; 0</td><td>done; departures (<code>extra_fields</code>, <code>path_fields</code>) are declared and graded</td></tr>
+      <tr><td>A2A surface</td><td class="num"><strong>spec-only</strong></td><td>6 handlers still hand-parse</td><td>6 non-spec skills deleted; the remaining handlers reimplement fields the builder already knows</td></tr>
       <tr><td>Refusal maps / ledgers / analyzer</td><td class="num"><strong>all gone</strong></td><td>—</td><td>—</td></tr>
-      <tr><td>Architecture guards policing drift</td><td class="num"><strong>3 of 4 deleted</strong></td><td><code>rest_body_completeness</code></td><td>retires with the last four REST bodies</td></tr>
+      <tr><td>Architecture guards policing drift</td><td class="num"><strong>3 of 4 deleted</strong></td><td><code>rest_body_completeness</code></td><td>now retirable — its last four subjects are derived</td></tr>
     </tbody>
   </table>
   <p>The A2A row is the one with a live buyer consequence rather than a tidiness one: a handler that plucks keys by hand forwards <em>only the fields whoever wrote it remembered.</em> <code>update_media_buy</code>&rsquo;s handler reimplements five of roughly ten. The other five are accepted, announced, documented — and silently dropped.</p>
@@ -303,6 +325,7 @@ for authored in ("Please choose a product with compatible pricing",
     <li><strong>Never write a request shape twice.</strong> If you are typing field names into a REST <code>Body</code> or a signature, and the SDK ships a DTO for that tool, you are creating the drift this whole deck is about. <code>derived_body_model(name, dto, impl)</code>.</li>
     <li><strong>Exposing a new spec field = making the impl accept it.</strong> There is no second place to update. No ledger, no unsupported map, no announcement to edit.</li>
     <li><strong>Before writing &ldquo;the spec doesn&rsquo;t have this&rdquo; — grep the spec&rsquo;s vocabulary, not ours.</strong> Search the schema tree by <em>capability</em> (<code>task</code>, <code>performance</code>, <code>propert</code>), not by our tool name. A tool published under a name that is in no spec version is undiscoverable, and that is a compliance defect, not a cosmetic one.</li>
+    <li><strong>Never write a claim about &ldquo;the spec&rdquo; without a version.</strong> <em>&ldquo;Float per AdCP spec, not Budget object&rdquo;</em> was true when written and false by 3.1.1 — and nothing failed until a derivation forced the question. Cite the version, or do not write the comment.</li>
     <li><strong>Schema violation is <code>INVALID_REQUEST</code>. Business rule is <code>VALIDATION_ERROR</code>.</strong> If a Pydantic model raised it, it is the first one. Always. On every transport.</li>
     <li><strong>Put facts in <code>ErrorProblem</code>, never in a sentence.</strong> If you are reaching for an f-string to describe a rejection, the fields you are interpolating are the fields the buyer wanted. Ship those.</li>
     <li><strong>Grade it with a BDD scenario on the wire envelope.</strong> Not a unit test about how a tool uses an SDK class. If the behavior is not observable through BDD, it is an integration test — and nothing else.</li>
@@ -314,7 +337,7 @@ for authored in ("Please choose a product with compatible pricing",
   Prebid Sales Agent · request &amp; response architecture. Sequel to <em>&ldquo;One way to raise an error.&rdquo;</em><br>
   Spec: AdCP 3.1.1 via <code>adcp==6.6.0</code> — <code>enums/error-code.json</code>, <code>core/error.json</code>, <code>list-accounts-request.json</code>.<br>
   Mechanism: <code>src/core/tools/_announced_shape.py</code>, <code>src/core/schema_helpers.py</code>, <code>src/routes/_derived_body.py</code>, <code>_register_tool</code> in <code>src/core/main.py</code>.<br>
-  Measured at <code>151759604</code>, 2026-09-01.
+  Measured at <code>7e52496f7</code>, 2026-09-01.
 </footer>
 </div>
 <script>

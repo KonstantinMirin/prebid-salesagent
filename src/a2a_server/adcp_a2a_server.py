@@ -2152,28 +2152,30 @@ class AdCPRequestHandler(RequestHandler):
         return response
 
     async def _handle_update_performance_index_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
-        """Handle explicit update_performance_index skill invocation (CRITICAL for optimization)."""
-        # Identity already resolved at transport boundary (on_message_send)
+        """Handle explicit update_performance_index skill invocation.
 
-        # Parse parameters into typed request model (validation at A2A boundary)
+        Builds through the SHARED builder and hands the wrapper the built request -- the same
+        two steps REST and MCP take. The wire values are selected against the BUILDER's
+        signature, so the field set this transport accepts is the builder's, not a list
+        repeated here that drifts the moment the spec adds a field.
+        """
         from src.core.schemas import UpdatePerformanceIndexRequest
+        from src.core.tools.performance import _build_update_performance_index_request
 
-        # Validated for its rejection only: the values forwarded below are the wire values,
-        # so the model is the boundary's gate rather than a container to pluck from.
-        with adcp_validation_boundary():
+        with adcp_validation_boundary(context="update_performance_index request"):
+            # Validated FIRST, for its rejection: the builder takes its required fields
+            # positionally, so a wire payload missing one would raise a bare TypeError
+            # instead of the typed error naming the field. The model is the gate; the
+            # builder is the seam.
             UpdatePerformanceIndexRequest.model_validate(parameters)
-
-        # Call core function with the selected fields and identity. Selected off
-        # update_performance_index_raw's own signature rather than hand-listed, like every
-        # other handler here; the wire values are forwarded as sent because
-        # _build_update_performance_index_request model_validates each entry itself (it
-        # reads typed models and wire dicts alike, deliberately).
-        selected = select_request_fields(
-            UpdatePerformanceIndexRequest, parameters, accepted_kwargs(core_update_performance_index_tool)
-        )
-        response = core_update_performance_index_tool(**selected, identity=identity)
-
-        return response
+            req = _build_update_performance_index_request(
+                **select_request_fields(
+                    UpdatePerformanceIndexRequest,
+                    parameters,
+                    accepted_kwargs(_build_update_performance_index_request),
+                )
+            )
+        return core_update_performance_index_tool(req=req, identity=identity)
 
     async def _get_products(self, query: str, identity: ResolvedIdentity | None) -> dict:
         """Get available advertising products by calling core functions directly.
