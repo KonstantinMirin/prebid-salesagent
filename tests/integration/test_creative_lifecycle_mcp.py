@@ -15,6 +15,8 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
+from adcp.types import AccountReference
+from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 from sqlalchemy import select
 
 from src.core.config_loader import set_current_tenant
@@ -34,6 +36,23 @@ from tests.factories.creative_asset import asset_spec, build_assets, image_spec
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+
+ACCOUNT_ID = "acct_lifecycle"
+
+
+def _seed_account(tenant_id: str, principal_ids: tuple[str, ...]) -> None:
+    """Add the Account sync-creatives-request.json requires, and grant these principals access.
+
+    Principal ids are passed in rather than queried: reading them back would need a session
+    in a test body, which test_architecture_repository_pattern.py forbids -- and the caller
+    already knows them, having just created them.
+    """
+    from tests.factories import AccountFactory, AgentAccountAccessFactory
+
+    AccountFactory(tenant_id=tenant_id, account_id=ACCOUNT_ID)
+    for pid in principal_ids:
+        AgentAccountAccessFactory(tenant_id=tenant_id, principal_id=pid, account_id=ACCOUNT_ID)
 
 
 class MockContext:
@@ -107,7 +126,7 @@ class TestCreativeLifecycleMCP:
             yield mock_get
 
     @pytest.fixture(autouse=True)
-    def setup_test_data(self, integration_db):
+    def setup_test_data(self, integration_db, bound_factory_session):
         """Create test tenant, principal, and media buy for creative tests."""
         with get_db_session() as session:
             # Create test tenant with auto-approve mode to avoid creative approval workflows
@@ -229,6 +248,10 @@ class TestCreativeLifecycleMCP:
         self.test_principal_id = "test_advertiser"
         self.test_media_buy_id = "test_media_buy_1"
 
+        # ``account`` is in sync-creatives-request.json /required, so every sync call in
+        # this file needs one the calling principal can reach. Factories, per CLAUDE.md.
+        _seed_account("creative_test", ("test_advertiser",))
+
     @pytest.fixture
     def mock_context(self):
         """Create mock FastMCP context."""
@@ -247,29 +270,19 @@ class TestCreativeLifecycleMCP:
                 "creative_id": "creative_display_1",
                 "name": "Banner Ad 300x250",
                 "format_id": {"agent_url": "https://test.com", "id": "display_300x250_image"},
-                "url": "https://example.com/banner.jpg",
-                "click_url": "https://advertiser.com/landing",
-                "width": 300,
-                "height": 250,
+                "assets": build_assets(image_spec("banner")),
             },
             {
                 "creative_id": "creative_video_1",
                 "name": "Video Ad 30sec",
                 "format_id": {"agent_url": "https://test.com", "id": "video_instream_15s"},
-                "url": "https://example.com/video.mp4",
-                "click_url": "https://advertiser.com/video-landing",
-                "width": 640,
-                "height": 480,
-                "duration": 30.0,
+                "assets": build_assets(image_spec("banner")),
             },
             {
                 "creative_id": "creative_display_2",
                 "name": "Leaderboard Ad 728x90",
                 "format_id": {"agent_url": "https://test.com", "id": "display_728x90_image"},
-                "url": "https://example.com/leaderboard.jpg",
-                "click_url": "https://advertiser.com/landing2",
-                "width": 728,
-                "height": 90,
+                "assets": build_assets(image_spec("banner")),
             },
         ]
 
@@ -280,7 +293,12 @@ class TestCreativeLifecycleMCP:
         identity = self._make_identity(tenant_overrides={"approval_mode": "auto-approve"})
 
         # Call sync_creatives tool (uses default patch=False for full upsert)
-        response = core_sync_creatives_tool(creatives=sample_creatives, identity=identity)
+        response = core_sync_creatives_tool(
+            creatives=sample_creatives,
+            idempotency_key="lifecycle-idem-key-01",
+            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            identity=identity,
+        )
 
         # Verify response structure (AdCP-compliant domain response)
         assert isinstance(response, SyncCreativesResponse)
@@ -300,21 +318,18 @@ class TestCreativeLifecycleMCP:
             display_creative = next((c for c in db_creatives if c.format == "display_300x250_image"), None)
             assert display_creative is not None
             assert display_creative.name == "Banner Ad 300x250"
-            assert display_creative.data.get("url") == "https://example.com/banner.jpg"
-            assert display_creative.data.get("width") == 300
-            assert display_creative.data.get("height") == 250
+            # url/width/height were PRE-3.x top-level fields. 3.1.1 carries the media
+            # reference inside ``assets``, so what is persisted is the assets block --
+            # asserting the old flat keys graded a shape the schema no longer has.
             assert display_creative.status == "approved"  # Auto-approved due to approval_mode setting
 
             # Verify video creative
             video_creative = next((c for c in db_creatives if c.format == "video_instream_15s"), None)
             assert video_creative is not None
-            assert video_creative.data.get("duration") == 30.0
 
             # Verify leaderboard creative
             leaderboard_creative = next((c for c in db_creatives if c.format == "display_728x90_image"), None)
             assert leaderboard_creative is not None
-            assert leaderboard_creative.data.get("width") == 728
-            assert leaderboard_creative.data.get("height") == 90
 
     def test_sync_creatives_upsert_existing_creative(self):
         """Test sync_creatives updates existing creative (default patch=False behavior)."""
@@ -330,9 +345,6 @@ class TestCreativeLifecycleMCP:
                 format="display_300x250_image",
                 status="pending",
                 data={
-                    "url": "https://example.com/old.jpg",
-                    "width": 300,
-                    "height": 250,
                     "assets": build_assets(image_spec("banner")),
                 },
             )
@@ -345,17 +357,19 @@ class TestCreativeLifecycleMCP:
                 "creative_id": "creative_update_test",
                 "name": "Updated Creative Name",
                 "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-                "url": "https://example.com/updated.jpg",
-                "click_url": "https://advertiser.com/updated-landing",
-                "width": 300,
-                "height": 250,
+                "assets": build_assets(image_spec("banner")),
             }
         ]
 
         identity = self._make_identity()
 
         # Upsert with patch=False (default): full replacement
-        response = core_sync_creatives_tool(creatives=updated_creative_data, identity=identity)
+        response = core_sync_creatives_tool(
+            creatives=updated_creative_data,
+            idempotency_key="lifecycle-idem-key-01",
+            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            identity=identity,
+        )
 
         # Verify response (domain response has creatives list, not summary/results)
         assert len(response.creatives) == 1
@@ -373,8 +387,6 @@ class TestCreativeLifecycleMCP:
             ).first()
 
             assert updated_creative.name == "Updated Creative Name"
-            assert updated_creative.data.get("url") == "https://example.com/updated.jpg"
-            assert updated_creative.data.get("click_url") == "https://advertiser.com/updated-landing"
             assert updated_creative.updated_at is not None
 
     def test_sync_creatives_with_package_assignments(self, sample_creatives):
@@ -390,7 +402,13 @@ class TestCreativeLifecycleMCP:
         # Use spec-compliant assignments dict: creative_id -> package_ids
         response = core_sync_creatives_tool(
             creatives=creative_data,
-            assignments={creative_id: ["package_1", "package_2"]},
+            assignments=[
+                Assignment(creative_id=creative_id, package_id="package_1"),
+                Assignment(creative_id=creative_id, package_id="package_2"),
+            ],
+            # Both are in sync-creatives-request.json /required.
+            idempotency_key="lifecycle-idem-key-01",
+            account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
 
@@ -422,7 +440,10 @@ class TestCreativeLifecycleMCP:
         # Use spec-compliant assignments dict
         response = core_sync_creatives_tool(
             creatives=creative_data,
-            assignments={creative_id: ["package_buyer_ref"]},
+            assignments=[Assignment(creative_id=creative_id, package_id="package_buyer_ref")],
+            # Both are in sync-creatives-request.json /required.
+            idempotency_key="lifecycle-idem-key-01",
+            account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
 
@@ -448,18 +469,27 @@ class TestCreativeLifecycleMCP:
                 "creative_id": "valid_creative",
                 "name": "Valid Creative",
                 "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
-                "url": "https://example.com/valid.jpg",
+                "assets": build_assets(image_spec("banner")),
             },
             {
                 "creative_id": "invalid_creative",
-                "name": "",  # Invalid: empty name
+                "name": "",  # Invalid: empty name -- a BUSINESS failure, so the entry is
+                # otherwise schema-valid on purpose. A schema-invalid entry (e.g. no assets)
+                # would reject the whole request, which is correct but grades something else:
+                # partial success is for per-creative business failures.
                 "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
+                "assets": build_assets(image_spec("banner")),
             },
         ]
 
         identity = self._make_identity()
 
-        response = core_sync_creatives_tool(creatives=invalid_creatives, identity=identity)
+        response = core_sync_creatives_tool(
+            creatives=invalid_creatives,
+            idempotency_key="lifecycle-idem-key-01",
+            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            identity=identity,
+        )
 
         # Should sync valid creative but fail on invalid one
         # Domain response has creatives list with action field
@@ -503,8 +533,6 @@ class TestCreativeLifecycleMCP:
                     status="approved" if i % 2 == 0 else "pending_review",
                     data={
                         "url": f"https://example.com/creative_{i}.jpg",
-                        "width": 300,
-                        "height": 250,
                         "assets": build_assets(image_spec("banner")),
                     },
                 )
@@ -918,7 +946,12 @@ class TestCreativeLifecycleMCP:
         identity = self._make_identity(tenant_overrides={"approval_mode": "auto-approve"})
 
         # The function works with tenant_id and approval_mode
-        response = core_sync_creatives_tool(creatives=sample_creatives, identity=identity)
+        response = core_sync_creatives_tool(
+            creatives=sample_creatives,
+            idempotency_key="lifecycle-idem-key-01",
+            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            identity=identity,
+        )
         assert isinstance(response, SyncCreativesResponse)
 
     def test_list_creatives_empty_results(self):
@@ -988,7 +1021,12 @@ class TestCreativeLifecycleMCP:
         core_sync_creatives_tool, _ = self._import_mcp_tools()
 
         identity = self._make_identity(tenant_overrides={"approval_mode": "require-human"})
-        sync_response = core_sync_creatives_tool(creatives=sample_creatives, identity=identity)
+        sync_response = core_sync_creatives_tool(
+            creatives=sample_creatives,
+            idempotency_key="lifecycle-idem-key-01",
+            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            identity=identity,
+        )
         assert len(sync_response.creatives) == 3
 
         # Update creatives in database to have platform_creative_id

@@ -93,14 +93,18 @@ class TestCreativeSyncEnvContract:
         env = CreativeSyncEnv()
         body = env.build_rest_body(creatives=[], dry_run=True)
 
-        # idempotency_key is present because AdCP 3.1.1 makes it /required on
-        # sync-creatives-request: a REST body without it is not a valid request, so the
-        # harness supplies it at every dispatch. Asserted explicitly rather than loosened to
-        # a subset check -- the point of this contract test is the EXACT body shape.
+        # idempotency_key AND account are present because AdCP 3.1.1 lists both in
+        # sync-creatives-request /required: a REST body without them is not a valid request,
+        # so the harness supplies them at every dispatch. ``account`` carries a literal id
+        # here because this env has no session bound -- there is nothing to seed against
+        # outside a ``with env:`` block, and this test asks for the body's SHAPE.
+        # Asserted explicitly rather than loosened to a subset check -- the point of this
+        # contract test is the EXACT body shape.
         assert body == {
             "creatives": [],
             "dry_run": True,
             "idempotency_key": CreativeSyncEnv.DEFAULT_IDEMPOTENCY_KEY,
+            "account": {"account_id": "acct_unbound"},
         }
 
     def test_has_parse_rest_response(self):

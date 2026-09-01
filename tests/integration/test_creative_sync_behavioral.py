@@ -27,6 +27,7 @@ from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFacto
 from tests.factories.creative_asset import build_assets, image_spec, make_test_banner_creative
 from tests.harness import CreativeSyncEnv, make_identity
 from tests.harness.transport import Transport
+from tests.helpers.creative_test_helpers import creative_payload
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
@@ -353,7 +354,7 @@ class TestValidationModeSemantics:
 
             result = env.call_via(
                 transport,
-                creatives=[],
+                creatives=[creative_payload(creative_id="c_sync_anchor")],
                 assignments=[{"creative_id": "c_never_synced", "package_id": pkg.package_id}],
                 validation_mode="strict",
             )
@@ -361,7 +362,7 @@ class TestValidationModeSemantics:
             assert result.is_error, f"Strict mode must abort on unknown creative: {result.payload!r}"
             if transport is Transport.A2A:
                 pytest.xfail(
-                    "salesagent-b2wny: A2A captures no wire envelope for a tool-internal "
+                    "a recorded gap: A2A captures no wire envelope for a tool-internal "
                     "AdCPSalesAgentError — is_error is True but wire_error_envelope is None, so there "
                     "is nothing to grade. Second instance of the same gap (the first was "
                     "SERVICE_UNAVAILABLE in test_creative_sync_transport), which is why the "
@@ -399,7 +400,7 @@ class TestValidationModeSemantics:
             pkg = MediaPackageFactory(media_buy=media_buy)
 
             response = env.call_impl(
-                creatives=[],
+                creatives=[creative_payload(creative_id="c_sync_anchor")],
                 assignments=[{"creative_id": "c_never_synced", "package_id": pkg.package_id}],
                 validation_mode="lenient",
             )
@@ -444,7 +445,7 @@ class TestValidationModeSemantics:
             )
 
             response = env.call_impl(
-                creatives=[],
+                creatives=[creative_payload(creative_id="c_sync_anchor")],
                 assignments=[{"creative_id": "c_exists_in_library", "package_id": "pkg_does_not_exist"}],
                 validation_mode="lenient",
             )
@@ -1031,7 +1032,7 @@ class TestDryRunPreviewMatchesLiveRun:
         )
         _assert_preview_matches_live(preview, live)
 
-    # -- Assignment outcomes (salesagent-58rs) ------------------------------
+    # -- Assignment outcomes ------------------------------
     # dry_run currently skips _process_assignments entirely (_sync.py:427), so
     # the preview omits assigned_to / assignment_errors / synthesized entries a
     # real run returns. Spec (AdCP 3.1.1, sync-creatives-request.json
@@ -1175,16 +1176,22 @@ class TestDryRunPreviewMatchesLiveRun:
         visibility) must appear in the preview exactly as in the live response."""
         preview, live = _preview_and_live(
             "asg_d",
-            creatives=[],
+            creatives=[creative_payload(creative_id="c_sync_anchor")],
             assignments=[{"creative_id": "asg_d_ghost", "package_id": "pkg_asg_d"}],
             validation_mode="lenient",
         )
 
-        assert _actions(live) == ["failed"], (
+        # The GHOST entry is the subject. The request also carries a real creative, because
+        # sync-creatives-request.json declares ``creatives: {minItems: 1}`` -- an
+        # assignment-only sync is not expressible -- so that creative legitimately produces
+        # its own 'created' entry alongside. Asserting on the whole action list would grade
+        # the anchor as much as the ghost.
+        ghost = next((e for e in live if e.get("creative_id") == "asg_d_ghost"), None)
+        assert ghost is not None and ghost["action"] == "failed", (
             f"precondition: live must synthesize a failed entry for the unknown creative, got {live}"
         )
-        assert live[0].get("assignment_errors") == {"pkg_asg_d": "Creative not found: asg_d_ghost"}, (
-            f"precondition: live must record why the assignment was skipped, got {live[0]}"
+        assert ghost.get("assignment_errors") == {"pkg_asg_d": "Creative not found: asg_d_ghost"}, (
+            f"precondition: live must record why the assignment was skipped, got {ghost}"
         )
         _assert_preview_matches_live(preview, live)
 
@@ -1413,7 +1420,7 @@ class TestAssignmentProcessing:
 
             result = env.call_via(
                 Transport.REST,
-                creatives=[],
+                creatives=[creative_payload(creative_id="c_sync_anchor")],
                 assignments=[
                     {"creative_id": "c_owned_by_other", "package_id": pkg_id},
                     {"creative_id": "c_mine", "package_id": pkg_id},
@@ -1500,7 +1507,7 @@ class TestAssignmentProcessing:
 
             result = env.call_via(
                 Transport.REST,
-                creatives=[],
+                creatives=[creative_payload(creative_id="c_sync_anchor")],
                 assignments=[{"creative_id": orphan_creative_id, "package_id": pkg_id}],
                 validation_mode="lenient",
             )
@@ -1550,7 +1557,7 @@ class TestAssignmentProcessing:
 
             result = env.call_via(
                 Transport.REST,
-                creatives=[],
+                creatives=[creative_payload(creative_id="c_sync_anchor")],
                 assignments=[{"creative_id": "c_preexisting", "package_id": pkg_id}],
                 validation_mode="lenient",
             )

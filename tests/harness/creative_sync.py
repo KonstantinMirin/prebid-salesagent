@@ -53,9 +53,12 @@ from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+from adcp.types import AccountReference
+
 from src.core.schemas import SyncCreativesResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import e2e_unsupported, realize_e2e
+from tests.helpers.creative_test_helpers import creative_payload
 
 
 @dataclass(frozen=True)
@@ -580,7 +583,7 @@ class CreativeSyncEnv(IntegrationEnv):
     #: Shape-valid per the pin: ^[A-Za-z0-9_.:-]{16,255}$.
     DEFAULT_IDEMPOTENCY_KEY = "harness-idem-key-0001"
 
-    def _with_required_request_fields(self, kwargs: dict) -> dict:
+    def _with_required_request_fields(self, kwargs: dict, *, with_account: bool = True) -> dict:
         """Fill the spec-required fields a scenario has not set itself.
 
         `account` needs care: steps pass it EXPLICITLY as None for scenarios that are not
@@ -593,15 +596,43 @@ class CreativeSyncEnv(IntegrationEnv):
         would resolve to nothing. A scenario that IS about accounts sets account_ref and
         keeps it, because only a None is replaced.
         """
-        kwargs.setdefault("creatives", [])
+        # A MINIMAL VALID creative, not []. sync-creatives-request.json declares
+        # ``creatives: {minItems: 1}``, so an empty array is a rejected request -- a test
+        # that never mentions creatives (auth, isolation, notification) would fail on the
+        # array rather than reaching what it grades. A test that explicitly passes [] still
+        # gets [], because setdefault does not override an explicit value: that is how the
+        # minItems rejection itself stays testable.
+        kwargs.setdefault("creatives", [creative_payload()])
         kwargs.setdefault("idempotency_key", self.DEFAULT_IDEMPOTENCY_KEY)
-        if kwargs.get("account") is None:
+        # ``with_account=False`` for the IMPL path. account is a field of the REQUEST, and
+        # requests are built by transport wrappers -- _sync_creatives_impl does not take one.
+        # Injecting it there makes every direct-impl test resolve an account before reaching
+        # its subject, so a scenario about an unknown tenant answers AdCPAuthorizationError
+        # from account resolution instead of the auth rejection it grades.
+        if with_account and kwargs.get("account") is None:
             identity = kwargs.get("identity") or self.identity
             account_id = getattr(identity, "account_id", None)
-            if account_id:
-                kwargs["account"] = {"account_id": account_id}
-            else:
-                kwargs.pop("account", None)
+            if not account_id:
+                # No account on the identity: seed one and use it. Dropping the key was
+                # viable only while the field was optional -- sync-creatives-request.json
+                # lists account in /required, so an absent account is now a request the
+                # schema rejects, and every scenario not ABOUT accounts would fail on a
+                # missing field before reaching what it grades.
+                if self._session is None:
+                    # No DB bound (a contract test building a body outside ``with env:``).
+                    # There is nothing to seed against and nothing that will resolve the
+                    # reference, so a literal id gives the body its required SHAPE, which is
+                    # all such a caller is asking for.
+                    account_id = "acct_unbound"
+                else:
+                    account_id = self.setup_default_account(
+                        principal_id=getattr(identity, "principal_id", None)
+                    ).account_id
+            # The TYPED reference, not a bare dict: the wrappers hand this straight to
+            # enrich_identity_with_account, which reads AccountReference.root. A dict gets
+            # as far as "'dict' object has no attribute 'root'". build_rest_body serialises
+            # it for the wire itself.
+            kwargs["account"] = AccountReference(root={"account_id": account_id})
         return kwargs
 
     def call_impl(self, **kwargs: Any) -> SyncCreativesResponse:
@@ -617,7 +648,7 @@ class CreativeSyncEnv(IntegrationEnv):
 
         self._commit_factory_data()
         kwargs.setdefault("identity", self.identity)
-        kwargs = self._with_required_request_fields(kwargs)
+        kwargs = self._with_required_request_fields(kwargs, with_account=False)
 
         # Handle account kwarg — resolve at boundary, same as wrappers
         account = kwargs.pop("account", None)

@@ -8,6 +8,7 @@ from typing import Any
 
 from adcp import PushNotificationConfig
 from adcp.types import ContextObject, CreativeAction, CreativeAsset
+from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 from pydantic import BaseModel
 
 from src.core.auth import require_identity, require_principal_id, require_tenant
@@ -56,7 +57,7 @@ def _with_creative(details: ValidationDetails | None, creative_id: str) -> Valid
 
 def _sync_creatives_impl(
     creatives: Sequence[CreativeAsset | BaseModel | dict[str, Any]],
-    assignments: dict | None = None,
+    assignments: list[Assignment] | None = None,
     creative_ids: list[str] | None = None,
     delete_missing: bool = False,
     dry_run: bool = False,

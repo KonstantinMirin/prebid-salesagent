@@ -19,6 +19,8 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
+from adcp.types import AccountReference
+from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
@@ -33,6 +35,7 @@ from src.core.database.models import Product as DBProduct
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum, SyncCreativesResponse
 from src.core.testing_hooks import AdCPTestContext
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -73,16 +76,35 @@ def _make_creative_dict(
         "creative_id": creative_id,
         "name": name,
         "format_id": {"agent_url": agent_url, "id": format_id},
-        "assets": {},
-        "url": "https://example.com/banner.png",
-        "width": 300,
-        "height": 250,
+        # url/width/height are PRE-3.x. CreativeAssetRequest forbids extras and 3.1.1 puts
+        # the media reference inside ``assets``. They survived only because nothing built
+        # the request model on the sync path; every transport does now. Backwards
+        # compatibility, where wanted, belongs in RequestCompatMiddleware -- not in the
+        # tool signature or _impl.
+        "assets": build_assets(image_spec("banner")),
     }
 
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
+
+
+ACCOUNT_ID = "acct_v3"
+
+
+def _seed_account_for(tenant_id: str, principal_ids: tuple[str, ...]) -> None:
+    """Add the Account sync-creatives-request.json requires, and grant these principals access.
+
+    Principal ids are passed in rather than queried: reading them back would need a session
+    in a test body, which test_architecture_repository_pattern.py forbids -- and the caller
+    already knows them, having just created them.
+    """
+    from tests.factories import AccountFactory, AgentAccountAccessFactory
+
+    AccountFactory(tenant_id=tenant_id, account_id=ACCOUNT_ID)
+    for pid in principal_ids:
+        AgentAccountAccessFactory(tenant_id=tenant_id, principal_id=pid, account_id=ACCOUNT_ID)
 
 
 @pytest.fixture(autouse=True)
@@ -127,7 +149,7 @@ class TestCrossPrincipalIsolation:
     TENANT_ID = "iso_tenant"
 
     @pytest.fixture(autouse=True)
-    def setup_tenant(self, integration_db):
+    def setup_tenant(self, integration_db, bound_factory_session):
         """Create tenant with two principals."""
         with get_db_session() as session:
             tenant = create_tenant_with_timestamps(
@@ -167,12 +189,22 @@ class TestCrossPrincipalIsolation:
             )
             session.commit()
 
+        # ``account`` is in sync-creatives-request.json /required, so every sync call in
+        # this file needs one that the calling principal can reach. Seeded through the
+        # factories (CLAUDE.md) rather than extending the hand-rolled block above.
+        _seed_account_for(self.TENANT_ID, ("principal_1", "principal_2"))
+
     def _sync_one(self, principal_id: str, creative_id: str = "c_shared") -> SyncCreativesResponse:
         from src.core.tools.creatives import sync_creatives_raw
 
         identity = _make_identity(self.TENANT_ID, principal_id)
         return sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id=creative_id)],
+            # Both are in sync-creatives-request.json /required, and every transport builds
+            # SyncCreativesRequest now, so omitting either is a rejected request rather than
+            # a call that reaches the impl.
+            idempotency_key=f"v3-sync-key-{creative_id}",
+            account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
 
@@ -252,7 +284,7 @@ class TestApprovalWorkflow:
     PRINCIPAL_ID = "approval_principal"
 
     @pytest.fixture(autouse=True)
-    def setup_tenant(self, integration_db):
+    def setup_tenant(self, integration_db, bound_factory_session):
         """Create tenant and principal for approval tests."""
         with get_db_session() as session:
             tenant = create_tenant_with_timestamps(
@@ -283,12 +315,22 @@ class TestApprovalWorkflow:
             )
             session.commit()
 
+        # ``account`` is in sync-creatives-request.json /required, so every sync call in
+        # this file needs one that the calling principal can reach. Seeded through the
+        # factories (CLAUDE.md) rather than extending the hand-rolled block above.
+        _seed_account_for(self.TENANT_ID, (self.PRINCIPAL_ID,))
+
     def _sync(self, approval_mode: str, creative_id: str) -> SyncCreativesResponse:
         from src.core.tools.creatives import sync_creatives_raw
 
         identity = _make_identity(self.TENANT_ID, self.PRINCIPAL_ID, approval_mode=approval_mode)
         return sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id=creative_id)],
+            # Both are in sync-creatives-request.json /required, and every transport builds
+            # SyncCreativesRequest now, so omitting either is a rejected request rather than
+            # a call that reaches the impl.
+            idempotency_key=f"v3-sync-key-{creative_id}",
+            account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
 
@@ -340,6 +382,9 @@ class TestApprovalWorkflow:
         )
         sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id="c_default")],
+            # Both are in sync-creatives-request.json /required.
+            idempotency_key="v3-sync-key-000001",
+            account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
         assert self._get_db_status("c_default") == CreativeStatusEnum.pending_review.value
@@ -360,7 +405,7 @@ class TestBatchSync:
     PRINCIPAL_ID = "batch_principal"
 
     @pytest.fixture(autouse=True)
-    def setup_tenant(self, integration_db):
+    def setup_tenant(self, integration_db, bound_factory_session):
         with get_db_session() as session:
             tenant = create_tenant_with_timestamps(
                 tenant_id=self.TENANT_ID,
@@ -390,6 +435,11 @@ class TestBatchSync:
             )
             session.commit()
 
+        # ``account`` is in sync-creatives-request.json /required, so every sync call in
+        # this file needs one that the calling principal can reach. Seeded through the
+        # factories (CLAUDE.md) rather than extending the hand-rolled block above.
+        _seed_account_for(self.TENANT_ID, (self.PRINCIPAL_ID,))
+
     def _identity(self) -> ResolvedIdentity:
         return _make_identity(self.TENANT_ID, self.PRINCIPAL_ID)
 
@@ -402,7 +452,13 @@ class TestBatchSync:
         from src.core.tools.creatives import sync_creatives_raw
 
         creatives = [_make_creative_dict(creative_id=f"c_{i}", name=f"Creative {i}") for i in range(5)]
-        result = sync_creatives_raw(creatives=creatives, identity=self._identity())
+        result = sync_creatives_raw(
+            creatives=creatives,
+            # Both are in sync-creatives-request.json /required.
+            idempotency_key="v3-sync-key-000001",
+            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            identity=self._identity(),
+        )
 
         assert len(result.creatives) == 5
         result_ids = {r.creative_id for r in result.creatives}
@@ -428,6 +484,9 @@ class TestBatchSync:
         # First sync: create
         result1 = sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id="c_upsert", name="Original Name")],
+            # Both are in sync-creatives-request.json /required.
+            idempotency_key="v3-sync-key-000001",
+            account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
         action1 = result1.creatives[0].action
@@ -438,6 +497,9 @@ class TestBatchSync:
         # Second sync: update
         result2 = sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id="c_upsert", name="Updated Name")],
+            # Both are in sync-creatives-request.json /required.
+            idempotency_key="v3-sync-key-000001",
+            account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
         action2 = result2.creatives[0].action
@@ -471,7 +533,7 @@ class TestFormatCompatibility:
     PRINCIPAL_ID = "fmt_compat_principal"
 
     @pytest.fixture(autouse=True)
-    def setup_tenant(self, integration_db):
+    def setup_tenant(self, integration_db, bound_factory_session):
         with get_db_session() as session:
             tenant = create_tenant_with_timestamps(
                 tenant_id=self.TENANT_ID,
@@ -538,6 +600,11 @@ class TestFormatCompatibility:
             session.add(pkg)
             session.commit()
 
+        # ``account`` is in sync-creatives-request.json /required, so every sync call in
+        # this file needs one that the calling principal can reach. Seeded through the
+        # factories (CLAUDE.md) rather than extending the hand-rolled block above.
+        _seed_account_for(self.TENANT_ID, (self.PRINCIPAL_ID,))
+
     def test_format_mismatch_strict_raises(self):
         """Strict mode: display creative assigned to video-only package raises error.
 
@@ -553,6 +620,9 @@ class TestFormatCompatibility:
         # First sync the display creative (so it exists in DB)
         sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id="c_display")],
+            # Both are in sync-creatives-request.json /required.
+            idempotency_key="v3-sync-key-000001",
+            account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
 
@@ -560,8 +630,14 @@ class TestFormatCompatibility:
         with pytest.raises(AdCPCreativeRejectedError):
             sync_creatives_raw(
                 creatives=[_make_creative_dict(creative_id="c_display")],
-                assignments={"c_display": ["pkg_video"]},
+                # list[Assignment], not the {creative_id: [package_id]} map: that map was an
+                # internal-only spelling of the same relation and is not what
+                # sync-creatives-request.json declares.
+                assignments=[Assignment(creative_id="c_display", package_id="pkg_video")],
                 validation_mode="strict",
+                # Both are in sync-creatives-request.json /required.
+                idempotency_key="v3-sync-key-strict01",
+                account=AccountReference(root={"account_id": ACCOUNT_ID}),
                 identity=identity,
             )
 
@@ -582,7 +658,7 @@ class TestMediaBuyStatusTransition:
     PRINCIPAL_ID = "mb_status_principal"
 
     @pytest.fixture(autouse=True)
-    def setup_tenant(self, integration_db):
+    def setup_tenant(self, integration_db, bound_factory_session):
         with get_db_session() as session:
             tenant = create_tenant_with_timestamps(
                 tenant_id=self.TENANT_ID,
@@ -650,6 +726,11 @@ class TestMediaBuyStatusTransition:
             session.add(pkg)
             session.commit()
 
+        # ``account`` is in sync-creatives-request.json /required, so every sync call in
+        # this file needs one that the calling principal can reach. Seeded through the
+        # factories (CLAUDE.md) rather than extending the hand-rolled block above.
+        _seed_account_for(self.TENANT_ID, (self.PRINCIPAL_ID,))
+
     def test_draft_with_approved_at_transitions(self):
         """Draft media buy with approved_at transitions to pending_creatives on assignment.
 
@@ -664,7 +745,11 @@ class TestMediaBuyStatusTransition:
         # Sync creative and assign to draft media buy's package
         sync_creatives_raw(
             creatives=[_make_creative_dict(creative_id="c_transition")],
-            assignments={"c_transition": ["pkg_draft"]},
+            # list[Assignment], per sync-creatives-request.json.
+            assignments=[Assignment(creative_id="c_transition", package_id="pkg_draft")],
+            # Both are in sync-creatives-request.json /required.
+            idempotency_key="v3-sync-key-000001",
+            account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
 
