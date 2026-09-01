@@ -22,6 +22,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.schemas import CompleteTaskRequestLocal, GetTaskRequest
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,36 @@ async def list_tasks(
         }
 
 
+def build_get_task_request(task_id: str, context: Any = None) -> GetTaskRequest:
+    """Build the request get_task accepts.
+
+    get_task is a LOCAL tool -- it appears in neither the pinned 3.1 schema tree nor
+    adcp.server.mcp_tools.ADCP_TOOL_DEFINITIONS -- so a local DTO is its final shape, not a
+    placeholder waiting for an SDK type. What the builder buys is that the tool follows the
+    same wrapper -> builder -> DTO -> impl template as every other tool, which is what lets
+    _register_tool resolve its model without the explicit `dto=` escape hatch
+    (salesagent-prkv.29).
+    """
+    return GetTaskRequest(task_id=task_id, context=context)
+
+
+def build_complete_task_request(
+    task_id: str,
+    status: str | None = None,
+    response_data: Any = None,
+    error_message: str | None = None,
+    context: Any = None,
+) -> CompleteTaskRequestLocal:
+    """Build the request complete_task accepts. Local tool; see build_get_task_request."""
+    return CompleteTaskRequestLocal(
+        task_id=task_id,
+        status=status,
+        response_data=response_data,
+        error_message=error_message,
+        context=context,
+    )
+
+
 async def get_task(
     task_id: str, context: Context | None = None, identity: ResolvedIdentity | None = None
 ) -> dict[str, Any]:
@@ -138,6 +169,8 @@ async def get_task(
     if identity is None and context is not None:
         identity = await context.get_state("identity")
 
+    req = build_get_task_request(task_id=task_id, context=context if not isinstance(context, Context) else None)
+
     identity = require_identity(identity)
     tenant = require_tenant(identity)
     require_principal_id(identity)  # F-03: an authenticated (non-anonymous) principal is required
@@ -145,7 +178,7 @@ async def get_task(
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
 
-        task = uow.workflows.get_by_step_id_or_raise(task_id)
+        task = uow.workflows.get_by_step_id_or_raise(req.task_id)
 
         mappings = uow.workflows.get_mappings_for_step(task_id)
 
@@ -202,6 +235,14 @@ async def complete_task(
     """
     if identity is None and context is not None:
         identity = await context.get_state("identity")
+
+    req = build_complete_task_request(
+        task_id=task_id,
+        status=status,
+        response_data=response_data,
+        error_message=error_message,
+        context=context if not isinstance(context, Context) else None,
+    )
 
     identity = require_identity(identity)
     tenant = require_tenant(identity)

@@ -336,13 +336,10 @@ from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
 from mcp.types import ToolAnnotations
 
 from src.core.schemas import (
-    CompleteTaskRequestLocal,
-    GetTaskRequest,
-    ListAuthorizedPropertiesRequest,
-    SyncCreativesRequest,
+    ListTasksRequest as LocalListTasksRequest,
 )
 from src.core.schemas import (
-    ListTasksRequest as LocalListTasksRequest,
+    SyncCreativesRequest,
 )
 from src.core.tool_error_logging import with_error_logging
 from src.core.tools._announced_shape import apply_dto_announced_shape
@@ -415,12 +412,15 @@ _register_tool(get_products)
 _register_tool(list_creative_formats)
 _register_tool(sync_creatives, SyncCreativesRequest)
 _register_tool(list_creatives)
-_register_tool(list_authorized_properties, ListAuthorizedPropertiesRequest)
+# No explicit DTO: the wrapper now calls build_list_authorized_properties_request, so the
+# model resolves from the builder like every other template-following tool. One fewer user of
+# the escape hatch salesagent-prkv.29 exists to delete.
+_register_tool(list_authorized_properties)
 _register_tool(create_media_buy)
 _register_tool(update_media_buy)
 _register_tool(get_media_buy_delivery)
 _register_tool(get_media_buys)
 _register_tool(update_performance_index)
 _register_tool(list_tasks, LocalListTasksRequest)
-_register_tool(get_task, GetTaskRequest)
-_register_tool(complete_task, CompleteTaskRequestLocal)
+_register_tool(get_task)
+_register_tool(complete_task)
