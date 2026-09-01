@@ -883,11 +883,7 @@ async def get_products(
 
 
 async def get_products_raw(
-    brief: str = "",
-    brand: BrandReference | str | None = None,
-    filters: ProductFilters | None = None,
-    property_list: PropertyListReference | None = None,
-    context: ContextObject | None = None,  # Application level context per adcp spec
+    req: GetProductsRequestGenerated,
     ctx: Context | ToolContext | None = None,
     identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> GetProductsResponse:
@@ -898,11 +894,9 @@ async def get_products_raw(
     at the caller's boundary (A2A handler), not here.
 
     Args:
-        brief: Brief description of the advertising campaign or requirements
-        brand: Brand reference per adcp 3.6.0 (BrandReference or string domain shorthand)
-        filters: Structured filters for product discovery (optional)
-        property_list: Property list reference for filtering by buyer's property list (optional)
-        context: Application level context per adcp spec
+        req: The built GetProductsRequest -- brief, brand, filters, property_list and
+            context all travel ON it. Callers build it with
+            ``create_get_products_request``, the one builder every transport shares.
         ctx: FastMCP context (automatically provided)
         identity: Resolved identity from transport boundary (preferred over ctx)
 
@@ -911,15 +905,6 @@ async def get_products_raw(
     """
     # Resolve identity from transport context only if the caller omitted it
     identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=False)
-
-    # Create request object - adcp library validates schema
-    req = create_get_products_request(
-        brief=brief or "",
-        brand=brand,
-        filters=filters,
-        property_list=property_list,
-        context=context,
-    )
 
     # Call shared implementation
     return await _get_products_impl(req, identity)

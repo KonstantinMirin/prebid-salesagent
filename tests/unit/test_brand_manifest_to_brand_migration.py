@@ -23,13 +23,15 @@ class TestGetProductsRawRejectsBrandManifest:
         This reproduces the failure in:
         - tests/integration_v2/test_get_products_filters.py (8+ tests)
         """
-        from src.core.tools.products import get_products_raw
+        from src.core.tools.products import create_get_products_request
 
+        # Aimed at the BUILDER, not get_products_raw. The wrapper takes the built request
+        # now, so every field name is unknown to it and `brand_manifest` would raise there
+        # for a reason that has nothing to do with this migration -- a pass that says
+        # nothing. The builder is the one door a buyer field enters through, so it is where
+        # "brand_manifest is not a parameter, brand is" is actually enforced.
         with pytest.raises(TypeError, match="brand_manifest"):
-            # brand_manifest is not a valid parameter — brand is the new name.
-            # TypeError is raised at call time (before coroutine creation)
-            # because the function signature has no **kwargs.
-            get_products_raw(
+            create_get_products_request(
                 brand_manifest={"name": "Test Brand"},
                 brief="",
             )

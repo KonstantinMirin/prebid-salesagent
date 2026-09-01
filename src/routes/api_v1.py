@@ -400,7 +400,10 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
                 accepted_kwargs(products_module.create_get_products_request),
             )
         )
-    response = await products_module._get_products_impl(req, identity)
+    # Through the raw wrapper like the other transports, not straight into _impl: an
+    # explicit identity=None is passed through unchanged, so the auth-optional path is
+    # preserved while the call shape stays the one shape.
+    response = await products_module.get_products_raw(req=req, identity=identity)
     result = response.model_dump(mode="json")
     return apply_version_compat("get_products", result, body.adcp_version)
 

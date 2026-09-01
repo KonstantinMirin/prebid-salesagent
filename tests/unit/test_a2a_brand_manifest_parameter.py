@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from src.core.schema_helpers import to_brand_reference
 from tests.factories.principal import PrincipalFactory
 
 logger = logging.getLogger(__name__)
@@ -42,12 +43,13 @@ async def test_handle_get_products_skill_passes_brand():
         await handler._handle_get_products_skill(parameters, _MOCK_IDENTITY)
 
         mock_core_tool.assert_called_once()
-        call_kwargs = mock_core_tool.call_args.kwargs
+        # The handler builds through the shared builder and hands the wrapper ONE request,
+        # so the buyer's fields are graded where they now travel: on the request.
+        req = mock_core_tool.call_args.kwargs["req"]
 
-        assert "brand" in call_kwargs, "brand should be passed to core tool"
-        assert call_kwargs["brand"] == {"domain": "nike.com"}
-        assert call_kwargs["brief"] == "Athletic footwear"
-        assert "brand_manifest" not in call_kwargs, "brand_manifest must not be passed"
+        assert to_brand_reference({"domain": "nike.com"}) == req.brand
+        assert req.brief == "Athletic footwear"
+        assert not hasattr(req, "brand_manifest"), "brand_manifest must not reach the request"
 
 
 @pytest.mark.asyncio
@@ -77,15 +79,15 @@ async def test_handle_get_products_skill_extracts_all_parameters():
         await handler._handle_get_products_skill(parameters, _MOCK_IDENTITY)
 
         mock_core_tool.assert_called_once()
-        call_kwargs = mock_core_tool.call_args.kwargs
+        req = mock_core_tool.call_args.kwargs["req"]
 
-        assert call_kwargs["brand"] == {"domain": "nike.com"}
-        assert call_kwargs["brief"] == "Athletic footwear"
-        assert call_kwargs["filters"] == {"delivery_type": "guaranteed"}
-        assert "min_exposures" not in call_kwargs, "min_exposures is not in AdCP spec — must not be forwarded"
-        assert "strategy_id" not in call_kwargs, "strategy_id is not in AdCP spec — must not be forwarded"
-        assert "adcp_version" not in call_kwargs, "adcp_version is a transport concern — must not be forwarded"
-        assert "brand_manifest" not in call_kwargs
+        assert to_brand_reference({"domain": "nike.com"}) == req.brand
+        assert req.brief == "Athletic footwear"
+        assert req.filters is not None and req.filters.delivery_type is not None
+        # Off-spec and transport-envelope names must not reach the request. The builder is
+        # the only door now, so a name it does not take cannot arrive by another route.
+        for off_spec in ("min_exposures", "strategy_id", "brand_manifest"):
+            assert not hasattr(req, off_spec), f"{off_spec} is not in the AdCP spec — must not be forwarded"
 
 
 @pytest.mark.asyncio
@@ -104,16 +106,21 @@ async def test_handle_get_products_skill_forwards_property_list():
 
         parameters = {
             "brief": "Video ads",
-            "property_list": {"agent_url": "https://buyer.example.com/properties"},
+            # list_id is REQUIRED on PropertyListReference (agent_url and list_id both
+            # are, per the pinned type). This payload used to omit it and still pass,
+            # because the handler forwarded the raw dict unvalidated; the shared builder
+            # validates it, so a fixture that could never come off the wire now fails.
+            "property_list": {"agent_url": "https://buyer.example.com/properties", "list_id": "pl-001"},
         }
 
         await handler._handle_get_products_skill(parameters, _MOCK_IDENTITY)
 
         mock_core_tool.assert_called_once()
-        call_kwargs = mock_core_tool.call_args.kwargs
+        req = mock_core_tool.call_args.kwargs["req"]
 
-        assert "property_list" in call_kwargs, "property_list should be forwarded to core tool"
-        assert call_kwargs["property_list"] == {"agent_url": "https://buyer.example.com/properties"}
+        assert req.property_list is not None, "property_list should reach the request"
+        assert str(req.property_list.agent_url).rstrip("/") == "https://buyer.example.com/properties"
+        assert req.property_list.list_id == "pl-001"
 
 
 @pytest.mark.asyncio
@@ -135,17 +142,14 @@ async def test_handle_get_products_skill_brand_manifest_not_converted():
         await handler._handle_get_products_skill(parameters, _MOCK_IDENTITY)
 
         mock_core_tool.assert_called_once()
-        call_kwargs = mock_core_tool.call_args.kwargs
+        req = mock_core_tool.call_args.kwargs["req"]
 
-        # brand_manifest is ignored, so the callee sees no brand at all. The handler now
-        # selects the request off GetProductsRequest, which drops absent/None fields so the
-        # callee's own default applies -- `brand` being ABSENT and `brand` being explicitly
-        # None are the same call. The obligation graded here is that brand_manifest is never
-        # converted into a brand, which `.get(...) is None` states without also pinning the
-        # forwarding mechanism.
-        assert call_kwargs.get("brand") is None
-        assert call_kwargs["brief"] == "Display ads"
-        assert "brand_manifest" not in call_kwargs
+        # brand_manifest is ignored, so the request carries no brand at all. The obligation
+        # graded here is that brand_manifest is never CONVERTED into a brand -- stated on
+        # the request itself, without also pinning how the field was forwarded.
+        assert req.brand is None
+        assert req.brief == "Display ads"
+        assert not hasattr(req, "brand_manifest")
 
 
 @pytest.mark.asyncio

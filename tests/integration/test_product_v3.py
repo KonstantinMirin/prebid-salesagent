@@ -95,7 +95,7 @@ async def _call_get_products(
     tenant_overrides: dict | None = None,
 ):
     """Convenience wrapper for get_products_raw with identity resolution."""
-    from src.core.tools.products import get_products_raw
+    from src.core.tools.products import create_get_products_request, get_products_raw
 
     tenant_dict: dict[str, Any] = {"tenant_id": tenant_id}
     if tenant_overrides:
@@ -112,14 +112,16 @@ async def _call_get_products(
     if brand is _BRAND_DEFAULT:
         brand = {"domain": "testbrand.com"}
 
-    return await get_products_raw(
+    # Built through the shared builder, then handed over -- the wrapper takes the request
+    # now, the same as every transport. This one helper drives every get_products case in
+    # the module, so the build lives here rather than at 77 call sites.
+    req = create_get_products_request(
         brief=brief,
         brand=brand,
         filters=filters,
         property_list=property_list,
-        ctx=ctx,
-        identity=identity,
     )
+    return await get_products_raw(req=req, ctx=ctx, identity=identity)
 
 
 # ---------------------------------------------------------------------------

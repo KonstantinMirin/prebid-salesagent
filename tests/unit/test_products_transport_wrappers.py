@@ -211,9 +211,11 @@ class TestA2AGetProductsRawWrapper:
             new_callable=AsyncMock,
             return_value=_mock_response(),
         ):
-            from src.core.tools.products import get_products_raw
+            from src.core.tools.products import create_get_products_request, get_products_raw
 
-            result = asyncio.run(get_products_raw(brief="display ads", identity=identity))
+            result = asyncio.run(
+                get_products_raw(req=create_get_products_request(brief="display ads"), identity=identity)
+            )
 
         assert isinstance(result, GetProductsResponse)
         assert result.products == []
@@ -227,9 +229,9 @@ class TestA2AGetProductsRawWrapper:
             new_callable=AsyncMock,
             return_value=_mock_response(),
         ) as mock_impl:
-            from src.core.tools.products import get_products_raw
+            from src.core.tools.products import create_get_products_request, get_products_raw
 
-            asyncio.run(get_products_raw(brief="video", identity=identity))
+            asyncio.run(get_products_raw(req=create_get_products_request(brief="video"), identity=identity))
 
         mock_impl.assert_awaited_once()
         _, call_identity = mock_impl.call_args.args
@@ -244,12 +246,14 @@ class TestA2AGetProductsRawWrapper:
             new_callable=AsyncMock,
             return_value=_mock_response(),
         ) as mock_impl:
-            from src.core.tools.products import get_products_raw
+            from src.core.tools.products import create_get_products_request, get_products_raw
 
             asyncio.run(
                 get_products_raw(
-                    brief="sports ads",
-                    filters={"delivery_types": ["guaranteed"]},
+                    req=create_get_products_request(
+                        brief="sports ads",
+                        filters={"delivery_types": ["guaranteed"]},
+                    ),
                     identity=identity,
                 )
             )
@@ -270,9 +274,9 @@ class TestA2AGetProductsRawWrapper:
             ),
             patch("src.core.version_compat.apply_version_compat") as mock_compat,
         ):
-            from src.core.tools.products import get_products_raw
+            from src.core.tools.products import create_get_products_request, get_products_raw
 
-            asyncio.run(get_products_raw(brief="ads", identity=identity))
+            asyncio.run(get_products_raw(req=create_get_products_request(brief="ads"), identity=identity))
 
         mock_compat.assert_not_called()
 
@@ -285,9 +289,9 @@ class TestA2AGetProductsRawWrapper:
             new_callable=AsyncMock,
             return_value=_mock_response(),
         ) as mock_impl:
-            from src.core.tools.products import get_products_raw
+            from src.core.tools.products import create_get_products_request, get_products_raw
 
-            asyncio.run(get_products_raw(brief="", identity=identity))
+            asyncio.run(get_products_raw(req=create_get_products_request(brief=""), identity=identity))
 
         req = mock_impl.call_args.args[0]
         # brief="" → create_get_products_request normalizes to None
@@ -394,9 +398,9 @@ class TestImplDirectIdentity:
             new_callable=AsyncMock,
             return_value=_mock_response(),
         ) as mock_impl:
-            from src.core.tools.products import get_products_raw
+            from src.core.tools.products import create_get_products_request, get_products_raw
 
-            asyncio.run(get_products_raw(brief="test"))
+            asyncio.run(get_products_raw(req=create_get_products_request(brief="test")))
 
         _, identity = mock_impl.call_args.args
         assert identity is None

@@ -1700,16 +1700,19 @@ class AdCPRequestHandler(RequestHandler):
         """
         from src.core.schemas.product import GetProductsRequest
 
-        # Selected off get_products_raw's own signature rather than hand-listed, so the set
-        # this transport forwards is "GetProductsRequest fields INTERSECT the callee's
-        # parameters" -- the same set MCP advertises. A hand-listed forward is the shape that
-        # silently drops every field added later, and this one already
-        # named five of the twenty-one fields the DTO declares.
-        # Call core function with identity — _impl validates search criteria
-        response = await core_get_products_tool(
-            **select_request_fields(GetProductsRequest, parameters, accepted_kwargs(core_get_products_tool)),
-            identity=identity,
-        )
+        # Builds through the SHARED builder and hands the wrapper the built request -- the
+        # same two steps REST and MCP take. Selected off the BUILDER's signature, so the
+        # set this transport forwards is "GetProductsRequest fields INTERSECT the builder's
+        # parameters" -- the same set MCP advertises. A hand-listed forward is the shape
+        # that silently drops every field added later, and this one already named five of
+        # the twenty-one fields the DTO declares.
+        from src.core.tools.products import create_get_products_request
+
+        with adcp_validation_boundary(context="get_products request"):
+            req = create_get_products_request(
+                **select_request_fields(GetProductsRequest, parameters, accepted_kwargs(create_get_products_request))
+            )
+        response = await core_get_products_tool(req=req, identity=identity)
 
         # Apply v2 compat for pre-3.0 clients at the boundary
         from src.core.version_compat import apply_version_compat
@@ -2207,11 +2210,14 @@ class AdCPRequestHandler(RequestHandler):
         # bypass synthesized a fake-success Task DataPart that storyboard
         # runners parsed as ``MCP_ERROR`` — that violates the envelope contract.
 
-        # Call core function directly using the underlying function
-        response = await core_get_products_tool(
-            brief=query,
-            identity=identity,
-        )
+        # Call core function directly using the underlying function. The natural-language
+        # query is the brief, built into a request the same way every other path builds one.
+        from src.core.schemas.product import GetProductsRequest as _GetProductsRequest  # noqa: F401
+        from src.core.tools.products import create_get_products_request
+
+        with adcp_validation_boundary(context="get_products request"):
+            req = create_get_products_request(brief=query)
+        response = await core_get_products_tool(req=req, identity=identity)
 
         # Convert to A2A response format with v2.x backward compatibility
         from src.core.version_compat import apply_version_compat

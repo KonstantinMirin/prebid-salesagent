@@ -23,36 +23,25 @@ import pytest
 class TestRawFunctionParameterValidation:
     """Validate that raw functions properly handle all their parameters."""
 
-    def test_get_products_raw_parameters_valid(self):
-        """Test that get_products_raw doesn't accept invalid parameters for helpers."""
-        from src.core.schema_helpers import create_get_products_request
+    def test_get_products_raw_takes_the_built_request_and_no_per_field_params(self):
+        """get_products_raw's only non-transport parameter is the built request.
+
+        This used to check that the wrapper's per-field parameters were a SUBSET of
+        create_get_products_request's, with an allowlist for the ones that were not --
+        a rule that can only ever be re-audited, because it presumes the wrapper
+        re-lists the request's fields at all. It does not any more: the caller builds
+        through the shared builder and hands the wrapper the request, so there is no
+        second parameter list to drift from the first, and the drift this test was
+        written to catch (passing the helper a name it does not accept) is not
+        expressible. Grading the signature directly is what keeps it that way.
+        """
         from src.core.tools import get_products_raw
 
-        # Get parameters
-        raw_sig = inspect.signature(get_products_raw)
-        helper_sig = inspect.signature(create_get_products_request)
+        params = set(inspect.signature(get_products_raw).parameters) - {"ctx", "identity"}
 
-        raw_params = set(raw_sig.parameters.keys()) - {"ctx", "identity"}
-        helper_params = set(helper_sig.parameters.keys())
-
-        # Check: All non-context params in raw should either:
-        # 1. Be passed to helper (except adcp_version which is NOT in helper)
-        # 2. Be valid for some other purpose
-
-        # Known valid parameters that are NOT passed to helper
-        valid_non_helper_params = {
-            "min_exposures",  # Optional, not in helper
-            "strategy_id",  # Optional, not in helper
-        }
-
-        # Parameters that SHOULD be in helper
-        should_be_in_helper = raw_params - valid_non_helper_params
-
-        # Verify all should-be-in-helper params are actually in helper
-        missing_in_helper = should_be_in_helper - helper_params
-
-        assert not missing_in_helper, (
-            f"get_products_raw has parameters not in helper and not documented as valid: {missing_in_helper}"
+        assert params == {"req"}, (
+            f"get_products_raw must take exactly the built request besides ctx/identity, got {params}. "
+            f"A per-field parameter here re-opens the two-list drift the request shape closed."
         )
 
     def test_all_raw_functions_have_context_parameter(self):

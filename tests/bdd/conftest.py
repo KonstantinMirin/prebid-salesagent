@@ -2441,27 +2441,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # _aw_partition_campaign leg is dropped; the row passes unmasked. (The old #1462
         # "request path drops post_click" framing was wrong for the wire transports; #1462 is
         # the in-process _impl path, which BDD does not parametrize.)
-        # The partition shape's error "INVALID_REQUEST" rows STILL fail on e2e_rest: the
-        # generic "with {request_params}" step shadows the specific "with attribution_window
-        # {value}" step and _parse_request_params drops the space-form window, so the window
-        # never reaches the live server (#1417). Marker kept for e2e_rest until the step-
-        # binding bug is fixed.
-        _aw_partition_error = "T-UC-004-partition-attribution" in marker_names and 'error "INVALID_REQUEST"' in nodeid
-        # #1545/x18x: the campaign partition row GRADUATED on a2a (the only transport
-        # parametrized for it) — INV-5 fires VALIDATION_ERROR with suggestion — so the
-        # former strict=True _aw_partition_campaign leg is dropped (no _aw_partition_campaign
-        # var remains). Only the error "INVALID_REQUEST" rows still fail on e2e_rest, where
-        # the generic "with {request_params}" step still shadows the specific partition step.
-        _partition_window_dropped = _aw_partition_error and is_e2e_rest
-        if _partition_window_dropped:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="attribution_window partition: the generic 'with {request_params}' step "
-                    "shadows the specific partition step and drops the window."
-                    "validation never fires so the rejection assertion can't pass",
-                    strict=True,
-                )
-            )
+        # Graduated: T-UC-004-partition-attribution error "INVALID_REQUEST" rows on
+        # e2e_rest. The step-binding bug this routed around is FIXED, and the fix is
+        # visible at the source: the generic step is now
+        # ``parsers.re(r"the Buyer Agent requests delivery metrics with (?P<request_params>\w+=.+)")``
+        # (uc004_delivery.py:733), and requiring ``\w+=`` means the JSON-form window
+        # ``with attribution_window {"post_click": ...}`` no longer matches it. It binds to
+        # the specific step instead, so the window reaches the live server, validation
+        # fires, and the rejection assertion the row makes can actually be met -- the pass
+        # is explained by real behavior, not by the assertion going vacuous.
+        # Verified: bdd_inprocess OK on all in-process transports; these four rows XPASS
+        # (strict) on e2e_rest in the in-network full run, which is the only job that
+        # grades them. They are NOT listed in tests/bdd/e2e_rest_known_failures.txt, so
+        # there is no sibling ledger entry to retire alongside this.
+        # (#1545/x18x had already dropped the campaign leg here for the same reason: INV-5
+        # fires VALIDATION_ERROR with suggestion on a2a.)
 
         # Graduated: T-UC-004-boundary-account — transport-aware.
         # "account_id present"/"brand + operator" (valid): fail on mcp/rest only.
