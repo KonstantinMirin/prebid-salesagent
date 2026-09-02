@@ -101,7 +101,7 @@ layering, the lifecycle traces a request through it.
 The guides in this directory that sit outside the core set:
 
 - [Getting started](GETTING_STARTED.md) — prerequisites, one-command setup, and common operations.
-- [Contributing](contributing.md) — development workflows: adapters, targeting, API and UI development, debugging.
+- [Creating an ad server adapter](../adapters/creating-an-adapter.md) — the adapter base-class contract, registration, and targeting translation.
 - [Troubleshooting](troubleshooting.md) — symptom-to-fix reference for environment, database, and operations issues.
 - [CI pipeline](ci-pipeline.md) — the GitHub Actions workflow, required checks, and test shards.
 - [A2A and MCP agent flows](a2a-mcp-agent-flows.md) — protocol-side sequence diagrams for buyer, governance, and creative flows.

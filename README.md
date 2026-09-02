@@ -357,8 +357,8 @@ We welcome contributions! Please see our [Development Guide](docs/development/RE
 ### Important: Database Access Patterns
 
 When contributing, follow the standardized database patterns. All data access goes
-through SQLAlchemy 2.0 ORM via repository classes — see
-[Contributing Guide](docs/development/contributing.md) and `CLAUDE.md` for details.
+through SQLAlchemy 2.0 ORM via repository classes — see the
+[Patterns reference](docs/development/patterns-reference.md) and `CLAUDE.md` for details.
 
 ```python
 # Use a context-managed session

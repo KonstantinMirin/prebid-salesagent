@@ -416,7 +416,8 @@ Detailed documentation lives in `/docs`:
 - `development/patterns-reference.md` — repository, Unit of Work, harness, and boundary patterns in full
 - `development/structural-guards.md` — structural-guard design and inventory
 - `development/GETTING_STARTED.md` — initial setup guide
-- `development/contributing.md` — development workflow
+- `development/README.md` — the map of development documentation
+- `adapters/creating-an-adapter.md` — building an ad server adapter
 - `development/e2e-testing.md` — end-to-end testing
 - `development/troubleshooting.md` — common issues
 - `security.md` — security guidelines

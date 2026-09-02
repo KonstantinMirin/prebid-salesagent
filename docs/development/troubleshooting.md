@@ -363,8 +363,6 @@ except Exception as e:
 # Run contract validation tests
 uv run pytest tests/integration/test_mcp_contract_validation.py -v
 
-# Audit all schema requirements
-uv run python scripts/audit_required_fields.py
 ```
 
 **Common Fixes**:
@@ -373,7 +371,7 @@ uv run python scripts/audit_required_fields.py
 - Add contract validation tests for new schemas
 
 **Prevention**:
-- Use pre-commit hooks: `pre-commit run mcp-contract-validation --all-files`
+- Use the pre-commit hook: `pre-commit run adcp-contract-tests --all-files`
 - Test minimal parameter creation for all Request models
 - Follow schema design guidelines in CLAUDE.md
 
