@@ -103,9 +103,9 @@ from src.core.config import get_pydantic_extra_mode
 from src.core.errors.codes import CODE_TABLE, ErrorCodeT
 from src.core.errors.details import ErrorDetails
 from src.core.exceptions import (
+    AdCPInvalidRequestError,
     AdCPNotFoundError,
     AdCPSalesAgentError,
-    AdCPValidationError,
     _details_to_wire,
 )
 
@@ -2477,24 +2477,36 @@ _IDEMPOTENCY_KEY_CHARSET = re.compile(r"^[A-Za-z0-9_.:-]+$")
 def validate_idempotency_key_shape(key: str | None) -> None:
     """Enforce the AdCP idempotency_key length/charset constraint.
 
-    Shared by create and update so both reject a malformed key identically. A
-    length or character-set violation is a value/format error → VALIDATION_ERROR
-    (per the idempotency storyboard and the value/range taxonomy), carrying a
-    buyer-facing suggestion. ``None`` is allowed here — required-ness is enforced
-    separately (and is deliberately relaxed on update).
+    Shared by create and update so both reject a malformed key identically.
+
+    A length or character-set violation is INVALID_REQUEST, not VALIDATION_ERROR.
+    The pinned schemas declare ``idempotency_key`` with ``minLength: 16``,
+    ``maxLength: 255`` and ``pattern: ^[A-Za-z0-9_.:-]{16,255}$`` (verified in
+    3.1/account/sync-accounts-request.json and its siblings), and core/error.json
+    puts "violates schema constraints" under INVALID_REQUEST while VALIDATION_ERROR
+    covers "business rules BEYOND schema validation". A minLength/pattern violation
+    is the first: a JSON-Schema validator alone rejects it.
+
+    This said VALIDATION_ERROR "per the idempotency storyboard and the value/range
+    taxonomy". Those are downstream artifacts, and the spec-grounding rule is that
+    they are a cross-check, never the authority -- grounding protocol behavior in
+    them instead of the schema is how a contract ends up inverted. The schema wins.
+
+    ``None`` is allowed here — required-ness is enforced separately (and is
+    deliberately relaxed on update).
     """
     if key is None:
         return
     if len(key) < _IDEMPOTENCY_KEY_MIN:
-        raise AdCPValidationError(
+        raise AdCPInvalidRequestError(
             field="idempotency_key",
         )
     if len(key) > _IDEMPOTENCY_KEY_MAX:
-        raise AdCPValidationError(
+        raise AdCPInvalidRequestError(
             field="idempotency_key",
         )
     if not _IDEMPOTENCY_KEY_CHARSET.match(key):
-        raise AdCPValidationError(
+        raise AdCPInvalidRequestError(
             field="idempotency_key",
         )
 
