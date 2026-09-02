@@ -1,14 +1,15 @@
 # Security and authentication
 
+This document is the reference for the security architecture of the sales agent: admin authentication, tenant and principal isolation, OAuth and OIDC configuration, and secrets handling. It describes what the system does and what you must configure or test when you change authentication code. Outbound HTTP and SSRF protection appear here only in summary; [Outbound egress](security/outbound-egress.md) is the full reference.
+
 ## Contents
 
 - [Admin authentication architecture](#admin-authentication-architecture) — environment-first super-admin check with database fallback
-- [Security recommendations](#security-recommendations) — session timeout, audit logging, and secrets hardening, by priority
 - [Tenant registration security](#tenant-registration-security) — subdomain assignment, branded URLs, ad server checks
 - [Access control patterns](#access-control-patterns) — super admins, tenant users, principal isolation, audit trail
 - [Outbound egress (SSRF)](#outbound-egress-ssrf) — the single gateway for outbound HTTP
 - [Security testing requirements](#security-testing-requirements)
-- [OAuth cross-domain authentication](#oauth-cross-domain-authentication) — why cross-domain login fails, and the workarounds
+- [OAuth cross-domain authentication](#oauth-cross-domain-authentication) — why cross-domain login fails, and the workaround
 - [Generic OIDC provider support](#generic-oidc-provider-support) — configuration for any OIDC provider, or Google OAuth
 - [Secrets configuration](#secrets-configuration) — the `.env.secrets` file and handling practices
 
@@ -51,66 +52,6 @@ The session layer avoids redundant checks in the following ways:
 - **Session caching**: The session caches super admin status to avoid redundant database calls.
 - **Trusted session state**: `require_tenant_access()` checks the session first, then validates if needed.
 - **Automatic caching**: The system updates the session when it confirms admin status.
-
-## Security recommendations
-
-The following sections describe recommended enhancements, ordered by priority.
-
-### High priority
-
-#### Session timeout and revalidation
-
-```python
-# Add to require_tenant_access decorator
-max_session_age = 3600  # 1 hour
-session_start = session.get("authenticated_at", 0)
-if time.time() - session_start > max_session_age:
-    session.clear()
-    return redirect(url_for("auth.login"))
-
-# Re-validate admin status every 5 minutes
-last_check = session.get("admin_check_at", 0)
-if time.time() - last_check > 300:
-    session["is_super_admin"] = is_super_admin(email)
-    session["admin_check_at"] = time.time()
-```
-
-#### Audit logging
-
-```python
-def audit_admin_access(email, tenant_id, action, success=True):
-    """Log all admin access attempts with IP and user agent."""
-    audit_log = AuditLog(
-        email=email,
-        tenant_id=tenant_id,
-        action=f"admin_access_{action}",
-        success=success,
-        ip_address=request.remote_addr,
-        user_agent=request.user_agent.string,
-        timestamp=datetime.utcnow()
-    )
-```
-
-### Medium priority
-
-#### Secure session configuration
-
-```python
-app.config.update(
-    SESSION_COOKIE_SECURE=True,      # HTTPS only
-    SESSION_COOKIE_HTTPONLY=True,    # No JavaScript access
-    SESSION_COOKIE_SAMESITE='Lax',   # CSRF protection
-    PERMANENT_SESSION_LIFETIME=3600  # 1 hour timeout
-)
-```
-
-#### Secrets management
-
-Move secrets from `.env` files to a secrets manager. Use one of the following options:
-
-- Fly.io secrets for production
-- Kubernetes secrets for Kubernetes deployments
-- AWS Secrets Manager or a similar service for AWS
 
 ## Tenant registration security
 
@@ -194,11 +135,7 @@ All authentication changes must include tests for the following:
 
 ## OAuth cross-domain authentication
 
-### Implementation status
-
-**Working**: OAuth authentication works correctly within the `sales-agent.example.com` domain and its subdomains.
-
-**Known limitation**: OAuth authentication from external domains, such as `test-agent.adcontextprotocol.org`, is limited by browser cookie security restrictions.
+OAuth authentication works within the `sales-agent.example.com` domain and its subdomains. OAuth authentication from external domains, such as `test-agent.adcontextprotocol.org`, is limited by browser cookie security restrictions.
 
 ### How OAuth works
 
@@ -224,11 +161,11 @@ Cross-domain OAuth is limited:
 #### Session cookie configuration
 
 ```python
-# Production session config
-SESSION_COOKIE_DOMAIN = ".sales-agent.example.com"  # Scoped to internal domain
-SESSION_COOKIE_SECURE = True                        # HTTPS only
-SESSION_COOKIE_SAMESITE = "None"                   # Required for OAuth
-SESSION_COOKIE_PATH = "/admin/"                     # Admin interface only
+# Production session config (src/admin/app.py)
+SESSION_COOKIE_DOMAIN = ".sales-agent.example.com"  # Multi-tenant mode: scoped to the internal domain
+SESSION_COOKIE_SECURE = True                        # Required for SameSite=None over HTTPS
+SESSION_COOKIE_SAMESITE = "None"                    # Required for EventSource cross-origin requests
+SESSION_COOKIE_PATH = "/"                           # Covers /admin/* and /auth/* (OAuth callbacks)
 ```
 
 #### OAuth flow architecture
@@ -245,6 +182,10 @@ external_domain = session.pop("oauth_external_domain", None)
 
 The limitation comes from fundamental browser security: browsers cannot share cookies across different domains. When a user comes from `test-agent.adcontextprotocol.org`, the browser cannot access session cookies scoped to `.sales-agent.example.com`.
 
+### Workaround
+
+Direct users to `https://tenant.sales-agent.example.com/admin/` for OAuth authentication rather than to external domain URLs.
+
 ### Test coverage
 
 The tests cover the following behaviors:
@@ -257,19 +198,6 @@ The tests cover the following behaviors:
 - Documentation of the cross-domain limitation
 
 **Key test file**: `tests/integration/test_oauth_session_handling.py`
-
-### Potential solutions
-
-Cross-domain OAuth needs research. Potential approaches include the following:
-
-- **Alternative state storage**: Redis, a database, or an external service.
-- **Modified redirect URI approach**: Register additional redirect URIs with domain-specific query parameters.
-- **Authentication architecture changes**: A different authentication flow for external domains.
-- **Proxy-based solution**: Handle authentication at the proxy or gateway level.
-
-### Recommendation
-
-For immediate needs, direct users to `https://tenant.sales-agent.example.com/admin/` for OAuth authentication rather than to external domain URLs.
 
 ## Generic OIDC provider support
 
