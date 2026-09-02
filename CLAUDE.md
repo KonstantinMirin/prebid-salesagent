@@ -186,7 +186,7 @@ When adding routes:
 - Deprecate properly with early return, not comments
 
 ### 3. Database: repository pattern + ORM-first
-**No SQLite support** — production uses PostgreSQL exclusively.
+The database is PostgreSQL, in every environment including tests.
 
 **ORM-first access (MANDATORY):**
 - All DB reads and writes go through SQLAlchemy ORM models via repository classes
