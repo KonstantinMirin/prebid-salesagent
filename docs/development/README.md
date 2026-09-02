@@ -1,8 +1,8 @@
-# Development Guide
+# Development guide
 
 Documentation for contributors to the Prebid Sales Agent codebase, maintained under Prebid.org.
 
-## Getting Started
+## Get started
 
 ```bash
 git clone https://github.com/prebid/salesagent.git
@@ -10,28 +10,30 @@ cd salesagent
 make setup
 ```
 
-See [Getting Started](GETTING_STARTED.md) for prerequisites, manual setup, testing, and common operations.
+See [Getting started](GETTING_STARTED.md) for prerequisites, manual setup, testing, and common operations.
 
 ## Documentation
 
-- **[Architecture Principles](architecture-principles.md)** - The governing principles behind the layering: where code belongs and why
+This directory contains the following guides:
+
+- **[Architecture principles](architecture-principles.md)** - The governing principles behind the layering: where code belongs and why
 - **[Architecture](architecture.md)** - System design and component overview
-- **[Request Lifecycle](request-lifecycle.md)** - How a request travels from the wire to business logic (middleware, identity, compat layers)
-- **[Patterns Reference](patterns-reference.md)** - Canonical examples for every key pattern (start here for new contributors)
-- **[Contributing](contributing.md)** - Development workflows, testing, code style
-- **[Structural Guards](structural-guards.md)** - Automated architecture enforcement tests
+- **[Request lifecycle](request-lifecycle.md)** - How a request travels from the wire to business logic (middleware, identity, compat layers)
+- **[Patterns reference](patterns-reference.md)** - Canonical examples for every key pattern (start here for new contributors)
+- **[Contributing](contributing.md)** - Development workflows, testing, and code style
+- **[Structural guards](structural-guards.md)** - Automated architecture enforcement tests
 - **[End-to-end testing](e2e-testing.md)** - The e2e stack, the two "e2e" suites, and how to run and debug them
 - **[Troubleshooting](troubleshooting.md)** - Common development issues
 
-## Key Resources
+## Key resources
 
 - **[CLAUDE.md](../../CLAUDE.md)** - Detailed development patterns and conventions
 - **[Tests](../../tests/)** - Test suite and examples
 - **[Source](../../src/)** - Application source code
 
-## Quick Reference
+## Quick reference
 
-### Running Tests
+### Run tests
 
 ```bash
 ./run_all_tests.sh ci     # Full suite: Docker + all 5 suites (DEFAULT)
@@ -43,7 +45,7 @@ uv run pytest tests/unit/ -x
 uv run pytest tests/integration/ -x
 ```
 
-### Code Quality
+### Code quality
 
 ```bash
 # Pre-commit hooks
@@ -53,9 +55,9 @@ pre-commit run --all-files
 uv run mypy src/core/your_file.py --config-file=mypy.ini
 ```
 
-### Database Migrations
+### Database migrations
 
-Migrations run automatically on startup. To run manually:
+Migrations run automatically on startup. To run them manually:
 
 ```bash
 # Inside Docker
@@ -64,6 +66,6 @@ docker compose exec adcp-server python scripts/ops/migrate.py
 # Or locally with uv
 uv run python scripts/ops/migrate.py
 
-# Create new migration
+# Create a migration
 uv run alembic revision -m "description"
 ```

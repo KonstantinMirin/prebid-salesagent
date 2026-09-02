@@ -1,10 +1,10 @@
-# Security & Authentication
+# Security and authentication
 
-## Admin Authentication Architecture
+## Admin authentication architecture
 
-The admin authentication system uses an **environment-first approach** with database fallback for robust, secure access control.
+The admin authentication system uses an environment-first approach with a database fallback for secure access control.
 
-### Current Implementation
+### Implementation
 
 ```python
 def is_super_admin(email):
@@ -32,17 +32,22 @@ def is_super_admin(email):
     return False
 ```
 
-### Session Optimization
+### Session optimization
 
-- **Session Caching**: Super admin status cached in session to avoid redundant database calls
-- **Trust Session State**: `require_tenant_access()` checks session first, then validates if needed
-- **Automatic Caching**: Session updated when admin status is confirmed
+The session layer avoids redundant checks in the following ways:
 
-## Security Recommendations for Future Enhancement
+- **Session caching**: The session caches super admin status to avoid redundant database calls.
+- **Trusted session state**: `require_tenant_access()` checks the session first, then validates if needed.
+- **Automatic caching**: The system updates the session when it confirms admin status.
 
-### HIGH Priority
+## Security recommendations
 
-#### 1. Session Timeout & Re-validation
+The following sections describe recommended enhancements, ordered by priority.
+
+### High priority
+
+#### Session timeout and revalidation
+
 ```python
 # Add to require_tenant_access decorator
 max_session_age = 3600  # 1 hour
@@ -58,7 +63,8 @@ if time.time() - last_check > 300:
     session["admin_check_at"] = time.time()
 ```
 
-#### 2. Enhanced Audit Logging
+#### Audit logging
+
 ```python
 def audit_admin_access(email, tenant_id, action, success=True):
     """Log all admin access attempts with IP and user agent."""
@@ -73,9 +79,10 @@ def audit_admin_access(email, tenant_id, action, success=True):
     )
 ```
 
-### MEDIUM Priority
+### Medium priority
 
-#### 3. Secure Session Configuration
+#### Secure session configuration
+
 ```python
 app.config.update(
     SESSION_COOKIE_SECURE=True,      # HTTPS only
@@ -85,116 +92,125 @@ app.config.update(
 )
 ```
 
-#### 4. Secrets Management
-Move from `.env` files to proper secrets management:
+#### Secrets management
+
+Move secrets from `.env` files to a secrets manager. Use one of the following options:
+
 - Fly.io secrets for production
-- Kubernetes secrets for k8s deployments
-- AWS Secrets Manager or similar for AWS
+- Kubernetes secrets for Kubernetes deployments
+- AWS Secrets Manager or a similar service for AWS
 
-## Tenant Registration Security
+## Tenant registration security
 
-### Subdomain Assignment
-To prevent subdomain squatting and brand impersonation, tenant subdomains are **automatically generated** using random UUIDs.
+### Subdomain assignment
 
-**Implementation**:
-- Subdomains are 8-character hexadecimal strings (e.g., `a7f3d92b`)
-- Generated from UUID4 (first 8 characters)
-- Users cannot choose custom subdomains during signup
-- Eliminates risk of claiming subdomains like "nytimes" or "cnn"
+To prevent subdomain squatting and brand impersonation, the system generates tenant subdomains automatically from random universally unique identifiers (UUIDs):
 
-**Branding Solution**:
-Publishers who want branded URLs should use **virtual hosts** (custom domains):
-- Configure custom domain (e.g., `sales.publisher.com`) in tenant settings
-- Domain ownership verified by Approximated proxy service
-- Proper branding without security risks
+- Subdomains are 8-character hexadecimal strings, for example `a7f3d92b`.
+- The system takes the first 8 characters of a UUID4 value.
+- Users cannot choose custom subdomains during signup.
+- This approach eliminates the risk of a user claiming a subdomain like `nytimes` or `cnn`.
 
-**Ad Server Configuration Check**:
-Tenants without configured ad servers show a "Pending Configuration" page instead of active agent endpoints. This prevents incomplete registrations from appearing operational.
+### Branded URLs
 
-## Access Control Patterns
+Publishers who want branded URLs can use virtual hosts (custom domains). Configure a custom domain, for example `sales.publisher.com`, in the tenant settings. The Approximated proxy service verifies domain ownership. This approach provides branding without security risks.
 
-### Super Admins
-- Full access to all tenants
-- Configured via environment variables or database
-- Can create/modify/delete tenants and users
+### Ad server configuration check
 
-### Tenant Users
-- Limited access to specific tenants via User model
-- Cannot access other tenants' data
-- Can manage their own tenant's configuration
+Tenants without a configured ad server show a "Pending Configuration" page instead of active agent endpoints. This prevents incomplete registrations from appearing operational.
 
-### Principal Isolation
-- Each advertiser (principal) has isolated access tokens
-- Tokens scoped to specific tenant
-- Cannot access other tenants or principals
+## Access control patterns
 
-### Audit Trail
-- All admin actions logged to `audit_logs` table
-- Includes timestamp, user, action, and result
-- Used for compliance and security monitoring
+### Super admins
+
+Super admins have full access to all tenants and can create, modify, and delete tenants and users. You configure super admins through environment variables or the database.
+
+### Tenant users
+
+Tenant users have access to specific tenants through the `User` model. They can manage their own tenant's configuration but cannot access other tenants' data.
+
+### Principal isolation
+
+Each advertiser (principal) has isolated access tokens. Tokens are scoped to a specific tenant and cannot access other tenants or principals.
+
+### Audit trail
+
+The system logs all admin actions to the `audit_logs` table, including the timestamp, user, action, and result. The audit trail supports compliance and security monitoring.
 
 ## Outbound egress (SSRF)
 
-Every outbound HTTP request goes through one seam,
-`src/core/security/outbound_http.py` (`send` / `asend`), which owns the
-address, TLS, redirect, and retry decision together. The few sanctioned
-dialers outside it are recorded, with reasons, in the seam's module docstring.
-Call sites do not validate URLs. Adding a private-IP check or hostname
-blocklist at a call site
-is a defect rather than defence in depth — it re-opens the resolve-then-connect
-TOCTOU (time-of-check to time-of-use) hole the seam closes by pinning the
-resolved IP.
+Every outbound HTTP request goes through a single module,
+`src/core/security/outbound_http.py` (`send` / `asend`), which makes the
+address, TLS, redirect, and retry decisions together. This design prevents
+server-side request forgery (SSRF). The module's docstring records the few
+permitted exceptions, with reasons. Call sites do not validate URLs. A
+private-IP check or hostname blocklist at a call site is a defect, not defense
+in depth: it reintroduces the resolve-then-connect TOCTOU (time-of-check to
+time-of-use) vulnerability that the module closes by pinning the resolved IP
+address.
 
-The seam refuses on two verdicts that share one address predicate:
-`check_registration` (DNS-free, grades a buyer-supplied URL before storage) and
-`resolve_for_dial` (resolves once, pins, refuses on the resolved address). Six
-supplement ranges the SDK does not classify — CGNAT and five others — are
-refused under **every** posture, including the test-only
-`ADCP_OUTBOUND_ALLOW_PRIVATE` hatch, because nothing else defends them.
+The module refuses requests based on two checks that share one address
+predicate: `check_registration` (validates a buyer-supplied URL before
+storage, without DNS resolution) and `resolve_for_dial` (resolves the hostname
+once, pins the resolved IP address, and refuses based on it). The SDK does not
+classify six supplement ranges — carrier-grade NAT (CGNAT) and five
+others. The module refuses these ranges under every configuration, including
+the test-only `ADCP_OUTBOUND_ALLOW_PRIVATE` override, because no other layer
+defends them.
 
-Enforcement is layered: the seams bind their imports privately so a re-export is
-an `ImportError`; `ruff-egress.toml` bans the raw client modules; and the gate
-runs `--ignore-noqa`, so a file cannot exempt itself — exemptions are rows in
-`[lint.per-file-ignores]` that land in a reviewed diff.
+Enforcement has three layers:
 
-**Full architecture, including how to add a new outbound call:**
-[Outbound egress: one seam](security/outbound-egress.md)
+- The egress modules bind their imports privately, so a re-export raises `ImportError`.
+- `ruff-egress.toml` bans the raw client modules.
+- The check runs with `--ignore-noqa`, so a file cannot exempt itself. Exemptions are rows in `[lint.per-file-ignores]` that land in a reviewed diff.
 
-## Security Testing Requirements
+For the full architecture, including how to add a new outbound call, see
+[Outbound egress](security/outbound-egress.md).
 
-All authentication changes must include tests for:
+## Security testing requirements
+
+All authentication changes must include tests for the following:
+
 - Session timeout behavior
-- Re-validation logic
-- Environment vs database precedence
+- Revalidation logic
+- Environment versus database precedence
 - Audit logging completeness
 - Session security headers
-- CSRF protection
+- Cross-site request forgery (CSRF) protection
 
-**Test Location**: `tests/integration/test_product_deletion.py` contains comprehensive authentication tests including environment-first approach validation.
+**Test location**: `tests/integration/test_product_deletion.py` contains comprehensive authentication tests, including validation of the environment-first approach.
 
-## OAuth Cross-Domain Authentication
+## OAuth cross-domain authentication
 
-### Current Implementation Status
-**✅ Working**: OAuth authentication works correctly within the `sales-agent.example.com` domain and its subdomains.
+### Implementation status
 
-**⚠️ Known Limitation**: OAuth authentication from external domains (e.g., `test-agent.adcontextprotocol.org`) has limitations due to browser cookie security restrictions.
+**Working**: OAuth authentication works correctly within the `sales-agent.example.com` domain and its subdomains.
 
-### How OAuth Currently Works
+**Known limitation**: OAuth authentication from external domains, such as `test-agent.adcontextprotocol.org`, is limited by browser cookie security restrictions.
 
-#### Same-Domain OAuth (✅ Fully Functional)
-- User visits `https://tenant.sales-agent.example.com/admin/`
-- OAuth flow works perfectly with session cookies
-- User redirected back to tenant subdomain after authentication
+### How OAuth works
 
-#### Cross-Domain OAuth (⚠️ Limited)
-- User visits external domain (e.g., `https://test-agent.adcontextprotocol.org/admin/`)
-- OAuth initiation works and stores external domain in session
-- OAuth callback cannot retrieve session data due to cookie domain restrictions
-- User redirected to login page instead of back to external domain
+#### Same-domain OAuth
 
-### Technical Details
+Same-domain OAuth is fully functional:
 
-#### Session Cookie Configuration
+1. The user visits `https://tenant.sales-agent.example.com/admin/`.
+2. The OAuth flow completes with session cookies.
+3. The system redirects the user back to the tenant subdomain after authentication.
+
+#### Cross-domain OAuth
+
+Cross-domain OAuth is limited:
+
+1. The user visits an external domain, for example `https://test-agent.adcontextprotocol.org/admin/`.
+2. OAuth initiation works and stores the external domain in the session.
+3. The OAuth callback cannot retrieve the session data because of cookie domain restrictions.
+4. The system redirects the user to the login page instead of back to the external domain.
+
+### Technical details
+
+#### Session cookie configuration
+
 ```python
 # Production session config
 SESSION_COOKIE_DOMAIN = ".sales-agent.example.com"  # Scoped to internal domain
@@ -203,7 +219,8 @@ SESSION_COOKIE_SAMESITE = "None"                   # Required for OAuth
 SESSION_COOKIE_PATH = "/admin/"                     # Admin interface only
 ```
 
-#### OAuth Flow Architecture
+#### OAuth flow architecture
+
 ```python
 # OAuth Initiation (stores external domain in session)
 session["oauth_external_domain"] = request.headers.get("Apx-Incoming-Host")
@@ -212,48 +229,58 @@ session["oauth_external_domain"] = request.headers.get("Apx-Incoming-Host")
 external_domain = session.pop("oauth_external_domain", None)
 ```
 
-### Browser Security Limitation
-The limitation is due to fundamental browser security: **cookies cannot be shared across different domains**. When a user comes from `test-agent.adcontextprotocol.org`, the browser cannot access session cookies scoped to `.sales-agent.example.com`.
+### Browser security limitation
 
-### Test Coverage
-- ✅ OAuth session handling within same domain
-- ✅ Approximated header detection and processing
-- ✅ Session cookie configuration
-- ✅ Redirect URI integrity (no modifications)
-- ✅ CSRF protection preservation (Authlib state management)
-- ✅ Cross-domain limitation documentation
+The limitation comes from fundamental browser security: browsers cannot share cookies across different domains. When a user comes from `test-agent.adcontextprotocol.org`, the browser cannot access session cookies scoped to `.sales-agent.example.com`.
 
-**Key Test File**: `tests/integration/test_oauth_session_handling.py`
+### Test coverage
 
-### Future Solutions (Research Needed)
-Potential approaches for cross-domain OAuth:
-1. **Alternative State Storage**: Redis, database, or external service
-2. **Modified Redirect URI Approach**: Register additional redirect URIs with domain-specific query parameters
-3. **Authentication Architecture Changes**: Different authentication flow for external domains
-4. **Proxy-Based Solution**: Handle authentication at the proxy/gateway level
+The tests cover the following behaviors:
 
-### Current Recommendation
-For immediate needs, direct users to use `https://tenant.sales-agent.example.com/admin/` for OAuth authentication rather than external domain URLs.
+- OAuth session handling within the same domain
+- Approximated header detection and processing
+- Session cookie configuration
+- Redirect URI integrity (no modifications)
+- CSRF protection preservation (Authlib state management)
+- Documentation of the cross-domain limitation
 
-## Generic OIDC Provider Support
+**Key test file**: `tests/integration/test_oauth_session_handling.py`
 
-The Admin UI supports authentication via any OpenID Connect (OIDC) compliant provider, not just Google. This allows organizations to use their existing identity provider.
+### Potential solutions
 
-### Supported Providers
+Cross-domain OAuth needs research. Potential approaches include the following:
 
-Any OIDC-compliant provider works, including:
-- **Google** (default)
-- **Microsoft Azure AD / Entra ID**
-- **Okta**
-- **Auth0**
-- **Keycloak**
-- **OneLogin**
-- **Ping Identity**
-- **Custom OIDC providers**
+- **Alternative state storage**: Redis, a database, or an external service.
+- **Modified redirect URI approach**: Register additional redirect URIs with domain-specific query parameters.
+- **Authentication architecture changes**: A different authentication flow for external domains.
+- **Proxy-based solution**: Handle authentication at the proxy or gateway level.
 
-### Configuration Options
+### Recommendation
 
-#### Option A: Generic OIDC (Any Provider)
+For immediate needs, direct users to `https://tenant.sales-agent.example.com/admin/` for OAuth authentication rather than to external domain URLs.
+
+## Generic OIDC provider support
+
+The Admin UI supports authentication through any OpenID Connect (OIDC) compliant provider, not just Google. This lets organizations use their own identity provider.
+
+### Supported providers
+
+Any OIDC-compliant provider works, including the following:
+
+- Google (default)
+- Microsoft Azure AD / Entra ID
+- Okta
+- Auth0
+- Keycloak
+- OneLogin
+- Ping Identity
+- Custom OIDC providers
+
+### Configuration options
+
+#### Option A: Generic OIDC
+
+Use this option with any OIDC-compliant provider:
 
 ```bash
 # Required for generic OIDC
@@ -265,7 +292,9 @@ OAUTH_CLIENT_SECRET=your-client-secret
 OAUTH_SCOPES=openid email profile custom_scope
 ```
 
-#### Option B: Google OAuth (Simpler for Google-only)
+#### Option B: Google OAuth
+
+Use this option if you only use Google:
 
 ```bash
 # Google-specific (backwards compatible)
@@ -273,48 +302,47 @@ GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-client-secret
 ```
 
-### Common Discovery URLs
+### Common discovery URLs
 
-| Provider | Discovery URL |
-|----------|--------------|
-| Google | `https://accounts.google.com/.well-known/openid-configuration` |
-| Microsoft | `https://login.microsoftonline.com/{tenant-id}/v2.0/.well-known/openid-configuration` |
-| Okta | `https://{your-domain}.okta.com/.well-known/openid-configuration` |
-| Auth0 | `https://{your-tenant}.auth0.com/.well-known/openid-configuration` |
-| Keycloak | `https://{server}/realms/{realm}/.well-known/openid-configuration` |
+The following list shows discovery URLs for common providers:
 
-### OAuth Application Setup
+- **Google**: `https://accounts.google.com/.well-known/openid-configuration`
+- **Microsoft**: `https://login.microsoftonline.com/{tenant-id}/v2.0/.well-known/openid-configuration`
+- **Okta**: `https://{your-domain}.okta.com/.well-known/openid-configuration`
+- **Auth0**: `https://{your-tenant}.auth0.com/.well-known/openid-configuration`
+- **Keycloak**: `https://{server}/realms/{realm}/.well-known/openid-configuration`
 
-When creating your OAuth application in your identity provider:
+### Set up the OAuth application
 
-1. **Application Type**: Web application
-2. **Redirect URI**: `http://localhost:8000/auth/google/callback` (local) or `https://your-domain/admin/auth/google/callback` (production)
-3. **Scopes**: At minimum `openid`, `email`, and `profile`
-4. **Grant Type**: Authorization Code
+When you create the OAuth application in your identity provider, use the following settings:
 
-### Claim Mapping
+- **Application type**: Web application
+- **Redirect URI**: `http://localhost:8000/auth/google/callback` (local) or `https://your-domain/admin/auth/google/callback` (production)
+- **Scopes**: At minimum `openid`, `email`, and `profile`
+- **Grant type**: Authorization Code
+
+### Claim mapping
 
 The system automatically handles different claim formats from various providers:
 
-| Claim | Providers |
-|-------|-----------|
-| Email | `email`, `preferred_username`, `upn`, `sub` |
-| Name | `name`, `display_name`, `given_name` + `family_name` |
-| Picture | `picture`, `avatar_url`, `photo` |
+- **Email**: `email`, `preferred_username`, `upn`, `sub`
+- **Name**: `name`, `display_name`, or `given_name` and `family_name` combined
+- **Picture**: `picture`, `avatar_url`, `photo`
 
-### Priority Order
+### Priority order
 
-When multiple OAuth configurations exist, they're used in this order:
+When multiple OAuth configurations exist, the system uses them in the following order:
 
-1. **Generic OIDC** (`OAUTH_DISCOVERY_URL` + credentials) - highest priority
-2. **Named Provider** (`OAUTH_PROVIDER` + generic credentials)
-3. **Google OAuth** (`GOOGLE_CLIENT_ID` + secret) - backwards compatible
-4. **File-based** (`client_secret.json`) - legacy support
+1. Generic OIDC (`OAUTH_DISCOVERY_URL` and credentials) — highest priority.
+2. Named provider (`OAUTH_PROVIDER` and generic credentials).
+3. Google OAuth (`GOOGLE_CLIENT_ID` and secret) — backwards compatible.
+4. File-based (`client_secret.json`) — legacy support.
 
-## Secrets Configuration
+## Secrets configuration
 
-### .env.secrets File (REQUIRED)
-**🔒 Security**: All secrets MUST be in `.env.secrets` file (no environment variables).
+### The `.env.secrets` file
+
+All secrets must be in the `.env.secrets` file, not in environment variables.
 
 Create your `.env.secrets` file:
 
@@ -345,15 +373,21 @@ GAM_OAUTH_CLIENT_SECRET=your-gam-client-secret
 SUPER_ADMIN_DOMAINS=example.com
 ```
 
-### Why .env.secrets?
-- **Single Source**: All secrets in one place
-- **Gitignore Protection**: File not committed to repository
-- **Workspace Isolation**: Each workspace can have different secrets
-- **Reduced Risk**: No accidental secret exposure via environment variables
+### Benefits of `.env.secrets`
 
-### Security Best Practices
-1. **Never commit secrets** to version control
-2. **Use different secrets** for dev/staging/production
-3. **Rotate secrets regularly** (at least quarterly)
-4. **Audit secret access** via logs
-5. **Use secrets managers** in production (Fly.io secrets, AWS Secrets Manager, etc.)
+The `.env.secrets` file provides the following benefits:
+
+- **Single source**: All secrets live in one place.
+- **Gitignore protection**: The file is not committed to the repository.
+- **Workspace isolation**: Each workspace can have different secrets.
+- **Reduced risk**: No accidental secret exposure through environment variables.
+
+### Security best practices
+
+Follow these practices:
+
+- Never commit secrets to version control.
+- Use different secrets for dev, staging, and production.
+- Rotate secrets regularly, at least quarterly.
+- Audit secret access through logs.
+- Use a secrets manager in production, such as Fly.io secrets or AWS Secrets Manager.

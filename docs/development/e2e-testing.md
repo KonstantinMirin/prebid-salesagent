@@ -1,16 +1,17 @@
 # End-to-end testing
 
 This guide explains how this repository tests against a live, containerized
-server: what the stack is, which suites drive it, how they share (and protect)
+server: what the stack is, which suites drive it, how they share and protect
 its database, and how to debug a run that misbehaves. Read the first section
-before anything else — the single most common e2e mistake here is running the
-wrong suite and drawing a conclusion from the wrong green result.
+before anything else — the most common e2e mistake here is running the wrong
+suite and drawing a conclusion from a passing result that never tested the
+change.
 
 ## Two suites share the name "e2e"
 
 "E2E" names two different things in this repository. They share the Docker
-stack but grade different contracts, run under different tox environments, and
-fail for different reasons.
+stack but verify different contracts, run under different tox environments,
+and fail for different reasons.
 
 **`tests/e2e/` — the protocol pytest suite.**
 The `test_*.py` modules under `tests/e2e/` are ordinary pytest that exercises
@@ -23,15 +24,15 @@ The BDD suite (`tests/bdd/`) runs every generated scenario across the wire
 transports `a2a`, `mcp`, and `rest` in-process. When `BDD_E2E_ENABLED=true`,
 `pytest_generate_tests` in `tests/bdd/conftest.py` appends a fourth
 parametrization, `e2e_rest`, which replays the same scenario as real HTTP
-against the live server. Runs as `tox -e bdd_e2e` (which executes
-`pytest tests/bdd/ -k e2e_rest`); the in-process bulk runs as
+against the live server. Runs as `tox -e bdd_e2e` (which runs
+`pytest tests/bdd/ -k e2e_rest`); the in-process transports run as
 `tox -e bdd_inprocess`.
 
-The distinction matters because a green result only certifies what actually
-ran. `tox -e e2e` passing says nothing about BDD scenario conformance over the
+The distinction matters because a passing result only certifies what ran.
+`tox -e e2e` passing says nothing about BDD scenario conformance over the
 wire, and `tox -e bdd_inprocess` passing says nothing about the live server —
-that environment pins `BDD_E2E_ENABLED=false`. If you changed server behavior
-that a BDD scenario grades, the suite that must pass is `bdd_e2e`.
+that environment sets `BDD_E2E_ENABLED=false`. If you changed server behavior
+that a BDD scenario covers, the suite that must pass is `bdd_e2e`.
 
 
 ## The stack
@@ -42,42 +43,45 @@ Both suites talk to the same compose stack, defined in
 | Service | Role | Why it exists |
 |---------|------|---------------|
 | `postgres` | One Postgres instance holding every database the run uses | Single DB service; isolation comes from database names, not containers |
-| `adcp-server` | The application under test (FastAPI, all protocols on one port) | The thing being graded |
+| `adcp-server` | The application under test (FastAPI, all protocols on one port) | The system under test |
 | `proxy` | nginx in front of `adcp-server`, plaintext `:8000` | Tests go through the same reverse proxy production does |
 | `tls-proxy` | A second nginx listener terminating TLS on `:8443` for the `*.adcp.test` origins | Serves real HTTPS from a generated private CA so https behavior is true, not asserted |
 | `webhook-capture` | Long-lived webhook receiver (`tests/e2e/webhook_capture_service.py`) | Captures the server's outbound webhook deliveries; delivery arrives over TLS, readback is a plain-HTTP test control plane |
 | `creative-agent` + `creative-pg` | A pinned in-network creative agent with its own registry DB | The live public agent drifts and rate-limits; it is blackholed in `adcp-server`'s `extra_hosts` so a regression fails instantly |
 | `tests` | The in-network test runner (profile `runner`) | Runs tox inside the compose network so suites reach services by name |
 
-Three properties of this stack shape everything else in this guide.
+Three properties of this stack determine everything else in this guide.
 
-**The base compose file publishes no host ports.** Every service is reached by
-service name (`postgres:5432`, `proxy:8000`) on the stack's own bridge
-network. Each `docker compose -p <project>` gets an isolated network, so any
-number of stacks can run concurrently with zero port coordination. The paths
-that run pytest on the host instead overlay `docker-compose.e2e.ports.yml`,
-which publishes loopback ports (`POSTGRES_PORT`, `ADCP_SALES_PORT`,
-`ADCP_TLS_PORT`, `WEBHOOK_CAPTURE_PORT`). Never add that overlay to the
-in-network runner — it would reintroduce the cross-stack collision surface the
-in-network design removes.
+**The base compose file publishes no host ports.** Every service is reachable
+by service name (`postgres:5432`, `proxy:8000`) on the stack's own bridge
+network. Each `docker compose -p <project>` invocation gets an isolated
+network, so any number of stacks can run concurrently with zero port
+coordination. The paths that run pytest on the host instead overlay
+`docker-compose.e2e.ports.yml`, which publishes loopback ports
+(`POSTGRES_PORT`, `ADCP_SALES_PORT`, `ADCP_TLS_PORT`,
+`WEBHOOK_CAPTURE_PORT`). Never add that overlay to the in-network runner —
+adding it reintroduces the cross-stack port collisions that the in-network
+design eliminates.
 
 **TLS is served for real.** `scripts/dev/ensure-test-tls.sh` generates a
-private CA and a leaf covering `*.adcp.test` into `.test-tls/` before any
-`up`; `tls-proxy` fronts every HTTPS origin the stack dials
+private CA and a leaf certificate covering `*.adcp.test` into `.test-tls/`
+before any `up`; `tls-proxy` serves every HTTPS origin the stack connects to
 (`proxy.adcp.test`, `creative-agent.adcp.test`, `webhooks.adcp.test`) through
 dotted network aliases on one service. Startup performs a verified handshake
-against the CA — a listener that half-starts is a hard failure, not a silent
-fallback to plaintext. The egress reasoning behind this design — why every
-outbound origin is TLS-fronted and what the seam refuses — lives in
-[Outbound egress](../security/outbound-egress.md); don't re-derive it here.
+against the CA — a listener that only partially starts is a hard failure, not
+a silent fallback to plaintext. For the egress reasoning behind this design —
+why every outbound origin is served over TLS and what the outbound HTTP layer
+refuses — see [Outbound egress](../security/outbound-egress.md); don't
+re-derive it here.
 
-**The stack opens the private-address hatch.** Every origin on a compose
+**The stack enables the private-address override.** Every origin on a compose
 network resolves to a private bridge address, so `adcp-server` runs with
 `ADCP_OUTBOUND_ALLOW_PRIVATE=true`. The consequence: no e2e or `bdd_e2e`
-scenario in this stack can grade a private-range egress refusal — that grading
-stays in-process, in `tests/integration/test_outbound_http.py` and the BDD
-refusal scenarios, which pin the flag closed per case. Scheme refusal and the
-supplement-range refusals remain gradeable live. Again, see
+scenario in this stack can verify a private-range egress refusal — that
+verification stays in-process, in `tests/integration/test_outbound_http.py`
+and the BDD refusal scenarios, which explicitly disable the override in each
+case. Scheme refusals and the supplement-range refusals remain testable
+against the live stack. See
 [Outbound egress](../security/outbound-egress.md) for the full posture.
 
 ## Two databases, one Postgres
@@ -118,45 +122,47 @@ Three suites mutate the server database, and they must not overlap:
 `tox.ini` therefore chains them: the `ui` environment declares
 `depends = e2e`, and the `bdd` and `bdd_e2e` environments declare
 `depends = e2e, ui`. That serializes the server-DB group under `tox -p` while
-unit/integration/admin still run fully parallel. This is not
-housekeeping: run the group in parallel and bdd's truncations land inside
-e2e's window, deleting the tenants e2e just seeded — presenting as
-`Tenant with subdomain 'ci-test' not found`, invisible to any targeted rerun
-because the same tests pass alone. The banner above `[testenv:ui]` in
-`tox.ini` carries the same warning.
+unit/integration/admin still run fully parallel. This ordering is required for
+correctness: if the group runs in parallel, the bdd truncations land while e2e
+is still running and delete the tenants that e2e just seeded. The failure
+presents as `Tenant with subdomain 'ci-test' not found`, and no targeted
+rerun reproduces it because the same tests pass alone. The comment block
+above `[testenv:ui]` in `tox.ini` carries the same warning.
 
-## The e2e_rest transport and its ledger
+## The e2e_rest transport and its known-failures list
 
-`e2e_rest` exists so the exact scenarios that grade the in-process wire
-transports also grade the deployed server — same Gherkin, same step
+`e2e_rest` exists so that the exact scenarios that verify the in-process wire
+transports also verify the deployed server — same Gherkin, same step
 definitions, same assertions, dispatched as real HTTP. The
 `e2e_stack` fixture in `tests/bdd/conftest.py` reads `E2E_BASE_URL` /
 `E2E_POSTGRES_URL` and health-checks the server; for an `e2e_rest` test a
 missing stack is a hard error, never a skip, because the transport is only
 parametrized when `BDD_E2E_ENABLED=true` — you asked for it, so it must run.
 
-Not every scenario passes over real HTTP yet.
-`tests/bdd/e2e_rest_known_failures.txt` is a ledger of node IDs that
+Some scenarios don't pass over real HTTP.
+`tests/bdd/e2e_rest_known_failures.txt` lists the node IDs that
 `tests/bdd/conftest.py` marks `xfail(strict=False)`: genuine production gaps,
 unseeded server-side state, or harness observability gaps, each annotated with
-the gap it represents. `tests/unit/test_e2e_rest_ledger_state.py` locks the
-file's shape.
+the gap it represents. `tests/unit/test_e2e_rest_ledger_state.py` enforces the
+file's format.
 
-**The only job that grades the ledger is a bdd-in-network run** — the
-"BDD In-Network (e2e_rest)" job in `.github/workflows/ci.yml`, which runs
-`./run_all_tests.sh bdd_e2e`. In-process runs never execute the `e2e_rest`
-parametrizations, so they can neither confirm a graduation nor catch a
-regression there. If your change touches behavior a ledgered scenario covers:
+**The only job that exercises the known-failures list is a bdd-in-network
+run** — the "BDD In-Network (e2e_rest)" job in `.github/workflows/ci.yml`,
+which runs `./run_all_tests.sh bdd_e2e`. In-process runs never execute the
+`e2e_rest` parametrizations, so they can neither confirm that a listed
+scenario passes nor catch a regression there. If your change touches behavior
+that a listed scenario covers:
 
 1. Run `./run_all_tests.sh bdd_e2e` (or let the CI job run).
-2. If a ledgered scenario now passes, graduate it — remove its line **in the
-   same change**, following the
+2. If a listed scenario now passes, remove its line **in the same change**,
+   following the
    [xpass graduation workflow](../../.claude/rules/workflows/xpass-graduation.md).
-   One scenario at a time, with the inspection evidence the workflow demands.
-3. If a previously passing scenario now fails, that is a regression; the
-   ledger only ever shrinks.
+   One scenario at a time, with the inspection evidence that the workflow
+   demands.
+3. If a previously passing scenario now fails, that is a regression; the list
+   only ever shrinks.
 
-### A green run that proves nothing: the xdist silent drop
+### A passing run that proves nothing: the xdist silent drop
 
 This hazard earns its own section because its failure mode is a **passing**
 suite.
@@ -165,9 +171,9 @@ suite.
 worker's collection never reaches the `pytest_generate_tests` state that
 appends the `e2e_rest` transport, so every scenario silently collects with
 only its in-process parametrizations. Nothing fails. Nothing skips. The suite
-goes green having never once dispatched HTTP at the live server — and a reader
-of that green run concludes the deployed server conforms when it was never
-asked.
+passes without ever having sent HTTP to the live server — and a reader of
+that passing run concludes that the deployed server conforms when it was
+never asked.
 
 `pytest_configure` in `tests/bdd/conftest.py` turns this into a hard
 `pytest.UsageError`: `BDD_E2E_ENABLED=true` together with `-n>0` refuses to
@@ -178,20 +184,20 @@ unnoticed there:
   and database (see the next section), so parallel `e2e_rest` is legal — and
   the `bdd_e2e` environment's `-k e2e_rest` makes pytest exit 5 ("no tests
   collected") if the transport were ever dropped, so a silent drop cannot
-  present as green.
+  appear as a pass.
 - `-n 0`: collection runs in-process, so the transport is parametrized
-  normally. The in-network compose default pins `BDD_XDIST_N=0` for exactly
+  normally. The in-network compose default sets `BDD_XDIST_N=0` for exactly
   this reason.
 
-If you hit the `UsageError`, the fix is one of those two shapes — never
-exporting the flag away.
+If you see the `UsageError`, the fix is one of those two configurations —
+never unsetting the flag to silence the guard.
 
 ## Worker counts are computed, not chosen
 
 `run_all_tests.sh` sizes every xdist worker count from the **Docker VM's**
 memory (`docker info --format '{{.MemTotal}}'`) and the core count — not from
-host RAM, because on a Mac those differ wildly and every worker imports the
-whole application. Three tiers (the script is the authority):
+host RAM, because on a Mac those differ widely and every worker imports the
+whole application. The script defines three tiers and is the authority:
 
 | Docker VM memory | `UNIT_XDIST_N` | `INTEGRATION_XDIST_N` | `E2E_WORKERS` |
 |------------------|----------------|------------------------|---------------|
@@ -201,38 +207,38 @@ whole application. Three tiers (the script is the authority):
 
 Every export uses the `${VAR:-computed}` pattern, which means **any value you
 have exported silently wins, with no warning** — and on a laptop-tier VM an
-exported worker count produces `-9` (SIGKILL) suite deaths from the VM's
-out-of-memory killer, reading as mysterious test failures. If a full run dies
-with exit code -9 or reports
-`collected N but reported 0`, check your environment for stale
-`*_XDIST_N`/`E2E_WORKERS` exports before suspecting the tests. The safe
-default is to never export these variables.
+exported worker count makes the VM's out-of-memory killer end suites with
+`-9` (SIGKILL), which reads as unexplained test failures. If a full run exits
+with code -9 or reports `collected N but reported 0`, check your environment
+for stale `*_XDIST_N`/`E2E_WORKERS` exports before suspecting the tests. The
+safe default is to never export these variables.
 
-Two related pins, both load-bearing:
+Two related settings are required for correctness:
 
 - `PYTEST_XDIST_AUTO_NUM_WORKERS` is set to 1 by `docker-compose.e2e.yml`, so
   any `-n auto` inside the runner resolves to one worker instead of one
-  app-loading process per CPU — which is an in-container OOM.
+  application-loading process per CPU core, which exhausts the container's
+  memory.
 - `BDD_XDIST_N` must **derive from** `E2E_WORKERS`, never be set directly.
-  When `E2E_WORKERS > 0`, `run_all_tests.sh` swaps the serial `bdd` env for
-  the `bdd_inprocess,bdd_e2e` split, exports
+  When `E2E_WORKERS > 0`, `run_all_tests.sh` swaps the serial `bdd`
+  environment for the `bdd_inprocess,bdd_e2e` split, exports
   `BDD_XDIST_N=${BDD_XDIST_N:-$E2E_WORKERS}` for the in-process half, and
   provisions `E2E_WORKERS` isolated per-worker stacks — one `adcp-server`
   container plus one TLS sidecar per xdist worker, each on its own database
   (`adcp_gwN`, cloned from a migrated template) — then runs `bdd_e2e` with
   `E2E_PER_WORKER=1` and `BDD_E2E_XDIST_N=$E2E_WORKERS`. That provisioning is
-  what makes parallel `e2e_rest` legal under the guard above.
+  what makes parallel `e2e_rest` legal under the earlier guard.
 
 ## Choose a command
 
 This table extends the decision tree in the root `CLAUDE.md` with the e2e
 distinctions this page teaches.
 
-| You want to grade | Command | What it starts |
-|-------------------|---------|----------------|
+| What you want to test | Command | What it starts |
+|-----------------------|---------|----------------|
 | Everything (the default full gate) | `./run_all_tests.sh` | Full stack in-network, all six suites via `tox -p`, auto-teardown |
 | The protocol pytest suite only | `./run_all_tests.sh e2e` | Full stack in-network, `tox -e e2e` |
-| BDD scenarios over real HTTP (the ledger) | `./run_all_tests.sh bdd_e2e` | Full stack in-network, `tox -e bdd_e2e` |
+| BDD scenarios over real HTTP (the known-failures list) | `./run_all_tests.sh bdd_e2e` | Full stack in-network, `tox -e bdd_e2e` |
 | BDD scenarios in-process only | `tox -e bdd_inprocess` | Nothing (needs a suite `DATABASE_URL`) |
 | One e2e test, iterating | `make test-stack-up`, then `source .test-stack.env && tox -e e2e -- -k <name>` | Host-side stack with published ports; stays up between runs |
 | One e2e test, no manual lifecycle | `scripts/run-test.sh tests/e2e/test_foo.py -x` | Auto-detects and starts the full stack |
@@ -246,8 +252,8 @@ concurrent invocations cannot collide. `quick` and `ci <target>` delegate to
 
 ## Iterate on one failing e2e test
 
-Paying a full stack build-up-teardown cycle per attempt is the slow way. The
-fast loop:
+Rebuilding and tearing down the full stack for every attempt is slow. Use
+this loop instead:
 
 1. Start a host-side stack once: `make test-stack-up`. This builds the images,
    overlays the ports file, waits for Postgres, the server, and a **verified**
@@ -269,15 +275,15 @@ Without `ADCP_TESTING=true` (and without `--skip-docker`), running
 `pytest tests/e2e/...` takes the standalone branch of `docker_services_e2e`:
 it builds and starts its own stack on dynamically allocated ports (server
 20000–25000, Postgres 25000–30000, TLS 15000–20000, webhook capture
-30000–32000) and tears it down at session end. That is the branch GitHub CI's
-host-side `pytest tests/e2e` path uses; for local iteration it pays the full
-cycle every session, so prefer the loop above.
+30000–32000) and tears it down at session end. That is the branch that GitHub
+CI's host-side `pytest tests/e2e` path uses; for local iteration it rebuilds
+the stack every session, so prefer the preceding loop.
 
 For an `e2e_rest` BDD scenario, the supported iteration path is the
 in-network runner: `./run_all_tests.sh bdd_e2e`. It is slower per cycle than
-the pytest loop, but it is the configuration the ledger and CI job are
-defined against; a scenario's pass/fail state on any other configuration is
-not evidence about the ledger.
+the pytest loop, but it is the configuration that the known-failures list and
+the CI job are defined against; a scenario's pass or fail result on any other
+configuration is not evidence about the list.
 
 ## Read the results, not the scrollback
 
@@ -291,13 +297,13 @@ exactly the suites that ran:
 
 The JSON is the authoritative record:
 
-- A long run's terminal output can vanish — background processes die, CLI
+- A long run's terminal output can vanish — background processes exit, CLI
   connections drop. The reports persist.
 - A suite that is stopped mid-run can truncate its report;
   `scripts/check_truncated_reports.py` fails the run when a report's
-  collected/reported counts disagree, so a half-run cannot read as green.
+  collected/reported counts disagree, so a half-run cannot read as passing.
 - A suite that ran but produced no report is an **error**, not an omission —
-  it died before writing one, and the runner exits nonzero for it.
+  it exited before writing one, and the runner exits nonzero for it.
 - `.tox/` persists between runs, so both runners purge old reports before
   running; a report exists only if the current run produced it. Trust the
   directory plus its `.suites` manifest, never a lone JSON file's timestamp.
@@ -307,26 +313,27 @@ the directory shows zero failures, the failure is outside the suites. The
 runner prints a diagnosis for the common case — Docker's own 125/126/127
 "could not run the container" range after all suites already finished.
 
-## Failure modes and what they actually mean
+## Failure modes and what they mean
 
 | Symptom | What it usually means | Where to look |
 |---------|----------------------|---------------|
-| `Tenant with subdomain 'ci-test' not found` in e2e, though the seed ran | Another suite truncated the server DB mid-window — the serialization in `tox.ini` was bypassed (for example, by running server-DB envs in parallel manually) | The `depends` banner above `[testenv:ui]` in `tox.ini` |
-| `Server not ready after 60s (port N)` across all of e2e, or `the live E2E stack is unreachable` across all of `bdd_e2e` | The stack never came up; the tests are casualties, not causes. One infrastructure fault, thousands of downstream errors | `docker compose ... logs adcp-server`; the runner's own health-wait output |
-| `PermissionError: /app/logs/audit.log` at collection, or the server dying at import | Bind-mount file-ownership race between `adcp-server` (uid 1001) and the runner. The runners pre-create world-writable log files to prevent it | The `logs/` block in `run_all_tests.sh` |
-| Suite dies with exit code -9, or a report says `collected N but reported 0` | The Docker VM's out-of-memory killer. Almost always an exported worker-count override defeating the computed tiers | Your shell environment: `UNIT_XDIST_N`, `INTEGRATION_XDIST_N`, `E2E_WORKERS`, `BDD_XDIST_N` |
+| `Tenant with subdomain 'ci-test' not found` in e2e, though the seed ran | Another suite truncated the server DB mid-run — the serialization in `tox.ini` was bypassed (for example, by running server-DB environments in parallel manually) | The `depends` comment block above `[testenv:ui]` in `tox.ini` |
+| `Server not ready after 60s (port N)` across all of e2e, or `the live E2E stack is unreachable` across all of `bdd_e2e` | The stack never came up; the test failures are downstream symptoms, not causes. One infrastructure fault, thousands of downstream errors | `docker compose ... logs adcp-server`; the runner's own health-wait output |
+| `PermissionError: /app/logs/audit.log` at collection, or the server exiting during import | Bind-mount file-ownership race between `adcp-server` (uid 1001) and the runner. The runners pre-create world-writable log files to prevent it | The `logs/` block in `run_all_tests.sh` |
+| Suite exits with code -9, or a report says `collected N but reported 0` | The Docker VM's out-of-memory killer. Almost always an exported worker-count override defeating the computed tiers | Your shell environment: `UNIT_XDIST_N`, `INTEGRATION_XDIST_N`, `E2E_WORKERS`, `BDD_XDIST_N` |
 | `pytest.UsageError: BDD_E2E_ENABLED=true is incompatible with xdist` | The guard against the silent transport drop fired | The silent-drop section in this guide |
-| nginx 502, or connection refused on a host-path port | Cross-stack host-port collision (the TOCTOU window in port allocation), or an abandoned stack squatting the port | `scripts/test-stack.sh` retries with fresh ports and reaps stacks older than 90 minutes; `docker ps --filter name=adcp-test-` |
+| nginx 502, or connection refused on a host-path port | Cross-stack host-port collision (a time-of-check to time-of-use race in port allocation), or an abandoned stack still holding the port | `scripts/test-stack.sh` retries with fresh ports and reaps stacks older than 90 minutes; `docker ps --filter name=adcp-test-` |
 | An https e2e test fails with a certificate error | Stale or missing `.test-tls/` material, or the process doesn't trust the generated CA | `scripts/dev/ensure-test-tls.sh`; `E2E_CA_BUNDLE`; note `SSL_CERT_FILE` must point at the **combined** bundle, never the private CA alone |
 | A report in `test-results/` shows failures for code that no longer exists | You are reading a stale report from a previous run | The directory's `.suites` manifest; rerun and read the fresh directory |
-| Exit code 125/126/127 with all-green reports | Docker's runner-level failure after the suites finished | The runner's closing diagnostic; the Docker daemon, not the tests |
+| Exit code 125/126/127 though every report shows zero failures | Docker's runner-level failure after the suites finished | The runner's closing diagnostic; the Docker daemon, not the tests |
 
 ## Related reading
 
-- [Outbound egress](../security/outbound-egress.md) — the TLS front, the
-  egress seam, and why the stack's SSRF posture is what it is.
+- [Outbound egress](../security/outbound-egress.md) — TLS for outbound
+  origins, the outbound HTTP enforcement layer, and why the stack's SSRF
+  posture is what it is.
 - [Xpass graduation workflow](../../.claude/rules/workflows/xpass-graduation.md)
-  — the per-scenario protocol for retiring ledger entries.
+  — the per-scenario protocol for retiring known-failure entries.
 - [CI pipeline](ci-pipeline.md) — where these suites run in GitHub Actions.
 - `tests/e2e/README.md` — directory-local notes for the protocol pytest
   suite.

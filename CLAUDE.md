@@ -1,39 +1,39 @@
-# Prebid Sales Agent - Development Guide
+# Prebid Sales Agent development guide
 
-## 🤖 For Claude (AI Assistant)
+## 🤖 For Claude (AI assistant)
 
-This guide helps you work effectively with the Prebid Sales Agent codebase maintained under Prebid.org. Key principles:
+This guide helps you work effectively with the Prebid Sales Agent codebase maintained under Prebid.org. The following sections list the key principles.
 
-### Working with This Codebase
-1. **Always read before writing** - Use Read/Glob to understand existing patterns
-2. **Test your changes** - Run `make quality` before committing
-3. **Follow the patterns** - 7 critical patterns below are non-negotiable
-4. **When stuck** - Check `/docs` for detailed explanations
-5. **Pre-commit hooks are your friend** - They catch most issues automatically
-6. **Name your PRs correctly** - they need to pass .github/workflows/pr-title-check.yml
+### Working with this codebase
+- **Always read before writing** — use Read/Glob to understand existing patterns
+- **Test your changes** — run `make quality` before committing
+- **Follow the patterns** — the 9 critical patterns in this guide are non-negotiable
+- **When stuck** — check `/docs` for detailed explanations
+- **Pre-commit hooks are your friend** — they catch most issues automatically
+- **Name your PRs correctly** — they must pass `.github/workflows/pr-title-check.yml`
 
-### Common Task Patterns
+### Common task patterns
 - **Adding a new AdCP tool**: Extend library schema → Add `_impl()` function → Add MCP wrapper → Add A2A raw function → Add tests
 - **Fixing a route issue**: Check for conflicts with `grep -r "@.*route.*your/path"` → Use `url_for()` in Python, `scriptRoot` in JavaScript
 - **Modifying schemas**: Verify against AdCP spec → Update Pydantic model → Run `pytest tests/unit/test_adcp_contract.py`
 - **Database changes**: Use SQLAlchemy 2.0 `select()` → Use `JSONType` for JSON → Create migration with `alembic revision`
 
-### Key Files to Know
-- `src/core/main.py` - MCP server and tool registration
-- `src/core/tools/` - tool `_impl()` business logic, MCP wrappers, and A2A raw functions (package)
-- `src/core/schemas/` - Pydantic models, AdCP-compliant (package)
-- `src/adapters/base.py` - Adapter interface
-- `src/adapters/gam/` - GAM implementation
-- `tests/unit/test_adcp_contract.py` - Schema compliance tests
+### Key files to know
+- `src/core/main.py` — MCP server and tool registration
+- `src/core/tools/` — tool `_impl()` business logic, MCP wrappers, and A2A raw functions (package)
+- `src/core/schemas/` — Pydantic models, AdCP-compliant (package)
+- `src/adapters/base.py` — adapter interface
+- `src/adapters/gam/` — GAM implementation
+- `tests/unit/test_adcp_contract.py` — schema compliance tests
 
-### DRY (Don't Repeat Yourself) — Non-Negotiable Invariant
+### DRY (Don't Repeat Yourself) — a non-negotiable invariant
 
-**DRY is not "premature optimization." It is not "refactoring beyond what was asked." It is a correctness requirement, equivalent to type safety or test integrity.**
+**DRY is a correctness requirement, equivalent to type safety or test integrity — not "premature optimization," and not "refactoring beyond what was asked."**
 
 - If you write a block of logic that is structurally similar to an existing block (same pattern, different variables), you **MUST** extract a shared helper function
 - If you are asked to refactor duplicated code, that is a **bug fix**, not an "improvement"
 - **NEVER** cite "avoid over-engineering" or "keep it simple" to justify leaving duplicated logic in place
-- Duplicated code is a defect. It means the next person who fixes a bug in one copy will miss the other copy. This is not theoretical — it has caused real bugs in this codebase
+- Duplicated code is a defect. It means the next person who fixes a bug in one copy misses the other copy. This is not theoretical — it has caused real bugs in this codebase
 - **Enforced by:** `check_code_duplication.py` in `make quality` (pylint R0801, ratcheting baseline in `.duplication-baseline`)
 
 **How to apply DRY correctly:**
@@ -58,7 +58,7 @@ formats = filter_by_format_ids(formats, req.input_format_ids, "input_format_ids"
 - It is not about collapsing two genuinely different operations that happen to look similar today
 - It applies when the same **logical operation** is repeated with only parameter substitution
 
-### What to Avoid
+### What to avoid
 - ❌ Don't use `session.query()` (use `select()` + `scalars()`)
 - ❌ Don't duplicate library schemas (extend with inheritance)
 - ❌ Don't hardcode URLs in JavaScript (use `scriptRoot`)
@@ -66,27 +66,27 @@ formats = filter_by_format_ids(formats, req.input_format_ids, "input_format_ids"
 - ❌ Don't skip tests to make CI pass (fix the underlying issue)
 - ❌ Don't leave duplicated logic — extract shared helpers (DRY invariant above)
 
-### Commit Messages & PR Titles
-**Use Conventional Commits format** - release-please uses this to generate changelogs.
+### Commit messages and PR titles
+**Use Conventional Commits format** — release-please uses this format to generate changelogs.
 
-PR titles should use one of these prefixes:
-- `feat: Add new feature` - New functionality (appears in "Features" section)
-- `fix: Fix bug description` - Bug fixes (appears in "Bug Fixes" section)
-- `docs: Update documentation` - Documentation changes
-- `refactor: Restructure code` - Code refactoring (appears in "Code Refactoring" section)
-- `perf: Improve performance` - Performance improvements
-- `chore: Update dependencies` - Maintenance tasks (hidden from changelog)
+Use one of the following prefixes in PR titles:
+- `feat: Add new feature` — new functionality (appears in "Features" section)
+- `fix: Fix bug description` — bug fixes (appears in "Bug Fixes" section)
+- `docs: Update documentation` — documentation changes
+- `refactor: Restructure code` — code refactoring (appears in "Code Refactoring" section)
+- `perf: Improve performance` — performance improvements
+- `chore: Update dependencies` — maintenance tasks (hidden from changelog)
 
-**Without a prefix, commits won't appear in release notes!** The code will still be released, but the change won't be documented in the changelog.
+**Without a prefix, commits don't appear in release notes.** The code is still released, but the changelog doesn't document the change.
 
-### Structural Guards (Automated Architecture Enforcement)
+### Structural guards (automated architecture enforcement)
 AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately.
 
-**The table below is a representative subset, not the full set.** There are over 70 guard tests (73 `tests/unit/test_architecture_*.py`, plus a handful of boundary guards like `test_transport_agnostic_impl.py` and `test_impl_resolved_identity.py`); the always-current list is `ls tests/unit/test_architecture_*.py`. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for design rationale (its written inventory covers only a subset).
+**The following table is a representative subset, not the full set.** There are over 70 guard tests (73 `tests/unit/test_architecture_*.py`, plus a handful of boundary guards like `test_transport_agnostic_impl.py` and `test_impl_resolved_identity.py`); for the complete list, run `ls tests/unit/test_architecture_*.py`. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for design rationale (its written inventory covers only a subset).
 
-| Guard | Enforces | Test File |
+| Guard | Enforces | Test file |
 |-------|----------|-----------|
-| Schema inheritance | Redeclarations are inherited unless reshaped or weakened | `test_architecture_schema_inheritance.py` |
+| Schema inheritance | Redeclarations are inherited unless changed or weakened | `test_architecture_schema_inheritance.py` |
 | No ToolError in _impl | `_impl` raises AdCPError, never ToolError | `test_no_toolerror_in_impl.py` |
 | Transport-agnostic _impl | `_impl` has zero transport imports | `test_transport_agnostic_impl.py` |
 | ResolvedIdentity in _impl | `_impl` accepts ResolvedIdentity, not Context | `test_impl_resolved_identity.py` |
@@ -98,8 +98,8 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | No raw MediaPackage select | All MediaPackage access goes through repository, not raw `select()` | `test_architecture_no_raw_media_package_select.py` |
 | No import-time filesystem I/O | `src/` and `scripts/` modules touch no files while being imported | `test_architecture_no_import_time_fs_io.py` |
 | No raw select outside repos | All ORM model queries go through repositories, not raw `select()` | `test_architecture_no_raw_select.py` |
-| No raw egress | All outbound HTTP goes through `src/core/security/outbound_http.py`; the seams bind their imports privately so re-export is an ImportError | `ruff-egress.toml` (TID251 over `src/` + `scripts/`, `--ignore-noqa`, in `make quality-ci`) + `test_ruff_egress_bans.py` |
-| No destination rewrite | Nothing under `src/` rebuilds a URL or swaps its netloc/scheme ahead of the seam | `test_architecture_no_destination_rewrite.py` |
+| No raw egress | All outbound HTTP goes through `src/core/security/outbound_http.py`; the gateway modules bind their imports privately so re-export is an ImportError | `ruff-egress.toml` (TID251 over `src/` + `scripts/`, `--ignore-noqa`, in `make quality-ci`) + `test_ruff_egress_bans.py` |
+| No destination rewrite | Nothing under `src/` rebuilds a URL or swaps its netloc/scheme ahead of the gateway | `test_architecture_no_destination_rewrite.py` |
 | BDD no-op Then steps | Then steps must assert, not delegate to `_pending()`-like no-ops | `test_architecture_bdd_no_pass_steps.py` |
 | BDD assertion reachability | A Then must not be able to RETURN without executing a meaningful assertion — presence is not enough | `test_architecture_bdd_no_trivial_assertions.py` |
 | BDD no dict registry | Given steps must use factories, not raw dicts | `test_architecture_bdd_no_dict_registry.py` |
@@ -119,31 +119,31 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 **Rules for guards:**
 - Allowlists can only shrink — never add new violations, fix them instead
 - Every allowlisted violation has a `# FIXME(#<gh-issue>)` comment at the source location — reference a GitHub issue/PR number, never a local beads id (beads ids don't resolve for outside contributors)
-- When you fix a violation, remove it from the allowlist (the stale-entry test will remind you)
+- When you fix a violation, remove it from the allowlist (the stale-entry test reminds you)
 
 ---
 
-## AdCP Spec Version
+## AdCP spec version
 
 This project targets AdCP spec **3.1.1** via the `adcp==6.6.0` Python SDK. See
 [docs/adcp-spec-version.md](docs/adcp-spec-version.md) for the version mapping
 and bump procedure. The CI guard at `tests/unit/test_adcp_spec_version.py`
 fails on pin drift.
 
-### Spec-Grounding Gate (MANDATORY before implementing protocol behavior)
+### Spec-grounding gate (MANDATORY before implementing protocol behavior)
 
 **Any change to AdCP/protocol BEHAVIOR** — a tool's request/response contract, error emission, idempotency, governance, or capabilities — **must cite, before code is written, the authoritative spec section + version that mandates it, plus the conformance storyboard step that grades it** (or note "ungraded"). Record the citation in the PR description and/or the planning note.
 
 - **Which version is authoritative:** the version the repo currently PINS — *unless* there is active work to comply with a different target version (a bump/migration in flight), in which case that TARGET version is the pin. Confirm which applies first.
-- **Where the spec lives** (`github.com/adcontextprotocol/adcp`): prose at `dist/docs/<version>/building/implementation/*.mdx`; the graded, executable contract at `dist/compliance/<version>/*.yaml`. The installed `adcp` SDK — codes, types, even reference implementations such as `adcp.server.idempotency` — is a CROSS-CHECK, **not** the authority; it can diverge from the spec.
-- **Why:** grounding protocol behavior in downstream artifacts (an internal contract item, or the mere existence of an SDK error code) instead of the spec prose + storyboard produces features built inverse to the spec. The spec is the contract; everything else is derived.
+- **Where the spec lives** (`github.com/adcontextprotocol/adcp`): the written spec at `dist/docs/<version>/building/implementation/*.mdx`; the graded, executable contract at `dist/compliance/<version>/*.yaml`. The installed `adcp` SDK — codes, types, even reference implementations such as `adcp.server.idempotency` — is a CROSS-CHECK, **not** the authority; it can diverge from the spec.
+- **Why:** grounding protocol behavior in downstream artifacts (an internal contract item, or the mere existence of an SDK error code) instead of the spec text + storyboard produces features built inverse to the spec. The spec is the contract; everything else is derived.
 - **Enforcement:** reviewers reject protocol-behavior changes that don't cite the spec; this complements the pin-drift guard above. Background: [docs/adcp-spec-version.md](docs/adcp-spec-version.md).
 
 ---
 
-## 🚨 Critical Architecture Patterns
+## 🚨 Critical architecture patterns
 
-### 1. AdCP Schema: Extend Library Schemas
+### 1. AdCP schema: extend library schemas
 **MANDATORY**: Use `adcp` library schemas via inheritance, never duplicate.
 
 ```python
@@ -165,26 +165,27 @@ class Product(LibraryProduct):
   `tests/unit/test_architecture_schema_inheritance.py`, which grades redeclarations
   against the library parent.
 - The inheritance guard's REDEFINITION rule decides membership by walking the live
-  MRO and testing `__module__`, so it consults no import spelling and has no spelling
-  to miss. The companion `test_all_library_types_have_local_subclass` is alias-keyed,
-  and is the one place where a differently-spelled import goes unexamined.
-- A redeclaration needs an allowlist row unless it is **neither reshaped nor weakened**:
+  MRO and testing `__module__`, so it never consults how an import is written and has
+  no import form to miss. The companion `test_all_library_types_have_local_subclass`
+  is alias-keyed, and is the one place where an import written in an unexpected form
+  goes unexamined.
+- A redeclaration needs an allowlist row unless it is **neither changed nor weakened**:
   same annotation (or a subclass), nullability not added, `is_required()` not relaxed,
   metadata a superset, no default introduced. A redeclaration that keeps the parent's
-  shape but is *weaker* — dropping a `Ge` or a `MinLen`, going required→optional — needs
+  type but is *weaker* — dropping a `Ge` or a `MinLen`, going required→optional — needs
   a row NAMING the weakened axis. Do not widen the admission rule to make it pass: a
   hand-written row names itself and can be audited, whereas a derived rule that admits a
   widening is invisible and permanent.
 
-### 2. Flask: Prevent Route Conflicts
-**Pre-commit hook detects duplicate routes** - Run manually: `uv run python .pre-commit-hooks/check_route_conflicts.py`
+### 2. Flask: prevent route conflicts
+**Pre-commit hook detects duplicate routes** — run it manually: `uv run python .pre-commit-hooks/check_route_conflicts.py`
 
 When adding routes:
 - Search existing: `grep -r "@.*route.*your/path"`
 - Deprecate properly with early return, not comments
 
-### 3. Database: Repository Pattern + ORM-First
-**No SQLite support** - Production uses PostgreSQL exclusively.
+### 3. Database: repository pattern + ORM-first
+**No SQLite support** — production uses PostgreSQL exclusively.
 
 **ORM-first access (MANDATORY):**
 - All DB reads and writes go through SQLAlchemy ORM models via repository classes
@@ -193,7 +194,7 @@ When adding routes:
 - Use SQLAlchemy relationships and cascading — they exist to manage parent/child persistence atomically
 - Use `JSONType` for all JSON columns (not plain `JSON`)
 - Use SQLAlchemy 2.0 patterns: `select()` + `scalars()`, not `query()`
-- Cast IDs at the boundary: JSON gives you strings, but Integer PK columns need `int` values. Write `int(x)` before passing to `.in_()` or `filter_by()`
+- Cast IDs at the boundary: JSON gives you strings, but Integer primary-key columns need `int` values. Write `int(x)` before passing to `.in_()` or `filter_by()`
 - All tests require PostgreSQL: `./run_all_tests.sh` runs Docker + tox (JSON reports in `test-results/`)
 - **Exception:** Bulk imports and complex reporting queries may use Core SQL/raw SQL for performance. Regular CRUD operations are never an exception.
 - **Enforced by:** `test_architecture_query_type_safety.py`, `test_architecture_repository_pattern.py`
@@ -232,7 +233,7 @@ def _create_media_buy_impl(req, identity):
 
 **`_impl` functions should not contain `get_db_session()` calls.** Data access belongs in the repository layer. `_impl` functions receive repositories (or use them via dependency injection) and call typed methods.
 
-### 4. Pydantic: Explicit Nested Serialization
+### 4. Pydantic: explicit nested serialization
 Parent models must override `model_dump()` to serialize nested children:
 
 ```python
@@ -248,7 +249,7 @@ class GetCreativesResponse(AdCPBaseModel):
 
 **Why**: Pydantic doesn't auto-call custom `model_dump()` on nested models.
 
-### 5. Transport Boundary: Layer Separation
+### 5. Transport boundary: layer separation
 All tools have two layers: **transport wrappers** (MCP, A2A, REST) and **business logic** (`_impl` functions). The layers have strict responsibilities.
 
 **`_impl` functions** (business logic layer):
@@ -289,22 +290,22 @@ async def create_media_buy_raw(...) -> CreateMediaBuyResponse:
 
 **Enforced by:** `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`, `test_no_toolerror_in_impl.py`, `test_architecture_boundary_completeness.py`
 
-### 6. JavaScript: Use request.script_root
-**All JS must support reverse proxy deployments:**
+### 6. JavaScript: use request.script_root
+**All JavaScript must support reverse-proxy deployments:**
 
 ```javascript
-const scriptRoot = '{{ request.script_root }}' || '';  // e.g., '/admin' or ''
+const scriptRoot = '{{ request.script_root }}' || '';  // for example, '/admin' or ''
 const apiUrl = scriptRoot + '/api/endpoint';
 fetch(apiUrl, { credentials: 'same-origin' });
 ```
 
-Never hardcode `/api/endpoint` - breaks with nginx prefix.
+Never hardcode `/api/endpoint` — it breaks behind an nginx prefix.
 
-### 7. Schema Validation: Environment-Based
+### 7. Schema validation: environment-based
 - **Production**: `ENVIRONMENT=production` → `extra="ignore"` (forward compatible)
 - **Development/CI**: Default → `extra="forbid"` (strict validation)
 
-### 8. Test Fixtures: Factory-Based, Not Inline
+### 8. Test fixtures: factory-based, not inline
 **MANDATORY for new integration tests:** Use `factory-boy` factories for test data, not inline `session.add()` boilerplate.
 
 ```python
@@ -344,10 +345,10 @@ with get_db_session() as session:
 - **DO NOT match pre-existing broken patterns.** If the test file you're adding to already uses
   `get_db_session()` or `session.add()`, those are pre-existing debt in the allowlist. Your new
   code must use factories regardless. The structural guard (`test_architecture_repository_pattern.py`)
-  will catch new violations immediately at `make quality`. Pre-existing violations are allowlisted
+  catches new violations immediately at `make quality`. Pre-existing violations are allowlisted
   and tracked with FIXME comments — they shrink over time, never grow.
 
-### 9. Outbound HTTP: The Application Implements No SSRF Protection
+### 9. Outbound HTTP: the application implements no SSRF protection
 **Every outbound request goes through `src/core/security/outbound_http.py` (`send` / `asend`).**
 
 Do not add URL validation, private-IP checks, metadata blocklists, resolve-then-check, or
@@ -356,11 +357,11 @@ httpx owns the response state machine (including NOT following redirects). If yo
 writing `ipaddress`, `socket.gethostbyname`, or a hostname blocklist in `src/`, stop: that logic
 is already owned elsewhere.
 
-**Why:** address, TLS, redirect and retry policy re-decided at each call site is how SSRF
-happens — one call site always forgets one of them. One seam, one decision.
+**Why:** address, TLS, redirect, and retry policy re-decided at each call site is how SSRF
+happens — one call site always forgets one of them. One gateway, one decision.
 
 ```python
-# CORRECT: the seam decides address, TLS, redirect and retry policy
+# CORRECT: the gateway decides address, TLS, redirect, and retry policy
 from src.core.security.outbound_http import asend
 
 result = await asend(url, json=payload)
@@ -376,42 +377,43 @@ async with httpx.AsyncClient() as client:
     await client.post(url, json=payload)
 ```
 
-**Three layers stop the wrong call. Reach for the strongest one available.**
+**Three layers stop the wrong call. Use the strongest one available.**
 
-1. **Unrepresentable.** The seams bind what they wrap PRIVATELY (`import httpx as _httpx`),
+1. **Unrepresentable.** The gateway modules bind what they wrap PRIVATELY (`import httpx as _httpx`),
    so `from src.core.security.outbound_http import httpx` is an `ImportError`, not a lint
    finding. Four paths are closed this way — `outbound_http.httpx`,
    `egress.policy.ipaddress`, `mcp_client.Client`, `mcp_client.StreamableHttpTransport`.
-   **If you write a seam around a dangerous dependency, bind its import privately** so the
-   seam cannot re-export the thing it exists to contain.
+   **If you write a gateway around a dangerous dependency, bind its import privately** so the
+   gateway cannot re-export the thing it exists to contain.
 2. **Banned.** `ruff-egress.toml` bans the modules outright (`httpx`, `requests`, `aiohttp`,
    `urllib.request`, `httpcore`, `urllib3`, `http.client`, `httpx2`, `httpcore2`) plus
    `fastmcp.Client`, the MCP transports, the un-pinnable `adcp` clients, `ipaddress`, and
    `socket.gethostbyname`. A third-party name cannot be rebound from this repo, so a ban
    list is the only mechanism for that half.
 3. **Exempted — and you cannot do it yourself.** The gate runs `--ignore-noqa`, which makes
-   `# noqa` INERT for this config in every spelling. **Adding a `# noqa` for TID251/ANN401
-   does nothing.** The only exemption channel is a row in `[lint.per-file-ignores]` in
-   `ruff-egress.toml`, which is a review conversation.
+   `# noqa` INERT for this config in every form it can be written. **Adding a `# noqa` for
+   TID251/ANN401 does nothing.** The only exemption channel is a row in
+   `[lint.per-file-ignores]` in `ruff-egress.toml`, which makes every exemption a
+   code-review decision.
 
 - **Enforced by:** `ruff-egress.toml` — TID251 over `src/` AND `scripts/`, plus ANN401
   scoped to the outbound chain (`src/core/security`, `src/adapters`), run by
   `make quality-ci` with `--ignore-noqa --no-respect-gitignore`;
-  `tests/unit/test_ruff_egress_bans.py` proves every ban FIRES on every resolving spelling
-  (ruff does not validate `banned-api` keys, so a typo'd row is silently inert);
+  `tests/unit/test_ruff_egress_bans.py` proves every ban FIRES on every import form that
+  resolves to it (ruff does not validate `banned-api` keys, so a mistyped row is silently inert);
   `tests/unit/test_architecture_no_destination_rewrite.py` keeps destinations unrewritten
-  ahead of the seam
+  ahead of the gateway
 - **Full architecture:** [docs/security/outbound-egress.md](docs/security/outbound-egress.md)
   (the rule and its enforcement) and
   [docs/design/egress-sdk-boundary.md](docs/design/egress-sdk-boundary.md)
-  (module map, what the `adcp` SDK owns, the registration-vs-dial split, and what is
+  (module map, what the `adcp` SDK owns, the registration-vs-connect split, and what is
   carried here only until an upstream release)
 
 ---
 
-## Project Overview
+## Project overview
 
-Python-based Prebid Sales Agent with:
+The Prebid Sales Agent is a Python application with the following components:
 - **MCP Server**: FastMCP tools for AI agents (via nginx at `/mcp/`)
 - **Admin UI**: Google OAuth secured interface (via nginx at `/admin/` or `/tenant/<name>`)
 - **A2A Server**: python-a2a agent-to-agent communication (via nginx at `/a2a`)
@@ -422,7 +424,7 @@ All services are accessed through the nginx proxy at **http://localhost:8000**.
 
 ---
 
-## Key Patterns
+## Key patterns
 
 ### SQLAlchemy 2.0 (MANDATORY for new code)
 ```python
@@ -436,7 +438,7 @@ instance = session.scalars(stmt).first()
 instance = session.query(Model).filter_by(field=value).first()
 ```
 
-### Database JSON Fields
+### Database JSON fields
 ```python
 from src.core.database.json_type import JSONType
 
@@ -444,7 +446,7 @@ class MyModel(Base):
     config: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
 ```
 
-### Import Patterns
+### Import patterns
 ```python
 # Always use absolute imports
 from src.core.schemas import Principal
@@ -452,7 +454,7 @@ from src.core.database.database_session import get_db_session
 from src.adapters import get_adapter
 ```
 
-### No Quiet Failures
+### No quiet failures
 ```python
 # ❌ WRONG - Silent failure
 if not self.supports_feature:
@@ -465,9 +467,9 @@ if not self.supports_feature and feature_requested:
 
 ---
 
-## Common Operations
+## Common operations
 
-### Running Locally
+### Running locally
 
 ```bash
 # Clone and start
@@ -485,7 +487,7 @@ docker compose down       # Stop
 - MCP Server: `/mcp/`
 - A2A Server: `/a2a`
 
-**Test login:** Click "Log in to Dashboard" button (password: `test123`)
+**Test login:** Click the **Log in to Dashboard** button (password: `test123`)
 
 **Test MCP interface:**
 ```bash
@@ -524,7 +526,7 @@ tox -e integration -- -k test_name   # Pass pytest args after --
 # Coverage: htmlcov/index.html, coverage.json
 ```
 
-### Database Migrations
+### Database migrations
 ```bash
 uv run python scripts/ops/migrate.py            # Run migrations locally
 uv run alembic revision -m "description"        # Create migration
@@ -535,7 +537,7 @@ docker compose exec admin-ui python scripts/ops/migrate.py
 
 **Never modify existing migrations after commit!**
 
-### Tenant Setup Dependencies
+### Tenant setup dependencies
 ```
 Tenant → CurrencyLimit (USD required for budget validation)
       → PropertyTag ("all_inventory" required for property_tags references)
@@ -544,23 +546,23 @@ Tenant → CurrencyLimit (USD required for budget validation)
 
 ---
 
-## Testing Guidelines
+## Testing guidelines
 
-### Test Organization
-- **tests/unit/**: Fast, isolated (mock external deps only)
+### Test organization
+- **tests/unit/**: Fast, isolated (mock external dependencies only)
 - **tests/integration/**: Real PostgreSQL database
 - **tests/e2e/**: Full system tests
 - **tests/admin/**: Admin UI tests
 - **tests/bdd/**: BDD behavioral tests (pytest-bdd)
 - **tests/ui/**: UI smoke tests (Playwright/chromium; needs full Docker stack)
 
-### Error Verification
+### Error verification
 **New error-path tests must assert on the wire envelope, not reconstructed exceptions.**
 The test harness reconstructs `AdCPError` from wire responses, but this reconstruction is lossy.
 Use `assert_envelope_shape(result.wire_error_envelope, code, recovery=...)` as the primary authority.
 See `tests/CLAUDE.md` § "Error Verification Policy" for the full policy and helpers.
 
-### Entity Markers
+### Entity markers
 Tests are auto-tagged with entity markers by filename pattern. Use `-m` to run entity-scoped slices:
 ```bash
 make test-entity ENTITY=delivery          # All delivery tests
@@ -569,7 +571,7 @@ make test-entity ENTITY="product"         # All product tests
 ```
 Entities: delivery, creative, product, media_buy, tenant, auth, adapter, inventory, schema, admin, architecture, targeting, transport, workflow, policy, agent, infra.
 
-### Database Fixtures
+### Database fixtures
 ```python
 # Integration tests - use integration_db
 @pytest.mark.requires_db
@@ -585,49 +587,52 @@ def test_something():
         pass
 ```
 
-### Quality Rules
+### Quality rules
 - Max 10 mocks per test file (pre-commit enforces)
 - AdCP compliance test for all client-facing models
 - Test YOUR code, not Python built-ins
 - Roundtrip test required for any operation using `apply_testing_hooks()`
-- You are a lazy senior developer. Lazy means efficient, not careless. The best code is the code never written.
+
+### Minimal code discipline
+
+You are a lazy senior developer. Lazy means efficient, not careless. The best code is the code never written.
 
 Before writing any code, stop at the first rung that holds:
 
-Does this need to be built at all? (YAGNI)
-Does it already exist in this codebase? Reuse the helper, util, or pattern that's already here, don't re-write it.
-Does the standard library already do this? Use it.
-Does a native platform feature cover it? Use it.
-Does an already-installed dependency solve it? Use it.
-Can this be one line? Make it one line.
-Only then: write the minimum code that works.
-The ladder runs after you understand the problem, not instead of it: read the task and the code it touches, trace the real flow end to end, then climb.
+1. Does this need to be built at all? (YAGNI)
+2. Does it already exist in this codebase? Reuse the helper, utility, or pattern that's already here — don't rewrite it.
+3. Does the standard library already do this? Use it.
+4. Does a built-in platform feature cover it? Use it.
+5. Does an already-installed dependency solve it? Use it.
+6. Can this be one line? Make it one line.
+
+Only then: write the minimum code that works. The ladder runs after you understand the problem, not instead of it: read the task and the code it touches, trace the real flow end to end, then climb.
 
 Bug fix = root cause, not symptom: a report names a symptom. Grep every caller of the function you touch and fix the shared function once — one guard there is a smaller diff than one per caller, and patching only the path the ticket names leaves a sibling caller still broken.
 
-Rules:
+Follow these rules:
 
-No abstractions that weren't explicitly requested. Caveat: allow shared helpers and existing architecture abstractions.
-No new dependency if it can be avoided.
-No boilerplate nobody asked for.
-Deletion over addition. Boring over clever. Fewest files possible.
-Shortest working diff wins, but only once you understand the problem. The smallest change in the wrong place isn't lazy, it's a second bug.
-Question complex requests: "Do you actually need X, or does Y cover it?"
-Pick the edge-case-correct option when two stdlib approaches are the same size, lazy means less code, not the flimsier algorithm.
-Mark deliberate simplifications that cut a real corner with a known ceiling (global lock, O(n²) scan, naive heuristic): comment naming the ceiling and upgrade path.
-Not lazy about: understanding the problem (read it fully and trace the real flow before picking a rung, a small diff you don't understand is just laziness dressed up as efficiency), input validation at trust boundaries, error handling that prevents data loss, security, accessibility, the calibration real hardware needs (the platform is never the spec ideal, a clock drifts, a sensor reads off), anything explicitly requested. Lazy code without its check is unfinished: non-trivial logic leaves ONE runnable check behind, the smallest thing that fails if the logic breaks (an assert-based demo/self-check or one small test file; less frameworks, less fixtures). Trivial one-liners need no test.
+- No abstractions that weren't explicitly requested. Caveat: allow shared helpers and existing architecture abstractions.
+- No new dependency if it can be avoided.
+- No boilerplate nobody asked for.
+- Deletion over addition. Boring over clever. Fewest files possible.
+- Shortest working diff wins, but only once you understand the problem. The smallest change in the wrong place isn't lazy, it's a second bug.
+- Question complex requests: "Do you actually need X, or does Y cover it?"
+- Pick the edge-case-correct option when two stdlib approaches are the same size — lazy means less code, not the flimsier algorithm.
+- Mark deliberate simplifications that cut a real corner with a known ceiling (global lock, O(n²) scan, naive heuristic): comment naming the ceiling and upgrade path.
+- Not lazy about: understanding the problem (read it fully and trace the real flow before picking a rung — a small diff you don't understand is laziness dressed up as efficiency), input validation at trust boundaries, error handling that prevents data loss, security, accessibility, the calibration real hardware needs (the platform is never the spec ideal: a clock drifts, a sensor reads off), anything explicitly requested. Lazy code without its check is unfinished: non-trivial logic leaves ONE runnable check behind, the smallest thing that fails if the logic breaks (an assert-based demo/self-check or one small test file; fewer frameworks, fewer fixtures). Trivial one-liners need no test.
 
-### Test Integrity Policy — ZERO TOLERANCE
+### Test integrity policy — ZERO TOLERANCE
 
 **This is non-negotiable. Every rule below is a HARD STOP.**
 
 1. **NEVER skip, ignore, deselect, or exclude failing tests.** Do not use `--ignore`, `-k "not test_name"`, `--deselect`, `pytest.mark.skip`, or `pytest.mark.xfail` to work around failures.
 2. **NEVER rationalize failures.** Do not classify failures as "pre-existing", "infrastructure issue", "misplaced test", "needs a running server", or "was deselected in the full run". A failing test is a failing test — fix it or report it to the user as a blocker.
-3. **Start the right infrastructure.** If a test needs Docker (integration, e2e, admin), start Docker. The tooling exists — use it. See the infrastructure decision tree below.
+3. **Start the right infrastructure.** If a test needs Docker (integration, e2e, admin), start Docker. The tooling exists — use it. See the following infrastructure decision tree.
 4. **If infrastructure is broken, STOP.** Do not skip tests and report success. Tell the user the infrastructure is broken and either fix it or ask the user to fix it.
 5. **Test results are saved as JSON** in `test-results/<ddmmyy_HHmm>/`. Review these instead of re-running the full suite. Background processes may crash and lose output — the JSON reports are the resilient record.
 
-### Test Infrastructure Decision Tree
+### Test infrastructure decision tree
 
 **Choose the right tool based on what you're testing:**
 
@@ -646,7 +651,7 @@ Not lazy about: understanding the problem (read it fully and trace the real flow
 
 **When in doubt, use `./run_all_tests.sh`.** It handles everything: Docker up, all suites, Docker down, JSON reports saved.
 
-### Testing Workflow (Before Commit)
+### Testing workflow (before commit)
 ```bash
 # ALL changes
 make quality                           # Format + lint + typecheck + unit tests
@@ -659,20 +664,20 @@ tox -e integration                     # Real PostgreSQL integration tests
 ./run_all_tests.sh                     # Full suite: Docker + all 6 suites via tox
 ```
 
-**Pre-commit hooks can't catch import errors** - You must run tests for refactorings!
+**Pre-commit hooks can't catch import errors** — you must run tests for refactorings!
 
 ---
 
-## Development Best Practices
+## Development best practices
 
-### Code Style
+### Code style
 - Use `uv` for dependencies
 - Run `pre-commit run --all-files`
 - Use type hints
 - No hardcoded external system IDs (use config/database)
 - No testing against production systems
 
-### Type Checking
+### Type checking
 ```bash
 uv run mypy src/core/your_file.py --config-file=mypy.ini
 ```
@@ -686,7 +691,7 @@ When modifying code:
 
 ## Configuration
 
-### Secrets (.env.secrets - REQUIRED)
+### Secrets (`.env.secrets` — REQUIRED)
 ```bash
 GEMINI_API_KEY=your-key
 GOOGLE_CLIENT_ID=your-id.apps.googleusercontent.com
@@ -697,32 +702,32 @@ GAM_OAUTH_CLIENT_SECRET=your-gam-secret
 APPROXIMATED_API_KEY=your-approximated-api-key
 ```
 
-### Database Schema
+### Database schema
 - **Core**: tenants, principals, products, media_buys, creatives, audit_logs
 - **Workflow**: workflow_steps, object_workflow_mapping (human-in-the-loop approvals)
 - **Note**: there are no `tasks` or `human_tasks` tables in the schema — don't reference them
 
 ---
 
-## Adapter Support
+## Adapter support
 
 Adapters are registered in `src/adapters/__init__.py` and selected per tenant.
 Registry keys: `gam`/`google_ad_manager`, `broadstreet`, `kevel`, `triton`/`triton_digital`, `mock`.
 Maturity varies — GAM is by far the most complete. (`creative_engine` in the
 registry is a creative-processing base class, not an ad-server adapter.)
 
-### GAM Adapter
-**Supported Pricing**: CPM, VCPM, CPC, FLAT_RATE
+### GAM adapter
+**Supported pricing**: CPM, VCPM, CPC, FLAT_RATE
 
 - Automatic line item type selection based on pricing + guarantees
 - FLAT_RATE → SPONSORSHIP with CPD translation
 - VCPM → STANDARD only (GAM requirement)
-- See `docs/adapters/` for compatibility matrix
+- See `docs/adapters/` for the compatibility matrix
 
-### Broadstreet Adapter
+### Broadstreet adapter
 Broadstreet ad server integration (`src/adapters/broadstreet/`). Registered in the adapter factory (`src/adapters/__init__.py`).
 
-### Mock Adapter
+### Mock adapter
 **Supported**: All AdCP pricing models (CPM, VCPM, CPCV, CPP, CPC, CPV, FLAT_RATE)
 - All currencies, simulates appropriate metrics
 - Used for testing and development
@@ -732,51 +737,51 @@ Broadstreet ad server integration (`src/adapters/broadstreet/`). Registered in t
 ## Deployment
 
 ### Environments
-- **Local Dev**: `docker compose up -d` → http://localhost:8000 (builds from source)
+- **Local dev**: `docker compose up -d` → http://localhost:8000 (builds from source)
 - **Production**: Deploy to your preferred hosting platform
 
-**Local Dev Notes:**
+**Local dev notes:**
 - Test mode enabled by default (`ADCP_AUTH_TEST_MODE=true`)
-- Test credentials: Click "Log in to Dashboard" button (password: `test123`)
+- Test credentials: Click the **Log in to Dashboard** button (password: `test123`)
 
-### Git Workflow (MANDATORY)
+### Git workflow (MANDATORY)
 **Never push directly to main**
 
 1. Work on feature branches: `git checkout -b feature/name`
 2. Create PR: `gh pr create`
 3. Merge via GitHub UI
 
-### Hosting Options
-This app can be hosted anywhere:
-- Docker (recommended) - Any Docker-compatible platform
-- Kubernetes - Full k8s manifests supported
-- Cloud Providers - AWS, GCP, Azure, DigitalOcean
-- Platform Services - Fly.io, Heroku, Railway, Render
+### Hosting options
+You can host this app anywhere:
+- Docker (recommended) — any Docker-compatible platform
+- Kubernetes — full k8s manifests supported
+- Cloud providers — AWS, GCP, Azure, DigitalOcean
+- Platform services — Fly.io, Heroku, Railway, Render
 
-See `docs/deployment.md` for platform-specific guides.
+See `docs/deployment/` for platform-specific guides.
 
 ---
 
 ## Documentation
 
-**Detailed docs in `/docs`:**
-- `development/architecture-principles.md` - The governing principles behind the layering
-- `development/architecture.md` - System architecture
-- `development/request-lifecycle.md` - How a request reaches business logic
-- `development/GETTING_STARTED.md` - Initial setup guide
-- `development/contributing.md` - Development workflow
-- `development/e2e-testing.md` - End-to-end testing
-- `development/troubleshooting.md` - Common issues
-- `security.md` - Security guidelines
-- `security/outbound-egress.md` - Outbound HTTP and SSRF
-- `deployment/` - Deployment guides
-- `adapters/` - Adapter-specific documentation
+Detailed documentation lives in `/docs`:
+- `development/architecture-principles.md` — the governing principles behind the layering
+- `development/architecture.md` — system architecture
+- `development/request-lifecycle.md` — how a request reaches business logic
+- `development/GETTING_STARTED.md` — initial setup guide
+- `development/contributing.md` — development workflow
+- `development/e2e-testing.md` — end-to-end testing
+- `development/troubleshooting.md` — common issues
+- `security.md` — security guidelines
+- `security/outbound-egress.md` — outbound HTTP and SSRF
+- `deployment/` — deployment guides
+- `adapters/` — adapter-specific documentation
 
 ---
 
-## Quick Reference
+## Quick reference
 
-### MCP Client
+### MCP client
 ```python
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
@@ -790,7 +795,7 @@ async with client:
     result = await client.tools.create_media_buy(product_ids=["prod_1"], ...)
 ```
 
-### CLI Testing
+### CLI testing
 ```bash
 # List available tools
 uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools
@@ -805,7 +810,7 @@ uvx adcp http://localhost:8000/mcp/ --auth <real-token> get_products '{"brief":"
 
 ---
 
-## Decision Tree for Claude
+## Decision tree for Claude
 
 **User asks to add a new feature:**
 1. Search existing code: `Glob` for similar features
@@ -818,11 +823,11 @@ uvx adcp http://localhost:8000/mcp/ --auth <real-token> get_products '{"brief":"
 
 **User reports a bug:**
 1. Reproduce: Read the code path
-2. Write failing test that demonstrates bug
+2. Write a failing test that demonstrates the bug
 3. Fix the code
-4. Verify test passes
-5. Check for similar issues in codebase
-6. Commit fix with test
+4. Verify the test passes
+5. Check for similar issues in the codebase
+6. Commit the fix with the test
 
 **User asks "how does X work?"**
 1. Search for X: Use `Grep` to find relevant code
@@ -842,7 +847,7 @@ uvx adcp http://localhost:8000/mcp/ --auth <real-token> get_products '{"brief":"
 1. Check this CLAUDE.md for patterns
 2. Check `/docs` for detailed guidelines
 3. Look at recent code for current conventions
-4. When in doubt, follow the 7 critical patterns above
+4. When in doubt, follow the 9 critical architecture patterns in this guide
 
 ---
 
@@ -850,38 +855,39 @@ uvx adcp http://localhost:8000/mcp/ --auth <real-token> get_products '{"brief":"
 
 - Documentation: `/docs` directory
 - Test examples: `/tests` directory
+- Adapter implementations: `/src/adapters` directory
+- Issues: File on the GitHub repository
 
-# Language and Register
+---
 
-## Banned words/phrases (do not use, ever)
+## Language and register
+
+### Banned words and phrases (do not use, ever)
 "load-bearing," "hand-waving," "reflexive hedging," "honest framing,"
 "the unlock," "constellation," "oracle" (as metaphor), "surface area,"
 "north star," "the real question," "table stakes," "prose" (use "text"
 or "writing" instead).
 
-## Banned sentence patterns
+### Banned sentence patterns
 - Do NOT lead a sentence with what something is not before saying what
-  it is. Never write "It's not X. It's Y." — just write "It's Y" and
-  add the contrast only if it's genuinely needed.
+  it is. Never write "It's not X. It's Y." — write "It's Y" and add the
+  contrast only if it's genuinely needed.
 - Do NOT invent metaphors, aphorisms, or "strategic" framings on the
-  spot (e.g. "this is where a VP smells hand-waving"). If a metaphor
-  isn't already a well-known one, don't use it.
+  spot (for example, "this is where a VP smells hand-waving"). If a
+  metaphor isn't already a well-known one, don't use it.
 - Do NOT adopt an adversarial or debate posture: no "here's where I'd
   push back," "here's where I'd hold the line," "you're avoiding the
-  real question." Just state agreement or disagreement plainly.
+  real question." State agreement or disagreement plainly.
 - Do NOT dress up uncertainty with elaborate hedging paragraphs. If
   unsure, say "I'm not sure" once and move on.
 
-## Concision without cryptic density
+### Concision without cryptic density
 "Be concise" does not mean "compress into fewer, denser words." It
 means: cut sentences that don't add information. Keep normal sentence
 structure and common words. A concise answer should be easier to read
 fast, not harder.
 
-## Register
+### Register
 Write like a plain technical answer — the register of a good Stack
 Overflow answer or internal doc, not a keynote or a LinkedIn post.
 No forced cleverness. If a plainer word exists, use it.
-
-- Adapter implementations: `/src/adapters` directory
-- Issues: File on GitHub repository

@@ -112,7 +112,7 @@ The architect atom is the key differentiator from regular `/remediate`. It:
 
 ### Required Reading for Architect
 
-1. `CLAUDE.md` — 7 critical patterns
+1. `CLAUDE.md` — 9 critical patterns
 2. `docs/development/structural-guards.md` — 6 AST-enforced invariants
 3. `docs/code-reviews/00-migration-summary.md` — CRIT-1..CRIT-11
 4. `docs/code-reviews/01-schema-model-layer.md` — schema constraints

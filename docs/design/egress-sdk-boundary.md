@@ -1,27 +1,27 @@
-# The egress seam and the SDK boundary
+# The egress gateway and the SDK boundary
 
-Where the seam is, what the `adcp` SDK owns, what this repo implements on top,
-and which parts of that are temporary.
+This document describes where the gateway is, what the `adcp` SDK owns, what this
+repo implements on top, and which parts of that are temporary.
 
-Companion to [Outbound egress: one seam](../security/outbound-egress.md),
+It is a companion to [Outbound egress: one gateway](../security/outbound-egress.md),
 which states the rule for people who need to make a request. This document
-is for people changing the seam, or deciding whether a new concern belongs here
+is for people changing the gateway, or deciding whether a new concern belongs here
 or upstream.
 
 ## The module map
 
 ```
 src/core/security/
-  outbound_http.py          the seam. send / asend. the only public entry point
+  outbound_http.py          the gateway. send / asend. the only public entry point
   egress/
-    policy.py               the address + scheme verdicts, and the one predicate they share
-    attempts.py             the retry SCHEDULE as pure steppable values — no I/O, no httpx
-    response.py             OutboundResult — the closed response shape consumers read
-    destination.py          the typed notion of WHERE a URL came from, at construction time
+    policy.py               the address and scheme verdicts, and the one predicate they share
+    attempts.py             the retry schedule as pure values — no I/O, no httpx
+    response.py             OutboundResult — the closed response type consumers read
+    destination.py          the typed record of where a URL came from, at construction time
 ```
 
-Two sibling seams build on this package rather than living in it:
-`src/core/utils/mcp_client.py` (MCP dials, pinned through
+Two sibling gateway modules build on this package rather than living in it:
+`src/core/utils/mcp_client.py` (MCP connections, pinned through
 `guarded_client_factory`) and `src/core/security/webhook_egress.py` (signed
 webhook delivery through `asend`).
 
@@ -31,17 +31,17 @@ Each module owns exactly one decision, and the split is deliberate:
   machine returning retry / success / terminal, which `send` and `asend` drive
   *identically* — one loop definition, so the sync and async paths cannot
   drift apart.
-- **`response.py` closes the response shape.** `OutboundResult` exposes no
+- **`response.py` closes the response type.** `OutboundResult` exposes no
   live `httpx.Response`: a result that leaked the raw response would let call
   sites program against httpx with the import ban still satisfied — true and
-  useless at the same time. The closed shape is what makes "no raw egress"
-  mean something.
+  useless at the same time. The closed type is what gives "no raw egress"
+  its meaning.
 - **`destination.py` is not `UrlProvenance`.** They answer different questions
   at different moments: `UrlProvenance` answers *"who do I blame in this
-  refusal"* when a dial fails, and deliberately never carries the URL;
-  `VendorConstant` answers *"where in source did this constant come from"* when
-  a call site builds a URL, and does carry it. A call site may legitimately use
-  both.
+  refusal"* when a connection attempt fails, and deliberately never carries the
+  URL; `VendorConstant` answers *"where in source did this constant come from"*
+  when a call site builds a URL, and does carry it. A call site may
+  legitimately use both.
 
 ## What comes from the SDK
 
@@ -56,32 +56,32 @@ imports these mechanisms; it never reimplements them:
 | `types.*`, `types.generated_poc.*` | the wire schema |
 | `canonical_formats` | format identity |
 | `webhook_receiver.verify_webhook_hmac` | the AdCP 3.x HMAC fallback verification |
-| `types.AuthenticationScheme` | the ONE webhook auth vocabulary — see [One vocabulary for webhook auth](#one-vocabulary-for-webhook-auth) |
+| `types.AuthenticationScheme` | the single webhook auth vocabulary — see [One vocabulary for webhook auth](#one-vocabulary-for-webhook-auth) |
 
 **The single most important consequence:** because the SDK resolves once and
 pins that IP into the transport, the address that was validated is the address
-that gets connected. Any code that validates a hostname and then hands the
-*hostname* to a client has reintroduced the DNS-rebinding TOCTOU
-(time-of-check to time-of-use) hole, however thorough its checks are. This is
-why "just add a check here" is not a smaller version of the right fix — it is
-a different, broken shape.
+the transport connects to. Any code that validates a hostname and then hands
+the *hostname* to a client has reintroduced the DNS-rebinding TOCTOU
+(time-of-check to time-of-use) vulnerability, however thorough its checks are.
+This is why "just add a check here" is not a smaller version of the right fix —
+it is a different, broken design.
 
 ### One SDK symbol is banned outright
 
 `adcp.webhooks.get_adcp_signed_headers_for_webhook` is on the TID251 ban list.
 It discards the body bytes it signs, so its own documented usage — sign, then
 send `json=payload` separately — reintroduces the signed-bytes-vs-wire-bytes
-divergence. Sign and send through the seam with the signed byte string instead.
+divergence. Sign and send through the gateway with the signed byte string instead.
 
-That an SDK ships a footgun is not a contradiction of "the SDK owns this": it
-owns address validation and pinning, which is not the same as every helper in
-it being safe. Treat the SDK as authoritative where it is the mechanism, and as
-a cross-check elsewhere.
+That an SDK ships an unsafe helper is not a contradiction of "the SDK owns
+this": the SDK owns address validation and pinning, which is not the same as
+every helper in it being safe. Treat the SDK as authoritative where it is the
+mechanism, and as a cross-check elsewhere.
 
-## What is carried here only until upstream catches up
+## Workarounds carried until upstream provides them
 
-The seam carries two overloads, both marked in the source. Neither is a design
-position — each is a dated workaround with a named retirement.
+The gateway carries two workarounds, both marked in the source. Neither is a
+design position — each is dated and has a named retirement condition.
 
 ### Five of the six supplement ranges
 
@@ -95,24 +95,25 @@ position — each is a dated workaround with a named retirement.
 the SDK classifies them. **CGNAT `100.64.0.0/10` stays**, because AdCP 3.1.1
 names it explicitly as a range a fetcher MUST reject.
 
-Retirement: adopt the release, delete the five, keep CGNAT, and confirm the
-oracle table in `tests/integration/test_outbound_http.py` still covers the
-production set exactly — a completeness test grades that both ways, so removing
-a range without removing its row fails, and adding one without a row fails too.
+Retirement: adopt the release, delete the five, keep CGNAT, and confirm that
+the oracle table in `tests/integration/test_outbound_http.py` still covers the
+production set exactly — a completeness test checks both directions, so
+removing a range without removing its row fails, and adding a range without
+adding a row fails too.
 
-The bump has been deliberately deferred: it is a major version jump, and the
+The version bump is deliberately deferred: it is a major version jump, and the
 owner's call was that it is not worth the risk for this alone.
 
-### Operator agent dials do not use the SDK client
+### Operator agent connections do not use the SDK client
 
-`creative_agent_registry` and `signals_agent_registry` dial through
+`creative_agent_registry` and `signals_agent_registry` connect through
 `src/core/utils/operator_mcp.py::call_operator_mcp_tool` — a real MCP handshake
 that is IP-pinned and redirect-refusing — rather than `adcp.ADCPMultiAgentClient`.
 
 The reason is concrete rather than stylistic: adcp 6.6.0 exposes no transport
 injection point, so the SDK client builds its own connection — following
-redirects included — and the dial reaches **none** of this application's
-egress policy.
+redirects included — and that connection passes through **none** of this
+application's egress policy.
 
 Retirement: **adcp-client-python#1004**, which adds the injection point. The
 citation is at `src/core/creative_agent_registry.py` and
@@ -120,41 +121,42 @@ citation is at `src/core/creative_agent_registry.py` and
 
 ## The validation split: two verdicts, one predicate
 
-The seam is asked two different questions at two different times, so there are
+The gateway is asked two different questions at two different times, so there are
 two verdicts:
 
 | | `check_registration` | `resolve_for_dial` |
 |---|---|---|
-| When | A URL is **stored** (webhook registration) | Something is **about to dial** |
+| When | A URL is **stored** (webhook registration) | Something is **about to connect** |
 | DNS | None — never resolves | Resolves once, pins the result |
 | Catches | A literal `10.0.0.1`, a bad scheme, a blocked hostname | What a name actually points at |
 | Cannot catch | What `evil.example.com` resolves to | Nothing it was given a chance to see |
-| `allow_private` | **No such parameter** | Test-only hatch — see [What no posture opens](#what-no-posture-opens) |
+| `allow_private` | **No such parameter** | Test-only override — see [What no override opens](#what-no-override-opens) |
 
 They read the **same** `_blocked_address` predicate, the same hostname
 blocklist, and the same scheme rule. That is the point: two independently
-maintained copies of "what is a bad address" is the disease this module exists
-to prevent, and the reason registration and dial cannot drift into disagreeing.
+maintained copies of "what is a bad address" is the defect this module exists
+to prevent, and the reason the registration and connection checks cannot drift
+into disagreement.
 
 Registration is DNS-free **on purpose**, and it is worth stating why.
 
 It runs when a buyer hands you a URL and there is no request to attach a refusal
 to yet. A registration-time resolution was never binding: DNS moves between
-registration and the first dial, so an unresolvable-but-public hostname must be
-*accepted* now and re-checked when the callback is actually dialled. Resolving
-at storage time is a side effect of storing data that proves nothing.
+registration and the first connection, so a hostname that is public but
+unresolvable must be *accepted* now and re-checked when the gateway actually
+connects to the callback. Resolving at storage time is a side effect of storing
+data that proves nothing.
 
-The admin route runs the same single funnel every protocol surface runs,
-losing registration-time DNS deliberately — two gates that can disagree hand
-the same URL two verdicts depending on which answers.
+The admin route runs the same single validation path that every protocol
+surface runs, deliberately giving up registration-time DNS — two gates that can
+disagree give the same URL two verdicts, depending on which one answers.
 `tests/integration/test_admin_ingest_url_policy.py` pins the decision: it
-asserts the resolver is called **zero** times at registration, so reinstating
-resolution has to be a deliberate act with a failing test in front of it, not
-an innocent-looking "we should validate earlier" change.
+asserts that the resolver is called **zero** times at registration, so
+reinstating resolution has to be a deliberate act with a failing test in front
+of it, not an innocent-looking "we should validate earlier" change.
 
-That technique generalises: when you keep a behaviour out on purpose, pin its
-absence with a test — an asserted absence makes the decision argue for
-itself.
+That technique generalizes: when you keep a behavior out on purpose, pin its
+absence with a test — an asserted absence makes the decision defend itself.
 
 ### Open question: the loopback rescue
 
@@ -167,44 +169,46 @@ only**, never a flag threaded into `_blocked_address` — a threaded flag rescue
 every supplement range and every RFC 1918 address at registration, not only
 loopback. It never rescues a scheme refusal.
 
-The unsettled part: the rescue is structurally close to an SSRF trust bypass
-of the "trust whatever hostname an env var names" shape — no helper of that
-shape (`_is_trusted_test_host` and the like) exists here, deliberately. There is a real distinction — loopback-ness is
-re-derived structurally from the URL, rather than read from an env var — but
-no commit states that distinction as a decision. Until that sentence exists,
-do not widen `allow_loopback`, and do not "harmonise" it toward an env-named
-trusted host.
+The unsettled part: the rescue is structurally close to an SSRF trust bypass of
+the form "trust whatever hostname an environment variable names" — no helper of
+that form, such as `_is_trusted_test_host`, exists here, deliberately. There is
+a real distinction — the loopback property is re-derived structurally from the
+URL, rather than read from an environment variable — but no commit states that
+distinction as a decision. Until that sentence exists, do not widen
+`allow_loopback`, and do not "harmonize" it toward a trusted host named by an
+environment variable.
 
 A trap for anyone touching the tests: the test cases `blocks_localhost` /
-`blocks_127_0_0_1` pin `ADCP_TESTING` off and assert both arms of the
+`blocks_127_0_0_1` pin `ADCP_TESTING` off and assert both branches of the
 allowance — an autouse `ADCP_TESTING=true` would feed the rescue and make
-them grade the opposite of what their names claim.
+them test the opposite of what their names claim.
 
 ### Stored rows are not re-validated
 
 A related split follows the same reasoning about who is present to fix a
-problem: **ingest validates, rehydration does not.** Reading a stored registration carries the
-document through the library type with `model_construct`, nested models included.
+problem: **ingest validates, rehydration does not.** Reading a stored
+registration carries the document through the library type with
+`model_construct`, nested models included.
 
 At ingest a buyer is present to correct a rejection. A stored row has no buyer,
 is delivering *today*, and the delivery path fails closed on its own. Routing
 rehydration through the validating model instead stops already-delivering rows
-over shapes stored data can carry — a short credential, a lowercase scheme
-spelling, an unrecognised scheme, a short `token` or malformed
-`operation_id`, an empty `schemes` list.
+over values that stored data can carry — a short credential, a lowercase scheme
+spelling, an unrecognized scheme, a short `token` or malformed `operation_id`,
+or an empty `schemes` list.
 
 The one exception is principled: an HMAC registration with no secret still
 refuses, because that row never delivered, and delivering it means sending
-unsigned to a receiver obliged to reject unsigned.
+unsigned payloads to a receiver that is obliged to reject them.
 
-### What no posture opens
+### What no override opens
 
 `ADCP_OUTBOUND_ALLOW_PRIVATE=true` relaxes the SDK's flag classes so tests can
 reach their own loopback origin or the compose bridge. It does **not** relax
-the supplement set, which `resolve_for_dial` checks unconditionally ahead of
-the hatch — those six ranges have no second line of defence, which is why they
-are carried at all. The fuller treatment is in
-[Outbound egress: the supplement ranges](../security/outbound-egress.md#the-supplement-ranges-and-the-one-thing-no-posture-opens).
+the supplement set, which `resolve_for_dial` checks unconditionally before the
+override applies — those six ranges have no second line of defense, which is
+why they are carried at all. The fuller treatment is in
+[Outbound egress: the supplement ranges](../security/outbound-egress.md#the-supplement-ranges-and-the-check-no-configuration-relaxes).
 
 ### Refusals say nothing
 
@@ -213,14 +217,14 @@ echo the refusal cause back to the party that supplied the URL. A per-cause
 message at the buyer surface is a port-scanning oracle.
 
 This is structural, not conventional: `AdCPBlockedUrlError.__init__` is
-keyword-only and takes **no `message` parameter**, so a second spelling of the
+keyword-only and takes **no `message` parameter**, so a second wording of the
 refusal is unrepresentable. The cause is not lost — it goes to the operator's
 log. **Do not assert on refusal message text in tests**; assert on the code, and
 at most on the presence or value of structured details carried with the error.
 
 The refusal sentence names neither the field nor the URL, which is exactly why
-the WARNING log line beside each refusal is load-bearing rather than noise —
-the two lines together are the whole story.
+the WARNING log line beside each refusal is essential rather than noise —
+the two lines together carry the complete information.
 
 ### Exception text never reaches stored or buyer-visible fields
 
@@ -235,10 +239,10 @@ Senders use `WebhookDeliveryOutcome.unexpected(exception_type)`
 (`src/core/webhooks/delivery.py`) — a named constructor carrying the
 exception **type** only. The exception's own message still reaches the
 operator in the adjacent log line, which is the right place for it. The
-residual is accepted knowingly and stated in the docstring: the outcome is a
-public frozen dataclass, so a caller can still construct `detail=str(e)` by
-hand — the sanitized form is the named and convenient one, not an
-inexpressibility.
+residual risk is accepted knowingly and stated in the docstring: the outcome is
+a public frozen dataclass, so a caller can still construct `detail=str(e)` by
+hand — the sanitized form is the named and convenient one, not the only
+expressible one.
 
 ## Provenance is carried, not decided
 
@@ -250,7 +254,7 @@ site passes a `UrlProvenance` and chooses the member deliberately, because the
 two members produce genuinely different buyer-facing outcomes
 (`src/core/helpers/outbound_error_mapping.py`):
 
-- `CounterpartyUrl` re-raises the seam's own classification unchanged. The
+- `CounterpartyUrl` re-raises the gateway's own classification unchanged. The
   refusal stays correctable and buyer-facing.
 - `OperatorEndpoint` yields `CONFIGURATION_ERROR`, terminal, naming a **role**
   rather than an address — the buyer did not choose that address and cannot
@@ -260,13 +264,13 @@ two members produce genuinely different buyer-facing outcomes
 The field exists because of the opaque refusal: the message says nothing about
 the cause on purpose, so `error.field` is the **only** channel that can name
 the offending input — without it the error is correctable in name only. And
-the seam cannot compute that path itself: it sees a URL string, never a
+the gateway cannot compute that path itself: it sees a URL string, never a
 request document, and the namespace differs per call site. Hence carried, not
 decided.
 
 `_checked_field(provenance, url)` guards the leak direction: `field` is
 buyer-visible, so a call site that passes the URL — or anything containing it
-— as the field routes straight around the opacity the message maintains. It
+— as the field bypasses the opacity that the message maintains. It
 **raises** rather than quietly dropping the value, because naming a URL where
 a request path belongs is a call-site bug worth surfacing, not one worth
 shipping as a silently fieldless envelope. The containment check runs in the
@@ -276,61 +280,61 @@ buyer-controlled URL must receive the policy verdict, not a manufactured
 
 Never fabricate a path. When a URL came from the request document but has no
 canonical path, construct `CounterpartyUrl` **without** a field — a
-made-up locator like `creative:{id}.agent_url` names a path that does not
+made-up locator such as `creative:{id}.agent_url` names a path that does not
 exist in the pinned request schema. And choose the member deliberately, never
-by default: a fallback dial path that re-classifies a buyer-supplied URL as
-operator configuration on a cache miss turns a correctable refusal into a
+by default: a fallback connection path that re-classifies a buyer-supplied URL
+as operator configuration on a cache miss turns a correctable refusal into a
 terminal one.
 
 The public helper `refusal_field(provenance)` is the one place the
 field-or-nothing derivation lives; call sites that raise their own error at
-the locator a seam refusal would have carried (`creative_agent_registry`) read
-it from there rather than re-deriving whose-URL-is-this with a second
-`isinstance`.
+the locator a gateway refusal would have carried (`creative_agent_registry`) read
+it from there rather than re-deriving the URL's ownership with a second
+`isinstance` check.
 
-## Retry and backoff belong to the seam
+## Retry and backoff belong to the gateway
 
-Retry, backoff, and `Retry-After` handling are seam policy. A new outbound
-call site passes `max_attempts` and lets the seam sleep; a geometric sleep
+Retry, backoff, and `Retry-After` handling are gateway policy. A new outbound
+call site passes `max_attempts` and lets the gateway sleep; a geometric sleep
 anywhere else under `src/` fails `make quality`. Anyone tuning backoff edits
 `attempts.py`.
 
 The schedule does **not** live where a reader expects. It lives in
 `src/core/security/egress/attempts.py` (`_backoff_seconds`, `_wait_seconds`,
 `Attempts`); `outbound_http.py` re-exports two of its names as a test-facing
-facade with no `src/` consumer. The public seam surface is
+facade with no `src/` consumer. The public gateway surface is
 `sleep_backoff(attempts)` and `terminal_client_error_status(exc)`.
 
-Four points worth teaching:
+Four points are worth knowing:
 
-- **The ordering, and why the obvious spelling is wrong.** `_wait_seconds`
+- **The ordering, and why the obvious form is wrong.** `_wait_seconds`
   returns `max(backoff, min(retry_after, 60.0))`: the ceiling clamps the
   Retry-After **contribution** only, and Retry-After can only lengthen a wait.
   The natural-looking `min(max(backoff, retry_after), CEILING)` applies the
   ceiling to the whole wait, so whenever the geometric wait exceeds the
-  ceiling the seam sleeps **less** than the rule requires — silently, in the
+  ceiling the gateway sleeps **less** than the rule requires — silently, in the
   module that owns the rule, and reachable through the public `max_attempts`
   parameter: the schedule is 1, 2, 4, 8, 16, 32, 64 s, so it crosses a 60 s
   ceiling at seven attempts.
-- **The seam sleeps rather than publishing the number.** A public
+- **The gateway sleeps rather than publishing the number.** A public
   `backoff_seconds()` lets `sleep(backoff_seconds(1))` — or a scaled variant —
   drift invisibly, because the guard's detector follows same-module names
   only. An awaitable that returns nothing leaves a call site nothing to get
   wrong but the attempt index.
 - **`Attempts` reifies the loop, not only the decisions.** One loop
-  definition serves `send`, `asend`, and the MCP seam — a loop written per
+  definition serves `send`, `asend`, and the MCP client wrapper — a loop written per
   consumer is where they drift. The abort recorder pins
   `last_retry_after=None`, so a size-cap abort right after a 429 cannot leak
   that attempt's `Retry-After` onto an unrelated failure.
-- **The guard bans the disease class, not the spelling.**
+- **The guard bans the class of defect, not one form of it.**
   `tests/unit/test_architecture_no_call_site_backoff.py` resolves the inline
   form, a local-variable binding, and one hop of same-module helper calls,
   because backoff is nearly always assigned to a variable first or hidden
   behind a helper — a detector that reads only the inline sleep argument
   reports almost nothing. Its list is `NON_HTTP_BACKOFF`, pinned at exactly
-  three entries — a business-state poll, a SOAP retry, a database connection
-  retry: a fixed taxonomy of correct designs that are genuinely not outbound
-  HTTP, not a shrink-only debt list.
+  three entries — a business-state poll, a SOAP retry, and a database
+  connection retry: a fixed taxonomy of correct designs that are genuinely not
+  outbound HTTP, not a debt list that is expected to shrink.
 
 `terminal_client_error_status` exists because the obvious
 `400 <= status < 500` predicate is wrong for 429: it makes a rate-limited
@@ -347,8 +351,9 @@ The scheme a webhook is signed with comes from `adcp.types.AuthenticationScheme`
 in the pinned `adcp==6.6.0` package, generated from the spec rather than
 written here; the spec marks both as legacy, removed in AdCP 4.0). This repo
 does not get to add to it — no seller-local members, and no tolerant
-case-folds for spellings that exist in the wild: rows always exist, and each
-fold is a second spelling of one fact that senders then disagree about.
+case-folding for spellings that exist in the wild: such rows always exist, and
+each folded form is a second spelling of one fact, which senders then disagree
+about.
 
 The sender (`webhook_egress.py::_headers_for`) matches on the enum members with
 `match`/`case`, case-sensitively, and the fall-through raises. That is the
@@ -362,7 +367,7 @@ Stored rows naming a scheme AdCP 3.1.1 does not define are refused as
 outcome, not collateral: a row that cannot be signed correctly must not be
 signed incorrectly.
 
-Three sub-rules, and the third is a trap worth knowing:
+Three sub-rules apply, and the third is a trap worth knowing:
 
 - **Decide on the enum member, never on its text.** `mypy.ini` sets
   `strict_equality`, and a guard
@@ -376,42 +381,42 @@ Three sub-rules, and the third is a trap worth knowing:
   in two places, which is the defect being removed, and it is actively
   dangerous: alembic imports every module under `versions/`, so an import-scope
   `assert` fails `alembic heads` and `alembic upgrade` on any member rename.
-  That bricks the migration system to guard a rename that has not happened.
+  That breaks the migration system to guard a rename that has not happened.
 
 ## Address logic is confined to the egress package — enforced two ways
 
 The rule "do not write address classification outside `egress/`" is stated in
-Pattern #9 and in the seam's own docstring, and — because a rule enforced by
-prose alone is how a second, independently maintained CIDR range set appears
-with no check going red — it is enforced twice, because one mechanism cannot
-see both spellings:
+Pattern #9 and in the gateway's own docstring. It is also enforced twice — a rule
+enforced by prose alone is how a second, independently maintained CIDR range
+set appears with no check failing — and it takes two mechanisms because one
+mechanism cannot see both forms:
 
-| Spelling | Caught by |
+| Form | Caught by |
 |---|---|
 | `import ipaddress`, `socket.gethostbyname` outside `egress/` | TID251 bans in `ruff-egress.toml`, each carrying its reason |
 | A hostname blocklist written as an inline `set`/`frozenset` literal | `tests/unit/test_architecture_no_hostname_blocklist_duplication.py` |
 
 An import ban sees imports. It cannot see a set of hostnames written inline —
-the likelier spelling of this defect, so shipping only the TID251 half leaves
-the likelier half unguarded.
+the likelier form of this defect — so shipping only the TID251 half leaves the
+likelier half unguarded.
 
 The `socket.gethostbyname` ban carries the deeper rule in its message:
-resolve-then-check is a TOCTOU the egress package does not use, because
+resolve-then-check is a TOCTOU pattern the egress package does not use, because
 `adcp.signing` pins the resolved IP in one step. So the ban is not merely "don't
-duplicate policy" — it is **don't reintroduce the two-step shape at all**.
+duplicate policy" — it is **don't reintroduce the two-step pattern at all**.
 
 **What this means if you are asked to block a new range:** add it to
 `_SUPPLEMENT_NETWORKS` in `src/core/security/egress/policy.py`, never at the
 call site. Importing `ipaddress` elsewhere under `src/` fails
 `make quality-ci` with a message pointing there.
 
-## A destination is a typed constant, never an env read with a URL default
+## A destination is a typed constant, never an environment read with a URL default
 
 `VendorConstant` (`src/core/security/egress/destination.py`) is the typed home
 for a fixed vendor endpoint. `APPROXIMATED_BASE_URL` and `GOOGLE_TOKEN_URL` are
 `VendorConstant` instances.
 
-The shape it forbids is worth naming, because it looks entirely ordinary:
+The pattern it forbids is worth naming, because it looks entirely ordinary:
 
 ```python
 APPROXIMATED_BASE_URL = os.environ.get("APPROXIMATED_BASE_URL", "https://cloud.approximated.app")
@@ -419,59 +424,59 @@ APPROXIMATED_BASE_URL = os.environ.get("APPROXIMATED_BASE_URL", "https://cloud.a
 
 That is a **credential-bearing destination, silently redirectable at import time
 by one environment variable**. The destination-rewrite guard therefore runs two
-detectors: stdlib URL-reassembly spellings (`urlunparse`, `urlunsplit`,
+detectors: stdlib URL-reassembly calls (`urlunparse`, `urlunsplit`,
 `._replace`), and any module-level constant sourced from
-`os.environ.get(...)` / `os.getenv(...)` with a URL-shaped default, anywhere
-under `src/` — an env read with a URL-shaped default is none of the reassembly
-spellings, so the first detector alone would miss it.
+`os.environ.get(...)` / `os.getenv(...)` with a URL-like default, anywhere
+under `src/` — an environment read with a URL-like default matches none of the
+reassembly calls, so the first detector alone would miss it.
 
 Exclusions are **per file with a stated reason**, not a growable allowlist,
 and the scanner raises on an exclusion that suppresses nothing. There is one:
 `src/app.py`'s CORS `allow_origins` — an *inbound* allowlist with no relation
-to the egress seam, a genuine false positive.
+to the egress gateway, a genuine false positive.
 (`creative_agent_registry.py`'s sanctioned `CREATIVE_AGENT_URL` connection
-alias sits outside both detectors' spellings — it swaps a whole string inside
-a function, not a URL part or a module-level env default — and is bounded
-behaviourally by
+alias sits outside both detectors' scope — it swaps a whole string inside
+a function, not a URL part or a module-level environment default — and is
+bounded behaviorally by
 `tests/unit/test_creative_agent_connection_alias.py`.)
 
 `VendorConstant` is deliberately a single member, not a union. Do not add
 sibling members or a `Destination` union alias to make the vocabulary look
-symmetrical: the counterpart concepts already live in `UrlProvenance`, and an
-unconstructed homonym half is two vocabularies for one concept.
+symmetrical: the counterpart concepts already live in `UrlProvenance`, and a
+parallel type that nothing constructs gives one concept two representations.
 
-## Replace a validator without opening a window
+## Replace a validator without opening a gap
 
-Two ordering rules for anyone deleting or replacing an egress guard:
+Two ordering rules apply for anyone deleting or replacing an egress guard:
 
 - **Delete a validator last, after its callers are migrated.** Removing it
   earlier leaves counterparty URLs validated by nothing while its replacement
   is still being wired. And check which sibling you are deleting:
   `WebhookURLValidator` (`src/core/webhook_validator.py`) is a thin wrapper
-  over `check_registration` — a caller of the seam, not a rival validator.
+  over `check_registration` — a caller of the gateway, not a rival validator.
 - **An empty allowlist is only honest when a second scan covers what the
   first cannot see.** The raw-egress allowlist is empty, and that is truthful
   only because a second scan — with its own permanently non-empty allowlist —
   covers SDK and MCP client egress. Otherwise "all outbound HTTP goes through
-  the seam" is certified while whole client types still dial counterparty
-  URLs unvalidated.
+  the gateway" is certified while whole client types still connect to
+  counterparty URLs unvalidated.
 
 ## Decide where a new concern belongs
 
-Ask in this order:
+Ask these questions in order:
 
 1. **Does the SDK already own it?** Address classification, resolution,
    pinning, and signing do. Import it. If the SDK is wrong, fix it upstream — a local
    copy is how the two go out of step.
-2. **Is it a policy the seam should decide once?** Then it belongs in
+2. **Is it a policy the gateway should decide once?** Then it belongs in
    `egress/`, in the module that owns that decision, expressed as a value rather
-   than an effect where possible (`attempts.py` is the model: no I/O, fully
-   steppable).
+   than an effect where possible (`attempts.py` is the model: no I/O, a pure
+   state machine).
 3. **Is it a call-site concern?** Then it is probably not a policy — pass it in.
-   If you are about to write address logic at a call site, that is the shape
+   If you are about to write address logic at a call site, that is the pattern
    this package exists to remove.
 
 ## Related
 
-- [Outbound egress: one seam](../security/outbound-egress.md) — the rule, and the three enforcement layers
+- [Outbound egress: one gateway](../security/outbound-egress.md) — the rule, and the three enforcement layers
 - `CLAUDE.md` Pattern #9 — the same, for agents
