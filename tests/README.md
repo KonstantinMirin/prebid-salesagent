@@ -61,7 +61,7 @@ with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
 ```
 
 Environments auto-patch external dependencies, bind database sessions to factories,
-and support dispatching through all 4 transports (IMPL, A2A, MCP, REST).
+and support dispatching through the three transports (A2A, MCP, REST), in-process or over real HTTP.
 
 See [`CLAUDE.md`](CLAUDE.md) for the full environment table and API reference.
 

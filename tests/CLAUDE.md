@@ -55,25 +55,26 @@ with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
 
 ### Transport dispatching
 
-Every `_impl` function is wrapped by MCP, A2A, and REST transports. Tests should verify
-behavior across the transports that grade them. The `Transport` enum has seven
-members — the four in-process ones (`IMPL`, `A2A`, `MCP`, `REST`) plus three
-`E2E_*` variants that dispatch over real HTTP (`tests/harness/transport.py`).
-A unit or integration test may loop over the in-process transports directly:
+There are three transports: **A2A, MCP and REST**. Every `_impl` function is
+wrapped by all three, each dispatches in-process, and each has an `E2E_*`
+variant that dispatches the same call over real HTTP
+(`tests/harness/transport.py`). Tests verify behavior across the transports
+that grade them:
 
 ```python
 from tests.harness.transport import Transport
 
-for transport in [Transport.IMPL, Transport.A2A, Transport.MCP, Transport.REST]:
+for transport in [Transport.A2A, Transport.MCP, Transport.REST]:
     result = env.call_via(transport, media_buy_ids=[buy.media_buy_id])
     assert result.is_success
 ```
 
-What the enum contains and what BDD auto-parametrizes are different claims:
-BDD's `pytest_generate_tests()` parametrizes **a2a/mcp/rest only** (plus
-`e2e_rest` when the in-network stack enables it) — BDD grades AdCP *wire*
-conformance, and IMPL has no wire. IMPL stays available to unit and
-integration tests through the harness.
+BDD parametrizes exactly these three, plus `e2e_rest` when the in-network
+stack enables it — a scenario grades AdCP wire conformance, so it must run
+where there is a wire.
+
+A direct call to `_impl` is not a transport and grades no wire; `Transport.IMPL`
+is legacy and is removed by #1721 — do not write new tests against it.
 
 ### Symbol index
 
@@ -112,9 +113,9 @@ Step definitions are organized in two layers:
 - **`tests/bdd/steps/domain/`** — Use-case-specific steps (delivery, creative formats)
 
 Every BDD scenario is automatically parametrized across the wire transports (A2A, MCP, REST —
-plus `e2e_rest` in-network) unless tagged with a specific transport; IMPL is not
-auto-parametrized. The `ctx` fixture is a mutable dict shared across steps,
-with `ctx["env"]` holding the harness environment.
+plus `e2e_rest` in-network) unless tagged with a specific transport. The `ctx`
+fixture is a mutable dict shared across steps, with `ctx["env"]` holding the
+harness environment.
 
 ```bash
 tox -e bdd
@@ -185,27 +186,127 @@ carries one.
 4. MUST use factory-boy factories for data setup
 5. MUST NOT be mock-echo only (asserting mock return values)
 
-## Test Data and Sessions: Factories and the Harness Only
+## HOWTO: The Three Moves of a Test
 
-Create all test data with the factory-boy factories imported from
-`tests/factories` (never from `tests/fixtures`, whose dict-based namesakes
-return plain dicts, not ORM models), inside a harness env. Do not call
-`session.add()` or `get_db_session()` in test bodies — the harness owns the
-session and binds it to the factories — and do not hand-roll `mock.patch`
-stacks for dependencies the env already manages.
+Every behavioral test makes the same three moves: put the world in a starting
+state (Given), run production through a transport (When), and check what the
+run produced (Then). Each move has exactly one recipe.
+
+### How to set state in a Given step
+
+**Goal:** starting state lives in two places — database entities, and the
+collaborators the env manages (adapter, format registry, HTTP origins).
+Program both through the env.
+
+**The call:** open the domain env, create entities with the factory-boy
+factories from `tests/factories`, and program collaborators with the env's
+`set_*` methods:
 
 ```python
-# One env, factories, harness-managed mocks and session
+from tests.factories import TenantFactory, PrincipalFactory, MediaBuyFactory
+from tests.harness import DeliveryPollEnv
+
 with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
     tenant = TenantFactory(tenant_id="t1")
-    env.set_adapter_response(buy_id, impressions=5000)
-    result = env.call_impl(media_buy_ids=[buy_id])
+    principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+    buy = MediaBuyFactory(tenant=tenant, principal=principal)
+    env.set_adapter_response(buy.media_buy_id, impressions=5000)
 ```
 
-The structural guard `test_architecture_repository_pattern.py` fails new
-violations at `make quality`; its allowlist only shrinks. Tests that predate
-the harness and factories are legacy — do not copy their setup; all new work
-follows the pattern above.
+`IntegrationEnv.__enter__()` opens the session and binds it to every factory,
+so the test manages no session at all — no `get_db_session()`, no
+`session.add()`. Each domain env exposes typed state-programming methods:
+`set_adapter_response(...)` / `set_adapter_error(exc)` (delivery),
+`set_registry_formats([...])` (`CreativeFormatsEnv`), `set_http_status(...)` /
+`set_http_sequence([...])` (webhook local origin), `set_policy_blocked(...)` /
+`set_policy_approved()` (`ProductEnv`). `.agent-index/harness/envs.pyi` lists
+the full set per env; anything else the env patches is reachable as
+`env.mock[name]` — never hand-roll a `mock.patch` stack for a dependency the
+env already manages. Identity comes from
+`PrincipalFactory.make_identity(tenant_id=..., principal_id=...)`, the single
+source of truth for `ResolvedIdentity`.
+
+**The trap:** import factories from `tests/factories`, never `tests/fixtures`
+— the dict-based namesakes there return plain dicts, not ORM models. The
+structural guard `tests/unit/test_architecture_repository_pattern.py` fails
+new `get_db_session()` / `session.add()` calls in test bodies at
+`make quality`, and its allowlist only shrinks; tests that predate the
+harness are legacy — do not copy their setup.
+
+### How to check a field in the response
+
+**Goal:** assert the *value* of a field on the response the `When` step
+produced, through the transport-independent readers on `TransportResult`.
+
+**The call:**
+
+```python
+result = env.call_via(transport, media_buy_ids=[buy.media_buy_id])
+assert result.is_success
+assert result.payload.deliveries[0].impressions == 5000
+```
+
+Two readers, two jobs. `result.payload` is the typed response model — the
+default for checking values. `result.require_wire()` is the serialized body
+the buyer actually received — required when the assertion is about
+serialization itself (field names, key presence/absence, wire types), because
+`payload` fields are already coerced to their declared types and cannot catch
+a serialization regression; it raises loudly on a success with no stashed
+body instead of falling back to re-serializing the payload. In BDD steps the
+same pair is `require_payload(ctx)` and `wire_field(ctx, "field")` /
+`wire_dict(ctx)` from `tests/bdd/steps/_outcome_helpers.py`.
+
+**The trap — a Then that grades the Given.** The value you check must be one
+the `When` produced, having made the full trip Given → production → response.
+Three reads that look like assertions but re-read the setup instead:
+
+- reading the factory object or DB row the Given wrote
+  (`assert buy.status == "active"`) — passes even when the When does nothing;
+- reading the mock the Given programmed
+  (`env.mock["adapter"].return_value...`) — mock-echo, hard rule 5: the
+  assertion and the setup are the same object;
+- recomputing the expected value from `ctx` / env state the Given stashed,
+  rather than reading `ctx["result"]` — the same circle, one hop longer.
+
+The test for vacuity: if the When step were deleted, could the Then still
+compute its actual value? Only the `TransportResult` returned by `call_via`
+(stashed as `ctx["result"]` in BDD) came out of the run. Plant a distinctive
+value in the Given (`impressions=5000`, not a factory default) and read it
+back off the result — then the assertion can only pass if production carried
+the value through.
+
+### How to validate an error response
+
+**Goal:** assert on the real JSON error envelope the buyer receives — code,
+recovery, message.
+
+**The call:** `assert_envelope_shape()` from
+`tests/helpers/envelope_assertions.py`, on `result.wire_error_envelope`:
+
+```python
+from tests.helpers import assert_envelope_shape
+
+result = env.call_via(transport, **bad_request)
+assert result.is_error
+assert_envelope_shape(
+    result.wire_error_envelope,
+    "VALIDATION_ERROR",
+    recovery="correctable",
+    message_substr="budget must be positive",
+)
+```
+
+`recovery` is required — it pins the buyer-facing retry semantics. BDD steps
+asserting a rejection that names a request field use
+`assert_wire_rejection(ctx, code, recovery=..., field=...)` from
+`tests/bdd/steps/_outcome_helpers.py`; step definitions never hand-roll
+envelope parsing.
+
+**The trap:** the harness also reconstructs a typed `AdCPError` from the wire
+(`result.error`). Asserting on that object — `isinstance(...)`,
+`.error_code` — grades the reconstruction rather than the real JSON response,
+and the reconstruction is lossy. Full policy: § Error Verification Policy
+below.
 
 ## Quick Reference: Writing a New Test
 
@@ -250,11 +351,11 @@ class TestFormatResolution:
 ### BDD step definition
 
 ```python
+from tests.bdd.steps._outcome_helpers import wire_field
+
 @then(parsers.parse('the response contains {count:d} formats'))
 def then_response_has_formats(ctx, count):
-    env = ctx["env"]
-    result = ctx["result"]
-    assert len(result.payload.get("formats", [])) == count
+    assert len(wire_field(ctx, "formats")) == count
 ```
 
 ## Error Verification Policy
@@ -273,21 +374,9 @@ what storyboard runners parse.
 
 ### How to assert on the wire envelope
 
-Use `assert_envelope_shape()` from `tests/helpers/envelope_assertions.py`:
-
-```python
-from tests.helpers import assert_envelope_shape
-
-# On a TransportResult:
-result = env.call_via(transport, **kwargs)
-assert result.is_error
-assert_envelope_shape(
-    result.wire_error_envelope,
-    "VALIDATION_ERROR",
-    recovery="correctable",
-    message_substr="budget must be positive",
-)
-```
+Use `assert_envelope_shape()` from `tests/helpers/envelope_assertions.py` on
+`result.wire_error_envelope` — the recipe, with a worked example, is
+§ "How to validate an error response" above.
 
 ### What to assert
 
@@ -306,56 +395,40 @@ and the wire is exactly the regression this helper exists to catch.
 
 Assertions on the reconstructed exception — `isinstance(error, ...)`,
 `error.error_code == ...`, `error.recovery == ...` — verify the
-reconstruction layer, not the wire; they are valid only in `_impl`-level
-tests, where no wire exists. Tests that predate this policy still assert on
-reconstructed exceptions; migrate them to the envelope when touched, and
-never write a new one.
+reconstruction layer, not the wire. Never write one. Tests that predate this
+policy still assert on reconstructed exceptions; migrate them to the envelope
+when touched.
 
 ### TransportResult.wire_error_envelope
 
 `TransportResult` exposes `wire_error_envelope: dict | None` — the two-layer
-error envelope captured at the transport boundary. Populated on error by
-every dispatcher that HAS a wire; `None` on IMPL, which has none, and `None`
-on success. This is the canonical field for error verification.
+error envelope captured at the transport boundary, from the transport's real
+wire bytes. Populated on error; `None` on success. This is the canonical
+field for error verification.
 
 **Authenticity per transport (matters for what regressions the field catches):**
 
-| Transport | `wire_error_envelope` source                                          | `_synthesized_error_envelope` (private)                                          | Catches a regression in...                                |
-|-----------|-----------------------------------------------------------------------|-----------------------------------------------------------------------|-----------------------------------------------------------|
-| REST      | HTTP response body (real wire)                                        | `None`                                                                | exception handler + envelope serialization + HTTP framing |
-| MCP       | JSON string in `ToolError`, else the real envelope stashed on the reconstructed error by `_envelope_to_adcp_error` — never synthesized | `None`                                                                | `_handle_tool_exception` + `build_two_layer_error_envelope` |
-| A2A       | Failed Task's artifact DataPart, stashed by `_envelope_to_adcp_error` | `None`                                                                | `on_message_send` + `_serialize_for_a2a` + envelope build |
-| IMPL      | `None` (no wire by definition)                                        | Built via `build_two_layer_error_envelope` against the caught error   | `build_two_layer_error_envelope` only                     |
+| Transport | `wire_error_envelope` source                                          | Catches a regression in...                                |
+|-----------|-----------------------------------------------------------------------|-----------------------------------------------------------|
+| REST      | HTTP response body (real wire)                                        | exception handler + envelope serialization + HTTP framing |
+| MCP       | JSON string in `ToolError`, else the real envelope stashed on the reconstructed error by `_envelope_to_adcp_error` — never synthesized | `_handle_tool_exception` + `build_two_layer_error_envelope` |
+| A2A       | Failed Task's artifact DataPart, stashed by `_envelope_to_adcp_error` | `on_message_send` + `_serialize_for_a2a` + envelope build |
 
-Only IMPL synthesizes, and only because it has no wire to lose. On a
-transport that HAS a wire, a synthesized value would be either redundant or a
-mask over a lost capture — which is why the private field stays `None` there.
-
-IMPL has no wire. `result.error_envelope()` returns the builder's envelope
-there — that is the only branch on which it may — so you see what production
-WOULD emit at the boundary for the same exception. Be aware that value cannot
-catch a regression in the production boundary translator
-— both IMPL and production call the same envelope builder, so the
-synthesized value moves in lockstep with whatever the builder produces.
-Tests that need to catch real wire-shape regressions must run on REST,
-MCP, or A2A — only those transports observe actual wire bytes.
-
-> **Direction (PR #1721, in flight):** the `IMPL` pseudo-transport, the
-> synthesized envelope, and the `ImplDispatcher` are being removed — for the
-> reason stated above: they compute an envelope from the same in-memory
-> exception the assertion then reads, so they cannot catch a boundary
-> regression. Do not build new tests on IMPL's synthesized envelope; write new
-> error assertions against a wire transport via `assert_envelope_shape`. See
-> [architecture-principles.md](../docs/development/architecture-principles.md)
-> § "Direction of travel".
+Every transport captures the envelope that actually came back; none
+synthesizes one. A synthesized value would be either redundant or a mask over
+a lost capture — an assertion on it would grade the harness rebuilding an
+envelope from the exception it had just caught, which passes whether or not
+production emitted anything. The invariant that MCP stashes its real envelope
+rather than synthesizing is pinned by
+`tests/unit/test_harness_mcp_never_synthesizes.py`.
 
 `result.error` (reconstructed exception) exists for tests that predate this
-policy. Reconstruction is lossy — assert on `result.error_envelope()`,
-which returns the real wire wherever one exists and the builder's envelope only
-on IMPL. It RAISES when there is none, rather than letting a dead wire path pass
-on a rebuilt shape; `error_envelope_or_none()` is the sibling for callers that
-branch on envelope-presence as control flow. The underlying field is private:
-reading it directly re-opens the substitution this pair exists to close.
+policy. Reconstruction is lossy — assert on `result.error_envelope()`, which
+returns the captured wire envelope and RAISES when there is none, rather than
+letting a dead wire path pass on a rebuilt shape; `error_envelope_or_none()`
+is the sibling for callers that branch on envelope-presence as control flow
+(an MCP dispatch can fail with a `ToolError` that is genuinely not an AdCP
+envelope).
 
 ### TransportResult.has_wire — declared, never defaulted
 
@@ -369,12 +442,12 @@ missing-config guard, or a catch-all firing before anything was sent. Those are
 `False` even on REST. The arm where a 2xx arrived and parsing then threw is
 `True`, because the bytes did cross.
 
-**Do not branch on `has_wire` to decide whether to read a rebuilt envelope.** It
-is `False` on every A2A, MCP, and IMPL error, so keying on it alone hands back a
-rebuilt envelope on transports that *do* have a wire, and discards a real
-captured one. What isolates IMPL is that IMPL is the only dispatcher populating
-the private synthesized field — an invariant pinned by
-`tests/unit/test_harness_mcp_never_synthesizes.py`.
+**`has_wire` governs the success path only — do not branch on it to decide
+whether an error envelope exists.** It is `False` on every A2A and MCP error
+(a catch-all arm may fire before anything was sent, and cannot tell which),
+yet those dispatchers still capture a real envelope when one came back —
+keying on `has_wire` would discard it. Read errors through
+`error_envelope()` / `error_envelope_or_none()` instead.
 
 ### TransportResult.wire_response (success-path wire)
 
@@ -382,13 +455,16 @@ the private synthesized field — an invariant pinned by
 success-path response body**, the success-path analogue of `wire_error_envelope`.
 Populated on success by the REST dispatcher (HTTP body) and by the A2A/MCP
 dispatchers **only when the env routes through `_run_a2a_handler` /
-`_run_mcp_client`** (which stash the wire). Legacy `_run_mcp_wrapper` and the
-direct `*_raw` wrappers do not stash, so `wire_response` is `None` there — as it
-is on error and on IMPL. `CreativeFormatsEnv` and `CreativeListEnv` read it.
-Use it to assert the **actual serialized shape** a buyer receives (e.g. the v3.1
-`format_id` `{agent_url, id}` federation contract on `list_creative_formats`)
-rather than the typed `payload`, whose fields are already coerced to their
-declared types and so cannot catch a serialization regression.
+`_run_mcp_client`** (which stash the wire); `None` on error. Legacy
+`_run_mcp_wrapper` and the direct `*_raw` wrappers do not stash, so
+`wire_response` is `None` there too. `CreativeFormatsEnv` and
+`CreativeListEnv` read it. Read it through `result.require_wire()`, which
+raises on a success with no stashed body instead of falling through to a
+harness-side reconstruction. Use it to assert the **actual serialized shape**
+a buyer receives (e.g. the v3.1 `format_id` `{agent_url, id}` federation
+contract on `list_creative_formats`) rather than the typed `payload`, whose
+fields are already coerced to their declared types and so cannot catch a
+serialization regression.
 
 **Authenticity per transport:**
 
@@ -397,10 +473,8 @@ declared types and so cannot catch a serialization regression.
 | REST | HTTP JSON body (`response.json()`) | Real wire; equals `raw_response.json()`. |
 | MCP  | `ToolResult.structured_content` (real wire) | Stashed by `_run_mcp_client`. |
 | A2A  | Full artifact DataPart (real wire) | Stashed by `_run_a2a_handler` BEFORE the `message`/`success` strip, so top-level envelope fields are present. |
-| IMPL | `None` (no wire by definition) | Serialize the typed `payload` (`model_dump(mode="json")`) — exercises the production serializer, not transport framing. |
 
-As with `wire_error_envelope`, real wire-shape regressions are only observable on
-REST/MCP/A2A; IMPL's `model_dump` only exercises the serializer. See
+See
 `tests/integration/test_harness_wire_response.py` (pins that the field is real
 wire, not a payload reconstruction) and
 `tests/bdd/steps/domain/uc005_format_id_shape.py` (uses it for the format_id
