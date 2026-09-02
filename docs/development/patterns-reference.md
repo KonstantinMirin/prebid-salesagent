@@ -42,6 +42,22 @@ currency_stmt = select(CurrencyLimit).where(
 currency_limit = session.scalars(currency_stmt).first()
 ```
 
+**Anti-pattern: inline session management and raw model construction in business logic:**
+```python
+# WRONG
+def _create_media_buy_impl(req, identity):
+    with get_db_session() as session:
+        mb = MediaBuy(
+            media_buy_id=generate_id(),
+            buyer_ref=req.buyer_ref,      # manual field plucking
+            tenant_id=tenant["tenant_id"], # from a dict, not even a model
+            status="pending_approval",     # magic string
+            ...
+        )
+        session.add(mb)
+```
+Use model factory methods or repository `create_from_*()` methods instead.
+
 **Adding a new repository:** Create `src/core/database/repositories/your_model.py` following `media_buy.py`, add to `__init__.py`, wire into the appropriate UoW. The `test_architecture_no_raw_select.py` guard catches raw `select()` calls outside repository files.
 
 **Enforced by:** `review-architecture` (CP-3), `review-execution-excellence` (Repository+UoW), `review-layering` (_impl → Repository leaks), `test_architecture_no_raw_select.py`, `test_architecture_repository_pattern.py`
@@ -327,6 +343,24 @@ if budget_amount < min_package_budget:
 ```
 
 Same check, two implementations, different error handling. When the validation rule changes, one gets updated and the other doesn't.
+
+**How to apply DRY correctly** — extract the shared pattern instead of copy-pasting with variable substitution:
+
+```python
+# WRONG: copy-paste with variable substitution
+formats = [f for f in formats if {fid.id for fid in f.output_format_ids} & requested_output_ids]
+formats = [f for f in formats if {fid.id for fid in f.input_format_ids} & requested_input_ids]
+
+# CORRECT: extract the shared pattern
+def filter_by_format_ids(formats, requested, attr):
+    if not requested:
+        return formats
+    ids = {fmt.id for fmt in requested}
+    return [f for f in formats if {fid.id for fid in getattr(f, attr)} & ids]
+
+formats = filter_by_format_ids(formats, req.output_format_ids, "output_format_ids")
+formats = filter_by_format_ids(formats, req.input_format_ids, "input_format_ids")
+```
 
 **Enforced by:** `review-dry` (Category 4: Database Query Patterns, Category 3: Error Handling), `check_code_duplication.py` (make quality)
 

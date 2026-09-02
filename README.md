@@ -75,6 +75,14 @@ Publishers deploy their own sales agent. Choose based on your needs:
 
 **Docker is the fastest** - it bundles PostgreSQL and just works. Cloud platforms require separate database setup.
 
+The app itself is platform-agnostic — beyond the walkthroughs above you can host it anywhere:
+- Docker (recommended) — any Docker-compatible platform
+- Kubernetes — full k8s manifests supported
+- Cloud providers — AWS, GCP, Azure, DigitalOcean
+- Platform services — Fly.io, Heroku, Railway, Render
+
+See `docs/deployment/` for platform-specific guides.
+
 Because this is alpha software tracking a beta protocol, pin the version you deploy
 and re-test after every upgrade — minor releases can carry breaking changes.
 
