@@ -1,4 +1,4 @@
-# Architecture Patterns Reference
+# Architecture patterns reference
 
 This document maps every key pattern to its **canonical implementation file** and identifies **known anti-patterns** that exist as tracked debt. New code must follow the canonical pattern, not the anti-pattern, even when the anti-pattern appears in surrounding code.
 
@@ -8,18 +8,18 @@ Structural guard tests under `tests/unit/test_architecture_*.py` enforce these p
 
 ## Contents
 
-- [1. Repository Pattern (CP-3)](#1-repository-pattern-cp-3)
+- [1. Repository pattern (CP-3)](#1-repository-pattern-cp-3)
 - [2. Unit of Work (UoW)](#2-unit-of-work-uow)
-- [3. Structural Guards and Allowlists](#3-structural-guards-and-allowlists)
-- [4. Writing Tests — The Test Harness](#4-writing-tests--the-test-harness)
-- [5. Factory Fixtures for Integration Tests](#5-factory-fixtures-for-integration-tests)
-- [6. Transport Boundary (CP-5)](#6-transport-boundary-cp-5)
-- [7. Error Hierarchy](#7-error-hierarchy)
-- [8. DRY — Shared Validation](#8-dry--shared-validation)
-- [Quick Reference: Where to Look](#quick-reference-where-to-look) — pattern-to-file lookup table
-- [Legacy Code Awareness](#legacy-code-awareness) — the files not to pattern-match from
+- [3. Structural guards and allowlists](#3-structural-guards-and-allowlists)
+- [4. Writing tests — the test harness](#4-writing-tests--the-test-harness)
+- [5. Factory fixtures for integration tests](#5-factory-fixtures-for-integration-tests)
+- [6. Transport boundary (CP-5)](#6-transport-boundary-cp-5)
+- [7. Error hierarchy](#7-error-hierarchy)
+- [8. DRY — shared validation](#8-dry--shared-validation)
+- [Quick reference: where to look](#quick-reference-where-to-look) — pattern-to-file lookup table
+- [Legacy code awareness](#legacy-code-awareness) — the files not to pattern-match from
 
-## 1. Repository Pattern (CP-3)
+## 1. Repository pattern (CP-3)
 
 All database access goes through repository classes. `_impl` functions never contain raw `select()`, `session.scalars()`, `session.add()`, or direct model imports for data access.
 
@@ -111,7 +111,7 @@ If you see `session = uow.session` in existing code, that is tracked debt. If yo
 
 **Enforced by:** `test_architecture_repository_pattern.py`
 
-## 3. Structural Guards and Allowlists
+## 3. Structural guards and allowlists
 
 AST-scanning tests enforce architecture invariants on every `make quality` run. See [`docs/development/structural-guards.md`](structural-guards.md) for the full inventory.
 
@@ -126,7 +126,7 @@ Guards use `(file_path, function_name)` tuples in their allowlists, not line num
 
 **Enforced by:** `review-architecture` (references all 14 guards), CI (`make quality`)
 
-## 4. Writing Tests — The Test Harness
+## 4. Writing tests — the test harness
 
 The project has a **test harness** at [`tests/harness/`](../../tests/harness/) that provides domain-specific test environments. These environments handle mock wiring, identity creation, UoW setup, and multi-transport dispatch so tests focus purely on behavior.
 
@@ -249,7 +249,7 @@ assert should_abort is True  # Tests Python arithmetic, not your endpoint
 
 **Enforced by:** `review-testing` (Anti-Pattern 1: Mock Echo, Anti-Pattern 2: Assertion-Free, Anti-Pattern 5: Happy Path Only)
 
-## 5. Factory Fixtures for Integration Tests
+## 5. Factory fixtures for integration tests
 
 Integration tests use `factory-boy` factories, not inline `session.add()`.
 
@@ -275,7 +275,7 @@ with get_db_session() as session:
 
 **Enforced by:** `test_architecture_repository_pattern.py` (catches `session.add()` in integration tests)
 
-## 6. Transport Boundary (CP-5)
+## 6. Transport boundary (CP-5)
 
 All tools have two layers: transport wrappers (MCP, A2A, REST) and business logic (`_impl` functions).
 
@@ -298,7 +298,7 @@ This is tracked debt — functions should be split into `_list_tasks_impl` + tra
 
 **Enforced by:** `review-architecture` (CP-5), `review-layering` (Transport → _impl leaks), `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`, `test_no_toolerror_in_impl.py`, `test_architecture_boundary_completeness.py`
 
-## 7. Error Hierarchy
+## 7. Error hierarchy
 
 `_impl` functions raise `AdCPError` subclasses (defined in `src/core/exceptions.py`). Transport wrappers catch these and translate to transport-appropriate format.
 
@@ -340,7 +340,7 @@ raise AdCPNotFoundError(f"Media buy '{media_buy_id}' not found.")
 
 **Enforced by:** `test_no_toolerror_in_impl.py`
 
-## 8. DRY — Shared Validation
+## 8. DRY — shared validation
 
 When the same validation logic applies to multiple code paths (create and update), extract a shared validator. Both create and update should call the same validation function.
 
@@ -377,7 +377,7 @@ formats = filter_by_format_ids(formats, req.input_format_ids, "input_format_ids"
 
 **Enforced by:** `review-dry` (Category 4: Database Query Patterns, Category 3: Error Handling), `check_code_duplication.py` (make quality)
 
-## Quick Reference: Where to Look
+## Quick reference: where to look
 
 | When you need to... | Read this file |
 |---------------------|---------------|
@@ -392,7 +392,7 @@ formats = filter_by_format_ids(formats, req.input_format_ids, "input_format_ids"
 | Add a structural guard | `docs/development/structural-guards.md` |
 | Know the standards a change is held to | [engineering-standards.md](engineering-standards.md) |
 
-## Legacy Code Awareness
+## Legacy code awareness
 
 These files contain significant legacy patterns. **Do not follow patterns from these files for new code:**
 
