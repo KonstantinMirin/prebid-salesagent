@@ -427,6 +427,19 @@ if ls "$RESULTS_DIR"/*.json >/dev/null 2>&1; then
     fi
 fi
 
+# Name every suite that reported failures OR errors, before the reconcile below
+# decides whether the exit code is unexplained. Errors are pytest SETUP/TEARDOWN
+# deaths and are NOT counted in summary.failed, so without this a run can print
+# "failed 0" everywhere and still exit 1 -- see scripts/report_suite_failures.py.
+SUITES_CLEAN=0
+if ls "$RESULTS_DIR"/*.json >/dev/null 2>&1; then
+    if python3 scripts/report_suite_failures.py "$RESULTS_DIR"; then
+        SUITES_CLEAN=1
+    else
+        RC=1
+    fi
+fi
+
 # Reconcile a non-zero exit against what the suites actually reported. This does
 # NOT change the exit code -- masking a failure is how the real cause of a dead
 # run became unknowable before (the `psql_admin() { ...; } || true` and the
@@ -439,20 +452,7 @@ fi
 # command inside returned. A long `-p` run that drops its CLI connection at the
 # end lands here with every suite already finished and every report written.
 if [ "$RC" -ne 0 ] && ls "$RESULTS_DIR"/*.json >/dev/null 2>&1; then
-    if python3 - "$RESULTS_DIR" <<'PYEOF'
-import glob, json, os, sys
-bad = []
-for f in sorted(glob.glob(os.path.join(sys.argv[1], "*.json"))):
-    try:
-        s = json.load(open(f)).get("summary", {})
-    except Exception:
-        bad.append(f"{os.path.basename(f)}: unreadable")
-        continue
-    if s.get("failed") or s.get("error"):
-        bad.append(f"{os.path.basename(f)}: failed={s.get('failed', 0)} error={s.get('error', 0)}")
-sys.exit(1 if bad else 0)
-PYEOF
-    then
+    if [ "$SUITES_CLEAN" -eq 1 ]; then
         echo ""
         echo "NOTE: exit code is $RC but every suite report shows 0 failures and 0 errors."
         case "$RC" in

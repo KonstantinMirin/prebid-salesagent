@@ -3916,15 +3916,55 @@ def e2e_stack():
     return E2EConfig(base_url=base_url, postgres_url=postgres_url)
 
 
+# Every sequence OWNED BY a column of a public table, i.e. exactly the set
+# ``TRUNCATE ... RESTART IDENTITY`` would have restarted. ``setval(seq, 1, false)``
+# leaves is_called false, so the next ``nextval`` returns 1 -- identical end state.
+_E2E_RESTART_IDENTITY_SQL = (
+    "SELECT setval(s.oid::regclass, 1, false) "
+    "FROM pg_class s "
+    "JOIN pg_namespace n ON n.oid = s.relnamespace "
+    "JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = s.oid "
+    "  AND d.refclassid = 'pg_class'::regclass AND d.deptype = 'a' "
+    "WHERE s.relkind = 'S' AND n.nspname = 'public'"
+)
+
+
 def _reset_e2e_db(e2e_config) -> None:
     """Flush the live server DB to a clean baseline before an e2e scenario.
 
     Live-server e2e shares ONE database and the server process commits
     independently, so the transaction-rollback isolation the in-process
     transports get (via the per-test integration_db) is impossible here. Instead
-    TRUNCATE every data table CASCADE so each scenario's harness setup recreates
-    exactly the rows it needs into a clean DB. The server reads the DB live, so it
-    observes the reset immediately. alembic_version is preserved (schema stays).
+    empty every data table so each scenario's harness setup recreates exactly the
+    rows it needs into a clean DB. The server reads the DB live, so it observes
+    the reset immediately. alembic_version is preserved (schema stays).
+
+    DELETE rather than TRUNCATE, and the lock mode is the whole point.
+    TRUNCATE takes an AccessExclusiveLock on every table it names, one relation
+    at a time, in whatever order ``pg_tables`` returned them. The server running
+    against this same database sweeps it from background schedulers --
+    ``delivery_webhook_scheduler`` every DELIVERY_WEBHOOK_INTERVAL (5s under
+    run_all_tests.sh) and ``media_buy_status_scheduler`` every 60s -- and each
+    sweep reads ``media_buys`` FIRST and a second table (webhook_delivery_log,
+    creative_assignments, creatives) LATER in the SAME transaction, taking an
+    AccessShareLock on each. AccessShareLock and AccessExclusiveLock conflict, the
+    two orders are opposite, and neither side knows about the other: a textbook
+    ABBA cycle. Postgres broke it by killing whichever party it picked, which
+    surfaced as one rotating ``DeadlockDetected`` per full in-network run, always
+    in scenario SETUP and never on an assertion (salesagent-prkv.48).
+
+    DELETE takes a RowExclusiveLock, which does not conflict with AccessShareLock
+    at all, so the reset can neither block nor be blocked by a concurrent reader
+    and the cycle has nowhere to form. Do NOT "fix" a recurrence by retrying or by
+    serialising the suite -- both leave the cycle in place.
+
+    Emptying every table makes the delete order irrelevant, so FK triggers are
+    suppressed for the transaction (``session_replication_role = replica``, SET
+    LOCAL so it reverts at COMMIT) instead of topologically sorting 40+ tables --
+    that is the property ``CASCADE`` was supplying. It needs a superuser, which
+    the e2e Postgres role already is (run_all_tests.sh calls pg_terminate_backend
+    on other backends with it); if that ever stops being true this raises loudly
+    rather than silently leaving rows behind.
     """
     from sqlalchemy import create_engine, text
 
@@ -3940,8 +3980,10 @@ def _reset_e2e_db(e2e_config) -> None:
                 )
             ]
             if tables:
-                joined = ", ".join(f'"{t}"' for t in tables)
-                conn.execute(text(f"TRUNCATE TABLE {joined} RESTART IDENTITY CASCADE"))
+                statements = ["SET LOCAL session_replication_role = replica"]
+                statements += [f'DELETE FROM "{t}"' for t in tables]
+                conn.exec_driver_sql("; ".join(statements))
+                conn.exec_driver_sql(_E2E_RESTART_IDENTITY_SQL)
     finally:
         engine.dispose()
 

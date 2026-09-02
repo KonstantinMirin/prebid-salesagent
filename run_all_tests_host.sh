@@ -148,6 +148,17 @@ if ls "$RESULTS_DIR"/*.json >/dev/null 2>&1; then
     fi
 fi
 
+# --- Failure/error check ---
+# This path decides success from tox exit codes alone, so a suite whose only
+# problem is a fixture dying in SETUP contributes an `error` -- which is NOT in
+# summary.failed -- and every report still reads "failed 0". Name it out loud.
+# See scripts/report_suite_failures.py.
+if ls "$RESULTS_DIR"/*.json >/dev/null 2>&1; then
+    if ! python3 scripts/report_suite_failures.py "$RESULTS_DIR"; then
+        FAILURES="${FAILURES:+$FAILURES }suite-errors"
+    fi
+fi
+
 # --- Security audit ---
 # Ignored-vulnerabilities list + uv-secure invocation are single-sourced in
 # scripts/security-audit.sh (same script is called by .github/workflows/ci.yml,
