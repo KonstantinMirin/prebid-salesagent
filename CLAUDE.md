@@ -59,7 +59,8 @@ formats = filter_by_format_ids(formats, req.input_format_ids, "input_format_ids"
 - It applies when the same **logical operation** is repeated with only parameter substitution
 
 ### What to avoid
-- ❌ Don't use `session.query()` (use `select()` + `scalars()`)
+- ❌ Don't query an ORM model outside a repository (go through a repository inside a Unit of Work)
+- ❌ Don't use `session.query()` inside a repository (use `select()` + `scalars()`)
 - ❌ Don't duplicate library schemas (extend with inheritance)
 - ❌ Don't hardcode URLs in JavaScript (use `scriptRoot`)
 - ❌ Don't bypass pre-commit hooks without good reason
@@ -445,6 +446,18 @@ All services are accessed through the nginx proxy at **http://localhost:8000**.
 ## Key patterns
 
 ### SQLAlchemy 2.0 (MANDATORY for new code)
+
+ORM queries live in repository methods. Business logic reaches them through a Unit of Work,
+never by building a statement of its own — see [critical pattern 3](#3-database-repository-pattern--orm-first).
+
+```python
+# Business logic: ask the repository.
+with MediaBuyUoW(identity.tenant_id) as uow:
+    media_buy = uow.media_buys.get_by_id(media_buy_id)
+```
+
+Inside a repository method, write the statement in 2.0 form:
+
 ```python
 from sqlalchemy import select
 
