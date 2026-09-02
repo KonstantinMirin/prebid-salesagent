@@ -540,22 +540,21 @@ Feature: BR-UC-011 Manage Accounts
     # POST-F2: Buyer knows what failed
 
   @T-UC-011-ext-a-expired @sync @ext-a @auth @error @partition @boundary
-  Scenario: Sync with expired token -- sync_invalid_token returns AUTH_MISSING (invalid token on sync)
-    # KNOWN ISSUE (salesagent-mkso): the Given below is textually "expired
-    # token" but its current implementation does not drive a presented-but-
-    # rejected token through the real chain (identical to no-token); see
-    # given_expired_token's docstring (tests/bdd/steps/domain/uc011_accounts.py)
-    # for the REST-harness limitation that blocks a real fix here. Pinned to
-    # what production actually returns for this Given (AUTH_MISSING), not
-    # the AUTH_INVALID the title implies.
+  Scenario: Sync with expired token -- sync_invalid_token returns AUTH_INVALID (invalid token on sync)
+    # Pairs with @T-UC-011-ext-a-no-token above: the two scenarios are the two
+    # sides of the v3.1.1 auth split, and the axis is CREDENTIAL PRESENCE.
+    # No token -> AUTH_MISSING / correctable (retrying with credentials can
+    # succeed); a token presented and rejected -> AUTH_INVALID / terminal (the
+    # same credential retried unmodified is rejected again).
     Given the Buyer Agent has an A2A connection with an expired token
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
     Then the response is an error variant
-    And the error code is "AUTH_MISSING"
+    And the wire error envelope should carry code "AUTH_INVALID" with recovery "terminal"
     And the error should include "suggestion" field with remediation guidance
     # @bva authentication (account operations): invalid token on sync
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
 
   @T-UC-011-ext-b-partial @sync @partial-failure @invariant @partition @boundary
   Scenario: Sync partial_failure -- success_partial_failure with action=failed (action=failed with errors)

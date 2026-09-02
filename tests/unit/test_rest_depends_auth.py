@@ -211,16 +211,65 @@ class TestResolveAuthDepBehavior:
 class TestRequireAuthDepBehavior:
     """Test the require_auth dependency function behavior directly."""
 
-    def test_raises_without_token(self):
-        """require_auth dep should raise AdCPAuthenticationError without token."""
+    def test_raises_auth_missing_without_token(self):
+        """No credential presented -> AUTH_MISSING / correctable.
+
+        Asserted on the wire envelope, not on the exception class:
+        ``AdCPAuthRequiredError`` (AUTH_MISSING) is a SUBCLASS of
+        ``AdCPAuthenticationError`` (AUTH_INVALID), so ``pytest.raises`` on the
+        parent passes for either code and cannot tell the two rejections apart —
+        which is the whole distinction the v3.1.1 enum draws.
+        """
         import pytest
 
         from src.core.auth_context import AuthContext, _require_auth_dep
-        from src.core.exceptions import AdCPAuthenticationError
+        from src.core.exceptions import AdCPSalesAgentError, build_two_layer_error_envelope
+        from tests.helpers import assert_envelope_shape
 
         auth_ctx = AuthContext.unauthenticated()
-        with pytest.raises(AdCPAuthenticationError):
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             _require_auth_dep(auth_ctx)
+
+        assert_envelope_shape(build_two_layer_error_envelope(exc_info.value), "AUTH_MISSING", recovery="correctable")
+
+    def test_raises_auth_invalid_when_presented_credential_resolves_to_no_principal(self):
+        """A credential WAS presented but resolved to no principal -> AUTH_INVALID / terminal.
+
+        Grades the dependency's second guard. ``resolve_identity`` normally
+        raises AUTH_INVALID itself for an unresolvable token, so this branch is
+        a backstop — and a backstop is exactly what must be shaped correctly,
+        because when it does fire it is answering a buyer who DID send a
+        credential. It previously raised AUTH_MISSING "for parity with the guard
+        above"; the two guards answer different questions (absent vs
+        unresolvable), so parity was the defect.
+
+        The v3.1.1 enum keys the split on header presence: AUTH_MISSING is for
+        "no ``Authorization`` header was included", AUTH_INVALID for "an
+        ``Authorization`` header was present but verification failed"
+        (adcp 6.6.0, _schemas/3.1/enums/error-code.json).
+        """
+        from unittest.mock import patch
+
+        import pytest
+
+        from src.core.auth_context import AuthContext, _require_auth_dep
+        from src.core.exceptions import AdCPSalesAgentError, build_two_layer_error_envelope
+        from tests.factories.principal import PrincipalFactory
+        from tests.helpers import assert_envelope_shape
+
+        auth_ctx = AuthContext(auth_token="presented-token", headers={"x-adcp-auth": "presented-token"})
+        principal_less = PrincipalFactory.make_identity(
+            principal_id=None,
+            tenant_id="default",
+            auth_token="presented-token",
+            protocol="rest",
+        )
+
+        with patch("src.core.resolved_identity.resolve_identity", return_value=principal_less):
+            with pytest.raises(AdCPSalesAgentError) as exc_info:
+                _require_auth_dep(auth_ctx)
+
+        assert_envelope_shape(build_two_layer_error_envelope(exc_info.value), "AUTH_INVALID", recovery="terminal")
 
     def test_returns_identity_with_valid_token(self):
         """require_auth dep should return ResolvedIdentity with valid token."""

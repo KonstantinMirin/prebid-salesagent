@@ -183,28 +183,27 @@ def given_unauthenticated(ctx: dict, transport: str | None = None) -> None:
 
 @given("the Buyer Agent has an A2A connection with an expired token")
 def given_expired_token(ctx: dict) -> None:
-    """Set up A2A connection with an expired/invalid token.
+    """Present a credential that resolves to no principal (expired/revoked).
 
-    KNOWN ISSUE (GH #1886): this Given is textually "expired token" but its
-    implementation is identical to ``given_unauthenticated`` (no credential
-    at all) — it does not actually drive a PRESENTED-but-rejected token
-    through the real resolution chain. That distinction was unobservable
-    before the AUTH_MISSING/AUTH_INVALID split (both cases collapsed to the
-    deprecated AUTH_REQUIRED); it is real now (absent -> AUTH_MISSING,
-    presented-but-invalid -> AUTH_INVALID). Attempted a real fix here (an
-    identity carrying a bogus ``auth_token``, mirroring
-    ``CapabilitiesEnv.invalid_token_identity()``): A2A correctly exercises
-    the real chain and rejects with AUTH_INVALID, but the REST harness's
-    ``_configure_rest_auth`` dependency override always treats a non-None
-    identity as a valid, already-resolved token (no real header/token-lookup
-    path exists in-process for REST — see tests/harness/capabilities.py's
-    "real header path is exercised on e2e_rest" note), so it collapses to
-    AUTH_MISSING via ``require_principal_id``. Fixing that needs a REST
-    real-token harness seam (GH #1886). Pinned to what this Given actually
-    produces (AUTH_MISSING) rather than force a wrong assertion.
+    Distinct from ``given_unauthenticated``, which presents NO credential.
+    AdCP v3.1.1 splits the two auth rejections on exactly that axis (absent ->
+    AUTH_MISSING/correctable, presented-but-rejected -> AUTH_INVALID/terminal),
+    so the Given has to drive a real token through the real resolution chain on
+    every transport, not stand in for the token-less case.
+
+    All four transports now do: A2A and MCP patch real headers off the
+    identity's ``auth_token``, e2e_rest sends them over real HTTP, and REST
+    leaves the production ``_require_auth_dep`` in place for an identity that
+    presents an unresolvable credential (``BaseTestEnv._configure_rest_auth``).
+    Previously REST's dependency override treated ANY non-None identity as an
+    already-resolved valid token, which is why this Given was pinned to
+    ``force_identity = None`` and graded the wrong code (GH #1886).
     """
     ctx["has_auth"] = False
-    ctx["force_identity"] = None
+    # Seed the tenant so tenant detection still resolves: the realistic shape is
+    # a known seller reached with a dead credential, not an unknown seller.
+    _setup_tenant_and_principal(ctx)
+    ctx["force_identity"] = ctx["env"].invalid_token_identity()
 
 
 @given("the sync_accounts response schema uses oneOf")

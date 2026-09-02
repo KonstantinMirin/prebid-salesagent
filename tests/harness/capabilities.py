@@ -352,11 +352,12 @@ class CapabilitiesEnv(IntegrationEnv):
         auth-dep override) is the base's ``_prepare_rest_request``; only the
         verb choice is env-specific.
         """
-        client, _identity = self._prepare_rest_request(kwargs)
+        client, identity = self._prepare_rest_request(kwargs)
+        headers = self._rest_request_headers(identity)
         if not kwargs:
-            return client.get(endpoint)
+            return client.get(endpoint, headers=headers)
         body = self.build_rest_body(**kwargs)
-        return client.post(endpoint, json=body)
+        return client.post(endpoint, json=body, headers=headers)
 
     def parse_rest_response(self, data: dict[str, Any]) -> GetAdcpCapabilitiesResponse:
         """Parse REST JSON into GetAdcpCapabilitiesResponse."""

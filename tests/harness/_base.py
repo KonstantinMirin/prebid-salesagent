@@ -448,8 +448,13 @@ class BaseTestEnv:
     def invalid_token_identity(self) -> ResolvedIdentity:
         """An identity carrying a token that matches no Principal row.
 
-        Per-transport behavior is production's: A2A rejects a presented-but-
-        invalid credential; MCP/REST treat it as absent (auth-optional tool).
+        Per-transport behavior is production's, and it now agrees across all
+        four wire transports: on an auth-REQUIRED tool the presented-but-
+        rejected credential is refused with AUTH_INVALID (terminal) everywhere —
+        A2A and MCP drive the real header→token→lookup chain, e2e_rest sends the
+        token over real HTTP, and REST leaves the production ``_require_auth_dep``
+        in place for this identity (``_configure_rest_auth``). On an auth-
+        OPTIONAL discovery tool it is treated as absent, also on every transport.
         """
         from tests.harness._identity import make_identity
 
@@ -852,10 +857,7 @@ class BaseTestEnv:
             # Patch get_http_headers in BOTH modules that import it:
             # transport_helpers (called by resolve_identity_from_context) and
             # mcp_auth_middleware (called for context_id extraction).
-            headers = {
-                "x-adcp-auth": auth_token,
-                "x-adcp-tenant": mcp_identity.tenant_id or "",
-            }
+            headers = self._credential_headers(mcp_identity)
 
             async def _call():
                 mock_th = patch("src.core.transport_helpers.get_http_headers", return_value=headers)
@@ -926,26 +928,84 @@ class BaseTestEnv:
         return client, identity
 
     @staticmethod
-    def _configure_rest_auth(identity: Any) -> None:
+    def _credential_headers(identity: Any) -> dict[str, str]:
+        """The headers that carry *identity*'s credential to the production auth chain.
+
+        One builder for both in-process wire transports: MCP patches
+        ``get_http_headers`` to return it, REST sends it on the TestClient
+        request. Shape is what production reads off the request
+        (``src/core/auth_middleware.py``: ``x-adcp-auth`` for the token,
+        ``x-adcp-tenant`` for tenant detection). Empty when no credential is
+        presented, so callers can splat it unconditionally.
+        """
+        token = getattr(identity, "auth_token", None)
+        if not token:
+            return {}
+        return {"x-adcp-auth": token, "x-adcp-tenant": getattr(identity, "tenant_id", None) or ""}
+
+    @staticmethod
+    def _presents_unresolvable_credential(identity: Any) -> bool:
+        """True when *identity* presented a token that resolved to no principal.
+
+        The discriminator production itself keys on: a credential WAS presented
+        (``auth_token``) but no principal came back. AdCP v3.1.1 splits the two
+        auth rejections on exactly this axis — absent credential -> AUTH_MISSING
+        (correctable), presented-but-rejected -> AUTH_INVALID (terminal) — so
+        the harness cannot collapse them the way it may collapse a valid token.
+        """
+        return bool(getattr(identity, "auth_token", None)) and not getattr(identity, "principal_id", None)
+
+    @classmethod
+    def _rest_request_headers(cls, identity: Any) -> dict[str, str]:
+        """Auth headers for a REST request whose ``_require_auth_dep`` is NOT overridden.
+
+        A valid identity is injected through the dependency override, so its
+        request needs no headers. The presented-but-unresolvable identity is
+        the one case where the real dependency runs (see
+        ``_configure_rest_auth``) — and the real dependency reads the
+        credential off the REQUEST, so without these headers it would see an
+        empty ``AuthContext`` and answer AUTH_MISSING to a caller that did
+        present a token.
+        """
+        if not cls._presents_unresolvable_credential(identity):
+            return {}
+        return cls._credential_headers(identity)
+
+    @classmethod
+    def _configure_rest_auth(cls, identity: Any) -> None:
         """Install per-request FastAPI auth-dep overrides for the test app.
 
         Single source of truth for the REST auth contract every dispatcher needs
-        (must run AFTER ``get_rest_client``). With ``identity=None`` the
-        ``_require_auth_dep`` override is REMOVED so the real production
-        dependency runs against the token-less request and raises the real
-        ``AUTH_REQUIRED`` error — the harness must not hand-copy the production
-        raise (a simulated raise drifted from production once already,
-        #1417/cx41); otherwise both deps return the identity.
+        (must run AFTER ``get_rest_client``). The ``_require_auth_dep`` override
+        is REMOVED — so the real production dependency runs and raises the real
+        error, rather than the harness hand-copying a raise that drifted from
+        production once already (#1417/cx41) — in the two cases where the
+        rejection itself is what is being graded:
+
+        - ``identity is None``: no credential at all -> real dep sees an empty
+          ``AuthContext`` -> AUTH_MISSING.
+        - ``identity`` presents an unresolvable credential: the request carries
+          the bogus token (``_rest_request_headers``) -> real dep runs
+          ``resolve_identity(require_valid_token=True)`` -> AUTH_INVALID.
+
+        The second case used to fall through to the override below, which
+        treats ANY non-None identity as an already-resolved valid token; REST
+        therefore answered AUTH_MISSING to a caller who had presented a
+        credential, diverging from A2A/MCP/e2e_rest, which all drive the real
+        chain (GH #1886).
+
+        ``_resolve_auth_dep`` (auth-OPTIONAL discovery routes) keeps returning
+        the identity in both cases: production returns an identity there too,
+        with ``principal_id`` None, which is exactly what these identities are.
         """
         from src.app import app
         from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
 
-        if identity is None:
+        if identity is None or cls._presents_unresolvable_credential(identity):
             app.dependency_overrides.pop(_require_auth_dep, None)
-            app.dependency_overrides[_resolve_auth_dep] = lambda: None
         else:
             app.dependency_overrides[_require_auth_dep] = lambda: identity
-            app.dependency_overrides[_resolve_auth_dep] = lambda: identity
+        app.dependency_overrides[_resolve_auth_dep] = lambda: identity
 
     def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
         """Shared REST dispatch: configure auth → build body → POST → return Response.
@@ -963,7 +1023,7 @@ class BaseTestEnv:
         """
         client, identity = self._prepare_rest_request(kwargs)
         body = self.build_rest_body(**kwargs)
-        return client.post(endpoint, json=body)
+        return client.post(endpoint, json=body, headers=self._rest_request_headers(identity))
 
     def call_rest(self, **kwargs: Any) -> Any:
         """Call the REST endpoint and parse the response.

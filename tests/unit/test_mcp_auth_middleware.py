@@ -143,9 +143,22 @@ class TestMCPAuthMiddlewareBehavior:
         assert mock_context.fastmcp_context._state_store.get("identity") is mock_identity
 
     @pytest.mark.asyncio
-    async def test_auth_failure_raises_before_tool_runs(self, middleware, mock_context):
-        """Auth-required tool with invalid token: error before tool body."""
+    async def test_auth_failure_rejects_before_tool_runs_with_wire_envelope(self, middleware, mock_context):
+        """Auth-required tool with a rejected credential: wire envelope, before the tool body.
+
+        Two obligations, and the second is why this asserts on the envelope
+        rather than on the raised class. The middleware runs OUTSIDE the tool
+        functions, so its raise never reaches the ``with_error_logging``
+        decorator that translates every other MCP raise; left untranslated,
+        FastMCP stringifies it into a bare ``ToolError("<message>")`` and the
+        buyer gets no code, no recovery and no suggestion — while A2A and REST
+        answer the same rejected credential with the full two-layer envelope.
+        Asserting ``pytest.raises(AdCPAuthenticationError)`` passed either way,
+        so it could not see that divergence.
+        """
         from src.core.exceptions import AdCPAuthenticationError
+        from src.core.tool_error_logging import AdCPToolError
+        from tests.helpers import assert_envelope_shape
 
         mock_context.message = MagicMock()
         mock_context.message.name = "create_media_buy"
@@ -156,8 +169,10 @@ class TestMCPAuthMiddlewareBehavior:
             "src.core.mcp_auth_middleware.resolve_identity_from_context",
             side_effect=AdCPAuthenticationError(),
         ):
-            with pytest.raises(AdCPAuthenticationError):
+            with pytest.raises(AdCPToolError) as exc_info:
                 await middleware.on_call_tool(mock_context, call_next)
+
+        assert_envelope_shape(exc_info.value.envelope, "AUTH_INVALID", recovery="terminal")
 
         # Tool was NOT called
         call_next.assert_not_awaited()

@@ -11,6 +11,8 @@ from fastmcp.server.dependencies import get_http_headers
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.tools.tool import ToolResult
 
+from src.core.exceptions import AdCPSalesAgentError
+from src.core.tool_error_logging import _translate_to_tool_error
 from src.core.transport_helpers import resolve_identity_from_context
 
 logger = logging.getLogger(__name__)
@@ -44,10 +46,21 @@ class MCPAuthMiddleware(Middleware):
         tool_name = context.message.name
         require_auth = tool_name not in AUTH_OPTIONAL_TOOLS
 
-        identity = resolve_identity_from_context(
-            context.fastmcp_context,
-            require_valid_token=require_auth,
-        )
+        try:
+            identity = resolve_identity_from_context(
+                context.fastmcp_context,
+                require_valid_token=require_auth,
+            )
+        except AdCPSalesAgentError as exc:
+            # This middleware runs OUTSIDE the tool functions, so its raise never
+            # reaches the ``with_error_logging`` decorator that translates every
+            # other MCP raise. Unhandled, FastMCP stringifies it into a bare
+            # ``ToolError("<message>")`` and the buyer gets no code, no recovery
+            # and no suggestion — while A2A and REST answer the same rejected
+            # credential with the full two-layer envelope. Translate here through
+            # the SAME boundary translator (never a hand-built envelope), exactly
+            # as RequestCompatMiddleware does for its own out-of-tool raises.
+            _translate_to_tool_error(exc)
 
         if context.fastmcp_context:
             await context.fastmcp_context.set_state("identity", identity, serializable=False)
