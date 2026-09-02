@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
-from adcp.types import GetAdcpCapabilitiesRequest
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_request import (
     GetAdcpCapabilitiesRequest as GetAdcpCapabilitiesRequestDTO,
 )
@@ -22,9 +21,7 @@ from fastapi import APIRouter, Depends, Request
 
 from src.core.auth_context import require_auth, resolve_auth
 from src.core.schema_helpers import (
-    accepted_kwargs,
     coerce_creative_filters,
-    select_request_fields,
     to_account_reference,
     to_brand_reference,
     to_context_object,
@@ -57,7 +54,7 @@ from src.core.tools.creatives import listing as creatives_listing_module
 from src.core.tools.creatives import sync_wrappers as creatives_sync_module
 from src.core.validation_helpers import adcp_validation_boundary
 from src.core.version_compat import apply_version_compat
-from src.routes._derived_body import DerivedBodyEnvelope, derived_body_model
+from src.routes._derived_body import DerivedBodyEnvelope, derived_body_model, derived_payload
 
 logger = logging.getLogger(__name__)
 
@@ -399,17 +396,13 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
     translation; no defensive catch needed here.
     """
     with adcp_validation_boundary(context="get_products request"):
-        # Selected off the BUILDER's signature, not GetProductsRequest's fields: the model
+        # The body's OWN derivation, read off the body: GetProductsRequest fields INTERSECT
+        # the builder's parameters. The narrowing to the builder is what matters -- the model
         # declares 13 fields this builder does not take (catalog, refine, pagination, ...),
-        # and handing it those would turn a key that is ignored today into a TypeError --
-        # a 500 on a spec-conformant payload.
-        req = products_module.create_get_products_request(
-            **select_request_fields(
-                GetProductsRequestDTO,
-                body,
-                accepted_kwargs(products_module.create_get_products_request),
-            )
-        )
+        # and handing it those would turn a key that is ignored today into a TypeError, a 500
+        # on a spec-conformant payload -- but it is the same narrowing GetProductsBody was
+        # generated with, so the route no longer states it a second time.
+        req = products_module.create_get_products_request(**derived_payload(body))
     # Through the raw wrapper like the other transports, not straight into _impl: an
     # explicit identity=None is passed through unchanged, so the auth-optional path is
     # preserved while the call shape stays the one shape.
@@ -444,14 +437,15 @@ async def post_capabilities(body: GetAdcpCapabilitiesBody, identity: ResolvedIde
 
     # Through the shared builder, selected off "DTO fields INTERSECT builder kwargs" --
     # the same two steps the A2A handler takes, so neither transport can construct a
-    # different request from the same payload.
+    # different request from the same payload. The pair is the body's own, so this route
+    # and GetAdcpCapabilitiesBody cannot disagree about which fields exist.
     #
     # Version pair forwarded explicitly -- see the A2A handler's note: the selector strips
     # the version-envelope fields by design, but this tool negotiates on them.
     builder = capabilities_module.build_get_adcp_capabilities_request
     with adcp_validation_boundary(context="get_adcp_capabilities request"):
         req = builder(
-            **select_request_fields(GetAdcpCapabilitiesRequest, body, accepted_kwargs(builder)),
+            **derived_payload(body),
             adcp_version=body.adcp_version,
             adcp_major_version=body.adcp_major_version,
         )
@@ -467,7 +461,7 @@ async def list_creative_formats(body: ListCreativeFormatsBody, identity: Resolve
     # cannot construct different requests from the same payload.
     builder = creative_formats_module.build_list_creative_formats_request
     with adcp_validation_boundary(context="list_creative_formats request"):
-        selected = select_request_fields(ListCreativeFormatsRequestDTO, body, accepted_kwargs(builder))
+        selected = derived_payload(body)
         req = builder(**selected) if selected else None
 
     response = creative_formats_module.list_creative_formats_raw(req=req, identity=identity)
@@ -483,7 +477,7 @@ async def list_authorized_properties(
     # build_list_authorized_properties_request.
     builder = properties_module.build_list_authorized_properties_request
     with adcp_validation_boundary(context="list_authorized_properties request"):
-        selected = select_request_fields(ListAuthorizedPropertiesRequestDTO, body, accepted_kwargs(builder))
+        selected = derived_payload(body)
         req = builder(**selected) if selected else None
 
     response = properties_module.list_authorized_properties_raw(req=req, identity=identity)
@@ -713,17 +707,16 @@ async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = r
     # Coerce the raw wire filters dict into a typed CreativeFilters here (#1493): the
     # merged list_creatives_raw expects a typed object (it calls .model_dump()), and
     # this is where an empty concept_ids etc. surfaces the VALIDATION_ERROR envelope.
-    from src.core.schemas import ListCreativesRequest
-
     filters = coerce_creative_filters(body.filters)
-    # Selected off "DTO fields INTERSECT the BUILDER's parameters" -- the builder, because
-    # the wrapper takes the built request now, so intersecting with it would select nothing.
-    # The 18-name hand-list this replaced never forwarded `sort`, so a spec-shaped REST
-    # payload sorted on MCP and A2A and silently did not on REST. `filters` is set after
-    # selection because it needs typed coercion (an empty concept_ids must surface a
-    # VALIDATION_ERROR envelope, not reach the impl as a dict).
+    # "DTO fields INTERSECT the BUILDER's parameters" -- the builder, because the wrapper
+    # takes the built request now, so intersecting with it would select nothing. Taken from
+    # the body, which was generated with that same pair. The 18-name hand-list this replaced
+    # never forwarded `sort`, so a spec-shaped REST payload sorted on MCP and A2A and
+    # silently did not on REST. `filters` is set after selection because it needs typed
+    # coercion (an empty concept_ids must surface a VALIDATION_ERROR envelope, not reach the
+    # impl as a dict).
     builder = creatives_listing_module._build_list_creatives_request
-    selected = select_request_fields(ListCreativesRequest, body, accepted_kwargs(builder))
+    selected = derived_payload(body)
     selected["filters"] = filters
     with adcp_validation_boundary(context="list_creatives request"):
         req = builder(**selected)
@@ -751,13 +744,10 @@ async def update_performance_index(body: UpdatePerformanceIndexBody, identity: R
 @router.post("/accounts")
 async def list_accounts(body: ListAccountsBody, identity: ResolvedIdentity = require_auth):
     """List accounts accessible to the authenticated agent (auth required)."""
-    from src.core.schemas.account import ListAccountsRequest
     from src.core.tools.accounts import build_list_accounts_request
 
     with adcp_validation_boundary(context="list_accounts request"):
-        req = build_list_accounts_request(
-            **select_request_fields(ListAccountsRequest, body, accepted_kwargs(build_list_accounts_request))
-        )
+        req = build_list_accounts_request(**derived_payload(body))
     response = accounts_module.list_accounts_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
@@ -765,12 +755,9 @@ async def list_accounts(body: ListAccountsBody, identity: ResolvedIdentity = req
 @router.post("/accounts/sync")
 async def sync_accounts(body: SyncAccountsBody, identity: ResolvedIdentity = require_auth):
     """Sync accounts by natural key (auth required)."""
-    from src.core.schemas.account import SyncAccountsRequest
     from src.core.tools.accounts import build_sync_accounts_request
 
     with adcp_validation_boundary(context="sync_accounts request"):
-        req = build_sync_accounts_request(
-            **select_request_fields(SyncAccountsRequest, body, accepted_kwargs(build_sync_accounts_request))
-        )
+        req = build_sync_accounts_request(**derived_payload(body))
     response = await accounts_module.sync_accounts_raw(req=req, identity=identity)
     return response.model_dump(mode="json")

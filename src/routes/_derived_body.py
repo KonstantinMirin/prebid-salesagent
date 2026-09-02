@@ -28,7 +28,7 @@ from typing import Any, cast
 
 from pydantic import BaseModel, create_model
 
-from src.core.schema_helpers import accepted_kwargs
+from src.core.schema_helpers import accepted_kwargs, select_request_fields
 from src.core.schemas._base import SalesAgentBaseModel
 
 #: Carried so the route can negotiate, never forwarded as request data.
@@ -140,6 +140,33 @@ def derived_body_model(
         path_fields=frozenset(path_fields),
     )
     return model
+
+
+def derived_payload(body: BaseModel) -> dict[str, Any]:
+    """The request data ``body`` carries, selected by the derivation the body RECORDS.
+
+    A derived body ALREADY is ``DTO fields INTERSECT impl parameters``, so a route that
+    re-states that intersection is asserting a guarantee the generator made two hundred
+    lines earlier. Seven routes did, each naming the DTO and the callee a second time --
+    and a restatement is a place to disagree. Pass a different DTO, or read the callee
+    from a module attribute a test has patched, and the route selects a SUBSET of what the
+    body accepted; the buyer's field is bound by FastAPI, dropped here, and the request
+    succeeds having done something other than what was asked. That is the same silent-no-op
+    disease this module exists to remove from the body classes, one layer down.
+
+    The pair is read from ``__derived_from_dto__``, which ``derived_body_model`` stamped at
+    derivation time, so selection and declaration cannot disagree -- there is nothing left
+    at the call site to disagree with.
+    """
+    derivation = getattr(type(body), "__derived_from_dto__", None)
+    if derivation is None:
+        raise TypeError(
+            f"{type(body).__name__} did not come from derived_body_model, so it records no "
+            f"derivation to select by. A hand-written body must call select_request_fields "
+            f"with the (DTO, callee) pair it is maintained against."
+        )
+    dto, impl = derivation
+    return select_request_fields(dto, body, accepted_kwargs(impl))
 
 
 def _is_optional(annotation: Any) -> bool:

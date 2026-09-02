@@ -1802,7 +1802,9 @@ class AdCPRequestHandler(RequestHandler):
         # Per AdCP 3.1.1 (media-buy/package-update.json) targeting_overlay and budgets live on each
         # PackageRequest; only request-level spec fields are forwarded here.
         #
-        # Selected off create_media_buy_raw's own signature rather than hand-listed. The
+        # Selected off the BUILDER's signature rather than hand-listed (it named
+        # create_media_buy_raw until the wrappers moved to taking the built request, whose
+        # signature would now select nothing). The
         # ten-name list this replaces dropped `ext` and `paused` — both declared by
         # CreateMediaBuyRequest AND accepted by the builder, so both were honoured on MCP and
         # silently discarded on A2A. That is the same defect class as the missing
@@ -1887,7 +1889,8 @@ class AdCPRequestHandler(RequestHandler):
         # Call core function with spec-compliant parameters (AdCP 2.5: full upsert
         # semantics, patch parameter removed).
         #
-        # Selected off sync_creatives_raw's own signature rather than hand-listed: the set
+        # Selected off the BUILDER's signature rather than hand-listed (it named
+        # sync_creatives_raw until the wrappers moved to taking the built request): the set
         # forwarded is "SyncCreativesRequest fields INTERSECT the callee's parameters", the
         # same set MCP advertises, so a field added to the DTO and the builder cannot reach
         # one transport and not another (which is how idempotency_key -- AdCP 3.1.1
@@ -1922,9 +1925,12 @@ class AdCPRequestHandler(RequestHandler):
         filters = coerce_creative_filters(parameters.get("filters"))
 
         # Call core function with optional parameters (fixing original validation bug)
-        # Selected off list_creatives_raw's own signature rather than hand-listed. The 20-name
-        # list this replaces is the shape that silently drops every field added later, which
-        # is how an A2A buyer's media_buy_ids came to be ignored (a recorded gap row 11).
+        # Selected off the BUILDER's signature rather than hand-listed. The 20-name list this
+        # replaces is the shape that silently drops every field added later, which is how an
+        # A2A buyer's media_buy_ids came to be ignored (a recorded gap row 11). It named
+        # list_creatives_raw when it was written; the wrapper takes the built request now, so
+        # intersecting with IT would select nothing -- the builder is the seam every transport
+        # constructs through, and REST's ListCreativesBody is derived against the same one.
         # `filters` is set explicitly AFTER selection because it needs typed coercion
         # (invalid filters must raise AdCPValidationError, not reach the impl as a dict).
         from src.core.tools.creatives.listing import _build_list_creatives_request

@@ -134,6 +134,36 @@ def request_model_for(fn: Callable[..., Any]) -> type[BaseModel] | None:
     return model if isinstance(model, type) and issubclass(model, BaseModel) else None
 
 
+#: Contributed by version-envelope.json to every SDK request model. An ancestor that carries
+#: only these grounds nothing -- it supplies no vocabulary for a DTO to be checked against.
+_ENVELOPE_ONLY = frozenset({"adcp_version", "adcp_major_version"})
+
+
+def sdk_grounding(model: type[BaseModel]) -> type[BaseModel] | None:
+    """The SDK request model ``model`` inherits its vocabulary from, or None.
+
+    "Announced = DTO fields INTERSECT the signature" only says something when the DTO comes
+    from somewhere ELSE. A DTO hand-authored from the wrapper's own signature satisfies the
+    intersection by construction: it declares what the wrapper declares, the derivation
+    reproduces the hand-written shape, and the tool advertises whatever we happened to write
+    while every test stays green. The DTO has to be the SPEC's vocabulary for the
+    intersection to grade anything.
+
+    Grounding is decided by walking the live MRO and asking where a field-carrying ancestor
+    is DEFINED, so it consults no import spelling and has no spelling to miss.
+    ``adcp.types.base.AdCPBaseModel`` and ``AdcpVersionEnvelope`` do not count: inheriting a
+    base class with no request fields, or with the version envelope alone, leaves every
+    buyer-facing field hand-written.
+    """
+    for ancestor in model.__mro__:
+        module = ancestor.__module__
+        if module != "adcp" and not module.startswith("adcp."):
+            continue
+        if set(getattr(ancestor, "model_fields", {})) - _ENVELOPE_ONLY:
+            return ancestor
+    return None
+
+
 def _declared_description(annotation: Any) -> str | None:
     """The description already on the tool's own ``Annotated[...]``, if any.
 

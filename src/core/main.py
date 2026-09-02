@@ -336,7 +336,7 @@ from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
 from mcp.types import ToolAnnotations
 
 from src.core.tool_error_logging import with_error_logging
-from src.core.tools._announced_shape import apply_dto_announced_shape
+from src.core.tools._announced_shape import apply_dto_announced_shape, request_model_for, sdk_grounding
 from src.core.tools.accounts import list_accounts, sync_accounts
 from src.core.tools.capabilities import get_adcp_capabilities
 from src.core.tools.creative_formats import list_creative_formats
@@ -386,6 +386,16 @@ def _register_tool(fn: Any) -> None:
     underived shape and nothing said so. A guard listing them would only have recorded the
     violation; refusing to register is what makes the underived state unreachable. The cost
     is that adding a tool now forces the DTO decision up front, which is the point.
+
+    RESOLVABLE IS NOT ENOUGH, so there is a second refusal. A DTO authored FROM the
+    wrapper's signature satisfies the intersection by construction and grades nothing -- the
+    tool would advertise whatever we wrote, derived from itself. For a tool THE PINNED SDK
+    DEFINES, the DTO must therefore inherit the SDK's own request model. The condition is
+    derived, not a list: ``sdk_def`` is the same lookup that supplies the description above,
+    so a tool the SDK does not define carries no obligation it cannot meet, and gains one
+    automatically the day it is renamed onto its spec operation. The four tools in that
+    state today are recorded in tests/unit/test_architecture_dto_sdk_grounded.py, which
+    grades the tree; this refusal keeps a new one from joining them.
     """
     tool_name = fn.__name__
     sdk_def = _sdk_tool_defs.get(tool_name)
@@ -402,6 +412,19 @@ def _register_tool(fn: Any) -> None:
             f"is nothing to derive from and the tool would publish a hand-written shape that "
             f"can drift from the spec. Give it a build_*_request builder that constructs "
             f"its request -- that is the only way to name a DTO."
+        )
+    model = request_model_for(fn)
+    if sdk_def is not None and model is not None and sdk_grounding(model) is None:
+        raise RuntimeError(
+            f"{tool_name} cannot be registered: {model.__name__} does not inherit the SDK's "
+            f"request model. The pinned AdCP version defines this tool, so its vocabulary is "
+            f"the spec's, not ours -- and a DTO written from the wrapper's own signature "
+            f"makes 'announced = DTO fields INTERSECT the implementation's arguments' "
+            f"tautological, advertising whatever we happened to write. Extend the SDK's "
+            f"request model for this tool -- most likely "
+            f"adcp.types.{tool_name.title().replace('_', '')}Request, though the SDK is the "
+            f"authority on the spelling -- per the Library* alias convention (critical "
+            f"pattern #1), instead of redeclaring its fields."
         )
     mcp.tool(**kwargs)(registered)
 

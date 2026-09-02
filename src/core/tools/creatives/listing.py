@@ -224,9 +224,16 @@ def _build_list_creatives_request(
     # Ungated. This was behind `accept_structured_sort`, whose comment said spec
     # sort/pagination were "NOT yet exposed on A2A/REST" and that "MCP is the ONE caller that
     # passes True". Both claims were false: BOTH callers passed True, so the False branch was
-    # unreachable, and list_creatives_raw declares sort/pagination while the derived REST body
-    # carries them -- so the deferred surface change had already shipped. A flag with one
-    # reachable value is not a gate, it is a comment that disagrees with its own code.
+    # unreachable, and every transport reaches THIS builder, which declares both -- MCP
+    # advertises them off the DTO, A2A forwards the bag through the request seam, and the
+    # derived ListCreativesBody carries them on REST. The deferred surface change had already
+    # shipped. A flag with one reachable value is not a gate, it is a comment that disagrees
+    # with its own code.
+    #
+    # (The sentence above named list_creatives_raw as what declares them, which was true when
+    # it was written and stopped being true when the wrappers moved to taking the built
+    # request -- its parameters are now req/format/include_performance/include_sub_assets/page.
+    # The behaviour is unchanged; the artifact that carries the shape moved down here.)
     # Coerce the wire's JSON objects into the typed models before reading attributes.
     # A2A and REST hand these through as plain dicts; only MCP's own validation builds
     # the models for us. Without this the builder raised
@@ -741,8 +748,12 @@ async def list_creatives(
 
     # The structured->flat coercion lives in _build_list_creatives_request now, so every
     # transport that reaches the builder gets identical treatment instead of MCP alone
-    # doing it at its own boundary (prkv.5 R1). MCP is the one caller that ENABLES it:
-    # spec sort/pagination are not exposed on A2A/REST yet (deferred ticket).
+    # doing it at its own boundary (prkv.5 R1). No caller ENABLES it and none is special:
+    # the accept_structured_sort flag this line used to describe is gone (it had one
+    # reachable value), and spec sort/pagination are live on the other two transports as
+    # well -- the derived ListCreativesBody declares both, and the A2A skill forwards the
+    # parameter bag through the same seam. BR-UC-018's pagination/sorting partitions grade
+    # the coercions on every transport, which is what retired the deferred ticket.
     req = _build_list_creatives_request(
         sort=sort,
         pagination=pagination,

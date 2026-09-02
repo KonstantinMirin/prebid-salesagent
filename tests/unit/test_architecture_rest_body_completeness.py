@@ -29,7 +29,9 @@ refuses to let a new hand-written class escape both.
 
 from __future__ import annotations
 
+import ast
 import inspect
+from pathlib import Path
 
 from src.core.schemas import (
     SalesAgentBaseModel,
@@ -269,3 +271,104 @@ def test_derived_bodies_carry_exactly_the_dto_fields_the_impl_accepts():
             f"{body_cls.__name__} carries {sorted(actual ^ expected)} outside "
             f"(DTO fields INTERSECT {impl.__name__} parameters, minus path_fields, plus extra_fields)."
         )
+
+
+def _route_functions_taking_a_derived_body() -> list[tuple[str, ast.AsyncFunctionDef]]:
+    """(route name, its AST) for every api_v1 handler whose body parameter is DERIVED.
+
+    Derived-ness is decided against the LIVE class, not the name: ``__derived_from_dto__``
+    is what the generator stamps, so a body that stops being generated stops being graded
+    here rather than being graded by a spelling that no longer means anything.
+    """
+    derived_names = {cls.__name__ for cls in _derived_bodies()}
+    source = Path("src/routes/api_v1.py")
+    routes = []
+    for node in ast.walk(ast.parse(source.read_text(), filename=str(source))):
+        if not isinstance(node, ast.AsyncFunctionDef):
+            continue
+        for arg in node.args.args:
+            annotation = arg.annotation
+            if isinstance(annotation, ast.Name) and annotation.id in derived_names:
+                routes.append((node.name, node))
+    return routes
+
+
+def test_a_route_with_a_derived_body_does_not_restate_the_derivation():
+    """A derived body already IS ``DTO fields INTERSECT callee parameters``.
+
+    Seven routes called ``select_request_fields`` with the same (DTO, callee) pair the body
+    was generated from -- the call site asserting a guarantee the generator had already
+    made. A restatement is somewhere to disagree: name a different DTO, or read the callee
+    off a module attribute a test has patched, and the route selects a SUBSET of what the
+    body accepted. FastAPI binds the buyer's field, this drops it, and the request answers
+    200 having ignored it -- the silent no-op the derived bodies exist to eliminate.
+
+    ``derived_payload(body)`` reads the pair off ``__derived_from_dto__`` instead, so there
+    is nothing at the call site left to disagree with.
+    """
+    routes = _route_functions_taking_a_derived_body()
+    assert len(routes) >= 7, (
+        f"only found {[name for name, _ in routes]} -- the AST read is not seeing the routes, so this grades nothing"
+    )
+    offenders = {
+        name
+        for name, node in routes
+        for call in ast.walk(node)
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "select_request_fields"
+    }
+    assert not offenders, (
+        f"{sorted(offenders)} re-derive their body's field selection. The body records the "
+        f"(DTO, callee) pair it was generated from -- call derived_payload(body) so the two "
+        f"cannot drift apart."
+    )
+
+
+class TestDerivedPayloadSelectsByTheRecordedDerivation:
+    """``derived_payload`` is graded on a fixture, because the tree cannot show it failing.
+
+    Every api_v1 body currently passes the same pair its route used to pass by hand, so a
+    tree-wide test would stay green if the helper started reading the wrong artifact. These
+    two grade the RULE.
+    """
+
+    @staticmethod
+    def _fixture_body():
+        from pydantic import BaseModel
+
+        from src.routes._derived_body import derived_body_model
+
+        class _Dto(BaseModel):
+            declared_and_accepted: str | None = None
+            declared_not_accepted: str | None = None
+
+        def _impl(declared_and_accepted: str | None = None, not_a_dto_field: str | None = None): ...
+
+        # Shaped after the live CreateMediaBuyBody: an extra_field that IS a DTO field the
+        # builder does NOT take, which the route forwards to the wrapper itself. That is the
+        # one field a derived body carries that only the ``accepted`` half of the rule
+        # removes -- drop the narrowing and it reaches the builder as an unknown keyword,
+        # i.e. a TypeError on a spec-conformant payload.
+        return derived_body_model(
+            "_FixtureBody", _Dto, _impl, extra_fields={"declared_not_accepted": (str | None, None)}
+        )
+
+    def test_it_carries_the_intersection_and_drops_the_envelope(self):
+        from src.routes._derived_body import derived_payload
+
+        body_cls = self._fixture_body()
+        body = body_cls(declared_and_accepted="kept", declared_not_accepted="dropped", adcp_version="3.1.1")
+        assert derived_payload(body) == {"declared_and_accepted": "kept"}, (
+            "derived_payload must select DTO fields INTERSECT callee parameters, minus the "
+            "version envelope -- the same rule the body was generated with"
+        )
+
+    def test_it_refuses_a_body_that_records_no_derivation(self):
+        import pytest
+
+        from src.routes._derived_body import derived_payload
+
+        class _HandWritten(SalesAgentBaseModel):
+            anything: str | None = None
+
+        with pytest.raises(TypeError, match="derived_body_model"):
+            derived_payload(_HandWritten())
