@@ -216,7 +216,10 @@ if TYPE_CHECKING:
 
 else:
     SyncCreativesBody = derived_body_model(
-        "SyncCreativesBody", LocalSyncCreativesRequest, creatives_sync_module.sync_creatives_raw
+        # The BUILDER -- the raw wrapper takes the built request now.
+        "SyncCreativesBody",
+        LocalSyncCreativesRequest,
+        creatives_sync_module.build_sync_creatives_request,
     )
 
 
@@ -662,28 +665,32 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
         push_notification_config = to_push_notification_config(body.push_notification_config)
         context = to_context_object(body.context)
 
-    response = creatives_sync_module.sync_creatives_raw(
-        # creatives stay wire dicts: _sync_creatives_impl validates each entry
-        # individually (partial-success semantics with per-creative results).
-        creatives=body.creatives,
-        assignments=body.assignments,
-        creative_ids=body.creative_ids,
-        delete_missing=body.delete_missing,
-        dry_run=body.dry_run,
-        validation_mode=body.validation_mode,
-        push_notification_config=push_notification_config,
-        context=context,
-        account=account_ref,
-        # The buyer's key was NOT forwarded here. SyncCreativesBody carries it and
-        # sync-creatives-request.json lists it in /required, but the route omitted it from
-        # this call, so a REST buyer's key was discarded before anything looked at it --
-        # while mcp and a2a both forward it. What that costs today is the shape check:
-        # _sync_creatives_impl runs validate_idempotency_key_shape, so a malformed key was
-        # rejected on mcp and a2a and silently accepted on REST. It does NOT yet buy replay:
-        # sync_creatives, unlike create_media_buy, does not implement one.
-        idempotency_key=body.idempotency_key,
-        identity=identity,
-    )
+        # Built through the SHARED builder, then handed over -- the same two steps A2A and
+        # MCP take. account rides ON the request, and the wrapper enriches identity off
+        # req.account. INSIDE the boundary: a buyer-invalid payload must surface as an
+        # envelope with a suggestion, not a raw pydantic message.
+        req = creatives_sync_module.build_sync_creatives_request(
+            # creatives stay wire dicts: _sync_creatives_impl validates each entry
+            # individually (partial-success semantics with per-creative results).
+            creatives=body.creatives,
+            assignments=body.assignments,
+            creative_ids=body.creative_ids,
+            delete_missing=body.delete_missing,
+            dry_run=body.dry_run,
+            validation_mode=body.validation_mode,
+            push_notification_config=push_notification_config,
+            context=context,
+            account=account_ref,
+            # The buyer's key was NOT forwarded here. SyncCreativesBody carries it and
+            # sync-creatives-request.json lists it in /required, but the route omitted it from
+            # this call, so a REST buyer's key was discarded before anything looked at it --
+            # while mcp and a2a both forward it. What that costs today is the shape check:
+            # _sync_creatives_impl runs validate_idempotency_key_shape, so a malformed key was
+            # rejected on mcp and a2a and silently accepted on REST. It does NOT yet buy replay:
+            # sync_creatives, unlike create_media_buy, does not implement one.
+            idempotency_key=body.idempotency_key,
+        )
+    response = creatives_sync_module.sync_creatives_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
 

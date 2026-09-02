@@ -139,6 +139,18 @@ def mock_format_registry():
 # ---------------------------------------------------------------------------
 
 
+def _sync_creatives(**kwargs):
+    """Build a SyncCreativesRequest from flat fields, then call the wrapper.
+
+    sync_creatives_raw takes the BUILT request. Routing this module's call sites through
+    one seam keeps them flat and readable without re-listing the request's fields at each.
+    """
+    from src.core.tools.creatives.sync_wrappers import build_sync_creatives_request, sync_creatives_raw
+
+    transport = {k: kwargs.pop(k) for k in ("ctx", "identity") if k in kwargs}
+    return sync_creatives_raw(req=build_sync_creatives_request(**kwargs), **transport)
+
+
 class TestCrossPrincipalIsolation:
     """BR-RULE-034: Cross-principal creative isolation with real DB.
 
@@ -195,10 +207,9 @@ class TestCrossPrincipalIsolation:
         _seed_account_for(self.TENANT_ID, ("principal_1", "principal_2"))
 
     def _sync_one(self, principal_id: str, creative_id: str = "c_shared") -> SyncCreativesResponse:
-        from src.core.tools.creatives import sync_creatives_raw
 
         identity = _make_identity(self.TENANT_ID, principal_id)
-        return sync_creatives_raw(
+        return _sync_creatives(
             creatives=[_make_creative_dict(creative_id=creative_id)],
             # Both are in sync-creatives-request.json /required, and every transport builds
             # SyncCreativesRequest now, so omitting either is a rejected request rather than
@@ -321,10 +332,9 @@ class TestApprovalWorkflow:
         _seed_account_for(self.TENANT_ID, (self.PRINCIPAL_ID,))
 
     def _sync(self, approval_mode: str, creative_id: str) -> SyncCreativesResponse:
-        from src.core.tools.creatives import sync_creatives_raw
 
         identity = _make_identity(self.TENANT_ID, self.PRINCIPAL_ID, approval_mode=approval_mode)
-        return sync_creatives_raw(
+        return _sync_creatives(
             creatives=[_make_creative_dict(creative_id=creative_id)],
             # Both are in sync-creatives-request.json /required, and every transport builds
             # SyncCreativesRequest now, so omitting either is a rejected request rather than
@@ -370,7 +380,6 @@ class TestApprovalWorkflow:
         Spec: UNSPECIFIED (implementation-defined approval workflow).
         Unit stub: TestApprovalWorkflow::test_default_approval_mode_is_require_human
         """
-        from src.core.tools.creatives import sync_creatives_raw
 
         # Identity with tenant dict that lacks approval_mode key
         identity = ResolvedIdentity(
@@ -380,7 +389,7 @@ class TestApprovalWorkflow:
             testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
             protocol="mcp",
         )
-        sync_creatives_raw(
+        _sync_creatives(
             creatives=[_make_creative_dict(creative_id="c_default")],
             # Both are in sync-creatives-request.json /required.
             idempotency_key="v3-sync-key-000001",
@@ -449,10 +458,9 @@ class TestBatchSync:
         Covers: UC-006-MAIN-MCP-02
         Unit stub: TestSyncCreativesE2E::test_batch_sync_multiple_creatives
         """
-        from src.core.tools.creatives import sync_creatives_raw
 
         creatives = [_make_creative_dict(creative_id=f"c_{i}", name=f"Creative {i}") for i in range(5)]
-        result = sync_creatives_raw(
+        result = _sync_creatives(
             creatives=creatives,
             # Both are in sync-creatives-request.json /required.
             idempotency_key="v3-sync-key-000001",
@@ -477,12 +485,11 @@ class TestBatchSync:
         Covers: UC-006-MAIN-MCP-03
         Unit stub: TestSyncCreativesE2E::test_upsert_by_triple_key
         """
-        from src.core.tools.creatives import sync_creatives_raw
 
         identity = self._identity()
 
         # First sync: create
-        result1 = sync_creatives_raw(
+        result1 = _sync_creatives(
             creatives=[_make_creative_dict(creative_id="c_upsert", name="Original Name")],
             # Both are in sync-creatives-request.json /required.
             idempotency_key="v3-sync-key-000001",
@@ -495,7 +502,7 @@ class TestBatchSync:
         assert action1 == "created"
 
         # Second sync: update
-        result2 = sync_creatives_raw(
+        result2 = _sync_creatives(
             creatives=[_make_creative_dict(creative_id="c_upsert", name="Updated Name")],
             # Both are in sync-creatives-request.json /required.
             idempotency_key="v3-sync-key-000001",
@@ -613,12 +620,11 @@ class TestFormatCompatibility:
         Unit stub: TestFormatCompatibility::test_format_mismatch_strict_raises
         """
         from src.core.exceptions import AdCPCreativeRejectedError
-        from src.core.tools.creatives import sync_creatives_raw
 
         identity = _make_identity(self.TENANT_ID, self.PRINCIPAL_ID)
 
         # First sync the display creative (so it exists in DB)
-        sync_creatives_raw(
+        _sync_creatives(
             creatives=[_make_creative_dict(creative_id="c_display")],
             # Both are in sync-creatives-request.json /required.
             idempotency_key="v3-sync-key-000001",
@@ -628,7 +634,7 @@ class TestFormatCompatibility:
 
         # Now try to assign it to the video-only package in strict mode
         with pytest.raises(AdCPCreativeRejectedError):
-            sync_creatives_raw(
+            _sync_creatives(
                 creatives=[_make_creative_dict(creative_id="c_display")],
                 # list[Assignment], not the {creative_id: [package_id]} map: that map was an
                 # internal-only spelling of the same relation and is not what
@@ -738,12 +744,11 @@ class TestMediaBuyStatusTransition:
         Spec: UNSPECIFIED (implementation-defined status machine).
         Unit stub: TestMediaBuyStatusTransition::test_draft_with_approved_at_transitions
         """
-        from src.core.tools.creatives import sync_creatives_raw
 
         identity = _make_identity(self.TENANT_ID, self.PRINCIPAL_ID)
 
         # Sync creative and assign to draft media buy's package
-        sync_creatives_raw(
+        _sync_creatives(
             creatives=[_make_creative_dict(creative_id="c_transition")],
             # list[Assignment], per sync-creatives-request.json.
             assignments=[Assignment(creative_id="c_transition", package_id="pkg_draft")],

@@ -151,20 +151,7 @@ async def sync_creatives(
 
 
 def sync_creatives_raw(
-    # A2A/REST send wire dicts; _sync_creatives_impl validates each entry
-    # individually (partial-success semantics with per-creative results).
-    creatives: list[CreativeAssetRequest],
-    assignments: list[Assignment] | None = None,
-    creative_ids: list[str] = None,
-    delete_missing: bool | None = None,
-    dry_run: bool | None = None,
-    validation_mode: ValidationMode | None = None,
-    push_notification_config: PushNotificationConfig | None = None,
-    context: ContextObject | None = None,
-    account: LibraryAccountReference | None = None,
-    # AdCP 3.1.1 /required. Declared here too so a2a and rest accept the same request set
-    # as mcp -- a field one transport takes and another drops is silently lost for the buyer.
-    idempotency_key: str | None = None,
+    req: SyncCreativesRequest,
     ctx: Context | ToolContext | None = None,
     identity: IdentityOrNotProvided = NOT_PROVIDED,
 ):
@@ -189,27 +176,11 @@ def sync_creatives_raw(
     """
     identity = resolve_identity_if_not_provided(identity, ctx)
 
-    # Resolve account at transport boundary (before _impl)
+    # Account resolution at the boundary, read OFF the request rather than from a separate
+    # parameter beside it -- account is a SyncCreativesRequest field, so one carrier.
     from src.core.transport_helpers import enrich_identity_with_account
 
-    identity = enrich_identity_with_account(identity, account)
-
-    # Through the SAME builder the MCP wrapper uses, so one tool has one shape on every
-    # transport. Possible once derived_body_model stopped rewriting every field to optional:
-    # while it did, REST accepted a request omitting a field the schema lists in /required
-    # and handed this wrapper a None for it.
-    req = build_sync_creatives_request(
-        creatives=creatives,
-        idempotency_key=idempotency_key,
-        account=account,
-        assignments=assignments,
-        creative_ids=creative_ids,
-        delete_missing=delete_missing,
-        dry_run=dry_run,
-        validation_mode=validation_mode,
-        push_notification_config=push_notification_config,
-        context=context,
-    )
+    identity = enrich_identity_with_account(identity, req.account)
 
     return _sync_creatives_impl(
         creatives=req.creatives,

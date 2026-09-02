@@ -343,7 +343,24 @@ class TestA2AResponseShape:
 
         mock_impl.return_value = SyncCreativesResponse(creatives=[], failed_creatives=[])
 
-        payload = _build_jsonrpc("sync_creatives", {"creatives": []})
+        # account, idempotency_key and a non-empty creatives[] are all /required on
+        # sync-creatives-request.json. The handler builds the request now, so a payload
+        # missing them is refused before the response shape this test grades exists.
+        payload = _build_jsonrpc(
+            "sync_creatives",
+            {
+                "creatives": [
+                    {
+                        "creative_id": "c1",
+                        "name": "Shape",
+                        "format_id": {"agent_url": "https://creative.example.com", "id": "display_300x250"},
+                        "assets": {},
+                    }
+                ],
+                "account": {"account_id": "acct-shape"},
+                "idempotency_key": "idem-shape-000000001",
+            },
+        )
         response = client.post("/a2a", json=payload, headers=auth_headers)
         body = response.json()
 

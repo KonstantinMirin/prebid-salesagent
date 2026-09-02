@@ -70,6 +70,17 @@ def _list_creatives(**kwargs):
     return list_creatives_raw(req=_build_list_creatives_request(**kwargs), **out_of_band, **transport)
 
 
+def _sync_creatives(**kwargs):
+    """Build a SyncCreativesRequest from flat fields, then call the wrapper.
+
+    sync_creatives_raw takes the BUILT request; this module's call sites stay flat.
+    """
+    from src.core.tools.creatives.sync_wrappers import build_sync_creatives_request, sync_creatives_raw
+
+    transport = {k: kwargs.pop(k) for k in ("ctx", "identity") if k in kwargs}
+    return sync_creatives_raw(req=build_sync_creatives_request(**kwargs), **transport)
+
+
 class MockContext:
     """Mock FastMCP Context for testing."""
 
@@ -86,9 +97,7 @@ class TestCreativeLifecycleMCP:
 
     def _import_mcp_tools(self):
         """Import MCP tools to avoid module-level database initialization."""
-        from src.core.tools.creatives import sync_creatives_raw
-
-        return sync_creatives_raw, _list_creatives
+        return _sync_creatives, _list_creatives
 
     def _make_identity(self, tenant_id=None, principal_id=None, tenant_overrides=None):
         """Create a ResolvedIdentity for tests, using stored test data as defaults."""

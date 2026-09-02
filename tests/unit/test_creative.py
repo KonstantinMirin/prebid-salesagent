@@ -4540,7 +4540,12 @@ class TestA2ATransportGaps:
         sync_creatives_raw delegates to _sync_creatives_impl with identity.
         Covers: UC-006-MAIN-REST-01
         """
-        from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
+        from adcp.types import AccountReference as LibraryAccountReference
+
+        from src.core.tools.creatives.sync_wrappers import (
+            build_sync_creatives_request,
+            sync_creatives_raw,
+        )
 
         identity = PrincipalFactory.make_identity(
             principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
@@ -4582,15 +4587,18 @@ class TestA2ATransportGaps:
             mock_db.return_value.__enter__.return_value = mock_uow
             mock_db.return_value.__exit__.return_value = None
 
+            # Built through the shared builder, since the wrapper takes the request.
+            # sync-creatives-request.json lists account and idempotency_key in /required,
+            # so omitting either is a rejected request rather than a call that reaches the
+            # impl. Resolving the account opens an AccountUoW, which a unit test must not
+            # do, so the enrichment is patched above -- what this test grades is the A2A
+            # path, not account resolution.
             result = sync_creatives_raw(
-                creatives=[_make_creative_asset()],
-                # sync-creatives-request.json lists both in /required, and every transport
-                # builds SyncCreativesRequest now, so omitting either is a rejected request
-                # rather than a call that reaches the impl. Resolving the account opens an
-                # AccountUoW, which a unit test must not do, so the enrichment is patched
-                # above -- what this test grades is the A2A path, not account resolution.
-                idempotency_key="unit-a2a-sync-key-01",
-                account={"account_id": "acc_unit_a2a"},
+                req=build_sync_creatives_request(
+                    creatives=[_make_creative_asset()],
+                    idempotency_key="unit-a2a-sync-key-01",
+                    account=LibraryAccountReference.model_validate({"account_id": "acc_unit_a2a"}),
+                ),
                 identity=identity,
             )
 

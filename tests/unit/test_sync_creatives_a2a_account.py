@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types import AccountReference as LibraryAccountReference
 
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPSalesAgentError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_account_reference
 
@@ -47,6 +47,16 @@ def test_to_account_reference_rejects_invalid_account_payload():
         to_account_reference({})
 
 
+#: A minimal creative the pinned schema accepts. sync-creatives-request.json requires
+#: creatives with minItems 1, so every payload in this module needs at least one.
+_WIRE_CREATIVE = {
+    "creative_id": "c1",
+    "name": "Wire Creative",
+    "format_id": {"agent_url": "https://creative.example.com", "id": "display_300x250"},
+    "assets": {},
+}
+
+
 class TestSyncCreativesAccountCoercion:
     """A2A handler must coerce raw account dict to AccountReference before calling core."""
 
@@ -58,8 +68,9 @@ class TestSyncCreativesAccountCoercion:
 
         captured = {}
 
-        def _fake_core(creatives, **kwargs):
-            captured["account"] = kwargs.get("account")
+        def _fake_core(**kwargs):
+            # account rides ON the request now, so it is read from there.
+            captured["account"] = kwargs["req"].account
             result = MagicMock()
             result.model_dump.return_value = {}
             return result
@@ -69,7 +80,17 @@ class TestSyncCreativesAccountCoercion:
 
             asyncio.run(
                 handler._handle_sync_creatives_skill(
-                    parameters={"creatives": [], "account": account_param},
+                    # A BUILDABLE payload. This used to pass `creatives: []`, which
+                    # sync-creatives-request.json forbids (minItems 1) -- and it passed,
+                    # because patching the wrapper also patched away the builder inside it,
+                    # so nothing ever validated the request. The handler builds now, so the
+                    # payload has to be one a buyer could actually send.
+                    parameters={
+                        "creatives": [_WIRE_CREATIVE],
+                        "account": account_param,
+                        # Also /required on sync-creatives-request.json.
+                        "idempotency_key": "idem-a2a-account-0001",
+                    },
                     identity=_MOCK_IDENTITY,
                 )
             )
@@ -85,10 +106,16 @@ class TestSyncCreativesAccountCoercion:
         assert result.root.operator == "op-1"
         assert result.root.sandbox is False
 
-    def test_none_account_passes_through_as_none(self):
-        """None account is passed through unchanged."""
-        result = self._call_handler_with_account(None)
-        assert result is None
+    def test_none_account_is_refused_because_the_pin_requires_one(self):
+        """A None account is REFUSED, not forwarded.
+
+        This asserted the opposite -- that None "passes through unchanged" -- and passed
+        only because the builder never ran under the patched wrapper. `account` is in
+        /required on sync-creatives-request.json, so a request without one is not
+        constructible, and forwarding a None was the permissive behavior the spec removed.
+        """
+        with pytest.raises(AdCPSalesAgentError):
+            self._call_handler_with_account(None)
 
     def test_already_typed_account_passes_through(self):
         """An already-validated AccountReference is forwarded by identity, not re-validated."""
@@ -123,8 +150,9 @@ class TestSyncCreativesFormatIdStaysWire:
         handler = AdCPRequestHandler.__new__(AdCPRequestHandler)
         captured = {}
 
-        def _fake_core(creatives, **kwargs):
-            captured["creatives"] = creatives
+        def _fake_core(**kwargs):
+            # creatives ride ON the request now.
+            captured["creatives"] = kwargs["req"].creatives
             result = MagicMock()
             result.model_dump.return_value = {}
             return result
@@ -134,7 +162,14 @@ class TestSyncCreativesFormatIdStaysWire:
 
             asyncio.run(
                 handler._handle_sync_creatives_skill(
-                    parameters={"creatives": creatives},
+                    # account and idempotency_key are /required on
+                    # sync-creatives-request.json; the payload has to carry them for the
+                    # request to be constructible at all.
+                    parameters={
+                        "creatives": creatives,
+                        "account": {"account_id": "acct-wire"},
+                        "idempotency_key": "idem-a2a-formatid-0001",
+                    },
                     identity=_MOCK_IDENTITY,
                 )
             )
@@ -153,19 +188,21 @@ class TestSyncCreativesFormatIdStaysWire:
                 }
             ]
         )
-        format_id = forwarded[0]["format_id"]
-        assert format_id == {"agent_url": "https://creative.example.com/", "id": "display_300x250"}
+        # The handler builds now, so what it forwards is the TYPED field -- the divergence
+        # this class guards (A2A alone constructing our FormatId subclass) is closed by
+        # construction rather than by keeping the payload a dict. The value is what matters.
+        format_id = forwarded[0].format_id
+        assert str(format_id.agent_url).rstrip("/") == "https://creative.example.com"
+        assert format_id.id == "display_300x250"
 
-    def test_legacy_string_format_id_is_upgraded_but_stays_a_dict(self):
-        """A legacy string still gains its agent_url -- as a dict the library accepts."""
+    def test_legacy_string_format_id_is_upgraded_with_the_default_agent_url(self):
+        """A legacy string still gains its agent_url on the way to the request."""
         forwarded = self._forwarded_creatives(
             [{"creative_id": "c1", "name": "Legacy", "format_id": "display_300x250", "assets": {}}]
         )
-        format_id = forwarded[0]["format_id"]
-        assert format_id == {
-            "agent_url": "https://creative.adcontextprotocol.org/",
-            "id": "display_300x250",
-        }
+        format_id = forwarded[0].format_id
+        assert str(format_id.agent_url).rstrip("/") == "https://creative.adcontextprotocol.org"
+        assert format_id.id == "display_300x250"
 
     def test_parameterized_format_id_keeps_its_parameters(self):
         """AdCP 2.5 width/height survive the dump rather than being dropped."""
@@ -184,21 +221,20 @@ class TestSyncCreativesFormatIdStaysWire:
                 }
             ]
         )
-        assert forwarded[0]["format_id"] == {
-            "agent_url": "https://creative.example.com/",
-            "id": "display",
-            "width": 300,
-            "height": 250,
-        }
+        format_id = forwarded[0].format_id
+        assert str(format_id.agent_url).rstrip("/") == "https://creative.example.com"
+        assert format_id.id == "display"
+        assert (format_id.width, format_id.height) == (300, 250)
 
     def test_forwarded_creative_builds_the_same_class_every_transport_builds(self):
         """The end the divergence actually had: CreativeAsset.format_id's CLASS.
 
-        Building the library CreativeAsset from what A2A forwards must produce the
-        same concrete format_id type as building it from the untouched wire dict --
-        which is exactly what MCP and REST do.
+        What A2A forwards must carry the same concrete format_id type as what the SHARED
+        builder produces from the untouched wire dict -- which is now literally what every
+        other transport calls. The divergence (A2A alone constructing our FormatId
+        subclass) is closed by construction: both sides here go through one builder.
         """
-        from adcp.types import CreativeAsset
+        from src.core.tools.creatives.sync_wrappers import build_sync_creatives_request
 
         wire = {
             "creative_id": "c1",
@@ -206,10 +242,14 @@ class TestSyncCreativesFormatIdStaysWire:
             "format_id": {"agent_url": "https://creative.example.com", "id": "display_300x250"},
             "assets": {},
         }
-        forwarded = self._forwarded_creatives([dict(wire)])[0]
-
-        from_a2a = CreativeAsset(**forwarded)
-        from_other_transports = CreativeAsset(**wire)
+        # A2A: through the handler, which upgrades legacy format_ids and then builds.
+        from_a2a = self._forwarded_creatives([dict(wire)])[0]
+        # Every other transport: the SAME builder, straight from the untouched wire dict.
+        from_other_transports = build_sync_creatives_request(
+            creatives=[dict(wire)],
+            account=LibraryAccountReference.model_validate({"account_id": "acct-wire"}),
+            idempotency_key="idem-a2a-formatid-0001",
+        ).creatives[0]
 
         assert type(from_a2a.format_id) is type(from_other_transports.format_id)
         assert from_a2a.format_id == from_other_transports.format_id

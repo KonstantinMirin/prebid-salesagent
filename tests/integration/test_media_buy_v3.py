@@ -175,6 +175,18 @@ def mb_creatives(integration_db, mb_identity):
 # ---------------------------------------------------------------------------
 
 
+def _sync_creatives(**kwargs):
+    """Build a SyncCreativesRequest from flat fields, then call the wrapper.
+
+    sync_creatives_raw takes the BUILT request. Routing this module's call sites through
+    one seam keeps them flat and readable without re-listing the request's fields at each.
+    """
+    from src.core.tools.creatives.sync_wrappers import build_sync_creatives_request, sync_creatives_raw
+
+    transport = {k: kwargs.pop(k) for k in ("ctx", "identity") if k in kwargs}
+    return sync_creatives_raw(req=build_sync_creatives_request(**kwargs), **transport)
+
+
 class TestCreateMediaBuyCurrencyValidation:
     """UC-002-V12: currency validation against tenant CurrencyLimit."""
 
@@ -648,7 +660,6 @@ class TestGetMediaBuysResponseFields:
         populated on the matching package.
         """
         from src.core.schemas import GetMediaBuysRequest
-        from src.core.tools.creatives import sync_creatives_raw
         from src.core.tools.media_buy_create import _create_media_buy_impl
         from src.core.tools.media_buy_list import _get_media_buys_impl
         from tests.helpers.adcp_factories import create_test_format
@@ -678,7 +689,7 @@ class TestGetMediaBuysResponseFields:
             return_value=mock_format,
         ):
             # Sync a creative and assign it to the package
-            sync_creatives_raw(
+            _sync_creatives(
                 creatives=[
                     {
                         "creative_id": "c_approval_test",

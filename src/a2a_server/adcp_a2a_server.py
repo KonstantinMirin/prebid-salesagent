@@ -1881,18 +1881,24 @@ class AdCPRequestHandler(RequestHandler):
         #
         # Selected off sync_creatives_raw's own signature rather than hand-listed: the set
         # forwarded is "SyncCreativesRequest fields INTERSECT the callee's parameters", the
-        # same set MCP advertises, so a field added to the DTO and the callee cannot reach
+        # same set MCP advertises, so a field added to the DTO and the builder cannot reach
         # one transport and not another (which is how idempotency_key -- AdCP 3.1.1
         # /required -- was lost here until it was hand-added back).
         #
         # Three fields are set AFTER selection because they need boundary coercion the raw
         # bag cannot carry: `creatives` (legacy format_id upgraded above), `context` (typed
         # ContextObject) and `account` (typed AccountReference).
-        selected = select_request_fields(SyncCreativesRequest, parameters, accepted_kwargs(core_sync_creatives_tool))
+        from src.core.tools.creatives.sync_wrappers import build_sync_creatives_request
+
+        selected = select_request_fields(
+            SyncCreativesRequest, parameters, accepted_kwargs(build_sync_creatives_request)
+        )
         selected["creatives"] = creatives
         selected["context"] = context
         selected["account"] = to_account_reference(parameters.get("account"))
-        response = core_sync_creatives_tool(**selected, identity=identity)
+        with adcp_validation_boundary(context="sync_creatives request"):
+            req = build_sync_creatives_request(**selected)
+        response = core_sync_creatives_tool(req=req, identity=identity)
 
         return response
 
