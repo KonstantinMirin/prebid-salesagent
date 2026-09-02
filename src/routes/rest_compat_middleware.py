@@ -14,6 +14,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import Response
 
+from src.core.exceptions import AdCPSalesAgentError
 from src.core.request_compat import normalize_request_params
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,20 @@ class RestCompatMiddleware(BaseHTTPMiddleware):
             request.state.raw_wire_payload = raw_body
 
             body_dict: dict[str, Any] = json.loads(raw_body)
-            result = normalize_request_params(tool_name, body_dict)
+            try:
+                result = normalize_request_params(tool_name, body_dict)
+            except AdCPSalesAgentError as exc:
+                # Normalization can REJECT, not just rewrite: the brand shorthand
+                # is coerced through ``to_brand_reference``, which raises
+                # AdCPValidationError(field="brand") for input it cannot
+                # normalize. A raise from a BaseHTTPMiddleware propagates OUTSIDE
+                # Starlette's ExceptionMiddleware, so app.py's typed handlers
+                # never see it and the buyer would get a bare 500 instead of the
+                # two-layer envelope naming the field. Build the same envelope
+                # response those handlers build.
+                from src.app import _envelope_response
+
+                return _envelope_response(request, exc)
 
             if result.translations_applied:
                 # Replace the request body with normalized JSON

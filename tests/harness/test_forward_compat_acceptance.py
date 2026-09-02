@@ -811,7 +811,11 @@ class TestErrorPropagation:
                 raise original_error
             raise retry_error
 
-        ctx = _make_mcp_context("get_products", {"brief": "test", "brand": {"domain": "x.com", "extra": 1}})
+        # The unknown key rides on ``filters``, not ``brand``: step 1 now normalizes
+        # brand through to_brand_reference, which drops unknown keys before deep-strip
+        # can see them, so a brand-borne extra would leave stripped == normalized and
+        # no retry would happen — the test would pass vacuously on the FIRST error.
+        ctx = _make_mcp_context("get_products", {"brief": "test", "filters": {"channel": "web", "extra": 1}})
 
         async def _call():
             with (
@@ -975,7 +979,15 @@ def _make_copied_ctx(original, **kwargs):
 
 
 def _simple_tool_schema() -> dict:
-    """A minimal tool schema for testing deep-strip behavior."""
+    """A minimal tool schema for testing deep-strip behavior.
+
+    ``filters`` is here as a nested object the request normalizer does NOT own, so
+    a test that needs deep-strip to actually CHANGE the payload has a vehicle for
+    it. ``brand`` can no longer serve that role: ``_normalize_brand`` coerces it
+    through ``to_brand_reference`` in step 1, which keeps only BrandReference's
+    own fields, so an unknown key under ``brand`` is already gone by the time
+    deep-strip runs and ``stripped == normalized`` suppresses the retry.
+    """
     return {
         "type": "object",
         "properties": {
@@ -989,6 +1001,11 @@ def _simple_tool_schema() -> dict:
                     },
                     {"type": "null"},
                 ],
+            },
+            "filters": {
+                "type": "object",
+                "properties": {"channel": {"type": "string"}},
+                "additionalProperties": False,
             },
         },
         "additionalProperties": False,

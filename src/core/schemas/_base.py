@@ -2179,17 +2179,16 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
     - reporting_webhook: dict (webhook configuration)
     """
 
-    # Same widening as GetProductsRequest.brand, for the same reason: this agent accepts the
-    # documented brand shorthand (bare domain, URL, or dict) which to_brand_reference
-    # normalizes, and the ADVERTISED shape is derived from this model. Declaring only the
-    # library's BrandReference would advertise narrower than the tool accepts and FastMCP
-    # would reject the shorthand at the boundary.
+    # The spec's type, matching the library parent -- see GetProductsRequest.brand for why
+    # the widened union is gone and where the shorthand lives now (``_normalize_brand`` in
+    # src/core/request_compat.py, which runs before validation on every transport).
     # REQUIRED, as the library declares it (create-media-buy-request.json /required lists
-    # brand). Only the TYPE is widened, never the requiredness -- redeclaring it optional
-    # would relax a spec constraint, which is the weakening the inheritance guard exists to
-    # catch and which broke test_brand_field_is_required_on_create_media_buy_request.
-    brand: LibraryBrandReference | dict[str, Any] | str = Field(
-        ..., description="Brand reference, or the shorthand this agent also accepts"
+    # brand). Narrowing the TYPE back to the parent's must not touch the requiredness --
+    # redeclaring it optional would relax a spec constraint, which is the weakening the
+    # inheritance guard exists to catch and which broke
+    # test_brand_field_is_required_on_create_media_buy_request.
+    brand: LibraryBrandReference = Field(
+        ..., description="Brand reference (see request_compat for the shorthand this agent also accepts)"
     )
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())

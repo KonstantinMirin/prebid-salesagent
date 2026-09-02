@@ -16,7 +16,7 @@ from fastmcp.tools.tool import ToolResult
 from mcp.types import CallToolRequestParams
 from pydantic import ValidationError
 
-from src.core.exceptions import adcp_error_for
+from src.core.exceptions import AdCPSalesAgentError, adcp_error_for
 from src.core.request_compat import deep_strip_to_schema, normalize_request_params, strip_unknown_params
 from src.core.tool_error_logging import _translate_to_tool_error, record_boundary_error
 
@@ -49,33 +49,7 @@ class RequestCompatMiddleware(Middleware):
             return await call_next(context)
 
         tool_name = context.message.name
-        normalized = dict(arguments)
-        modified = False
-
-        # Step 1: Translate deprecated fields
-        compat_result = normalize_request_params(tool_name, normalized)
-        normalized = compat_result.params
-        if compat_result.translations_applied:
-            modified = True
-
-        # Step 2: Strip unknown fields (schema-aware, production only)
-        # In dev mode, unknown fields reach TypeAdapter and fail loudly —
-        # this is how we detect that the seller agent doesn't support a
-        # field the spec requires. In production, strip silently to avoid
-        # rejecting callers using newer schema versions.
-        from src.core.config import is_production
-
-        if is_production():
-            known_params = await self._get_known_params(context, tool_name)
-            if known_params is not None:
-                normalized, stripped = strip_unknown_params(normalized, known_params)
-                if stripped:
-                    modified = True
-                    logger.warning(
-                        "Stripped unknown fields from %s: %s",
-                        tool_name,
-                        ", ".join(stripped),
-                    )
+        normalized, modified = await self._prepared_arguments(context, tool_name, dict(arguments))
 
         if modified:
             new_message = CallToolRequestParams(
@@ -141,6 +115,60 @@ class RequestCompatMiddleware(Middleware):
                 principal_id=principal_id,
             )
             _translate_to_tool_error(exc, typed=typed)
+
+    async def _prepared_arguments(
+        self,
+        context: MiddlewareContext,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Pipeline steps 1-2: translate deprecated names, then strip unknown fields.
+
+        Returns ``(arguments, modified)``; the caller rebuilds the message only when
+        something actually changed. Extracted from ``on_call_tool`` so that method
+        stays inside the statement ceiling the complexity ratchet enforces — the
+        dispatch-and-recover half (step 3) is a different job from preparing the
+        payload, and reads better apart from it.
+        """
+        modified = False
+
+        # Step 1: Translate deprecated fields
+        try:
+            compat_result = normalize_request_params(tool_name, arguments)
+        except AdCPSalesAgentError as exc:
+            # Normalization can REJECT, not just rewrite: the brand shorthand is
+            # coerced through ``to_brand_reference``, which raises
+            # AdCPValidationError(field="brand") for input it cannot normalize.
+            # That raise happens OUTSIDE the try around ``call_next``, so nothing
+            # else in this class would frame it — FastMCP would stringify it into a
+            # bare ToolError and the buyer would lose both the code and the field
+            # being blamed. Translate through the same boundary translator step 3
+            # uses.
+            _translate_to_tool_error(exc)
+        arguments = compat_result.params
+        if compat_result.translations_applied:
+            modified = True
+
+        # Step 2: Strip unknown fields (schema-aware, production only)
+        # In dev mode, unknown fields reach TypeAdapter and fail loudly —
+        # this is how we detect that the seller agent doesn't support a
+        # field the spec requires. In production, strip silently to avoid
+        # rejecting callers using newer schema versions.
+        from src.core.config import is_production
+
+        if is_production():
+            known_params = await self._get_known_params(context, tool_name)
+            if known_params is not None:
+                arguments, stripped = strip_unknown_params(arguments, known_params)
+                if stripped:
+                    modified = True
+                    logger.warning(
+                        "Stripped unknown fields from %s: %s",
+                        tool_name,
+                        ", ".join(stripped),
+                    )
+
+        return arguments, modified
 
     @staticmethod
     def _should_retry(exc: Exception) -> bool:

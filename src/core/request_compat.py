@@ -11,12 +11,13 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.core.schema_helpers import brand_shorthand_to_domain, is_url_shorthand
+from src.core.schema_helpers import brand_shorthand_to_domain, is_url_shorthand, to_brand_reference
 
 logger = logging.getLogger(__name__)
 V25_SIGNALS: frozenset[str] = frozenset({"brand_manifest", "promoted_offerings", "campaign_ref"})
 
-# Tools where brand_manifest → brand translation applies.
+# Tools where the brand_manifest → brand translation and the brand shorthand
+# coercion apply.
 _BRAND_TOOLS: frozenset[str] = frozenset({"get_products", "create_media_buy"})
 
 
@@ -61,6 +62,43 @@ def _translate_brand_manifest(value: Any) -> dict[str, str] | None:
         logger.debug("Could not parse domain from brand_manifest url=%r; stripping field", url)
         return None
     return {"domain": domain}
+
+
+def _normalize_brand(value: Any) -> tuple[Any, bool]:
+    """Coerce the explicit ``brand`` shorthand to the BrandReference wire shape.
+
+    The announced shape is the SPEC's shape. ``apply_dto_announced_shape`` copies
+    the DTO's declared type onto the tool's ``__annotations__``, and FastMCP reads
+    those to build the TypeAdapter — so the DTO is what decides what MCP accepts,
+    and a DTO widened past its library parent is how the shorthand used to be
+    admitted. That widening is a Liskov violation the type checker objects to, and
+    it puts backwards-compatibility tolerance in the announced contract, where it
+    does not belong. The tolerance belongs here: this normalizer runs before
+    validation on all three transports (MCP ``RequestCompatMiddleware`` before
+    ``call_next``, REST ``RestCompatMiddleware`` before FastAPI binds the body,
+    A2A's skill dispatcher before any handler), so the shorthand keeps working
+    while the model states the spec's type.
+
+    Malformed input is NOT swallowed. ``to_brand_reference`` is the same
+    raise-capable funnel every explicit-brand call site already used, so a bad
+    brand still surfaces as ``AdCPValidationError(field="brand")`` rather than
+    reaching the narrowed model and being reported as a generic type mismatch
+    that does not name the field.
+
+    Returns ``(value, changed)``. ``changed`` is False when the caller already sent
+    the canonical shape, so a request that needed no help is neither logged as a
+    translation nor cause for REST to rewrite a body it did not change.
+    """
+    brand_ref = to_brand_reference(value)
+    if brand_ref is None:
+        return value, False
+    # mode="json" keeps params JSON-serializable, which both REST's body rewrite
+    # (json.dumps) and A2A's idempotency hash (RFC 8785 over this dict) require —
+    # a BrandReference instance would break either. exclude_none keeps the
+    # unchanged case genuinely unchanged instead of padding it with null fields
+    # the buyer never sent.
+    normalized = brand_ref.model_dump(mode="json", exclude_none=True)
+    return normalized, normalized != value
 
 
 def _normalize_packages(packages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
@@ -144,6 +182,14 @@ def normalize_request_params(
                 result["brand"] = brand_ref
                 translations.append("brand_manifest → brand")
         del result["brand_manifest"]
+
+    # brand shorthand → BrandReference (get_products, create_media_buy only).
+    # AFTER the brand_manifest translation above so a brand recovered from the
+    # legacy field goes through the same funnel as an explicit one.
+    if tool_name in _BRAND_TOOLS and result.get("brand") is not None:
+        result["brand"], brand_normalized = _normalize_brand(result["brand"])
+        if brand_normalized:
+            translations.append("brand shorthand → BrandReference")
 
     # promoted_offerings → catalogs (get_products)
     if "promoted_offerings" in result:
