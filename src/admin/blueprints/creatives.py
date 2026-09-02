@@ -79,6 +79,84 @@ def _cleanup_completed_tasks():
             logger.debug(f"Cleaned up completed AI review task: {task_id}")
 
 
+async def _deliver_creative_status_webhook(
+    *,
+    creative_id: Any,
+    complete_result: Any,
+    all_creatives: Any,
+    push_notification_config: Any,
+    step_request_data: dict,
+    step_tool_name: Any,
+    step_step_id: Any,
+    step_context_id: Any,
+) -> bool:
+    """Deliver the creative-status notification, outside the transaction.
+
+    Split at the session boundary the caller already documents: everything above
+    it reads state under a UoW, everything here is delivery. Keeping them in one
+    function meant the delivery half's branches counted against a function whose
+    subject is deciding WHETHER to notify.
+    """
+    service = get_protocol_webhook_service()
+    try:
+        logger.info(f"tool name: {step_tool_name}")
+        logger.info(f"task id: {step_step_id}")
+        logger.info(f"task type: {step_tool_name}")
+        logger.info("status: completed")
+        logger.info(f"result: {complete_result}")
+        logger.info("error: None")
+        logger.info(f"push_notification_config: {push_notification_config}")
+
+        # Determine protocol type from workflow step request_data
+        protocol = step_request_data.get("protocol", "mcp")  # Default to MCP for backward compatibility
+
+        # Create appropriate webhook payload based on protocol
+        # Convert result to dict for webhook payload functions
+        result_dict = complete_result.model_dump(mode="json")
+
+        # step_tool_name is untrusted (workflow_steps DB column). Validate a
+        # COPY for the SDK payload; keep the original label for metadata
+        # .
+        wire_task_type = validate_webhook_task_type(step_tool_name or "sync_creatives")
+
+        payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
+        if protocol == "a2a":
+            payload = create_a2a_webhook_payload(
+                task_id=step_step_id,
+                status=GeneratedTaskStatus.completed,
+                result=result_dict,
+                context_id=step_context_id,
+            )
+        else:
+            # SDK 5.7: returns McpWebhookPayload directly
+            payload = create_mcp_webhook_payload(
+                task_id=step_step_id,
+                status=GeneratedTaskStatus.completed,
+                task_type=wire_task_type,
+                result=result_dict,
+            )
+
+        metadata = {
+            "task_type": step_tool_name
+            # TODO: @yusuf - check if we were passing principal_id and tenant to this previously
+            # TODO: @yusuf - check if we want to make metadata typed
+        }
+
+        await service.send_notification(
+            push_notification_config=push_notification_config, payload=payload, metadata=metadata
+        )
+
+        logger.info(
+            f"Successfully sent protocol webhook for sync_creatives task {step_step_id} "
+            f"with {len(all_creatives)} reviewed creatives"
+        )
+
+        return True
+    except Exception as send_e:
+        logger.error(f"Failed to send protocol webhook for creative {creative_id}: {send_e}")
+        return False
+
+
 async def _call_webhook_for_creative_status(
     creative_id,
     tenant_id: str,
@@ -194,64 +272,16 @@ async def _call_webhook_for_creative_status(
 
         # --- Session closed here; webhook delivery is outside the transaction ---
 
-        service = get_protocol_webhook_service()
-        try:
-            logger.info(f"tool name: {step_tool_name}")
-            logger.info(f"task id: {step_step_id}")
-            logger.info(f"task type: {step_tool_name}")
-            logger.info("status: completed")
-            logger.info(f"result: {complete_result}")
-            logger.info("error: None")
-            logger.info(f"push_notification_config: {push_notification_config}")
-
-            # Determine protocol type from workflow step request_data
-            protocol = step_request_data.get("protocol", "mcp")  # Default to MCP for backward compatibility
-
-            # Create appropriate webhook payload based on protocol
-            # Convert result to dict for webhook payload functions
-            result_dict = complete_result.model_dump(mode="json")
-
-            # step_tool_name is untrusted (workflow_steps DB column). Validate a
-            # COPY for the SDK payload; keep the original label for metadata
-            # .
-            wire_task_type = validate_webhook_task_type(step_tool_name or "sync_creatives")
-
-            payload: Task | TaskStatusUpdateEvent | McpWebhookPayload
-            if protocol == "a2a":
-                payload = create_a2a_webhook_payload(
-                    task_id=step_step_id,
-                    status=GeneratedTaskStatus.completed,
-                    result=result_dict,
-                    context_id=step_context_id,
-                )
-            else:
-                # SDK 5.7: returns McpWebhookPayload directly
-                payload = create_mcp_webhook_payload(
-                    task_id=step_step_id,
-                    status=GeneratedTaskStatus.completed,
-                    task_type=wire_task_type,
-                    result=result_dict,
-                )
-
-            metadata = {
-                "task_type": step_tool_name
-                # TODO: @yusuf - check if we were passing principal_id and tenant to this previously
-                # TODO: @yusuf - check if we want to make metadata typed
-            }
-
-            await service.send_notification(
-                push_notification_config=push_notification_config, payload=payload, metadata=metadata
-            )
-
-            logger.info(
-                f"Successfully sent protocol webhook for sync_creatives task {step_step_id} "
-                f"with {len(all_creatives)} reviewed creatives"
-            )
-
-            return True
-        except Exception as send_e:
-            logger.error(f"Failed to send protocol webhook for creative {creative_id}: {send_e}")
-            return False
+        return await _deliver_creative_status_webhook(
+            creative_id=creative_id,
+            complete_result=complete_result,
+            all_creatives=all_creatives,
+            push_notification_config=push_notification_config,
+            step_request_data=step_request_data,
+            step_tool_name=step_tool_name,
+            step_step_id=step_step_id,
+            step_context_id=step_context_id,
+        )
 
     except Exception as e:
         logger.error(f"Error sending protocol webhook for creative {creative_id}: {e}", exc_info=True)

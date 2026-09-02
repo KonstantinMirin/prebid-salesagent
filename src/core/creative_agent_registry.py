@@ -245,6 +245,36 @@ class CachedFormats:
         return datetime.now(UTC) > self.fetched_at + timedelta(seconds=self.ttl_seconds)
 
 
+def _mcp_request_headers(agent: CreativeAgent) -> dict[str, str]:
+    """Headers for a raw MCP call, with the agent's auth credential when configured."""
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    if agent.auth:
+        auth_token = agent.auth.get("credentials")
+        if auth_token:
+            headers[agent.auth_header or "x-adcp-auth"] = auth_token
+    return headers
+
+
+def _mcp_result_payload(response: Any) -> dict | None:
+    """The `result` object from an MCP response, SSE-framed or plain JSON.
+
+    Returns None when the response carries no parseable result, leaving the
+    caller to raise with the agent's identity in the message.
+    """
+    import json
+
+    if "text/event-stream" in response.headers.get("content-type", ""):
+        for line in response.text.split("\n"):
+            if line.startswith("data: "):
+                event_data = json.loads(line[6:])
+                if "result" in event_data:
+                    return event_data["result"]
+        return None
+
+    data = response.json()
+    return data.get("result")
+
+
 class CreativeAgentRegistry:
     """Registry of creative agents with dynamic format discovery and caching.
 
@@ -507,7 +537,6 @@ class CreativeAgentRegistry:
         creative agents return TextContent with JSON. This method calls the MCP
         endpoint directly via HTTP and parses the JSON response.
         """
-        import json
         import logging
 
         import httpx
@@ -517,13 +546,7 @@ class CreativeAgentRegistry:
         # MCP endpoint may be at /mcp (as per adcp SDK fallback behavior)
         mcp_url = f"{agent_url}/mcp" if not agent_url.endswith("/mcp") else agent_url
 
-        # Build headers with auth credentials if configured
-        headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
-        if agent.auth:
-            auth_header = agent.auth_header or "x-adcp-auth"
-            auth_token = agent.auth.get("credentials")
-            if auth_token:
-                headers[auth_header] = auth_token
+        headers = _mcp_request_headers(agent)
 
         import asyncio
 
@@ -584,23 +607,13 @@ class CreativeAgentRegistry:
         else:
             raise AdCPServiceUnavailableError(f"Creative agent HTTP error after {max_retries} retries") from last_exc
 
-        # Parse SSE or JSON response
-        content_type = response.headers.get("content-type", "")
-        if "text/event-stream" in content_type:
-            for line in response.text.split("\n"):
-                if line.startswith("data: "):
-                    event_data = json.loads(line[6:])
-                    if "result" in event_data:
-                        return self._parse_mcp_tool_result(event_data["result"], logger)
-        else:
-            data = response.json()
-            if "result" in data:
-                return self._parse_mcp_tool_result(data["result"], logger)
-
-        raise AdCPAdapterError(
-            f"No parseable result in MCP response from {agent.agent_url}",
-            recovery="terminal",
-        )
+        result = _mcp_result_payload(response)
+        if result is None:
+            raise AdCPAdapterError(
+                f"No parseable result in MCP response from {agent.agent_url}",
+                recovery="terminal",
+            )
+        return self._parse_mcp_tool_result(result, logger)
 
     def _parse_mcp_tool_result(self, result: dict, logger: Any) -> list[Format]:
         """Parse formats from an MCP tools/call result."""

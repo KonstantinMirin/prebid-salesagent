@@ -379,53 +379,7 @@ class WebhookDeliveryService:
                 # Send to all configured webhooks
                 sent_count = 0
                 for config in configs:
-                    safe_url = webhook_url_for_log(config.url)
-                    # Skip auth-blocked endpoints (UC-004-EXT-G-07)
-                    if isinstance(getattr(config, "auth_blocked_at", None), datetime):
-                        logger.warning(
-                            "⚠️ Auth blocked for %s, skipping until credentials reconfigured",
-                            safe_url,
-                        )
-                        continue
-
-                    endpoint_key = f"{tenant_id}:{config.url}"
-
-                    # Get or create circuit breaker for this endpoint
-                    if endpoint_key not in self._circuit_breakers:
-                        self._circuit_breakers[endpoint_key] = CircuitBreaker()
-
-                    # Get or create queue for this endpoint
-                    if endpoint_key not in self._queues:
-                        self._queues[endpoint_key] = WebhookQueue(max_size=1000)
-
-                    circuit_breaker = self._circuit_breakers[endpoint_key]
-                    queue = self._queues[endpoint_key]
-
-                    # Check circuit breaker
-                    if not circuit_breaker.can_attempt():
-                        logger.warning(
-                            "⚠️ Circuit breaker OPEN for %s, skipping webhook delivery",
-                            safe_url,
-                        )
-                        continue
-
-                    # Send-time SSRF gate before enqueue/POST (registration may skip DNS).
-                    if self._reject_unsafe_outbound_url(config.url, circuit_breaker):
-                        continue
-
-                    # Add to queue (bounded)
-                    webhook_data = {
-                        "config": config,
-                        "payload": delivery_payload,
-                        "timestamp": datetime.now(UTC),
-                    }
-
-                    if not queue.enqueue(webhook_data):
-                        logger.warning("⚠️ Queue full for %s, webhook dropped", safe_url)
-                        continue
-
-                    # Deliver from queue with enhanced features
-                    if self._deliver_with_backoff(endpoint_key, circuit_breaker, queue):
+                    if self._deliver_to_endpoint(config, tenant_id=tenant_id, delivery_payload=delivery_payload):
                         sent_count += 1
 
                 if sent_count > 0:
@@ -446,6 +400,72 @@ class WebhookDeliveryService:
             circuit_breaker.record_failure()
             return True
         return False
+
+    def _deliver_to_endpoint(self, config: Any, *, tenant_id: str, delivery_payload: dict[str, Any]) -> bool:
+        """Deliver to ONE endpoint, or skip it. True only when it was delivered.
+
+        Every reason to skip -- auth-blocked, open circuit, unsafe URL, full
+        queue -- is a property of THIS endpoint, so they belong beside it rather
+        than as branches of the loop that visits every endpoint.
+        """
+        safe_url = webhook_url_for_log(config.url)
+
+        # Skip auth-blocked endpoints (UC-004-EXT-G-07)
+        if isinstance(getattr(config, "auth_blocked_at", None), datetime):
+            logger.warning("⚠️ Auth blocked for %s, skipping until credentials reconfigured", safe_url)
+            return False
+
+        endpoint_key = f"{tenant_id}:{config.url}"
+        if endpoint_key not in self._circuit_breakers:
+            self._circuit_breakers[endpoint_key] = CircuitBreaker()
+        if endpoint_key not in self._queues:
+            self._queues[endpoint_key] = WebhookQueue(max_size=1000)
+
+        circuit_breaker = self._circuit_breakers[endpoint_key]
+        queue = self._queues[endpoint_key]
+
+        if not circuit_breaker.can_attempt():
+            logger.warning("⚠️ Circuit breaker OPEN for %s, skipping webhook delivery", safe_url)
+            return False
+
+        # Send-time SSRF gate before enqueue/POST (registration may skip DNS).
+        if self._reject_unsafe_outbound_url(config.url, circuit_breaker):
+            return False
+
+        webhook_data = {"config": config, "payload": delivery_payload, "timestamp": datetime.now(UTC)}
+        if not queue.enqueue(webhook_data):
+            logger.warning("⚠️ Queue full for %s, webhook dropped", safe_url)
+            return False
+
+        return self._deliver_with_backoff(endpoint_key, circuit_breaker, queue)
+
+    def _delivery_headers(self, config: Any, *, payload: Any, timestamp: str, safe_url: str) -> dict[str, str]:
+        """Headers for one delivery: framing, replay stamp, HMAC and bearer auth.
+
+        Signing and authentication are two conditions on WHAT to send, not on
+        the retry loop that sends it, so they are decided here rather than
+        adding branches to the caller.
+        """
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "AdCP-Sales-Agent/2.3 (Enhanced Webhooks)",
+            "X-ADCP-Timestamp": timestamp,  # For replay prevention
+        }
+
+        webhook_secret = getattr(config, "webhook_secret", None)
+        if webhook_secret:
+            if not self._verify_secret_strength(webhook_secret):
+                logger.warning(
+                    "⚠️ Webhook secret for %s is too weak (min 32 characters required)",
+                    safe_url,
+                )
+            else:
+                headers["X-ADCP-Signature"] = self._generate_hmac_signature(payload, webhook_secret, timestamp)
+
+        if config.authentication_type == "bearer" and config.authentication_token:
+            headers["Authorization"] = f"Bearer {config.authentication_token}"
+
+        return headers
 
     def _deliver_with_backoff(
         self,
@@ -475,27 +495,7 @@ class WebhookDeliveryService:
         timestamp = webhook_data["timestamp"].isoformat()
         safe_url = webhook_url_for_log(config.url)
 
-        # Generate HMAC signature if webhook secret is configured
-        webhook_secret = getattr(config, "webhook_secret", None)
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "AdCP-Sales-Agent/2.3 (Enhanced Webhooks)",
-            "X-ADCP-Timestamp": timestamp,  # For replay prevention
-        }
-
-        if webhook_secret:
-            if not self._verify_secret_strength(webhook_secret):
-                logger.warning(
-                    "⚠️ Webhook secret for %s is too weak (min 32 characters required)",
-                    safe_url,
-                )
-            else:
-                signature = self._generate_hmac_signature(payload, webhook_secret, timestamp)
-                headers["X-ADCP-Signature"] = signature
-
-        # Add authentication
-        if config.authentication_type == "bearer" and config.authentication_token:
-            headers["Authorization"] = f"Bearer {config.authentication_token}"
+        headers = self._delivery_headers(config, payload=payload, timestamp=timestamp, safe_url=safe_url)
 
         # Exponential backoff with jitter
         for attempt in range(max_retries):

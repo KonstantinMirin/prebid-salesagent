@@ -126,6 +126,38 @@ def _normalize_localhost_for_docker(url: str) -> str:
     return url
 
 
+def _delivery_log_common(
+    *,
+    log_id: str,
+    url: str,
+    task_type: str | None,
+    tenant_id: str | None,
+    principal_id: str | None,
+    media_buy_id: str | None,
+    sequence_number: int,
+    notification_type: Any,
+    payload_size_bytes: int,
+) -> dict[str, Any] | None:
+    """The fields every delivery-log row shares, or None when this task is not logged.
+
+    Eligibility is decided once, here, so `_log_delivery` can no-op internally
+    and no call site has to restate the rule.
+    """
+    if task_type in ("delivery_report", "media_buy_delivery") and media_buy_id and tenant_id and principal_id:
+        return {
+            "log_id": log_id,
+            "tenant_id": tenant_id,
+            "principal_id": principal_id,
+            "media_buy_id": media_buy_id,
+            "webhook_url": url,
+            "task_type": task_type,
+            "sequence_number": sequence_number,
+            "notification_type": notification_type,
+            "payload_size_bytes": payload_size_bytes,
+        }
+    return None
+
+
 class ProtocolWebhookService:
     """
     Service for sending protocol-level push notifications to clients.
@@ -262,6 +294,159 @@ class ProtocolWebhookService:
         except Exception as e:
             logger.error(f"Failed to write webhook delivery log: {e}")
 
+    def _log_delivery(self, common: dict[str, Any] | None, **fields: Any) -> None:
+        """Write one delivery-log row, or nothing when this task is not logged.
+
+        The eligibility guard -- delivery-report task types with a media buy,
+        tenant and principal -- was written out at six call sites inside
+        `_send_with_retry_and_logging`, once per outcome. Deciding it ONCE and
+        making the no-op internal means a call site records an outcome without
+        also restating who is eligible to have outcomes recorded.
+        """
+        if common is None:
+            return
+        self._write_delivery_log(**common, **fields)
+
+    async def _handle_http_error(
+        self,
+        exc: requests.HTTPError,
+        *,
+        task_id: str,
+        attempt: int,
+        max_attempts: int,
+        start_time: float,
+        log_common: dict[str, Any] | None,
+        audit_logger: Any,
+        task_type: str | None,
+        sequence_number: int,
+    ) -> bool | None:
+        """Decide an HTTP failure: return the final result, or None to retry.
+
+        Lifted out whole because a 4xx is a permanent failure, a 5xx before the
+        last attempt is a backoff, and a 5xx on the last attempt is exhaustion --
+        three outcomes of ONE decision, which read as three more branches of the
+        retry loop while they lived inside it.
+        """
+        e = exc
+        status_code = e.response.status_code if e.response else None
+        response_time_ms = int((time.time() - start_time) * 1000)
+        error_message = f"HTTP {status_code}: {str(e)}"
+
+        # Don't retry on 4xx errors (client errors - permanent failures)
+        if status_code and 400 <= status_code < 500:
+            logger.error(f"Webhook failed for task {task_id} with client error {status_code} - not retrying")
+
+            # Write to webhook_delivery_log (failed)
+            self._log_delivery(
+                log_common,
+                status="failed",
+                attempt_count=attempt + 1,
+                http_status_code=status_code,
+                error_message=error_message,
+                response_time_ms=response_time_ms,
+                completed_at=datetime.now(UTC),
+            )
+
+            # Log to audit system (failure)
+            if audit_logger:
+                audit_logger.log_warning(f"{task_type} webhook failed with client error {status_code}")
+
+            return False
+
+        # Retry on 5xx errors (server errors - transient)
+        if attempt < max_attempts - 1:
+            wait_seconds = min(2**attempt, 60)  # Exponential backoff, max 60 seconds
+            logger.warning(
+                f"Webhook failed for task {task_id}: HTTP {status_code}. "
+                f"Retrying in {wait_seconds}s (attempt {attempt + 1}/{max_attempts})"
+            )
+
+            # Write to webhook_delivery_log (retrying)
+            next_retry = datetime.now(UTC).replace(microsecond=0)
+            next_retry = next_retry.replace(second=next_retry.second + int(wait_seconds))
+            self._log_delivery(
+                log_common,
+                status="retrying",
+                attempt_count=attempt + 1,
+                http_status_code=status_code,
+                error_message=error_message,
+                response_time_ms=response_time_ms,
+                next_retry_at=next_retry,
+            )
+
+            await asyncio.sleep(wait_seconds)
+        else:
+            logger.error(f"Webhook failed for task {task_id} after {max_attempts} attempts: HTTP {status_code}")
+
+            # Write to webhook_delivery_log (failed after all retries)
+            self._log_delivery(
+                log_common,
+                status="failed",
+                attempt_count=max_attempts,
+                http_status_code=status_code,
+                error_message=error_message,
+                response_time_ms=response_time_ms,
+                completed_at=datetime.now(UTC),
+            )
+
+            # Log to audit system (failure after all retries)
+            if audit_logger:
+                audit_logger.log_warning(f"{task_type} webhook failed after {max_attempts} attempts")
+
+            return False
+        return None
+
+    async def _handle_transport_error(
+        self,
+        exc: requests.RequestException,
+        *,
+        task_id: str,
+        attempt: int,
+        max_attempts: int,
+        start_time: float,
+        log_common: dict[str, Any] | None,
+        audit_logger: Any,
+        task_type: str | None,
+        sequence_number: int,
+    ) -> bool | None:
+        """Decide a network failure: return the final result, or None to retry.
+
+        Same shape as `_handle_http_error`, and out of the loop for the same
+        reason: backoff-or-exhaust is one decision, not two more branches of the
+        thing that calls it.
+        """
+        e = exc
+        response_time_ms = int((time.time() - start_time) * 1000)
+        error_message = f"{type(e).__name__}: {str(e)}"
+
+        # Network errors - retry
+        if attempt < max_attempts - 1:
+            wait_seconds = min(2**attempt, 60)
+            logger.warning(
+                f"Webhook network error for task {task_id}: {type(e).__name__}. "
+                f"Retrying in {wait_seconds}s (attempt {attempt + 1}/{max_attempts})"
+            )
+            await asyncio.sleep(wait_seconds)
+        else:
+            logger.error(f"Webhook failed for task {task_id} after {max_attempts} attempts: {type(e).__name__} - {e}")
+
+            # Write to webhook_delivery_log (failed)
+            self._log_delivery(
+                log_common,
+                status="failed",
+                attempt_count=max_attempts,
+                error_message=error_message,
+                response_time_ms=response_time_ms,
+                completed_at=datetime.now(UTC),
+            )
+
+            # Log to audit system (network failure)
+            if audit_logger:
+                audit_logger.log_warning(f"{task_type} webhook failed with network error: {type(e).__name__}")
+
+            return False
+        return None
+
     async def _send_with_retry_and_logging(
         self,
         url: str,
@@ -274,10 +459,10 @@ class ProtocolWebhookService:
         # Calculate payload size for metrics
         payload_size_bytes = len(json.dumps(payload).encode("utf-8"))
 
-        task_type = metadata["task_type"] if "task_type" in metadata else None
-        tenant_id = metadata["tenant_id"] if "tenant_id" in metadata else None
-        principal_id = metadata["principal_id"] if "principal_id" in metadata else None
-        media_buy_id = metadata["media_buy_id"] if "media_buy_id" in metadata else None
+        task_type = metadata.get("task_type")
+        tenant_id = metadata.get("tenant_id")
+        principal_id = metadata.get("principal_id")
+        media_buy_id = metadata.get("media_buy_id")
 
         # TODO: Fix type annotation discrepancy in adcp library - extract_webhook_result_data
         # returns dict at runtime but is typed as AdcpAsyncResponseData | None
@@ -296,6 +481,18 @@ class ProtocolWebhookService:
         # Create webhook delivery log entry
         log_id = str(uuid4())
         start_time = time.time()
+
+        log_common = _delivery_log_common(
+            log_id=log_id,
+            url=url,
+            task_type=task_type,
+            tenant_id=tenant_id,
+            principal_id=principal_id,
+            media_buy_id=media_buy_id,
+            sequence_number=sequence_number,
+            notification_type=notification_type,
+            payload_size_bytes=payload_size_bytes,
+        )
 
         # Log to audit system (start)
         audit_logger = None
@@ -328,28 +525,14 @@ class ProtocolWebhookService:
                 logger.info(f"Successfully sent webhook for task {task_id} (status: {response.status_code})")
 
                 # Write to webhook_delivery_log (success)
-                if (
-                    task_type in ("delivery_report", "media_buy_delivery")
-                    and media_buy_id
-                    and tenant_id
-                    and principal_id
-                ):
-                    self._write_delivery_log(
-                        log_id=log_id,
-                        tenant_id=tenant_id,
-                        principal_id=principal_id,
-                        media_buy_id=media_buy_id,
-                        webhook_url=url,
-                        task_type=task_type,
-                        status="success",
-                        sequence_number=sequence_number,
-                        notification_type=notification_type,
-                        attempt_count=attempt + 1,
-                        http_status_code=response.status_code,
-                        payload_size_bytes=payload_size_bytes,
-                        response_time_ms=response_time_ms,
-                        completed_at=datetime.now(UTC),
-                    )
+                self._log_delivery(
+                    log_common,
+                    status="success",
+                    attempt_count=attempt + 1,
+                    http_status_code=response.status_code,
+                    response_time_ms=response_time_ms,
+                    completed_at=datetime.now(UTC),
+                )
 
                 # Log to audit system (success)
                 if audit_logger:
@@ -361,187 +544,46 @@ class ProtocolWebhookService:
                 return True
 
             except requests.HTTPError as e:
-                status_code = e.response.status_code if e.response else None
-                response_time_ms = int((time.time() - start_time) * 1000)
-                error_message = f"HTTP {status_code}: {str(e)}"
-
-                # Don't retry on 4xx errors (client errors - permanent failures)
-                if status_code and 400 <= status_code < 500:
-                    logger.error(f"Webhook failed for task {task_id} with client error {status_code} - not retrying")
-
-                    # Write to webhook_delivery_log (failed)
-                    if (
-                        task_type in ("delivery_report", "media_buy_delivery")
-                        and media_buy_id
-                        and tenant_id
-                        and principal_id
-                    ):
-                        self._write_delivery_log(
-                            log_id=log_id,
-                            tenant_id=tenant_id,
-                            principal_id=principal_id,
-                            media_buy_id=media_buy_id,
-                            webhook_url=url,
-                            task_type=task_type,
-                            status="failed",
-                            sequence_number=sequence_number,
-                            notification_type=notification_type,
-                            attempt_count=attempt + 1,
-                            http_status_code=status_code,
-                            error_message=error_message,
-                            payload_size_bytes=payload_size_bytes,
-                            response_time_ms=response_time_ms,
-                            completed_at=datetime.now(UTC),
-                        )
-
-                    # Log to audit system (failure)
-                    if audit_logger:
-                        audit_logger.log_warning(f"{task_type} webhook failed with client error {status_code}")
-
-                    return False
-
-                # Retry on 5xx errors (server errors - transient)
-                if attempt < max_attempts - 1:
-                    wait_seconds = min(2**attempt, 60)  # Exponential backoff, max 60 seconds
-                    logger.warning(
-                        f"Webhook failed for task {task_id}: HTTP {status_code}. "
-                        f"Retrying in {wait_seconds}s (attempt {attempt + 1}/{max_attempts})"
-                    )
-
-                    # Write to webhook_delivery_log (retrying)
-                    if (
-                        task_type in ("delivery_report", "media_buy_delivery")
-                        and media_buy_id
-                        and tenant_id
-                        and principal_id
-                    ):
-                        next_retry = datetime.now(UTC).replace(microsecond=0)
-                        next_retry = next_retry.replace(second=next_retry.second + int(wait_seconds))
-                        self._write_delivery_log(
-                            log_id=log_id,
-                            tenant_id=tenant_id,
-                            principal_id=principal_id,
-                            media_buy_id=media_buy_id,
-                            webhook_url=url,
-                            task_type=task_type,
-                            status="retrying",
-                            sequence_number=sequence_number,
-                            notification_type=notification_type,
-                            attempt_count=attempt + 1,
-                            http_status_code=status_code,
-                            error_message=error_message,
-                            payload_size_bytes=payload_size_bytes,
-                            response_time_ms=response_time_ms,
-                            next_retry_at=next_retry,
-                        )
-
-                    await asyncio.sleep(wait_seconds)
-                else:
-                    logger.error(f"Webhook failed for task {task_id} after {max_attempts} attempts: HTTP {status_code}")
-
-                    # Write to webhook_delivery_log (failed after all retries)
-                    if (
-                        task_type in ("delivery_report", "media_buy_delivery")
-                        and media_buy_id
-                        and tenant_id
-                        and principal_id
-                    ):
-                        self._write_delivery_log(
-                            log_id=log_id,
-                            tenant_id=tenant_id,
-                            principal_id=principal_id,
-                            media_buy_id=media_buy_id,
-                            webhook_url=url,
-                            task_type=task_type,
-                            status="failed",
-                            sequence_number=sequence_number,
-                            notification_type=notification_type,
-                            attempt_count=max_attempts,
-                            http_status_code=status_code,
-                            error_message=error_message,
-                            payload_size_bytes=payload_size_bytes,
-                            response_time_ms=response_time_ms,
-                            completed_at=datetime.now(UTC),
-                        )
-
-                    # Log to audit system (failure after all retries)
-                    if audit_logger:
-                        audit_logger.log_warning(f"{task_type} webhook failed after {max_attempts} attempts")
-
-                    return False
+                outcome = await self._handle_http_error(
+                    e,
+                    task_id=task_id,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    start_time=start_time,
+                    log_common=log_common,
+                    audit_logger=audit_logger,
+                    task_type=task_type,
+                    sequence_number=sequence_number,
+                )
+                if outcome is not None:
+                    return outcome
 
             except requests.RequestException as e:
-                response_time_ms = int((time.time() - start_time) * 1000)
-                error_message = f"{type(e).__name__}: {str(e)}"
-
-                # Network errors - retry
-                if attempt < max_attempts - 1:
-                    wait_seconds = min(2**attempt, 60)
-                    logger.warning(
-                        f"Webhook network error for task {task_id}: {type(e).__name__}. "
-                        f"Retrying in {wait_seconds}s (attempt {attempt + 1}/{max_attempts})"
-                    )
-                    await asyncio.sleep(wait_seconds)
-                else:
-                    logger.error(
-                        f"Webhook failed for task {task_id} after {max_attempts} attempts: {type(e).__name__} - {e}"
-                    )
-
-                    # Write to webhook_delivery_log (failed)
-                    if (
-                        task_type in ("delivery_report", "media_buy_delivery")
-                        and media_buy_id
-                        and tenant_id
-                        and principal_id
-                    ):
-                        self._write_delivery_log(
-                            log_id=log_id,
-                            tenant_id=tenant_id,
-                            principal_id=principal_id,
-                            media_buy_id=media_buy_id,
-                            webhook_url=url,
-                            task_type=task_type,
-                            status="failed",
-                            sequence_number=sequence_number,
-                            notification_type=notification_type,
-                            attempt_count=max_attempts,
-                            error_message=error_message,
-                            payload_size_bytes=payload_size_bytes,
-                            response_time_ms=response_time_ms,
-                            completed_at=datetime.now(UTC),
-                        )
-
-                    # Log to audit system (network failure)
-                    if audit_logger:
-                        audit_logger.log_warning(f"{task_type} webhook failed with network error: {type(e).__name__}")
-
-                    return False
+                outcome = await self._handle_transport_error(
+                    e,
+                    task_id=task_id,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    start_time=start_time,
+                    log_common=log_common,
+                    audit_logger=audit_logger,
+                    task_type=task_type,
+                    sequence_number=sequence_number,
+                )
+                if outcome is not None:
+                    return outcome
 
             except Exception as e:
                 logger.error(f"Unexpected error sending webhook for task {task_id}: {e}")
 
                 # Write to webhook_delivery_log (unexpected failure)
-                if (
-                    task_type in ("delivery_report", "media_buy_delivery")
-                    and media_buy_id
-                    and tenant_id
-                    and principal_id
-                ):
-                    self._write_delivery_log(
-                        log_id=log_id,
-                        tenant_id=tenant_id,
-                        principal_id=principal_id,
-                        media_buy_id=media_buy_id,
-                        webhook_url=url,
-                        task_type=task_type,
-                        status="failed",
-                        sequence_number=sequence_number,
-                        notification_type=notification_type,
-                        attempt_count=attempt + 1,
-                        error_message=f"Unexpected error: {str(e)}",
-                        payload_size_bytes=payload_size_bytes,
-                        completed_at=datetime.now(UTC),
-                    )
+                self._log_delivery(
+                    log_common,
+                    status="failed",
+                    attempt_count=attempt + 1,
+                    error_message=f"Unexpected error: {str(e)}",
+                    completed_at=datetime.now(UTC),
+                )
 
                 return False
 

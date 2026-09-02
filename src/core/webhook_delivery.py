@@ -51,6 +51,113 @@ class WebhookDelivery:
     object_id: str | None = None
 
 
+def _preflight_rejection(delivery: WebhookDelivery) -> tuple[bool, dict[str, Any]] | None:
+    """The reasons a delivery never reaches an attempt, or None to proceed."""
+    from src.core.metrics import webhook_delivery_total
+
+    if delivery.payload.get("status") == "paused":
+        logger.info("[Webhook Delivery] Rejected: media buy is paused")
+        return False, {"status": "rejected", "error": "Media buy is paused", "attempts": 0}
+
+    is_valid, error_msg = WebhookURLValidator.validate_webhook_url(delivery.webhook_url)
+    if not is_valid:
+        logger.error(f"Webhook URL validation failed: {error_msg}")
+        if delivery.tenant_id and delivery.event_type:
+            webhook_delivery_total.labels(
+                tenant_id=delivery.tenant_id, event_type=delivery.event_type, status="validation_failed"
+            ).inc()
+        return False, {"status": "failed", "error": f"Invalid webhook URL: {error_msg}", "attempts": 0}
+
+    return None
+
+
+def _record_outcome(
+    delivery: WebhookDelivery,
+    delivery_id: str,
+    *,
+    status: str,
+    metric_status: str,
+    attempts: int,
+    response_code: int | None,
+    last_error: str | None = None,
+    delivered_at: datetime | None = None,
+    duration: float | None = None,
+) -> None:
+    """Persist a terminal outcome and emit its metrics.
+
+    One owner for a block that was written out three times -- success, client
+    error, and retries-exhausted -- differing only in the status strings and in
+    whether the duration/attempts histograms are observed.
+    """
+    from src.core.metrics import webhook_delivery_attempts, webhook_delivery_duration, webhook_delivery_total
+
+    if not (delivery.tenant_id and delivery.event_type):
+        return
+
+    _update_delivery_record(
+        delivery_id=delivery_id,
+        tenant_id=delivery.tenant_id,
+        status=status,
+        attempts=attempts,
+        response_code=response_code,
+        last_error=last_error,
+        delivered_at=delivered_at,
+    )
+    webhook_delivery_total.labels(
+        tenant_id=delivery.tenant_id, event_type=delivery.event_type, status=metric_status
+    ).inc()
+    if duration is not None:
+        webhook_delivery_duration.labels(event_type=delivery.event_type).observe(duration)
+        webhook_delivery_attempts.labels(event_type=delivery.event_type).observe(attempts)
+
+
+def _client_error_result(
+    delivery: WebhookDelivery, delivery_id: str, response: requests.Response, attempts: int
+) -> tuple[bool, dict[str, Any]]:
+    """A 4xx is terminal: record it, block on auth failures, and report.
+
+    Extracted whole because the auth-blocking rule is a branch of THIS decision,
+    not of the retry loop that contains it.
+    """
+    response_code = response.status_code
+    last_error = f"Client error {response_code}: {response.text[:200]}"
+    logger.warning(f"[Webhook Delivery] Client error, will NOT retry: {last_error}")
+
+    # Auth failures (401/403): block until credentials reconfigured
+    if response_code in (401, 403) and delivery.tenant_id:
+        _set_auth_blocked(delivery.tenant_id, delivery.webhook_url)
+
+    _record_outcome(
+        delivery,
+        delivery_id,
+        status="failed",
+        metric_status="client_error",
+        attempts=attempts,
+        response_code=response_code,
+        last_error=last_error,
+    )
+    return False, {
+        "delivery_id": delivery_id,
+        "status": "failed",
+        "attempts": attempts,
+        "response_code": response_code,
+        "error": last_error,
+    }
+
+
+def _transport_error_message(exc: requests.exceptions.RequestException, timeout: float) -> str:
+    """The retryable-error text for a failed request.
+
+    Timeout and ConnectionError are both RequestException subclasses, so one
+    handler with this mapping says what three near-identical `except` arms did.
+    """
+    if isinstance(exc, requests.exceptions.Timeout):
+        return f"Request timeout after {timeout}s"
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return f"Connection error: {str(exc)[:200]}"
+    return f"Request exception: {str(exc)[:200]}"
+
+
 def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[str, Any]]:
     """Deliver webhook with exponential backoff retry and database tracking.
 
@@ -76,44 +183,21 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
         - response_code: HTTP status code (if received)
         - error: Error message (if failed)
     """
-    from src.core.metrics import webhook_delivery_attempts, webhook_delivery_duration, webhook_delivery_total
+    rejection = _preflight_rejection(delivery)
+    if rejection is not None:
+        return rejection
 
-    # Reject delivery for paused media buys
-    if delivery.payload.get("status") == "paused":
-        logger.info("[Webhook Delivery] Rejected: media buy is paused")
-        return False, {
-            "status": "rejected",
-            "error": "Media buy is paused",
-            "attempts": 0,
-        }
-
-    # Validate webhook URL for SSRF protection
-    is_valid, error_msg = WebhookURLValidator.validate_webhook_url(delivery.webhook_url)
-    if not is_valid:
-        logger.error(f"Webhook URL validation failed: {error_msg}")
-        # Record validation failure metrics
-        if delivery.tenant_id and delivery.event_type:
-            webhook_delivery_total.labels(
-                tenant_id=delivery.tenant_id, event_type=delivery.event_type, status="validation_failed"
-            ).inc()
-        return False, {"status": "failed", "error": f"Invalid webhook URL: {error_msg}", "attempts": 0}
-
-    # Generate delivery ID for tracking
     delivery_id = f"whd_{uuid.uuid4().hex[:12]}"
 
-    # Add HMAC signature if secret provided
     headers = delivery.headers.copy()
     if delivery.signing_secret:
-        signature_headers = WebhookAuthenticator.sign_payload(delivery.payload, delivery.signing_secret)
-        headers.update(signature_headers)
+        headers.update(WebhookAuthenticator.sign_payload(delivery.payload, delivery.signing_secret))
 
-    # Track delivery attempts
     attempts = 0
     last_error = None
     response_code = None
     start_time = time.time()
 
-    # Create initial database record if tracking is enabled
     if delivery.tenant_id and delivery.event_type:
         _create_delivery_record(
             delivery_id=delivery_id,
@@ -138,9 +222,9 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
             )
 
             response_code = response.status_code
-            attempt_duration = time.time() - attempt_start
-
-            logger.debug(f"[Webhook Delivery] Response: {response_code} in {attempt_duration:.2f}s for {delivery_id}")
+            logger.debug(
+                f"[Webhook Delivery] Response: {response_code} in {time.time() - attempt_start:.2f}s for {delivery_id}"
+            )
 
             # Success: 2xx status codes
             if 200 <= response_code < 300:
@@ -148,25 +232,16 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
                 logger.info(
                     f"[Webhook Delivery] SUCCESS: {delivery_id} delivered in {total_duration:.2f}s after {attempts} attempts"
                 )
-
-                # Update database record
-                if delivery.tenant_id and delivery.event_type:
-                    _update_delivery_record(
-                        delivery_id=delivery_id,
-                        tenant_id=delivery.tenant_id,
-                        status="delivered",
-                        attempts=attempts,
-                        response_code=response_code,
-                        delivered_at=datetime.now(UTC),
-                    )
-
-                    # Record success metrics
-                    webhook_delivery_total.labels(
-                        tenant_id=delivery.tenant_id, event_type=delivery.event_type, status="success"
-                    ).inc()
-                    webhook_delivery_duration.labels(event_type=delivery.event_type).observe(total_duration)
-                    webhook_delivery_attempts.labels(event_type=delivery.event_type).observe(attempts)
-
+                _record_outcome(
+                    delivery,
+                    delivery_id,
+                    status="delivered",
+                    metric_status="success",
+                    attempts=attempts,
+                    response_code=response_code,
+                    delivered_at=datetime.now(UTC),
+                    duration=total_duration,
+                )
                 return True, {
                     "delivery_id": delivery_id,
                     "status": "delivered",
@@ -177,58 +252,16 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
 
             # Client errors (4xx): Don't retry
             if 400 <= response_code < 500:
-                error_msg = f"Client error {response_code}: {response.text[:200]}"
-                logger.warning(f"[Webhook Delivery] Client error, will NOT retry: {error_msg}")
-                last_error = error_msg
-
-                # Auth failures (401/403): block until credentials reconfigured
-                if response_code in (401, 403) and delivery.tenant_id:
-                    _set_auth_blocked(delivery.tenant_id, delivery.webhook_url)
-
-                # Update database record
-                if delivery.tenant_id and delivery.event_type:
-                    _update_delivery_record(
-                        delivery_id=delivery_id,
-                        tenant_id=delivery.tenant_id,
-                        status="failed",
-                        attempts=attempts,
-                        response_code=response_code,
-                        last_error=error_msg,
-                    )
-
-                    # Record client error metrics
-                    webhook_delivery_total.labels(
-                        tenant_id=delivery.tenant_id, event_type=delivery.event_type, status="client_error"
-                    ).inc()
-
-                return False, {
-                    "delivery_id": delivery_id,
-                    "status": "failed",
-                    "attempts": attempts,
-                    "response_code": response_code,
-                    "error": error_msg,
-                }
+                return _client_error_result(delivery, delivery_id, response, attempts)
 
             # Server errors (5xx): Retry
             if response_code >= 500:
-                error_msg = f"Server error {response_code}: {response.text[:200]}"
-                logger.warning(f"[Webhook Delivery] Server error, will retry: {error_msg}")
-                last_error = error_msg
+                last_error = f"Server error {response_code}: {response.text[:200]}"
+                logger.warning(f"[Webhook Delivery] Server error, will retry: {last_error}")
 
-        except requests.exceptions.Timeout:
-            error_msg = f"Request timeout after {delivery.timeout}s"
-            logger.warning(f"[Webhook Delivery] Timeout, will retry: {error_msg}")
-            last_error = error_msg
-
-        except requests.exceptions.ConnectionError as e:
-            error_msg = f"Connection error: {str(e)[:200]}"
-            logger.warning(f"[Webhook Delivery] Connection error, will retry: {error_msg}")
-            last_error = error_msg
-
-        except requests.exceptions.RequestException as e:
-            error_msg = f"Request exception: {str(e)[:200]}"
-            logger.warning(f"[Webhook Delivery] Request exception, will retry: {error_msg}")
-            last_error = error_msg
+        except requests.exceptions.RequestException as exc:
+            last_error = _transport_error_message(exc, delivery.timeout)
+            logger.warning(f"[Webhook Delivery] Transport error, will retry: {last_error}")
 
         # Exponential backoff before next retry (unless this was the last attempt)
         if attempt < delivery.max_retries - 1:
@@ -239,25 +272,16 @@ def deliver_webhook_with_retry(delivery: WebhookDelivery) -> tuple[bool, dict[st
     # All retries exhausted
     total_duration = time.time() - start_time
     logger.error(f"[Webhook Delivery] FAILED: {delivery_id} failed after {attempts} attempts in {total_duration:.2f}s")
-
-    # Update database record and record failure metrics
-    if delivery.tenant_id and delivery.event_type:
-        _update_delivery_record(
-            delivery_id=delivery_id,
-            tenant_id=delivery.tenant_id,
-            status="failed",
-            attempts=attempts,
-            response_code=response_code,
-            last_error=last_error or "Max retries exceeded",
-        )
-
-        # Record failure metrics (max retries exceeded)
-        webhook_delivery_total.labels(
-            tenant_id=delivery.tenant_id, event_type=delivery.event_type, status="max_retries_exceeded"
-        ).inc()
-        webhook_delivery_duration.labels(event_type=delivery.event_type).observe(total_duration)
-        webhook_delivery_attempts.labels(event_type=delivery.event_type).observe(attempts)
-
+    _record_outcome(
+        delivery,
+        delivery_id,
+        status="failed",
+        metric_status="max_retries_exceeded",
+        attempts=attempts,
+        response_code=response_code,
+        last_error=last_error or "Max retries exceeded",
+        duration=total_duration,
+    )
     return False, {
         "delivery_id": delivery_id,
         "status": "failed",
