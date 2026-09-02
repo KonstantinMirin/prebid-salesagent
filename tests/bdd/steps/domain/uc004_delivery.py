@@ -755,12 +755,23 @@ def when_request_with_status_filter(ctx: dict, filter_value: str) -> None:
     can reconstruct it. The "(field absent)" / "(omitted)" sentinels mean "send
     no status_filter at all" — dispatching the literal would resolve to an empty
     filter and drop every buy.
+
+    An Examples cell that SPELLS an array ("[]") means that array, not a
+    one-element list holding its literal text. Wrapping it produced
+    ``status_filter=["[]"]``, which the pinned MediaBuyStatus enum rejects as an
+    unknown value — the very rejection the ``unknown_value`` sibling row already
+    grades — so the ``empty_array`` row passed without ever exercising the
+    minItems obligation it is named for (pinned v3.1.1 StatusFilter: "List
+    should have at least 1 item after validation, not 0").
     """
-    ctx.setdefault("request_params", {})["status_filter"] = [filter_value]
     if filter_value in ("(field absent)", "(omitted)"):
+        ctx.setdefault("request_params", {})["status_filter"] = [filter_value]
         dispatch_request(ctx)
-    else:
-        dispatch_request(ctx, status_filter=[filter_value])
+        return
+
+    status_filter = _parse_json_list(filter_value) if filter_value.startswith("[") else [filter_value]
+    ctx.setdefault("request_params", {})["status_filter"] = status_filter
+    dispatch_request(ctx, status_filter=status_filter)
 
 
 @when(parsers.re(r"the Buyer Agent requests delivery metrics with status_filter (?P<filter_json>\[.+?\])"))
@@ -1139,8 +1150,17 @@ def when_partition_principal(ctx: dict, partition: str) -> None:
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics at ownership boundary "(?P<boundary_point>[^"]+)"'))
 def when_boundary_ownership(ctx: dict, boundary_point: str) -> None:
-    """Boundary test: ownership."""
-    _dispatch_partition(ctx, "ownership", boundary_point)
+    """Boundary test: ownership — swap identity, same as the partition outline.
+
+    This used to send the Gherkin label as a literal ``ownership=`` kwarg. That
+    is not a request field, so FastMCP's TypeAdapter rejected it as unrecognized
+    before _get_media_buy_delivery_impl ever ran — matching "invalid" for the
+    mismatch row no matter what production does about cross-principal access
+    (debt item B3). Ownership is decided by the caller's IDENTITY, so the
+    boundary now routes through the same reconciled dispatcher as its partition
+    twin.
+    """
+    _dispatch_ownership_partition(ctx, boundary_point)
 
 
 @when(parsers.re(r'the Buyer Agent queries delivery artifacts with sampling method "(?P<partition_value>[^"]+)"'))
@@ -3305,11 +3325,16 @@ def _dispatch_ownership_partition(ctx: dict, label: str) -> None:
     is seeded under the default principal (buyer-001). ``owner_matches`` queries
     as the owner (the buy is returned); ``owner_mismatch`` queries the same buy
     id as a foreign principal (a real ownership mismatch).
+
+    Serves the BOUNDARY outline too, whose Examples spell the same two cases as
+    "principal matches owner" / "principal differs from owner" — hence
+    ``differs`` alongside ``mismatch``. Both outlines assert the same obligation,
+    so they must exercise the same identity swap.
     """
     norm = label.strip().lower().replace(" ", "_")
     media_buys = ctx.get("media_buys", {})
     owned_ids = _resolve_media_buy_ids(ctx, list(media_buys.keys()))
-    if "mismatch" in norm:
+    if "mismatch" in norm or "differs" in norm:
         # Query the owned buy as a different principal — a genuine ownership
         # mismatch. (The row is selective-xfailed: production does not yet
         # reject a non-owned id, it just returns nothing.)

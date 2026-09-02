@@ -253,6 +253,13 @@ only record). Reconciled items were fixed by the Phase-2 wave (run
   variant cannot fail at all because identity is never swapped
 - **Severity:** P2 (test bug; pairs with C3 security gap to fully validate)
 - **Origin:** Batch 3 audit
+- **Update (salesagent-prkv.39):** the table above marked B3 RECONCILED, but only
+  the PARTITION outline had been fixed — `when_boundary_ownership` still sent the
+  label as a literal `ownership=` kwarg, so `T-UC-004-boundary-ownership` kept
+  grading "does this transport reject an unknown argument". That produced a
+  vacuous mcp XPASS which was NOT graduated. The boundary When now routes through
+  `_dispatch_ownership_partition` (the same identity swap), so both outlines
+  exercise the obligation and both fail on the still-open C3 gap.
 
 ### B4 — `sampling_method` scenarios live on the wrong feature
 - **Scope:** `T-UC-004-boundary-sampling`, `T-UC-004-partition-sampling`

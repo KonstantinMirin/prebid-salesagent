@@ -2322,37 +2322,28 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # AdCP reporting_webhook Authentication at the create_media_buy boundary
         # (scheme enum + credentials min_length=32), so all rows pass on all transports.
 
-        # Graduated: T-UC-004-boundary-ownership — impl-"differs", a2a-"differs" and
-        # rest-"matches" pass. Remaining failures: impl-matches, mcp-differs, rest-differs.
-        if "T-UC-004-boundary-ownership" in marker_names:
-            _ownership_passes = (
-                (not is_a2a and not is_mcp)
-                and (
-                    (not is_rest and not is_e2e_rest and "differs from owner" in nodeid)
-                    or (is_rest and "matches owner" in nodeid)
-                    or (is_e2e_rest and "matches owner" in nodeid)
+        # T-UC-004-boundary-ownership. The mcp XPASS this replaces was VACUOUS, so it
+        # was NOT graduated -- the step was fixed instead (debt item B3, previously
+        # RECONCILED for the partition twin only). when_boundary_ownership sent the
+        # Gherkin label as a literal `ownership=` kwarg; that is not a request field, so
+        # FastMCP's TypeAdapter rejected it as unrecognized before
+        # _get_media_buy_delivery_impl ran, matching `invalid` regardless of what
+        # production does about cross-principal access. The old per-transport table
+        # below was therefore a table of "which transport rejects an unknown argument",
+        # not of ownership enforcement. The When now routes through
+        # _dispatch_ownership_partition, the same real identity swap the partition
+        # outline uses, so the split is the obligation's: querying as the owner returns
+        # the buy on every transport, and querying a non-owned id hits the C3 gap --
+        # production answers 200 + empty instead of MEDIA_BUY_NOT_FOUND -- on every
+        # transport, exactly like T-UC-004-partition-ownership/owner_mismatch above.
+        if "T-UC-004-boundary-ownership" in marker_names and "matches owner" not in nodeid:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="cross-principal access returns 200+empty instead of "
+                    "AdCPSalesAgentError(MEDIA_BUY_NOT_FOUND). See docs/test-debt-bdd-strict-markers.md item C3.",
+                    strict=False,
                 )
-            ) or (
-                # a2a now raises AdCPSalesAgentError(MEDIA_BUY_NOT_FOUND) on cross-principal access
-                # (wire-drop confirmed XPASS, #1417).
-                is_a2a and "differs from owner" in nodeid
             )
-            if not _ownership_passes:
-                # mcp's xpass here is VACUOUS, not a production graduation.
-                # when_boundary_ownership (uc004_delivery.py) sends the Gherkin
-                # label text as a literal `ownership=` kwarg, which is not a real
-                # request field -- FastMCP's TypeAdapter rejects it as an
-                # unrecognized argument before _get_media_buy_delivery_impl ever
-                # runs, coincidentally matching `invalid`. It does not test whether
-                # production enforces cross-principal ownership. See
-                # docs/test-debt-bdd-strict-markers.md item B3 (RECONCILED for the
-                # partition variant only, via _dispatch_ownership_partition; the
-                # boundary variant used here still has the bug). Do NOT graduate
-                # until when_boundary_ownership is fixed to route through a real
-                # identity swap.
-                item.add_marker(
-                    pytest.mark.xfail(reason="ownership boundary: validation gaps on some transports", strict=False)
-                )
 
         # Graduated: T-UC-004-boundary-reporting-dims — "metro but no system" is the
         # only row still genuinely gapped (prose-only spec constraint, no formal
@@ -2632,25 +2623,50 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"non_boolean"},
                 "include_package_daily_breakdown validation not implemented — production accepts non-boolean",
             ),
-            # account: production doesn't validate the oneOf constraint / empty object
-            # on the wire (raises ValidationError, not AdCPSalesAgentError(INVALID_REQUEST)).
-            # account_not_found is NOT here: with the valid siblings seeded
-            # , resolution runs and the unseeded id correctly
-            # raises ACCOUNT_NOT_FOUND on every transport.
-            (
-                "T-UC-004-partition-account",
-                {"invalid_oneOf_both", "empty_object"},
-                "delivery account oneOf/empty-object validation not implemented — "
-                "production raises ValidationError not AdCPSalesAgentError(INVALID_REQUEST)",
-            ),
+            # Graduated: T-UC-004-partition-account. ENTRY DELETED, not thinned — its set
+            # named invalid_oneOf_both and empty_object, and with impl sunsetted (#1417)
+            # a2a/mcp/rest are the only in-process transports, so all SIX matching rows
+            # graduate at once and nothing is left for the entry to mark. (Thinning to an
+            # empty set would xfail every row carrying the tag; see the account note in
+            # _UC004_GENUINE_XFAIL_ROWS.) The reason -- "raises ValidationError, not
+            # AdCPSalesAgentError(INVALID_REQUEST)" -- is disproved by production: the
+            # pydantic oneOf/extra_forbidden rejection is translated by
+            # adcp_validation_boundary (src/core/validation_helpers.py:49-52, entered at
+            # src/core/tools/media_buy_delivery.py:761) into a typed AdCPInvalidRequestError,
+            # which the boundary frames as INVALID_REQUEST -- the first code in the pinned
+            # v3.1.1 enums/error-code.json, correctable, with a suggestion. The scenario
+            # names that exact outcome (error "INVALID_REQUEST" with suggestion) and grades
+            # it through TransportResult.assert_wire_error -> assert_envelope_shape on the
+            # captured envelope, both mirrored layers, so the pass is not vacuous. The Given
+            # and the When run the shared cross-transport path (_dispatch_partition ->
+            # dispatch_request) with no per-transport branch. Six deterministic XPASS rows
+            # on the serial box slice, 2026-09-02 (534 passed / 484 xfailed / 16 xpassed).
+            # account_not_found was never in this set: with the valid siblings seeded,
+            # resolution runs and the unseeded id correctly raises ACCOUNT_NOT_FOUND.
             # Graduated: T-UC-004-partition-sampling (transport-aware block below)
             # "not_provided" passes all transports; valid named methods pass on REST only.
-            # status_filter: production doesn't validate unknown values or empty arrays
-            (
-                "T-UC-004-partition-status-filter",
-                {"unknown_value", "empty_array"},
-                "status_filter validation not implemented — production accepts invalid values",
-            ),
+            # Graduated: T-UC-004-partition-status-filter. ENTRY DELETED, not thinned — the
+            # set named unknown_value and empty_array, and a2a/mcp/rest are the only
+            # in-process transports since impl was sunsetted (#1417), so all six matching
+            # rows graduate together and nothing is left to mark.
+            #
+            # unknown_value ("failed") graduated on the evidence as it stood: the reason
+            # "production accepts invalid values" is false — the value is not a pinned
+            # MediaBuyStatus, adcp_validation_boundary
+            # (src/core/validation_helpers.py:49-52) converts the pydantic rejection to a
+            # typed AdCPInvalidRequestError, and the wire carries INVALID_REQUEST +
+            # suggestion, exactly what the Example names and what assert_wire_error grades
+            # on the captured envelope.
+            #
+            # empty_array did NOT graduate on its xpass — that xpass was VACUOUS and the
+            # step was fixed first. when_request_with_status_filter wrapped the Example
+            # cell, sending status_filter=["[]"], so the row rejected as an unknown enum
+            # value: a duplicate of its unknown_value sibling, never the minItems
+            # obligation its name claims. With the cell now parsed as the array it spells,
+            # the row sends status_filter=[] and rejects on the pinned v3.1.1 StatusFilter
+            # min-items constraint ("List should have at least 1 item after validation,
+            # not 0") — same INVALID_REQUEST on the wire, but now for the reason the row
+            # is named for.
             # date range partition GRADUATED (#1545): only [a2a-…] is
             # parametrized for start_equals_end/start_after_end, and a2a now emits
             # VALIDATION_ERROR+suggestion ("Start date must be before end date",
