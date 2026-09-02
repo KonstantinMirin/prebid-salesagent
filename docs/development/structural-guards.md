@@ -585,25 +585,107 @@ run then reports "no violations" over a tree the detector cannot actually
 read, which is indistinguishable from a clean tree. Every guard's detector
 gets a known-bad self-test.
 
-**Borrow the machinery even when the rule is your own.** The helpers are
-available to every guard and used by most, and the ones that skip them
-re-derive the same four steps — find the root, find the files, parse, assert
-— and re-invent the same mistakes each time. Measured across the guard
-modules:
+### Write a guard with the helpers
 
-| Machinery | Modules importing the helper | Modules hand-rolling it anyway |
-|---|---|---|
-| Repository root | 89 | 71 |
-| Source-file discovery | 89 | 56 |
-| AST parse and walk | 89 | 86 |
+A complete guard, with each helper doing the job it exists for. The rule here
+is "no `datetime.utcnow()` in `src/`", because it returns a naive datetime;
+substitute your own predicate and the rest of the shape holds.
 
-The repository root is the clearest case, because the hand-rolled answers
-disagree: 55 modules resolve it as `parents[2]` and 19 as `parents[1]`.
-Those cannot both be right, and a guard anchored on the wrong one — or on a
-relative path such as `Path("src")` — scans a directory that may not exist
-where the test happens to run. Such a guard finds nothing and reports
-success, which is the failure this whole document is about. `repo_root()`
-gives one answer; anchor on it.
+```python
+"""Guard: no naive `datetime.utcnow()` in src/."""
+
+import ast
+
+from tests.unit._architecture_helpers import (
+    assert_detector_catches_ast_snippets,
+    assert_violations_match_allowlist,
+    iter_module_trees,
+    repo_root,
+    walk_with_enclosing_function,
+)
+
+# Pre-existing violations, keyed on (path, enclosing function). Never a line
+# number: it moves when anything above it is edited, and the entry goes stale
+# without the violation being fixed.
+KNOWN_VIOLATIONS: set[tuple[str, str]] = set()
+
+
+def _violations(tree: ast.Module):
+    """Yield each `.utcnow()` call with the function that encloses it."""
+    for node, enclosing in walk_with_enclosing_function(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "utcnow"
+        ):
+            yield node, enclosing
+
+
+def _lineno_violations(tree: ast.Module) -> list[int]:
+    """The same detector, as the line-number list the self-test expects."""
+    return [node.lineno for node, _ in _violations(tree)]
+
+
+def test_detector_catches_known_bad() -> None:
+    """Prove the detector fires. Without this the scan below proves nothing."""
+    assert_detector_catches_ast_snippets(
+        _lineno_violations,
+        snippets={
+            "module level": "import datetime\ndatetime.datetime.utcnow()\n",
+            "inside a function": (
+                "import datetime\n"
+                "def f():\n"
+                "    return datetime.datetime.utcnow()\n"
+            ),
+        },
+    )
+
+
+def test_no_naive_utcnow() -> None:
+    found = {
+        (path, enclosing)
+        for tree, path in iter_module_trees([repo_root() / "src"])
+        for _, enclosing in _violations(tree)
+    }
+    assert_violations_match_allowlist(
+        found,
+        KNOWN_VIOLATIONS,
+        fix_hint="Use datetime.now(UTC); utcnow() returns a naive datetime.",
+    )
+```
+
+What each helper is doing, and what goes wrong without it:
+
+- **`repo_root()`** anchors the scan. Do not write `Path(__file__).parents[2]`
+  or a relative `Path("src")`. The hand-rolled spellings in this repository
+  disagree with each other — 55 modules say `parents[2]` and 19 say
+  `parents[1]` — so at least one family is anchored somewhere unintended, and
+  a relative path resolves against whatever directory pytest was started
+  from. A guard pointed at a directory that does not exist finds nothing and
+  passes.
+- **`iter_module_trees()`** yields `(tree, repo_relative_path)` for every
+  `.py` file under the directories you give it, through a shared mtime-keyed
+  cache, and raises on a file it cannot parse rather than skipping it. Skipping
+  an unparseable file is how a guard silently stops covering it.
+- **`walk_with_enclosing_function()`** gives you the enclosing function name
+  alongside each node, which is what lets the allowlist key on
+  `(path, function)` instead of a line number.
+- **`assert_violations_match_allowlist()`** compares both directions: a new
+  violation fails, and so does an allowlist entry whose violation is gone. The
+  second direction is what stops the allowlist accumulating entries nobody can
+  retire.
+- **`assert_detector_catches_ast_snippets()`** runs the detector against
+  known-bad input. This is the test that matters most, and the one most often
+  omitted: a detector that has quietly stopped matching reports "no
+  violations" over a tree it cannot read, which is indistinguishable from a
+  clean tree. Include a snippet for each spelling the rule must catch — an
+  attribute call, an aliased import, a call inside a nested function.
+
+Two further helpers cover cases the example does not: `parse_module()` when
+you need a single file rather than a tree walk, and `iter_call_expressions()`
+when the rule is about calls to one named function. `format_failure()` renders
+a failure with a summary, a fix hint, and a documentation link, for guards
+that assert directly rather than through the allowlist comparison.
 
 ## Symbol subjects and shape subjects
 
