@@ -368,65 +368,24 @@ with get_db_session() as session:
   and tracked with FIXME comments — they shrink over time, never grow.
 
 ### 9. Outbound HTTP: the application implements no SSRF protection
+
 **Every outbound request goes through `src/core/security/outbound_http.py` (`send` / `asend`).**
 
 Do not add URL validation, private-IP checks, metadata blocklists, resolve-then-check, or
-redirect re-validation anywhere else — `adcp.signing` owns address validation and IP pinning,
-httpx owns the response state machine (including NOT following redirects). If you find yourself
-writing `ipaddress`, `socket.gethostbyname`, or a hostname blocklist in `src/`, stop: that logic
-is already owned elsewhere.
-
-**Why:** address, TLS, redirect, and retry policy re-decided at each call site is how SSRF
-happens — one call site always forgets one of them. One gateway, one decision.
+redirect re-validation anywhere else. If you find yourself writing `ipaddress`,
+`socket.gethostbyname`, or a hostname blocklist in `src/`, stop — that logic is owned elsewhere.
 
 ```python
-# CORRECT: the gateway decides address, TLS, redirect, and retry policy
 from src.core.security.outbound_http import asend
 
 result = await asend(url, json=payload)
 ```
 
-```python
-# WRONG: raw client plus hand-rolled address policy at the call site
-import httpx, ipaddress, socket
+`ruff-egress.toml`, run by `make quality-ci`, fails the build on a raw HTTP client or a
+hand-written address check. A `# noqa` does not silence it.
 
-if ipaddress.ip_address(socket.gethostbyname(host)).is_private:  # TOCTOU, and not our job
-    raise ValueError("blocked")
-async with httpx.AsyncClient() as client:
-    await client.post(url, json=payload)
-```
-
-**Three layers stop the wrong call. Use the strongest one available.**
-
-1. **Unrepresentable.** The gateway modules bind what they wrap PRIVATELY (`import httpx as _httpx`),
-   so `from src.core.security.outbound_http import httpx` is an `ImportError`, not a lint
-   finding. Four paths are closed this way — `outbound_http.httpx`,
-   `egress.policy.ipaddress`, `mcp_client.Client`, `mcp_client.StreamableHttpTransport`.
-   **If you write a gateway around a dangerous dependency, bind its import privately** so the
-   gateway cannot re-export the thing it exists to contain.
-2. **Banned.** `ruff-egress.toml` bans the modules outright (`httpx`, `requests`, `aiohttp`,
-   `urllib.request`, `httpcore`, `urllib3`, `http.client`, `httpx2`, `httpcore2`) plus
-   `fastmcp.Client`, the MCP transports, the un-pinnable `adcp` clients, `ipaddress`, and
-   `socket.gethostbyname`. A third-party name cannot be rebound from this repo, so a ban
-   list is the only mechanism for that half.
-3. **Exempted — and you cannot do it yourself.** The gate runs `--ignore-noqa`, which makes
-   `# noqa` INERT for this config in every form it can be written. **Adding a `# noqa` for
-   TID251/ANN401 does nothing.** The only exemption channel is a row in
-   `[lint.per-file-ignores]` in `ruff-egress.toml`, which makes every exemption a
-   code-review decision.
-
-- **Enforced by:** `ruff-egress.toml` — TID251 over `src/` AND `scripts/`, plus ANN401
-  scoped to the outbound chain (`src/core/security`, `src/adapters`), run by
-  `make quality-ci` with `--ignore-noqa --no-respect-gitignore`;
-  `tests/unit/test_ruff_egress_bans.py` proves every ban FIRES on every import form that
-  resolves to it (ruff does not validate `banned-api` keys, so a mistyped row is silently inert);
-  `tests/unit/test_architecture_no_destination_rewrite.py` keeps destinations unrewritten
-  ahead of the gateway
-- **Full architecture:** [docs/security/outbound-egress.md](docs/security/outbound-egress.md)
-  (the rule and its enforcement) and
-  [docs/design/egress-sdk-boundary.md](docs/design/egress-sdk-boundary.md)
-  (module map, what the `adcp` SDK owns, the registration-vs-connect split, and what is
-  carried here only until an upstream release)
+- **The rule, what it refuses, and how to add a call:** [docs/security/outbound-egress.md](docs/security/outbound-egress.md)
+- **What the `adcp` SDK owns and what this repo carries:** [docs/design/egress-sdk-boundary.md](docs/design/egress-sdk-boundary.md)
 
 ---
 
