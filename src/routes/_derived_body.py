@@ -105,6 +105,11 @@ def derived_body_model(
     # any difference. An undeclared extra field, or a silently dropped one, still fails.
     model.__derived_extra_fields__ = frozenset(extra_fields or ())  # type: ignore[attr-defined]
     model.__derived_path_fields__ = frozenset(path_fields)  # type: ignore[attr-defined]
+    # The callee the field set was derived AGAINST. Recorded so the completeness guard can
+    # read it off the body instead of keeping a hand-maintained {Body: callee} list, which
+    # goes stale the moment a wrapper's shape changes -- exactly what happened when the
+    # wrappers moved from flat parameters to taking the built request.
+    model.__derived_callee__ = impl  # type: ignore[attr-defined]
     return model
 
 

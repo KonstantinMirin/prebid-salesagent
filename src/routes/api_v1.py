@@ -145,7 +145,8 @@ else:
     UpdateMediaBuyBody = derived_body_model(
         "UpdateMediaBuyBody",
         UpdateMediaBuyRequestDTO,
-        media_buy_update_module.update_media_buy_raw,
+        # The BUILDER -- the raw wrapper takes the built request now.
+        media_buy_update_module._build_update_request,
         extra_fields={
             "flight_start_date": (str | None, None),
             "flight_end_date": (str | None, None),
@@ -559,9 +560,11 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         push_notification_config = to_push_notification_config(body.push_notification_config)
         context = to_context_object(body.context)
         reporting_webhook = to_reporting_webhook(body.reporting_webhook)
-    response = media_buy_update_module.update_media_buy_raw(
+    # Built through the SHARED builder, then handed over -- the same two steps A2A and
+    # MCP take. media_buy_id comes from the PATH, not the body.
+    req = media_buy_update_module._build_update_request(
         media_buy_id=media_buy_id,
-        # Through the same converter the sync route uses, rather than handing the wrapper a
+        # Through the same converter the sync route uses, rather than handing the builder a
         # raw dict where it declares AccountReference. The converter is also where a
         # malformed account object is rejected with the message every other route gives it.
         account=to_account_reference(body.account),
@@ -579,8 +582,8 @@ async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity
         ext=body.ext,
         idempotency_key=body.idempotency_key,
         revision=body.revision,
-        identity=identity,
     )
+    response = media_buy_update_module.update_media_buy_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
 

@@ -2096,16 +2096,20 @@ class AdCPRequestHandler(RequestHandler):
         with adcp_validation_boundary():
             req = UpdateMediaBuyRequest.model_validate(validation_bag)
 
-        # Selected off update_media_buy_raw's own signature rather than hand-listed. The
+        # Selected off the BUILDER's signature rather than hand-listed. The
         # eight-name list this replaces silently dropped currency, daily_budget, ext,
         # flight_start_date, flight_end_date, idempotency_key and pacing -- all accepted on
         # MCP and REST. idempotency_key is the costly one: AdCP 3.1.1 puts it in
         # update-media-buy-request.json /required, so a spec-conformant A2A buyer's
         # at-most-once key was being discarded, the same defect class as .
         # media_buy_id comes from the validated model; the rest of the bag is selected.
-        selected = select_request_fields(UpdateMediaBuyRequest, params, accepted_kwargs(core_update_media_buy_tool))
+        from src.core.tools.media_buy_update import _build_update_request
+
+        selected = select_request_fields(UpdateMediaBuyRequest, params, accepted_kwargs(_build_update_request))
         selected["media_buy_id"] = req.media_buy_id or ""
-        response = core_update_media_buy_tool(**selected, identity=identity)
+        with adcp_validation_boundary(context="update_media_buy request"):
+            built = _build_update_request(**selected)
+        response = core_update_media_buy_tool(req=built, identity=identity)
 
         return response
 

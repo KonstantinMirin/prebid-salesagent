@@ -66,23 +66,24 @@ class TestA2AParameterMapping:
 
             result = asyncio.run(handler._handle_update_media_buy_skill(parameters=parameters, identity=_MOCK_IDENTITY))
 
-            # Verify the core function was called with correct parameter name
+            # The handler builds and hands the wrapper ONE request, so `packages` is
+            # graded where it now travels: on the request, under its AdCP v2.0+ name.
             mock_update.assert_called_once()
-            call_kwargs = mock_update.call_args.kwargs
+            req = mock_update.call_args.kwargs["req"]
 
-            # CRITICAL: Must pass 'packages' parameter (not 'updates')
-            assert "packages" in call_kwargs, "Core function should be called with 'packages' parameter (AdCP v2.0+)"
-
-            # Verify packages data is passed through (may have additional fields from Pydantic serialization)
-            assert len(call_kwargs["packages"]) == len(parameters["packages"]), "Package count should match"
+            assert req.packages is not None, "packages must reach the request (AdCP v2.0+, not 'updates')"
+            assert len(req.packages) == len(parameters["packages"]), "Package count should match"
+            assert req.packages[0].package_id == "pkg_1"
             msg = "Package ID should match"
 
-            # Should NOT use legacy 'updates' parameter
-            assert "updates" not in call_kwargs, "Should not pass legacy 'updates' parameter to core function"
+            # Should NOT carry the legacy 'updates' wrapper -- UpdateMediaBuyRequest has no
+            # such field, so its presence would be a construction error rather than a silent
+            # extra: asserting the request cannot hold it is the stronger statement.
+            assert not hasattr(req, "updates"), "the legacy 'updates' wrapper must not reach the request"
 
-            # Verify other AdCP v2.12.0+ parameters are passed
-            assert call_kwargs["media_buy_id"] == "mb_123"
-            assert call_kwargs["paused"] is False  # adcp 2.12.0+: paused=False means resume
+            # Verify other AdCP v2.12.0+ fields reached the request
+            assert req.media_buy_id == "mb_123"
+            assert req.paused is False  # adcp 2.12.0+: paused=False means resume
 
     def test_update_media_buy_backward_compatibility_with_updates(self):
         """
@@ -108,9 +109,12 @@ class TestA2AParameterMapping:
                 # AdCP 3.1.1 /required on update-media-buy-request.json
                 "account": {"account_id": "acct_test"},
                 "idempotency_key": "test-idem-key-0001",
-                "updates": {
-                    "packages": [{"package_id": "pkg_1", "budget": 5000.0, "status": "active"}]
-                },  # Legacy wrapper
+                # Legacy `updates` WRAPPER is what this test grades; the package inside it
+                # uses the pinned spelling. It previously carried `status: "active"`, which
+                # UpdatePackage does not accept (paused is the field) -- and the test still
+                # passed, because patching the wrapper also patched away the builder, so the
+                # payload was never validated. Building in the handler makes it real.
+                "updates": {"packages": [{"package_id": "pkg_1", "paused": False}]},
             }
 
             import asyncio
@@ -119,12 +123,11 @@ class TestA2AParameterMapping:
 
             # Should extract packages from legacy 'updates' wrapper
             mock_update.assert_called_once()
-            call_kwargs = mock_update.call_args.kwargs
+            req = mock_update.call_args.kwargs["req"]
 
-            # Verify packages were extracted from legacy 'updates' wrapper
-            assert "packages" in call_kwargs, "Should have packages parameter"
-            assert len(call_kwargs["packages"]) == 1, "Should have extracted 1 package"
-            assert call_kwargs["packages"][0]["package_id"] == "pkg_1", "Package ID should match"
+            # Verify packages were extracted from the legacy 'updates' wrapper onto the request
+            assert req.packages is not None and len(req.packages) == 1, "Should have extracted 1 package"
+            assert req.packages[0].package_id == "pkg_1", "Package ID should match"
 
     def test_update_media_buy_validates_required_parameters(self):
         """

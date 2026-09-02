@@ -34,20 +34,6 @@ import inspect
 from src.core.schemas import (
     SalesAgentBaseModel,
 )
-from src.core.tools.creatives.listing import list_creatives_raw
-from src.core.tools.creatives.sync_wrappers import sync_creatives_raw
-from src.core.tools.media_buy_create import create_media_buy_raw
-from src.core.tools.media_buy_delivery import get_media_buy_delivery_raw
-from src.core.tools.media_buy_update import update_media_buy_raw
-from src.core.tools.performance import update_performance_index_raw
-from src.routes.api_v1 import (
-    CreateMediaBuyBody,
-    GetMediaBuyDeliveryBody,
-    ListCreativesBody,
-    SyncCreativesBody,
-    UpdateMediaBuyBody,
-    UpdatePerformanceIndexBody,
-)
 
 # Raw-wrapper parameters that are transport plumbing, never buyer-facing body fields.
 # Server-injected plumbing, never buyer-supplied body fields: ctx/identity are
@@ -73,15 +59,19 @@ _ALLOWLIST: dict[str, dict[str, str]] = {
     },
 }
 
+
 # Each field-by-field REST Body paired with the raw wrapper its route forwards into.
-_PAIRS = [
-    (CreateMediaBuyBody, create_media_buy_raw),
-    (UpdateMediaBuyBody, update_media_buy_raw),
-    (GetMediaBuyDeliveryBody, get_media_buy_delivery_raw),
-    (SyncCreativesBody, sync_creatives_raw),
-    (ListCreativesBody, list_creatives_raw),
-    (UpdatePerformanceIndexBody, update_performance_index_raw),
-]
+def _pairs() -> list[tuple[type, object]]:
+    """(Body, the callee its field set was derived against), read OFF each body.
+
+    This was a hand-maintained list naming each body's raw wrapper. It went stale the
+    moment the wrappers stopped taking flat parameters and started taking the built
+    request: the bodies now derive against the BUILDERS, and a list that still named the
+    wrappers graded every converted body against a signature of (req, ctx, identity).
+    ``derived_body_model`` stamps ``__derived_callee__``, so the pairing is read from the
+    same place the derivation happened and cannot disagree with it.
+    """
+    return [(body, body.__derived_callee__) for body in _api_v1_bodies() if hasattr(body, "__derived_callee__")]
 
 
 def _api_v1_bodies() -> list[type]:
@@ -129,7 +119,7 @@ def test_rest_bodies_forward_all_raw_wrapper_params():
     advertise fields AdCP 3.1.1 does not define.
     """
     violations = []
-    for body_cls, raw_fn in _PAIRS:
+    for body_cls, raw_fn in _pairs():
         if getattr(body_cls, "__derived_from_dto__", None) is not None:
             continue
         body_fields = set(body_cls.model_fields) - _BODY_META
@@ -150,7 +140,7 @@ def test_rest_body_allowlist_has_no_stale_entries():
     Keeps the allowlist shrinking: once a field is added to its Body (or removed from
     the raw wrapper), its allowlist entry must be deleted.
     """
-    pairs_by_name = {body_cls.__name__: (body_cls, raw_fn) for body_cls, raw_fn in _PAIRS}
+    pairs_by_name = {body_cls.__name__: (body_cls, raw_fn) for body_cls, raw_fn in _pairs()}
     stale = []
     for body_name, entries in _ALLOWLIST.items():
         body_cls, raw_fn = pairs_by_name[body_name]
@@ -253,7 +243,7 @@ def test_derived_bodies_carry_exactly_the_dto_fields_the_impl_accepts():
     intersecting -- carrying a non-spec field, or dropping an implemented one -- REST starts
     disagreeing with MCP and this fails.
 
-    Discovered from the MODULE, not from ``_PAIRS``. Keyed on the hand-maintained pair list
+    Discovered from the MODULE, not from ``_pairs()``. Keyed on the hand-maintained pair list
     it graded only the two derived bodies that happened to be in it, and every body derived
     afterwards was checked by nothing -- a hand list guarding against hand lists.
     """

@@ -250,13 +250,25 @@ class TestUpdateMediaBuyFieldForwarding:
             f"MCP wrapper 'update_media_buy' doesn't accept AdCP fields as parameters: {sorted(missing)}"
         )
 
-    def test_a2a_wrapper_accepts_all_spec_fields(self):
-        """A2A update_media_buy_raw must accept all AdCP spec fields as parameters."""
+    def test_a2a_wrapper_takes_the_built_request_and_no_spec_fields(self):
+        """update_media_buy_raw takes the BUILT request, so it declares no spec field.
+
+        This replaces the inverse assertion -- that the wrapper accept every AdCP field
+        as a parameter -- which was correct while the wrapper re-listed the request's
+        fields and is false by design now that it takes the request. No obligation is
+        lost: "every spec field must be constructible" is carried by
+        test_build_update_request_accepts_all_spec_fields below, on the builder, which
+        is the one place a buyer field can now enter. Asserting the wrapper is EMPTY of
+        them is what stops the two-list drift from being reintroduced.
+        """
         params = _extract_wrapper_params(UPDATE_FILE, "update_media_buy_raw")
-        missing = UPDATE_SPEC_FIELDS - params
-        assert not missing, (
-            f"A2A wrapper 'update_media_buy_raw' doesn't accept AdCP fields as parameters: {sorted(missing)}"
+        leaked = UPDATE_SPEC_FIELDS & params
+        assert not leaked, (
+            f"update_media_buy_raw declares spec fields {sorted(leaked)} beside the request. "
+            f"They belong on _build_update_request; a second list here is the drift the "
+            f"request shape removed."
         )
+        assert "req" in params, "the wrapper must take the built request"
 
     def test_build_update_request_accepts_all_spec_fields(self):
         """_build_update_request must accept all AdCP spec fields as parameters."""
@@ -272,13 +284,23 @@ class TestUpdateMediaBuyFieldForwarding:
             f"MCP wrapper 'update_media_buy' doesn't forward AdCP fields to _build_update_request: {sorted(missing)}"
         )
 
-    def test_a2a_wrapper_forwards_all_spec_fields_to_build(self):
-        """A2A wrapper must pass all spec fields to _build_update_request call site."""
+    def test_a2a_wrapper_does_not_build_the_request_itself(self):
+        """update_media_buy_raw RECEIVES the request; it must not construct one.
+
+        This replaces the assertion that the wrapper forward every spec field INTO
+        _build_update_request. That was the obligation while the wrapper owned
+        construction; it now takes the built request, and its callers (the REST route
+        and the A2A skill handler) build. A wrapper that also built would be a second
+        construction path -- the exact thing the request shape removes -- so the
+        invariant is that it contains no build call at all.
+
+        The field-completeness obligation is unchanged and still graded, one test below,
+        where construction actually happens: _build_update_request.
+        """
         kwargs = _extract_call_kwargs(UPDATE_FILE, "update_media_buy_raw", "_build_update_request")
-        missing = UPDATE_SPEC_FIELDS - kwargs
-        assert not missing, (
-            f"A2A wrapper 'update_media_buy_raw' doesn't forward AdCP fields to "
-            f"_build_update_request: {sorted(missing)}"
+        assert not kwargs, (
+            f"update_media_buy_raw calls _build_update_request with {sorted(kwargs)}. "
+            f"It takes the built request; building here would restore the second path."
         )
 
     def test_build_update_request_constructs_with_all_spec_fields(self):

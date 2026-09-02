@@ -1520,22 +1520,7 @@ async def update_media_buy(
 
 
 def update_media_buy_raw(
-    media_buy_id: str | None = None,
-    account: LibraryAccountReference | None = None,
-    paused: bool = None,
-    flight_start_date: str = None,
-    flight_end_date: str = None,
-    start_time: str = None,
-    end_time: str = None,
-    # A2A/REST send wire dicts; UpdateMediaBuyRequest validates them as the
-    # request's packages[] field.
-    packages: list[UpdatePackage] | list[dict[str, Any]] | None = None,
-    push_notification_config: PushNotificationConfig | None = None,
-    context: ContextObject | None = None,  # payload-level context
-    reporting_webhook: ReportingWebhook | None = None,  # AdCP ReportingWebhook
-    ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
-    idempotency_key: str | None = None,  # AdCP idempotency key for retry safety
-    revision: int | None = None,  # AdCP expected-current optimistic-concurrency token
+    req: UpdateMediaBuyRequest,
     ctx: Context | ToolContext | None = None,
     identity: IdentityOrNotProvided = NOT_PROVIDED,
 ):
@@ -1569,22 +1554,6 @@ def update_media_buy_raw(
     Returns:
         UpdateMediaBuyResponse
     """
-    req = _build_update_request(
-        media_buy_id=media_buy_id,
-        account=account,
-        paused=paused,
-        flight_start_date=flight_start_date,
-        flight_end_date=flight_end_date,
-        start_time=start_time,
-        end_time=end_time,
-        packages=packages,
-        push_notification_config=push_notification_config,
-        context=context,
-        reporting_webhook=reporting_webhook,
-        ext=ext,
-        idempotency_key=idempotency_key,
-        revision=revision,
-    )
     identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=True)
     # A2A/REST callers pass identity directly without a FastMCP Context, so there
     # is no workflow context_id to forward — _impl creates one if needed.
