@@ -8,10 +8,17 @@ from typing import Any
 
 from adcp import PushNotificationConfig
 from adcp.types import ContextObject, CreativeAction, CreativeAsset
+from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 from pydantic import BaseModel
+from pydantic import ValidationError as PydanticValidationError
 
 from src.core.auth import require_identity, require_principal_id, require_tenant
+from src.core.idempotency_replay import cache_success, lookup_cached_replay, maybe_evict_expired
+
+#: Scope component of the idempotency cache key (see IdempotencyAttempt.tool_name), so a
+#: sync_creatives key can never resolve to a create_media_buy response.
+_IDEMPOTENCY_TOOL_NAME = "sync_creatives"
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import ValidationDetails
 from src.core.exceptions import AdCPSalesAgentError, adcp_error_for
@@ -55,6 +62,21 @@ def _with_creative(details: ValidationDetails | None, creative_id: str) -> Valid
     return details.model_copy(update={"creative_id": creative_id})
 
 
+def _replay_cached_sync(envelope: dict[str, object]) -> SyncCreativesResponse | None:
+    """Reconstruct a cached sync_creatives success from the verbatim cache.
+
+    The cache stores ``{"status": <protocol task status>, "response": <SyncCreativesResponse
+    dump>}``. Returns None when the stored envelope no longer validates against the current
+    schema -- drift between the writing and the replaying deploy inside the TTL window --
+    so callers treat it as a miss and re-execute rather than erroring.
+    """
+    try:
+        return SyncCreativesResponse.model_validate(envelope["response"])
+    except (KeyError, TypeError, PydanticValidationError):
+        logger.warning("Cached sync_creatives envelope failed validation — treating as a miss", exc_info=True)
+        return None
+
+
 def _sync_creatives_impl(
     creatives: Sequence[CreativeAsset | BaseModel | dict[str, Any]],
     assignments: list[Assignment] | None = None,
@@ -65,6 +87,11 @@ def _sync_creatives_impl(
     push_notification_config: PushNotificationConfig | dict | None = None,
     context: ContextObject | dict | None = None,
     idempotency_key: str | None = None,
+    # Computed by the transport wrapper from the request it already built. Passed in rather
+    # than derived here because canonicalising means dumping the request model, and an
+    # _impl must not call model_dump (the no-model-dump-in-impl guard) -- nor rebuild the
+    # request, which would be a second construction path.
+    request_hash: str | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
@@ -97,11 +124,10 @@ def _sync_creatives_impl(
     # after a lost response is at-most-once. Its SHAPE is enforced here so a malformed key
     # is a buyer-facing VALIDATION_ERROR rather than silence.
     #
-    # HONEST LIMIT: accepting the key is not yet honouring it. sync_creatives does not
-    # consult the IdempotencyAttempt replay cache that media_buy_create uses, so a retry
-    # carrying the same key still executes. Filed separately -- taking the key while not
-    # deduplicating on it is a promise we do not yet keep, and it is recorded rather than
-    # implied.
+    # The key is HONOURED, not merely accepted: the probe below replays a stored success
+    # for a repeated key and refuses a repeated key carrying a different payload. Accepting
+    # it without deduplicating was worse than not taking it, because the spec attaches the
+    # at-most-once promise to the field's presence.
     validate_idempotency_key_shape(idempotency_key)
     from pydantic import ValidationError
 
@@ -123,6 +149,22 @@ def _sync_creatives_impl(
     principal_id = require_principal_id(identity, context=context)
     identity = require_identity(identity, context=context)
     tenant = require_tenant(identity, context=context)
+
+    # At-most-once probe, through the SHARED machinery media_buy_create uses -- one cache,
+    # one conflict rule, one ceiling. A dry run is excluded deliberately: it performs no
+    # write, so there is no side effect to deduplicate, and caching one would let a dry run
+    # answer a subsequent real sync carrying the same key.
+    if idempotency_key and not dry_run:
+        replay = lookup_cached_replay(
+            tenant_id=tenant["tenant_id"],
+            principal_id=principal_id,
+            account_id=identity.account_id,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            deserialize=_replay_cached_sync,
+        )
+        if replay is not None:
+            return replay
 
     # Registration SSRF gate before any DB / workflow writes that stash the URL.
     webhook_url = None
@@ -526,8 +568,27 @@ def _sync_creatives_impl(
         message += f", {len(creatives_needing_approval)} require approval"
 
     # Build AdCP-compliant response (per official spec)
-    return SyncCreativesResponse(
+    response = SyncCreativesResponse(
         creatives=results,
         dry_run=dry_run,
         context=context,
     )
+
+    # Cached only on the success path, so an error is never replayed (AdCP
+    # security.mdx#idempotency rule 3) -- every failure returns or raises before here.
+    # request_hash is set by the wrapper under exactly this condition, so the extra check
+    # narrows the type rather than adding a case: a cache row without a payload hash carries
+    # no conflict signal, and writing one would make a later reuse silently replayable.
+    if idempotency_key and not dry_run and request_hash is not None:
+        cache_success(
+            tenant_id=tenant["tenant_id"],
+            principal_id=principal_id,
+            account_id=identity.account_id,
+            tool_name=_IDEMPOTENCY_TOOL_NAME,
+            idempotency_key=idempotency_key,
+            response_model=response,
+            protocol_status=AdcpTaskStatus.completed.value,
+            payload_hash=request_hash,
+        )
+        maybe_evict_expired(tenant["tenant_id"])
+    return response

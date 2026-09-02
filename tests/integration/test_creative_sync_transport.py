@@ -1560,7 +1560,16 @@ class TestRestForwardsIdempotencyKey:
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
-            result = env.call_via(Transport.REST, creatives=[_creative(creative_id="c_idem")], idempotency_key="short")
+            result = env.call_via(
+                # A FRESH key per call, as sync-creatives-request.json directs ("Use a fresh
+                # UUID v4 for each request"). These were derived from the creative_id or
+                # hardcoded, so a test syncing the same creative twice with different content
+                # reused one key across two payloads -- correctly an IDEMPOTENCY_CONFLICT now
+                # that sync_creatives honours the key.
+                Transport.REST,
+                creatives=[_creative(creative_id="c_idem")],
+                idempotency_key="short",  # DELIBERATELY malformed: below minLength 16,
+            )
 
         assert not result.is_success, "a malformed idempotency_key must be rejected on REST too"
         # INVALID_REQUEST, and the code CHANGED with the builder conversion -- for the

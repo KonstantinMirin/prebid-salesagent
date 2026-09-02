@@ -13,6 +13,7 @@ Test creatives use "https://test.com" as a default value.
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 from adcp.types import AccountReference
@@ -319,7 +320,12 @@ class TestCreativeLifecycleMCP:
         # Call sync_creatives tool (uses default patch=False for full upsert)
         response = core_sync_creatives_tool(
             creatives=sample_creatives,
-            idempotency_key="lifecycle-idem-key-01",
+            # A FRESH key per call, as sync-creatives-request.json directs ("Use a fresh
+            # UUID v4 for each request"). These were derived from the creative_id or
+            # hardcoded, so a test syncing the same creative twice with different content
+            # reused one key across two payloads -- correctly an IDEMPOTENCY_CONFLICT now
+            # that sync_creatives honours the key.
+            idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
@@ -390,7 +396,7 @@ class TestCreativeLifecycleMCP:
         # Upsert with patch=False (default): full replacement
         response = core_sync_creatives_tool(
             creatives=updated_creative_data,
-            idempotency_key="lifecycle-idem-key-01",
+            idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
@@ -431,7 +437,7 @@ class TestCreativeLifecycleMCP:
                 Assignment(creative_id=creative_id, package_id="package_2"),
             ],
             # Both are in sync-creatives-request.json /required.
-            idempotency_key="lifecycle-idem-key-01",
+            idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
@@ -466,7 +472,7 @@ class TestCreativeLifecycleMCP:
             creatives=creative_data,
             assignments=[Assignment(creative_id=creative_id, package_id="package_buyer_ref")],
             # Both are in sync-creatives-request.json /required.
-            idempotency_key="lifecycle-idem-key-01",
+            idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
@@ -510,7 +516,7 @@ class TestCreativeLifecycleMCP:
 
         response = core_sync_creatives_tool(
             creatives=invalid_creatives,
-            idempotency_key="lifecycle-idem-key-01",
+            idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
@@ -972,7 +978,7 @@ class TestCreativeLifecycleMCP:
         # The function works with tenant_id and approval_mode
         response = core_sync_creatives_tool(
             creatives=sample_creatives,
-            idempotency_key="lifecycle-idem-key-01",
+            idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
@@ -1047,7 +1053,7 @@ class TestCreativeLifecycleMCP:
         identity = self._make_identity(tenant_overrides={"approval_mode": "require-human"})
         sync_response = core_sync_creatives_tool(
             creatives=sample_creatives,
-            idempotency_key="lifecycle-idem-key-01",
+            idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
@@ -1196,7 +1202,7 @@ class TestCreativeLifecycleMCP:
                     start_time=datetime.now(UTC) + timedelta(days=1),
                     end_time=datetime.now(UTC) + timedelta(days=30),
                     po_number="PO-TEST-123",
-                    idempotency_key=f"int-key-{uuid.uuid4().hex}",
+                    idempotency_key=f"sync-{uuid4().hex}",
                 ),
                 identity=identity,
             )

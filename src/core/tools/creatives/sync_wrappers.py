@@ -10,6 +10,7 @@ from fastmcp.server.context import Context
 from pydantic import Field
 
 from src.core.helpers import enum_value
+from src.core.idempotency_canonical import canonical_request_hash
 from src.core.schemas.creative import CreativeAssetRequest, SyncCreativesRequest
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
@@ -183,6 +184,9 @@ def sync_creatives_raw(
     identity = enrich_identity_with_account(identity, req.account)
 
     return _sync_creatives_impl(
+        # Canonicalised HERE, from the built request, because _impl must not call
+        # model_dump (the no-model-dump-in-impl guard) and must not rebuild the request.
+        request_hash=canonical_request_hash(req) if req.idempotency_key and not req.dry_run else None,
         creatives=req.creatives,
         assignments=req.assignments,
         creative_ids=req.creative_ids,

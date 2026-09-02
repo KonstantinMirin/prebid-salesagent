@@ -9,7 +9,6 @@ Handles media buy creation including:
 """
 
 import logging
-import random
 import secrets
 import time
 import uuid
@@ -50,7 +49,6 @@ from src.core.exceptions import (
     AdCPConfigurationError,
     AdCPCreativeRejectedError,
     AdCPFormatNotFoundError,
-    AdCPIdempotencyConflictError,
     AdCPIdempotencyExpiredError,
     AdCPInternalError,
     AdCPInvalidRequestError,
@@ -62,6 +60,12 @@ from src.core.exceptions import (
 from src.core.helpers import enum_value
 from src.core.idempotency_canonical import canonical_payload_hash, canonical_request_hash
 from src.core.idempotency_policy import DEFAULT_REPLAY_TTL
+from src.core.idempotency_replay import (
+    cache_success,
+    lookup_cached_replay,
+    maybe_evict_expired,
+    raise_on_payload_conflict,
+)
 
 
 class PackageAssignmentDict(TypedDict):
@@ -1885,16 +1889,9 @@ def _raise_degraded_replay_outcome(
     )
 
 
-def _raise_on_payload_conflict(stored_hash: str | None, request_hash: str | None) -> None:
-    """Raise IDEMPOTENCY_CONFLICT when the same key carries a different canonical payload.
-
-    Applied at both lookup points — the probe and the post-race recovery — so a
-    conflicting duplicate can never be resolved to someone else's response.
-    Production writes always store a hash (``record_success`` requires it); a row
-    without one carries no conflict signal, so it never conflicts (legacy tolerance).
-    """
-    if stored_hash is not None and stored_hash != request_hash:
-        raise AdCPIdempotencyConflictError()
+#: Re-exported so this module's callers and tests keep their import site. The rule lives in
+#: src.core.idempotency_replay, shared with every other tool that honours a key.
+_raise_on_payload_conflict = raise_on_payload_conflict
 
 
 def _replay_cached_success(envelope: dict[str, Any]) -> CreateMediaBuyResult | None:
@@ -1928,48 +1925,27 @@ def _replay_cached_success(envelope: dict[str, Any]) -> CreateMediaBuyResult | N
 
 def _lookup_cached_replay(
     tenant_id: str,
-    *,
     principal_id: str,
     account_id: str | None,
     idempotency_key: str,
     request_hash: str | None,
-    enforce_ceiling: bool = False,
+    enforce_ceiling: bool = True,
 ) -> CreateMediaBuyResult | None:
-    """Probe the verbatim success cache: conflict-check the stored hash, then replay.
+    """This tool's binding of the shared replay probe.
 
-    Shared read path for the front probe and the post-race recovery. The same
-    key carrying a different canonical payload raises ``IDEMPOTENCY_CONFLICT``
-    (checked BEFORE any replay); a hit whose stored envelope no longer validates
-    returns ``None`` exactly like a miss, so callers fall through to fresh
-    execution (probe) or the degraded fallback (post-race).
-
-    ``enforce_ceiling=True`` (the front probe) additionally rate-limits a MISS:
-    a fresh key would insert a new cache row, and the per-scope insert rate and
-    row count are bounded — see :mod:`src.services.idempotency_policy`. The
-    post-race path never enforces it (the loser inserts nothing).
+    The probe, the conflict rule, the ceiling and the miss-on-drift behaviour are shared
+    (src.core.idempotency_replay); the only create-specific part is turning the stored
+    envelope back into a CreateMediaBuyResult, which is what ``deserialize`` supplies.
     """
-    # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
-    from src.core.database.repositories import MediaBuyUoW
-
-    with MediaBuyUoW(tenant_id) as uow:
-        assert uow.idempotency_attempts is not None
-        cached = uow.idempotency_attempts.find_by_key(
-            principal_id=principal_id,
-            account_id=account_id,
-            idempotency_key=idempotency_key,
-        )
-        if cached is None:
-            if enforce_ceiling:
-                from src.services.idempotency_policy import enforce_insert_ceiling
-
-                enforce_insert_ceiling(
-                    uow.idempotency_attempts,
-                    principal_id=principal_id,
-                    account_id=account_id,
-                )
-            return None
-        _raise_on_payload_conflict(cached.payload_hash, request_hash)
-        return _replay_cached_success(cached.response_envelope)
+    return lookup_cached_replay(
+        tenant_id=tenant_id,
+        principal_id=principal_id,
+        account_id=account_id,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        deserialize=_replay_cached_success,
+        enforce_ceiling=enforce_ceiling,
+    )
 
 
 # Fraction of successful keyed creates that run storage reclamation. Eviction
@@ -1978,26 +1954,14 @@ def _lookup_cached_replay(
 _EVICTION_PROBABILITY = 0.01
 
 
+#: Fraction of successful keyed creates that run storage reclamation. Kept on THIS module
+#: because it is the documented patch point; the pass itself is shared.
+_EVICTION_PROBABILITY = 0.01
+
+
 def _maybe_evict_expired(tenant_id: str) -> None:
-    """Probabilistically reclaim expired cache rows in a separate short transaction.
-
-    Runs OUTSIDE the cache-write transaction so a tenant-wide DELETE deadlock
-    can never roll back a just-cached success, and only on
-    ``_EVICTION_PROBABILITY`` of keyed successes so creates almost never pay
-    for housekeeping. Best-effort by design — a failure here affects nothing
-    the buyer sees.
-    """
-    if random.random() >= _EVICTION_PROBABILITY:
-        return
-    # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
-    from src.core.database.repositories import MediaBuyUoW
-
-    try:
-        with MediaBuyUoW(tenant_id) as uow:
-            assert uow.idempotency_attempts is not None
-            uow.idempotency_attempts.expire_old()
-    except Exception:
-        logger.warning("Best-effort idempotency cache eviction failed for tenant %s", tenant_id, exc_info=True)
+    """This tool's binding of the shared eviction pass, at this module's probability."""
+    maybe_evict_expired(tenant_id, probability=_EVICTION_PROBABILITY)
 
 
 def _submitted_approval_result(step, req: CreateMediaBuyRequest, adapter) -> CreateMediaBuyResult:
@@ -2049,38 +2013,16 @@ def _cache_and_return(
         "_cache_and_return must be called only with a successful or submitted result"
     )
 
-    # Lazy: tests patch src.core.database.repositories.MediaBuyUoW; the call-time import binds the patched object.
-    from src.core.database.repositories import MediaBuyUoW
-
-    try:
-        with MediaBuyUoW(identity.tenant_id) as uow:
-            assert uow.idempotency_attempts is not None
-            uow.idempotency_attempts.record_success(
-                principal_id=identity.principal_id,
-                account_id=identity.account_id,
-                tool_name=_IDEMPOTENCY_TOOL_NAME,
-                idempotency_key=req.idempotency_key,
-                response_model=result.response,
-                protocol_status=result.status,
-                payload_hash=request_hash,
-            )
-    except (
-        IntegrityError
-    ):  # structural-guard: integrity-narrowing - best-effort cache write; logs and continues, claims no cause
-        logger.info(
-            "Idempotency cache race for key %s (tenant %s, principal %s) — winner already stored",
-            req.idempotency_key,
-            identity.tenant_id,
-            identity.principal_id,
-        )
-    except Exception:
-        logger.warning(
-            "Best-effort idempotency cache write failed for key %s (tenant %s, principal %s)",
-            req.idempotency_key,
-            identity.tenant_id,
-            identity.principal_id,
-            exc_info=True,
-        )
+    cache_success(
+        tenant_id=identity.tenant_id,
+        principal_id=identity.principal_id,
+        account_id=identity.account_id,
+        tool_name=_IDEMPOTENCY_TOOL_NAME,
+        idempotency_key=req.idempotency_key,
+        response_model=result.response,
+        protocol_status=result.status,
+        payload_hash=request_hash,
+    )
     # Eviction runs AFTER the cache write commits, in its own transaction —
     # a DELETE deadlock can never roll back the just-cached success.
     _maybe_evict_expired(identity.tenant_id)

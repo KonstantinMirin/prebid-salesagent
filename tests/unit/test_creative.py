@@ -4557,6 +4557,11 @@ class TestA2ATransportGaps:
                 side_effect=lambda ident, _account: ident,
             ),
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
+            # The at-most-once probe and cache write open a MediaBuyUoW; this is a unit
+            # test, and what it grades is the A2A response payload, not the replay path.
+            patch("src.core.tools.creatives._sync.lookup_cached_replay", return_value=None),
+            patch("src.core.tools.creatives._sync.cache_success"),
+            patch("src.core.tools.creatives._sync.maybe_evict_expired"),
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
             patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
             patch(

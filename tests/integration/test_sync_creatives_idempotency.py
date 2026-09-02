@@ -1,0 +1,124 @@
+"""sync_creatives HONOURS its idempotency_key: replay on retry, refuse on conflict.
+
+prkv.31. The field was required and shape-validated at the boundary, but _impl never
+consulted the replay cache, so a buyer whose sync timed out and retried executed the sync
+twice. Taking the key while ignoring it is worse than not taking it: the spec attaches the
+at-most-once promise to the field's presence.
+
+Graded against a real database, because the guarantee IS the cache row -- a mocked probe
+would prove only that a function was called.
+"""
+
+import pytest
+from adcp.types import AccountReference
+
+from src.core.exceptions import AdCPIdempotencyConflictError
+from tests.integration.test_creative_v3 import (
+    ACCOUNT_ID,
+    _make_creative_dict,
+    _make_identity,
+    _seed_account_for,
+    _sync_creatives,
+)
+
+TENANT_ID = "tenant_sync_idem"
+PRINCIPAL_ID = "principal_sync_idem"
+
+
+@pytest.fixture
+def synced(integration_db, bound_factory_session):
+    """Tenant + principal + account the sync can reach, through the factories.
+
+    Factories rather than the hand-rolled session block the sibling module still uses:
+    CLAUDE.md forbids get_db_session() in a test body, and pre-existing debt in a
+    neighbouring file is not a licence to add more.
+    """
+    from tests.factories import PrincipalFactory, TenantFactory
+
+    # The TENANT OBJECT is passed, not just its id: tenant_id on these factories is a
+    # LazyAttribute off a SubFactory, so supplying the id alone still builds a second
+    # tenant and collides on the (tenant_id, currency_code) key.
+    tenant = TenantFactory(tenant_id=TENANT_ID, subdomain="sync-idem", ad_server="mock", approval_mode="auto-approve")
+    # No CurrencyLimitFactory call: TenantFactory already creates the USD limit, and a
+    # second one violates uq_currency_limit.
+    PrincipalFactory(tenant=tenant, principal_id=PRINCIPAL_ID)
+    _seed_account_for(TENANT_ID, (PRINCIPAL_ID,))
+    return _make_identity(TENANT_ID, PRINCIPAL_ID)
+
+
+def _sync(identity, *, key, creative_id="c_idem", name=None):
+    payload = _make_creative_dict(creative_id=creative_id)
+    if name is not None:
+        payload["name"] = name
+    return _sync_creatives(
+        creatives=[payload],
+        idempotency_key=key,
+        account=AccountReference(root={"account_id": ACCOUNT_ID}),
+        identity=identity,
+    )
+
+
+@pytest.mark.requires_db
+def test_a_retry_with_the_same_key_replays_instead_of_re_executing(synced):
+    """The at-most-once promise: the second call returns the first result, unchanged."""
+    key = "sync-idem-replay-000001"
+
+    first = _sync(synced, key=key)
+    second = _sync(synced, key=key)
+
+    assert [c.creative_id for c in second.creatives] == [c.creative_id for c in first.creatives], (
+        "a retry carrying the same idempotency_key must return the ORIGINAL result"
+    )
+    # The replay is served from the cache rather than re-run: a second execution would
+    # re-sync the creative, so the response bodies must be identical, not merely similar.
+    assert second.model_dump(mode="json") == first.model_dump(mode="json")
+
+
+@pytest.mark.requires_db
+def test_the_same_key_with_a_different_payload_is_refused(synced):
+    """A key is a promise about ONE request; reusing it for another is a conflict."""
+    key = "sync-idem-conflict-00001"
+
+    _sync(synced, key=key, name="Original Name")
+
+    with pytest.raises(AdCPIdempotencyConflictError) as exc_info:
+        _sync(synced, key=key, name="A Different Name")
+
+    assert exc_info.value.error_code == "IDEMPOTENCY_CONFLICT"
+
+
+@pytest.mark.requires_db
+def test_a_different_key_executes_normally(synced):
+    """The refusal must be specific to key reuse, not merely strict."""
+    first = _sync(synced, key="sync-idem-distinct-0001", creative_id="c_idem_a")
+    second = _sync(synced, key="sync-idem-distinct-0002", creative_id="c_idem_b")
+
+    assert [c.creative_id for c in first.creatives] == ["c_idem_a"]
+    assert [c.creative_id for c in second.creatives] == ["c_idem_b"]
+
+
+@pytest.mark.requires_db
+def test_a_dry_run_is_not_cached(synced):
+    """A dry run performs no write, so there is no side effect to deduplicate.
+
+    Caching one would be actively wrong: the dry run's response would then answer a
+    subsequent REAL sync carrying the same key, and the real sync would never execute.
+    """
+    key = "sync-idem-dryrun-000001"
+
+    dry = _sync_creatives(
+        creatives=[_make_creative_dict(creative_id="c_idem_dry")],
+        idempotency_key=key,
+        dry_run=True,
+        account=AccountReference(root={"account_id": ACCOUNT_ID}),
+        identity=synced,
+    )
+    assert dry.dry_run is True
+
+    real = _sync_creatives(
+        creatives=[_make_creative_dict(creative_id="c_idem_dry")],
+        idempotency_key=key,
+        account=AccountReference(root={"account_id": ACCOUNT_ID}),
+        identity=synced,
+    )
+    assert real.dry_run is not True, "the dry run must not have been cached as this key's answer"

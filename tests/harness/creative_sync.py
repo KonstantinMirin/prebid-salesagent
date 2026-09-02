@@ -52,6 +52,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 from adcp.types import AccountReference
 
@@ -581,7 +582,15 @@ class CreativeSyncEnv(IntegrationEnv):
     #: key it does not care about. A scenario that IS about the key overrides it, and its
     #: value wins because setdefault only fills an absent one.
     #: Shape-valid per the pin: ^[A-Za-z0-9_.:-]{16,255}$.
-    DEFAULT_IDEMPOTENCY_KEY = "harness-idem-key-0001"
+    #:
+    #: FRESH PER CALL, because sync_creatives now HONOURS the key. A fixed default meant two
+    #: successive calls in one scenario were the same request: the second replayed the
+    #: first's response instead of executing, so a create-then-upsert test saw "created"
+    #: twice, and a create-then-modify test hit IDEMPOTENCY_CONFLICT. The pin's own guidance
+    #: is "use a fresh UUID v4 for each request", which is what a real buyer does per call.
+    @property
+    def DEFAULT_IDEMPOTENCY_KEY(self) -> str:  # noqa: N802 - kept as the documented name
+        return f"harness-idem-{uuid4().hex}"
 
     def _with_required_request_fields(self, kwargs: dict, *, with_account: bool = True) -> dict:
         """Fill the spec-required fields a scenario has not set itself.

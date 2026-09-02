@@ -7,6 +7,8 @@ mock dict populated, identity lazy, _configure_mocks called.
 
 from __future__ import annotations
 
+import re
+
 
 class TestCreativeSyncEnvContract:
     """CreativeSyncEnv must mock only external services, not DB."""
@@ -99,13 +101,22 @@ class TestCreativeSyncEnvContract:
         # here because this env has no session bound -- there is nothing to seed against
         # outside a ``with env:`` block, and this test asks for the body's SHAPE.
         # Asserted explicitly rather than loosened to a subset check -- the point of this
-        # contract test is the EXACT body shape.
+        # contract test is the EXACT body shape. The key's VALUE is checked by pattern
+        # rather than equality: it is minted fresh per call now that sync_creatives honours
+        # it, so a fixed expected value would be wrong by construction. Its shape is still
+        # pinned, which is what a REST body has to get right.
+        key = body.pop("idempotency_key")
         assert body == {
             "creatives": [],
             "dry_run": True,
-            "idempotency_key": CreativeSyncEnv.DEFAULT_IDEMPOTENCY_KEY,
             "account": {"account_id": "acct_unbound"},
         }
+        assert re.fullmatch(r"[A-Za-z0-9_.:-]{16,255}", key), (
+            f"the harness must supply a key matching the pinned pattern, got {key!r}"
+        )
+        assert key != env.build_rest_body(creatives=[], dry_run=True)["idempotency_key"], (
+            "each dispatch must carry its OWN key -- a shared one makes two calls the same request"
+        )
 
     def test_has_parse_rest_response(self):
         """CreativeSyncEnv implements parse_rest_response."""

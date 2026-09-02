@@ -17,6 +17,7 @@ Covers:
 
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 from adcp.types import AccountReference
@@ -214,7 +215,12 @@ class TestCrossPrincipalIsolation:
             # Both are in sync-creatives-request.json /required, and every transport builds
             # SyncCreativesRequest now, so omitting either is a rejected request rather than
             # a call that reaches the impl.
-            idempotency_key=f"v3-sync-key-{creative_id}",
+            # A FRESH key per call, as sync-creatives-request.json directs ("Use a fresh
+            # UUID v4 for each request"). These were derived from the creative_id or
+            # hardcoded, so a test syncing the same creative twice with different content
+            # reused one key across two payloads -- correctly an IDEMPOTENCY_CONFLICT now
+            # that sync_creatives honours the key.
+            idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
@@ -339,7 +345,7 @@ class TestApprovalWorkflow:
             # Both are in sync-creatives-request.json /required, and every transport builds
             # SyncCreativesRequest now, so omitting either is a rejected request rather than
             # a call that reaches the impl.
-            idempotency_key=f"v3-sync-key-{creative_id}",
+            idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
@@ -392,7 +398,7 @@ class TestApprovalWorkflow:
         _sync_creatives(
             creatives=[_make_creative_dict(creative_id="c_default")],
             # Both are in sync-creatives-request.json /required.
-            idempotency_key="v3-sync-key-000001",
+            idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
@@ -463,7 +469,7 @@ class TestBatchSync:
         result = _sync_creatives(
             creatives=creatives,
             # Both are in sync-creatives-request.json /required.
-            idempotency_key="v3-sync-key-000001",
+            idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=self._identity(),
         )
@@ -492,7 +498,7 @@ class TestBatchSync:
         result1 = _sync_creatives(
             creatives=[_make_creative_dict(creative_id="c_upsert", name="Original Name")],
             # Both are in sync-creatives-request.json /required.
-            idempotency_key="v3-sync-key-000001",
+            idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
@@ -505,7 +511,7 @@ class TestBatchSync:
         result2 = _sync_creatives(
             creatives=[_make_creative_dict(creative_id="c_upsert", name="Updated Name")],
             # Both are in sync-creatives-request.json /required.
-            idempotency_key="v3-sync-key-000001",
+            idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
@@ -627,7 +633,7 @@ class TestFormatCompatibility:
         _sync_creatives(
             creatives=[_make_creative_dict(creative_id="c_display")],
             # Both are in sync-creatives-request.json /required.
-            idempotency_key="v3-sync-key-000001",
+            idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
@@ -642,7 +648,7 @@ class TestFormatCompatibility:
                 assignments=[Assignment(creative_id="c_display", package_id="pkg_video")],
                 validation_mode="strict",
                 # Both are in sync-creatives-request.json /required.
-                idempotency_key="v3-sync-key-strict01",
+                idempotency_key=f"sync-{uuid4().hex}",
                 account=AccountReference(root={"account_id": ACCOUNT_ID}),
                 identity=identity,
             )
@@ -753,7 +759,7 @@ class TestMediaBuyStatusTransition:
             # list[Assignment], per sync-creatives-request.json.
             assignments=[Assignment(creative_id="c_transition", package_id="pkg_draft")],
             # Both are in sync-creatives-request.json /required.
-            idempotency_key="v3-sync-key-000001",
+            idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
             identity=identity,
         )
