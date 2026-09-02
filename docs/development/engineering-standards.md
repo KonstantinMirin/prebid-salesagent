@@ -251,9 +251,18 @@ claims a thoroughness that never executes.
   scenario is legitimate only for a pure transport mechanic with the
   reason stated at the scenario.
 - **Setup and dispatch go through the harness.** Given steps use env
-  methods and factories; `dispatch_request` is the only writer of
-  `ctx["result"]` and the wire keys. A step that hand-stashes a wire
-  value fakes a result the transport never produced.
+  methods and factories; `dispatch_request` performs the dispatch and is
+  the only writer of the context keys it stores. Steps never read or write
+  those keys themselves — the accessors in
+  `tests/bdd/steps/_outcome_helpers.py` are the interface:
+  `require_payload` and `wire_field` for values, `assert_wire_rejection`
+  for refusals. They fail loudly on a missing or errored dispatch, which
+  indexing the context does not, and they keep the step readable as the
+  behavior it grades rather than as context plumbing.
+  `test_architecture_bdd_wire_discipline.py` catches the two worst forms:
+  building an error test-side, and asserting on the reconstructed
+  exception without reading the wire. Steps that index the context
+  directly are legacy; write new ones through the accessors.
 - **Cite schema divergence.** Generated `BR-*.feature` files can be
   edited locally (generation merges semantically); where a scenario is
   corrected against the pinned schema, add a comment citing the exact

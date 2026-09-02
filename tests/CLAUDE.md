@@ -279,14 +279,14 @@ instead:
 - reading the mock the Given configured
   (`env.mock["adapter"].return_value...`) — hard rule 5: the assertion and
   the setup are the same object;
-- recomputing the expected value from `ctx` / env state the Given stored,
-  rather than reading `ctx["result"]` — the same circular check, one step
-  removed.
+- recomputing the expected value from `ctx` or env state the Given stored,
+  rather than reading the dispatched result through `require_payload(ctx)` or
+  `wire_field(ctx, ...)` — the same circular check, one step removed.
 
 The test for an assertion that cannot fail: if the When step were deleted,
 could the Then still compute its actual value? Only the `TransportResult`
-returned by `call_via` (stored as `ctx["result"]` in BDD) came out of the
-run. Set a distinctive value in the Given (`impressions=5000`, not a factory
+returned by `call_via` — reached in BDD through `require_payload(ctx)` and
+`wire_field(ctx, ...)`, never by indexing the context — came out of the run. Set a distinctive value in the Given (`impressions=5000`, not a factory
 default) and read it back off the result — then the assertion can only pass
 if production carried the value through.
 
