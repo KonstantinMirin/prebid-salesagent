@@ -368,11 +368,18 @@ _sdk_tool_defs = {td["name"]: td for td in ADCP_TOOL_DEFINITIONS}
 #:     inline. Cosmetic, tracked separately; it never affected what buyers may send.
 
 
-def _register_tool(fn: Any, dto: type | None = None) -> None:
+def _register_tool(fn: Any) -> None:
     """Register an MCP tool with SDK description, annotations and ADVERTISED SHAPE.
 
-    ``dto`` is REQUIRED -- either passed explicitly or resolvable from the builder the
-    wrapper calls. A tool that cannot name its request DTO cannot be registered.
+    The request DTO is RESOLVED FROM THE BUILDER the wrapper calls. There is no parameter
+    to pass one explicitly: the escape hatch that allowed it is gone, so "registered with a
+    hand-supplied DTO" is not a state this function can produce.
+
+    It existed for list_tasks, whose pre-3.1.1 vocabulary intersected the SDK model at
+    ``context`` alone. Rebasing that tool onto the spec shape left the parameter with zero
+    users, and a zero-user escape hatch is one refactor away from being used again -- so it
+    is deleted rather than documented as discouraged. A tool that cannot name its request
+    DTO still cannot be registered; it just has exactly one way to name it now.
 
     This used to fall back silently: ``apply_dto_announced_shape`` returned False and
     registration proceeded with the hand-written signature, so five tools quietly kept an
@@ -388,13 +395,13 @@ def _register_tool(fn: Any, dto: type | None = None) -> None:
         if sdk_def.get("annotations"):
             kwargs["annotations"] = ToolAnnotations(**sdk_def["annotations"])
     registered = with_error_logging(fn)
-    if not apply_dto_announced_shape(registered, fn, dto):
+    if not apply_dto_announced_shape(registered, fn):
         raise RuntimeError(
             f"{tool_name} cannot be registered: no request DTO. Its advertised shape is "
             f"'DTO fields INTERSECT the implementation's arguments', so without a DTO there "
             f"is nothing to derive from and the tool would publish a hand-written shape that "
-            f"can drift from the spec. Give it a build_*_request builder, or pass the model "
-            f"explicitly: _register_tool({tool_name}, SomeRequest)."
+            f"can drift from the spec. Give it a build_*_request builder that constructs "
+            f"its request -- that is the only way to name a DTO."
         )
     mcp.tool(**kwargs)(registered)
 

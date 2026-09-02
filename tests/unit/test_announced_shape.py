@@ -16,6 +16,7 @@ Three properties, each of which failed at least once while this was being built:
 from __future__ import annotations
 
 import pytest
+from pydantic import BaseModel
 
 from src.core.tools._announced_shape import (
     derived_signature,
@@ -378,37 +379,21 @@ class TestARequiredFieldCannotGoUnannounced:
 
     def test_registration_refuses_a_wrapper_missing_a_required_field(self) -> None:
         import pytest
-        from pydantic import BaseModel
 
         from src.core.tools._announced_shape import apply_dto_announced_shape
-
-        class NeedsAnId(BaseModel):
-            media_buy_id: str  # required
-            note: str | None = None
-
-        def wrapper_that_forgot_it(note: str | None = None):
-            """Declares the optional field but not the required one."""
 
         def target(): ...
 
         with pytest.raises(RuntimeError, match="media_buy_id"):
-            apply_dto_announced_shape(target, wrapper_that_forgot_it, NeedsAnId)
+            apply_dto_announced_shape(target, _fixture_wrapper_that_forgot_it)
 
     def test_a_wrapper_that_declares_it_registers_normally(self) -> None:
         """The refusal must be specific to the defect, not merely strict."""
-        from pydantic import BaseModel
-
         from src.core.tools._announced_shape import apply_dto_announced_shape
-
-        class NeedsAnId(BaseModel):
-            media_buy_id: str
-            note: str | None = None
-
-        def wrapper(media_buy_id: str = "", note: str | None = None): ...
 
         def target(): ...
 
-        assert apply_dto_announced_shape(target, wrapper, NeedsAnId) is True
+        assert apply_dto_announced_shape(target, _fixture_wrapper_that_declares_it) is True
         assert "media_buy_id" in target.__signature__.parameters
 
     def test_every_registered_tool_announces_its_required_fields(self) -> None:
@@ -468,3 +453,31 @@ class TestDroppedFieldsAreReported:
             )
 
         assert not any("ignoring" in r.getMessage() for r in caplog.records)
+
+
+# ── Fixtures for TestARequiredFieldCannotGoUnannounced ────────────────────────
+#
+# MODULE-LEVEL on purpose. apply_dto_announced_shape no longer accepts an explicit dto=
+# (that escape hatch was deleted with its last caller), so a fixture supplies its model the
+# way production does: the wrapper CALLS a builder, and builder_for resolves that builder
+# from the wrapper's bytecode and looks it up in the wrapper's module. Locals inside a test
+# method are invisible to that lookup, so these have to live here -- and grading through the
+# real resolution path is the stronger test anyway.
+
+
+class _FixtureNeedsAnId(BaseModel):
+    media_buy_id: str  # required
+    note: str | None = None
+
+
+def _build_fixture_request(media_buy_id: str = "", note: str | None = None) -> _FixtureNeedsAnId:
+    return _FixtureNeedsAnId(media_buy_id=media_buy_id, note=note)
+
+
+def _fixture_wrapper_that_forgot_it(note: str | None = None):
+    """Declares the optional field but not the required one."""
+    return _build_fixture_request(note=note)
+
+
+def _fixture_wrapper_that_declares_it(media_buy_id: str = "", note: str | None = None):
+    return _build_fixture_request(media_buy_id=media_buy_id, note=note)

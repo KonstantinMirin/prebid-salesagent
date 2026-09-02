@@ -186,15 +186,18 @@ def derived_signature(fn: Callable[..., Any], model: type[BaseModel]) -> inspect
     return signature.replace(parameters=parameters)
 
 
-def apply_dto_announced_shape(
-    target: Callable[..., Any], source_fn: Callable[..., Any], dto: type[BaseModel] | None = None
-) -> bool:
+def apply_dto_announced_shape(target: Callable[..., Any], source_fn: Callable[..., Any]) -> bool:
     """Point ``target``'s advertised signature at the DTO. True when one was applied.
 
     ``target`` is what gets registered (the error-logging wrapper); ``source_fn`` is the
     undecorated tool, whose body names the builder.
+
+    The model is resolved from the builder, full stop. The ``dto`` override this used to
+    accept is gone with its last caller (list_tasks, rebased onto the SDK vocabulary): an
+    unused override is one refactor away from being used again, and its whole effect was to
+    let a tool advertise a shape no builder constructs.
     """
-    model = dto or request_model_for(source_fn)
+    model = request_model_for(source_fn)
     if model is None:
         return False
     signature = derived_signature(source_fn, model)
