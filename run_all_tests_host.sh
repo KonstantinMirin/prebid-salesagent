@@ -45,7 +45,7 @@ from src.core.tools.media_buy_create import _create_media_buy_impl
 collect_reports() {
     # Copy JSON reports from .tox/ to results dir
     mkdir -p "$RESULTS_DIR"
-    for name in unit integration e2e admin bdd ui; do
+    for name in unit integration e2e admin bdd ui quality; do
         [ -f ".tox/${name}.json" ] && cp ".tox/${name}.json" "$RESULTS_DIR/"
     done
     # Explicit return 0 — without this, the function inherits the exit code

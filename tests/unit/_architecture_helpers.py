@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import ast
 import functools
+import importlib.util
 import os
 import re
 import subprocess
+import sys
 import warnings
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
@@ -1381,3 +1383,25 @@ def format_failure(
     if docs_link:
         parts.extend(["", f"See: {docs_link}"])
     return "\n".join(parts)
+
+
+@functools.cache
+def load_hook_module(name: str) -> Any:
+    """Import a ``.pre-commit-hooks/<name>.py`` script as a module.
+
+    The hooks are standalone scripts, not an importable package, so a guard that
+    wants to RUN one (rather than read its source) has to load it by path.
+    Cached because several guards load the same hook and each load re-executes
+    the module body.
+    """
+    path = repo_root() / ".pre-commit-hooks" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load hook module {name} from {path}")
+    module = importlib.util.module_from_spec(spec)
+    # The hooks import their shared driver as a top-level ``count_ratchet``.
+    hooks_dir = str(path.parent)
+    if hooks_dir not in sys.path:
+        sys.path.insert(0, hooks_dir)
+    spec.loader.exec_module(module)
+    return module

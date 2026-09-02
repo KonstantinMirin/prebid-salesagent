@@ -29,6 +29,29 @@ make quality
 ```
 All checks must pass. If they fail, fix the issues before committing.
 
+**Why this step is not the only thing standing between you and a broken
+ratchet — and why it used to be.** `.pre-commit-config.yaml` files the Layer-2
+checks (the ratchet counters, docs-links, route-conflicts) under
+`stages: [pre-push]`, because the commit stage is capped at 12 fast hooks (D27).
+But this page's own workflow is "merged to main **locally**, no `git push`", so
+the pre-push stage never fires — and `.github/workflows/ci.yml` triggers only on
+`push`/`pull_request` to `main`/`develop`, so the "CI is authoritative" backstop
+never fires either. For a long stretch, `make quality` being *documented* here
+was the entire enforcement, and counts drifted unnoticed (salesagent-aemue.13).
+
+The ratchets no longer depend on you remembering:
+
+- the fast counters (type-ignore, fixme-citation, admin-raw-session,
+  ruff-complexity) run in the unit suite —
+  `tests/unit/test_architecture_ratchet_enforcement.py`;
+- the two too slow for it (mypy `--check-untyped-defs`, pylint duplication) run
+  in the `quality` tox env, which `./run_all_tests.sh` executes with the rest —
+  `tests/quality/test_ratchets_slow.py`.
+
+`tests/unit/test_architecture_ratchet_enforcement.py::test_every_ratchet_names_an_enforcement_that_executes`
+keeps it that way: a new ratchet filed only under `pre-push` fails until it
+names a mechanism that actually runs.
+
 ### Step 4: Close Completed Tasks
 ```bash
 bd close <id1> <id2> ...
