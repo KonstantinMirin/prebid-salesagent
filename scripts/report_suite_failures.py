@@ -23,36 +23,30 @@ Exit 0 when every suite reports 0 failed and 0 error, 1 otherwise.
 
 from __future__ import annotations
 
-import glob
-import json
 import os
 import sys
+
+from _suite_reports import scan_suite_summaries
+
+
+def _failure_problems(name: str, summary: dict) -> list[str]:
+    """The failure judgment for one suite: any failure or any error is a finding."""
+    failed = summary.get("failed", 0)
+    errored = summary.get("error", 0)
+    if not failed and not errored:
+        return []
+
+    line = f"  {name}: failed={failed} error={errored}"
+    if errored and not failed:
+        # The whole point of the script: say out loud that the headline
+        # number is zero and the suite still did not pass.
+        line += "  <- 0 failed, but errors are setup/teardown deaths, not passes"
+    return [line]
 
 
 def failure_report(results_dir: str) -> list[str]:
     """One line per suite reporting failures or errors; empty when all clean."""
-    problems: list[str] = []
-    for path in sorted(glob.glob(os.path.join(results_dir, "*.json"))):
-        name = os.path.basename(path)
-        try:
-            with open(path, encoding="utf-8") as handle:
-                summary = json.load(handle).get("summary", {})
-        except Exception as exc:  # noqa: BLE001 -- an unreadable report is itself a finding
-            problems.append(f"  {name}: unreadable ({exc})")
-            continue
-
-        failed = summary.get("failed", 0)
-        errored = summary.get("error", 0)
-        if not failed and not errored:
-            continue
-
-        line = f"  {name}: failed={failed} error={errored}"
-        if errored and not failed:
-            # The whole point of the script: say out loud that the headline
-            # number is zero and the suite still did not pass.
-            line += "  <- 0 failed, but errors are setup/teardown deaths, not passes"
-        problems.append(line)
-    return problems
+    return scan_suite_summaries(results_dir, _failure_problems)
 
 
 def main(argv: list[str]) -> int:
