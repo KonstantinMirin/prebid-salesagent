@@ -106,7 +106,15 @@ The guides in this directory that sit outside the core set:
 - [CI pipeline](ci-pipeline.md) — the GitHub Actions workflow, required checks, and test shards.
 - [A2A and MCP agent flows](a2a-mcp-agent-flows.md) — protocol-side sequence diagrams for buyer, governance, and creative flows.
 - [Admin UI BDD pattern](admin-bdd-pattern.md) — how to write BDD tests for Flask admin features.
-- [Account management risks](account-management-risks.md) — known gaps and mitigations for the account-management area.
+
+## Records of past work, not guidance
+
+The `docs/` tree also holds records: review rounds under `docs/code-reviews/`,
+release notes under `docs/releases/`, and remediation plans, comparison
+reports, and planning artifacts at the `docs/` root and under `docs/design/`
+and `docs/development/`. Each describes one piece of work at the time it was
+done. None of them describes how the system works — for that, use the
+documents mapped earlier in this page.
 
 ## Key resources
 
