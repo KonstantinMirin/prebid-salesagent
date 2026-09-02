@@ -107,7 +107,10 @@ async def test_short_webhook_credentials_do_not_block_create_media_buy():
         "into CreateMediaBuyRequest.model_validate)."
     )
 
-    # push_notification_config must be forwarded to the tool, not validated away.
+    # push_notification_config must be forwarded to the tool, not validated away. It stays
+    # a kwarg BESIDE the request (gh-#1299): folding it in would apply
+    # Authentication.credentials MinLen(32) to the whole create_media_buy, which is exactly
+    # what this test's short credential must not trigger.
     assert captured.get("push_notification_config") == {
         "url": "http://localhost:9999/webhook",
         "authentication": {"schemes": ["Bearer"], "credentials": "test-webhook-token"},

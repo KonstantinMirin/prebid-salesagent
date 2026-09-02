@@ -123,7 +123,12 @@ else:
     CreateMediaBuyBody = derived_body_model(
         "CreateMediaBuyBody",
         CreateMediaBuyRequestDTO,
-        media_buy_create_module.create_media_buy_raw,
+        # The BUILDER -- the raw wrapper takes the built request now.
+        media_buy_create_module._build_create_media_buy_request,
+        # push_notification_config is a DTO field the builder deliberately does NOT take
+        # (gh-#1299), so the intersection misses it. Declared here so the REST body keeps
+        # announcing it -- the route forwards it to the wrapper as its own argument.
+        extra_fields={"push_notification_config": (dict[str, Any] | None, None)},
     )
 
 if TYPE_CHECKING:
@@ -533,21 +538,29 @@ async def create_media_buy(
         reporting_webhook = to_reporting_webhook(body.reporting_webhook)
         push_notification_config = to_push_notification_config(body.push_notification_config)
         context = to_context_object(body.context)
+
+        # Built through the SHARED builder, then handed over -- the same two steps A2A and
+        # MCP take. INSIDE the boundary so a buyer-invalid payload surfaces as an envelope
+        # with a suggestion rather than a raw pydantic message.
+        req = media_buy_create_module._build_create_media_buy_request(
+            brand=brand_ref,
+            # packages stay wire dicts: CreateMediaBuyRequest validates them as the
+            # request's packages[] field, preserving full-request error field paths.
+            packages=body.packages,
+            start_time=body.start_time,
+            end_time=body.end_time,
+            po_number=body.po_number,
+            account=account_ref,
+            reporting_webhook=reporting_webhook,
+            context=context,
+            ext=body.ext,
+            idempotency_key=body.idempotency_key,
+            paused=body.paused,
+        )
     response = await media_buy_create_module.create_media_buy_raw(
-        brand=brand_ref,
-        # packages stay wire dicts: CreateMediaBuyRequest validates them as the
-        # request's packages[] field, preserving full-request error field paths.
-        packages=body.packages,
-        start_time=body.start_time,
-        end_time=body.end_time,
-        po_number=body.po_number,
-        account=account_ref,
-        reporting_webhook=reporting_webhook,
+        req=req,
+        # Beside the request, not in it (gh-#1299) -- see create_media_buy_raw's note.
         push_notification_config=push_notification_config,
-        context=context,
-        ext=body.ext,
-        idempotency_key=body.idempotency_key,
-        paused=body.paused,
         identity=identity,
         raw_wire_payload=raw_wire_payload,
     )

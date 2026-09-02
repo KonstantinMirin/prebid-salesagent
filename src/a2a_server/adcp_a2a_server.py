@@ -1804,19 +1804,27 @@ class AdCPRequestHandler(RequestHandler):
         #
         # Selected off create_media_buy_raw's own signature rather than hand-listed. The
         # ten-name list this replaces dropped `ext` and `paused` — both declared by
-        # CreateMediaBuyRequest AND accepted by the callee, so both were honoured on MCP and
+        # CreateMediaBuyRequest AND accepted by the builder, so both were honoured on MCP and
         # silently discarded on A2A. That is the same defect class as the missing
         # idempotency_key on update_media_buy; the cure is to stop enumerating.
-        selected = select_request_fields(CreateMediaBuyRequest, params, accepted_kwargs(core_create_media_buy_tool))
+        from src.core.tools.media_buy_create import _build_create_media_buy_request
+
+        selected = select_request_fields(
+            CreateMediaBuyRequest, params, accepted_kwargs(_build_create_media_buy_request)
+        )
         # Wrap for boundary-pattern consistency with delivery/sync_creatives. A crash is
         # structurally impossible here (create_media_buy_raw re-coerces via
         # CreateMediaBuyRequest), and to_account_reference is idempotent on an already
         # typed/dict account — but resolving at the boundary keeps all three handlers uniform.
         selected["account"] = to_account_reference(params.get("account"))
+        with adcp_validation_boundary(context="create_media_buy request"):
+            req = _build_create_media_buy_request(**selected)
         response = await core_create_media_buy_tool(
-            **selected,
-            # Popped from params above: an A2A transport-layer parameter, forwarded as a
-            # SEPARATE argument exactly like the MCP wrapper does.
+            req=req,
+            # Forwarded BESIDE the request, not in it -- see the note above the pop: folding
+            # it in applies Authentication.credentials MinLen(32) to the whole
+            # create_media_buy and diverts short-credential requests away from the
+            # manual-approval gate (gh-#1299).
             push_notification_config=push_notification_config,
             identity=identity,
             # The DataPart params AS SENT (pre-normalization, pre-mutation) are

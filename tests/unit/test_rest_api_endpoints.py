@@ -102,7 +102,12 @@ class TestCreateMediaBuyScalarForwarding:
     def test_scalar_forwards_to_raw(self, mock_raw, mock_resolve, field, wire_value, expected):
         mock_raw.return_value = MagicMock(model_dump=lambda **kw: {})
         body = {
-            "packages": [],
+            # A BUILDABLE payload: create-media-buy-request.json puts minItems 1 on
+            # packages. An empty list passed only while create_media_buy_raw was mocked --
+            # mocking it also mocked away the builder inside it, so nothing validated the
+            # body. The route builds before calling now, so the payload must be one a
+            # buyer could actually send.
+            "packages": [{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "po_1"}],
             "start_time": "2026-01-01T00:00:00Z",
             "end_time": "2026-02-01T00:00:00Z",
             # create-media-buy-request.json /required. The body is DERIVED from the DTO now,
@@ -116,9 +121,11 @@ class TestCreateMediaBuyScalarForwarding:
         response = client.post("/api/v1/media-buys", json=body, headers={"Authorization": "Bearer test-token"})
 
         assert response.status_code == 200, response.text
-        assert mock_raw.call_args.kwargs[field] == expected, (
-            f"REST create route did not forward {field!r} to create_media_buy_raw"
-        )
+        # Each scalar is graded on the built REQUEST the wrapper receives -- except
+        # push_notification_config, which stays a kwarg beside it (gh-#1299).
+        kwargs = mock_raw.call_args.kwargs
+        actual = kwargs[field] if field in kwargs else getattr(kwargs["req"], field)
+        assert actual == expected, f"REST create route did not forward {field!r} to create_media_buy_raw"
 
 
 class TestGetMediaBuyDeliveryEndpoint:

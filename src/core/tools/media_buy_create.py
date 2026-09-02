@@ -135,7 +135,7 @@ from src.core.helpers.creative_helpers import (
 )
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import to_brand_reference, to_context_object, to_reporting_webhook
+from src.core.schema_helpers import to_brand_reference
 from src.core.schemas import (
     AssetStatus,
     CreateMediaBuyError,
@@ -4498,20 +4498,20 @@ async def _create_media_buy_impl(
 
 def _build_create_media_buy_request(
     *,
-    brand: BrandReference | dict[str, Any] | str | None,
+    brand: BrandReference | dict[str, Any] | str | None = None,
     # The MCP wrapper receives the internal PackageRequest subtype; the raw
     # wrapper the library type or wire dicts (A2A/REST) — CreateMediaBuyRequest
     # validates any of them.
-    packages: list[AdcpPackageRequest] | list[PackageRequest] | list[dict[str, Any]] | None,
-    start_time: str | None,
-    end_time: str | None,
-    po_number: str | None,
-    reporting_webhook: ReportingWebhook | None,
-    context: ContextObject | None,
-    ext: dict[str, Any] | None,
-    account: AccountReference | None,
-    idempotency_key: str | None,
-    paused: bool | None,
+    packages: list[AdcpPackageRequest] | list[PackageRequest] | list[dict[str, Any]] | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    po_number: str | None = None,
+    reporting_webhook: ReportingWebhook | None = None,
+    context: ContextObject | None = None,
+    ext: dict[str, Any] | None = None,
+    account: AccountReference | None = None,
+    idempotency_key: str | None = None,
+    paused: bool | None = None,
 ) -> CreateMediaBuyRequest:
     """Shared boundary request construction for the MCP and A2A/REST wrappers.
 
@@ -4670,20 +4670,13 @@ async def create_media_buy(
 
 
 async def create_media_buy_raw(
-    brand: BrandReference | str | None = None,
-    # A2A/REST send wire dicts; CreateMediaBuyRequest validates them as the
-    # request's packages[] field. REQUIRED per AdCP spec.
-    packages: list[AdcpPackageRequest] | list[dict[str, Any]] | None = None,
-    start_time: str | None = None,  # ISO 8601 or 'asap' - REQUIRED per AdCP spec
-    end_time: str | None = None,  # ISO 8601 - REQUIRED per AdCP spec
-    po_number: str | None = None,
-    reporting_webhook: ReportingWebhook | None = None,
+    req: CreateMediaBuyRequest,
+    # DELIBERATELY not a builder parameter and not folded into CreateMediaBuyRequest.
+    # The adcp Authentication.credentials MinLen(32) constraint would then apply to the
+    # WHOLE create_media_buy, so a short webhook credential would divert the request away
+    # from the manual-approval gate instead of being handled (gh-#1299). It is a transport
+    # -layer argument here for the same reason the MCP wrapper keeps it separate.
     push_notification_config: PushNotificationConfig | None = None,
-    context: ContextObject | None = None,  # Application level context per adcp spec
-    ext: dict[str, Any] | None = None,  # AdCP ExtensionObject for custom fields
-    account: AccountReference | None = None,  # A2A/REST send dicts; coerced by CreateMediaBuyRequest
-    idempotency_key: str | None = None,
-    paused: bool | None = None,  # AdCP 3.1.1 compatibility; pause-on-create NOT yet honored (tracked in #1619)
     ctx: Context | ToolContext | None = None,
     identity: IdentityOrNotProvided = NOT_PROVIDED,
     raw_wire_payload: dict[str, Any] | None = None,
@@ -4713,22 +4706,6 @@ async def create_media_buy_raw(
     Returns:
         Dict with status and CreateMediaBuyResponse data
     """
-    # A2A/REST send dict inputs; the two coercions below are this transport's
-    # only divergence from the MCP wrapper — everything else is the shared builder.
-    req = _build_create_media_buy_request(
-        brand=brand,
-        packages=packages,
-        start_time=start_time,
-        end_time=end_time,
-        po_number=po_number,
-        reporting_webhook=to_reporting_webhook(reporting_webhook),
-        context=to_context_object(context),
-        ext=ext,
-        account=account,
-        idempotency_key=idempotency_key,
-        paused=paused,
-    )
-
     identity = resolve_identity_if_not_provided(identity, ctx, require_valid_token=True)
 
     # Resolve account at transport boundary (before _impl)

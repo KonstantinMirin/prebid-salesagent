@@ -16,7 +16,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MEDIA_BUY_CREATE = REPO_ROOT / "src" / "core" / "tools" / "media_buy_create.py"
 
-WRAPPER_NAMES = {"create_media_buy", "create_media_buy_raw"}
+WRAPPER_NAMES = {"create_media_buy", "create_media_buy_raw", "_build_create_media_buy_request"}
 
 
 def _get_param_names(func_node: ast.AsyncFunctionDef | ast.FunctionDef) -> list[str]:
@@ -46,15 +46,22 @@ class TestCreateWrapperAccountParam:
             "Without it, harness strips account before MCP dispatch."
         )
 
-    def test_create_media_buy_raw_has_account_param(self):
-        """A2A wrapper create_media_buy_raw must accept 'account' parameter."""
+    def test_builder_has_account_param(self):
+        """The shared builder must accept 'account'.
+
+        Was asserted on create_media_buy_raw, which took the field directly. That wrapper
+        now takes the BUILT request, so `account` reaches it on the request and the place
+        it can go missing is the builder -- if the builder does not declare it, every
+        transport loses it at once, which is strictly worse than the single-transport
+        stripping this guard was written for.
+        """
         wrappers = self._parse_wrappers()
-        assert "create_media_buy_raw" in wrappers, "create_media_buy_raw not found in media_buy_create.py"
-        params = _get_param_names(wrappers["create_media_buy_raw"])
+        name = "_build_create_media_buy_request"
+        assert name in wrappers, f"{name} not found in media_buy_create.py"
+        params = _get_param_names(wrappers[name])
         assert "account" in params, (
-            f"create_media_buy_raw is missing 'account' parameter. "
-            f"Current params: {params}. "
-            "Without it, harness strips account before A2A dispatch."
+            f"{name} is missing 'account' parameter. Current params: {params}. "
+            "Without it no transport can put an account on the request."
         )
 
     def test_guard_catches_missing_account_param(self):

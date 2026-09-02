@@ -1078,6 +1078,7 @@ class TestCreativeLifecycleMCP:
 
         # Import create_media_buy tool
         from src.core.tools import create_media_buy_raw
+        from src.core.tools.media_buy_create import _build_create_media_buy_request
 
         # Create media buy with creative_ids in packages
         creative_ids = [c["creative_id"] for c in sample_creatives]
@@ -1187,13 +1188,16 @@ class TestCreativeLifecycleMCP:
             ]
 
             # Call create_media_buy with packages containing creative_ids
+            # Through the shared builder, since the wrapper takes the built request.
             response = await create_media_buy_raw(
-                brand={"domain": "testbrand.com"},
-                packages=packages,
-                start_time=datetime.now(UTC) + timedelta(days=1),
-                end_time=datetime.now(UTC) + timedelta(days=30),
-                po_number="PO-TEST-123",
-                idempotency_key=f"int-key-{uuid.uuid4().hex}",
+                req=_build_create_media_buy_request(
+                    brand={"domain": "testbrand.com"},
+                    packages=packages,
+                    start_time=datetime.now(UTC) + timedelta(days=1),
+                    end_time=datetime.now(UTC) + timedelta(days=30),
+                    po_number="PO-TEST-123",
+                    idempotency_key=f"int-key-{uuid.uuid4().hex}",
+                ),
                 identity=identity,
             )
 

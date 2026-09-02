@@ -98,7 +98,7 @@ async def capture_a2a_forwarded_pnc(pnc: Any) -> dict | None:
         was not called.
     """
     from src.core.schemas import CreateMediaBuyResult
-    from src.core.tools.media_buy_create import create_media_buy_raw
+    from src.core.tools.media_buy_create import _build_create_media_buy_request, create_media_buy_raw
 
     req_dict = create_test_media_buy_request_dict()
     mock_result = MagicMock(spec=CreateMediaBuyResult)
@@ -115,12 +115,18 @@ async def capture_a2a_forwarded_pnc(pnc: Any) -> dict | None:
         "src.core.tools.media_buy_create._create_media_buy_impl",
         side_effect=_capture,
     ):
+        # push_notification_config stays a kwarg BESIDE the request (gh-#1299) -- folding
+        # it in would apply Authentication.credentials MinLen(32) to the whole
+        # create_media_buy. Everything else goes through the shared builder.
         await create_media_buy_raw(
-            brand=req_dict["brand"],
-            packages=req_dict["packages"],
-            start_time=req_dict["start_time"],
-            end_time=req_dict["end_time"],
-            idempotency_key=req_dict["idempotency_key"],
+            req=_build_create_media_buy_request(
+                brand=req_dict["brand"],
+                packages=req_dict["packages"],
+                start_time=req_dict["start_time"],
+                end_time=req_dict["end_time"],
+                idempotency_key=req_dict["idempotency_key"],
+                account=req_dict.get("account"),
+            ),
             push_notification_config=pnc,
             identity=mock_identity,
         )

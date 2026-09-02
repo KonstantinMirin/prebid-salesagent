@@ -102,14 +102,19 @@ def _extract_request_constructor_kwargs(file_path: Path, wrapper_name: str, requ
 
 
 def _extract_wrapper_params(file_path: Path, wrapper_name: str) -> set[str]:
-    """Extract parameter names from a wrapper function signature."""
+    """Extract parameter names from a wrapper function signature.
+
+    KEYWORD-ONLY parameters count. Reading only ``args.args`` made every
+    ``def f(*, ...)`` look like it declared nothing, so a keyword-only builder
+    silently reported all its fields as missing.
+    """
     source = file_path.read_text()
     tree = ast.parse(source, filename=str(file_path))
 
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if node.name == wrapper_name:
-                return {arg.arg for arg in node.args.args}
+                return {arg.arg for arg in node.args.args + node.args.kwonlyargs}
     return set()
 
 
@@ -193,12 +198,19 @@ class TestCreateMediaBuyFieldForwarding:
             f"CreateMediaBuyRequest: {sorted(missing)}"
         )
 
-    def test_a2a_wrapper_constructs_request_with_all_spec_fields(self):
-        """A2A create_media_buy_raw must pass all AdCP spec fields to CreateMediaBuyRequest."""
-        kwargs = _extract_request_constructor_kwargs(CREATE_FILE, "create_media_buy_raw", "CreateMediaBuyRequest")
+    def test_builder_constructs_request_with_all_spec_fields(self):
+        """The BUILDER must pass every AdCP spec field into CreateMediaBuyRequest.
+
+        Moved off create_media_buy_raw, which no longer constructs the request -- it
+        receives one. Construction is the builder's job, so that is where dropping a
+        field is a defect worth catching.
+        """
+        kwargs = _extract_request_constructor_kwargs(
+            CREATE_FILE, "_build_create_media_buy_request", "CreateMediaBuyRequest"
+        )
         missing = CREATE_SPEC_FIELDS - kwargs
         assert not missing, (
-            f"A2A wrapper 'create_media_buy_raw' drops AdCP fields when constructing "
+            f"_build_create_media_buy_request drops AdCP fields when constructing "
             f"CreateMediaBuyRequest: {sorted(missing)}"
         )
 
@@ -210,12 +222,29 @@ class TestCreateMediaBuyFieldForwarding:
             f"MCP wrapper 'create_media_buy' doesn't accept AdCP fields as parameters: {sorted(missing)}"
         )
 
-    def test_a2a_wrapper_accepts_all_spec_fields_as_params(self):
-        """A2A create_media_buy_raw must accept all AdCP spec fields as parameters."""
+    def test_a2a_wrapper_takes_the_built_request_and_no_spec_fields(self):
+        """create_media_buy_raw takes the BUILT request, so it declares no spec field.
+
+        The inverse of what this asserted, and for the same reason as its update sibling:
+        the wrapper re-listed the request's fields, and now takes the request. The
+        obligation -- every spec field must be constructible -- is carried by
+        test_builder_accepts_all_spec_fields below, on _build_create_media_buy_request,
+        which is the one place a buyer field can enter.
+        """
         params = _extract_wrapper_params(CREATE_FILE, "create_media_buy_raw")
+        leaked = CREATE_SPEC_FIELDS & params
+        assert not leaked, (
+            f"create_media_buy_raw declares spec fields {sorted(leaked)} beside the request. "
+            f"They belong on the builder; a second list here is the drift the request shape removed."
+        )
+        assert "req" in params, "the wrapper must take the built request"
+
+    def test_builder_accepts_all_spec_fields(self):
+        """_build_create_media_buy_request must accept every AdCP spec field."""
+        params = _extract_wrapper_params(CREATE_FILE, "_build_create_media_buy_request")
         missing = CREATE_SPEC_FIELDS - params
         assert not missing, (
-            f"A2A wrapper 'create_media_buy_raw' doesn't accept AdCP fields as parameters: {sorted(missing)}"
+            f"_build_create_media_buy_request doesn't accept AdCP fields as parameters: {sorted(missing)}"
         )
 
 
