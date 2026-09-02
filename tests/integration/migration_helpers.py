@@ -87,14 +87,20 @@ def reset_to_revision(
     database is already at ``revision`` and rewinds it when a previous test left it
     higher.
 
+    The rows are cleared BETWEEN the two, never after: a downgrade is now entitled
+    to REFUSE to run over rows it cannot represent (``e381618812f1`` aborts on
+    ``billing='advertiser'``), so leftovers from an earlier test would abort the
+    rewind itself rather than merely survive it.
+
     Returns ``(engine, db_url)``.
     """
     engine, db_url = migration_db
     run_alembic_upgrade(db_url, revision)
-    run_alembic_downgrade(db_url, revision)
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM accounts"))
         conn.execute(text("DELETE FROM tenants"))
+    run_alembic_downgrade(db_url, revision)
+    with engine.begin() as conn:
         conn.execute(
             text(
                 "INSERT INTO tenants (tenant_id, name, subdomain, ad_server, is_active) "
@@ -114,6 +120,7 @@ def seed_account(
     operator: str | None,
     brand_id: str | None = None,
     name: str | None = None,
+    billing: str | None = None,
 ) -> None:
     """Insert an accounts row directly — a migration's subject is rows, not callers.
 
@@ -128,6 +135,10 @@ def seed_account(
 
     ``domain=None`` writes SQL NULL, matching what production stores for a
     brand-less account (``JSONType`` uses ``JSONB(none_as_null=True)``).
+
+    ``billing`` is likewise raw: the CHECK-widening migration's tests must be able
+    to write a value the CURRENT constraint rejects, and to observe the database
+    refusing it, which is exactly what the ORM would pre-empt.
     """
     brand: str | None = None
     if domain is not None:
@@ -139,8 +150,8 @@ def seed_account(
     with engine.begin() as conn:
         conn.execute(
             text(
-                "INSERT INTO accounts (tenant_id, account_id, name, status, operator, brand) "
-                "VALUES (:tid, :aid, :name, 'active', :operator, CAST(:brand AS jsonb))"
+                "INSERT INTO accounts (tenant_id, account_id, name, status, operator, brand, billing) "
+                "VALUES (:tid, :aid, :name, 'active', :operator, CAST(:brand AS jsonb), :billing)"
             ),
             {
                 "tid": tenant_id,
@@ -148,5 +159,6 @@ def seed_account(
                 "name": account_id if name is None else name,
                 "operator": operator,
                 "brand": brand,
+                "billing": billing,
             },
         )

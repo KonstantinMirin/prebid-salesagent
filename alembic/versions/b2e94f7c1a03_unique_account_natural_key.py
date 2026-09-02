@@ -8,9 +8,8 @@ Create Date: 2026-07-27 20:40:00.000000
 
 from collections.abc import Sequence
 
-import sqlalchemy as sa
-
 from alembic import op
+from src.core.database.migration_guards import abort_if_rows
 
 # revision identifiers, used by Alembic.
 revision: str = "b2e94f7c1a03"
@@ -67,23 +66,23 @@ def upgrade() -> None:
     about a tenant's live accounts, so this reports them and stops (owner
     decision, 2026-07-27). Resolve the extras — close or re-key them — and re-run.
     """
-    collisions = op.get_bind().execute(sa.text(_SURVEY_SQL)).fetchall()
-    if collisions:
-        detail = "\n".join(
+    abort_if_rows(
+        op.get_bind(),
+        _SURVEY_SQL,
+        describe=lambda row: (
             f"  tenant={row.tenant_id!r} operator={row.operator!r} "
             f"brand.domain={row.brand_domain!r} brand.brand_id={row.brand_id!r} "
             f"sandbox={row.sandbox!r} -> accounts {list(row.account_ids)}"
-            for row in collisions
-        )
-        raise RuntimeError(
-            f"Cannot enforce the account natural key: {len(collisions)} colliding key(s) already "
-            f"exist.\n{detail}\n"
+        ),
+        headline="Cannot enforce the account natural key: {count} colliding key(s) already exist.",
+        remedy=(
             "Each group must collapse to ONE account before this index can be created. Close or "
             "re-key the extras (the buyer's account is the one their sync_accounts maintains — "
             "normally the oldest, and the one carrying an agent_account_access row), then re-run "
             "this migration. This migration will not choose for you: 'closed' is terminal in the "
             "status transitions, so a wrong choice is not reversible by the downgrade."
-        )
+        ),
+    )
 
     op.execute(
         f"CREATE UNIQUE INDEX {_INDEX} ON accounts ({_KEY_SQL}) NULLS NOT DISTINCT WHERE {_KEYED_ONLY}",
