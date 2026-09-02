@@ -175,7 +175,11 @@ def derived_signature(fn: Callable[..., Any], model: type[BaseModel]) -> inspect
             continue
         declared = parameter.annotation
         description = field.description or _declared_description(declared)
-        annotation = field.annotation
+        # Typed Any because the two arms are genuinely different kinds: `field.annotation`
+        # is a runtime type, while `Annotated[...]` is a typing special form. mypy inferred
+        # the variable from the first assignment and then rejected the second; the value is
+        # handed straight to Parameter.replace, which takes either.
+        annotation: Any = field.annotation
         if description:
             annotation = Annotated[annotation, PydanticField(description=description)]
         parameters.append(parameter.replace(annotation=annotation))

@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any
 
 from src.adapters.base_workflow import BaseWorkflowManager
+from src.core.helpers.brand_key import brand_key_parts
 from src.core.schemas import CreateMediaBuyRequest, MediaPackage
 
 
@@ -83,7 +84,10 @@ class BroadstreetWorkflowManager(BaseWorkflowManager):
             str: The workflow step ID if created successfully, None otherwise
         """
         # Build campaign name
-        brand_name = (request.brand.domain if request.brand is not None else None) or "Unknown Brand"
+        # Through the canonical accessor: `brand` is declared as the widened union
+        # (BrandReference | dict | str), so reading `.domain` off it is wrong on two of
+        # the three arms.
+        brand_name = brand_key_parts(request.brand)[0] or "Unknown Brand"
         campaign_name = f"{brand_name} - {start_time.strftime('%Y%m%d')}"
         if request.po_number:
             campaign_name = f"AdCP-{request.po_number}"

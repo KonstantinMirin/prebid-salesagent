@@ -38,6 +38,7 @@ from src.core.exceptions import (
     AdCPServiceUnavailableError,
     AdCPValidationError,
 )
+from src.core.helpers.brand_key import brand_key_parts
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AssetStatus,
@@ -635,8 +636,10 @@ class MockAdServer(AdServerAdapter):
         scenario = None
         test_message = None
         if request.brand:
-            # BrandReference.domain is a str
-            test_message = str(request.brand.domain) if request.brand.domain else None
+            # Through the canonical accessor: `brand` is declared as the widened union
+            # (BrandReference | dict | str), so reading `.domain` off it is wrong on two
+            # of the three arms. The comment this replaces asserted the narrow arm.
+            test_message = brand_key_parts(request.brand)[0] or None
 
         if test_message and isinstance(test_message, str) and has_test_keywords(test_message):
             scenario = parse_test_scenario(test_message, "create_media_buy")

@@ -31,10 +31,10 @@ def brand_key_parts(brand: BrandReference) -> tuple[str, str | None]: ...
 
 
 @overload
-def brand_key_parts(brand: BrandReference | dict | None) -> tuple[str | None, str | None]: ...
+def brand_key_parts(brand: BrandReference | dict | str | None) -> tuple[str | None, str | None]: ...
 
 
-def brand_key_parts(brand: BrandReference | dict | None) -> tuple[Any, str | None]:
+def brand_key_parts(brand: BrandReference | dict | str | None) -> tuple[Any, str | None]:
     """Read the (domain, brand_id) half of the natural key out of a brand reference.
 
     Accepts both shapes and neither is a fallback: a freshly built row assigns a
@@ -44,9 +44,18 @@ def brand_key_parts(brand: BrandReference | dict | None) -> tuple[Any, str | Non
     The overloads keep callers that already hold a ``BrandReference`` from having
     to re-narrow ``domain``: it is a required ``str`` on that model, and only the
     dict/None arms can widen it to ``None``.
+
+    The bare-string arm is the domain shorthand ``to_brand_reference`` already accepts
+    (``"ACME.COM"`` and ``{"domain": "ACME.COM"}`` go through one normalize-then-validate
+    funnel there and are equivalent). It is covered here so this helper is TOTAL over the
+    same union the request models declare -- without it, every caller reading a domain off
+    a request field had to narrow the union itself, and four of them simply wrote
+    ``request.brand.domain`` and were wrong on two of the three arms.
     """
     if brand is None:
         return None, None
+    if isinstance(brand, str):
+        return brand, None
     if isinstance(brand, dict):
         raw_id = brand.get("brand_id")
         return brand.get("domain"), None if raw_id is None else str(raw_id)
