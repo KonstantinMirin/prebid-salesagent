@@ -87,20 +87,14 @@ def reset_to_revision(
     database is already at ``revision`` and rewinds it when a previous test left it
     higher.
 
-    The rows are cleared BETWEEN the two, never after: a downgrade is now entitled
-    to REFUSE to run over rows it cannot represent (``e381618812f1`` aborts on
-    ``billing='advertiser'``), so leftovers from an earlier test would abort the
-    rewind itself rather than merely survive it.
-
     Returns ``(engine, db_url)``.
     """
     engine, db_url = migration_db
     run_alembic_upgrade(db_url, revision)
+    run_alembic_downgrade(db_url, revision)
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM accounts"))
         conn.execute(text("DELETE FROM tenants"))
-    run_alembic_downgrade(db_url, revision)
-    with engine.begin() as conn:
         conn.execute(
             text(
                 "INSERT INTO tenants (tenant_id, name, subdomain, ad_server, is_active) "

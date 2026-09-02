@@ -46,6 +46,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 
 from alembic import op
+from src.core.database.migration_guards import abort_if_rows
 
 # revision identifiers, used by Alembic.
 revision: str = "f4d31a97c058"
@@ -201,30 +202,33 @@ def upgrade() -> None:
         logger.info("No accounts carry a mangled brand_id — nothing to repair.")
         return
 
-    unparseable = bind.execute(sa.text(_UNPARSEABLE_SQL)).fetchall()
-    if unparseable:
-        detail = "\n".join(
-            f"  tenant={row.tenant_id!r} account={row.account_id!r} brand_id={row.brand_id!r}" for row in unparseable
-        )
-        raise RuntimeError(
-            f"Cannot repair the mangled brand_id: {len(unparseable)} row(s) match 'root=%' but not the "
-            f"expected root='<brand_id>' shape.\n{detail}\n"
+    abort_if_rows(
+        bind,
+        _UNPARSEABLE_SQL,
+        describe=lambda row: f"  tenant={row.tenant_id!r} account={row.account_id!r} brand_id={row.brand_id!r}",
+        headline=(
+            "Cannot repair the mangled brand_id: {count} row(s) match 'root=%' but not the "
+            "expected root='<brand_id>' shape."
+        ),
+        remedy=(
             "These are an unknown mangling, so rewriting them would be a guess about a tenant's live "
             "account. Inspect and hand-repair them with direct SQL, then re-run this migration. "
             "Skipping them silently is not an option: they are unreadable through the ORM."
-        )
+        ),
+    )
 
-    collisions = bind.execute(sa.text(_collision_sql())).fetchall()
-    if collisions:
-        detail = "\n".join(
+    abort_if_rows(
+        bind,
+        _collision_sql(),
+        describe=lambda row: (
             f"  tenant={row.tenant_id!r} operator={row.operator!r} brand.domain={row.brand_domain!r} "
             f"brand.brand_id={row.repaired_brand_id!r} sandbox={row.sandbox!r} -> "
             f"poisoned={row.poisoned_account_id} occupant={row.occupant_account_id}"
-            for row in collisions
-        )
-        raise RuntimeError(
-            f"Cannot repair the mangled brand_id: {len(collisions)} repaired key(s) are already occupied "
-            f"by another account.\n{detail}\n"
+        ),
+        headline=(
+            "Cannot repair the mangled brand_id: {count} repaired key(s) are already occupied by another account."
+        ),
+        remedy=(
             "Repairing the poisoned row would make it collide with the occupant under "
             f"{_INDEX}. The occupant is the account the buyer's sync_accounts now maintains (after the "
             "write-path fix their payload can only reach the correct key), and the poisoned row is the "
@@ -237,7 +241,8 @@ def upgrade() -> None:
             "its brand and name — then re-run. Note the urgency: migrations run automatically on "
             "startup and scripts/ops/migrate.py exits non-zero on failure, so until this is resolved "
             "the service will not boot."
-        )
+        ),
+    )
 
     result = bind.execute(sa.text(_REPAIR_SQL))
     logger.info("Repaired the mangled brand_id on %d account(s).", result.rowcount)

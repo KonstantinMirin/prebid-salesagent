@@ -50,6 +50,9 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 _REVISION = "f4d31a97c058"
 _PREVIOUS = "b2e94f7c1a03"
 
+#: The index a repaired key would collide under — the abort has to name it.
+_INDEX = "uq_accounts_natural_key"
+
 _TENANT = "mig_bid_tenant"
 _DOMAIN = "acme.com"
 _OPERATOR = "example.com"
@@ -221,6 +224,16 @@ class TestTheMigrationRefusesAmbiguity:
         # will try it and fail, since brand/operator/sandbox are immutable. A bare
         # `"re-key" not in message` cannot express both: it forbids the word, and so
         # forbids the explanation the message is required to carry.
+        assert "cannot be re-keyed" in message, (
+            f"the abort must explain that re-keying is unavailable here, not just avoid suggesting it: {message}"
+        )
+        assert "poisoned=acc_bid_poisoned" in message and "occupant=acc_bid_occupant" in message, (
+            f"the operator cannot act on a report that does not say which row is which: {message}"
+        )
+        assert _INDEX in message, f"the abort must name the index the repair would violate: {message}"
+        assert "1 repaired key(s)" in message, (
+            f"the headline must count the blocking rows, not print a placeholder: {message}"
+        )
 
         poisoned = _stored(engine, "acc_bid_poisoned")
         occupant = _stored(engine, "acc_bid_occupant")
@@ -248,6 +261,9 @@ class TestTheMigrationRefusesAmbiguity:
             run_alembic_upgrade(db_url, _REVISION)
 
         message = str(excinfo.value)
+        assert "acc_bid_unknown" in message, f"an unparseable row must be named, not merely counted: {message}"
+        assert unknown in message, f"the operator needs the value that was not understood: {message}"
+        assert "1 row(s)" in message, f"the headline must count the blocking rows, not print a placeholder: {message}"
 
         row = _stored(engine, "acc_bid_unknown")
         assert (row.brand_id, row.name) == (unknown, _POISONED_NAME), (
