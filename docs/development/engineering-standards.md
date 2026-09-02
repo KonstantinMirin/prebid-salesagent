@@ -252,17 +252,20 @@ claims a thoroughness that never executes.
   reason stated at the scenario.
 - **Setup and dispatch go through the harness.** Given steps use env
   methods and factories; `dispatch_request` performs the dispatch and is
-  the only writer of the context keys it stores. Steps never read or write
-  those keys themselves — the accessors in
-  `tests/bdd/steps/_outcome_helpers.py` are the interface:
+  the only writer of the context keys it stores. Reach what it produced
+  through the accessors in `tests/bdd/steps/_outcome_helpers.py`:
   `require_payload` and `wire_field` for values, `assert_wire_rejection`
-  for refusals. They fail loudly on a missing or errored dispatch, which
-  indexing the context does not, and they keep the step readable as the
-  behavior it grades rather than as context plumbing.
-  `test_architecture_bdd_wire_discipline.py` catches the two worst forms:
-  building an error test-side, and asserting on the reconstructed
-  exception without reading the wire. Steps that index the context
-  directly are legacy; write new ones through the accessors.
+  for refusals. They fail loudly when the dispatch is missing or errored,
+  so a step cannot quietly assert nothing, and they read as the behavior
+  being graded rather than as plumbing.
+
+  What makes a step wrong is not which context key it names but what it
+  does with it. Building the error test-side fabricates a result the
+  transport never produced. Asserting on the reconstructed exception alone
+  grades the reconstruction rather than the wire.
+  `test_architecture_bdd_wire_discipline.py` catches both.
+  `ctx["result"].assert_wire_error(...)` reads the real wire and is
+  correct; the accessor is preferred because it is guarded.
 - **Cite schema divergence.** Generated `BR-*.feature` files can be
   edited locally (generation merges semantically); where a scenario is
   corrected against the pinned schema, add a comment citing the exact

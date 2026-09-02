@@ -286,7 +286,7 @@ instead:
 The test for an assertion that cannot fail: if the When step were deleted,
 could the Then still compute its actual value? Only the `TransportResult`
 returned by `call_via` — reached in BDD through `require_payload(ctx)` and
-`wire_field(ctx, ...)`, never by indexing the context — came out of the run. Set a distinctive value in the Given (`impressions=5000`, not a factory
+`wire_field(ctx, ...)` — came out of the run. Set a distinctive value in the Given (`impressions=5000`, not a factory
 default) and read it back off the result — then the assertion can only pass
 if production carried the value through.
 
