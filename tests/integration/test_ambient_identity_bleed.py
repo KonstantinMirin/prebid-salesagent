@@ -28,38 +28,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastmcp.server.http import set_http_request
-from sqlalchemy.orm import Session as SASession
 from starlette.requests import Request as StarletteRequest
 
-from src.core.database.database_session import get_engine
 from src.core.schemas import GetProductsResponse
 from src.core.schemas.account import ListAccountsResponse, SyncAccountsResponse
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
-
-
-@pytest.fixture
-def bound_session(integration_db):
-    """A session bound to the test DB with all factories registered to it.
-
-    Mirrors tests/integration/test_delivery_simulation_config.py's
-    `bound_session` fixture — lets factories run outside the full
-    IntegrationEnv harness for a test that only needs a bare tenant row.
-    """
-    from tests.factories import ALL_FACTORIES
-
-    engine = get_engine()
-    session = SASession(bind=engine)
-    previous = [f._meta.sqlalchemy_session for f in ALL_FACTORIES]
-    for f in ALL_FACTORIES:
-        f._meta.sqlalchemy_session = session
-    try:
-        yield session
-    finally:
-        for f, prev in zip(ALL_FACTORIES, previous, strict=True):
-            f._meta.sqlalchemy_session = prev
-        session.rollback()
-        session.close()
 
 
 def _localhost_request() -> StarletteRequest:
@@ -87,7 +61,7 @@ def _localhost_request() -> StarletteRequest:
 class TestAmbientContextIdentityBleed:
     """Covers salesagent-tb8c: explicit identity=None must stay anonymous."""
 
-    async def test_explicit_none_identity_survives_ambient_http_context(self, bound_session):
+    async def test_explicit_none_identity_survives_ambient_http_context(self, bound_factory_session):
         """An explicit identity=None must NOT be upgraded to a real tenant
         just because an ambient FastMCP HTTP request is active.
 
@@ -109,7 +83,7 @@ class TestAmbientContextIdentityBleed:
         from tests.factories import TenantFactory
 
         TenantFactory(tenant_id="default_tenant", subdomain="default")
-        bound_session.commit()
+        bound_factory_session.commit()
 
         with (
             patch(
@@ -163,7 +137,7 @@ class TestAmbientContextIdentityBleed:
     )
     async def test_explicit_none_identity_survives_ambient_http_context_parametrized(
         self,
-        bound_session,
+        bound_factory_session,
         impl_patch_target,
         impl_return,
         wrapper_is_async,
@@ -182,7 +156,7 @@ class TestAmbientContextIdentityBleed:
         from tests.factories import TenantFactory
 
         TenantFactory(tenant_id="default_tenant", subdomain="default")
-        bound_session.commit()
+        bound_factory_session.commit()
 
         impl_new_callable = AsyncMock if wrapper_is_async else MagicMock
         with (

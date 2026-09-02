@@ -376,156 +376,143 @@ def test_ruff_complexity_thresholds_pinned_to_ruff_defaults() -> None:
     assert lint["pylint"]["max-statements"] == 50
 
 
+# ---------------------------------------------------------------------------
+# The anti-raise probe's semantics, re-expressed at its new home
+# ---------------------------------------------------------------------------
+#
+# These obligations were previously pinned per hook, against
+# check_type_ignore_count.raise_probe_value / check_ruff_complexity_count.
+# check_baseline_not_raised — four near-copies of one rule. The rule is
+# unchanged; it now lives once, in run_count_ratchet, so the two hooks that
+# never had a copy are covered by the same tests.
+
+
 @pytest.mark.parametrize(
-    ("baseline_count", "current_count", "update_baseline", "expected"),
+    ("baseline", "current", "update_baseline", "ceiling", "expected_rc"),
     [
-        (None, 10, False, 10),
-        (5, 10, True, 10),
-        (8, 5, False, 5),
-        (3, 9, False, 3),
+        # create (no baseline file) probes `current`
+        (None, 10, False, 9, 1),
+        (None, 10, False, 10, 0),
+        # --update-baseline probes `current`
+        (5, 10, True, 9, 1),
+        (5, 10, True, 10, 0),
+        # normal compare probes min(baseline, current): an auto-lower must not
+        # mask a committed raise, and a count above a legal baseline is the
+        # compare's business, not the probe's
+        (8, 5, False, 5, 0),
+        (12, 12, False, 11, 1),
     ],
 )
-def test_raise_probe_value_cases(
-    baseline_count: int | None,
-    current_count: int,
+def test_ceiling_probe_value_per_write_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    baseline: int | None,
+    current: int,
     update_baseline: bool,
-    expected: int,
+    ceiling: int,
+    expected_rc: int,
 ) -> None:
-    assert (
-        check_type_ignore_count.raise_probe_value(
-            baseline_count=baseline_count,
-            current_count=current_count,
-            update_baseline=update_baseline,
-        )
-        == expected
+    monkeypatch.setattr(count_ratchet, "resolve_upstream_ceiling", lambda **_k: {"a": ceiling})
+    writes: list[dict[str, int]] = []
+
+    rc = count_ratchet.run_count_ratchet(
+        keys=("a",),
+        current={"a": current},
+        baseline_file=tmp_path / "counts.json",
+        update_baseline=update_baseline,
+        read_baseline=lambda _p: None if baseline is None else {"a": baseline},
+        write_baseline=lambda _p, counts: writes.append(dict(counts)),
+        increase_header="up",
+        increase_hints=(),
+        repo_root=tmp_path,
+        out=io.StringIO(),
+        err=io.StringIO(),
     )
 
-
-def test_raise_probe_failure_does_not_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Anti-tamper: failed origin/main probe returns 1 before any baseline write."""
-    repo = tmp_path
-    (repo / "src").mkdir()
-    baseline = repo / ".type-ignore-baseline"
-    baseline.write_text("4\n", encoding="utf-8")
-    writes: list[object] = []
-
-    monkeypatch.setattr(check_type_ignore_count, "count_type_ignores", lambda _p: 7)
-    monkeypatch.setattr(
-        check_type_ignore_count,
-        "check_baseline_not_raised",
-        lambda _repo, probe: writes.append(("probe", probe)) or 1,
-    )
-    monkeypatch.setattr(
-        check_type_ignore_count,
-        "resolve_ratchet_paths",
-        lambda **_kwargs: (repo, repo / "src", baseline),
-    )
-    monkeypatch.setattr(
-        check_type_ignore_count,
-        "parse_ratchet_args",
-        lambda _description: type("Args", (), {"update_baseline": True})(),
-    )
-    monkeypatch.setattr(
-        check_type_ignore_count,
-        "run_count_ratchet",
-        lambda **_kwargs: writes.append("ratchet-ran") or 0,
-    )
-
-    assert check_type_ignore_count.main() == 1
-    assert writes == [("probe", 7)]
+    assert rc == expected_rc
+    if expected_rc == 1:
+        assert writes == []
 
 
-def test_ruff_raise_probe_failure_does_not_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    repo = tmp_path
-    (repo / "src").mkdir()
-    rules = check_ruff_complexity_count.RULES
-    baseline_counts = dict.fromkeys(rules, 1)
-    baseline = repo / ".ruff-complexity-baseline"
-    baseline.write_text(json.dumps(baseline_counts) + "\n", encoding="utf-8")
-    writes: list[object] = []
+def test_compare_failure_is_not_reported_as_a_ceiling_breach(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """min(baseline, current) keeps the two compares distinct.
 
-    monkeypatch.setattr(
-        check_ruff_complexity_count,
-        "count_rule_violations",
-        lambda *_a, **_k: {**baseline_counts, "C901": 2},
-    )
-    monkeypatch.setattr(
-        check_ruff_complexity_count,
-        "check_baseline_not_raised",
-        lambda _repo, probe: writes.append(("probe", probe)) or 1,
-    )
-    monkeypatch.setattr(
-        check_ruff_complexity_count,
-        "resolve_ratchet_paths",
-        lambda **_kwargs: (repo, repo / "src", baseline),
-    )
-    monkeypatch.setattr(
-        check_ruff_complexity_count,
-        "parse_ratchet_args",
-        lambda _description: type("Args", (), {"update_baseline": False})(),
-    )
-    monkeypatch.setattr(
-        check_ruff_complexity_count,
-        "run_count_ratchet",
-        lambda **_kwargs: writes.append("ratchet-ran") or 0,
-    )
-
-    assert check_ruff_complexity_count.main() == 1
-    assert writes == [("probe", baseline_counts)]
-
-
-def _fake_git_show(payload: str | None):
-    """Stand in for ``git show origin/main:<baseline>``; None means 'not on main'."""
-
-    def runner(*_args, **_kwargs) -> subprocess.CompletedProcess[str]:
-        if payload is None:
-            return _cp(returncode=128, stderr="fatal: path does not exist")
-        return _cp(stdout=payload)
-
-    return runner
-
-
-def test_read_main_baseline_omits_rules_main_never_tracked(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A rule absent from main's file is OMITTED, not read as 0.
-
-    Reading it as 0 would make every newly-ratcheted rule unlandable: its true
-    count is the debt that already exists (F841 landed at 38), so the very change
-    that starts tracking it would trip the raise guard against a ceiling main
-    never had.
+    baseline=3 / current=9 against a ceiling of 3: the committed baseline is
+    legal, so the probe must pass and the run must fail on the ordinary
+    count-vs-baseline increase — reporting it as a raised baseline would send
+    the author to edit the wrong thing.
     """
-    monkeypatch.setattr(
-        check_ruff_complexity_count.subprocess,
-        "run",
-        _fake_git_show(json.dumps({"C901": 185, "PLR0912": 134, "PLR0915": 108})),
+    monkeypatch.setattr(count_ratchet, "resolve_upstream_ceiling", lambda **_k: {"a": 3})
+    err = io.StringIO()
+
+    rc = count_ratchet.run_count_ratchet(
+        keys=("a",),
+        current={"a": 9},
+        baseline_file=tmp_path / "counts.json",
+        update_baseline=False,
+        read_baseline=lambda _p: {"a": 3},
+        write_baseline=lambda _p, _counts: None,
+        increase_header="count increased!",
+        increase_hints=(),
+        repo_root=tmp_path,
+        out=io.StringIO(),
+        err=err,
     )
 
-    main_baseline = check_ruff_complexity_count.read_main_baseline(Path("/repo"))
+    assert rc == 1
+    assert "count increased!" in err.getvalue()
+    assert "raised above upstream" not in err.getvalue()
 
-    assert main_baseline == {"C901": 185, "PLR0912": 134, "PLR0915": 108}
-    assert "F841" not in main_baseline
 
+def test_ceiling_applies_per_key_independently(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A key upstream never tracked stays landable; a tracked key stays guarded.
 
-def test_untracked_rule_is_soft_but_tracked_rule_still_guarded(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The soft path applies per rule, and does not weaken the rules main tracks."""
+    Reading an untracked key as 0 would make every newly-ratcheted key
+    unlandable — its true count IS the pre-existing debt, which is why F841
+    could join the ruff baseline at 39. So an untracked key falls through to
+    the next evidence source rather than defaulting.
+    """
+    tracked = json.dumps({"C901": 185, "PLR0912": 134, "PLR0915": 108})
     monkeypatch.setattr(
-        check_ruff_complexity_count.subprocess,
+        count_ratchet.subprocess,
         "run",
-        _fake_git_show(json.dumps({"C901": 185, "PLR0912": 134, "PLR0915": 108})),
+        _git_stub({("show", f"{count_ratchet.MAIN_REF}:.ruff-complexity-baseline"): _cp(stdout=tracked)}),
     )
 
+    ceiling = count_ratchet.resolve_upstream_ceiling(
+        repo_root=Path("/repo"),
+        baseline_name=".ruff-complexity-baseline",
+        keys=("C901", "PLR0912", "PLR0915", "F841"),
+        parse=json.loads,
+        count_upstream=lambda _tree: {"F841": 38},
+    )
+
+    assert ceiling == {"C901": 185, "PLR0912": 134, "PLR0915": 108}
+    err = io.StringIO()
     landing = {"C901": 185, "PLR0912": 134, "PLR0915": 108, "F841": 38}
-    assert check_ruff_complexity_count.check_baseline_not_raised(Path("/repo"), landing) == 0
-
+    assert (
+        count_ratchet.check_against_ceiling(
+            keys=tuple(landing),
+            probe=landing,
+            ceiling=ceiling,
+            baseline_name=".ruff-complexity-baseline",
+            format_key=str,
+            err=err,
+        )
+        == 0
+    )
     raising = {**landing, "C901": 186}
-    assert check_ruff_complexity_count.check_baseline_not_raised(Path("/repo"), raising) == 1
-
-
-def test_main_baseline_absent_file_is_soft(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(check_ruff_complexity_count.subprocess, "run", _fake_git_show(None))
-
-    unbounded = dict.fromkeys(check_ruff_complexity_count.RULES, 999)
-    assert check_ruff_complexity_count.read_main_baseline(Path("/repo")) is None
-    assert check_ruff_complexity_count.check_baseline_not_raised(Path("/repo"), unbounded) == 0
+    assert (
+        count_ratchet.check_against_ceiling(
+            keys=tuple(raising),
+            probe=raising,
+            ceiling=ceiling,
+            baseline_name=".ruff-complexity-baseline",
+            format_key=str,
+            err=io.StringIO(),
+        )
+        == 1
+    )
 
 
 def test_ruff_baseline_file_tracks_every_ratcheted_rule() -> None:
@@ -537,3 +524,245 @@ def test_ruff_baseline_file_tracks_every_ratcheted_rule() -> None:
     committed = json.loads((_REPO / ".ruff-complexity-baseline").read_text(encoding="utf-8"))
 
     assert set(committed) == set(check_ruff_complexity_count.RULES)
+
+
+# ---------------------------------------------------------------------------
+# Upstream ceiling: the anti-raise probe lives in the DRIVER, not per hook
+# ---------------------------------------------------------------------------
+#
+# Five ratchets on this branch moved the wrong way, and every one of them was
+# admitted by the same shape: the ratchet compared `current` against a baseline
+# file that the same commit could edit, and the anti-raise probe that would have
+# caught the edit was an OPT-IN each hook re-implemented (or, for
+# check_code_duplication / check_mypy_untyped_defs_count, simply never did).
+# `.mypy-untyped-defs-baseline` went 227 -> 237 through exactly that gap.
+#
+# The tests below pin the mechanism that makes the growth unrepresentable rather
+# than merely noticed: `run_count_ratchet` resolves an upstream ceiling itself,
+# on every path (create, --update-baseline, compare, auto-lower).
+
+
+def _git_stub(table: dict[tuple[str, ...], subprocess.CompletedProcess[str]]):
+    """Stub ``subprocess.run`` keyed on the git argv tail.
+
+    ``rev-parse --verify`` of origin/main succeeds by default — every test here
+    is about which baseline the ceiling comes from, not about a repo that has
+    no main. Tables override ``show`` / ``merge-base``.
+    """
+
+    def runner(cmd, *_args, **_kwargs) -> subprocess.CompletedProcess[str]:
+        tail = tuple(cmd[1:])
+        if tail in table:
+            return table[tail]
+        if tail[:1] == ("rev-parse",):
+            return _cp(stdout="cafe1234\n")
+        return _cp(returncode=128, stderr="fatal: not found")
+
+    return runner
+
+
+def test_upstream_ceiling_uses_origin_main_when_no_merge_base_resolves(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CI fetches main with --depth=1, so origin/main is often the only ref."""
+    monkeypatch.setattr(
+        count_ratchet.subprocess,
+        "run",
+        _git_stub({("show", "origin/main:.b"): _cp(stdout='{"a": 5}')}),
+    )
+
+    ceiling = count_ratchet.resolve_upstream_ceiling(
+        repo_root=Path("/repo"), baseline_name=".b", keys=("a",), parse=json.loads
+    )
+
+    assert ceiling == {"a": 5}
+
+
+def test_upstream_ceiling_prefers_the_merge_base_over_origin_main(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A branch is graded against what it INHERITED, not against a moved-on main.
+
+    main paying a count down after this branch departed is main's progress, not
+    the branch's regression; grading the branch's untouched baseline against the
+    lower number reports a raise the author cannot act on, which is how
+    --update-baseline becomes reflex.
+    """
+    monkeypatch.setattr(
+        count_ratchet.subprocess,
+        "run",
+        _git_stub(
+            {
+                ("merge-base", "HEAD", "origin/main"): _cp(stdout="deadbeef\n"),
+                ("show", "deadbeef:.b"): _cp(stdout='{"a": 182}'),
+                ("show", "origin/main:.b"): _cp(stdout='{"a": 177}'),
+            }
+        ),
+    )
+
+    ceiling = count_ratchet.resolve_upstream_ceiling(
+        repo_root=Path("/repo"), baseline_name=".b", keys=("a",), parse=json.loads
+    )
+
+    assert ceiling == {"a": 182}
+
+
+def test_origin_main_answers_for_a_key_the_merge_base_omits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The merge base leads, but does not shadow keys it has no value for."""
+    monkeypatch.setattr(
+        count_ratchet.subprocess,
+        "run",
+        _git_stub(
+            {
+                ("merge-base", "HEAD", "origin/main"): _cp(stdout="deadbeef\n"),
+                ("show", "deadbeef:.b"): _cp(stdout='{"a": 5}'),
+                ("show", "origin/main:.b"): _cp(stdout='{"a": 1, "b": 9}'),
+            }
+        ),
+    )
+
+    ceiling = count_ratchet.resolve_upstream_ceiling(
+        repo_root=Path("/repo"), baseline_name=".b", keys=("a", "b"), parse=json.loads
+    )
+
+    assert ceiling == {"a": 5, "b": 9}
+
+
+def test_upstream_ceiling_counts_upstream_source_for_untracked_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A key no upstream baseline carries gets its ceiling from upstream SOURCE.
+
+    This is what keeps a newly-ratcheted key landable (its true count is the
+    pre-existing debt) WITHOUT handing it an unbounded seed.
+    """
+    monkeypatch.setattr(
+        count_ratchet.subprocess,
+        "run",
+        _git_stub({("show", "origin/main:.b"): _cp(stdout='{"a": 5}')}),
+    )
+    monkeypatch.setattr(count_ratchet, "_extract_upstream_tree", lambda *_a, **_k: Path("/upstream"))
+
+    ceiling = count_ratchet.resolve_upstream_ceiling(
+        repo_root=Path("/repo"),
+        baseline_name=".b",
+        keys=("a", "b"),
+        parse=json.loads,
+        count_upstream=lambda root: {"a": 99, "b": 7} if root == Path("/upstream") else {},
+    )
+
+    assert ceiling == {"a": 5, "b": 7}
+
+
+def test_upstream_ceiling_omits_key_with_no_upstream_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(count_ratchet.subprocess, "run", _git_stub({}))
+
+    assert (
+        count_ratchet.resolve_upstream_ceiling(
+            repo_root=Path("/repo"), baseline_name=".b", keys=("a",), parse=json.loads
+        )
+        == {}
+    )
+
+
+def test_run_count_ratchet_rejects_baseline_above_ceiling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A committed baseline above upstream fails, and writes nothing."""
+    baseline = tmp_path / "counts.json"
+    baseline.write_text(json.dumps({"a": 237}), encoding="utf-8")
+    writes: list[dict[str, int]] = []
+    out, err = io.StringIO(), io.StringIO()
+    monkeypatch.setattr(count_ratchet, "resolve_upstream_ceiling", lambda **_k: {"a": 227})
+
+    rc = count_ratchet.run_count_ratchet(
+        keys=("a",),
+        current={"a": 237},
+        baseline_file=baseline,
+        update_baseline=False,
+        read_baseline=lambda p: json.loads(p.read_text()),
+        write_baseline=lambda _p, counts: writes.append(dict(counts)),
+        increase_header="up",
+        increase_hints=(),
+        repo_root=tmp_path,
+        out=out,
+        err=err,
+    )
+
+    assert rc == 1
+    assert writes == []
+    assert "227" in err.getvalue()
+
+
+def test_run_count_ratchet_ceiling_probes_the_update_baseline_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--update-baseline` cannot launder a raise: it probes the post-write value."""
+    baseline = tmp_path / "counts.json"
+    baseline.write_text(json.dumps({"a": 100}), encoding="utf-8")
+    writes: list[dict[str, int]] = []
+    monkeypatch.setattr(count_ratchet, "resolve_upstream_ceiling", lambda **_k: {"a": 100})
+
+    rc = count_ratchet.run_count_ratchet(
+        keys=("a",),
+        current={"a": 140},
+        baseline_file=baseline,
+        update_baseline=True,
+        read_baseline=lambda p: json.loads(p.read_text()),
+        write_baseline=lambda _p, counts: writes.append(dict(counts)),
+        increase_header="up",
+        increase_hints=(),
+        repo_root=tmp_path,
+        out=io.StringIO(),
+        err=io.StringIO(),
+    )
+
+    assert rc == 1
+    assert writes == []
+
+
+def test_run_count_ratchet_ceiling_probes_the_missing_baseline_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deleting the baseline file cannot launder a raise either.
+
+    Without this, `baseline is None -> create at current, return 0` made every
+    ratchet in the repo optional: `rm .type-ignore-baseline` accepted any count.
+    """
+    writes: list[dict[str, int]] = []
+    monkeypatch.setattr(count_ratchet, "resolve_upstream_ceiling", lambda **_k: {"a": 10})
+
+    rc = count_ratchet.run_count_ratchet(
+        keys=("a",),
+        current={"a": 11},
+        baseline_file=tmp_path / "absent.json",
+        update_baseline=False,
+        read_baseline=lambda _p: None,
+        write_baseline=lambda _p, counts: writes.append(dict(counts)),
+        increase_header="up",
+        increase_hints=(),
+        repo_root=tmp_path,
+        out=io.StringIO(),
+        err=io.StringIO(),
+    )
+
+    assert rc == 1
+    assert writes == []
+
+
+def test_run_count_ratchet_auto_lower_still_allowed_under_ceiling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    baseline = tmp_path / "counts.json"
+    baseline.write_text(json.dumps({"a": 20}), encoding="utf-8")
+    writes: list[dict[str, int]] = []
+    monkeypatch.setattr(count_ratchet, "resolve_upstream_ceiling", lambda **_k: {"a": 20})
+
+    rc = count_ratchet.run_count_ratchet(
+        keys=("a",),
+        current={"a": 12},
+        baseline_file=baseline,
+        update_baseline=False,
+        read_baseline=lambda p: json.loads(p.read_text()),
+        write_baseline=lambda _p, counts: writes.append(dict(counts)),
+        increase_header="up",
+        increase_hints=(),
+        repo_root=tmp_path,
+        out=io.StringIO(),
+        err=io.StringIO(),
+    )
+
+    assert rc == 0
+    assert writes == [{"a": 12}]

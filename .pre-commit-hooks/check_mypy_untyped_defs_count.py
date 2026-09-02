@@ -70,6 +70,12 @@ def main() -> int:
         current={KEY: count_untyped_defs_errors(repo_root)},
         baseline_file=baseline_file,
         update_baseline=args.update_baseline,
+        repo_root=repo_root,
+        parse_upstream=lambda text: {KEY: int(text.strip())},
+        # No count_upstream: re-running mypy over an extracted upstream tree
+        # costs a full type-check per hook invocation. The upstream baseline
+        # FILE is the ceiling; it exists on main, which is the case that
+        # matters here (this baseline was committed at 237 over main's 227).
         read_baseline=read_baseline,
         write_baseline=write_baseline,
         increase_header="mypy --check-untyped-defs error count increased! (ADR-009 / #1611)",

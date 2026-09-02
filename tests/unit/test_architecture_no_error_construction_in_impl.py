@@ -12,10 +12,12 @@ sweep lands. New code is never added to the cap — the only way to add a new fi
 raise a cap is to land a fix that exceeds it intentionally, which is a code-
 review red flag.
 
-Capped files may carry a ``# FIXME(salesagent-pattern-a): migrate to typed
+Capped files may carry a ``# FIXME(#<gh-issue>): migrate to typed
 AdCPSalesAgentError raise`` comment at every Error(code=...) site so reviewers can grep
 their way to the cleanup work. The comments are aspirational; the cap dict
 + ratchet (`assert_caps_only_shrink`) is the actual enforcement mechanism.
+The citation is a GitHub issue, never a local beads id (CLAUDE.md "Rules for
+guards"); check_fixme_citation_count.py ratchets that spelling to zero in src/.
 
 Spec: AdCP 3.0.0 (error-handling.mdx) — two-layer envelope is normative.
 """

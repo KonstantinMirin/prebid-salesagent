@@ -56,7 +56,7 @@ def count_duplications(directory: str) -> int:
 
 def main() -> int:
     args = parse_ratchet_args("Check that code duplication count doesn't increase")
-    _repo_root, _src_path, baseline_file = resolve_ratchet_paths(baseline_name=BASELINE_FILE)
+    repo_root, _src_path, baseline_file = resolve_ratchet_paths(baseline_name=BASELINE_FILE)
     read_baseline, write_baseline = json_baseline_io(SCOPES)
 
     print("Scanning for code duplication (pylint R0801)...")
@@ -71,6 +71,10 @@ def main() -> int:
         current=current,
         baseline_file=baseline_file,
         update_baseline=args.update_baseline,
+        repo_root=repo_root,
+        # No count_upstream: a pylint R0801 pass over an extracted upstream
+        # tree doubles this hook's runtime. The upstream baseline FILE is the
+        # ceiling — which is a ceiling this hook had none of until now.
         read_baseline=read_baseline,
         write_baseline=write_baseline,
         increase_header="Code duplication increased! DRY is a non-negotiable invariant.",

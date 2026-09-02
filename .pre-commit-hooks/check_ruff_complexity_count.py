@@ -18,14 +18,12 @@ ruff count method + origin/main raise guard only.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 from count_ratchet import (
     json_baseline_io,
     parse_ratchet_args,
-    read_json_baseline,
     resolve_ratchet_paths,
     run_count_ratchet,
     run_counting_tool,
@@ -71,103 +69,21 @@ def count_rule_violations(repo_root: Path, src_path: Path) -> dict[str, int]:
     return counts
 
 
-def read_main_baseline(repo_root: Path) -> dict[str, int] | None:
-    """Load origin/main's baseline, or None if the file is not on main yet.
-
-    Rules ABSENT from main's file are OMITTED rather than read as 0. A rule main
-    never tracked has no ceiling to be raised against, so the first change that
-    adds it is soft — the same rule the ``None`` return applies one level up when
-    the whole file is new. Reading a missing key as 0 would instead make every
-    newly-ratcheted rule unlandable, since its true count is whatever debt already
-    exists (F841 landed at 38).
-
-    This is not a reset loophole: dropping a key from the local baseline also means
-    dropping it from RULES and from the pyproject ratchet bucket, which
-    ``test_ruff_complexity_rules_match_pyproject_ratchet_bucket`` pins equal — a
-    visible, reviewable change, not a silent one.
-    """
-    result = subprocess.run(
-        ["git", "show", f"{MAIN_REF}:{BASELINE_FILE}"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        # First land: file does not exist on main yet — soft until after merge.
-        return None
-    try:
-        data = json.loads(result.stdout)
-        if not isinstance(data, dict):
-            raise ValueError(f"baseline must be a JSON object, got {type(data).__name__}")
-        return {key: int(data[key]) for key in RULES if key in data}
-    except (ValueError, TypeError) as e:
-        print(f"ERROR: {MAIN_REF}:{BASELINE_FILE} is not a valid JSON object: {e}", file=sys.stderr)
-        raise SystemExit(1) from e
-
-
-def raise_probe_counts(
-    *,
-    baseline: dict[str, int] | None,
-    current: dict[str, int],
-    update_baseline: bool,
-) -> dict[str, int]:
-    """Per-key values probed against origin/main before any baseline write."""
-    if baseline is None or update_baseline:
-        return dict(current)
-    return {key: min(baseline.get(key, 0), current[key]) for key in RULES}
-
-
-def check_baseline_not_raised(repo_root: Path, local: dict[str, int]) -> int:
-    """Fail when any local baseline key exceeds origin/main's (once main has the file)."""
-    main_baseline = read_main_baseline(repo_root)
-    if main_baseline is None:
-        return 0
-    raised = False
-    for key in RULES:
-        if key not in main_baseline:
-            # Not tracked on main yet — nothing to raise against (see read_main_baseline).
-            continue
-        if local[key] > main_baseline[key]:
-            if not raised:
-                print("Baseline value raised vs origin/main!", file=sys.stderr)
-                raised = True
-            print(
-                f"  {key}: {MAIN_REF}={main_baseline[key]} local={local[key]} (+{local[key] - main_baseline[key]})",
-                file=sys.stderr,
-            )
-    if raised:
-        print("", file=sys.stderr)
-        print("The ruff baseline may only shrink. Fix the new violations instead of raising.", file=sys.stderr)
-        return 1
-    return 0
-
-
 def main() -> int:
     args = parse_ratchet_args(f"Check that ruff {'/'.join(RULES)} counts do not increase")
     repo_root, src_path, baseline_file = resolve_ratchet_paths(baseline_name=BASELINE_FILE)
     read_baseline, write_baseline = json_baseline_io(RULES)
 
-    current = count_rule_violations(repo_root, src_path)
-    baseline = read_json_baseline(baseline_file, RULES)
-
-    if (
-        check_baseline_not_raised(
-            repo_root,
-            raise_probe_counts(
-                baseline=baseline,
-                current=current,
-                update_baseline=args.update_baseline,
-            ),
-        )
-        != 0
-    ):
-        return 1
-
     return run_count_ratchet(
         keys=RULES,
-        current=current,
+        current=count_rule_violations(repo_root, src_path),
         baseline_file=baseline_file,
         update_baseline=args.update_baseline,
+        repo_root=repo_root,
+        # Upstream SOURCE under TODAY's thresholds: the ceiling must answer
+        # "how many did the merge base have under the rules we grade by now",
+        # otherwise loosening a threshold in pyproject would silently raise it.
+        count_upstream=lambda tree: count_rule_violations(repo_root, tree / SRC_DIR),
         read_baseline=read_baseline,
         write_baseline=write_baseline,
         increase_header="Ruff ratchet count increased! (ADR-009 / #1610)",

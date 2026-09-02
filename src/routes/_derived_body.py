@@ -47,6 +47,43 @@ class DerivedBodyEnvelope(BaseModel):
     adcp_version: str | None = None
 
 
+def _stamp_derivation(
+    model: type[BaseModel],
+    *,
+    dto: type[BaseModel],
+    impl: Callable[..., Any],
+    extra_fields: frozenset[str],
+    path_fields: frozenset[str],
+) -> None:
+    """Record on the generated class HOW it was derived, for the guards to grade.
+
+    - ``__derived_from_dto__`` marks the body as DERIVED. The completeness guard asserts
+      hand-written bodies do not LAG their raw wrapper; a derived body deliberately
+      declares LESS -- it drops the wrapper's non-spec parameters, which is the point --
+      so it is graded by the intersection rule instead.
+    - ``__derived_extra_fields__`` / ``__derived_path_fields__`` are the two DELIBERATE
+      departures from "DTO fields INTERSECT impl parameters", recorded so the guard can
+      grade them rather than being widened to tolerate any difference. An undeclared
+      extra field, or a silently dropped one, still fails.
+    - ``__derived_callee__`` is the callee the field set was derived AGAINST, so the guard
+      reads the pairing off the body instead of keeping a hand-maintained {Body: callee}
+      list -- which goes stale the moment a wrapper's shape changes, exactly what happened
+      when the wrappers moved from flat parameters to taking the built request.
+
+    Stamped through one loop rather than four attribute assignments: mypy cannot know a
+    ``create_model()`` class carries these names, and the four-assignment spelling needed
+    four ``# type: ignore[attr-defined]`` -- four claims to audit, and four sites for the
+    next mark to be added to inconsistently, instead of one function that owns the record.
+    """
+    for attribute, value in (
+        ("__derived_from_dto__", (dto, impl)),
+        ("__derived_extra_fields__", extra_fields),
+        ("__derived_path_fields__", path_fields),
+        ("__derived_callee__", impl),
+    ):
+        setattr(model, attribute, value)
+
+
 def derived_body_model(
     name: str,
     dto: type[BaseModel],
@@ -95,21 +132,13 @@ def derived_body_model(
     # splatted as keywords, so the precise dict type never matches one. The values are
     # already the (annotation, default) pairs it documents.
     model = create_model(name, __base__=SalesAgentBaseModel, **cast(dict[str, Any], fields))
-    # Marks the body as DERIVED. The completeness guard asserts hand-written bodies do not
-    # LAG their raw wrapper; a derived body deliberately declares LESS -- it drops the
-    # wrapper's non-spec parameters, which is the point -- so it is graded by the
-    # intersection rule instead.
-    model.__derived_from_dto__ = (dto, impl)  # type: ignore[attr-defined]
-    # The two DELIBERATE departures from "DTO fields INTERSECT impl parameters", recorded on
-    # the class so the completeness guard can grade them instead of being widened to tolerate
-    # any difference. An undeclared extra field, or a silently dropped one, still fails.
-    model.__derived_extra_fields__ = frozenset(extra_fields or ())  # type: ignore[attr-defined]
-    model.__derived_path_fields__ = frozenset(path_fields)  # type: ignore[attr-defined]
-    # The callee the field set was derived AGAINST. Recorded so the completeness guard can
-    # read it off the body instead of keeping a hand-maintained {Body: callee} list, which
-    # goes stale the moment a wrapper's shape changes -- exactly what happened when the
-    # wrappers moved from flat parameters to taking the built request.
-    model.__derived_callee__ = impl  # type: ignore[attr-defined]
+    _stamp_derivation(
+        model,
+        dto=dto,
+        impl=impl,
+        extra_fields=frozenset(extra_fields or ()),
+        path_fields=frozenset(path_fields),
+    )
     return model
 
 

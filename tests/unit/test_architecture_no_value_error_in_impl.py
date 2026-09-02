@@ -23,8 +23,11 @@ import pytest
 #
 #   1. **Migration targets** — boundary-facing raises that should become typed
 #      ``AdCPSalesAgentError`` subclasses. Each site carries a
-#      ``# FIXME(salesagent-pattern-a): migrate to typed AdCPSalesAgentError raise`` comment so reviewers
-#      can grep to the cleanup work. PR 2 sub-batches drain these.
+#      ``# FIXME(#<gh-issue>): migrate to typed AdCPSalesAgentError raise``
+#      comment so reviewers can grep to the cleanup work. PR 2 sub-batches
+#      drain these. The citation is a GitHub issue, never a local beads id —
+#      beads ids do not resolve for outside contributors (CLAUDE.md "Rules for
+#      guards"), and check_fixme_citation_count.py ratchets the spelling.
 #
 #   2. **Internal contracts** — ``ValueError`` raised inside helper functions
 #      to enforce programmer-error invariants (Pydantic validators, factory

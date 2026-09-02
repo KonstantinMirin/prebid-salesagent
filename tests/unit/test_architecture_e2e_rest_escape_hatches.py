@@ -98,7 +98,6 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     "is_e2e_rest and any((t.startswith('T-UC-019') for t in marker_names))",
     "is_e2e_rest and marker_names & _UC004_E2E_WEBHOOK_INTERNAL_TAGS",
     "is_e2e_rest and marker_names & _UC005_E2E_FIXTURE_INJECTION_TAGS",
-    "is_e2e_rest and tag == 'T-UC-005-main'",
     "is_e2e_rest and tag in uc005_filter_e2e_untestable",
     "is_e2e_rest and tag in uc005_filter_e2e_untestable",
     "marker_names & _UC005_PARTIAL_TAGS and (not is_e2e_rest)",
@@ -298,7 +297,7 @@ def test_harness_unsupported_declarations_match_pin() -> None:
 
 def test_unsupported_declarations_never_cite_a_beads_id() -> None:
     """CLAUDE.md: a tracked gap cites a GH issue/PR number, never a local beads
-    id -- beads ids don't resolve for outside contributors (#1721 M5, R1-8).
+    id -- beads ids don't resolve for outside contributors (#1721).
 
     Checks the LIVE source, not just the pin, so a new declaration can't slip
     in with a beads citation even before EXPECTED_UNSUPPORTED_DECLARATIONS is

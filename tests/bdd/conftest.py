@@ -1571,30 +1571,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Tag-based xfail for all other scenarios
         for tag, reason in _XFAIL_TAGS.items():
             if tag in marker_names:
-                if is_e2e_rest and tag == "T-UC-005-main":
-                    # E2E_REST-only harness gap (#1721 M4 dormancy tripwire caught
-                    # this): given_registry_multi_categories builds synthetic
-                    # FormatFactory formats (audio-spot/banner/pre-roll) whose ids
-                    # aren't in the live reference catalog. In-process this is a
-                    # no-op (the registry is mocked directly) and the scenario
-                    # genuinely reaches and fails on the real production gap this
-                    # tag's blanket reason names (audio-spot lacks
-                    # asset_requirements/render_capabilities). Over e2e_rest the
-                    # Given never gets that far -- CreativeFormatsEnv's
-                    # _validate_registry_formats (already a declared/pinned
-                    # E2EUnsupportedSetup escape hatch) raises first, since the
-                    # live stack can't be told to serve arbitrary synthetic
-                    # format ids. Test-wiring, not the graded production gap.
-                    item.add_marker(
-                        pytest.mark.xfail(
-                            reason="E2E_REST harness gap: given_registry_multi_categories' synthetic "
-                            "format ids aren't in the live reference catalog, so "
-                            "CreativeFormatsEnv._validate_registry_formats rejects the Given before "
-                            "reaching the graded audio-spot asset_requirements gap — FIXME",
-                            strict=False,
-                        )
-                    )
-                    break
+                # DELETED (#1721 F14b): the e2e_rest arm of T-UC-005-main used to add a
+                # SECOND, strict=False escape hatch here. It was redundant with the first
+                # one, by its own account: over e2e_rest the Given never reaches the graded
+                # gap because CreativeFormatsEnv._validate_registry_formats raises
+                # E2EUnsupportedSetup ("the live stack can't be told to serve arbitrary
+                # synthetic format ids"), and that declaration is already pinned in
+                # EXPECTED_UNSUPPORTED_DECLARATIONS and already surfaced as xfail by the
+                # report hook above -- with its reason readable at the env method rather
+                # than buried in a conftest branch. Two mechanisms for one gap is how an
+                # escape-hatch registry grows; the weaker one goes. strict=False was the
+                # weaker one in the literal sense too: it would have swallowed an xpass, so
+                # if the live catalog ever DOES serve these ids, nothing would have said so.
                 if is_e2e_rest and tag == "T-UC-005-main-referrals":
                     # GRADUATED for e2e_rest (#1417): with a seeded tenant the
                     # live server populates creative_agents (>=DEFAULT_AGENT), so referrals
