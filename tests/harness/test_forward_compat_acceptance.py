@@ -232,6 +232,214 @@ class TestMcpForwardCompat:
 
 
 # ---------------------------------------------------------------------------
+# AdCP 3.1 read-tool idempotency envelope
+# ---------------------------------------------------------------------------
+
+#: The request envelope AdCP 3.1 extends to EVERY task, reads included. Copied from the
+#: storyboard's own sample_request so the payload we grade is the payload the compliance
+#: harness sends:
+#:   /Users/konst/projects/salesagent-sbsweep/tests/storyboard/runner/adcp-3.1.1/compliance/
+#:     universal/read-tool-idempotency.yaml
+#:   phase read_requests_accept_idempotency_key, step list_accounts_with_idempotency_key
+#:
+#: Its narrative names the mechanism, and the mechanism is the point: "Tool wrappers must
+#: pass it through their envelope normalization layer instead of rejecting it as an unknown
+#: task-specific input." account/list-accounts-request.json declares no idempotency_key, so
+#: the ONLY conformant way to tolerate it is the envelope layer -- which is
+#: RequestCompatMiddleware, and which already does it.
+READ_TOOL_3_1_ENVELOPE_LIST_ACCOUNTS = {
+    "idempotency_key": "read-tool-idem-key-0001",
+    "sandbox": True,
+    "pagination": {"max_results": 10},
+    "context": {"correlation_id": "read_tool_idempotency--list_accounts_with_key"},
+    "ext": {"adcp": {"storyboard": "read_tool_idempotency", "probe": "list_accounts"}},
+}
+
+#: Same phase, step get_products_with_idempotency_key.
+READ_TOOL_3_1_ENVELOPE_GET_PRODUCTS = {
+    "idempotency_key": "read-tool-idem-key-0002",
+    "brief": "Show available advertising products for an outdoor lifestyle campaign.",
+    "context": {"correlation_id": "read_tool_idempotency--get_products_with_key"},
+    "ext": {"adcp": {"storyboard": "read_tool_idempotency", "probe": "get_products"}},
+}
+
+
+def _list_accounts_patches():
+    """Mock _list_accounts_impl's dependencies so Client(mcp) reaches the tool body."""
+    from tests.factories.principal import PrincipalFactory
+
+    identity = PrincipalFactory.make_identity(protocol="mcp")
+
+    mock_uow = MagicMock()
+    mock_uow_instance = MagicMock()
+    mock_uow_instance.accounts = MagicMock()
+    mock_uow_instance.accounts.list_for_agent.return_value = []
+    mock_uow_instance.__enter__ = MagicMock(return_value=mock_uow_instance)
+    mock_uow_instance.__exit__ = MagicMock(return_value=False)
+    mock_uow.return_value = mock_uow_instance
+
+    return [
+        patch("src.core.mcp_auth_middleware.resolve_identity_from_context", return_value=identity),
+        patch("src.core.tools.accounts.AccountUoW", mock_uow),
+    ]
+
+
+class TestReadToolIdempotencyEnvelope:
+    """AdCP 3.1 read tools tolerate ``idempotency_key`` WITHOUT declaring it.
+
+    This grades the obligation that a declared field was standing in for. ``list_accounts``
+    carried an ``idempotency_key`` field on its request DTO, cited to this storyboard. The
+    citation was right and the mechanism was wrong: the storyboard says wrappers must pass the
+    key through the ENVELOPE NORMALIZATION LAYER "instead of rejecting it as an unknown
+    task-specific input", and declaring it on the task DTO is precisely what makes it a
+    task-specific input -- it appears in the advertised task schema, which
+    account/list-accounts-request.json does not define.
+
+    Nothing graded the real obligation, which is why declaring the field looked like a fix.
+    These tests grade it, so the field cannot come back for that reason.
+
+    MUTATION NOTE, because a careless check here reads as "the middleware does not matter":
+    the envelope layer tolerates the key by TWO independently sufficient stages, and
+    disabling either ALONE leaves these tests green. Step 2 (``strip_unknown_params``, keyed
+    on the tool's advertised properties) removes the key before dispatch; if it does not,
+    TypeAdapter rejects and step 3 (``deep_strip_to_schema`` + retry) strips and re-dispatches.
+    Disable BOTH and both tolerance cases fail with INVALID_REQUEST on /idempotency_key --
+    verified, and that is the mutation that proves what these grade.
+    """
+
+    @pytest.mark.parametrize(
+        "tool_name,payload,patches_factory,array_field",
+        [
+            ("list_accounts", READ_TOOL_3_1_ENVELOPE_LIST_ACCOUNTS, _list_accounts_patches, "accounts"),
+            ("get_products", READ_TOOL_3_1_ENVELOPE_GET_PRODUCTS, _get_products_patches, "products"),
+        ],
+        ids=["list_accounts", "get_products"],
+    )
+    def test_production_tolerates_the_envelope_and_echoes_context(
+        self, tool_name: str, payload: dict, patches_factory, array_field: str
+    ):
+        """The storyboard's step validations, run against our tool.
+
+        It grades three things, and the context echo is the one that matters most: an
+        implementation that "tolerated" the key by discarding the whole envelope would pass a
+        bare not-is_error check and fail the buyer.
+        """
+        from fastmcp import Client
+
+        from src.core.main import mcp
+
+        async def _call():
+            patches = patches_factory()
+            with patch.dict(os.environ, {"ENVIRONMENT": "production"}):
+                for p in patches:
+                    p.start()
+                try:
+                    async with Client(mcp) as client:
+                        result = await client.call_tool(tool_name, payload, raise_on_error=False)
+                        assert not result.is_error, (
+                            f"{tool_name} rejected the AdCP 3.1 read envelope. The envelope layer "
+                            f"(RequestCompatMiddleware) must strip idempotency_key rather than the "
+                            f"tool declaring it: {str(result.content)[:300]}"
+                        )
+                        structured = result.structured_content or {}
+                        assert array_field in structured, f"{tool_name} must still answer with its {array_field} array"
+                        assert structured.get("context") == payload["context"], (
+                            f"{tool_name} must echo the context object unchanged; got {structured.get('context')!r}"
+                        )
+                finally:
+                    for p in patches:
+                        p.stop()
+
+        asyncio.run(_call())
+
+    def test_the_key_is_not_advertised_as_a_task_field(self):
+        """Tolerating it must not mean declaring it.
+
+        This is the half that makes the test above non-vacuous: declaring
+        ``idempotency_key`` on ListAccountsRequest ALSO makes the call above succeed, and did,
+        for as long as the field existed. What separates the conformant implementation from
+        the non-conformant one is that the advertised task schema stays the spec's.
+        ``sync_accounts`` is the control: sync-accounts-request.json DOES declare the property,
+        because a sync mutates and a mutation genuinely needs at-most-once.
+        """
+        from src.core.main import mcp
+
+        async def _advertised(tool_name: str) -> set[str]:
+            return set((await mcp.get_tool(tool_name)).parameters.get("properties", {}))
+
+        assert "idempotency_key" not in asyncio.run(_advertised("list_accounts"))
+        assert "idempotency_key" not in asyncio.run(_advertised("get_products"))
+        assert "idempotency_key" in asyncio.run(_advertised("sync_accounts"))
+
+    def test_a_read_omitting_the_key_is_not_rejected(self):
+        """The storyboard's grace-window branch, and a guard against over-implementing it.
+
+        Phases ``omitted_key_grace_accept_path`` and ``omitted_key_grace_reject_path`` are an
+        ``any_of`` branch set: in 3.1 a seller MAY accept a read with no ``idempotency_key`` or
+        MAY reject it with INVALID_REQUEST, and the assertion phase requires only that one of
+        them holds. We take the accept branch. Pinned because the yaml marks the rejection as
+        a 3.2 SWITCH POINT -- someone reading "sellers SHOULD reject" out of context could
+        implement a hard rejection today and break every current buyer.
+        """
+        from fastmcp import Client
+
+        from src.core.main import mcp
+
+        payload = {k: v for k, v in READ_TOOL_3_1_ENVELOPE_LIST_ACCOUNTS.items() if k != "idempotency_key"}
+
+        async def _call():
+            patches = _list_accounts_patches()
+            with patch.dict(os.environ, {"ENVIRONMENT": "production"}):
+                for p in patches:
+                    p.start()
+                try:
+                    async with Client(mcp) as client:
+                        result = await client.call_tool("list_accounts", payload, raise_on_error=False)
+                        assert not result.is_error, (
+                            "a read omitting idempotency_key must still be answered during the "
+                            "3.1 grace window; rejecting it is the 3.2 behaviour"
+                        )
+                finally:
+                    for p in patches:
+                        p.stop()
+
+        asyncio.run(_call())
+
+    def test_dev_still_surfaces_the_key_as_unknown(self):
+        """The environment asymmetry is DELIBERATE, and this records which half is which.
+
+        Production strips (forward compatibility); dev and CI reject so a field this agent does
+        not model becomes visible instead of silently ignored -- CLAUDE.md "Schema Validation:
+        Environment-Based". Without this test, a red CI scenario looks like a bug in the
+        stripping, and the cheapest way to make it green is to declare the field on the DTO --
+        which is exactly how the field got there the first time.
+        """
+        from fastmcp import Client
+
+        from src.core.main import mcp
+
+        async def _call():
+            patches = _list_accounts_patches()
+            with patch.dict(os.environ, {"ENVIRONMENT": "development"}):
+                for p in patches:
+                    p.start()
+                try:
+                    async with Client(mcp) as client:
+                        result = await client.call_tool(
+                            "list_accounts", READ_TOOL_3_1_ENVELOPE_LIST_ACCOUNTS, raise_on_error=False
+                        )
+                        assert result.is_error, "dev mode must surface an unmodelled field rather than stripping it"
+                        assert "idempotency_key" in str(result.content), (
+                            "the rejection must name the field, or it teaches nothing"
+                        )
+                finally:
+                    for p in patches:
+                        p.stop()
+
+        asyncio.run(_call())
+
+
+# ---------------------------------------------------------------------------
 # A2A transport: normalize + model_validate (production mode)
 # ---------------------------------------------------------------------------
 

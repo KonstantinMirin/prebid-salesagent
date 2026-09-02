@@ -22,6 +22,19 @@ every field it declares.** Both halves matter:
 * A parameter the DTO DOES declare takes the DTO's type. This is the half that cannot
   drift: bump the SDK and every advertised type moves with it.
 
+A third property was missing for a long time, and it is the one this module used to get
+wrong: **the DTO supplies the TYPE, the library supplies the FIELD SET.** "Announced ==
+accepted" said nothing about "announced == SPEC", and because the shape derives from OUR
+subclass, a field added locally was published to buyers as though the spec defined it.
+``list_accounts.idempotency_key`` was that field: account/list-accounts-request.json declares
+no such property, the duty it was added for is TOLERANCE (that schema also declares
+``additionalProperties: true``), and declaring it turned a tolerance obligation into an
+invented spec field on MCP and REST. It has been removed.
+``_refuse_fields_the_spec_does_not_define`` now refuses to register such a tool, so the state
+is unreachable rather than recorded. A field we genuinely need is either ``exclude=True``
+(internal, never announced) or listed in the DTO's ``_NON_SCHEMA_FIELDS`` with the reason it
+is carried anyway.
+
 A parameter the DTO does not declare is DROPPED from the announcement -- that is what
 retires a legacy flat name such as ``list_creatives(status=...)``: FastMCP never passes what
 it does not advertise, so there is no list of retired names to maintain. (This paragraph
@@ -181,6 +194,57 @@ def _declared_description(annotation: Any) -> str | None:
     return None
 
 
+#: The ClassVar a DTO declares to name a field it carries that the spec does NOT define, and
+#: to say why the field is nevertheless buyer-visible. Read off the class, never from a list
+#: kept somewhere else: an entry sits at the definition site, next to the field it excuses,
+#: and it cites the spec artifact that licenses it.
+NON_SCHEMA_FIELDS_ATTR = "_NON_SCHEMA_FIELDS"
+
+
+def library_declared_fields(model: type[BaseModel]) -> set[str]:
+    """Every field name declared by an ``adcp`` class in ``model``'s ancestry (or by itself).
+
+    This is "what the spec shape is", read from the SDK rather than from a schema file. The
+    announcement already stakes everything on the DTO -- "bump the SDK and every advertised
+    type moves with it" -- so the same artifact answers which fields the DTO's shape HAS.
+
+    KNOWN LIMIT, and it is the SDK-vs-spec one. This project's rule is that the PINNED JSON
+    SCHEMA is authoritative and the SDK is only a cross-check (CLAUDE.md), and this gate reads
+    the SDK. Measured at adcp 6.6.0 the two agree for every registered tool -- the SDK types
+    carry exactly the pinned schemas' field sets -- so the gate does not bite today. If the
+    SDK ever LAGS the spec, the failure mode is that a field the spec genuinely defines gets
+    refused and ``_NON_SCHEMA_FIELDS`` becomes the normal route for correct code, which is the
+    opposite of what it is for. Watch for that shape of complaint rather than widening the rule.
+
+    Not re-gated on the pinned tree because doing so means reading JSON files during
+    ``import src.core.main`` (tools register at import), which makes the server's
+    importability depend on the filesystem -- the thing
+    ``test_architecture_no_import_time_fs_io`` exists to prevent -- and either couples ``src``
+    to ``tests.helpers.pinned_schema`` or duplicates it. The schema direction is graded
+    instead by ``TestNoNonSpecFieldsAreAdvertised``, which runs where file access is free.
+    """
+    return {
+        name
+        for base in model.__mro__
+        if isinstance(base, type) and issubclass(base, BaseModel) and base.__module__.startswith("adcp.")
+        for name in base.model_fields
+    }
+
+
+def non_schema_fields(model: type[BaseModel]) -> dict[str, str]:
+    """The DTO's declared departures from the spec shape: field name -> spec citation.
+
+    Unioned across the MRO so a subclass inherits its parent's citations instead of having to
+    repeat them. An empty result is the normal case and the one that must stay normal.
+    """
+    citations: dict[str, str] = {}
+    for base in reversed(model.__mro__):
+        declared = base.__dict__.get(NON_SCHEMA_FIELDS_ATTR)
+        if declared:
+            citations.update(declared)
+    return citations
+
+
 def derived_signature(fn: Callable[..., Any], model: type[BaseModel]) -> inspect.Signature:
     """``fn``'s own parameters, retyped from ``model`` wherever it declares the field.
 
@@ -203,6 +267,15 @@ def derived_signature(fn: Callable[..., Any], model: type[BaseModel]) -> inspect
             # does not advertise. No allowlist of legacy names to maintain; absence from
             # the DTO is the whole statement.
             continue
+        if field.exclude:
+            # INTERNAL. ``exclude=True`` is how this codebase says "never reaches a buyer",
+            # and until now it said that about serialization ONLY -- the announcement read
+            # right past it, so an internal field the wrapper happened to declare would have
+            # been published as a request parameter. Honouring it here is what makes the
+            # marker mean the same thing in both directions, and it is the escape the
+            # non-spec refusal below leans on: a field we need locally is marked internal
+            # rather than advertised as though the spec defined it.
+            continue
         declared = parameter.annotation
         description = field.description or _declared_description(declared)
         # Typed Any because the two arms are genuinely different kinds: `field.annotation`
@@ -214,6 +287,59 @@ def derived_signature(fn: Callable[..., Any], model: type[BaseModel]) -> inspect
             annotation = Annotated[annotation, PydanticField(description=description)]
         parameters.append(parameter.replace(annotation=annotation))
     return signature.replace(parameters=parameters)
+
+
+def _refuse_fields_the_spec_does_not_define(
+    source_fn: Callable[..., Any], model: type[BaseModel], signature: inspect.Signature
+) -> None:
+    """Refuse to announce a field our SUBCLASS invented on top of the library DTO.
+
+    The announcement rule guarantees announced == accepted. It does NOT guarantee
+    announced == SPEC, and until this refusal existed nothing did: because the advertised
+    shape derives from OUR model, a field added to the subclass was published to buyers on
+    MCP and REST as though the spec had defined it. ``ListAccountsRequest.idempotency_key``
+    was that field, and it shows how the state is reached in practice -- not by carelessness
+    but by a correct spec citation reasoned to the wrong conclusion. The duty
+    ``read-tool-idempotency`` imposes is TOLERANCE, which list-accounts-request.json expresses
+    as ``additionalProperties: true`` and the boundary already discharges; declaring a
+    property to satisfy it advertised a field 3.1.1 does not define.
+
+    A field is spec-declared when an ``adcp`` class in the DTO's ancestry declares it. When
+    the ancestry declares NOTHING, the DTO is not extending a spec shape at all (it is a
+    wholly local model, for a tool the spec does not define) and there is no shape for a
+    field to be extra to -- so the rule is vacuous there rather than wrong.
+
+    Two ways out, and both are declarations at the definition site rather than a list kept in
+    a test:
+
+    * ``exclude=True`` -- the field is INTERNAL. ``derived_signature`` already drops it, so
+      it never reaches this check and never reaches a buyer.
+    * ``_NON_SCHEMA_FIELDS`` -- the field is carried on purpose, and the entry says why.
+      ``GetMediaBuysRequest.account_id`` is the one live case: a legacy filter predating the
+      spec's ``account``, which live code still reads. Note what an entry is NOT: a place to
+      park a field because removing it is work. Each one is a question someone has to answer,
+      and answering ``idempotency_key``'s is what deleted it.
+
+    Refusing rather than allowlisting, for the same reason the missing-required check below
+    refuses: a list of known-bad tools records the violation, whereas refusing makes it
+    unreachable -- the server cannot start.
+    """
+    library_declared = library_declared_fields(model)
+    if not library_declared:
+        return
+    cited = non_schema_fields(model)
+    declared_here = set(model.model_fields) - library_declared - set(cited)
+    invented = sorted(set(signature.parameters) & declared_here)
+    if not invented:
+        return
+    raise RuntimeError(
+        f"{source_fn.__name__} cannot announce {model.__name__}: {invented} is declared by "
+        f"{model.__name__} but by no adcp library type in its ancestry, so announcing it "
+        f"would publish a field the spec does not define as though it did. Remove it, mark "
+        f"it exclude=True if it is internal, or -- if a buyer genuinely must send it -- add "
+        f"it to {model.__name__}.{NON_SCHEMA_FIELDS_ATTR} with the spec artifact that "
+        f"licenses it."
+    )
 
 
 def apply_dto_announced_shape(target: Callable[..., Any], source_fn: Callable[..., Any]) -> bool:
@@ -231,6 +357,7 @@ def apply_dto_announced_shape(target: Callable[..., Any], source_fn: Callable[..
     if model is None:
         return False
     signature = derived_signature(source_fn, model)
+    _refuse_fields_the_spec_does_not_define(source_fn, model, signature)
 
     # A REQUIRED DTO field the wrapper does not declare can never be populated: the builder
     # never receives it, so every call raises ValidationError. That is a loud failure, but it

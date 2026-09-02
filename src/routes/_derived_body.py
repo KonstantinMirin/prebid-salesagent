@@ -107,6 +107,12 @@ def derived_body_model(
     for field_name, field in dto.model_fields.items():
         if accepted is not None and field_name not in accepted:
             continue  # declared by the spec, not implemented here -- so not accepted
+        if field.exclude:
+            # INTERNAL, exactly as on MCP (``derived_signature``). Without this the two
+            # transports disagree about what an ``exclude=True`` field means: MCP would drop
+            # it from the advertised shape while REST kept accepting it in the body, which is
+            # the single-transport hole every derivation here exists to close.
+            continue
         if field_name in path_fields:
             # Carried in the URL, so it is not a BODY field. Declaring it here would make a
             # REST caller send the same value twice -- and since requiredness is preserved,

@@ -250,7 +250,6 @@ def build_list_accounts_request(
     status: AccountStatus | None = None,
     pagination: PaginationRequest | None = None,
     sandbox: bool | None = None,
-    idempotency_key: str | None = None,
     ext: dict | None = None,
     context: ContextObject | None = None,
     adcp_version: str | None = None,
@@ -262,17 +261,17 @@ def build_list_accounts_request(
     seam every transport constructs the typed request through, so a future request
     field lands here once instead of in wrapper lockstep.
 
-    ``idempotency_key`` is threaded verbatim and never generated: on a read tool it is
-    tolerance (list-accounts-request.json 3.1.1 declares no such property and
-    ``additionalProperties: true``), so the only correct handling is to accept whatever
-    the buyer sent and let it have no effect.
+    No ``idempotency_key``. It was threaded through here as read-tool tolerance, but
+    list-accounts-request.json declares no such property, and the advertised shape is
+    "DTO fields INTERSECT this builder's parameters" -- so threading it was what PUBLISHED
+    it, on MCP and REST, as though the spec defined it. Tolerance is the boundary's job
+    (critical pattern #7), not a parameter's. See ListAccountsRequest in schemas/account.py.
     """
     return ListAccountsRequest(
         account=account,
         status=status,
         pagination=pagination,
         sandbox=sandbox,
-        idempotency_key=idempotency_key,
         ext=ext,
         context=context,
         adcp_version=adcp_version,
@@ -290,9 +289,6 @@ async def list_accounts(
     status: AccountStatus | None = None,
     pagination: PaginationRequest | None = None,
     sandbox: Annotated[bool | None, Field(description="When true, return only sandbox/test accounts")] = None,
-    idempotency_key: Annotated[
-        str | None, Field(description="Read-tool idempotency tolerance per v3.1.1 -- accepted, has no effect")
-    ] = None,
     ext: Annotated[dict | None, Field(description="AdCP extension object -- accepted, has no effect")] = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
@@ -307,7 +303,6 @@ async def list_accounts(
         status: Filter accounts by status (active, closed, etc.).
         pagination: Pagination parameters (max_results, cursor).
         sandbox: Filter by sandbox flag.
-        idempotency_key: Read-tool idempotency tolerance (accepted, no effect on a read).
         ext: AdCP extension object (accepted, no effect).
         context: Application-level context per AdCP spec.
         ctx: FastMCP context for authentication.
@@ -321,7 +316,6 @@ async def list_accounts(
             status=status,
             pagination=pagination,
             sandbox=sandbox,
-            idempotency_key=idempotency_key,
             ext=ext,
             context=context,
         )

@@ -5,10 +5,12 @@ All classes are re-exported from ``src.core.schemas`` for backward compatibility
 
 
 SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
-- [misc] on line ~127: SyncAccountsResponse class def. Pydantic metaclass
+- [misc] on line ~185: SyncAccountsResponse class def. Pydantic metaclass
   interaction in SDK hierarchy; permanent.
-- [assignment] on line ~79: idempotency_key override (required -> optional).
-  Architectural; permanent.
+- [assignment] on line ~101: SyncAccountsRequest.idempotency_key override
+  (required -> optional). Architectural; permanent. Note this is the SYNC
+  request -- sync-accounts-request.json declares the property because a sync
+  mutates. The read request declares none; see ListAccountsRequest.
 """
 
 from typing import ClassVar
@@ -65,16 +67,23 @@ class Account(AlwaysIncludeFieldsMixin, LibraryAccountDomain):
 class ListAccountsRequest(LibraryListAccountsRequest):
     """Extends library ListAccountsRequest.
 
-    Library provides: account, status, pagination, sandbox, context, ext.
-    idempotency_key added locally -- the library type doesn't declare it
-    (unlike SyncAccountsRequest), but v3.1.1's read-tool-idempotency.yaml
-    compliance phase requires read tools to tolerate it (salesagent-tm97 F5;
-    previously rejected under Pattern #7 extra=forbid).
+    Library provides: account, status, pagination, sandbox, context, ext. Nothing is added:
+    the field set is the pinned schema's, which is what lets the tool's advertised shape be
+    derived from this model without publishing anything AdCP 3.1.1 does not define.
+
+    ``idempotency_key`` used to be declared here, commented as read-tool-idempotency
+    tolerance. The citation was right and the conclusion was backwards, and the generated
+    BR-UC-011 scenario says so in its own words: account/list-accounts-request.json does NOT
+    declare the property and DOES declare ``additionalProperties: true``, so the duty is
+    TOLERANCE, not a declared field. Declaring it satisfied a tolerance obligation by
+    inventing a spec field -- the exact defect this model is now graded against. Tolerance
+    itself is already the boundary's job (critical pattern #7: production runs
+    ``extra="ignore"``, so a buyer may send the key and it is ignored), and a read is
+    idempotent by construction, so there is no at-most-once guarantee for a key to carry.
+    Contrast SyncAccountsRequest below, where the spec DOES declare it because a sync mutates.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
-
-    idempotency_key: str | None = None
 
 
 class SyncAccountsRequest(LibrarySyncAccountsRequest):

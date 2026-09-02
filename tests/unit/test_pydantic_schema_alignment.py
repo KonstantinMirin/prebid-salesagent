@@ -1996,43 +1996,186 @@ class TestPinnedBoundsUnreachableFromAnyRequest:
         )
 
 
-if __name__ == "__main__":
-    # Run tests with verbose output
-    pytest.main([__file__, "-v", "--tb=short"])
+#: Registered tool -> the pinned request schema its DTO implements. Keyed by TOOL rather
+#: than by model because the tool registry is what the coverage test below reads: a request
+#: DTO that quietly stops being graded is the failure this pairing exists to prevent, and a
+#: model-keyed map cannot notice a tool it was never given.
+#:
+#: Not the same table as SCHEMA_TO_MODEL_MAP above, which drives three OTHER test classes
+#: whose membership is constrained by unrelated history (CreateMediaBuyRequest is held out of
+#: it pending brand_card). Merging them would couple this grading to that hold-out, which is
+#: exactly how list_accounts -- the tool with the one declared departure -- went ungraded.
+#:
+#: list_creative_formats resolves to the media-buy/ copy, not the creative/ one: the pinned
+#: tree ships BOTH, they differ (creative/ has account, include_pricing, type; media-buy/ has
+#: property_id, publisher_domain), and media-buy/ is the path the generated BR-UC-005
+#: storyboards cite at the pinned commit. Picking the other one grades this tool against a
+#: schema nothing else in the repo uses.
+_REQUEST_SCHEMA_BY_TOOL: dict[str, str] = {
+    "create_media_buy": "media-buy/create-media-buy-request.json",
+    "get_adcp_capabilities": "protocol/get-adcp-capabilities-request.json",
+    "get_media_buy_delivery": "media-buy/get-media-buy-delivery-request.json",
+    "get_media_buys": "media-buy/get-media-buys-request.json",
+    "get_products": "media-buy/get-products-request.json",
+    "get_task": "protocol/get-task-status-request.json",
+    "list_accounts": "account/list-accounts-request.json",
+    "list_creative_formats": "media-buy/list-creative-formats-request.json",
+    "list_creatives": "creative/list-creatives-request.json",
+    "list_tasks": "protocol/list-tasks-request.json",
+    "sync_accounts": "account/sync-accounts-request.json",
+    "sync_creatives": "creative/sync-creatives-request.json",
+    "update_media_buy": "media-buy/update-media-buy-request.json",
+}
+
+#: Tools AdCP 3.1.1 does not define, so there is no pinned request schema to grade them
+#: against. This is a statement about the SPEC, not an exemption granted here, and the
+#: coverage test PROVES each entry by showing the pinned tree really resolves no request
+#: schema under that name. Rebasing any of them onto a spec task (update_performance_index is
+#: the spec's provide_performance_feedback under an older name) moves it into the map above;
+#: the set only shrinks.
+_TOOLS_WITH_NO_PINNED_REQUEST_SCHEMA = frozenset(
+    {"complete_task", "list_authorized_properties", "update_performance_index"}
+)
+
+
+def _registered_tool_shapes() -> dict[str, tuple[type, set[str]]]:
+    """Tool name -> (request DTO, ADVERTISED parameter names), read from the LIVE registry.
+
+    Importing ``src.core.main`` is what registers the tools, so this sees exactly the set a
+    buyer sees rather than a list of names kept in this file.
+    """
+    import asyncio
+
+    from src.core import main
+    from src.core.tools._announced_shape import request_model_for
+
+    shapes: dict[str, tuple[type, set[str]]] = {}
+    for tool in asyncio.run(main.mcp.list_tools()):
+        source_fn = getattr(tool.fn, "__wrapped__", tool.fn)
+        model = request_model_for(source_fn)
+        if model is not None:
+            shapes[tool.name] = (model, set(tool.parameters.get("properties", {})))
+    return shapes
 
 
 class TestNoNonSpecFieldsAreAdvertised:
-    """A local subclass must not declare a field the pinned schema does not define.
+    """A request DTO must not carry a buyer-visible field the pinned schema does not define.
 
-    This is the EXTRA direction, and it had no grader. The suite already checked that our
-    models ACCEPT every spec field (test_model_accepts_all_schema_fields) and REQUIRE what the
-    spec requires (test_model_has_all_required_fields, after its inverted branch was fixed).
-    Nothing checked the other way, so a field we invented locally was published to buyers as
-    though the spec defined it -- the announced shape derives from OUR model, not the library's.
+    This is the EXTRA direction. The suite already checked that our models ACCEPT every spec
+    field (test_model_accepts_all_schema_fields) and REQUIRE what the spec requires
+    (test_model_has_all_required_fields). Nothing checked the other way, so a field invented
+    locally was published to buyers as though the spec defined it -- the announced shape
+    derives from OUR model, not the library's.
 
-    The instance that motivated this: UpdateMediaBuyRequest carried a top-level `budget`,
-    commented "not in library -- convenience field". AdCP 3.1.1 defines no such field (budget
-    is package-level), the SDK declares none, and the compliance tree grades none -- yet it
-    was advertised on MCP and REST. It has been removed.
+    The instance this caught: ListAccountsRequest declared `idempotency_key`, commented as
+    read-tool-idempotency tolerance. account/list-accounts-request.json declares no such
+    property and declares `additionalProperties: true` -- the duty is tolerance, which the
+    boundary already discharges, so declaring it advertised a field 3.1.1 does not define on
+    MCP and REST. Both the field and the wrapper parameter have been removed; a field removed
+    from the model while the wrapper still declares the parameter stays advertised.
 
-    `exclude=True` fields are exempt by design: they are internal (principal_id, today) and
-    never reach a buyer, which is exactly the difference between an internal field and an
-    invented spec field.
+    What runs at RUNTIME is stronger than this class and lives in
+    ``src.core.tools._announced_shape``: registration REFUSES a tool whose DTO announces a
+    field no adcp library type declares, so that state is unreachable rather than reported.
+    This class is the half the refusal cannot do, and the reason it is not redundant: the
+    refusal's authority is the SDK, and the SDK is a cross-check on the pinned schemas, not
+    the authority (CLAUDE.md). A field the SDK itself declares and the spec does not sails
+    straight past the refusal and is caught only here.
+
+    Two kinds of field are exempt, both by DECLARATION on the model rather than by a row in
+    this file:
+
+    * ``exclude=True`` -- internal, never announced on any transport, never serialized.
+    * ``_NON_SCHEMA_FIELDS`` -- carried on purpose, with the reason. Read off the model so
+      there is ONE declaration, consumed by both the runtime refusal and these tests.
     """
 
-    @pytest.mark.parametrize("schema_ref,model_class", SCHEMA_TO_MODEL_MAP.items())
-    def test_model_declares_no_field_absent_from_the_schema(self, schema_ref: str, model_class: type) -> None:
-        schema = load_json_schema(schema_ref)
-        spec_fields = set(schema.get("properties", {}))
-        if not spec_fields:
-            pytest.skip(f"{schema_ref} declares no properties to compare against")
+    @pytest.mark.parametrize("tool_name", sorted(_REQUEST_SCHEMA_BY_TOOL))
+    def test_the_advertised_shape_carries_no_field_the_schema_lacks(self, tool_name: str) -> None:
+        """What buyers actually SEE, graded against the spec.
 
-        buyer_visible = {name for name, field in model_class.model_fields.items() if not field.exclude}
-        extra = sorted(buyer_visible - spec_fields - _VERSION_FIELDS)
+        Keyed on the advertised parameter set rather than on model_fields, because that is
+        the thing the ticket is about: a field only misleads a buyer once it is published.
+        """
+        from src.core.tools._announced_shape import non_schema_fields
+
+        model_class, advertised = _registered_tool_shapes()[tool_name]
+        schema_ref = _REQUEST_SCHEMA_BY_TOOL[tool_name]
+        spec_fields = set(load_json_schema(schema_ref).get("properties", {}))
+        assert spec_fields, f"{schema_ref} declares no properties — the pin moved, fix the ref"
+
+        extra = sorted(advertised - spec_fields - _VERSION_FIELDS - set(non_schema_fields(model_class)))
 
         assert not extra, (
-            f"{model_class.__name__} declares {extra}, which {schema_ref} does not define. "
-            f"The advertised shape derives from this model, so a field invented here is "
-            f"published to buyers as if it were spec. Either remove it, or mark it "
-            f"exclude=True if it is genuinely internal and must never reach a buyer."
+            f"{tool_name} advertises {extra}, which {schema_ref} does not define. Buyers read "
+            f"the advertised shape as the contract, so this publishes a field as if it were "
+            f"spec. Remove it, mark it exclude=True if it is genuinely internal, or add it to "
+            f"{model_class.__name__}._NON_SCHEMA_FIELDS with the reason it is carried anyway."
         )
+
+    @pytest.mark.parametrize("tool_name", sorted(_REQUEST_SCHEMA_BY_TOOL))
+    def test_no_locally_declared_field_is_absent_from_the_schema(self, tool_name: str) -> None:
+        """The LATENT case: a field our subclass adds that no wrapper has exposed yet.
+
+        The test above only sees published fields, and the runtime refusal only fires on
+        published ones too -- so a locally-invented field sits harmlessly in the DTO until
+        somebody adds the matching wrapper parameter, at which point it is published. Graded
+        here so the departure is declared BEFORE that, not discovered by a buyer after.
+
+        Scoped to fields OUR subclass declares (nothing in the adcp ancestry declares them),
+        which is what makes this different from the test above: a field the SDK ships that
+        the pinned schema lacks is SDK-vs-spec drift, not something this repo can fix by
+        deleting a line, and it is caught above the moment it reaches a buyer.
+        """
+        from src.core.tools._announced_shape import library_declared_fields, non_schema_fields
+
+        model_class, _ = _registered_tool_shapes()[tool_name]
+        schema_ref = _REQUEST_SCHEMA_BY_TOOL[tool_name]
+        spec_fields = set(load_json_schema(schema_ref).get("properties", {}))
+
+        locally_declared = {
+            name
+            for name, field in model_class.model_fields.items()
+            if not field.exclude and name not in library_declared_fields(model_class)
+        }
+        extra = sorted(locally_declared - spec_fields - _VERSION_FIELDS - set(non_schema_fields(model_class)))
+
+        assert not extra, (
+            f"{model_class.__name__} ({tool_name}) declares {extra}, which {schema_ref} does "
+            f"not define and no adcp library type declares either. Remove it, mark it "
+            f"exclude=True if it is internal, or add it to "
+            f"{model_class.__name__}._NON_SCHEMA_FIELDS with the reason it is carried anyway."
+        )
+
+    def test_every_registered_tool_is_graded_or_provably_has_no_spec_schema(self) -> None:
+        """No tool may drop out of the grading by simply not being added to the map.
+
+        The escape this closes is the cheap one: a new tool lands, nobody adds a row, and its
+        DTO is never compared to anything. Membership is read from the live registry, and the
+        only other way to sit outside the map is to be a tool the PINNED TREE has no request
+        schema for -- which the second half verifies rather than takes on trust.
+        """
+        registered = set(_registered_tool_shapes())
+        ungraded = registered - set(_REQUEST_SCHEMA_BY_TOOL) - _TOOLS_WITH_NO_PINNED_REQUEST_SCHEMA
+        assert not ungraded, (
+            f"{sorted(ungraded)} announce a request DTO that nothing compares to the pinned "
+            f"schema. Add a row to _REQUEST_SCHEMA_BY_TOOL naming the schema it implements."
+        )
+
+        resolvable = {}
+        for tool_name in sorted(_TOOLS_WITH_NO_PINNED_REQUEST_SCHEMA & registered):
+            candidate = f"{tool_name.replace('_', '-')}-request.json"
+            try:
+                pinned_schema.load(candidate)
+            except pinned_schema.PinnedSchemaError:
+                continue
+            resolvable[tool_name] = candidate
+        assert not resolvable, (
+            f"{resolvable} claim to have no pinned request schema, but the pinned tree "
+            f"resolves one for each. Move them into _REQUEST_SCHEMA_BY_TOOL and grade them."
+        )
+
+
+if __name__ == "__main__":
+    # Run tests with verbose output
+    pytest.main([__file__, "-v", "--tb=short"])
