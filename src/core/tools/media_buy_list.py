@@ -122,6 +122,7 @@ class _PackageData:
 from adcp.server.helpers import valid_actions_for_status
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, MediaBuyStatus
+from adcp.types.generated_poc.media_buy.get_media_buys_request import StatusFilter
 
 from src.core.auth import (
     require_identity,
@@ -413,7 +414,10 @@ def _get_media_buys_impl(
 
 def _build_get_media_buys_request(
     media_buy_ids: list[str] | None = None,
-    status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
+    # The DTO's OWN annotation, not a narrower guess. Declaring list[MediaBuyStatus]
+    # while GetMediaBuysRequest declares StatusFilter is one tool answering to two
+    # shapes -- mypy could not see it until the wrappers funnelled through here.
+    status_filter: MediaBuyStatus | StatusFilter | list[MediaBuyStatus] | None = None,
     account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     include_snapshot: bool | None = None,

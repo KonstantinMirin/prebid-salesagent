@@ -1380,10 +1380,15 @@ def _build_update_request(
     media_buy_id: str | None = None,
     account: Any = None,
     paused: bool | None = None,
-    flight_start_date: str | None = None,
-    flight_end_date: str | None = None,
-    start_time: str | None = None,
-    end_time: str | None = None,
+    # The DTO's OWN annotations. str stays accepted because the wire sends ISO strings and
+    # the model coerces them; declaring ONLY str while UpdateMediaBuyRequest declares
+    # datetime is the same tool answering to two shapes across transports.
+    # flight_* are the deprecated aliases this builder maps onto start_time/end_time, so
+    # they take the `date` the REST body derives for them.
+    flight_start_date: date | str | None = None,
+    flight_end_date: date | str | None = None,
+    start_time: datetime | Literal["asap"] | str | None = None,
+    end_time: datetime | str | None = None,
     packages: list | None = None,
     push_notification_config: Any = None,
     context: Any = None,

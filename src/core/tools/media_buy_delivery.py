@@ -82,6 +82,10 @@ PLATFORM_DEFAULT_ATTRIBUTION_MODEL = AttributionModel.last_touch
 # adcp 3.6.0: Use schemas.ReportingPeriod (extends creative ReportingPeriod) for adapter compat.
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
 # Adapters are typed to accept schemas.ReportingPeriod, so we use that here.
+from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
+    StatusFilter as DeliveryStatusFilter,
+)
+
 from src.core.auth import require_identity, require_principal_id, require_tenant, resolve_principal_or_raise
 from src.core.database.models import MediaBuy, PricingOption
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
@@ -711,7 +715,9 @@ def _get_media_buy_delivery_impl(
 
 def _build_get_media_buy_delivery_request(
     media_buy_ids: list[str] | None = None,
-    status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
+    # The DTO's OWN annotation. See the note on the get_media_buys builder: a narrower
+    # guess here is the same tool answering to two shapes across transports.
+    status_filter: MediaBuyStatus | DeliveryStatusFilter | list[MediaBuyStatus] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     reporting_dimensions: ReportingDimensions | None = None,

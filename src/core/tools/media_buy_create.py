@@ -106,6 +106,9 @@ def validate_agent_url(url: str | None) -> bool:
 from dataclasses import dataclass
 from enum import StrEnum
 
+from adcp.types.generated_poc.core.ext import ExtensionObject
+from adcp.types.generated_poc.core.start_timing import StartTiming
+from pydantic import AwareDatetime
 from sqlalchemy.exc import SQLAlchemyError
 
 from src.core import schemas
@@ -4503,12 +4506,16 @@ def _build_create_media_buy_request(
     # wrapper the library type or wire dicts (A2A/REST) — CreateMediaBuyRequest
     # validates any of them.
     packages: list[AdcpPackageRequest] | list[PackageRequest] | list[dict[str, Any]] | None = None,
-    start_time: str | None = None,
-    end_time: str | None = None,
+    # The DTO's OWN annotations. Declaring str here while CreateMediaBuyRequest declares
+    # StartTiming/AwareDatetime is the same tool answering to two shapes depending on the
+    # transport -- invisible to mypy until every route funnelled through this builder.
+    # str stays accepted because the wire sends ISO strings and the model coerces them.
+    start_time: StartTiming | str | None = None,
+    end_time: AwareDatetime | str | None = None,
     po_number: str | None = None,
     reporting_webhook: ReportingWebhook | None = None,
     context: ContextObject | None = None,
-    ext: dict[str, Any] | None = None,
+    ext: ExtensionObject | dict[str, Any] | None = None,
     account: AccountReference | None = None,
     idempotency_key: str | None = None,
     paused: bool | None = None,
