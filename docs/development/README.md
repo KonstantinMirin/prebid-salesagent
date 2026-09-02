@@ -15,6 +15,7 @@ See [Getting Started](GETTING_STARTED.md) for prerequisites, manual setup, testi
 ## Documentation
 
 - **[Architecture](architecture.md)** - System design and component overview
+- **[Request Lifecycle](request-lifecycle.md)** - How a request travels from the wire to business logic (middleware, identity, compat layers)
 - **[Patterns Reference](patterns-reference.md)** - Canonical examples for every key pattern (start here for new contributors)
 - **[Contributing](contributing.md)** - Development workflows, testing, code style
 - **[Structural Guards](structural-guards.md)** - Automated architecture enforcement tests

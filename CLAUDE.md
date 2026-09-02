@@ -760,13 +760,15 @@ See `docs/deployment.md` for platform-specific guides.
 ## Documentation
 
 **Detailed docs in `/docs`:**
-- `ARCHITECTURE.md` - System architecture
-- `SETUP.md` - Initial setup guide
-- `DEVELOPMENT.md` - Development workflow
-- `testing/` - Testing patterns and case studies
-- `TROUBLESHOOTING.md` - Common issues
+- `development/architecture.md` - System architecture
+- `development/request-lifecycle.md` - How a request reaches business logic
+- `development/GETTING_STARTED.md` - Initial setup guide
+- `development/contributing.md` - Development workflow
+- `development/e2e-testing.md` - End-to-end testing
+- `development/troubleshooting.md` - Common issues
 - `security.md` - Security guidelines
-- `deployment.md` - Deployment guides
+- `security/outbound-egress.md` - Outbound HTTP and SSRF
+- `deployment/` - Deployment guides
 - `adapters/` - Adapter-specific documentation
 
 ---

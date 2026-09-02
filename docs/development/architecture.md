@@ -48,6 +48,10 @@ Database-backed tenant isolation with:
 4. **UnifiedAuthMiddleware** - Single ASGI middleware extracts token into scope["state"]
 5. **Principal Resolution** - Token → Principal → Tenant → Adapter
 
+For the step-by-step path a request takes from the wire to business logic —
+middleware order, identity resolution, and the compat layers — see
+[Request Lifecycle](request-lifecycle.md).
+
 ## Database Schema
 
 ### Core Tables
