@@ -374,58 +374,6 @@ def with_error_logging(tool_func: Callable) -> Callable:
 # ---------------------------------------------------------------------------
 
 
-def _build_error_code_to_status() -> dict[str, int]:
-    """Derive the wire-code → HTTP status map from ``AdCPSalesAgentError`` subclasses.
-
-    Walks every concrete subclass of ``AdCPSalesAgentError`` and reads its class-level
-    ``error_code`` + ``status_code`` declarations. Eliminates the drift potential of a
-    hand-maintained table — historically the table declared
-    ``AUTH_REQUIRED → 401`` while ``AdCPAuthorizationError`` (same wire
-    code at the time) carried ``status_code = 403``; a plain-ToolError raise
-    from authorization code surfaced as 401 instead of 403. Same pattern for
-    ``SERVICE_UNAVAILABLE`` (table said 503, adapter class said 502).
-    The class attribute is the source of truth.
-
-    When a wire code is shared by multiple subclasses (e.g.,
-    ``SERVICE_UNAVAILABLE`` from both ``AdCPAdapterError`` 502 and
-    ``AdCPServiceUnavailableError`` 503), the **highest** status code wins —
-    the more restrictive one is the spec-aligned answer when the table
-    is used for a plain-ToolError fallback that has no carried context.
-    (``AdCPAuthorizationError`` no longer shares AUTH_REQUIRED with
-    ``AdCPAuthenticationError`` — it emits PERMISSION_DENIED, salesagent-otc5.)
-    """
-    # INVALID_REQUEST is AdCP's "generic 4xx bucket" wire code that no specific typed
-    # subclass claims, so nothing else would seed its status. Anchor it to HTTP 400, the
-    # conventional bad-request status.
-    #
-    # (_GENERIC_CATCHALLS lived here to stop a status propagating onto a TRANSLATION
-    # target. Codes are no longer translated, so no propagation can occur and the set had
-    # no remaining reader. Ruff does not flag it -- the leading underscore matches the
-    # default dummy-variable pattern -- so it is removed by hand.)
-    table: dict[str, int] = {"INVALID_REQUEST": 400}
-
-    # iter_concrete_subclasses() is the single source of truth for the subclass
-    # walk — shared with the error-code compliance tests. Class-level identity
-    # lives on the _default_* ClassVar slots; error_code/status_code are instance
-    # attrs set in __init__, so read the _default_* slots off the class object.
-    for cls in AdCPSalesAgentError.iter_concrete_subclasses():
-        code = getattr(cls, "_code", None)
-        status = getattr(cls, "_default_status_code", None)
-        if not code or not status:
-            continue
-        # Index the raw class code so plain-ToolError("CODE") fallbacks resolve.
-        existing = table.get(code)
-        if existing is None or status > existing:
-            table[code] = status
-    return table
-
-
-# Plain ``ToolError("CODE", "message")`` legacy paths don't carry the typed
-# AdCPSalesAgentError that owns ``status_code``. Derived from class declarations at
-# import time so the table cannot drift from the source of truth.
-_ERROR_CODE_TO_STATUS: dict[str, int] = _build_error_code_to_status()
-
-
 def handle_tool_error(e: ToolError) -> JSONResponse:
     """Convert MCP ToolError to the spec-compliant two-layer envelope body.
 
@@ -433,9 +381,9 @@ def handle_tool_error(e: ToolError) -> JSONResponse:
     is the typed ``AdCPToolError`` raised by the MCP boundary translator, its
     envelope and status_code are forwarded unchanged so 4xx errors don't get
     mislabeled as 5xx. Plain ``ToolError`` (raised by other paths) is rebuilt
-    into an envelope via a synthetic ``AdCPSalesAgentError``; its HTTP status is
-    resolved from ``_ERROR_CODE_TO_STATUS`` for known wire codes and falls
-    through to 500 only when the code is unrecognized.
+    into an envelope via a synthetic ``AdCPSalesAgentError``, whose HTTP status
+    follows from the code it resolved to — an unrecognized code becomes
+    INTERNAL_ERROR, and INTERNAL_ERROR is a 500.
     """
     if isinstance(e, AdCPToolError):
         # Defensive copy: the envelope dict is owned by the AdCPToolError instance,
@@ -461,8 +409,10 @@ def handle_tool_error(e: ToolError) -> JSONResponse:
     # bare ErrorDetails argument is honest here: this boundary resolves a code
     # from a lookup rather than from a class, so it has no specific shape to
     # name -- and it carries no details at all.
-    synthetic: AdCPSalesAgentError[ErrorDetails] = AdCPSalesAgentError(
-        error_code=resolved_code,
-        status_code=_ERROR_CODE_TO_STATUS.get(error_code, 500),
-    )
+    # No status is passed, because none can be: ``status_code`` is a read-only
+    # function of the code (``CODE_TABLE``). Resolving the code IS resolving the
+    # status, so this boundary cannot answer a code with a status that
+    # contradicts it — which is what the old derived table, rebuilt per call from
+    # whatever subclasses happened to be imported, could do (salesagent-pssfi).
+    synthetic: AdCPSalesAgentError[ErrorDetails] = AdCPSalesAgentError(error_code=resolved_code)
     return JSONResponse(status_code=synthetic.status_code, content=build_two_layer_error_envelope(synthetic))

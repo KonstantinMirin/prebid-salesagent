@@ -116,16 +116,15 @@ footer{padding:3rem 0;color:var(--muted);font-size:.85rem}
       <pre><code>Recovery      correctable | transient | terminal
 AppErrorCode  our 8 platform codes
 ErrorCodeT    = ErrorCode | AppErrorCode
-CodeEntry     recovery, suggestion, message
+CodeEntry     recovery, suggestion, message, status
 CODE_TABLE    100 entries</code></pre>
-      <p style="font-size:.9rem;color:var(--muted)">The 92 spec entries are <strong>loaded from the installed wheel at import</strong>, not transcribed. A loaded table cannot drift, so there is nothing for a guard to verify. Only the 8 platform entries are hand-written, in the same three fields.</p>
+      <p style="font-size:.9rem;color:var(--muted)">The 92 spec entries are <strong>loaded from the installed wheel at import</strong>, not transcribed. A loaded table cannot drift, so there is nothing for a guard to verify. Only the 8 platform entries are hand-written, in the same fields. <code>status</code> is the exception: the pin fixes the 4xx/5xx band per code but not the number, so the numbers are authored here — keyed by code, never by class.</p>
     </div>
     <div>
       <h3>The exception</h3>
       <pre><code>class AdCPValidationError(AdCPError):
-    _default_status_code = 400
     _code = ErrorCode.VALIDATION_ERROR</code></pre>
-      <p style="font-size:.9rem;color:var(--muted)">That is the entire subclass. <code>message</code>, <code>suggestion</code> and <code>recovery</code> resolve from the table by code. <code>_code</code> is a <code>ClassVar</code>, never a constructor parameter, so no instance can change its own code.</p>
+      <p style="font-size:.9rem;color:var(--muted)">That is the entire subclass. <code>message</code>, <code>suggestion</code>, <code>recovery</code> and the HTTP <code>status_code</code> resolve from the table by code. The status was the last per-class knob, and it was removed once a subclass was found re-coding itself to INVALID_REQUEST while keeping its parent's 404. <code>_code</code> is a <code>ClassVar</code>, never a constructor parameter, so no instance can change its own code.</p>
       <h3>Vendor names left the wire</h3>
       <p style="font-size:.9rem;color:var(--muted)"><code>GAM_UPDATE_FAILED</code> → <code>AD_SERVER_UPDATE_FAILED</code>. The buyer must not learn which ad server we run.</p>
     </div>

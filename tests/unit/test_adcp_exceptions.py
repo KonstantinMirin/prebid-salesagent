@@ -16,17 +16,14 @@ is open, codes now reach the buyer verbatim, and the envelope has one builder.
 What remains is behavior that lives in *code* rather than in the table, and that
 nothing else in the suite exercises:
 
-- The per-class HTTP ``status_code``. It is the one graded wire-adjacent value
-  ``CODE_TABLE`` does not carry, so no table-derivation argument covers it.
-  ``tests/unit/test_error_boundary_translation.py::TestRestStatusCodeRoundtrip``
-  grades that the value survives the REST handler stack; graded here is the
-  distinct obligation that each class *declares* the status the roundtrip then
-  carries — including the classes that roundtrip does not drive.
-- ``AdCPSalesAgentError.iter_concrete_subclasses()``. Its only production
-  consumer is ``_build_error_code_to_status`` in
-  ``src/core/tool_error_logging.py``, which iterates it but pins none of the
-  walk's promises: transitive, deduplicated across diamond inheritance, never
-  yielding ``cls`` itself, skipping abstract bases.
+- Coverage of the authored code → HTTP-status map. The values themselves are a
+  table, and re-listing them here would only copy it; what is graded is that
+  every code a typed class can emit HAS a row, so no raise site falls through to
+  the unclassified default.
+- ``AdCPSalesAgentError.iter_concrete_subclasses()``. It backs the error-code
+  compliance tests, which iterate it but pin none of the walk's promises:
+  transitive, deduplicated across diamond inheritance, never yielding ``cls``
+  itself, skipping abstract bases.
 - The ``context`` echo surviving the REST exception handler and reaching the
   response body. The BDD lines that would grade it have no step definition and
   are converted to xfail by ``tests/bdd/conftest.py``, so no scenario reaches
@@ -45,20 +42,13 @@ from __future__ import annotations
 import abc
 
 import pytest
+from adcp.types import ErrorCode
 from starlette.testclient import TestClient
 
-from src.core.errors.codes import AppErrorCode
+from src.core.errors.codes import _HTTP_STATUS, _UNCLASSIFIED_STATUS
 from src.core.exceptions import (
-    AdCPAdapterError,
-    AdCPAuthenticationError,
-    AdCPAuthorizationError,
-    AdCPBudgetExhaustedError,
-    AdCPConflictError,
-    AdCPGoneError,
     AdCPProductNotFoundError,
-    AdCPRateLimitError,
     AdCPSalesAgentError,
-    AdCPServiceUnavailableError,
     AdCPValidationError,
 )
 
@@ -67,57 +57,61 @@ from src.core.exceptions import (
 # ---------------------------------------------------------------------------
 
 
-class TestPerClassHttpStatus:
-    """Each typed class declares the HTTP status its raise sites mean.
+class TestEveryEmittedCodeHasAnAuthoredStatus:
+    """No typed class can reach a buyer with an unclassified HTTP status.
 
-    ``status_code`` is not a function of the error code — the table classifies
-    message, recovery and suggestion, and stops there — so it is the one
-    per-class value a test can pin without transcribing the pin. Two readers
-    depend on the declaration: ``src/app.py``'s handler stack (``exc.status_code``
-    becomes the response status) and ``_build_error_code_to_status``, which reads
-    the ``_default_status_code`` class slot to answer for plain-``ToolError``
-    fallbacks that carry no typed exception.
+    ``status_code`` is a read-only function of the wire code, read from
+    ``CODE_TABLE``; the published codes get their number from ``_HTTP_STATUS``
+    and any published code missing from it takes ``_UNCLASSIFIED_STATUS`` (500).
+    That default is right for the 60-odd published codes this seller never
+    raises, and wrong for every code it does — a new typed class whose code has
+    no row would answer a buyer-correctable failure with a server fault, and
+    nothing else would say so. Platform codes need no check: an
+    :class:`AppErrorCode` member carries its own ``CodeEntry``, status included,
+    so a member without one cannot be declared.
+
+    The values are deliberately NOT transcribed here. They are authored in one
+    place, and a second list of them would be a copy to keep in sync, not a
+    grader. Delivery of the value to the wire is graded by
+    ``tests/unit/test_error_boundary_translation.py::TestRestStatusCodeRoundtrip``.
     """
 
-    @pytest.mark.parametrize(
-        ("exc_cls", "expected_status"),
-        [
-            (AdCPAuthenticationError, 401),
-            (AdCPAuthorizationError, 403),
-            (AdCPConflictError, 409),
-            (AdCPGoneError, 410),
-            (AdCPBudgetExhaustedError, 422),
-            (AdCPRateLimitError, 429),
-            (AdCPAdapterError, 502),
-            (AdCPServiceUnavailableError, 503),
-        ],
-        ids=lambda value: value.__name__ if isinstance(value, type) else str(value),
-    )
-    def test_class_declares_its_status(self, exc_cls: type[AdCPSalesAgentError], expected_status: int):
-        """A new typed subclass is one parametrize row, not one method."""
-        assert exc_cls().status_code == expected_status
+    def test_no_class_falls_through_to_the_unclassified_default(self):
+        emitted = {cls._code for cls in AdCPSalesAgentError.iter_concrete_subclasses() if getattr(cls, "_code", None)}
 
-    def test_base_defaults_to_500(self):
-        """The base carries 500: an error that names no class-specific status is a
-        server fault, not a buyer-correctable one.
+        # Non-vacuity: an empty walk would satisfy the assertion below.
+        assert emitted, "no concrete AdCPSalesAgentError subclass declares a code — the walk is vacuous"
+
+        unclassified = sorted(str(code) for code in emitted if isinstance(code, ErrorCode) and code not in _HTTP_STATUS)
+        assert not unclassified, (
+            "these published codes are emitted by a typed class but have no row in _HTTP_STATUS "
+            f"(src/core/errors/codes.py), so they answer {_UNCLASSIFIED_STATUS}: {unclassified}"
+        )
+
+    def test_an_unclassified_code_is_a_server_fault(self):
+        """A published code this seller does not raise resolves to 500.
+
+        ``BUDGET_CAP_REACHED`` is one: no class emits it, so it has no row. The
+        default is not a judgement about that code — it is the floor that used to
+        be the base exception's own class default.
         """
-        exc = AdCPSalesAgentError(error_code=AppErrorCode.INTERNAL_ERROR)
+        exc = AdCPSalesAgentError(error_code=ErrorCode.BUDGET_CAP_REACHED)
 
-        assert exc.status_code == 500
+        assert exc.status_code == _UNCLASSIFIED_STATUS == 500
 
 
 # ---------------------------------------------------------------------------
-# The subclass walk behind the wire-code -> HTTP-status table
+# The subclass walk behind the error-code compliance tests
 # ---------------------------------------------------------------------------
 
 
 class TestIterConcreteSubclasses:
     """Lock the contract of ``AdCPSalesAgentError.iter_concrete_subclasses()``.
 
-    ``_build_error_code_to_status`` depends on this walk visiting every
-    transitive subclass exactly once; it iterates the generator but pins none of
+    The error-code compliance tests depend on this walk visiting every
+    transitive subclass exactly once; they iterate the generator but pin none of
     its behavior, so a regression in transitivity, dedup or self-exclusion would
-    silently produce a table missing rows or overwriting them.
+    silently narrow what they grade.
     """
 
     def test_yields_transitive_descendants_once_excluding_cls(self):

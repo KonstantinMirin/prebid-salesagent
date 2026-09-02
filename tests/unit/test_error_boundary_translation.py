@@ -12,9 +12,9 @@ than in the table, and that nothing else in the suite exercises:
   its ``status_code``; a plain ``ToolError`` is rebuilt from a synthetic error
   whose HTTP status comes from ``_ERROR_CODE_TO_STATUS`` and whose code falls
   back to ``INTERNAL_ERROR`` when the wire string is unrecognized.
-- ``_build_error_code_to_status`` — the derived wire-code → HTTP-status table:
-  the "highest status wins" rule for a code two classes declare, and the
-  ``INVALID_REQUEST → 400`` seed.
+- ``AdCPSalesAgentError.status_code`` — a read-only function of the wire code,
+  read from ``CODE_TABLE``. What is graded is that one code cannot be answered
+  with two statuses, and that the answer does not move with the import set.
 - ``extract_error_info`` on its NON-typed branches — the plain-``ToolError``
   argument shapes, the ``is_error_code`` heuristic that chooses between them,
   and the non-``ToolError`` fallthrough.
@@ -24,21 +24,26 @@ than in the table, and that nothing else in the suite exercises:
   boundaries that call it.
 - ``_translate_to_tool_error``'s plain-``ToolError`` passthrough, which must
   stay ahead of the pre-converted ``typed`` short-circuit.
-- The per-class HTTP ``status_code`` roundtrip through REST. ``status_code`` is
-  the one graded wire-adjacent value that is NOT a function of the error code —
-  ``CODE_TABLE`` does not carry it — so no table-derivation argument covers it.
+- The HTTP ``status_code`` roundtrip through REST. ``CODE_TABLE`` now carries
+  the status, so the value itself is a table read — what is NOT a table read is
+  whether it survives the handler stack and lands on the response, which is what
+  driving each exception through REST grades.
 """
 
 from __future__ import annotations
 
 import copy
+import inspect
 import json
+import subprocess
+import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from fastmcp.exceptions import ToolError
 
-from src.core.errors.codes import Recovery
+from src.core.errors.codes import CODE_TABLE, Recovery
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPConflictError,
@@ -52,7 +57,6 @@ from src.core.exceptions import (
 )
 from src.core.tool_error_logging import (
     AdCPToolError,
-    _build_error_code_to_status,
     _coerce_recovery,
     _translate_to_tool_error,
     extract_error_info,
@@ -161,101 +165,131 @@ class TestHandleToolError:
         assert_envelope_shape(json.loads(response.body), "INTERNAL_ERROR", recovery="transient")
 
 
-class TestErrorCodeToStatusTable:
-    """``_build_error_code_to_status`` derives the plain-ToolError status map.
+class TestStatusIsAFunctionOfTheWireCode:
+    """One wire code, one HTTP status — with nowhere left to say otherwise.
 
-    The map used to be hand-maintained and drifted from the class declarations
-    it was supposed to mirror. Deriving it removes the drift but introduces a
-    question the class declarations alone cannot answer: what happens when two
-    classes declare the same wire code with different statuses.
+    ``status_code`` used to be a per-class ``_default_status_code`` slot, and the
+    plain-``ToolError`` boundary reconstructed a code → status table by walking
+    ``AdCPSalesAgentError.__subclasses__()`` and letting the highest status win.
+    Both halves were wrong in the same way. A subclass could redeclare its
+    ``_code`` and keep a status that belonged to its parent's code —
+    ``SimulationError`` emitted INVALID_REQUEST carrying ``AdCPNotFoundError``'s
+    404 — and because ``__subclasses__()`` only sees classes already imported,
+    the table answered INVALID_REQUEST 400 or 404 depending on which modules the
+    process had imported first (salesagent-pssfi).
+
+    The status is now read from ``CODE_TABLE`` by code. These tests grade the
+    two properties that fix bought: no code has two statuses, and no status
+    depends on the import set.
     """
 
-    def test_shared_wire_code_resolves_to_the_highest_declared_status(self):
-        """SERVICE_UNAVAILABLE is declared twice — the more restrictive status wins.
+    def test_no_subclass_can_shadow_the_derived_status(self):
+        """Every class in the hierarchy resolves ``status_code`` to the ONE property.
 
-        A real collision, not a constructed one: ``AdCPAdapterError`` is a 502
-        and ``AdCPServiceUnavailableError`` a 503, and both emit
-        SERVICE_UNAVAILABLE. A plain-ToolError fallback carries no context to
-        disambiguate them, so the rule is "highest wins".
+        The check is structural — ``getattr_static`` on the live class set, so a
+        subclass added later is graded the moment it exists — rather than
+        instantiating each class and comparing numbers: several classes take
+        required constructor arguments (``SetupIncompleteError``), and a
+        value-comparison test would be reporting on whichever of them a given
+        worker's import set happened to have loaded. What must stay impossible is
+        not a wrong number but a second place to put one, which is exactly what
+        the old ``_default_status_code`` slot was: writable, inheritable, and
+        free to belong to a different code than the class's own.
         """
-        assert AdCPAdapterError._code == AdCPServiceUnavailableError._code
-        assert AdCPAdapterError._default_status_code == 502
-        assert AdCPServiceUnavailableError._default_status_code == 503
-
-        table = _build_error_code_to_status()
-
-        assert table[str(AdCPAdapterError._code)] == 503
-
-    def test_invalid_request_is_seeded_as_a_client_error(self):
-        """INVALID_REQUEST — AdCP's generic bad-request code — always has a 4xx entry.
-
-        The seed is what stops a plain ``ToolError("INVALID_REQUEST", ...)`` from
-        falling through to the unknown-code 500 and reporting the buyer's own
-        malformed request as a server fault.
-
-        The assertion is a 4xx band rather than the literal 400 the seed writes,
-        because the seed does not survive the subclass walk: ``SimulationError``
-        (``src/core/strategy.py``) declares INVALID_REQUEST while inheriting
-        ``AdCPNotFoundError``'s 404, so "highest status wins" raises the entry to
-        404 — and only once ``src.core.strategy`` has been imported, which makes
-        the resolved value depend on the import set. Pinning 400 here would grade
-        that accident rather than the seed. See the report accompanying this file.
-        """
-        status = _build_error_code_to_status()["INVALID_REQUEST"]
-
-        assert 400 <= status < 500, f"INVALID_REQUEST resolved to {status}, not a client-error status"
-
-    def test_every_concrete_subclass_that_declares_a_code_reaches_the_table(self):
-        """Drift guard: the table is DERIVED from the class declarations, not hand-kept.
-
-        The hand-maintained version of this table drifted — it said
-        ``AUTH_REQUIRED -> 401`` while the class emitting that code carried 403,
-        so a plain-ToolError raise from authorization code surfaced as 401. A
-        derivation that silently skips a class puts that drift straight back, so
-        every concrete subclass declaring ``_code`` must be present, at a status
-        no LOWER than the one it declares: the "highest status wins" merge may
-        only raise an entry, never lower it.
-
-        The merge is also why the table is not a pure function of the classes it
-        walks. ``SimulationError`` (``src/core/strategy.py``) declares
-        INVALID_REQUEST while inheriting ``AdCPNotFoundError``'s 404, so the
-        seeded 400 resolves to 404 — but only once ``src.core.strategy`` has been
-        imported, which makes the value depend on the import set. This guard is
-        where a class joining, leaving, or re-coding that walk becomes visible.
-        """
-        table = _build_error_code_to_status()
-        declared = [cls for cls in AdCPSalesAgentError.iter_concrete_subclasses() if getattr(cls, "_code", None)]
+        derived = AdCPSalesAgentError.__dict__["status_code"]
+        walked = list(AdCPSalesAgentError.iter_concrete_subclasses())
 
         # Non-vacuity: an empty walk would satisfy every assertion below.
-        assert declared, "no concrete AdCPSalesAgentError subclass declares a code — the walk is vacuous"
+        assert walked, "no concrete AdCPSalesAgentError subclass was walked — the check is vacuous"
 
-        drift = [
-            f"  {cls.__name__}: _code={str(cls._code)!r} declares {cls._default_status_code}, "
-            f"table says {table.get(cls._code)!r}"
-            for cls in declared
-            if table.get(cls._code, 0) < cls._default_status_code
+        shadowed = [
+            f"  {cls.__name__} defines its own status_code ({inspect.getattr_static(cls, 'status_code')!r})"
+            for cls in walked
+            if inspect.getattr_static(cls, "status_code", derived) is not derived
         ]
-        assert not drift, (
-            "concrete AdCPSalesAgentError subclasses are missing from — or understated in — the derived "
-            "status table, so the plain-ToolError fallback would mis-classify their HTTP status:\n" + "\n".join(drift)
+        assert not shadowed, (
+            "these classes override the code-derived HTTP status, so one wire code can again be "
+            "answered two ways:\n" + "\n".join(shadowed)
         )
 
-    def test_each_call_returns_a_fresh_table(self):
-        """The derivation is a function, not a constant wearing a function's name.
+    def test_the_derived_status_is_the_table_entry(self):
+        """The property reads ``CODE_TABLE``, so a class's code decides its status.
 
-        Re-walking ``__subclasses__()`` per call is what lets a subclass defined
-        in a module imported later reach the table at all. Returning a shared
-        dict by reference would also let one caller's mutation reach every other
-        caller of a table that decides HTTP status.
+        Paired with the shadowing check above: that one says there is exactly one
+        place the status can come from, this one says what that place is. Uses
+        the base class with a named code, which is the only construction that
+        can vary the code independently of the class.
         """
-        first = _build_error_code_to_status()
-        second = _build_error_code_to_status()
+        error = AdCPSalesAgentError(error_code=AdCPAdapterError._code)
 
-        assert first == second
-        assert first is not second
+        assert error.status_code == CODE_TABLE[AdCPAdapterError._code].status == 503
 
-        first["INVALID_REQUEST"] = 599
-        assert _build_error_code_to_status()["INVALID_REQUEST"] != 599
+    def test_two_classes_sharing_a_code_are_answered_identically(self):
+        """SERVICE_UNAVAILABLE is emitted by four classes and answered one way.
+
+        A real collision, not a constructed one: ``AdCPAdapterError`` declared
+        502 and ``AdCPServiceUnavailableError`` 503 while both put
+        SERVICE_UNAVAILABLE on the wire, so one failure told the buyer two
+        different things. The buyer reads the code, so the code decides: 503.
+        """
+        assert AdCPAdapterError._code == AdCPServiceUnavailableError._code
+
+        assert AdCPAdapterError().status_code == AdCPServiceUnavailableError().status_code == 503
+
+    def test_simulation_error_is_answered_as_the_bad_request_it_is(self):
+        """``SimulationError`` emits INVALID_REQUEST, so it is a 400 — not its parent's 404.
+
+        Graded through REST rather than off the attribute: the 404 the buyer
+        used to get came out of the response, and that is where it has to stop.
+        """
+        from src.core.strategy import SimulationError
+
+        response = _capabilities_response(SimulationError())
+
+        assert response.status_code == 400
+        assert_envelope_shape(response.json(), "INVALID_REQUEST", recovery="correctable")
+
+    def test_status_does_not_move_with_the_import_set(self):
+        """The same code resolves to the same status under a narrow and a wide import.
+
+        This is the literal regression, so it is graded on the literal path: a
+        plain ``ToolError("INVALID_REQUEST")`` through ``handle_tool_error``,
+        which is what a legacy raise site puts in front of a buyer. It has to run
+        out-of-process twice — the defect was that the answer depended on which
+        modules had been imported, and a test sharing this session's interpreter
+        has already imported everything. The wide leg imports
+        ``src.core.strategy`` first, whose ``SimulationError`` used to raise the
+        derived table's INVALID_REQUEST entry from 400 to 404; the narrow leg
+        does not. They used to disagree.
+        """
+        resolve = (
+            "from fastmcp.exceptions import ToolError;"
+            "from src.core.tool_error_logging import handle_tool_error;"
+            "print(handle_tool_error(ToolError('INVALID_REQUEST', 'bad')).status_code)"
+        )
+        legs = ("", "import src.core.strategy;")
+
+        answers = [
+            subprocess.run(
+                [sys.executable, "-c", leg + resolve],
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=Path(__file__).resolve().parents[2],
+            ).stdout.strip()
+            for leg in legs
+        ]
+
+        assert answers == ["400", "400"], f"INVALID_REQUEST resolved differently per import set: {answers}"
+
+    def test_a_caller_cannot_name_a_status_that_contradicts_the_code(self):
+        """There is no ``status_code=`` parameter, so no raise site can override it.
+
+        The old constructor took one, which is how a boundary could hand a code
+        one status while the class that owned the code declared another.
+        """
+        with pytest.raises(TypeError):
+            AdCPValidationError(status_code=500)  # type: ignore[call-arg]
 
 
 # ---------------------------------------------------------------------------
@@ -466,12 +500,13 @@ class TestAdcpErrorForAtEveryBoundary:
 class TestRestStatusCodeRoundtrip:
     """Each typed class's ``status_code`` must survive the REST boundary.
 
-    ``message``, ``recovery`` and ``suggestion`` are all functions of the error
-    code, resolved from ``CODE_TABLE`` at read time, so asserting them per class
-    only re-reads the pinned table. ``status_code`` is not in that table — it is
-    a per-class transport choice — so the only thing that proves it reaches the
-    wire is driving the exception through the handler stack and reading the
-    response.
+    ``CODE_TABLE`` now owns the status alongside ``message``, ``recovery`` and
+    ``suggestion``, so the expected numbers below are not an independent
+    declaration of what each class means — that is graded by
+    :class:`TestStatusIsAFunctionOfTheWireCode`. What these rows grade is the
+    delivery: the status is a read-only property with no instance state behind
+    it, and only driving the exception through the handler stack proves the
+    property is what the response is built from.
     """
 
     @pytest.mark.parametrize(
@@ -481,7 +516,9 @@ class TestRestStatusCodeRoundtrip:
             (AdCPGoneError, 410),
             (AdCPServiceUnavailableError, 503),
             (AdCPRateLimitError, 429),
-            (AdCPAdapterError, 502),
+            # 503, not the 502 this class used to declare: it emits
+            # SERVICE_UNAVAILABLE, and the code owns the status.
+            (AdCPAdapterError, 503),
         ],
         ids=lambda value: value.__name__ if isinstance(value, type) else str(value),
     )

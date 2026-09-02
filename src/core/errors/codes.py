@@ -1,8 +1,9 @@
 """The one table every buyer-facing error resolves against.
 
-An error code is a label. This module maps each label to the three things a
-buyer needs with it: how to recover, what to do about it, and what happened.
-Nothing else in the codebase decides those three per raise site.
+An error code is a label. This module maps each label to the four things a
+buyer needs with it: how to recover, what to do about it, what happened, and
+the HTTP status the failure is signalled with. Nothing else in the codebase
+decides those four per raise site.
 
 The 92 codes AdCP publishes are LOADED from the pinned schema bundle inside the
 installed ``adcp`` wheel -- ``enums/error-code.json``, whose ``enumMetadata``
@@ -87,11 +88,21 @@ class CodeEntry:
     put a blank buyer-facing field on every raise of that code. Checking it at
     the one place entries are built — pinned-schema load and platform authorship
     alike — means no test or raise site ever needs to re-check non-emptiness.
+
+    ``status`` is the HTTP status the failure is signalled with. It belongs to
+    the CODE, not to whichever exception class happened to raise it: the pinned
+    schema states the transport-level failure marker per code — ``HTTP 5xx`` for
+    CONFIGURATION_ERROR and GOVERNANCE_UNAVAILABLE, ``HTTP 4xx`` for
+    GOVERNANCE_DENIED and CREDENTIAL_IN_ARGS (``enums/error-code.json``,
+    ``enumDescriptions``, AdCP 3.1.1) — so a class that emitted a code with a
+    status from a different band would contradict the pin. The band is the
+    spec's; the exact number inside it is this seller's.
     """
 
     recovery: Recovery
     suggestion: str
     message: str
+    status: int
 
     def __post_init__(self) -> None:
         if not self.suggestion or not self.message:
@@ -99,6 +110,8 @@ class CodeEntry:
                 f"CodeEntry requires non-empty suggestion and message, got "
                 f"suggestion={self.suggestion!r}, message={self.message!r}"
             )
+        if not 100 <= self.status <= 599:
+            raise ValueError(f"CodeEntry.status must be an HTTP status code, got {self.status!r}")
 
 
 class AppErrorCode(StrEnum):
@@ -142,6 +155,7 @@ class AppErrorCode(StrEnum):
             recovery=Recovery.TRANSIENT,
             suggestion="Check the media buy's status before retrying; it may activate without further action",
             message="The media buy was created but could not be activated",
+            status=502,
         ),
     )
     AD_SERVER_CREATE_FAILED = (
@@ -150,6 +164,7 @@ class AppErrorCode(StrEnum):
             recovery=Recovery.TRANSIENT,
             suggestion="Retry with backoff; if it persists, the seller's operator must intervene",
             message="The media buy could not be created on the ad server",
+            status=502,
         ),
     )
     AD_SERVER_UPDATE_FAILED = (
@@ -158,6 +173,7 @@ class AppErrorCode(StrEnum):
             recovery=Recovery.TRANSIENT,
             suggestion="Retry with backoff; the media buy is unchanged",
             message="The media buy could not be updated on the ad server",
+            status=502,
         ),
     )
     AGENT_UNREACHABLE = (
@@ -166,6 +182,7 @@ class AppErrorCode(StrEnum):
             recovery=Recovery.TRANSIENT,
             suggestion="Retry to pick up the missing formats; the formats that were returned are complete and usable",
             message="A configured creative agent is unreachable; its formats were not included",
+            status=502,
         ),
     )
     INTERNAL_ERROR = (
@@ -174,6 +191,7 @@ class AppErrorCode(StrEnum):
             recovery=Recovery.TRANSIENT,
             suggestion="Retry with backoff; if it persists, report it to the seller's operator",
             message="The request could not be completed",
+            status=500,
         ),
     )
     MEDIA_BUY_REJECTED = (
@@ -182,6 +200,7 @@ class AppErrorCode(StrEnum):
             recovery=Recovery.TERMINAL,
             suggestion="Do not retry this buy; contact the seller about the decision",
             message="The media buy was declined",
+            status=422,
         ),
     )
     PARTIAL_FAILURE = (
@@ -190,6 +209,7 @@ class AppErrorCode(StrEnum):
             recovery=Recovery.CORRECTABLE,
             suggestion="Read the per-item errors and resend only the items that failed",
             message="Some items in the request succeeded and others failed",
+            status=502,
         ),
     )
     WORKFLOW_CREATION_FAILED = (
@@ -198,6 +218,7 @@ class AppErrorCode(StrEnum):
             recovery=Recovery.TRANSIENT,
             suggestion="Retry with backoff; the request itself was accepted",
             message="The request was accepted but its approval workflow could not be started",
+            status=502,
         ),
     )
 
@@ -309,12 +330,89 @@ _AUTHORED_SPEC_MESSAGES: Final[Mapping[ErrorCode, str]] = MappingProxyType(
 )
 
 
+#: HTTP status for a published code this seller does not classify below. 500 is
+#: what an unclassified code has always resolved to — it was the base exception's
+#: own class default — so nothing that reaches this line changes shape. It is a
+#: floor, not a judgement: none of this seller's raise sites can emit a code that
+#: lands here, because every code a typed class declares is in the table below.
+_UNCLASSIFIED_STATUS: Final = 500
+
+
+#: The HTTP status each published code is signalled with.
+#:
+#: Keyed by CODE, which is the whole point. These 31 numbers were, until
+#: salesagent-pssfi, 26 ``_default_status_code`` declarations spread over the
+#: exception classes in ``src/core/exceptions.py`` — where a class was free to
+#: redeclare its ``_code`` and keep a status inherited from a parent that meant
+#: something else. ``SimulationError`` did exactly that: INVALID_REQUEST with
+#: ``AdCPNotFoundError``'s 404, so a buyer's malformed simulation request was
+#: answered 404, and the derived plain-``ToolError`` table resolved
+#: INVALID_REQUEST to 400 or 404 depending on whether ``src.core.strategy`` had
+#: been imported yet. Keyed by code, that state cannot be written down.
+#:
+#: The pinned schema fixes the BAND per code (see :class:`CodeEntry`); the exact
+#: number is this seller's, and the choices are conventional HTTP: 4xx where the
+#: buyer can change the request, 5xx where it cannot.
+_HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
+    {
+        # 400 — the request is malformed or unsupported as written.
+        ErrorCode.INVALID_REQUEST: 400,
+        ErrorCode.VALIDATION_ERROR: 400,
+        ErrorCode.VERSION_UNSUPPORTED: 400,
+        # 401 / 402 / 403 — who is asking, and whether they may.
+        ErrorCode.AUTH_INVALID: 401,
+        ErrorCode.AUTH_MISSING: 401,
+        ErrorCode.ACCOUNT_PAYMENT_REQUIRED: 402,
+        ErrorCode.ACCOUNT_SUSPENDED: 403,
+        ErrorCode.PERMISSION_DENIED: 403,
+        ErrorCode.POLICY_VIOLATION: 403,
+        # 404 — a named thing does not exist, or is not the caller's to see.
+        ErrorCode.ACCOUNT_NOT_FOUND: 404,
+        ErrorCode.CREATIVE_NOT_FOUND: 404,
+        ErrorCode.MEDIA_BUY_NOT_FOUND: 404,
+        ErrorCode.PACKAGE_NOT_FOUND: 404,
+        ErrorCode.PRODUCT_NOT_FOUND: 404,
+        ErrorCode.REFERENCE_NOT_FOUND: 404,
+        ErrorCode.SESSION_NOT_FOUND: 404,
+        # 409 — the request collides with state that already exists.
+        ErrorCode.ACCOUNT_AMBIGUOUS: 409,
+        ErrorCode.CONFLICT: 409,
+        ErrorCode.IDEMPOTENCY_CONFLICT: 409,
+        ErrorCode.IDEMPOTENCY_EXPIRED: 409,
+        # 410 — the resource's own status forbids the operation.
+        ErrorCode.INVALID_STATE: 410,
+        # 422 — well-formed, understood, and refused on its merits.
+        ErrorCode.ACCOUNT_SETUP_REQUIRED: 422,
+        ErrorCode.BUDGET_EXCEEDED: 422,
+        ErrorCode.BUDGET_EXHAUSTED: 422,
+        ErrorCode.BUDGET_TOO_LOW: 422,
+        ErrorCode.CREATIVE_REJECTED: 422,
+        ErrorCode.PRODUCT_UNAVAILABLE: 422,
+        ErrorCode.UNSUPPORTED_FEATURE: 422,
+        # 429 — correct, but too often.
+        ErrorCode.RATE_LIMITED: 429,
+        # 5xx — the buyer cannot fix it. CONFIGURATION_ERROR and
+        # SERVICE_UNAVAILABLE are the two the pin bands explicitly, both 5xx.
+        ErrorCode.CONFIGURATION_ERROR: 500,
+        # SERVICE_UNAVAILABLE is what the buyer is TOLD, so 503 is what the buyer
+        # is answered — including for the adapter and MCP-client failures that
+        # used to declare 502 while emitting this code. A 502 answer to a
+        # "service unavailable" code told the buyer two different things about
+        # one failure; the codes for an ad-server call that actually failed are
+        # AD_SERVER_CREATE_FAILED / AD_SERVER_UPDATE_FAILED, which are 502 above.
+        ErrorCode.SERVICE_UNAVAILABLE: 503,
+    }
+)
+
+
 def _build_code_table() -> dict[ErrorCodeT, CodeEntry]:
     """Assemble the published codes and this platform's own into one table.
 
     A message comes from the first source that has one: authored here, then the
     SDK's ``STANDARD_ERROR_CODES``, then the pinned schema's own prose. Every
     code resolves to text, so no code can reach a buyer with an empty message.
+    A status comes from ``_HTTP_STATUS`` or, for the published codes this seller
+    never raises, from ``_UNCLASSIFIED_STATUS``.
     """
     published = _load_published_codes()
     table: dict[ErrorCodeT, CodeEntry] = {}
@@ -346,6 +444,7 @@ def _build_code_table() -> dict[ErrorCodeT, CodeEntry]:
                 or STANDARD_ERROR_CODES.get(code.value, {}).get("message")
                 or _message_from_prose(spec.description)
             ),
+            status=_HTTP_STATUS.get(code, _UNCLASSIFIED_STATUS),
         )
 
     # Each member carries its own entry, so there is nothing to reconcile: a code

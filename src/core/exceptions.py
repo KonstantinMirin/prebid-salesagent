@@ -138,26 +138,29 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
     type. mypy then rejects both a dict and a foreign detail class at every
     raise site, and reading ``exc.details`` back is typed without a cast.
 
-    Class-level identity (``_code``, ``_default_status_code``) is declared
-    with ``ClassVar`` per PEP 526 — each typed subclass overrides the
-    ``_default_*`` slot, not the public name. The public ``error_code``,
-    ``message``, ``recovery`` and ``suggestion`` are read-only properties
+    Class-level identity is ``_code`` and nothing else, declared with
+    ``ClassVar`` per PEP 526. The public ``error_code``, ``message``,
+    ``recovery``, ``suggestion`` and ``status_code`` are read-only properties
     over ``_error_code`` — functions of the code, resolved from
     ``CODE_TABLE`` at every read, so no instance can carry a value that
     disagrees with the table by any route, assignment included.
-    ``status_code`` remains an instance attribute: the HTTP status is a
-    transport choice, not a field of the wire error object, so it is the one
-    per-class default a caller may override (``error_code=`` on the base,
-    refused on a coded subclass).
 
-    Code that needs class-level identity (e.g. ``_build_error_code_to_status``
-    walking ``__subclasses__()`` to build the wire-code → HTTP-status table)
-    reads ``cls._code`` / ``cls._default_status_code`` directly.
-    Instance code reads ``self.error_code`` etc. as before.
+    ``status_code`` joined that list in salesagent-pssfi. It used to be a
+    per-class ``_default_status_code`` slot, which let a class redeclare its
+    ``_code`` and keep a status inherited from a parent that meant something
+    else — ``SimulationError`` emitted INVALID_REQUEST with
+    ``AdCPNotFoundError``'s 404 — and forced the plain-``ToolError`` boundary to
+    reconstruct a code → status table by walking ``__subclasses__()``, whose
+    answer for INVALID_REQUEST was 400 or 404 depending on the import set. There
+    is now no per-class slot to disagree with, and nothing to walk.
+
+    Code that needs class-level identity reads ``cls._code`` directly. Instance
+    code reads ``self.error_code`` etc. as before.
 
     Attributes:
         message: Human-readable error description (read-only, from CODE_TABLE).
-        status_code: HTTP status code for REST/FastAPI responses (instance).
+        status_code: HTTP status for REST/FastAPI responses (read-only, from
+            CODE_TABLE).
         error_code: Machine-readable error code string (read-only).
         recovery: Recovery classification for buyer agents (read-only, from
             CODE_TABLE).
@@ -203,8 +206,6 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
     ``message``.
     """
 
-    # Class-level identity defaults. Subclasses override these.
-    _default_status_code: ClassVar[int] = 500
     #: The code this class IS. Annotation only on the base: a class that declares
     #: none cannot be constructed (see ``__new__``), so a code is identity rather
     #: than a default anyone can fall through to.
@@ -221,7 +222,6 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
     # here: they are read-only properties over ``_error_code``, so none of
     # those slots can be written after construction.
     _error_code: ErrorCodeT
-    status_code: int
     internal_detail: BaseException | str | None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
@@ -270,7 +270,6 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
         self,
         *,
         error_code: ErrorCodeT | None = None,
-        status_code: int | None = None,
         details: DetailsT | None = None,
         issues: list[ErrorIssue] | None = None,
         field: str | None = None,
@@ -312,7 +311,6 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
         # build_two_layer_error_envelope(); emitted only to the server-side log
         # by adcp_error_for(). Never add it to a serializer.
         self.internal_detail = internal_detail
-        self.status_code = status_code if status_code is not None else type(self)._default_status_code
         # args stays EMPTY: BaseException.__reduce__ replays ``cls(*args)``, and this
         # constructor takes none. ``__reduce__`` below replays the keyword form instead,
         # and ``__str__`` reads the property, so str(e) and .message cannot diverge.
@@ -348,6 +346,18 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
         """The pinned correction hint for this code, derived like ``message``."""
         return CODE_TABLE[self._error_code].suggestion
 
+    @property
+    def status_code(self) -> int:
+        """The HTTP status this error is signalled with, derived like ``message``.
+
+        No setter and no constructor parameter: two errors carrying one wire code
+        cannot be answered with two different statuses, because there is nowhere
+        left to say so. That is the whole fix for salesagent-pssfi — the old
+        per-class slot was writable by inheritance, so a subclass could re-code
+        itself and silently keep its parent's status.
+        """
+        return CODE_TABLE[self._error_code].status
+
     def __str__(self) -> str:
         return self.message
 
@@ -360,9 +370,11 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
     def iter_concrete_subclasses(cls) -> Iterator[type[AdCPSalesAgentError]]:
         """Yield every transitive *concrete* subclass of ``cls`` exactly once.
 
-        Single source of truth for the subclass walk that builds the
-        wire-code -> HTTP-status table (``_build_error_code_to_status``) and
-        backs the error-code compliance tests. Yields descendants only — not
+        Single source of truth for the subclass walk that backs the
+        error-code compliance tests. (It also built the wire-code → HTTP-status
+        table, until that table stopped existing: a status is now read from
+        ``CODE_TABLE`` by code, so nothing has to be aggregated over whichever
+        subclasses an import happened to define.) Yields descendants only — not
         ``cls`` itself — deduplicates so a class reachable by more than one
         path is visited once, and skips abstract bases (their descendants are
         still walked) so the name's "concrete" promise holds.
@@ -384,7 +396,6 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
 class AdCPValidationError(AdCPSalesAgentError[ValidationDetails]):
     """Invalid parameters or request data (400)."""
 
-    _default_status_code: ClassVar[int] = 400
     _code: ClassVar[ErrorCodeT] = ErrorCode.VALIDATION_ERROR
 
 
@@ -398,7 +409,6 @@ class AdCPVersionUnsupportedError(AdCPSalesAgentError[VersionUnsupportedDetails]
     shape and names none, so it stays reusable.
     """
 
-    _default_status_code: ClassVar[int] = 400
     _code: ClassVar[ErrorCodeT] = ErrorCode.VERSION_UNSUPPORTED
 
 
@@ -438,7 +448,6 @@ class AdCPAuthenticationError(AdCPSalesAgentError[EntityRefDetails]):
     rotate/refresh once if applicable, otherwise escalate to a human.
     """
 
-    _default_status_code: ClassVar[int] = 401
     _code: ClassVar[ErrorCodeT] = ErrorCode.AUTH_INVALID
 
 
@@ -464,7 +473,6 @@ class AdCPAuthorizationError(AdCPSalesAgentError[EntityRefDetails]):
     (salesagent-otc5, completing salesagent-mkso for this axis).
     """
 
-    _default_status_code: ClassVar[int] = 403
     _code: ClassVar[ErrorCodeT] = ErrorCode.PERMISSION_DENIED
 
 
@@ -499,7 +507,6 @@ class AdCPNotFoundError[D: ErrorDetails](AdCPSalesAgentError[D]):
     from the request, and this base is only the fallback.
     """
 
-    _default_status_code: ClassVar[int] = 404
     _code: ClassVar[ErrorCodeT] = ErrorCode.REFERENCE_NOT_FOUND
 
 
@@ -535,7 +542,6 @@ class AdCPAccountNotFoundError(AdCPNotFoundError[EntityRefDetails]):
 class AdCPAccountSetupRequiredError(AdCPSalesAgentError[AccountSetupDetails]):
     """Account exists but requires setup before use (422, ACCOUNT_SETUP_REQUIRED)."""
 
-    _default_status_code: ClassVar[int] = 422
     _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_SETUP_REQUIRED
 
 
@@ -546,7 +552,6 @@ class AdCPAccountSuspendedError(AdCPSalesAgentError[EntityRefDetails]):
     (the base default is transient to match its SERVICE_UNAVAILABLE wire code).
     """
 
-    _default_status_code: ClassVar[int] = 403
     _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_SUSPENDED
 
 
@@ -560,7 +565,6 @@ class AdCPAccountPaymentRequiredError(AdCPSalesAgentError[EntityRefDetails]):
     (the base default is transient to match its SERVICE_UNAVAILABLE wire code).
     """
 
-    _default_status_code: ClassVar[int] = 402
     _code: ClassVar[ErrorCodeT] = ErrorCode.ACCOUNT_PAYMENT_REQUIRED
 
 
@@ -574,7 +578,6 @@ class AdCPConflictError(AdCPSalesAgentError[ConflictDetails]):
     override this (#1417).
     """
 
-    _default_status_code: ClassVar[int] = 409
     _code: ClassVar[ErrorCodeT] = ErrorCode.CONFLICT
 
 
@@ -594,7 +597,6 @@ class AdCPGoneError(AdCPSalesAgentError[InvalidStateDetails]):
     media buy) and re-issuing the request.
     """
 
-    _default_status_code: ClassVar[int] = 410
     _code: ClassVar[ErrorCodeT] = ErrorCode.INVALID_STATE
 
 
@@ -606,21 +608,24 @@ class AdCPBudgetExhaustedError(AdCPSalesAgentError[BudgetDetails]):
     budget — so the buyer agent must not retry (#1417).
     """
 
-    _default_status_code: ClassVar[int] = 422
     _code: ClassVar[ErrorCodeT] = ErrorCode.BUDGET_EXHAUSTED
 
 
 class AdCPRateLimitError(AdCPSalesAgentError[AdapterFailureDetails]):
     """Too many requests (429)."""
 
-    _default_status_code: ClassVar[int] = 429
     _code: ClassVar[ErrorCodeT] = ErrorCode.RATE_LIMITED
 
 
 class AdCPAdapterError(AdCPSalesAgentError[AdapterFailureDetails]):
-    """External adapter (GAM, etc.) failure (502)."""
+    """External adapter (GAM, etc.) failure.
 
-    _default_status_code: ClassVar[int] = 502
+    Answered 503, like everything else emitting SERVICE_UNAVAILABLE: the status
+    follows the code the buyer reads, and this class declared 502 against that
+    code until salesagent-pssfi. An ad-server call that actually failed has its
+    own 502 codes -- AD_SERVER_CREATE_FAILED / AD_SERVER_UPDATE_FAILED.
+    """
+
     _code: ClassVar[ErrorCodeT] = ErrorCode.SERVICE_UNAVAILABLE
 
 
@@ -636,7 +641,6 @@ class AdCPConfigurationError(AdCPSalesAgentError[ConfigurationDetails]):
     (#1430 review).
     """
 
-    _default_status_code: ClassVar[int] = 500
     _code: ClassVar[ErrorCodeT] = ErrorCode.CONFIGURATION_ERROR
 
 
@@ -679,7 +683,6 @@ class AdCPServiceUnavailableError(AdCPSalesAgentError[AdapterFailureDetails]):
     than mutate the request.
     """
 
-    _default_status_code: ClassVar[int] = 503
     _code: ClassVar[ErrorCodeT] = ErrorCode.SERVICE_UNAVAILABLE
 
 
@@ -697,7 +700,6 @@ class AdCPInternalError(AdCPSalesAgentError[EntityRefDetails]):
     emits.
     """
 
-    _default_status_code: ClassVar[int] = 500
     _code: ClassVar[ErrorCodeT] = AppErrorCode.INTERNAL_ERROR
 
 
@@ -734,7 +736,6 @@ class AdCPUrlNotAllowedError(AdCPSalesAgentError[ValueRejectionDetails]):
     which ADR-010 forbids (the override knob that once allowed it is deleted).
     """
 
-    _default_status_code: ClassVar[int] = 400
     _code: ClassVar[ErrorCodeT] = ErrorCode.VALIDATION_ERROR
 
 
@@ -866,7 +867,6 @@ class AdCPTaskNotFoundError(AdCPNotFoundError[EntityRefDetails]):
 class AdCPBudgetTooLowError(AdCPSalesAgentError[BudgetDetails]):
     """Requested budget falls below product minimum (422, BUDGET_TOO_LOW)."""
 
-    _default_status_code: ClassVar[int] = 422
     _code: ClassVar[ErrorCodeT] = ErrorCode.BUDGET_TOO_LOW
 
 
@@ -889,7 +889,6 @@ class AdCPCapabilityNotSupportedError(AdCPSalesAgentError[CapabilityRefusalDetai
         ``correctable`` hint), reconcile with the SDK then.
     """
 
-    _default_status_code: ClassVar[int] = 422
     _code: ClassVar[ErrorCodeT] = ErrorCode.UNSUPPORTED_FEATURE
 
 
@@ -937,14 +936,12 @@ class AdCPIdempotencyExpiredError(AdCPConflictError):
 class AdCPCreativeRejectedError(AdCPSalesAgentError[CreativeRejectionDetails]):
     """Creative failed policy or technical validation (422, CREATIVE_REJECTED)."""
 
-    _default_status_code: ClassVar[int] = 422
     _code: ClassVar[ErrorCodeT] = ErrorCode.CREATIVE_REJECTED
 
 
 class AdCPBudgetExceededError(AdCPSalesAgentError[BudgetDetails]):
     """Requested budget exceeds tenant or product ceiling (422, BUDGET_EXCEEDED)."""
 
-    _default_status_code: ClassVar[int] = 422
     _code: ClassVar[ErrorCodeT] = ErrorCode.BUDGET_EXCEEDED
 
 
@@ -964,12 +961,11 @@ class AdCPProductUnavailableError(AdCPSalesAgentError[EntityRefDetails]):
     ``details``.
     """
 
-    _default_status_code: ClassVar[int] = 422
     _code: ClassVar[ErrorCodeT] = ErrorCode.PRODUCT_UNAVAILABLE
 
 
 # ---------------------------------------------------------------------------
-# Adapter-taxonomy subclasses (502 → SERVICE_UNAVAILABLE).
+# Adapter-taxonomy subclasses.
 # ---------------------------------------------------------------------------
 # These extend AdCPAdapterError to carry a failure taxonomy as the class identity
 # instead of smuggling it through ``details["internal_code"]`` (which is
@@ -979,34 +975,35 @@ class AdCPProductUnavailableError(AdCPSalesAgentError[EntityRefDetails]):
 
 
 class AdCPWorkflowError(AdCPAdapterError):
-    """Workflow-step orchestration failed inside an adapter (502 → SERVICE_UNAVAILABLE).
+    """Workflow-step orchestration failed inside an adapter (WORKFLOW_CREATION_FAILED, 502).
 
-    Carries the WORKFLOW_CREATION_FAILED taxonomy as the class identity so
-    logs/audit retain the specific failure mode while the wire shows the
-    standard SERVICE_UNAVAILABLE. Recovery=transient (inherited): the
-    workflow subsystem may succeed on retry.
+    Carries the WORKFLOW_CREATION_FAILED taxonomy as the class identity, and
+    that code is what reaches the buyer -- so 502 is its status, read from the
+    code like every other. Recovery=transient: the workflow subsystem may
+    succeed on retry.
     """
 
     _code: ClassVar[ErrorCodeT] = AppErrorCode.WORKFLOW_CREATION_FAILED
 
 
 class AdCPLineItemError(AdCPAdapterError):
-    """Adapter line-item creation failed (502 → SERVICE_UNAVAILABLE).
+    """Adapter line-item creation failed (SERVICE_UNAVAILABLE, 503).
 
-    Carries the LINE_ITEM_CREATION_FAILED taxonomy as the class identity;
-    same rationale as ``AdCPWorkflowError``.
+    The one adapter-taxonomy subclass that declares no code of its own: it
+    inherits ``AdCPAdapterError``'s SERVICE_UNAVAILABLE, and therefore that
+    code's 503. It read 502 until salesagent-pssfi gave the code the status.
     """
 
     _code: ClassVar[ErrorCodeT] = AppErrorCode.AD_SERVER_CREATE_FAILED
 
 
 class AdCPBulkUpdateError(AdCPAdapterError):
-    """A bulk update partially failed — N operations attempted, M failed (502 → SERVICE_UNAVAILABLE).
+    """A bulk update partially failed — N operations attempted, M failed (PARTIAL_FAILURE, 502).
 
     Unifies the cross-adapter partial-failure event under one class and one
-    status (502) so REST clients filtering on HTTP status don't fork by
-    adapter (previously broadstreet raised 502, GAM raised 503 for the same
-    semantic event). Carries the PARTIAL_FAILURE taxonomy as the class
+    status so REST clients filtering on HTTP status don't fork by adapter
+    (previously broadstreet raised 502, GAM raised 503 for the same semantic
+    event). Carries the PARTIAL_FAILURE taxonomy as the class
     identity; per-operation detail (failed IDs, counts) belongs in ``details``
     as data. Recovery=transient (inherited): failed operations may succeed
     on retry.
@@ -1016,7 +1013,7 @@ class AdCPBulkUpdateError(AdCPAdapterError):
 
 
 class AdCPActivationWorkflowError(AdCPAdapterError):
-    """Adapter order/line-item activation workflow failed (502 → SERVICE_UNAVAILABLE).
+    """Adapter order/line-item activation workflow failed (ACTIVATION_WORKFLOW_FAILED, 502).
 
     Distinct from ``AdCPWorkflowError`` (creation): this is the activation step
     of an existing order. Carries the ACTIVATION_WORKFLOW_FAILED taxonomy as the
@@ -1027,7 +1024,7 @@ class AdCPActivationWorkflowError(AdCPAdapterError):
 
 
 class AdCPGamUpdateError(AdCPAdapterError):
-    """A GAM line-item update API call failed (502 → SERVICE_UNAVAILABLE).
+    """A GAM line-item update API call failed (AD_SERVER_UPDATE_FAILED, 502).
 
     Carries the GAM_UPDATE_FAILED taxonomy as the class identity; per-operation
     detail (package_id, line_item_id) belongs in ``details`` as data.
@@ -1044,7 +1041,6 @@ class AdCPMediaBuyRejectedError(AdCPSalesAgentError[RejectionReasonDetails]):
     taxonomy as the class identity; the wire code is the standard POLICY_VIOLATION.
     """
 
-    _default_status_code: ClassVar[int] = 422
     _code: ClassVar[ErrorCodeT] = AppErrorCode.MEDIA_BUY_REJECTED
 
 

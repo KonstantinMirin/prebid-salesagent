@@ -350,7 +350,8 @@ async def tool_error_handler(request: Request, exc: ToolError) -> JSONResponse:
     that envelope bubbles up, this handler forwards it unchanged — removing
     the need for every REST route to duplicate a ``try/except ToolError``
     block. Plain ``ToolError`` (no typed source) falls through
-    ``handle_tool_error``'s ``_ERROR_CODE_TO_STATUS`` lookup.
+    ``handle_tool_error``, which resolves its wire code against ``CODE_TABLE``
+    and takes the status from the same entry.
 
     Matches subclasses, so ``AdCPToolError`` is caught here too.
     """
