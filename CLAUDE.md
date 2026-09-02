@@ -16,7 +16,7 @@ This guide helps you work effectively with the Prebid Sales Agent codebase maint
 - **Adding a new AdCP tool**: Extend library schema → Add `_impl()` function → Add MCP wrapper → Add A2A raw function → Add tests
 - **Fixing a route issue**: Check for conflicts with `grep -r "@.*route.*your/path"` → Use `url_for()` in Python, `scriptRoot` in JavaScript
 - **Modifying schemas**: Verify against AdCP spec → Update Pydantic model → Run `pytest tests/unit/test_adcp_contract.py`
-- **Database changes**: Use SQLAlchemy 2.0 `select()` → Use `JSONType` for JSON → Create migration with `alembic revision`
+- **Database changes**: Reach the data through a repository inside a Unit of Work → Use `JSONType` for JSON columns → Create migration with `alembic revision`
 
 ### Key files to know
 - `src/core/main.py` — MCP server and tool registration
@@ -193,11 +193,12 @@ When adding routes:
 - Never pass `json.dumps()` to `JSONType` columns — the column type handles serialization
 - Use SQLAlchemy relationships and cascading — they exist to manage parent/child persistence atomically
 - Use `JSONType` for all JSON columns (not plain `JSON`)
-- Use SQLAlchemy 2.0 patterns: `select()` + `scalars()`, not `query()`
+- Inside a repository, use SQLAlchemy 2.0 patterns: `select()` + `scalars()`, never `query()`
+- Outside a repository, `select()` on an ORM model is banned. It bypasses tenant scoping and the business rules the repository owns
 - Cast IDs at the boundary: JSON gives you strings, but Integer primary-key columns need `int` values. Write `int(x)` before passing to `.in_()` or `filter_by()`
 - All tests require PostgreSQL: `./run_all_tests.sh` runs Docker + tox (JSON reports in `test-results/`)
 - **Exception:** Bulk imports and complex reporting queries may use Core SQL/raw SQL for performance. Regular CRUD operations are never an exception.
-- **Enforced by:** `test_architecture_query_type_safety.py`, `test_architecture_repository_pattern.py`
+- **Enforced by:** `test_architecture_query_type_safety.py`, `test_architecture_repository_pattern.py`, `test_architecture_no_raw_select.py`
 
 **Repository pattern:**
 ```python
@@ -232,6 +233,23 @@ def _create_media_buy_impl(req, identity):
 ```
 
 **`_impl` functions should not contain `get_db_session()` calls.** Data access belongs in the repository layer. `_impl` functions receive repositories (or use them via dependency injection) and call typed methods.
+
+**Unit of Work:**
+```python
+# The UoW owns the session: it opens one on entry, commits on a clean exit,
+# and rolls back if the block raises. Repositories hang off it.
+with MediaBuyUoW(identity.tenant_id) as uow:
+    media_buy = uow.media_buys.get_by_id(req.media_buy_id)
+```
+
+`BaseUoW` and the per-domain classes live in `src/core/database/repositories/uow.py`. A UoW
+is how an `_impl` gets a repository — it is the only sanctioned place a session is created,
+which is what keeps `get_db_session()` out of business logic.
+
+`uow.session` raises a `DeprecationWarning`. If a repository has no method for the data you
+need, add one; do not reach past it to the raw session.
+
+See [patterns-reference.md](docs/development/patterns-reference.md) for both patterns in full.
 
 ### 4. Pydantic: explicit nested serialization
 Parent models must override `model_dump()` to serialize nested children:
@@ -768,6 +786,7 @@ Detailed documentation lives in `/docs`:
 - `development/architecture-principles.md` — the governing principles behind the layering
 - `development/architecture.md` — system architecture
 - `development/request-lifecycle.md` — how a request reaches business logic
+- `development/patterns-reference.md` — repository, Unit of Work, harness, and boundary patterns in full
 - `development/GETTING_STARTED.md` — initial setup guide
 - `development/contributing.md` — development workflow
 - `development/e2e-testing.md` — end-to-end testing
