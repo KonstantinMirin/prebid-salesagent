@@ -410,6 +410,21 @@ def _replace_routes():
             replaced_paths.add(path)
         else:
             new_routes.append(route)
+
+    # The SDK's route factory mounts exactly ONE path (a2a-sdk's
+    # AGENT_CARD_WELL_KNOWN_PATH), so a pass that only REPLACES leaves every other
+    # declared path unrouted -- /.well-known/agent.json (the path AdCP's own guide
+    # names, and the one the tenant landing page publishes a link to) and
+    # /agent.json both 404'd. Create what there was nothing to replace, reusing the
+    # SAME handler and methods: one closure serves every path, so their bodies are
+    # byte-identical by construction rather than by convention. Sorted for a
+    # deterministic route table. Appending at import time is safe because
+    # _install_admin_mounts() re-appends the Flask "" catch-all during lifespan
+    # startup, after this runs.
+    for path in sorted(_AGENT_CARD_PATHS - replaced_paths):
+        new_routes.append(Route(path, dynamic_agent_card, methods=["GET", "OPTIONS"]))
+        replaced_paths.add(path)
+
     app.router.routes = new_routes
 
     missing = _AGENT_CARD_PATHS - replaced_paths

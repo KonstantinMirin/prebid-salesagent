@@ -21,7 +21,16 @@ from adcp import get_adcp_spec_version
 # Add parent directories to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from src.app import _AGENT_CARD_PATHS
 from tests.e2e.conftest import e2e_host
+
+# Read the declared set from production: a path added to (or dropped from)
+# `_AGENT_CARD_PATHS` must change what these tests grade. Sorted for a
+# deterministic parametrization order.
+AGENT_CARD_PATHS = sorted(_AGENT_CARD_PATHS)
+
+# The one path the a2a-sdk factory mounts today — the regression guard.
+CANONICAL_AGENT_CARD_PATH = "/.well-known/agent-card.json"
 
 
 def _a2a_base_url() -> str:
@@ -98,9 +107,19 @@ class TestA2AEndpointsActual:
                 data = response.json()
                 assert data["name"] == "Prebid Sales Agent"
 
-                # Same URL validation as well-known endpoint
-                url = data["url"]
+                # Same URL validation as the well-known endpoint. a2a-sdk 1.0
+                # (protobuf) puts the endpoint in supportedInterfaces, NOT top-level:
+                # `data["url"]` here was a dormant 0.3-era read that never ran, because
+                # /agent.json 404'd and this whole block sits behind a 200 check. Routing
+                # the path woke it into a KeyError, which is what a vacuous assertion
+                # does the moment it stops being vacuous.
+                assert "supportedInterfaces" in data, "Agent card must have supportedInterfaces"
+                interfaces = data["supportedInterfaces"]
+                assert len(interfaces) > 0
+                url = interfaces[0]["url"]
+
                 assert not url.endswith("/"), f"Agent card URL should not have trailing slash: {url}"
+                assert url.endswith("/a2a"), f"Agent card URL should end with '/a2a': {url}"
 
         except (requests.ConnectionError, requests.Timeout):
             pytest.skip(f"A2A server not running at {_a2a_base_url()}")
@@ -153,6 +172,77 @@ class TestA2AEndpointsActual:
 
         except (requests.ConnectionError, requests.Timeout):
             pytest.skip(f"A2A server not running at {_a2a_base_url()}")
+
+
+class TestAgentCardDiscoveryPathsLive:
+    """Every declared agent-card path serves the same card on a LIVE server (#1440).
+
+    The live server runs under lifespan, where `_install_admin_mounts()`
+    re-appends the Flask catch-all `Mount("/")` last. That is the surface the
+    in-process TestClient probe in
+    tests/unit/test_a2a_transport_contract.py cannot reach: here a 200 also
+    proves the card routes are matched BEFORE the catch-all, not swallowed by it.
+    """
+
+    @pytest.mark.integration
+    @pytest.mark.parametrize("path", AGENT_CARD_PATHS)
+    def test_declared_card_path_is_served_live(self, path):
+        """GET on every path in _AGENT_CARD_PATHS returns 200 from the live server."""
+        try:
+            response = requests.get(f"{_a2a_base_url()}{path}", timeout=2)
+        except (requests.ConnectionError, requests.Timeout):
+            pytest.skip(f"A2A server not running at {_a2a_base_url()}")
+
+        assert response.status_code == 200, (
+            f"{path} is declared in _AGENT_CARD_PATHS but the live server returned "
+            f"{response.status_code}; every declared discovery path must be served"
+        )
+        assert response.headers["content-type"].startswith("application/json")
+
+    @pytest.mark.integration
+    def test_all_declared_card_paths_return_byte_identical_bodies_live(self):
+        """The live server serves one byte-identical card on every declared path.
+
+        Compares raw bytes, not the parsed dict: a caching fetcher keyed on bytes
+        treats a re-serialization difference as a different document.
+        """
+        try:
+            bodies = {path: requests.get(f"{_a2a_base_url()}{path}", timeout=2) for path in AGENT_CARD_PATHS}
+        except (requests.ConnectionError, requests.Timeout):
+            pytest.skip(f"A2A server not running at {_a2a_base_url()}")
+
+        for path, response in bodies.items():
+            assert response.status_code == 200, f"{path} returned {response.status_code}, expected 200"
+
+        canonical = bodies[CANONICAL_AGENT_CARD_PATH].content
+        for path, response in bodies.items():
+            assert response.content == canonical, (
+                f"{path} body differs from {CANONICAL_AGENT_CARD_PATH}; "
+                f"all declared paths must serve one byte-identical card"
+            )
+
+    @pytest.mark.integration
+    @pytest.mark.parametrize("path", AGENT_CARD_PATHS)
+    def test_host_derivation_applies_on_every_card_path_live(self, path):
+        """Apx-Incoming-Host + X-Forwarded-Proto drive supportedInterfaces[0].url on every path.
+
+        A path that returns 200 carrying the static fallback host is still broken:
+        it advertises the wrong A2A endpoint to every tenant.
+        """
+        try:
+            response = requests.get(
+                f"{_a2a_base_url()}{path}",
+                headers={"Apx-Incoming-Host": "tenant.example.com", "X-Forwarded-Proto": "https"},
+                timeout=2,
+            )
+        except (requests.ConnectionError, requests.Timeout):
+            pytest.skip(f"A2A server not running at {_a2a_base_url()}")
+
+        assert response.status_code == 200, f"{path} returned {response.status_code}, expected 200"
+        card = response.json()
+        assert card["supportedInterfaces"][0]["url"] == "https://tenant.example.com/a2a", (
+            f"{path} did not derive its URL from Apx-Incoming-Host/X-Forwarded-Proto"
+        )
 
 
 class TestA2AAgentCardCreation:
