@@ -17,6 +17,20 @@ Two properties bind them together:
   missing helper, a bypassed boundary — expressed three ways. Fix the
   design choice, and the symptoms never appear.
 
+## Contents
+
+- [Solve the problem the issue posed](#solve-the-problem-the-issue-posed)
+- [Put logic in its layer](#put-logic-in-its-layer)
+- [Say each piece of logic once](#say-each-piece-of-logic-once)
+- [Follow the codebase's own conventions](#follow-the-codebases-own-conventions)
+- [Write tests that can fail](#write-tests-that-can-fail)
+- [Assert on the wire](#assert-on-the-wire)
+- [Ground protocol behavior in the spec](#ground-protocol-behavior-in-the-spec)
+- [Prove behavior with live BDD scenarios](#prove-behavior-with-live-bdd-scenarios)
+- [Keep every allowlist shrinking](#keep-every-allowlist-shrinking)
+- [Write current Python](#write-current-python)
+- [Verify the change](#verify-the-change) — the checklist to run before you call a change complete
+
 ## Solve the problem the issue posed
 
 A change exists to close one or more issues, and the issue states the

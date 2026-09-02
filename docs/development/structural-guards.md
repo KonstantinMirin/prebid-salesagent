@@ -9,6 +9,27 @@ whether a guard should exist at all, and most structural concerns are better
 served by something that is not a guard. The guard inventory is expected to
 shrink as invariants move into types and lint rules.
 
+## Contents
+
+- [Decide whether a guard should exist](#decide-whether-a-guard-should-exist) — the three-question framework; work through it before adding to the inventory
+- [Refactoring checks are scaffolding, not guards](#refactoring-checks-are-scaffolding-not-guards) — completion checks get a deletion condition, not a permanent slot
+- [What guards catch](#what-guards-catch) — the one defect class that justifies a guard
+- [Guard design rules](#guard-design-rules) — shrinking allowlists and the other invariants every guard follows
+- [Guard inventory](#guard-inventory) — every active guard, with how it works, its tests, and its known violations:
+  - [Transport-boundary guards](#transport-boundary-guards)
+  - [Schema inheritance guard](#schema-inheritance-guard)
+  - [Boundary completeness guard](#boundary-completeness-guard)
+  - [Query type safety guard](#query-type-safety-guard)
+  - [No model_dump() in _impl guard](#no-model_dump-in-_impl-guard)
+  - [Repository pattern guard](#repository-pattern-guard)
+  - [BDD step quality guards](#bdd-step-quality-guards)
+  - [Single migration head guard](#single-migration-head-guard)
+  - [Hook-relocation guards](#hook-relocation-guards)
+- [Add a guard](#add-a-guard) — the procedure, and the shared helpers to build on
+- [Symbol subjects and shape subjects](#symbol-subjects-and-shape-subjects) — bind a symbol, allowlist a shape
+- [Run the guards](#run-the-guards)
+- [Relationship to other quality mechanisms](#relationship-to-other-quality-mechanisms) — where guards sit among types, lint, and hooks
+
 ## Decide whether a guard should exist
 
 A guard is the last resort, not the first move. Work through these three

@@ -8,6 +8,21 @@ which states the rule for people who need to make a request. This document
 is for people changing the gateway, or deciding whether a new concern belongs here
 or upstream.
 
+## Contents
+
+- [The module map](#the-module-map)
+- [What comes from the SDK](#what-comes-from-the-sdk) — what `adcp` owns and this repo never reimplements
+- [Workarounds carried until upstream provides them](#workarounds-carried-until-upstream-provides-them) — two dated workarounds, each with a named retirement condition
+- [The validation split: two verdicts, one predicate](#the-validation-split-two-verdicts-one-predicate) — `check_registration` versus `resolve_for_dial`, and the edge cases around them
+- [Provenance is carried, not decided](#provenance-is-carried-not-decided) — `UrlProvenance` as a type, not an inference
+- [Retry and backoff belong to the gateway](#retry-and-backoff-belong-to-the-gateway)
+- [One vocabulary for webhook auth](#one-vocabulary-for-webhook-auth) — `AuthenticationScheme` comes from the spec, not a local choice
+- [Address logic is confined to the egress package — enforced two ways](#address-logic-is-confined-to-the-egress-package--enforced-two-ways)
+- [A destination is a typed constant, never an environment read with a URL default](#a-destination-is-a-typed-constant-never-an-environment-read-with-a-url-default)
+- [Replace a validator without opening a gap](#replace-a-validator-without-opening-a-gap) — ordering rules for deleting or swapping an egress guard
+- [Decide where a new concern belongs](#decide-where-a-new-concern-belongs) — the questions to ask, in order
+- [Related](#related)
+
 ## The module map
 
 ```

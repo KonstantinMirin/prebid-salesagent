@@ -1,5 +1,17 @@
 # Security and authentication
 
+## Contents
+
+- [Admin authentication architecture](#admin-authentication-architecture) — environment-first super-admin check with database fallback
+- [Security recommendations](#security-recommendations) — session timeout, audit logging, and secrets hardening, by priority
+- [Tenant registration security](#tenant-registration-security) — subdomain assignment, branded URLs, ad server checks
+- [Access control patterns](#access-control-patterns) — super admins, tenant users, principal isolation, audit trail
+- [Outbound egress (SSRF)](#outbound-egress-ssrf) — the single gateway for outbound HTTP
+- [Security testing requirements](#security-testing-requirements)
+- [OAuth cross-domain authentication](#oauth-cross-domain-authentication) — why cross-domain login fails, and the workarounds
+- [Generic OIDC provider support](#generic-oidc-provider-support) — configuration for any OIDC provider, or Google OAuth
+- [Secrets configuration](#secrets-configuration) — the `.env.secrets` file and handling practices
+
 ## Admin authentication architecture
 
 The admin authentication system uses an environment-first approach with a database fallback for secure access control.

@@ -6,6 +6,19 @@ This document maps every key pattern to its **canonical implementation file** an
 
 Structural guard tests under `tests/unit/test_architecture_*.py` enforce these patterns, and the standards in [engineering-standards.md](engineering-standards.md) restate the ones a reviewer applies.
 
+## Contents
+
+- [1. Repository Pattern (CP-3)](#1-repository-pattern-cp-3)
+- [2. Unit of Work (UoW)](#2-unit-of-work-uow)
+- [3. Structural Guards and Allowlists](#3-structural-guards-and-allowlists)
+- [4. Writing Tests — The Test Harness](#4-writing-tests--the-test-harness)
+- [5. Factory Fixtures for Integration Tests](#5-factory-fixtures-for-integration-tests)
+- [6. Transport Boundary (CP-5)](#6-transport-boundary-cp-5)
+- [7. Error Hierarchy](#7-error-hierarchy)
+- [8. DRY — Shared Validation](#8-dry--shared-validation)
+- [Quick Reference: Where to Look](#quick-reference-where-to-look) — pattern-to-file lookup table
+- [Legacy Code Awareness](#legacy-code-awareness) — the files not to pattern-match from
+
 ## 1. Repository Pattern (CP-3)
 
 All database access goes through repository classes. `_impl` functions never contain raw `select()`, `session.scalars()`, `session.add()`, or direct model imports for data access.

@@ -3,6 +3,17 @@
 This file is the authoritative guide to writing tests in this project.
 **Agents must read this before writing any test code.**
 
+## Contents
+
+- [The harness system (use this)](#the-harness-system-use-this) — environments, capabilities, and multi-transport dispatch
+- [Test types](#test-types) — unit, integration, BDD, E2E, and admin suites
+- [Factory system (use this)](#factory-system-use-this) — ORM and Pydantic factories, the identity helper, session binding
+- [Obligation tests](#obligation-tests) — the rules that bind any test tagged `Covers:`
+- [HOWTO: The three steps of a test](#howto-the-three-steps-of-a-test) — one recipe each for setting state, checking a response field, and validating an error
+- [Quick reference: Write a new test](#quick-reference-write-a-new-test) — copyable skeletons for integration, unit, and BDD tests
+- [Error verification policy](#error-verification-policy) — assert on the wire envelope, not reconstructed exceptions
+- [Infrastructure](#infrastructure) — which command starts what
+
 ## The harness system (use this)
 
 The test harness (`tests/harness/`) is the central testing abstraction. It manages mocks,
