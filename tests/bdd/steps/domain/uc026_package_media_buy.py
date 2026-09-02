@@ -1551,22 +1551,26 @@ def when_send_generic_request(ctx: dict) -> None:
     """Send either a create or update request based on context."""
     if ctx.get("paused_request_type") == "update" or "update_kwargs" in ctx:
         # Update flow
-        from src.core.schemas import UpdateMediaBuyRequest
         from tests.bdd.steps.generic._dispatch import dispatch_request
 
         update_kwargs = ctx.get("update_kwargs", {})
-        try:
-            req = UpdateMediaBuyRequest(
-                **{
-                    "account": {"account_id": "acct_test"},
-                    "idempotency_key": "test-idem-key-0001",
-                    **update_kwargs,
-                }  # scenario-supplied values win over the defaults
-            )
-        except Exception as exc:
-            ctx["error"] = exc
-            return
-        dispatch_request(ctx, req=req)
+        # Dispatch the RAW flat bag and let the TRANSPORT validate. Constructing
+        # UpdateMediaBuyRequest here meant a payload the schema rejects never crossed a
+        # transport: the ValidationError was raised in the TEST process and stashed as
+        # ctx["error"], so every "malformed input is rejected with X" scenario graded the
+        # harness's own exception -- keys ['code','message'], no suggestion -- instead of
+        # the wire envelope production emits, which carries a full one (code, field,
+        # issues, message, recovery, suggestion).
+        #
+        # Such a test cannot fail when the server stops rejecting the payload, because the
+        # server was never asked. The sibling site in uc003_update_media_buy.py was fixed
+        # the same way; this was the second one named in the ticket.
+        raw: dict = {
+            "account": {"account_id": "acct_test"},
+            "idempotency_key": "test-idem-key-0001",
+            **update_kwargs,  # scenario-supplied values win over the defaults
+        }
+        dispatch_request(ctx, **raw)
     else:
         # Create flow
         _dispatch_create(ctx)
@@ -1574,19 +1578,14 @@ def when_send_generic_request(ctx: dict) -> None:
 
 def _dispatch_create(ctx: dict) -> None:
     """Build CreateMediaBuyRequest and dispatch through harness."""
-    from pydantic import ValidationError
-
-    from src.core.schemas import CreateMediaBuyRequest
     from tests.bdd.steps.generic._dispatch import dispatch_request
 
+    # Dispatch the RAW flat bag; the TRANSPORT validates. Constructing the request here and
+    # catching its ValidationError meant a schema-invalid payload never crossed a transport,
+    # so the scenario graded the harness's own exception rather than the wire envelope --
+    # and would keep passing if the server stopped rejecting the payload entirely.
     request_kwargs = _ensure_request_defaults(ctx)
-    try:
-        req = CreateMediaBuyRequest(**request_kwargs)
-    except ValidationError as exc:
-        ctx["error"] = exc
-        return
-
-    dispatch_request(ctx, req=req)
+    dispatch_request(ctx, **request_kwargs)
 
     # Post-process: promote error results
     _promote_create_errors(ctx)

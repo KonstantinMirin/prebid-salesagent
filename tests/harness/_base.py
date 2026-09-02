@@ -36,12 +36,52 @@ from tests.harness._realize import e2e_unsupported, realize_e2e
 # (src.core.main._background_schedulers_enabled reads this at lifespan runtime.)
 os.environ.setdefault("ADCP_RUN_BACKGROUND_SCHEDULERS", "false")
 
+# RUNTIME import: json_safe does an isinstance() check against it, so a TYPE_CHECKING-only
+# import would be a NameError at call time rather than a type-checker convenience.
+from datetime import date, datetime  # noqa: E402
+from decimal import Decimal  # noqa: E402
+from enum import Enum  # noqa: E402
+
+from pydantic import BaseModel  # noqa: E402
+
 if TYPE_CHECKING:
-    from pydantic import BaseModel
     from sqlalchemy.orm import Session
 
     from src.core.resolved_identity import ResolvedIdentity
     from tests.harness.transport import E2EConfig, Transport, TransportResult
+
+
+def json_safe(value: Any) -> Any:
+    """Recursively convert pydantic models into the JSON forms a wire body carries.
+
+    A REST body is JSON. When a step dispatches a RAW parameter bag rather than a built
+    request -- which is what lets a schema-invalid payload actually reach the transport and
+    be graded on the wire -- that bag can hold typed objects a scenario constructed for
+    setup (an AccountReference, a Budget). ``req.model_dump(mode="json")`` used to convert
+    them on the way out; the raw path has to do the same or serialization fails with
+    "Object of type X is not JSON serializable" and the scenario grades a TypeError instead
+    of the server's answer.
+
+    Leaves everything else untouched, so a deliberately-malformed value still reaches the
+    wire malformed -- which is the entire point of dispatching raw.
+    """
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json", exclude_none=True)
+    if isinstance(value, Enum):
+        return value.value
+    # datetime/date/Decimal are what model_dump(mode="json") converts and a raw bag does
+    # not: a step that stashed a real datetime for setup would otherwise reach the wire as
+    # a Python object and be rejected for the WRONG reason -- the scenario would grade a
+    # serialization artefact instead of the server's answer.
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, dict):
+        return {k: json_safe(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [json_safe(v) for v in value]
+    return value
 
 
 class WireError(Exception):

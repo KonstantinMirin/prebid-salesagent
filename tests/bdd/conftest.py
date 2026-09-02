@@ -293,11 +293,12 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-005-ext-b-input-empty": "specific validation error codes not implemented",
     "T-UC-005-ext-b-input-invalid": "specific validation error codes not implemented",
     "T-UC-005-ext-b-input-noid": "specific validation error codes not implemented",
-    # FIXME: unknown targeting field caught at wrong layer
-    # Targeting uses extra=get_pydantic_extra_mode(): 'forbid' in dev (ValidationError at parse time),
-    # 'ignore' in prod (field silently dropped). Neither produces INVALID_REQUEST.
-    # Spec expects business-logic validation with INVALID_REQUEST code and suggestion field.
-    "T-UC-002-ext-f": "unknown targeting field caught by Pydantic (VALIDATION_ERROR), not business logic (INVALID_REQUEST) — spec-production gap",
+    # Graduated: T-UC-002-ext-f. The gap was never in production -- it was in the harness.
+    # The step built CreateMediaBuyRequest IN THE TEST PROCESS, so an unknown targeting
+    # field raised pydantic's ValidationError there and never crossed a transport; the
+    # scenario graded the harness's own exception. Dispatching the raw parameter bag lets
+    # the payload reach the server, which answers INVALID_REQUEST with a suggestion, which
+    # is what the scenario asked for all along (prkv.33).
     # FIXME: the error CODE is fixed (currency-not-supported now
     # raises AdCPCapabilityNotSupportedError -> UNSUPPORTED_FEATURE, verified by
     # tests/integration/test_currency_not_supported_error_code.py). But this scenario
@@ -345,10 +346,9 @@ _XFAIL_TAGS: dict[str, str] = {
     # all hold. Inspected per .claude/rules/workflows/xpass-graduation.md: the assertions are
     # wire-level, not truthiness, so the pass is not vacuous.
     "T-UC-002-ext-h-agent": "unregistered agent_url validation not wired — _validate_and_convert_format_ids is dead code",
-    # FIXME: auth error lacks suggestion field
-    # AdCPAuthenticationError("Principal ID not found...") has no details["suggestion"].
-    # Spec requires suggestion for buyer remediation (POST-F3).
-    "T-UC-002-ext-i": "auth error lacks suggestion field — spec-production gap",
+    # Graduated: T-UC-002-ext-i, for the same reason as ext-f above -- the auth error was
+    # never reached. With the raw dispatch the request crosses the transport, the auth
+    # boundary answers, and its envelope does carry a suggestion (prkv.33).
     # FIXME: adapter failure raises exception instead of returning failed result
     # Production wraps adapter exceptions as AdCPAdapterError and re-raises instead of
     # returning CreateMediaBuyResult(status="failed"). Also no suggestion field on error.
@@ -1093,6 +1093,26 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         is_rest = "[rest]" in nodeid or "[rest-" in nodeid
         is_impl = "[impl]" in nodeid or "[impl-" in nodeid
         is_e2e_rest = "[e2e_rest]" in nodeid or "[e2e_rest-" in nodeid
+
+        # T-UC-002-ext-i on MCP ONLY: an unauthenticated caller gets its PAYLOAD critiqued
+        # instead of being told it is unauthenticated. The scenario sends a deliberately
+        # minimal body (it is an auth test, not a payload test); a2a and rest answer
+        # AUTH_MISSING, MCP validates the announced shape first and answers INVALID_REQUEST
+        # naming brand/start_time/end_time. Auth-before-validation is the correct order --
+        # it is also what stops an unauthenticated caller learning the request shape.
+        #
+        # Only visible since the step began dispatching the raw parameter bag (prkv.33);
+        # while it built the request in-process the payload never reached any transport.
+        # The other leg of this tag GRADUATED on a2a/rest in that same change. Filed as
+        # the ordering bug it is rather than left red.
+        if "T-UC-002-ext-i" in marker_names and is_mcp:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="MCP validates the payload before checking auth, so an "
+                    "unauthenticated caller gets INVALID_REQUEST instead of AUTH_MISSING",
+                    strict=True,
+                )
+            )
 
         # uc005 type-filter / disclosure-validation scenarios cannot hold as strict
         # xfails over e2e_rest — but NOT because the body is dropped (build_rest_body

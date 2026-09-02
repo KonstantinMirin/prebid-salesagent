@@ -755,24 +755,22 @@ def when_send_create_media_buy(ctx: dict) -> None:
 
 def _dispatch_full_create(ctx: dict) -> None:
     """Build a typed CreateMediaBuyRequest from ctx['request_kwargs'] and dispatch."""
-    from pydantic import ValidationError
 
-    from src.core.schemas import CreateMediaBuyRequest
     from tests.bdd.steps.generic._dispatch import dispatch_request
 
+    # Dispatch the RAW flat bag; the TRANSPORT validates. Constructing the request here and
+    # catching its ValidationError meant a schema-invalid payload never crossed a transport:
+    # the scenario then graded the harness's own exception -- keys ['code','message'], no
+    # suggestion -- rather than the wire envelope production emits. A test routed that way
+    # cannot fail when the server stops rejecting the payload, because it never asked one.
     kwargs = ctx.get("request_kwargs", {})
-    try:
-        req = CreateMediaBuyRequest(**kwargs)
-    except ValidationError as e:
-        ctx["error"] = e
-        return
 
     # No-auth scenarios (#1417) stash an unauthenticated identity so the
     # transport-boundary account-resolution guard is exercised on the wire.
     if "dispatch_identity" in ctx:
-        dispatch_request(ctx, req=req, identity=ctx["dispatch_identity"])
+        dispatch_request(ctx, identity=ctx["dispatch_identity"], **kwargs)
     else:
-        dispatch_request(ctx, req=req)
+        dispatch_request(ctx, **kwargs)
 
 
 def _dispatch_raw_create(ctx: dict) -> None:

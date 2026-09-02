@@ -21,7 +21,7 @@ from src.core.schemas._base import (
     CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
 )
-from tests.harness._base import IntegrationEnv
+from tests.harness._base import IntegrationEnv, json_safe
 
 # Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
 # request with NO key (the schema rejects it as "Field required" — AdCP 3.0.1).
@@ -361,6 +361,9 @@ class MediaBuyCreateEnv(IntegrationEnv):
         """
         req = kwargs.pop("req", None)
         if req is None:
+            # NOT json_safe'd: the MCP/A2A wrappers take TYPED parameters, so a raw bag
+            # goes to them as-is. Only the REST body needs JSON, and build_rest_body
+            # normalizes there.
             return _ensure_idempotency_key(kwargs)
         flat = req.model_dump(mode="json", exclude_none=True)
         # Keep ``account``: the create_media_buy wrappers declare it and resolve it
@@ -406,7 +409,10 @@ class MediaBuyCreateEnv(IntegrationEnv):
             # Preserve creative_ids — exclude=True strips them from model_dump
             _restore_creative_ids(req, body)
             return body
-        return _ensure_idempotency_key(kwargs)
+        # The RAW path: normalize to JSON. A step dispatching a raw bag (so a
+        # schema-invalid payload actually reaches the transport) may hand us typed objects
+        # it built for setup; a REST body cannot carry them.
+        return json_safe(_ensure_idempotency_key(kwargs))
 
     def parse_rest_response(self, data: dict[str, Any]) -> CreateMediaBuyResult:
         """Parse a flattened create_media_buy wire body back into a CreateMediaBuyResult.
