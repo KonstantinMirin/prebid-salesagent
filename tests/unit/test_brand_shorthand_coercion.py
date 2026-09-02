@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPSalesAgentError, build_two_layer_error_envelope
 from src.core.schema_helpers import (
     brand_shorthand_to_domain,
     create_get_products_request,
@@ -10,6 +10,7 @@ from src.core.schema_helpers import (
     to_brand_reference,
 )
 from src.core.tools.media_buy_create import _build_create_media_buy_request
+from tests.helpers import assert_envelope_shape
 from tests.helpers.capture_wrapper_req import capture_req_via_wrapper
 
 
@@ -71,10 +72,18 @@ def test_brand_shorthand_to_domain_malformed_url_non_raising(malformed_url: str)
     assert brand_shorthand_to_domain(malformed_url) == ""
 
 
-def test_to_brand_reference_malformed_url_raises_validation_error() -> None:
-    with pytest.raises(AdCPValidationError) as exc_info:
+def test_to_brand_reference_malformed_url_raises_invalid_request() -> None:
+    """An unparseable URL is a schema-constraint failure -> INVALID_REQUEST.
+
+    Graded on the built envelope, not on ``pytest.raises`` alone: this used to
+    assert ``AdCPValidationError``, which ``AdCPInvalidRequestError`` SUBCLASSES,
+    so it passed for either code and could never have caught the wrong one
+    (salesagent-prkv.37).
+    """
+    with pytest.raises(AdCPSalesAgentError) as exc_info:
         to_brand_reference("https://[")
     assert exc_info.value.field == "brand"
+    assert_envelope_shape(build_two_layer_error_envelope(exc_info.value), "INVALID_REQUEST", recovery="correctable")
 
 
 @pytest.mark.parametrize(
@@ -85,10 +94,18 @@ def test_to_brand_reference_malformed_url_raises_validation_error() -> None:
         "https://münchen.de",
     ],
 )
-def test_to_brand_reference_invalid_domain_raises_typed_error(invalid_brand: str) -> None:
-    with pytest.raises(AdCPValidationError) as exc_info:
+def test_to_brand_reference_invalid_domain_raises_invalid_request(invalid_brand: str) -> None:
+    """Path, underscore and IDN all fail BrandReference.domain's PATTERN.
+
+    A pattern is a schema constraint, which the pinned enum
+    (adcp 6.6.0, _schemas/3.1/enums/error-code.json) assigns to INVALID_REQUEST
+    rather than VALIDATION_ERROR ("beyond schema validation"). Asserted on the
+    envelope for the same reason as above.
+    """
+    with pytest.raises(AdCPSalesAgentError) as exc_info:
         to_brand_reference(invalid_brand)
     assert exc_info.value.field == "brand"
+    assert_envelope_shape(build_two_layer_error_envelope(exc_info.value), "INVALID_REQUEST", recovery="correctable")
 
 
 def test_dict_uppercase_domain_normalized_like_string() -> None:
@@ -124,10 +141,12 @@ def test_to_brand_reference_dict_preserves_governance_fields() -> None:
     assert ref.brand_kit_override.colors.primary == "#003366"
 
 
-def test_to_brand_reference_unexpected_type_raises_typed_error() -> None:
-    with pytest.raises(AdCPValidationError) as exc_info:
+def test_to_brand_reference_unexpected_type_raises_invalid_request() -> None:
+    """A brand that is neither string, dict nor BrandReference is a type violation."""
+    with pytest.raises(AdCPSalesAgentError) as exc_info:
         to_brand_reference(123)  # type: ignore[arg-type]
     assert exc_info.value.field == "brand"
+    assert_envelope_shape(build_two_layer_error_envelope(exc_info.value), "INVALID_REQUEST", recovery="correctable")
 
 
 @pytest.mark.parametrize(
@@ -139,11 +158,18 @@ def test_to_brand_reference_unexpected_type_raises_typed_error() -> None:
         {"domain": "acme.com", "industries": "not-a-list"},
     ],
 )
-def test_to_brand_reference_dict_rejects_raise_typed_error(invalid_brand: dict) -> None:
-    """Dict-branch rejects (missing/non-string domain; malformed governance fields)."""
-    with pytest.raises(AdCPValidationError) as exc_info:
+def test_to_brand_reference_dict_rejects_raise_invalid_request(invalid_brand: dict) -> None:
+    """Dict-branch rejects (missing/non-string domain; malformed governance fields).
+
+    All four rows are schema constraints -- a missing required field or a wrong
+    JSON type -- so all four are INVALID_REQUEST. Two reach it by the explicit
+    raise and two by pydantic through ``adcp_validation_boundary``; the envelope
+    assertion holds them to the same answer regardless of which path ran.
+    """
+    with pytest.raises(AdCPSalesAgentError) as exc_info:
         to_brand_reference(invalid_brand)
     assert exc_info.value.field == "brand"
+    assert_envelope_shape(build_two_layer_error_envelope(exc_info.value), "INVALID_REQUEST", recovery="correctable")
 
 
 def _minimal_create_media_buy_kwargs() -> dict:
@@ -187,10 +213,12 @@ def test_build_create_media_buy_request_brand_shorthand(brand_input, expected_do
     "invalid_brand",
     ["https://[", "acme.com/products", "my_brand.com", "https://münchen.de"],
 )
-def test_build_create_media_buy_request_invalid_brand_raises(invalid_brand: str) -> None:
-    with pytest.raises(AdCPValidationError) as exc_info:
+def test_build_create_media_buy_request_invalid_brand_raises_invalid_request(invalid_brand: str) -> None:
+    """The builder inherits the funnel's code: schema-constraint -> INVALID_REQUEST."""
+    with pytest.raises(AdCPSalesAgentError) as exc_info:
         _build_create_media_buy_request(brand=invalid_brand, **_minimal_create_media_buy_kwargs())
     assert exc_info.value.field == "brand"
+    assert_envelope_shape(build_two_layer_error_envelope(exc_info.value), "INVALID_REQUEST", recovery="correctable")
 
 
 def _capture_req_via_create_media_buy(brand):

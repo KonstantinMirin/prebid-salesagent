@@ -246,6 +246,27 @@ def then_wire_envelope_code(ctx: dict, code: str) -> None:
     ctx["result"].assert_wire_error(code)
 
 
+@then(parsers.re(r'the request is rejected with (?P<code>[A-Z_0-9]+) naming field "(?P<field>[\w.]+)"$'))
+def then_rejected_with_code_naming_field(ctx: dict, code: str, field: str) -> None:
+    """Reject graded on the wire envelope: the code AND the field it blames.
+
+    Routed through ``assert_wire_error``, which hard-asserts a real
+    ``wire_error_envelope`` was captured before forwarding to
+    ``assert_envelope_shape`` — so this cannot pass on a reconstructed
+    exception, and cannot pass at all on a transport that swallowed the typed
+    error instead of framing it.
+
+    The field half is the point. A rejection that does not name the offending
+    field makes the buyer search the whole payload, and the blame is exactly
+    what goes generic when a coercion moves between layers.
+
+    Written because BR-UC-BRAND-SHORTHAND's 36 reject rows had no matching step
+    and were auto-xfailed as "Step definition not found", so the whole reject
+    half of that feature had never graded anything.
+    """
+    ctx["result"].assert_wire_error(code, field=field)
+
+
 @then("the operation should fail")
 def then_operation_fails(ctx: dict) -> None:
     """Assert the operation resulted in an error.
