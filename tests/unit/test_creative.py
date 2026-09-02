@@ -1540,7 +1540,10 @@ class TestListCreativesRawBoundaryCompleteness:
         """
         from adcp import CreativeFilters
 
-        from src.core.tools.creatives.listing import list_creatives_raw
+        from src.core.tools.creatives.listing import (
+            _build_list_creatives_request,
+            list_creatives_raw,
+        )
 
         test_filters = CreativeFilters(tags=["promo"])
         identity = PrincipalFactory.make_identity(
@@ -1553,11 +1556,10 @@ class TestListCreativesRawBoundaryCompleteness:
                 pagination=Pagination(has_more=False),
                 query_summary=QuerySummary(returned=0, total_matching=0),
             )
-            list_creatives_raw(filters=test_filters, identity=identity)
+            # filters are a REQUEST field, so they are built into the request the
+            # wrapper is handed -- the wrapper takes no per-field parameters.
+            list_creatives_raw(req=_build_list_creatives_request(filters=test_filters), identity=identity)
             mock_impl.assert_called_once()
-            # filters are now folded into the typed request (req.filters), not a
-            # direct _impl kwarg. The wrapper merges the structured filter into the
-            # request, so the forwarded request must carry the tag filter.
             req = mock_impl.call_args.kwargs["req"]
             assert req.filters is not None
             assert req.filters.tags == ["promo"]
@@ -1567,7 +1569,10 @@ class TestListCreativesRawBoundaryCompleteness:
 
         Covers: UC-006-MAIN-REST-01
         """
-        from src.core.tools.creatives.listing import list_creatives_raw
+        from src.core.tools.creatives.listing import (
+            _build_list_creatives_request,
+            list_creatives_raw,
+        )
 
         identity = PrincipalFactory.make_identity(
             principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
@@ -1579,7 +1584,7 @@ class TestListCreativesRawBoundaryCompleteness:
                 pagination=Pagination(has_more=False),
                 query_summary=QuerySummary(returned=0, total_matching=0),
             )
-            list_creatives_raw(include_performance=True, identity=identity)
+            list_creatives_raw(req=_build_list_creatives_request(), include_performance=True, identity=identity)
             mock_impl.assert_called_once()
             assert mock_impl.call_args.kwargs["include_performance"] is True
 
@@ -1588,7 +1593,10 @@ class TestListCreativesRawBoundaryCompleteness:
 
         Covers: UC-006-MAIN-REST-01
         """
-        from src.core.tools.creatives.listing import list_creatives_raw
+        from src.core.tools.creatives.listing import (
+            _build_list_creatives_request,
+            list_creatives_raw,
+        )
 
         identity = PrincipalFactory.make_identity(
             principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
@@ -1600,7 +1608,7 @@ class TestListCreativesRawBoundaryCompleteness:
                 pagination=Pagination(has_more=False),
                 query_summary=QuerySummary(returned=0, total_matching=0),
             )
-            list_creatives_raw(include_assignments=True, identity=identity)
+            list_creatives_raw(req=_build_list_creatives_request(include_assignments=True), identity=identity)
             mock_impl.assert_called_once()
             # include_assignments is an AdCP spec request field, so it now travels
             # on the typed request (req.include_assignments), not as a direct kwarg.
@@ -4641,7 +4649,10 @@ class TestA2ATransportGaps:
         STUB: list_creatives A2A boundary -- list_creatives_raw forwards all params.
         Covers: UC-006-MAIN-REST-01
         """
-        from src.core.tools.creatives.listing import list_creatives_raw
+        from src.core.tools.creatives.listing import (
+            _build_list_creatives_request,
+            list_creatives_raw,
+        )
 
         identity = PrincipalFactory.make_identity(
             principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
@@ -4650,20 +4661,17 @@ class TestA2ATransportGaps:
         with patch("src.core.tools.creatives.listing._list_creatives_impl") as mock_impl:
             mock_impl.return_value = MagicMock()
 
+            # Spec request fields go through the BUILDER; format/page are the non-spec
+            # out-of-band kwargs the wrapper still takes, mirroring _impl's own signature.
             list_creatives_raw(
-                media_buy_id="mb_1",
-                status="approved",
+                req=_build_list_creatives_request(media_buy_id="mb_1", status="approved", limit=25),
                 format="display",
                 page=2,
-                limit=25,
                 identity=identity,
             )
 
             mock_impl.assert_called_once()
             call_kwargs = mock_impl.call_args[1]
-            # Spec request fields (media_buy_id, status, limit) fold into the typed
-            # request; format/page are non-spec out-of-band _impl kwargs; identity
-            # is resolved at the boundary.
             req = call_kwargs["req"]
             assert req.filters is not None
             assert "mb_1" in req.filters.media_buy_ids

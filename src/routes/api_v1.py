@@ -241,7 +241,8 @@ else:
     ListCreativesBody = derived_body_model(
         "ListCreativesBody",
         ListCreativesRequestDTO,
-        creatives_listing_module.list_creatives_raw,
+        # The BUILDER -- the raw wrapper takes the built request now.
+        creatives_listing_module._build_list_creatives_request,
     )
 
 
@@ -692,18 +693,18 @@ async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = r
     from src.core.schemas import ListCreativesRequest
 
     filters = coerce_creative_filters(body.filters)
-    # Selected off "DTO fields INTERSECT the raw wrapper's parameters" rather than the
-    # 18-name hand-list this replaces, which never forwarded `sort` -- so a spec-shaped
-    # REST payload sorted on MCP and A2A and silently did not on REST. `filters` is set
-    # after selection because it needs typed coercion (an empty concept_ids must surface
-    # a VALIDATION_ERROR envelope, not reach the impl as a dict).
-    selected = select_request_fields(
-        ListCreativesRequest,
-        body,
-        accepted_kwargs(creatives_listing_module.list_creatives_raw),
-    )
+    # Selected off "DTO fields INTERSECT the BUILDER's parameters" -- the builder, because
+    # the wrapper takes the built request now, so intersecting with it would select nothing.
+    # The 18-name hand-list this replaced never forwarded `sort`, so a spec-shaped REST
+    # payload sorted on MCP and A2A and silently did not on REST. `filters` is set after
+    # selection because it needs typed coercion (an empty concept_ids must surface a
+    # VALIDATION_ERROR envelope, not reach the impl as a dict).
+    builder = creatives_listing_module._build_list_creatives_request
+    selected = select_request_fields(ListCreativesRequest, body, accepted_kwargs(builder))
     selected["filters"] = filters
-    response = creatives_listing_module.list_creatives_raw(**selected, identity=identity)
+    with adcp_validation_boundary(context="list_creatives request"):
+        req = builder(**selected)
+    response = creatives_listing_module.list_creatives_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
 

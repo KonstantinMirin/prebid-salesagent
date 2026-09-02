@@ -439,13 +439,13 @@ class TestDroppedFieldsAreReported:
 
         from src.core.schema_helpers import accepted_kwargs, select_request_fields
         from src.core.schemas import ListCreativesRequest
-        from src.core.tools.creatives import list_creatives_raw
+        from src.core.tools.creatives.listing import _build_list_creatives_request
 
         with caplog.at_level(logging.INFO, logger="src.core.schema_helpers"):
             selected = select_request_fields(
                 ListCreativesRequest,
                 {"status": "processing", "include_assignments": True},
-                accepted_kwargs(list_creatives_raw),
+                accepted_kwargs(_build_list_creatives_request),
             )
 
         assert "status" not in selected, "a field the DTO does not define must not be forwarded"
@@ -460,11 +460,11 @@ class TestDroppedFieldsAreReported:
 
         from src.core.schema_helpers import accepted_kwargs, select_request_fields
         from src.core.schemas import ListCreativesRequest
-        from src.core.tools.creatives import list_creatives_raw
+        from src.core.tools.creatives.listing import _build_list_creatives_request
 
         with caplog.at_level(logging.INFO, logger="src.core.schema_helpers"):
             select_request_fields(
-                ListCreativesRequest, {"include_assignments": True}, accepted_kwargs(list_creatives_raw)
+                ListCreativesRequest, {"include_assignments": True}, accepted_kwargs(_build_list_creatives_request)
             )
 
         assert not any("ignoring" in r.getMessage() for r in caplog.records)

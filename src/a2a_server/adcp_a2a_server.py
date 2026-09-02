@@ -1911,14 +1911,17 @@ class AdCPRequestHandler(RequestHandler):
         # Selected off list_creatives_raw's own signature rather than hand-listed. The 20-name
         # list this replaces is the shape that silently drops every field added later, which
         # is how an A2A buyer's media_buy_ids came to be ignored (a recorded gap row 11).
-        # Selecting by signature also keeps spec sort/pagination OFF this surface for free:
-        # list_creatives_raw does not declare them, so they cannot be forwarded here while
-        # exposing them on A2A remains a deferred, buyer-visible change.
         # `filters` is set explicitly AFTER selection because it needs typed coercion
         # (invalid filters must raise AdCPValidationError, not reach the impl as a dict).
-        selected = select_request_fields(ListCreativesRequest, parameters, accepted_kwargs(core_list_creatives_tool))
+        from src.core.tools.creatives.listing import _build_list_creatives_request
+
+        selected = select_request_fields(
+            ListCreativesRequest, parameters, accepted_kwargs(_build_list_creatives_request)
+        )
         selected["filters"] = filters
-        response = core_list_creatives_tool(**selected, identity=identity)
+        with adcp_validation_boundary(context="list_creatives request"):
+            req = _build_list_creatives_request(**selected)
+        response = core_list_creatives_tool(req=req, identity=identity)
 
         return response
 

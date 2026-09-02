@@ -55,6 +55,21 @@ def _seed_account(tenant_id: str, principal_ids: tuple[str, ...]) -> None:
         AgentAccountAccessFactory(tenant_id=tenant_id, principal_id=pid, account_id=ACCOUNT_ID)
 
 
+def _list_creatives(**kwargs):
+    """Build a ListCreativesRequest from flat filters, then call the wrapper.
+
+    list_creatives_raw takes the BUILT request; only `format` and `page` remain
+    out-of-band (they are not ListCreativesRequest fields). Routing every call in this
+    module through one seam keeps the flat, readable call sites without re-listing the
+    request's fields at each of them.
+    """
+    from src.core.tools.creatives.listing import _build_list_creatives_request, list_creatives_raw
+
+    out_of_band = {k: kwargs.pop(k) for k in ("format", "page") if k in kwargs}
+    transport = {k: kwargs.pop(k) for k in ("ctx", "identity") if k in kwargs}
+    return list_creatives_raw(req=_build_list_creatives_request(**kwargs), **out_of_band, **transport)
+
+
 class MockContext:
     """Mock FastMCP Context for testing."""
 
@@ -71,9 +86,9 @@ class TestCreativeLifecycleMCP:
 
     def _import_mcp_tools(self):
         """Import MCP tools to avoid module-level database initialization."""
-        from src.core.tools.creatives import list_creatives_raw, sync_creatives_raw
+        from src.core.tools.creatives import sync_creatives_raw
 
-        return sync_creatives_raw, list_creatives_raw
+        return sync_creatives_raw, _list_creatives
 
     def _make_identity(self, tenant_id=None, principal_id=None, tenant_overrides=None):
         """Create a ResolvedIdentity for tests, using stored test data as defaults."""

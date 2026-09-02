@@ -25,7 +25,6 @@ from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value, log_tool_activity
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import to_context_object
 from src.core.schemas import (
     Creative,
     Error,
@@ -774,31 +773,15 @@ async def list_creatives(
 
 
 def list_creatives_raw(
-    media_buy_id: str = None,
-    media_buy_ids: list[str] = None,
-    status: str = None,
-    format: str = None,
-    tags: list[str] = None,
-    created_after: str = None,
-    created_before: str = None,
-    search: str = None,
-    filters: CreativeFilters | None = None,
-    fields: list[str] | None = None,
+    req: "ListCreativesRequest",
+    # NOT ListCreativesRequest fields: `format` filters, `page` drives the offset, and the
+    # two include_* flags widen the payload. They mirror _list_creatives_impl's own
+    # out-of-band parameters exactly, so this wrapper's signature is "_impl's signature
+    # plus transport args" -- there is no second field list here to drift from the model.
+    format: str | None = None,
     include_performance: bool = False,
-    include_assignments: bool = False,
     include_sub_assets: bool = False,
     page: int = 1,
-    limit: int = 50,
-    sort_by: str = "created_date",
-    sort_order: str = "desc",
-    # AdCP 3.1.1 sorts and paginates through OBJECTS (list-creatives-request.json
-    # /properties/sort and /properties/pagination), not the flat params above. Accepted here
-    # so every transport honours the spec shape: the A2A and REST seams forward
-    # "DTO fields INTERSECT this signature", so a field absent here cannot land -- which is
-    # why `sort` used to be honoured on MCP alone.
-    sort: "Sort | None" = None,
-    pagination: "PaginationRequest | None" = None,
-    context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
     identity: IdentityOrNotProvided = NOT_PROVIDED,
 ):
@@ -833,24 +816,6 @@ def list_creatives_raw(
     """
     identity = resolve_identity_if_not_provided(identity, ctx)
 
-    req = _build_list_creatives_request(
-        sort=sort,
-        pagination=pagination,
-        media_buy_id=media_buy_id,
-        media_buy_ids=media_buy_ids,
-        status=status,
-        tags=tags,
-        created_after=created_after,
-        created_before=created_before,
-        search=search,
-        filters=filters,
-        fields=fields,
-        include_assignments=include_assignments,
-        limit=limit,
-        sort_by=sort_by,
-        sort_order=sort_order,
-        context=to_context_object(context),
-    )
     return _list_creatives_impl(
         req=req,
         format=format,
