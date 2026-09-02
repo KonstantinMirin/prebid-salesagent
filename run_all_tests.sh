@@ -250,6 +250,13 @@ export PYTEST_WORKER_PROFILE="${PYTEST_WORKER_PROFILE:-/app/$RESULTS_DIR/worker-
 # having predicted they would need it. See tests/_collection_manifest.py.
 export PYTEST_COLLECTION_MANIFEST="${PYTEST_COLLECTION_MANIFEST:-/app/$RESULTS_DIR/collection-manifest}"
 
+# Where each BDD session publishes what it MEASURED. Per run, for the same
+# reason the manifest above is: the liveness artifact itself lives at a stable
+# top-level path, so a directory derived from it would accumulate yesterday's
+# sessions, which satisfy the coverage check and get merged into today's
+# measurement. See tests/bdd/scenario_liveness.sessions_dir().
+export BDD_LIVENESS_SESSIONS="${BDD_LIVENESS_SESSIONS:-/app/$RESULTS_DIR/liveness-sessions}"
+
 dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile runner "$@"; }
 
 cleanup() {

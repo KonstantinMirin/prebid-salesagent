@@ -29,6 +29,7 @@ mkdir -p "$RESULTS_DIR"
 # tests fail loudly on a missing artifact rather than skipping -- correctly, but
 # it means the runner cannot leave the variable unset.
 export PYTEST_COLLECTION_MANIFEST="${PYTEST_COLLECTION_MANIFEST:-$RESULTS_DIR/collection-manifest}"
+export BDD_LIVENESS_SESSIONS="${BDD_LIVENESS_SESSIONS:-$RESULTS_DIR/liveness-sessions}"
 
 # Keep only the last 10 result directories
 ls -dt "$(pwd)/test-results"/*/ 2>/dev/null | tail -n +11 | xargs rm -rf

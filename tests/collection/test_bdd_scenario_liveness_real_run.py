@@ -57,6 +57,7 @@ from pathlib import Path
 import pytest
 
 from scripts.audit import storyboard_spec
+from tests.bdd.scenario_liveness import load_run, sessions_dir
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -70,7 +71,6 @@ UC005_FILE = "tests/bdd/test_uc005_discover_creative_formats.py"
 
 # Every in-process transport the bdd suite parametrizes over with
 # ``BDD_E2E_ENABLED`` popped (see _run_bdd_slice's docstring).
-IN_PROCESS_TRANSPORTS = {"mcp", "a2a", "rest"}
 
 
 def _slice_scenarios(feature: str, marker: str) -> list[storyboard_spec.TaggedScenario]:
@@ -82,6 +82,34 @@ def _slice_scenarios(feature: str, marker: str) -> list[storyboard_spec.TaggedSc
     from the tree on every run instead of frozen into this file.
     """
     return [s for s in storyboard_spec.tagged_scenarios(FEATURES_DIR, tag=f"@{marker}") if s.feature == feature]
+
+
+def _measured_scenarios() -> dict[str, dict]:
+    """What the real run measured, projected onto the in-process transports.
+
+    Replaces five miniature `pytest` sessions. `load_run` refuses an artifact
+    that does not account for every BDD module, so a partial measurement fails
+    loudly here instead of being graded as the suite.
+    """
+    return load_run(sessions_dir())["scenarios"]
+
+
+def _graded(measured: dict[str, dict], scenario_id: str) -> dict:
+    """One scenario's projection, with the cardinality floor applied.
+
+    The floor is the honest half of the transport-set equality this migration
+    drops: "not silently zero" is a real obligation, "exactly three" was a
+    property of the old slice's BDD_ALL_TRANSPORTS override rather than of the
+    scenario. Without it an empty projection would satisfy every `all(...)`
+    assertion below vacuously.
+    """
+    record = measured.get(scenario_id)
+    assert record is not None, f"{scenario_id} was not measured by the real run at all"
+    assert record["observations"], (
+        f"{scenario_id} has no in-process observation in the real run's artifact — "
+        "every assertion about it below would pass over an empty list"
+    )
+    return record
 
 
 def _identity_tags(scenarios: Sequence[storyboard_spec.TaggedScenario]) -> set[str]:
@@ -140,12 +168,7 @@ def _run_bdd_slice(tmp_path: Path, test_file: str, marker_expr: str, *, extra_ar
     return json.loads(artifact.read_text(encoding="utf-8"))
 
 
-# Measured 65.17s on an idle 40-core box against CI's --timeout=60 (ci.yml
-# "Integration (other)"). Same class as test_liveness_artifact_is_identical_
-# under_xdist_and_serial below: a real nested-pytest-subprocess cost, not a
-# hang. Scoped rather than raising the job's CLI timeout, same reasoning.
-@pytest.mark.timeout(300)
-def test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live(tmp_path: Path) -> None:
+def test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live() -> None:
     """The UC-006 storyboard-routing slice is measured in full, and its
     ``@storyboard-v3.1``-tagged members have real, bound step definitions
     — none are dormant/steps-unbound. Five genuinely xfail
@@ -153,8 +176,7 @@ def test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live(tmp_pat
     the sixth, format-id-roundtrip-on-sync, genuinely passes. Proves the artifact
     tracks real state, not a frozen count, and distinguishes ledgered-xfail from
     live-pass even though both have steps_bound=True."""
-    data = _run_bdd_slice(tmp_path, UC006_FILE, UC006_MARKER)
-    scenarios = {s["scenario_id"]: s for s in data["scenarios"]}
+    scenarios = _measured_scenarios()
 
     # DERIVED, not frozen: every scenario the slice runs carries a `@T-*` identity
     # tag, and identity — not provenance — is what the artifact keys membership on.
@@ -163,7 +185,11 @@ def test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live(tmp_pat
     # measured; a provenance retag must not be able to delete a scenario from the
     # measurement.
     slice_scenarios = _slice_scenarios("BR-UC-006-sync-creatives.feature", UC006_MARKER)
-    assert set(scenarios) == _identity_tags(slice_scenarios)
+    # PRESENT in, not EQUAL to: the artifact now covers the whole suite, so the
+    # slice's ids are a subset of it. Every expected id must still be there --
+    # that is the "expected list versus what actually ran" this test exists for.
+    missing = _identity_tags(slice_scenarios) - set(scenarios)
+    assert not missing, f"the real run measured none of: {sorted(missing)}"
 
     # The scenarios whose detailed ledgered/live behaviour this test pins — again
     # derived from the feature's own tags, not listed here.
@@ -186,7 +212,7 @@ def test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live(tmp_pat
     )
 
     for scenario_id in sorted(storyboard_tagged):
-        record = scenarios[scenario_id]
+        record = _graded(scenarios, scenario_id)
         # Every scenario has real steps bound now — the dormant/unbound axis is
         # fully retired for this feature.
         assert record["steps_bound"] is True, f"{scenario_id} unexpectedly reports steps_bound=False"
@@ -202,32 +228,36 @@ def test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live(tmp_pat
             assert all("SPEC-PRODUCTION GAP" in o["reason"] for o in record["observations"]), (
                 f"{scenario_id}'s xfail reason doesn't cite a real production gap"
             )
-        # Real transports actually ran (not silently zero, not silently one).
-        assert {o["transport"] for o in record["observations"]} == {"mcp", "a2a", "rest"}
+        # The cardinality floor is applied by `_graded` above. The old
+        # `== {"mcp","a2a","rest"}` is deliberately gone: measured on a real run
+        # it is 3 transports for 32 ledgered scenarios and a2a alone for 21,
+        # split by whether the xfail reason carries `scope=per-transport` --
+        # a property of the deselection optimization, which
+        # test_architecture_bdd_xfail_reason_tokens.py already grades.
 
 
-def test_real_run_records_uc005_format_id_roundtrip_scenarios_as_live(tmp_path: Path) -> None:
+def test_real_run_records_uc005_format_id_roundtrip_scenarios_as_live() -> None:
     """A scenario that is NOT dormant reports steps_bound=True/harness_wired=True — the
     guard proves both directions, not only the failure case."""
-    data = _run_bdd_slice(tmp_path, UC005_FILE, "storyboard-v3.1")
-    scenarios = {s["scenario_id"]: s for s in data["scenarios"]}
+    scenarios = _measured_scenarios()
 
-    assert set(scenarios) == _identity_tags(
-        _slice_scenarios("BR-UC-005-discover-creative-formats.feature", "storyboard-v3.1")
-    )
-    for scenario_id, record in scenarios.items():
+    expected = _identity_tags(_slice_scenarios("BR-UC-005-discover-creative-formats.feature", "storyboard-v3.1"))
+    # Both siblings pin their premise; this one did not. `expected` is keyed off
+    # a feature FILENAME, so a rename would empty it and every assertion below
+    # would loop zero times and pass.
+    assert expected, "the UC-005 storyboard-v3.1 slice derived no scenarios — renamed feature file?"
+    missing = expected - set(scenarios)
+    assert not missing, f"the real run measured none of: {sorted(missing)}"
+    for scenario_id in sorted(expected):
+        record = _graded(scenarios, scenario_id)
         assert record["steps_bound"] is True, f"{scenario_id} unexpectedly reports steps_bound=False"
         assert record["unbound_steps"] == []
         assert record["harness_wired"] is True
         assert record["ledgered"] is False
-        assert {o["transport"] for o in record["observations"]} == IN_PROCESS_TRANSPORTS
         assert all(o["outcome"] == "passed" for o in record["observations"])
 
 
-# Measured 62.52s on an idle 40-core box against CI's --timeout=60. Same class
-# as the two siblings above/below: a real nested-pytest-subprocess cost.
-@pytest.mark.timeout(300)
-def test_provenance_tag_is_a_recorded_field_not_a_collection_filter(tmp_path: Path) -> None:
+def test_provenance_tag_is_a_recorded_field_not_a_collection_filter() -> None:
     """A ``@schema-v3.1`` retag must not delete a scenario from the measurement.
 
     ``scenario_liveness._TAG`` is used at ``pytest_bdd_before_scenario`` as an
@@ -244,8 +274,7 @@ def test_provenance_tag_is_a_recorded_field_not_a_collection_filter(tmp_path: Pa
     must report them ``steps_bound=False`` with the unbound step named — the
     exact fact the current filter hides.
     """
-    data = _run_bdd_slice(tmp_path, UC006_FILE, UC006_MARKER)
-    scenarios = {s["scenario_id"]: s for s in data["scenarios"]}
+    scenarios = _measured_scenarios()
 
     slice_scenarios = _slice_scenarios("BR-UC-006-sync-creatives.feature", UC006_MARKER)
     retagged = [s for s in slice_scenarios if storyboard_spec.TAG not in s.tags]
@@ -267,14 +296,13 @@ def test_provenance_tag_is_a_recorded_field_not_a_collection_filter(tmp_path: Pa
     }
 
     for scenario in retagged:
-        record = scenarios[scenario.identifier]
+        record = _graded(scenarios, scenario.identifier)
         # The provenance tag is DATA on the record, not the membership predicate.
         assert set(record["tags"]) == {t.lstrip("@") for t in scenario.tags}
         # Dormancy, measured — this is what the collection filter currently hides.
         assert record["steps_bound"] is False
         assert unbound_given[scenario.identifier] in record["unbound_steps"]
         assert record["harness_wired"] is None
-        assert {o["transport"] for o in record["observations"]} == IN_PROCESS_TRANSPORTS
         assert all(o["outcome"] == "xfailed" for o in record["observations"])
         assert all(o["reason_category"] == "no_steps_bound" for o in record["observations"])
 
