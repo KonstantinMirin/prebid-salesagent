@@ -51,6 +51,35 @@ the transport, so the address that was validated is the address that gets
 connected. A call site that validates and then hands the hostname to its own
 client has reintroduced the vulnerability, no matter how good its blocklist is.
 
+The following diagram shows the path of one `send` or `asend` call through the
+egress gateway. The verdict runs before any connection exists, so a refusal
+means nothing was attempted:
+
+```mermaid
+flowchart TD
+    Caller["Call site\nsend(url) / asend(url)"]
+    Verdict["EgressPolicy.resolve_for_dial\nscheme + address checks,\none DNS resolution"]
+    Blocked["OutboundRequestBlocked\n(no connection was attempted)"]
+    Pin["PinnedHost\nthe validated IP is pinned\ninto the transport"]
+    Client["httpx client on the pinned transport\nfollow_redirects=False, never overridden"]
+    Attempt["One attempt: connect to the\npinned IP, read the body\nunder the size cap"]
+    Outcome{"Attempt outcome"}
+    Retry["Backoff per BR-RULE-029,\nbounded Retry-After"]
+    Result["OutboundResult\n(a redirect status is returned\nto the caller, not followed)"]
+    Failed["OutboundDeliveryFailed\n(destination reached,\nrequest not delivered)"]
+
+    Caller --> Verdict
+    Verdict -- "refused" --> Blocked
+    Verdict -- "accepted" --> Pin
+    Pin --> Client
+    Client --> Attempt
+    Attempt --> Outcome
+    Outcome -- "success" --> Result
+    Outcome -- "retryable, attempts left" --> Retry
+    Retry --> Attempt
+    Outcome -- "terminal, or attempts exhausted" --> Failed
+```
+
 ## What the gateway refuses, and what it never refuses
 
 The gateway answers two questions, through two verdicts deliberately kept
@@ -102,6 +131,34 @@ is present and a wrong hostname should fail loudly at once; buyer-supplied
 URLs get the non-resolving verdict at registration and the full verdict before
 connecting.
 
+The following diagram shows where each kind of URL is validated — at ingest,
+at connect time, or both:
+
+```mermaid
+flowchart TD
+    Buyer["Buyer-supplied webhook URL\nat protocol ingest"]
+    Operator["Operator-entered URL (admin ingest);\nagent URL before the MCP handshake"]
+    Reg["check_registration\nDNS-free verdict"]
+    Val["validate_url\nfull connect-time policy,\nresolved address discarded"]
+    IngestRefused["Refused at ingest"]
+    Later["URL stored, or\nhandshake proceeds"]
+    Gateway["Connect time: send / asend\n(or the guarded MCP client)"]
+    Dial["resolve_for_dial\nfresh resolution, full verdict"]
+    DialRefused["Refused at connect time\n(no connection attempted)"]
+    Conn["Connection to the pinned IP"]
+
+    Buyer --> Reg
+    Operator --> Val
+    Reg -- "refused" --> IngestRefused
+    Val -- "refused" --> IngestRefused
+    Reg -- "accepted" --> Later
+    Val -- "accepted" --> Later
+    Later --> Gateway
+    Gateway --> Dial
+    Dial -- "refused" --> DialRefused
+    Dial -- "accepted" --> Conn
+```
+
 ### The supplement ranges, and the check no configuration relaxes
 
 `adcp.signing` classifies the usual reserved space (private, loopback,
@@ -123,6 +180,36 @@ the override. The reason is that those six ranges have no second line of
 defense — they are carried here precisely because the SDK does not know them,
 so a configuration that skips them leaves them undefended rather than merely
 relaxed.
+
+The following diagram shows the connect-time checks in the order
+`resolve_for_dial` applies them, and which of them the override can and cannot
+relax:
+
+```mermaid
+flowchart TD
+    URL["URL about to be connected to"]
+    Scheme{"Scheme is https?"}
+    Resolve["Resolve DNS once\n(this resolution is the\nIP that gets pinned)"]
+    Meta{"Resolved IP in the\ncloud metadata set?"}
+    Flags{"Private, loopback, link-local,\nmulticast, reserved,\nor unspecified?"}
+    Hatch{"ADCP_OUTBOUND_ALLOW_PRIVATE\nopen?"}
+    Supp{"In the six supplement ranges,\nsuch as 100.64.0.0/10?"}
+    Refused["Refused:\nOutboundRequestBlocked"]
+    Pinned["PinnedHost\nthe connection is made\nto exactly this IP"]
+
+    URL --> Scheme
+    Scheme -- "no — no override exists" --> Refused
+    Scheme -- "yes" --> Resolve
+    Resolve --> Meta
+    Meta -- "yes — checked before the override is read" --> Refused
+    Meta -- "no" --> Flags
+    Flags -- "yes" --> Hatch
+    Flags -- "no" --> Supp
+    Hatch -- "closed" --> Refused
+    Hatch -- "open (test-only)" --> Supp
+    Supp -- "yes — no configuration relaxes this" --> Refused
+    Supp -- "no" --> Pinned
+```
 
 ## Test egress in-network: the TLS terminator
 

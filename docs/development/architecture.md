@@ -15,30 +15,35 @@ per-tenant adapter. Publishers operate it through a web admin UI.
 ## System topology
 
 One process runs behind nginx. A single FastAPI application (`src/app.py`)
-serves every protocol; there is no per-protocol server.
+serves every protocol; there is no per-protocol server. The following diagram
+shows how a request reaches business logic and what the process depends on:
 
-```text
-                    ┌──────────────────┐
-                    │   nginx :8000    │
-                    └────────┬─────────┘
-                             │
-┌────────────────────────────┴────────────────────────────┐
-│            Unified FastAPI app (src/app.py) :8080       │
-│                                                         │
-│  /api/v1/*   /mcp        /a2a          /admin, /        │
-│  REST routes FastMCP     a2a-sdk       Flask admin UI   │
-│              sub-app     routes        (via WSGI)       │
-│                                                         │
-│        shared ASGI middleware + identity resolution     │
-│                          │                              │
-│              _impl business logic (src/core/tools/)     │
-└───────┬──────────────┬──────────────┬───────────────────┘
-        │              │              │
- ┌────────────┐ ┌─────────────┐ ┌────────────────────┐
- │ PostgreSQL │ │  Ad server  │ │ Outbound HTTP      │
- │ (tenant-   │ │  adapters   │ │ gateway (webhooks, │
- │  scoped)   │ │ (GAM, ...)  │ │ AI, vendor APIs)   │
- └────────────┘ └─────────────┘ └────────────────────┘
+```mermaid
+flowchart TD
+    Buyer["Buyer agent / API client"] --> Nginx["nginx (port 8000)"]
+    Operator["Publisher operator browser"] --> Nginx
+
+    Nginx --> REST
+    Nginx --> MCP
+    Nginx --> A2A
+    Nginx --> Admin
+
+    subgraph App["Unified FastAPI app (src/app.py, port 8080)"]
+        REST["REST routes (/api/v1/*)"]
+        MCP["FastMCP sub-app (/mcp)"]
+        A2A["a2a-sdk routes (/a2a)"]
+        Admin["Flask admin UI (/admin, via WSGI; own Google OAuth)"]
+        Identity["Shared ASGI middleware + identity resolution"]
+        Impl["_impl business logic (src/core/tools/)"]
+        REST --> Identity
+        MCP --> Identity
+        A2A --> Identity
+        Identity --> Impl
+    end
+
+    Impl --> DB[("PostgreSQL (tenant-scoped)")]
+    Impl --> Adapters["Ad server adapters (GAM, ...)"]
+    Impl --> Egress["Outbound HTTP gateway (webhooks, AI, vendor APIs)"]
 ```
 
 ### Component map
@@ -83,9 +88,10 @@ violations fail `make quality` rather than waiting for review.
 
 ## Multi-tenancy
 
-Isolation is database-backed and row-level: every domain table carries a
-`tenant_id` foreign key, and every query is tenant-scoped through the
-repository layer. A request's tenant is resolved from its token before
+Isolation is database-backed and row-level. Most domain tables carry a
+`tenant_id` foreign key; the rest — media packages, workflow steps and object
+mappings — are scoped through the parent row that does. Every query is
+tenant-scoped through the repository layer. A request's tenant is resolved from its token before
 `_impl` runs, so business logic never sees data outside its tenant.
 
 - **Tenant** — a publisher. Configuration lives in individual columns on the
@@ -98,26 +104,48 @@ repository layer. A request's tenant is resolved from its token before
 
 ## Data model
 
-The following tree shows the main entities and how they depend on each
-other; `src/core/database/models.py` holds the authoritative definitions:
+The following diagram shows the main entities and which entity owns which;
+`src/core/database/models.py` holds the authoritative definitions:
 
-```text
-Tenant
- ├── CurrencyLimit      (USD row required before budgets validate)
- ├── PropertyTag        ("all_inventory" required before products)
- ├── AuthorizedProperty
- ├── Principal ──────── access_token = API identity
- │     └── MediaBuy ─── revision + confirmed_at are repository-managed
- │           └── MediaPackage
- ├── Product ─────────── pricing options, inventory mappings
- ├── Creative ────────── reviews, assignments to packages
- ├── WorkflowStep / ObjectWorkflowMapping / Context   (human-in-the-loop)
- ├── PushNotificationConfig / WebhookDelivery         (outbound notify)
- └── AuditLog
+```mermaid
+erDiagram
+    Tenant ||--o{ CurrencyLimit : has
+    Tenant ||--o{ PropertyTag : has
+    Tenant ||--o{ AuthorizedProperty : has
+    Tenant ||--o{ Product : offers
+    Tenant ||--o{ Principal : has
+    Tenant ||--o{ WebhookDeliveryRecord : records
+    Tenant ||--o{ AuditLog : records
+    Principal ||--o{ MediaBuy : owns
+    Principal ||--o{ Creative : owns
+    Principal ||--o{ Context : owns
+    Principal ||--o{ PushNotificationConfig : registers
+    MediaBuy ||--o{ MediaPackage : contains
+    Context ||--o{ WorkflowStep : contains
+    WorkflowStep ||--o{ ObjectWorkflowMapping : "maps to objects"
+
+    Principal {
+        string access_token "API identity"
+    }
+    MediaBuy {
+        int revision "repository-managed"
+        datetime confirmed_at "repository-managed"
+    }
 ```
 
-Setup order matters: a tenant needs its `CurrencyLimit` and `PropertyTag`
-rows before you can create products, and products before media buys.
+Principal-owned rows also carry `tenant_id` directly; rows without their own
+`tenant_id` (media packages, workflow steps, object mappings) are
+tenant-scoped through their parent. `Context`, `WorkflowStep`, and
+`ObjectWorkflowMapping` implement human-in-the-loop workflows;
+`PushNotificationConfig` and `WebhookDeliveryRecord` implement outbound
+notification. Secondary tables hang off these entities — products have
+pricing options and inventory mappings, creatives have reviews and
+package assignments.
+
+Setup order matters: a tenant needs its `CurrencyLimit` row (USD, required
+before budgets validate) and its `PropertyTag` row (`all_inventory`, required
+before products) before you can create products, and products before media
+buys.
 
 All access goes through repositories (`src/core/database/repositories/`);
 some models additionally defend their own invariants — `MediaBuy` refuses
@@ -200,6 +228,21 @@ See the [security guide](../security.md) for more.
 Local development runs four compose services (`docker-compose.yml`):
 `postgres` (17-alpine), `db-init` (runs migrations, then exits),
 `adcp-server` (the unified app on 8080), and `proxy` (nginx on 8000).
+The following diagram shows the services and their startup order —
+`adcp-server` waits for a healthy database and completed migrations, and
+`proxy` waits for `adcp-server`:
+
+```mermaid
+flowchart LR
+    Client["Browser / buyer agent"] --> proxy
+
+    subgraph Compose["docker compose services"]
+        proxy["proxy (nginx, port 8000)"] --> adcp["adcp-server (unified app, port 8080)"]
+        dbinit["db-init (runs migrations, then exits)"] --> postgres
+        adcp --> postgres[("postgres (PostgreSQL 17)")]
+    end
+```
+
 Production uses the same topology — nginx in front of the single app process
 and a managed PostgreSQL — on any Docker-compatible platform. See
 [single-tenant deployment](../deployment/single-tenant.md) and

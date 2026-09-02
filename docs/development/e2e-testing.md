@@ -50,6 +50,38 @@ Both suites talk to the same compose stack, defined in
 | `creative-agent` + `creative-pg` | A pinned in-network creative agent with its own registry DB | The live public agent drifts and rate-limits; it is blackholed in `adcp-server`'s `extra_hosts` so a regression fails instantly |
 | `tests` | The in-network test runner (profile `runner`) | Runs tox inside the compose network so suites reach services by name |
 
+The following diagram shows an in-network run: every arrow is traffic on the
+stack's own bridge network, addressed by service name or dotted alias — no
+host ports exist. The `tls-proxy` service fronts all three HTTPS origins on
+one listener and routes by SNI, which is what makes the server's outbound
+calls real HTTPS.
+
+```mermaid
+flowchart LR
+    subgraph network["Compose bridge network — one per project, no published host ports"]
+        Runner["tests runner\nruns tox"]
+        Proxy["proxy\nnginx :8000, plaintext"]
+        TLSP["tls-proxy\nnginx :8443, TLS\naliases: proxy.adcp.test,\ncreative-agent.adcp.test,\nwebhooks.adcp.test"]
+        Server["adcp-server\napp under test :8080"]
+        WH["webhook-capture\n:8080"]
+        CA["creative-agent\n:8080"]
+        CPG["creative-pg\nadcp_registry"]
+        PG["postgres\ndatabases adcp + adcp_test"]
+    end
+
+    Runner -->|"E2E_BASE_URL\nhttp://proxy:8000"| Proxy
+    Runner -->|"E2E_TLS_BASE_URL\nhttps://proxy.adcp.test:8443"| TLSP
+    Runner -->|"postgres:5432\nboth databases"| PG
+    Runner -->|"readback, plain HTTP\nwebhook-capture:8080"| WH
+    Proxy -->|"adcp-server:8080"| Server
+    Server -->|"database adcp"| PG
+    Server -->|"outbound HTTPS\ncreative-agent.adcp.test:8443\nwebhooks.adcp.test:8443"| TLSP
+    TLSP -->|"SNI proxy.adcp.test"| Server
+    TLSP -->|"SNI creative-agent.adcp.test"| CA
+    TLSP -->|"SNI webhooks.adcp.test"| WH
+    CA --> CPG
+```
+
 Three properties of this stack determine everything else in this guide.
 
 **The base compose file publishes no host ports.** Every service is reachable
@@ -62,6 +94,26 @@ coordination. The paths that run pytest on the host instead overlay
 `WEBHOOK_CAPTURE_PORT`). Never add that overlay to the in-network runner —
 adding it reintroduces the cross-stack port collisions that the in-network
 design eliminates.
+
+The following diagram contrasts the two ways a test process reaches the same
+stack: the in-network runner needs no published ports, while the host paths
+publish loopback ports through the overlay.
+
+```mermaid
+flowchart LR
+    subgraph innet["In-network path — ./run_all_tests.sh"]
+        Runner2["tests runner container\ninside the stack's network"]
+    end
+    subgraph hostpath["Host paths — make test-stack-up, quick, ci target"]
+        HostPy["pytest / tox on the host"]
+        Overlay["docker-compose.e2e.ports.yml\npublishes 127.0.0.1 ports:\nPOSTGRES_PORT, ADCP_SALES_PORT,\nADCP_TLS_PORT, WEBHOOK_CAPTURE_PORT"]
+    end
+    Stack["Compose stack\ndocker-compose.e2e.yml:\npostgres, adcp-server, proxy,\ntls-proxy, webhook-capture,\ncreative-agent"]
+
+    Runner2 -->|"service names\nproxy:8000, postgres:5432"| Stack
+    HostPy --> Overlay
+    Overlay -->|"published loopback ports"| Stack
+```
 
 **TLS is served for real.** `scripts/dev/ensure-test-tls.sh` generates a
 private CA and a leaf certificate covering `*.adcp.test` into `.test-tls/`
@@ -110,6 +162,36 @@ derives it from the stack's published Postgres port
 (`localhost:<POSTGRES_PORT>/adcp`) with `setdefault`, so a stale
 `DATABASE_URL` inherited from some other harness cannot silently point the
 direct-DB helpers at a database the server never reads.
+
+The following diagram shows which suite touches which database. The suites on
+the left drive the live server and read or mutate its `/adcp` database; the
+suites on the right never touch the live server and use `/adcp_test`.
+
+```mermaid
+flowchart TD
+    subgraph liveSuites["Suites that drive the live server"]
+        E2E["tox -e e2e\ntests/e2e/ protocol pytest"]
+        UI["tox -e ui"]
+        BDDE["tox -e bdd_e2e\nBDD e2e_rest transport"]
+    end
+    subgraph inprocSuites["Suites that never touch the live server"]
+        BDDI["tox -e bdd_inprocess\ntransports a2a, mcp, rest"]
+        INT["tox -e integration / admin"]
+    end
+    Server2["Live adcp-server\nreal HTTP via proxy"]
+    ADCP["Database adcp\nthe server's database"]
+    ADCPT["Database adcp_test\nthe suite database"]
+
+    E2E --> Server2
+    UI --> Server2
+    BDDE --> Server2
+    Server2 --> ADCP
+    E2E -->|"E2E_DATABASE_URL\nseeds ci-test / iso-test"| ADCP
+    UI -->|"E2E_DATABASE_URL\nseeds default tenant"| ADCP
+    BDDE -->|"E2E_POSTGRES_URL\ntruncates every table,\nwrites Given-step data"| ADCP
+    BDDI --> ADCPT
+    INT --> ADCPT
+```
 
 Three suites mutate the server database, and they must not overlap:
 
