@@ -4,7 +4,7 @@ This document maps every key pattern to its **canonical implementation file** an
 
 > **Why this document exists:** The codebase has two eras — legacy code and current architecture. Most code by volume is legacy. If you pattern-match from surrounding code, you will likely follow a legacy pattern. This document tells you which files represent the target architecture.
 
-These patterns are machine-enforced by 8 review agents (`.claude/agents/review-*.md`) and 14+ structural guard tests (`tests/unit/test_architecture_*.py`).
+Structural guard tests under `tests/unit/test_architecture_*.py` enforce these patterns, and the standards in [engineering-standards.md](engineering-standards.md) restate the ones a reviewer applies.
 
 ## 1. Repository Pattern (CP-3)
 
@@ -60,7 +60,7 @@ Use model factory methods or repository `create_from_*()` methods instead.
 
 **Adding a new repository:** Create `src/core/database/repositories/your_model.py` following `media_buy.py`, add to `__init__.py`, wire into the appropriate UoW. The `test_architecture_no_raw_select.py` guard catches raw `select()` calls outside repository files.
 
-**Enforced by:** `review-architecture` (CP-3), `review-execution-excellence` (Repository+UoW), `review-layering` (_impl → Repository leaks), `test_architecture_no_raw_select.py`, `test_architecture_repository_pattern.py`
+**Enforced by:** `test_architecture_no_raw_select.py`, `test_architecture_repository_pattern.py`
 
 ## 2. Unit of Work (UoW)
 
@@ -96,7 +96,7 @@ uow.session is deprecated — use repository methods instead of raw session acce
 
 If you see `session = uow.session` in existing code, that is tracked debt. If you need data access that no repository method provides, **add a repository method** — don't use the raw session.
 
-**Enforced by:** `review-execution-excellence` (Repository+UoW pattern), `review-layering` (_impl → Repository leaks)
+**Enforced by:** `test_architecture_repository_pattern.py`
 
 ## 3. Structural Guards and Allowlists
 
@@ -178,7 +178,7 @@ Supporting modules: `_mixins.py` (shared fluent APIs), `_mock_uow.py` (UoW mock 
 The harness dispatches the same test through multiple transports:
 
 ```python
-@pytest.mark.parametrize("transport", [Transport.IMPL, Transport.A2A, Transport.REST])
+@pytest.mark.parametrize("transport", [Transport.A2A, Transport.MCP, Transport.REST])
 def test_something(self, integration_db, transport):
     with CreativeSyncEnv() as env:
         result = env.call_via(transport, creatives=[...])
@@ -260,7 +260,7 @@ with get_db_session() as session:
     session.commit()
 ```
 
-**Enforced by:** `review-execution-excellence` (Factory Fixtures), `test_architecture_repository_pattern.py` (catches `session.add()` in integration tests)
+**Enforced by:** `test_architecture_repository_pattern.py` (catches `session.add()` in integration tests)
 
 ## 6. Transport Boundary (CP-5)
 
@@ -325,7 +325,7 @@ raise ValueError(f"Media buy '{media_buy_id}' not found.")
 raise AdCPNotFoundError(f"Media buy '{media_buy_id}' not found.")
 ```
 
-**Enforced by:** `review-execution-excellence` (AdCPError Hierarchy), `review-python-practices` (Error Handling), `test_no_toolerror_in_impl.py`
+**Enforced by:** `test_no_toolerror_in_impl.py`
 
 ## 8. DRY — Shared Validation
 
@@ -377,7 +377,7 @@ formats = filter_by_format_ids(formats, req.input_format_ids, "input_format_ids"
 | Create a test factory | `tests/factories/media_buy.py` |
 | Understand error hierarchy | `src/core/exceptions.py` |
 | Add a structural guard | `docs/development/structural-guards.md` |
-| Understand the review agents | `.claude/agents/review-*.md` (8 agents) |
+| Know the standards a change is held to | [engineering-standards.md](engineering-standards.md) |
 
 ## Legacy Code Awareness
 
