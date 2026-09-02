@@ -254,6 +254,13 @@ def build_list_accounts_request(
     context: ContextObject | None = None,
     adcp_version: str | None = None,
     adcp_major_version: int | None = None,
+    # TEMPORARY, paired with ListAccountsRequest.idempotency_key -- see the full rationale
+    # there. Threading it here is what PUBLISHES it on MCP, because the advertised shape is
+    # "DTO fields INTERSECT this builder's parameters". That is a real cost and it is accepted
+    # knowingly: without it the UC-011 tolerance scenario cannot construct its request under
+    # dev-mode extra="forbid" and grades nothing at all. Remove both together once the harness
+    # can dispatch a raw payload (salesagent-prkv.65).
+    idempotency_key: str | None = None,
 ) -> ListAccountsRequest:
     """Build the shared list_accounts request for transport wrappers.
 
@@ -261,11 +268,14 @@ def build_list_accounts_request(
     seam every transport constructs the typed request through, so a future request
     field lands here once instead of in wrapper lockstep.
 
-    No ``idempotency_key``. It was threaded through here as read-tool tolerance, but
-    list-accounts-request.json declares no such property, and the advertised shape is
-    "DTO fields INTERSECT this builder's parameters" -- so threading it was what PUBLISHED
-    it, on MCP and REST, as though the spec defined it. Tolerance is the boundary's job
-    (critical pattern #7), not a parameter's. See ListAccountsRequest in schemas/account.py.
+    ``idempotency_key`` is threaded TEMPORARILY. list-accounts-request.json declares no
+    such property, and because the advertised shape is "DTO fields INTERSECT this builder's
+    parameters", threading it here is exactly what publishes it on MCP as though the spec
+    defined it. Tolerance is properly the boundary's job (critical pattern #7), not a
+    parameter's -- and production already does it without this. The parameter exists only so
+    the UC-011 tolerance scenario can construct its request while its When step still builds
+    the model in-process. Remove it with the field once the harness dispatches raw payloads
+    (salesagent-prkv.65). See ListAccountsRequest in schemas/account.py for the full rationale.
     """
     return ListAccountsRequest(
         account=account,
@@ -276,6 +286,7 @@ def build_list_accounts_request(
         context=context,
         adcp_version=adcp_version,
         adcp_major_version=adcp_major_version,
+        idempotency_key=idempotency_key,
     )
 
 
@@ -291,6 +302,13 @@ async def list_accounts(
     sandbox: Annotated[bool | None, Field(description="When true, return only sandbox/test accounts")] = None,
     ext: Annotated[dict | None, Field(description="AdCP extension object -- accepted, has no effect")] = None,
     context: ContextObject | None = None,
+    # TEMPORARY, paired with ListAccountsRequest.idempotency_key and the builder parameter.
+    # Declaring it here is what makes FastMCP ACCEPT it, which the UC-011 tolerance scenario
+    # needs while its When step constructs the model in-process. Delete all three together
+    # once the harness dispatches raw payloads (salesagent-prkv.65).
+    idempotency_key: Annotated[
+        str | None, Field(description="Read-tool idempotency tolerance per v3.1.1 -- accepted, has no effect")
+    ] = None,
     ctx: Context | ToolContext | None = None,
 ) -> ToolResult:
     """List accounts accessible to the authenticated agent (MCP tool).
@@ -318,6 +336,7 @@ async def list_accounts(
             sandbox=sandbox,
             ext=ext,
             context=context,
+            idempotency_key=idempotency_key,  # TEMPORARY -- see the builder parameter's comment
         )
 
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
