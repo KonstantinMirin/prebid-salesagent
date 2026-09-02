@@ -6,7 +6,9 @@ happened to it by the time your `_impl` function runs.
 Read this before adding anything to the request path: a header to read, a field
 to normalise, an auth rule, a tenant-scoped check. Each of those has exactly one
 layer that owns it (see [Where does my change go?](#where-does-my-change-go) at
-the end).
+the end). The principles this layering serves — why logic lives only in
+`_impl`, and why construction and serialization happen only at the boundary —
+are in [architecture-principles.md](architecture-principles.md).
 
 ## One process, four front doors
 

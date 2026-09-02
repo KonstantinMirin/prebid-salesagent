@@ -760,6 +760,7 @@ See `docs/deployment.md` for platform-specific guides.
 ## Documentation
 
 **Detailed docs in `/docs`:**
+- `development/architecture-principles.md` - The governing principles behind the layering
 - `development/architecture.md` - System architecture
 - `development/request-lifecycle.md` - How a request reaches business logic
 - `development/GETTING_STARTED.md` - Initial setup guide

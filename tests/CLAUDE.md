@@ -340,6 +340,15 @@ synthesized value moves in lockstep with whatever the builder produces.
 Tests that need to catch real wire-shape regressions must run on REST,
 MCP, or A2A — only those transports observe actual wire bytes.
 
+> **Direction (PR #1721, in flight):** the `IMPL` pseudo-transport, the
+> synthesized envelope, and the `ImplDispatcher` are being removed — for the
+> reason stated above: they compute an envelope from the same in-memory
+> exception the assertion then reads, so they cannot catch a boundary
+> regression. Do not build new tests on IMPL's synthesized envelope; write new
+> error assertions against a wire transport via `assert_envelope_shape`. See
+> [architecture-principles.md](../docs/development/architecture-principles.md)
+> § "Direction of travel".
+
 `result.error` (reconstructed exception) exists for tests that predate this
 policy. Reconstruction is lossy — assert on `result.error_envelope()`,
 which returns the real wire wherever one exists and the builder's envelope only
