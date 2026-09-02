@@ -585,6 +585,26 @@ run then reports "no violations" over a tree the detector cannot actually
 read, which is indistinguishable from a clean tree. Every guard's detector
 gets a known-bad self-test.
 
+**Borrow the machinery even when the rule is your own.** The helpers are
+available to every guard and used by most, and the ones that skip them
+re-derive the same four steps — find the root, find the files, parse, assert
+— and re-invent the same mistakes each time. Measured across the guard
+modules:
+
+| Machinery | Modules importing the helper | Modules hand-rolling it anyway |
+|---|---|---|
+| Repository root | 89 | 71 |
+| Source-file discovery | 89 | 56 |
+| AST parse and walk | 89 | 86 |
+
+The repository root is the clearest case, because the hand-rolled answers
+disagree: 55 modules resolve it as `parents[2]` and 19 as `parents[1]`.
+Those cannot both be right, and a guard anchored on the wrong one — or on a
+relative path such as `Path("src")` — scans a directory that may not exist
+where the test happens to run. Such a guard finds nothing and reports
+success, which is the failure this whole document is about. `repo_root()`
+gives one answer; anchor on it.
+
 ## Symbol subjects and shape subjects
 
 A guard's subject is either a **symbol** — a function, class or constant that
