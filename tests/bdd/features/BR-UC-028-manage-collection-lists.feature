@@ -215,8 +215,8 @@ Feature: BR-UC-028 Manage Collection Lists
     Examples:
       | filter_type           | boundary_point                            | filter_value                          | error_code           |
       | kinds_empty_array     | kinds empty array (minItems=1)            | {"kinds": []}                         | INVALID_REQUEST   |
-      | unknown_kind          | kinds contains unknown enum value         | {"kinds": ["unknown_kind"]}           | VALIDATION_ERROR     |
-      | unknown_quality       | production_quality unknown enum value     | {"production_quality": ["bogus"]}     | VALIDATION_ERROR     |
+      | unknown_kind          | kinds contains unknown enum value         | {"kinds": ["unknown_kind"]}           | INVALID_REQUEST     |
+      | unknown_quality       | production_quality unknown enum value     | {"production_quality": ["bogus"]}     | INVALID_REQUEST     |
       | unknown_filter_field  | field outside the closed filters schema   | {"bogus_dimension": ["x"]}            | INVALID_REQUEST |
 
   @T-UC-028-ext-a-webhook-on-create @create @validation @error @post-f1 @post-f2
@@ -494,7 +494,7 @@ Feature: BR-UC-028 Manage Collection Lists
   Scenario: collection_list_changed -- payload omitting a required field is rejected
     Given a collection_list_changed webhook body omits the required "list_id" field
     When the recipient validates the webhook payload
-    Then the error code should be "VALIDATION_ERROR"
+    Then the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
 
   @T-UC-028-bva-idempotency-format @boundary @bva @create @idempotency
@@ -646,7 +646,7 @@ Feature: BR-UC-028 Manage Collection Lists
       | boundary_point                       | expected                  |
       | Empty request body                    | all tenant lists returned |
       | name_contains supplied as a string    | substring filter applied  |
-      | name_contains supplied as an integer  | rejected: VALIDATION_ERROR |
+      | name_contains supplied as an integer  | rejected: INVALID_REQUEST |
 
   @T-UC-028-bva-coverage-gaps @boundary @bva @get @coverage-gaps
   Scenario Outline: get_collection_list coverage_gaps boundary -- <boundary_point>

@@ -81,8 +81,8 @@ Feature: BR-UC-012 Manage Content Standards
     Given no existing content standard for this scope
     When the Buyer Agent creates a content standard with scope {"languages_any": ["en"]} and only a legacy singular policy string "No adult content"
     Then the legacy policy string does not establish governance
-    And the request is rejected with error code "VALIDATION_ERROR"
-    And the error code should be "VALIDATION_ERROR"
+    And the request is rejected with error code "INVALID_REQUEST"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion"
     # BR-RULE-256 INV-7: v3.0 singular `policy` string no longer recognized; governance must use policies[]/registry_policy_ids[]
     # With no policies[]/registry_policy_ids[], the v3.1 create-request anyOf (INV-1) is unsatisfied → rejection
@@ -209,7 +209,7 @@ Feature: BR-UC-012 Manage Content Standards
   Scenario: Update content standard - idempotency_key omitted is rejected (REQUIRED in v3.1)
     Given an existing content standard with standards_id "std_abc123"
     When the Buyer Agent sends an update for "std_abc123" without an idempotency_key
-    Then the error code should be "VALIDATION_ERROR"
+    Then the error code should be "INVALID_REQUEST"
     And the error should include "suggestion"
     # BR-RULE-081 INV-6: idempotency_key REQUIRED on content-standards update
     # POST-F2: Buyer knows what failed
@@ -392,7 +392,7 @@ Feature: BR-UC-012 Manage Content Standards
   @T-UC-012-list-channel-invalid @list @filter @error @boundary @post-f2 @post-f3
   Scenario: List content standards - channels with unknown enum value in filter
     When the Buyer Agent filters by channels ["fake_channel"]
-    Then the error code should be "VALIDATION_ERROR"
+    Then the error code should be "INVALID_REQUEST"
     And the error should include "suggestion"
 
   @T-UC-012-pricing-options-list @pricing-options @list @partition

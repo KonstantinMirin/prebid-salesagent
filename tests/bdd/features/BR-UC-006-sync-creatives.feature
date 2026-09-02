@@ -753,7 +753,7 @@ Feature: BR-UC-006 Sync Creative Assets
 
     Examples: Invalid modes
       | partition      | mode     | outcome                              |
-      | unknown_value  | partial  | rejected with VALIDATION_ERROR       |
+      | unknown_value  | partial  | rejected with INVALID_REQUEST       |
 
   @T-UC-006-partition-approval-mode @partition @approval-mode
   Scenario Outline: Approval mode routing — <partition>
@@ -1018,7 +1018,7 @@ Feature: BR-UC-006 Sync Creative Assets
       | not set (default strict) | not set    | the operation should abort with PACKAGE_NOT_FOUND        |
       | strict                   | "strict"   | the operation should abort with PACKAGE_NOT_FOUND        |
       | lenient                  | "lenient"  | the assignment should be skipped with a warning          |
-      | unknown value            | "partial"  | the system should reject with VALIDATION_ERROR           |
+      | unknown value            | "partial"  | the system should reject with INVALID_REQUEST           |
 
   @T-UC-006-boundary-format-id @boundary @format-id
   Scenario Outline: Format validation boundary — <boundary_point>

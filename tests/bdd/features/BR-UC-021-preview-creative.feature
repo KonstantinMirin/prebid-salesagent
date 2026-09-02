@@ -405,7 +405,7 @@ Feature: BR-UC-021 Preview Creative
     Given a preview_creative request with request_type "unknown_type"
     When the Buyer Agent invokes preview_creative
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "single" or "batch" or "variant"
     # BR-RULE-160 INV-5: request_type unknown -> rejected
@@ -417,7 +417,7 @@ Feature: BR-UC-021 Preview Creative
     Given a preview_creative request without request_type field
     When the Buyer Agent invokes preview_creative
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     And the suggestion should contain "request_type"
     # BR-RULE-160 INV-5: request_type missing -> rejected
@@ -481,7 +481,7 @@ Feature: BR-UC-021 Preview Creative
     Given a single preview request with quality "ultra"
     When the Buyer Agent invokes preview_creative
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-227 INV-3: quality not in [draft, production] -> rejected
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/preview-creative-request.json
@@ -511,7 +511,7 @@ Feature: BR-UC-021 Preview Creative
     Given a single preview request with item_limit 0
     When the Buyer Agent invokes preview_creative
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-228 INV-2: item_limit < 1 violates minimum: 1 -> rejected
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/creative/preview-creative-request.json

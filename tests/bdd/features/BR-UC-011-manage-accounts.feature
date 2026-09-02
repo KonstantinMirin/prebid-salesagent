@@ -318,7 +318,7 @@ Feature: BR-UC-011 Manage Accounts
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     # The value production validates MUST be the buyer's. A seller that substitutes a
     # server-minted uuid4 (or drops the field) would let both rows below succeed, so this
     # outline is what distinguishes "threads the buyer's key" from "fabricates its own".

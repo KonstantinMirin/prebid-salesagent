@@ -964,7 +964,7 @@ Feature: BR-UC-003 Update Media Buy
       | partition      | value          | outcome                                              |
       | empty_string   |                | error "VALIDATION_ERROR" with suggestion              |
       | too_short      | abc1234        | error "INVALID_REQUEST" with suggestion              |
-      | too_long       | <256 character string> | error "VALIDATION_ERROR" with suggestion      |
+      | too_long       | <256 character string> | error "INVALID_REQUEST" with suggestion      |
 
   @T-UC-003-boundary-idempotency-key @boundary @idempotency_key
   Scenario Outline: Idempotency key boundary validation - <boundary_point>
@@ -984,13 +984,13 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Boundary values
       | boundary_point                  | value               | outcome                                |
       | absent (field not provided)     | <not provided>      | success                                |
-      | empty string (length 0)         |                     | error "VALIDATION_ERROR" with suggestion |
-      | length 15 (min - 1)            | <15 char string>    | error "VALIDATION_ERROR" with suggestion |
+      | empty string (length 0)         |                     | error "INVALID_REQUEST" with suggestion |
+      | length 15 (min - 1)            | <15 char string>    | error "INVALID_REQUEST" with suggestion |
       | length 16 (min, inclusive)      | <16 char string>    | success                                |
       | length 17 (min + 1)            | <17 char string>    | success                                |
       | length 254 (max - 1)           | <254 char string>   | success                                |
       | length 255 (max, inclusive)     | <255 char string>   | success                                |
-      | length 256 (max + 1)           | <256 char string>   | error "VALIDATION_ERROR" with suggestion |
+      | length 256 (max + 1)           | <256 char string>   | error "INVALID_REQUEST" with suggestion |
 
   @T-UC-003-partition-media-buy-status @partition @media_buy_status
   Scenario Outline: Media buy status partition validation - <partition>
@@ -2386,7 +2386,7 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Boundary values
       | boundary_point         | value             | outcome                                 |
       | reason 500 chars (max) | <500 char string> | success                                 |
-      | reason 501 chars (max+1) | <501 char string> | error "VALIDATION_ERROR" with suggestion |
+      | reason 501 chars (max+1) | <501 char string> | error "INVALID_REQUEST" with suggestion |
 
   @T-UC-003-cancel-package @invariant @BR-RULE-216 @cancellation @schema-v3.1 @post-s2
   Scenario: Package-level cancellation stops only that package (INV-6)
@@ -2415,7 +2415,7 @@ Feature: BR-UC-003 Update Media Buy
     | canceled     | false       |
     When the Buyer Agent sends the update_media_buy request
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-216 INV-1: canceled only valid value is const true; INV-3: cancellation is irreversible (no "uncancel")
     # ---------- BR-RULE-198: Package Immutable Fields After Creation (immutable field guard on package update) ----------
@@ -2671,7 +2671,7 @@ Feature: BR-UC-003 Update Media Buy
     Examples: idempotency_key boundaries (BR-UC-003)
       | boundary                                       | outcome                                            |
       | absent (field not provided)                    | error "INVALID_REQUEST" — rejected (v3.1 requires idempotency_key) |
-      | valid length, disallowed character (e.g. space) | error "VALIDATION_ERROR" (suggested_code IDEMPOTENCY_KEY_INVALID_FORMAT) — rejected |
+      | valid length, disallowed character (e.g. space) | error "INVALID_REQUEST" (suggested_code IDEMPOTENCY_KEY_INVALID_FORMAT) — rejected |
 
   @T-UC-003-bva-product-uniqueness @boundary @product_uniqueness @schema-v3.1 @post-f2
   Scenario Outline: product uniqueness boundary - <boundary>

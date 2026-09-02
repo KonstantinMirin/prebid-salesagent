@@ -429,7 +429,7 @@ Feature: BR-UC-009 Update Performance Index
     | media_buy_id | performance_data                |
     | mb_val_001   | [{"invalid_field": "no_index"}] |
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error should contain validation details
     And the error should include "suggestion" field
     And the suggestion should contain "correct parameter format"
@@ -471,7 +471,7 @@ Feature: BR-UC-009 Update Performance Index
     | media_buy_id | performance_data |
     | mb_val_003   | "not_a_list"     |
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error should contain model validation details
     And the error should include "suggestion" field
     And the suggestion should contain "correct data format"
@@ -483,7 +483,7 @@ Feature: BR-UC-009 Update Performance Index
     Given the Buyer owns media buy "mb_type_001"
     When the Buyer Agent submits performance feedback with performance_index as string "high"
     Then the operation should fail with a validation error
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error should indicate performance_index must be numeric
     And the error should include "suggestion" field
     And the suggestion should contain "correct data type"
@@ -713,14 +713,14 @@ Feature: BR-UC-009 Update Performance Index
     Then the operation should fail
     And the error code should be "<code>"
     And the error should include "suggestion" field
-    # BR-RULE-283 INV-4: scope=vendor needs both vendor and metric_id; format violation -> VALIDATION_ERROR
+    # BR-RULE-283 INV-4: scope=vendor needs both vendor and metric_id; format violation -> INVALID_REQUEST
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/provide-performance-feedback-request.json
 
     Examples:
       | partition         | field_present                                                       | code             |
       | missing_vendor    | metric_id "vmetric_a"                                               | INVALID_REQUEST  |
       | missing_metric_id | vendor domain "measure.example.com"                                 | INVALID_REQUEST  |
-      | bad_vendor_format | vendor domain "INVALID DOMAIN" and metric_id "vmetric_a"            | VALIDATION_ERROR |
+      | bad_vendor_format | vendor domain "INVALID DOMAIN" and metric_id "vmetric_a"            | INVALID_REQUEST |
 
   @T-UC-009-inv-283-5 @invariant @BR-RULE-283 @error
   Scenario: INV-5 violated - metric.qualifier with unknown key is rejected
@@ -761,7 +761,7 @@ Feature: BR-UC-009 Update Performance Index
     Given the Buyer owns media buy "mb_vendor_shape_002"
     When the Buyer Agent submits performance feedback for "mb_vendor_shape_002" with vendor object containing invalid domain "NOT A VALID DOMAIN!"
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # BR-RULE-284 INV-2: vendor must satisfy brand-ref schema
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/provide-performance-feedback-request.json
@@ -899,7 +899,7 @@ Feature: BR-UC-009 Update Performance Index
     Given the Buyer owns media buy "mb_bva_idemp"
     When the Buyer Agent submits performance feedback exercising the idempotency_key boundary
     Then the outcome should be <outcome>
-    # The "validation error" outcomes assert VALIDATION_ERROR / IDEMPOTENCY_KEY_INVALID_FORMAT with a recovery suggestion (use a fresh UUID v4 of length 16-255 with allowed character set).
+    # The "validation error" outcomes assert INVALID_REQUEST / IDEMPOTENCY_KEY_INVALID_FORMAT with a recovery suggestion (use a fresh UUID v4 of length 16-255 with allowed character set).
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/media-buy/provide-performance-feedback-request.json
 
     Examples: Length and pattern boundaries

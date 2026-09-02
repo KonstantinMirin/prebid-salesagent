@@ -1114,7 +1114,7 @@ Feature: BR-UC-024 Content Compliance
     And a calibrate_content request with a valid artifact but no idempotency_key
     When the Seller invokes calibrate_content with standards_id "std-260"
     Then the operation should fail
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
     # POST-F2: missing required field identified
     # @source repo=adcp ref=v3.1-04f59d2d5 commit=04f59d2d5 path=static/schemas/source/content-standards/get-media-buy-artifacts-request.json
@@ -1149,9 +1149,9 @@ Feature: BR-UC-024 Content Compliance
       | boundary_point                          | outcome                                          |
       | 16-char key (minimum)                   | the operation succeeds                           |
       | 255-char key (maximum)                  | the operation succeeds                           |
-      | 15-char key (below minimum)             | error "VALIDATION_ERROR" with suggestion         |
+      | 15-char key (below minimum)             | error "INVALID_REQUEST" with suggestion         |
       | 256-char key (above maximum)            | error "VALIDATION_ERROR" with suggestion         |
-      | key with space (pattern violation)      | error "VALIDATION_ERROR" with suggestion         |
+      | key with space (pattern violation)      | error "INVALID_REQUEST" with suggestion         |
 
   @T-UC-024-inv-260-conflict @v3-1 @invariant @BR-RULE-260 @error @idempotency
   Scenario: BR-RULE-260 INV-4 violated -- corrected re-emission reusing prior key with changed payload conflicts
