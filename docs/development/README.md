@@ -109,12 +109,11 @@ The guides in this directory that sit outside the core set:
 
 ## Records of past work, not guidance
 
-The `docs/` tree also holds records: review rounds under `docs/code-reviews/`,
-release notes under `docs/releases/`, and remediation plans, comparison
-reports, and planning artifacts at the `docs/` root and under `docs/design/`
-and `docs/development/`. Each describes one piece of work at the time it was
-done. None of them describes how the system works — for that, use the
-documents mapped earlier in this page.
+Completed review rounds, remediation plans, one-time reports and epic planning
+artifacts live in [`archive/`](../../archive/) at the repository root. Each was
+accurate about a moment that has passed; none describes how the system works
+now. Release notes stay under `docs/releases/`, where they belong as a record
+of what shipped.
 
 ## Key resources
 

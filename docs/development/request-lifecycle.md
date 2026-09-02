@@ -23,6 +23,32 @@ per-protocol process. The app exposes four kinds of entry point:
 | `/a2a` + `/.well-known/agent-card.json` | A2A (JSON-RPC) | a2a-sdk route factories, appended **directly** to the FastAPI app's route table — not mounted as a sub-app, so the app's middleware and `scope["state"]` are visible to A2A handlers |
 | `/admin` and `/` (catch-all) | Admin UI | The Flask admin app (`src.admin.app.create_app`), wrapped in `WSGIMiddleware` and mounted into FastAPI |
 
+How each entry point reaches the shared application — and which of them are
+sub-applications rather than plain routes on the app itself:
+
+```mermaid
+flowchart LR
+    nginx["nginx (port 8000)"] --> app["FastAPI app\nsrc/app.py"]
+
+    subgraph routes["FastAPI route table"]
+        direction TB
+        landing["GET / and /landing\nlanding pages, inserted at position 0"]
+        rest["/api/v1/* and health\nREST routers, app.include_router"]
+        mcp["/mcp\nFastMCP sub-application, app.mount"]
+        a2a["/a2a + /.well-known/agent-card.json\nA2A routes appended directly to the route table\n(app middleware and scope state reach the handlers)"]
+        admin["/admin and / catch-all\nFlask admin via WSGIMiddleware\n(mounted at startup, always last)"]
+    end
+
+    app --> landing
+    app --> rest
+    app --> mcp
+    app --> a2a
+    app --> admin
+
+    mcp --> fastmcp["FastMCP app\nown middleware chain"]
+    admin --> flask["Flask admin app\nown auth, outside the AdCP path"]
+```
+
 Two details deserve attention:
 
 - **The admin UI is a Flask app living inside the FastAPI app.** The lifespan
@@ -47,6 +73,29 @@ router.
 > middleware the outermost one, so the registration order in the file is the
 > *reverse* of the execution order. A middleware that you register after
 > another in the source runs *before* that one on the wire.
+
+The two orders side by side — read the left column down the source file and the
+right column down the wire:
+
+```mermaid
+flowchart LR
+    subgraph reg["Registration order in src/app.py (top to bottom)"]
+        direction TB
+        r1["1. A2A messageId compat"] --> r2["2. UnifiedAuthMiddleware"]
+        r2 --> r3["3. RestCompatMiddleware"]
+        r3 --> r4["4. CORSMiddleware"]
+    end
+
+    subgraph ex["Execution order on the wire (top to bottom)"]
+        direction TB
+        e1["1. CORSMiddleware"] --> e2["2. RestCompatMiddleware"]
+        e2 --> e3["3. UnifiedAuthMiddleware"]
+        e3 --> e4["4. A2A messageId compat"]
+        e4 --> e5["5. Router"]
+    end
+
+    reg -->|"add_middleware wraps:\nlast registered runs outermost"| ex
+```
 
 Every HTTP request traverses the middleware in this order, outermost first:
 
@@ -113,6 +162,22 @@ and *discovers* the tenant from the token. An invalid token raises
 `require_valid_token=False` an invalid or missing token degrades to an
 unauthenticated identity instead — this is what discovery endpoints such as
 `get_products` and `list_creative_formats`, and best-effort observability, use.
+
+The same three steps as a flow, including where token validity forks the
+outcome:
+
+```mermaid
+flowchart TD
+    hdrs["Headers\n(+ token, when the transport already extracted it)"]
+    hdrs --> tenant["1. Tenant detection (_detect_tenant)\nHost → x-adcp-tenant → Apx-Incoming-Host → localhost fallback\nfirst match wins"]
+    tenant --> token["2. Token extraction\nx-adcp-auth, then Authorization: Bearer"]
+    token --> principal["3. Principal resolution (get_principal_from_token)\ntenant-scoped lookup, or global lookup that discovers the tenant"]
+    principal --> valid{"Token valid?"}
+    valid -->|"yes"| rid["Frozen ResolvedIdentity"]
+    valid -->|"invalid,\nrequire_valid_token=True"| err["AdCPAuthenticationError"]
+    valid -->|"invalid or missing,\nrequire_valid_token=False"| unauth["Unauthenticated identity"]
+    unauth --> rid
+```
 
 The result is a frozen `ResolvedIdentity`: `principal_id`, `tenant_id`,
 `tenant` (a `TenantContext`), `auth_token`, `protocol`, `testing_context`
@@ -295,6 +360,29 @@ Structural guards enforce this boundary
 `test_no_toolerror_in_impl.py`, `test_architecture_boundary_completeness.py`.
 
 ## Where does my change go?
+
+The end-to-end path with the common insertion points (dashed) attached to the
+layer that owns each one; the table below maps specific changes onto the same
+layers:
+
+```mermaid
+flowchart TD
+    wire["Wire (nginx)"] --> mw["ASGI middleware stack\nCORS → RestCompat → UnifiedAuth → A2A messageId compat"]
+    mw --> boundary["Transport boundary\nrequire_auth (REST) / FastMCP middleware (MCP) /\n_resolve_a2a_identity (A2A)"]
+    boundary --> ident["resolve_identity\ntenant → token → principal"]
+    ident --> wrapper["Wrapper / raw function\nwire dict → typed request"]
+    wrapper --> impl["_impl\nbusiness logic on ResolvedIdentity + request"]
+    impl --> out["Boundary translation\nenvelope builders + record_boundary_error"]
+    out -->|"response"| wire
+
+    i1["Touch bodies or headers globally"] -.-> mw
+    i2["Accept a renamed field\n(src/core/request_compat.py)"] -.-> mw
+    i2 -.-> boundary
+    i3["Auth rule:\nwho may call at all"] -.-> boundary
+    i4["New header, tenant strategy,\nnew field about the caller"] -.-> ident
+    i5["Authorization rule:\nwhat this principal may do"] -.-> impl
+    i6["Change how an error\nlooks on the wire"] -.-> out
+```
 
 | Change you want to make | It belongs in | Not in |
 |---|---|---|
