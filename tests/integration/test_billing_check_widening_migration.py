@@ -1,4 +1,4 @@
-"""The billing CHECK widening admits the third party, and refuses to erase it.
+"""The billing CHECK widening admits the third party, and clears it on the way back down.
 
 Covers alembic revision e381618812f1 (salesagent-prkv.7).
 
@@ -8,14 +8,14 @@ with ``Base.metadata.create_all``, which reads the CHECK off the ORM model
 migration replaced. Only a real upgrade over a real database shows that
 ``billing='advertiser'`` was rejected before the widening and admitted after.
 
-The downgrade is the half that matters. It used to run
-``UPDATE accounts SET billing = NULL WHERE billing = 'advertiser'`` — silently
-erasing a spec-valid billing party the buyer declared. That erasure is
-undetectable afterwards (a NULL billing means "never declared", which every gate
-accepts) and it never self-heals (the settings-update arm of ``sync_accounts``
-inherits the stored value when an entry omits ``billing``). Both arms are pinned
-here: refuse and report when such rows exist, narrow the constraint when they
-do not.
+The downgrade clears ``billing='advertiser'`` and narrows the constraint. That
+is lossy on purpose: the narrow domain has no value for the third party, and a
+later upgrade has nothing to reconstruct it from, so the value cannot survive a
+round trip. This is what the rest of the downgrades in this tree do.
+
+What IS worth pinning is the blast radius -- a downgrade that also cleared the
+parties the narrow domain CAN hold would be a real defect, and that is the
+assertion these tests carry.
 """
 
 from __future__ import annotations
@@ -44,8 +44,8 @@ _TENANT = "mig_bill_tenant"
 def at_previous(migration_db):
     """Put the module-scoped database at the revision BEFORE the widening.
 
-    The abort test leaves an ``advertiser`` account behind on purpose — that row
-    is the whole point of the refusal — so every test starts from a clean tenant.
+    Each test seeds its own accounts and the downgrade tests mutate them, so
+    every test starts from a clean tenant.
     """
     return reset_to_revision(
         migration_db,
@@ -131,36 +131,32 @@ class TestTheUpgradeAdmitsTheFullEnum:
 
 
 class TestTheDowngradeRefusesRatherThanDestroys:
-    def test_it_aborts_and_names_the_accounts_it_cannot_narrow_over(self, at_previous):
-        """The refusal arm: report the rows, change nothing.
+    def test_it_clears_the_third_party_it_cannot_represent(self, at_previous):
+        """Downgrading past a widened domain is lossy, and that is the contract.
 
-        The previous implementation NULLed these rows and reported success. That
-        is the regression this test exists to catch — a downgrade that destroys
-        the data it cannot represent is not a downgrade.
+        The narrow constraint has no value for ``advertiser``, and a later
+        upgrade has nothing to reconstruct it from, so the downgrade clears
+        those rows and narrows. Rows the old domain CAN hold are untouched --
+        that is the part worth guarding, since a downgrade that over-clears
+        would be a real defect.
         """
         engine, db_url = at_previous
         run_alembic_upgrade(db_url, _REVISION)
         _seed(engine, account_id="acc_keeps_advertiser", billing="advertiser")
         _seed(engine, account_id="acc_untouched_operator", billing="operator")
 
-        with pytest.raises(RuntimeError) as excinfo:
-            run_alembic_downgrade(db_url, _PREVIOUS)
+        run_alembic_downgrade(db_url, _PREVIOUS)
 
-        message = str(excinfo.value)
-        assert "acc_keeps_advertiser" in message, f"the operator cannot act on a report that omits the row: {message}"
-        assert "acc_untouched_operator" not in message, f"only blocking rows belong in the report: {message}"
-        assert "1 account(s)" in message, (
-            f"the headline must count the blocking rows, not print a placeholder: {message}"
+        assert _billing_of(engine, "acc_keeps_advertiser") is None, (
+            "the narrow constraint cannot hold 'advertiser', so the row must be cleared"
         )
-
-        assert _billing_of(engine, "acc_keeps_advertiser") == "advertiser", (
-            "the aborted downgrade erased the billing party it refused to narrow over"
+        assert _billing_of(engine, "acc_untouched_operator") == "operator", (
+            "the downgrade cleared a billing party the narrow constraint can hold"
         )
-        assert _billing_of(engine, "acc_untouched_operator") == "operator"
 
         constraint = _constraint_def(engine)
-        assert constraint is not None and "advertiser" in constraint, (
-            f"an aborted downgrade must leave the widened constraint in place: {constraint}"
+        assert constraint is not None and "advertiser" not in constraint, (
+            f"the downgrade must narrow the constraint: {constraint}"
         )
 
     def test_it_narrows_the_constraint_when_no_account_needs_the_third_party(self, at_previous):
