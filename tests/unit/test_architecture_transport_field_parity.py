@@ -32,6 +32,7 @@ import pathlib
 import re
 
 import pytest
+from pydantic import BaseModel
 
 from tests.unit._architecture_helpers import iter_call_expressions
 
@@ -67,6 +68,45 @@ WHOLESALE_MARKERS = (
 #: REST now DERIVES its body from the DTO, so it declares them like every other transport.
 #: A divergence can no longer be papered over here -- it has to be fixed at the seam.
 ALLOWLIST: dict[tuple[str, str], str] = {}
+
+#: PRE-3.1.1 FLAT ALIASES that MCP and A2A still accept and REST deliberately does not.
+#:
+#: These are NOT allowlisted divergences and are kept out of ALLOWLIST on purpose. A field
+#: in ALLOWLIST means "both transports should carry it and one does not, yet". These are the
+#: opposite: REST is the CORRECT surface. list-creatives-request.json declares filters, sort
+#: and pagination OBJECTS -- none of the flat names below -- so the derived REST body cannot
+#: announce them and should not. MCP and A2A accept them as legacy conveniences that
+#: _build_list_creatives_request folds into the structured request.
+#:
+#: They surfaced only when this guard regained sight of REST: every body in api_v1 is now a
+#: derived_body_model ASSIGNMENT, and the old AST ClassDef scan found none of them, so REST
+#: had dropped out of the comparison entirely. The divergence predates that fix.
+#:
+#: Resolution is REMOVAL from the MCP wrapper and the builder, not an entry here -- pre-3.x
+#: payloads do not belong at tool-definition level. That is a buyer-visible surface change,
+#: so it is its own task. This set may only SHRINK.
+_LEGACY_FLAT_ALIASES: dict[str, frozenset[str]] = {
+    "list_creatives": frozenset(
+        {
+            # Folded into filters/sort/pagination by the builder.
+            "media_buy_id",
+            "media_buy_ids",
+            "status",
+            "tags",
+            "search",
+            "created_after",
+            "created_before",
+            "limit",
+            "sort_by",
+            "sort_order",
+            # Not ListCreativesRequest fields at all: out-of-band _impl parameters.
+            "format",
+            "page",
+            "include_performance",
+            "include_sub_assets",
+        }
+    ),
+}
 
 
 def _mcp_tool_params() -> dict[str, set[str]]:
@@ -147,18 +187,28 @@ def _a2a_skill_params() -> tuple[dict[str, set[str]], set[str]]:
 
 
 def _rest_body_fields() -> dict[str, set[str]]:
-    """``*Body`` class name -> declared field names."""
-    tree = ast.parse(API_V1.read_text())
+    """``*Body`` model name -> declared field names, resolved at RUNTIME.
+
+    Read off the imported module, NOT by AST-scanning for ClassDef nodes. Every body
+    in api_v1 is now produced by ``derived_body_model(...)``, which is an ASSIGNMENT,
+    not a class statement -- so an AST scan for ClassDefs found zero of them and REST
+    dropped out of the MCP/A2A/REST comparison entirely. The guard then reported green
+    for exactly the tools whose REST surface it could no longer see, and would have kept
+    reporting green if a later change made them wrong.
+
+    The derived models are ordinary pydantic models at runtime; only their SOURCE form
+    changed, so resolving them by value is both simpler and immune to the next form
+    change.
+    """
+    import src.routes.api_v1 as api_v1_module
+
     bodies: dict[str, set[str]] = {}
-    for node in tree.body:
-        if not isinstance(node, ast.ClassDef) or not node.name.endswith("Body"):
+    for name, obj in vars(api_v1_module).items():
+        if not name.endswith("Body") or not isinstance(obj, type):
             continue
-        fields = {
-            stmt.target.id
-            for stmt in node.body
-            if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name)
-        }
-        bodies[node.name] = fields - NON_REQUEST_PARAMS
+        if not issubclass(obj, BaseModel):
+            continue
+        bodies[name] = set(obj.model_fields) - NON_REQUEST_PARAMS
     return bodies
 
 
@@ -219,7 +269,11 @@ def collect_divergences() -> dict[tuple[str, str], list[str]]:
 def test_no_request_field_diverges_across_transports() -> None:
     """No tool may carry a request field on one transport and not another."""
     divergences = collect_divergences()
-    unexpected = {key: missing for key, missing in divergences.items() if key not in ALLOWLIST}
+    unexpected = {
+        (tool, field): missing
+        for (tool, field), missing in divergences.items()
+        if (tool, field) not in ALLOWLIST and field not in _LEGACY_FLAT_ALIASES.get(tool, frozenset())
+    }
     assert not unexpected, (
         "Request fields diverge across transports. A field one transport accepts and another "
         "does not is silently dropped for the buyer.\n"
@@ -228,6 +282,26 @@ def test_no_request_field_diverges_across_transports() -> None:
         )
         + "\n\nForward the field on every transport, or consume the parameter bag wholesale "
         "(select_request_fields / model_validate). Do NOT add to ALLOWLIST -- it only shrinks."
+    )
+
+
+def test_legacy_flat_aliases_have_no_stale_entries() -> None:
+    """A legacy alias that no longer diverges must be removed from the set.
+
+    Without this the set could only grow: an alias removed from the MCP wrapper would
+    leave a row here that silently exempts a name nobody sends any more, and the next
+    real divergence on that name would be pre-forgiven.
+    """
+    divergences = collect_divergences()
+    diverging = {(tool, field) for (tool, field) in divergences}
+    stale = sorted(
+        f"{tool}.{field}"
+        for tool, fields in _LEGACY_FLAT_ALIASES.items()
+        for field in fields
+        if (tool, field) not in diverging
+    )
+    assert not stale, (
+        "Legacy flat aliases that no longer diverge -- remove them from _LEGACY_FLAT_ALIASES:\n  " + "\n  ".join(stale)
     )
 
 

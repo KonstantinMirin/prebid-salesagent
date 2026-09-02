@@ -766,6 +766,13 @@ async def get_media_buy_delivery(
     include_package_daily_breakdown: Annotated[
         bool | None, Field(description="When true, include daily breakdown metrics per package")
     ] = None,
+    # Declared GetMediaBuyDeliveryRequest fields. The builder now carries them, so REST and
+    # A2A accept them; MCP must advertise them too or the same tool takes different fields
+    # depending on the transport a buyer reaches it through.
+    include_window_breakdown: Annotated[
+        bool | None, Field(description="When true, include per-attribution-window breakdown")
+    ] = None,
+    time_granularity: Annotated[Any | None, Field(description="Requested reporting time granularity")] = None,
     account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,
@@ -804,6 +811,8 @@ async def get_media_buy_delivery(
         reporting_dimensions=reporting_dimensions,
         attribution_window=attribution_window,
         include_package_daily_breakdown=include_package_daily_breakdown,
+        include_window_breakdown=include_window_breakdown,
+        time_granularity=time_granularity,
         account=account,
         context=context,
     )
