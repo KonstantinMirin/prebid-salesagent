@@ -335,9 +335,6 @@ from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
 # not optional -- _register_tool refuses a tool without one.
 from mcp.types import ToolAnnotations
 
-from src.core.schemas import (
-    ListTasksRequest as LocalListTasksRequest,
-)
 from src.core.tool_error_logging import with_error_logging
 from src.core.tools._announced_shape import apply_dto_announced_shape
 from src.core.tools.accounts import list_accounts, sync_accounts
@@ -420,6 +417,6 @@ _register_tool(update_media_buy)
 _register_tool(get_media_buy_delivery)
 _register_tool(get_media_buys)
 _register_tool(update_performance_index)
-_register_tool(list_tasks, LocalListTasksRequest)
+_register_tool(list_tasks)
 _register_tool(get_task)
 _register_tool(complete_task)

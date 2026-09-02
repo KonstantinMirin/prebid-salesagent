@@ -11,6 +11,11 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from adcp.types import AccountReference as LibraryAccountReference
+from adcp.types import ListTasksRequest as LibraryListTasksRequest
+from adcp.types import PaginationRequest
+from adcp.types.generated_poc.protocol.list_tasks_request import Filters as ListTasksFilters
+from adcp.types.generated_poc.protocol.list_tasks_request import Sort as ListTasksSort
 from fastmcp.server.context import Context
 
 from src.core.audit_logger import get_audit_logger
@@ -22,40 +27,138 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas import CompleteTaskRequestLocal, GetTaskRequest
+from src.core.schema_helpers import adcp_validation_boundary
+from src.core.schemas import CompleteTaskRequestLocal, ContextObject, GetTaskRequest, enum_value
 
 logger = logging.getLogger(__name__)
 
 
+#: Spec TaskStatus -> the workflow-step status this repo actually stores.
+#:
+#: The two vocabularies are genuinely different, which is the substance of the rebase and
+#: not a naming detail: list-tasks-request.json filters on TaskStatus
+#: (submitted/working/input-required/completed/canceled/failed/rejected/auth-required)
+#: while WorkflowStep.status is pending/in_progress/requires_approval/completed/failed.
+#: A buyer now sends the SPEC value and this is where it becomes ours.
+#:
+#: canceled, rejected and auth-required have no workflow-step equivalent today. They map to
+#: None, which the filter treats as "no such task", rather than being silently dropped --
+#: dropping the filter would return EVERY task for a status the buyer meant to narrow by.
+_SPEC_STATUS_TO_WORKFLOW_STATUS: dict[str, str | None] = {
+    "submitted": "pending",
+    "working": "in_progress",
+    "input-required": "requires_approval",
+    "completed": "completed",
+    "failed": "failed",
+    "canceled": None,
+    "rejected": None,
+    "auth-required": None,
+}
+
+
+def _build_list_tasks_request(
+    filters: ListTasksFilters | None = None,
+    sort: ListTasksSort | None = None,
+    pagination: PaginationRequest | None = None,
+    include_history: bool | None = None,
+    account: LibraryAccountReference | None = None,
+    context: ContextObject | None = None,
+) -> LibraryListTasksRequest:
+    """Build a ListTasksRequest from individual wire params.
+
+    The one seam every transport constructs this request through, matching the other
+    tools. Its existence is what lets ``_register_tool(list_tasks)`` resolve the DTO
+    from the builder instead of being handed one via the ``dto=`` escape hatch.
+    """
+    with adcp_validation_boundary(context="list_tasks request"):
+        fields = {
+            "filters": filters,
+            "sort": sort,
+            "pagination": pagination,
+            "include_history": include_history,
+            "account": account,
+            "context": context,
+        }
+        # A None argument means the buyer did not send that field, so it is omitted and the
+        # model's own default applies rather than being overwritten with an explicit None.
+        return LibraryListTasksRequest(**{k: v for k, v in fields.items() if v is not None})
+
+
 async def list_tasks(
-    status: str | None = None,
-    object_type: str | None = None,
-    object_id: str | None = None,
-    limit: int = 20,
-    offset: int = 0,
-    context: Context | None = None,
+    filters: ListTasksFilters | None = None,
+    sort: ListTasksSort | None = None,
+    pagination: PaginationRequest | None = None,
+    include_history: bool | None = None,
+    account: LibraryAccountReference | None = None,
+    context: ContextObject | None = None,
+    ctx: Context | None = None,
     identity: ResolvedIdentity | None = None,
 ) -> dict[str, Any]:
-    """List workflow tasks with filtering options.
+    """List workflow tasks (AdCP 3.1.1 list-tasks-request.json).
+
+    REBASED onto the SDK vocabulary. This tool used to take object_id, object_type,
+    status, limit and offset -- a pre-3.1.1 flat shape whose intersection with
+    ListTasksRequest was ``{context}`` alone, so it could only register through
+    ``_register_tool``'s ``dto=`` escape hatch, and it was the last tool doing so.
+
+    ``object_type`` and ``object_id`` are GONE from the wire surface: they are our
+    internal workflow-object concepts and list-tasks-request.json declares no equivalent
+    (its Filters carry protocol, status, task_type, dates, task_ids, context_contains,
+    has_webhook). The repository still supports them for internal callers; they are simply
+    not something a buyer can ask for any more, per the rule that pre-3.x payloads do not
+    belong at tool-definition level.
 
     Args:
-        status: Filter by task status ("pending", "in_progress", "completed", "failed", "requires_approval")
-        object_type: Filter by object type ("media_buy", "creative", "product")
-        object_id: Filter by specific object ID
-        limit: Maximum number of tasks to return (default: 20)
-        offset: Number of tasks to skip (default: 0)
-        context: MCP context (automatically provided)
-        identity: Pre-resolved identity (preferred over context)
+        filters: Task filters per the spec (status/statuses, task_type, dates, ...)
+        sort: Sort field and direction
+        pagination: Cursor pagination (max_results, cursor)
+        include_history: Include task history
+        account: Account reference
+        context: Application-level context per AdCP spec
+        ctx: MCP context (automatically provided)
+        identity: Pre-resolved identity (preferred over ctx)
 
     Returns:
         Dict containing tasks list and pagination info
     """
-    if identity is None and context is not None:
-        identity = await context.get_state("identity")
+    if identity is None and ctx is not None:
+        identity = await ctx.get_state("identity")
 
-    identity = require_identity(identity)
-    tenant = require_tenant(identity)
-    require_principal_id(identity)  # F-03: an authenticated (non-anonymous) principal is required
+    req = _build_list_tasks_request(
+        filters=filters,
+        sort=sort,
+        pagination=pagination,
+        include_history=include_history,
+        account=account,
+        context=context,
+    )
+
+    # Map the spec shape onto the repository's own vocabulary. `statuses` is the plural
+    # arm; a single `status` is the singular one, and the repository takes one string.
+    status: str | None = None
+    filtered_by_status = False
+    if req.filters is not None:
+        spec_status = req.filters.status
+        if spec_status is None and req.filters.statuses:
+            spec_status = req.filters.statuses[0]
+        if spec_status is not None:
+            filtered_by_status = True
+            status = _SPEC_STATUS_TO_WORKFLOW_STATUS.get(enum_value(spec_status))
+    if filtered_by_status and status is None:
+        # A spec status this seller has no workflow equivalent for. Answering with an
+        # unfiltered listing would be worse than answering with none: the buyer asked to
+        # narrow and would get everything.
+        return {"tasks": [], "total": 0, "limit": 0, "offset": 0}
+    object_type = None
+    object_id = None
+    limit = req.pagination.max_results if req.pagination and req.pagination.max_results else 20
+    offset = 0
+
+    # context is forwarded so a refusal ECHOES the buyer's context object, as it does on
+    # every other tool -- available here now that this tool builds a request.
+    identity = require_identity(identity, context=req.context)
+    tenant = require_tenant(identity, context=req.context)
+    require_principal_id(identity, context=req.context)  # F-03: an authenticated principal is required
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None

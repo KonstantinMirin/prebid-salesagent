@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import pytest
+from adcp.types.generated_poc.protocol.list_tasks_request import Filters as ListTasksFilters
 
 from src.core.database.models import WorkflowStep
 from src.core.exceptions import AdCPTaskNotFoundError
@@ -100,7 +101,10 @@ class TestListTasksTool:
         identity = self._make_identity(sample_tenant)
 
         with patch("src.core.tools.task_management.WorkflowUoW", return_value=mock_uow):
-            result = await list_tasks_fn(status="requires_approval", identity=identity)
+            # The SPEC vocabulary now: list-tasks-request.json filters on TaskStatus, and
+            # "input-required" is the spec's name for what this repo stores as
+            # "requires_approval". The tool translates; the buyer never sends our word.
+            result = await list_tasks_fn(filters=ListTasksFilters(status="input-required"), identity=identity)
 
         assert "tasks" in result
         mock_workflow_repo.count_by_tenant.assert_called_once_with(

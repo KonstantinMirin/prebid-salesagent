@@ -3294,31 +3294,6 @@ class GetMediaBuysMediaBuy(AlwaysIncludeFieldsMixin, LibraryGetMediaBuysMediaBuy
         return result
 
 
-class ListTasksRequest(SalesAgentBaseModel):
-    """Request to list tasks -- OUR vocabulary, which is not yet the spec's.
-
-    The SDK ships a ListTasksRequest (filters, pagination, sort, include_history, account,
-    ext). This tool implements none of those: it takes object_id, object_type, status, limit
-    and offset. Registering against the SDK model would advertise their INTERSECTION --
-    ``context`` alone -- and the tool would be uncallable.
-
-    So this declares what we implement, and the gap is FILED, not hidden: implementing the
-    spec's filters/pagination/sort is the work that lets this model be deleted and the
-    library type used directly. Same re-base rule as GetTaskRequest -- when we implement the
-    spec shape, this becomes ``class ListTasksRequest(LibraryListTasksRequest)`` and the
-    local fields go.
-    """
-
-    model_config = ConfigDict(extra=get_pydantic_extra_mode())
-
-    object_id: str | None = Field(default=None, description="Filter to one object")
-    object_type: str | None = Field(default=None, description="Filter by object type")
-    status: str | None = Field(default=None, description="Filter by task status")
-    limit: int | None = Field(default=None, description="Maximum tasks to return")
-    offset: int | None = Field(default=None, description="Offset for paging")
-    context: ContextObject | None = Field(default=None, description="Application-level context")
-
-
 class CompleteTaskRequestLocal(SalesAgentBaseModel):
     """Request to complete a task -- OUR vocabulary, which is not the app CompleteTaskRequest.
 
