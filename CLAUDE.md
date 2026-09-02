@@ -2,26 +2,17 @@
 
 ## 🤖 For Claude (AI assistant)
 
-This guide helps you work effectively with the Prebid Sales Agent codebase maintained under Prebid.org. The following sections list the key principles.
+This guide surfaces the repository-specific rules for the Prebid Sales Agent codebase (maintained under Prebid.org). The 9 critical patterns and the structural guards that enforce them are non-negotiable; the § Documentation list at the end says where the depth lives.
 
-### Working with this codebase
-- **Always read before writing** — use Read/Glob to understand existing patterns
-- **Test your changes** — run `make quality` before committing
-- **Follow the patterns** — the 9 critical patterns in this guide are non-negotiable
-- **When stuck** — check `/docs` for detailed explanations
-- **Pre-commit hooks are your friend** — they catch most issues automatically
-- **Name your PRs correctly** — they must pass `.github/workflows/pr-title-check.yml`
+**Never push directly to main.** Commits and PR titles use Conventional Commits prefixes — `feat` / `fix` / `docs` / `refactor` / `perf` / `chore` — enforced by `.github/workflows/pr-title-check.yml`; release-please builds the changelog from them, so an unprefixed commit ships undocumented.
 
 ### Common task patterns
 - **Adding a new AdCP tool**: Extend library schema → Add `_impl()` function → Add MCP wrapper → Add A2A raw function → Add tests
 - **Fixing a route issue**: Check for conflicts with `grep -r "@.*route.*your/path"` → Use `url_for()` in Python, `scriptRoot` in JavaScript
 - **Modifying schemas**: Verify against AdCP spec → Update Pydantic model → Run `pytest tests/unit/test_adcp_contract.py`
 - **Database changes**: Reach the data through a repository inside a Unit of Work → Use `JSONType` for JSON columns → Create migration with `alembic revision`
-- **New feature**: Search and read similar existing code first → design against the critical patterns → write tests first (TDD, full cycle in `.claude/rules/workflows/tdd-workflow.md`) → implement → `make quality` → commit
-- **Bug report**: Reproduce by reading the code path → write the failing regression test first → fix the root cause, not the symptom → check the codebase for the same defect elsewhere → commit fix with test (full workflow in `.claude/rules/workflows/bug-reporting.md`)
-- **Refactoring**: Verify tests exist and pass first → small incremental changes, `make quality` after each → verify import changes with `uv run python -c "from module import thing"` → run `tox -e integration` for shared implementations
-- **"How does X work?"**: Grep for X → read the implementation and its tests (`tests/unit/test_*X*.py`) → explain with code references (file:line) → link relevant docs
-- **Best practices**: Check this guide's patterns first, then `/docs`, then recent code for current conventions
+- **Any feature or bug fix**: TDD — the failing test comes first, and every change is gated by `make quality` (full cycles in `.claude/rules/workflows/tdd-workflow.md` and `bug-reporting.md`)
+- **Refactorings**: additionally run `tox -e integration` and verify imports with `uv run python -c "from module import thing"` — pre-commit hooks can't catch import errors
 
 ### Key files to know
 - `src/core/main.py` — MCP server and tool registration
@@ -46,23 +37,6 @@ This guide helps you work effectively with the Prebid Sales Agent codebase maint
 - It is not about collapsing two genuinely different operations that happen to look similar today
 - It applies when the same **logical operation** is repeated with only parameter substitution
 - A worked example of extracting the shared pattern: [patterns-reference.md §8](docs/development/patterns-reference.md)
-
-### What to avoid
-- ❌ Don't query an ORM model outside a repository (go through a repository inside a Unit of Work)
-- ❌ Don't use `session.query()` inside a repository (use `select()` + `scalars()`)
-- ❌ Don't duplicate library schemas (extend with inheritance)
-- ❌ Don't hardcode URLs in JavaScript (use `scriptRoot`)
-- ❌ Don't bypass pre-commit hooks without good reason
-- ❌ Don't skip tests to make CI pass (fix the underlying issue)
-- ❌ Don't leave duplicated logic — extract shared helpers (DRY invariant above)
-
-### Commit messages and PR titles
-**Use Conventional Commits format** — release-please uses this format to generate changelogs.
-
-PR-title prefixes: `feat:` (new functionality → "Features"), `fix:` (→ "Bug Fixes"), `docs:` (documentation),
-`refactor:` (→ "Code Refactoring"), `perf:` (performance), `chore:` (maintenance, hidden from changelog).
-
-**Without a prefix, commits don't appear in release notes.** The code is still released, but the changelog doesn't document the change.
 
 ### Structural guards (automated architecture enforcement)
 AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately.
@@ -303,10 +277,9 @@ The Prebid Sales Agent is a Python application with the following components:
 ## Common operations
 
 ### Running locally
-`docker compose up -d` builds from local source and starts everything behind nginx at
-http://localhost:8000 (migrations run automatically on startup; clean rebuild: `docker compose build --no-cache`).
-Access points, the test login (password `test123`), and troubleshooting are in
-[docs/quickstart.md](docs/quickstart.md); MCP client usage and the `uvx adcp ... list_tools` smoke test are in `.claude/rules/patterns/mcp-patterns.md`.
+Migrations run automatically on container startup. The local-run walkthrough, access points, and
+test login are in [docs/quickstart.md](docs/quickstart.md); MCP client usage and the
+`uvx adcp ... list_tools` smoke test are in `.claude/rules/patterns/mcp-patterns.md`.
 
 ### Testing
 Test orchestration uses **tox** (with tox-uv): `uv tool install tox --with tox-uv`.
@@ -425,18 +398,6 @@ The Broadstreet integration lives at `src/adapters/broadstreet/`.
 ### Mock adapter
 **Supported**: all AdCP pricing models (CPM, VCPM, CPCV, CPP, CPC, CPV, FLAT_RATE) and all
 currencies, with simulated metrics. Used for testing and development.
-
-## Deployment
-
-- **Local dev**: `docker compose up -d` → http://localhost:8000 (builds from source; test auth is on by default via `ADCP_AUTH_TEST_MODE=true`, login password `test123`)
-- **Production**: deploy to your preferred hosting platform — platform options and guides are in README § Publisher Deployment and `docs/deployment/`
-
-### Git workflow (MANDATORY)
-**Never push directly to main**
-
-1. Work on feature branches: `git checkout -b feature/name`
-2. Create PR: `gh pr create`
-3. Merge via GitHub UI
 
 ## Documentation
 
