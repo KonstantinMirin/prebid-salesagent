@@ -448,6 +448,7 @@ Rules files for day-to-day work (read the one matching your task before starting
 - `tests/CLAUDE.md` — authoring tests with the harness: environments, factories, wire-envelope assertions
 
 Detailed documentation lives in `/docs`:
+- `development/engineering-standards.md` — the standards this codebase holds code to; read before writing a change
 - `development/architecture-principles.md` — the governing principles behind the layering
 - `development/architecture.md` — system architecture
 - `development/request-lifecycle.md` — how a request reaches business logic
