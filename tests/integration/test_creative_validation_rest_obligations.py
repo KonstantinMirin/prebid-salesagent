@@ -66,9 +66,11 @@ class TestMissingFormatIdRejectedAtTheRequestBoundary:
                 ],
             )
 
-        assert exc_info.value.error_code == "INVALID_REQUEST"
         # WHICH field was rejected is graded on the structured `field` pointer, not on the
         # sentence — the sentence is a CODE_TABLE function of the code and cannot name it.
+        # The CODE this becomes is INVALID_REQUEST and is graded once, on the wire, in
+        # tests/unit/test_validation_error_at_the_boundary.py; asserting it off the pydantic
+        # exception here is not possible (it carries no code) and would not grade the wire.
         assert first_validation_error_field(exc_info.value) == "format_id"
 
 

@@ -1069,7 +1069,7 @@ class TestUpdateMediaBuyMissingPackageId:
         # core/error.json: `field` is JSONPath-lite and request-rooted ('packages[0].targeting'),
         # so the buyer is told WHICH package is missing the identifier.
         assert first_validation_error_field(exc_info.value) == "packages[0].package_id", (
-            f"expected the request-rooted path, got {exc_info.value.field!r}"
+            f"expected the request-rooted path, got {first_validation_error_field(exc_info.value)!r}"
         )
 
     def test_package_update_with_buyer_ref_but_no_package_id_is_rejected(self):
