@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import pytest
 
+from src.core.exceptions import AdCPInvalidRequestError
+from src.core.validation_helpers import adcp_validation_boundary
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness import (
     CreativeFormatsEnv,
@@ -19,6 +21,7 @@ from tests.harness import (
     Transport,
     assert_envelope,
 )
+from tests.helpers.creative_test_helpers import sync_creatives_request
 
 DEFAULT_AGENT_URL = "https://creative.test.example.com"
 
@@ -26,48 +29,43 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 # ---------------------------------------------------------------------------
-# : Missing format_id rejected through sync impl
+# : Missing format_id refused when the sync REQUEST is built
 # Obligation: UC-006-EXT-E-01
 # ---------------------------------------------------------------------------
 
 
-class TestMissingFormatIdRejectedThroughImpl:
-    """Missing format_id is caught by _sync_creatives_impl as a failed creative."""
+class TestMissingFormatIdRejectedAtTheRequestBoundary:
+    """Missing format_id is refused when the sync request is BUILT."""
 
-    def test_missing_format_id_produces_failed_result(self, integration_db):
-        """Covers: UC-006-EXT-E-01 — creative without format_id fails through impl.
+    def test_missing_format_id_is_refused_naming_format_id(self, integration_db):
+        """Covers: UC-006-EXT-E-01 — a creative without format_id is rejected, naming it.
 
-        Unlike the unit test which just checks Pydantic schema construction,
-        this exercises the full _sync_creatives_impl code path: dict normalization,
-        CreativeAsset parsing, validation, and result assembly.
+        This asserted a per-creative ``action="failed"`` coming out of
+        ``_sync_creatives_impl``. ``format_id`` is required by core/creative-asset.json @
+        AdCP 3.1.1, and every caller -- all three transports and both in-process media-buy
+        uploads -- now builds a SyncCreativesRequest before _impl runs, so the omission is
+        refused at the request boundary and the per-creative arm is never reached. The
+        obligation is unchanged: the rejection happens and it names format_id. Only the
+        layer that states it moved, and it moved to the layer a real buyer actually hits --
+        no transport could ever have delivered the payload the old assertion described.
         """
-        with CreativeSyncEnv() as env:
-            env.setup_default_data()
+        with pytest.raises(AdCPInvalidRequestError) as exc_info:
+            with adcp_validation_boundary(context="sync_creatives request"):
+                sync_creatives_request(
+                    creatives=[
+                        {
+                            "creative_id": "c_no_format",
+                            "name": "Missing Format Creative",
+                            # format_id intentionally omitted
+                            "assets": build_assets(image_spec("banner")),
+                        }
+                    ],
+                )
 
-            # Pass a creative dict missing format_id entirely
-            response = env.call_impl(
-                creatives=[
-                    {
-                        "creative_id": "c_no_format",
-                        "name": "Missing Format Creative",
-                        # format_id intentionally omitted
-                        "assets": build_assets(image_spec("banner")),
-                    }
-                ],
-            )
-
-        # The impl catches the ValidationError from CreativeAsset parsing
-        # and produces a failed result instead of raising
-        assert len(response.creatives) == 1
-        result = response.creatives[0]
-        assert result.creative_id == "c_no_format"
-        assert result.action == "failed"
-        assert result.errors is not None
-        assert len(result.errors) > 0
+        assert exc_info.value.error_code == "INVALID_REQUEST"
         # WHICH field was rejected is graded on the structured `field` pointer, not on the
         # sentence — the sentence is a CODE_TABLE function of the code and cannot name it.
-        fields = [str(getattr(e, "field", "") or "") for e in result.errors]
-        assert any("format_id" in f for f in fields), f"Expected the rejection to name format_id, got fields: {fields}"
+        assert exc_info.value.field == "format_id"
 
 
 # ---------------------------------------------------------------------------
