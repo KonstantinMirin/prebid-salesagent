@@ -75,6 +75,15 @@ from tests.helpers.request_schemas import (
 #: that character, which is the same failure the request-factory suite's own table
 #: produced for ``list_accounts``.
 #:
+#: The rationale was not merely stale, it was FALSE at the pin: measured at adcp 6.6.0 /
+#: AdCP 3.1.1, ``create-media-buy-request.json`` declares no ``brand_card`` property at
+#: all (its brand-ish property is ``brand``, which the model has), and ``account`` is in
+#: ``/required`` and required on the model. What actually kept the model out was a bug in
+#: the synthetic generator below, which read ``loc[0]`` on NESTED ``extra_forbidden``
+#: errors and so blamed the model for sub-keys the generator itself invented. So the
+#: exclusion outlived not just its urgency but its premise, and the instrument that
+#: created it was reporting a production defect that did not exist.
+#:
 #: Membership now comes from the LIVE MCP registry via ``graded_request_schemas()``: a
 #: tool is graded because it is registered and its DTO resolves a pinned schema, and
 #: there is no key set to omit it from. It grades thirteen models where the table graded
