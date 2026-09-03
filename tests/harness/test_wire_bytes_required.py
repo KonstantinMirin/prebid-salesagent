@@ -27,10 +27,22 @@ import pytest
 from tests.harness.transport import Transport, TransportResult
 
 
-def _two_layer(code: str, message: str, *, recovery: str = "correctable", details: dict | None = None) -> dict:
+def _two_layer(
+    code: str,
+    message: str,
+    *,
+    recovery: str = "correctable",
+    details: dict | None = None,
+    field: str | None = None,
+    issues: list[dict] | None = None,
+) -> dict:
     error: dict = {"code": code, "message": message, "recovery": recovery}
     if details is not None:
         error["details"] = details
+    if field is not None:
+        error["field"] = field
+    if issues is not None:
+        error["issues"] = issues
     return {"adcp_error": dict(error), "errors": [dict(error)]}
 
 
@@ -75,35 +87,61 @@ def _wire_ctx(envelope: dict) -> dict:
     }
 
 
+#: The generic error-path primitives, each with the envelope it needs to be
+#: satisfiable and the arguments a scenario would pass it.
+#:
+#: One row per primitive is the POINT, not bookkeeping: this file's invariant is
+#: "for every error-path Then step, delete the wire and it must redden", so a
+#: primitive missing from this table is a step nothing holds to the invariant.
+#: When ``then_error.py`` grows a primitive that reads the wire envelope, add it
+#: here — that is the whole maintenance contract.
+_WIRE_ENVELOPE_PRIMITIVES = [
+    pytest.param("then_response_arrives", (), {}, id="arrives"),
+    pytest.param("then_response_error_code", ("AUTH_INVALID",), {}, id="code"),
+    pytest.param("then_response_error_field", ("billing",), {"field": "billing"}, id="field"),
+    pytest.param(
+        "then_response_error_issue",
+        ("enum", "billing"),
+        {"field": "billing", "issues": [{"keyword": "enum", "pointer": "/accounts/0/Accounts/billing"}]},
+        id="issue",
+    ),
+]
+
+
 class TestGenericWireEnvelopeStepsRequireWireBytes:
-    """``then_error.py``'s wire-envelope steps say "wire" in their own step text."""
+    """Every generic error-path primitive in ``then_error.py`` needs real wire bytes.
 
-    def test_code_and_recovery_step_reddens_without_wire_bytes(self):
-        from tests.bdd.steps.generic.then_error import then_wire_envelope_code_and_recovery
+    This covers FOUR primitives where it once covered two bundled steps. The two
+    it named (``then_wire_envelope_code`` and its ``with recovery`` variant) were
+    deleted when the bundled trio was decomposed (salesagent-prkv.65): they graded
+    arrived+code and arrived+code+recovery, so the set had to be kept in step by
+    hand. Repointing at the four orthogonal primitives is not a rename — it widens
+    the invariant to every step that reads the envelope, which is what this file's
+    module docstring already claimed to enforce.
 
-        ctx = _no_wire_ctx(_two_layer("AUTH_INVALID", _AUTH_MESSAGE, recovery="terminal"))
+    ``recovery`` has no primitive of its own by design, so none appears here:
+    ``assert_wire_error`` defaults it from the pinned CODE_TABLE, so a scenario
+    naming it would restate what the code already determines.
+    """
+
+    @pytest.mark.parametrize(("step_name", "args", "envelope_kwargs"), _WIRE_ENVELOPE_PRIMITIVES)
+    def test_primitive_reddens_without_wire_bytes(self, step_name, args, envelope_kwargs):
+        """The negative control: delete the captured wire, the step must fail."""
+        from tests.bdd.steps.generic import then_error
+
+        step = getattr(then_error, step_name)
+        ctx = _no_wire_ctx(_two_layer("AUTH_INVALID", _AUTH_MESSAGE, recovery="terminal", **envelope_kwargs))
         with pytest.raises(AssertionError):
-            then_wire_envelope_code_and_recovery(ctx, "AUTH_INVALID", "terminal")
+            step(ctx, *args)
 
-    def test_code_and_recovery_step_passes_on_real_wire_bytes(self):
-        from tests.bdd.steps.generic.then_error import then_wire_envelope_code_and_recovery
+    @pytest.mark.parametrize(("step_name", "args", "envelope_kwargs"), _WIRE_ENVELOPE_PRIMITIVES)
+    def test_primitive_passes_on_real_wire_bytes(self, step_name, args, envelope_kwargs):
+        """The positive control, so "raises always" cannot satisfy the grader."""
+        from tests.bdd.steps.generic import then_error
 
-        ctx = _wire_ctx(_two_layer("AUTH_INVALID", _AUTH_MESSAGE, recovery="terminal"))
-        then_wire_envelope_code_and_recovery(ctx, "AUTH_INVALID", "terminal")
-
-    def test_code_only_step_reddens_without_wire_bytes(self):
-        from tests.bdd.steps.generic.then_error import then_wire_envelope_code
-
-        ctx = _no_wire_ctx(_two_layer("AUTH_INVALID", _AUTH_MESSAGE, recovery="terminal"))
-        with pytest.raises(AssertionError):
-            then_wire_envelope_code(ctx, "AUTH_INVALID")
-
-    def test_code_only_step_passes_on_real_wire_bytes(self):
-        from tests.bdd.steps.generic.then_error import then_wire_envelope_code
-
-        then_wire_envelope_code(
-            _wire_ctx(_two_layer("AUTH_INVALID", _AUTH_MESSAGE, recovery="terminal")), "AUTH_INVALID"
-        )
+        step = getattr(then_error, step_name)
+        ctx = _wire_ctx(_two_layer("AUTH_INVALID", _AUTH_MESSAGE, recovery="terminal", **envelope_kwargs))
+        step(ctx, *args)
 
 
 class TestCapabilitiesDetailStepsRequireWireBytes:
