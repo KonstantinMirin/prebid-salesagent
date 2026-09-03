@@ -19,6 +19,7 @@ with a reason (e.g., "MCP wrapper does not accept disclosure_positions").
 from __future__ import annotations
 
 import dataclasses
+import functools
 import os
 import re
 import ssl
@@ -106,11 +107,33 @@ pytest_plugins = [
 _STEP_ERROR_CLASSIFICATION: dict[str, str] = {}
 
 
+#: nodeid -> the dormancy BASELINE KEY for a missing binding, "<keyword> <normalized step>".
+#: Separate from the human-readable text above because the key must survive scenario
+#: edits that the message deliberately includes (line numbers).
+_MISSING_STEP_KEY: dict[str, str] = {}
+
+
+def _normalize_step_text(name: str) -> str:
+    """Collapse Examples-row variation so one gap is one baseline entry.
+
+    A Scenario Outline substitutes its placeholders before the lookup fails, so the
+    SAME missing binding arrives here once per row with different literals baked in.
+    Without this, adding a row to an already-dormant scenario would read as NEW
+    dormancy and fail a build for no loss of coverage. Quoted literals, bare numbers
+    and inline objects become placeholders; the step's identity is what remains.
+    """
+    text = re.sub(r'"[^"]*"', '"<>"', name)
+    text = re.sub(r"\b\d+\b", "<n>", text)
+    text = re.sub(r"\{[^}]*\}", "{<>}", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def pytest_bdd_step_func_lookup_error(request, feature, scenario, step, exception) -> None:  # noqa: ANN001
     """Record that this scenario's failure is a missing step BINDING (dormancy)."""
     _STEP_ERROR_CLASSIFICATION[request.node.nodeid] = (
         f"a missing step definition for {step.type} {step.name!r} (line {step.line_number})"
     )
+    _MISSING_STEP_KEY[request.node.nodeid] = f"{step.type} {_normalize_step_text(step.name)}"
 
 
 def pytest_bdd_step_error(request, feature, scenario, step, step_func, step_func_args, exception) -> None:  # noqa: ANN001
@@ -125,6 +148,101 @@ def pytest_bdd_step_error(request, feature, scenario, step, step_func, step_func
         _STEP_ERROR_CLASSIFICATION[request.node.nodeid] = (
             f"a Given-side setup error on {step.name!r} (line {step.line_number}): {exception!r}"
         )
+
+
+DORMANT_SCENARIOS_PATH = Path(__file__).parent / "dormant_scenarios.txt"
+
+
+@functools.lru_cache(maxsize=1)
+def _dormant_baseline() -> frozenset[tuple[str, str]]:
+    """The committed set of (scenario tag, missing step) pairs that already grade nothing.
+
+    Read once. See ``dormant_scenarios.txt`` for why the key is the TAG and the STEP
+    rather than anything positional, and why enforcement is per-test rather than a
+    count.
+    """
+    entries = set()
+    for line in DORMANT_SCENARIOS_PATH.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or " :: " not in line:
+            continue
+        tag, step = line.split(" :: ", 1)
+        entries.add((tag.strip(), step.strip()))
+    return frozenset(entries)
+
+
+def _scenario_tag(item: pytest.Item) -> str | None:
+    """The scenario's ``T-...`` tag, which is its stable identity across rewrites."""
+    return next((k for k in item.keywords if re.match(r"^T-[A-Z0-9-]", k)), None)
+
+
+def _record_dormancy(item: pytest.Item, report: pytest.TestReport) -> bool:
+    """Report a missing-binding scenario AS DORMANCY, and refuse a NEW one.
+
+    Returns True when the scenario is an already-recorded dormant entry (caller
+    converts it to xfail), False when it is new (caller leaves it FAILING).
+
+    WHY THIS EXISTS. A scenario whose step has no binding executes nothing, and the
+    auto-convert below reported it as a plain xfail -- indistinguishable in any
+    summary from a graded spec-production gap. A suite could shrink to nothing while
+    every run stayed green, which is the state salesagent-prkv.39 found.
+
+    The judgement was already in this file and was simply not reached:
+    ``pytest_bdd_step_func_lookup_error`` classifies a missing binding as dormancy,
+    and ``_classify_strict_xfail_dormancy`` fails a strict-xfail that CLAIMS a
+    production gap when the cause is that classification. But the auto-convert's own
+    reason claims nothing, so it sailed past the check written for it. This routes it
+    through the same vocabulary instead of adding a third rule beside the two
+    (salesagent-kp56h).
+
+    The key is published as a ``user_property`` because pytest-json-report does NOT
+    serialize ``wasxfail``: the reason string is invisible in the JSON reports, so the
+    only trace of dormancy there is the exception class inside a traceback. Measuring
+    this required knowing that trick, and the first attempt at it returned zero
+    against a real count of 1356 (salesagent-vtreb). A user_property IS serialized, so
+    the next audit does not depend on folklore.
+    """
+    tag = _scenario_tag(item)
+    step_key = _MISSING_STEP_KEY.pop(item.nodeid, None)
+    if step_key is None or tag is None:
+        return True  # not a pytest-bdd scenario we can key; leave prior behaviour
+
+    # CONSUME the classification. ``_classify_strict_xfail_dormancy`` exists to catch an
+    # xfail that CLAIMS a production gap while the real cause is dormancy; once this
+    # function has named the dormancy honestly there is nothing left for it to catch, and
+    # its early return on a missing classification is exactly the right seam to use.
+    #
+    # This is also what keeps the two rules from being coupled by SUBSTRING. That
+    # tripwire greps candidate reasons for "production gap"/"spec-production", so the
+    # first draft of the honest reason below -- which ended "this is NOT a graded
+    # spec-production gap" -- MATCHED IT and turned every recorded dormant scenario into
+    # a MISCLASSIFIED failure. 138 of them, from a disclaimer. Popping removes the
+    # coupling; the reason text avoids those words as well, so re-introducing the
+    # coupling would take two mistakes rather than one.
+    #
+    # The tripwire's other job is untouched: a scenario rescued by an explicit strict
+    # xfail MARKER never reaches here (it is not ``report.failed``), so a marker lying
+    # about a production gap is still caught there.
+    _STEP_ERROR_CLASSIFICATION.pop(item.nodeid, None)
+
+    item.user_properties.append(("dormant_scenario", f"{tag} :: {step_key}"))
+    if (tag, step_key) in _dormant_baseline():
+        report.wasxfail = (
+            f"DORMANT (test-wiring): no step definition for {step_key!r} in {tag}, so this "
+            f"scenario grades nothing. Recorded in tests/bdd/dormant_scenarios.txt; closing "
+            f"the hole is salesagent-8j5nf. Not a graded seller behaviour."
+        )
+        return True
+    report.outcome = "failed"
+    report.wasxfail = ""
+    report.longrepr = (
+        f"NEW DORMANT SCENARIO: {item.nodeid}\n"
+        f"  {tag} has no step definition for {step_key!r}, so this scenario grades NOTHING.\n"
+        f"  It is not in tests/bdd/dormant_scenarios.txt, so it is new coverage loss.\n"
+        f"  Wire the step. Do NOT add a line to that file -- the list may only shrink.\n"
+        f"  (If you just deleted a step definition, this is what that deletion cost.)"
+    )
+    return False
 
 
 def _classify_strict_xfail_dormancy(item: pytest.Item, report: pytest.TestReport) -> None:
@@ -173,8 +291,10 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Gener
         from tests.harness._realize import E2EUnsupportedSetup
 
         if call.excinfo.errisinstance(StepDefinitionNotFoundError):
-            report.outcome = "skipped"
-            report.wasxfail = f"Step definition not found: {call.excinfo.value}"
+            # Dormancy, not an expected failure. _record_dormancy names it honestly and
+            # refuses a scenario that is not already on the committed baseline.
+            if _record_dormancy(item, report):
+                report.outcome = "skipped"
         elif call.excinfo.errisinstance(NotImplementedError):
             report.outcome = "skipped"
             report.wasxfail = f"Not implemented: {call.excinfo.value}"
