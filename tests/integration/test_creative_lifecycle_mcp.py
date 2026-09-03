@@ -16,7 +16,8 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
-from adcp.types import AccountReference
+from adcp.types import AccountReference, CreativeFilters, PaginationRequest
+from adcp.types.generated_poc.creative.list_creatives_request import Sort
 from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 from sqlalchemy import select
 
@@ -624,7 +625,7 @@ class TestCreativeLifecycleMCP:
         set_current_tenant({"tenant_id": self.test_tenant_id})
 
         # Test approved filter
-        response = core_list_creatives_tool(status="approved", identity=identity)
+        response = core_list_creatives_tool(filters=CreativeFilters(statuses=["approved"]), identity=identity)
         assert len(response.creatives) == 3
         # Check status field (handle both dict, object, and enum)
         for c in response.creatives:
@@ -637,7 +638,7 @@ class TestCreativeLifecycleMCP:
             assert status_val == "approved"
 
         # Test pending_review filter (correct AdCP status value)
-        response = core_list_creatives_tool(status="pending_review", identity=identity)
+        response = core_list_creatives_tool(filters=CreativeFilters(statuses=["pending_review"]), identity=identity)
         assert len(response.creatives) == 2
         # Check status field (handle both dict, object, and enum)
         for c in response.creatives:
@@ -761,14 +762,15 @@ class TestCreativeLifecycleMCP:
         identity = self._make_identity()
         set_current_tenant({"tenant_id": self.test_tenant_id})
 
-        # Test created_after filter
-        created_after = (now - timedelta(days=5)).isoformat()
-        response = core_list_creatives_tool(created_after=created_after, identity=identity)
+        # Test created_after filter. AdCP 3.1.1 puts both dates inside `filters`
+        # (core/creative-filters.json) as real date-times; the flat ISO-string aliases the
+        # builder used to parse are gone.
+        cutoff = now - timedelta(days=5)
+        response = core_list_creatives_tool(filters=CreativeFilters(created_after=cutoff), identity=identity)
         assert len(response.creatives) == 2  # Only recent creatives
 
         # Test created_before filter
-        created_before = (now - timedelta(days=5)).isoformat()
-        response = core_list_creatives_tool(created_before=created_before, identity=identity)
+        response = core_list_creatives_tool(filters=CreativeFilters(created_before=cutoff), identity=identity)
         assert len(response.creatives) == 2  # Only old creatives
 
     def test_list_creatives_with_search(self):
@@ -815,7 +817,7 @@ class TestCreativeLifecycleMCP:
         set_current_tenant({"tenant_id": self.test_tenant_id})
 
         # Search for "Holiday"
-        response = core_list_creatives_tool(search="Holiday", identity=identity)
+        response = core_list_creatives_tool(filters=CreativeFilters(name_contains="Holiday"), identity=identity)
         assert len(response.creatives) == 2
         # Check name field (handle both dict and object)
         for c in response.creatives:
@@ -823,7 +825,7 @@ class TestCreativeLifecycleMCP:
             assert "Holiday" in name_val
 
         # Search for "Banner"
-        response = core_list_creatives_tool(search="Banner", identity=identity)
+        response = core_list_creatives_tool(filters=CreativeFilters(name_contains="Banner"), identity=identity)
         assert len(response.creatives) == 2
         # Check name field (handle both dict and object)
         for c in response.creatives:
@@ -855,7 +857,7 @@ class TestCreativeLifecycleMCP:
         set_current_tenant({"tenant_id": self.test_tenant_id})
 
         # Test first page
-        response = core_list_creatives_tool(page=1, limit=10, identity=identity)
+        response = core_list_creatives_tool(page=1, pagination=PaginationRequest(max_results=10), identity=identity)
         assert len(response.creatives) == 10
         assert response.query_summary.total_matching == 25
         assert response.query_summary.returned == 10
@@ -863,21 +865,25 @@ class TestCreativeLifecycleMCP:
         assert response.pagination.total_count == 25
 
         # Test second page
-        response = core_list_creatives_tool(page=2, limit=10, identity=identity)
+        response = core_list_creatives_tool(page=2, pagination=PaginationRequest(max_results=10), identity=identity)
         assert len(response.creatives) == 10
         assert response.query_summary.returned == 10
         assert response.pagination.has_more is True
         assert response.pagination.total_count == 25
 
         # Test last page
-        response = core_list_creatives_tool(page=3, limit=10, identity=identity)
+        response = core_list_creatives_tool(page=3, pagination=PaginationRequest(max_results=10), identity=identity)
         assert len(response.creatives) == 5
         assert response.query_summary.returned == 5
         assert response.pagination.has_more is False
         assert response.pagination.total_count == 25
 
         # Test name sorting ascending
-        response = core_list_creatives_tool(sort_by="name", sort_order="asc", limit=5, identity=identity)
+        response = core_list_creatives_tool(
+            sort=Sort(field="name", direction="asc"),
+            pagination=PaginationRequest(max_results=5),
+            identity=identity,
+        )
         creative_names = [c.get("name") if isinstance(c, dict) else c.name for c in response.creatives]
         assert creative_names == sorted(creative_names)
 
@@ -926,7 +932,9 @@ class TestCreativeLifecycleMCP:
         set_current_tenant({"tenant_id": self.test_tenant_id})
 
         # Filter by media_buy_id - should only return assigned creative
-        response = core_list_creatives_tool(media_buy_id=self.test_media_buy_id, identity=identity)
+        response = core_list_creatives_tool(
+            filters=CreativeFilters(media_buy_ids=[self.test_media_buy_id]), identity=identity
+        )
         assert len(response.creatives) == 1
         creative = response.creatives[0]
         creative_id = creative.get("creative_id") if isinstance(creative, dict) else creative.creative_id
@@ -991,7 +999,9 @@ class TestCreativeLifecycleMCP:
         set_current_tenant({"tenant_id": self.test_tenant_id})
 
         # Query with filters that match nothing
-        response = core_list_creatives_tool(status="rejected", identity=identity)  # No rejected creatives exist
+        response = core_list_creatives_tool(
+            filters=CreativeFilters(statuses=["rejected"]), identity=identity
+        )  # none exist
 
         assert len(response.creatives) == 0
         assert response.query_summary.total_matching == 0
