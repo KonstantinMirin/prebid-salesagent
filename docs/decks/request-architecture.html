@@ -204,17 +204,20 @@ apply_dto_announced_shape(fn, dto)</code></pre>
     <div>
       <h3>What we actually take</h3>
       <pre><code><span class="cm"># REST</span>
-derived_body_model(name, dto, impl)</code></pre>
-      <p>The request body, derived from the same pair.</p>
+derived_body_model_for(tool)</code></pre>
+      <p>The request body, derived from the same pair &mdash; and the pair itself is now read off the tool, so neither side names it.</p>
     </div>
   </div>
   <p>Same intersection, computed twice from the same two inputs, so the answers are equal by construction rather than by inspection. There is no test asserting &ldquo;the schema matches the body&rdquo; because there is no way to author a difference.</p>
-  <pre><code><span class="cm"># src/routes/_derived_body.py</span>
-def derived_body_model(name, dto, impl, *, extra_fields=None) -&gt; type[BaseModel]:
-    """A request body carrying exactly ``DTO fields INTERSECT impl parameters``.
+  <pre><code><span class="cm"># src/core/tools/_announced_shape.py</span>
+def request_seam_for(tool) -&gt; tuple[type[BaseModel], Callable]:
+    """The (DTO, builder) pair a tool constructs its request through."""
 
-    ONE definition of "what the impl accepts", shared with the forwarding seam
-    and the MCP derivation, rather than a third independent signature read."""</code></pre>
+<span class="cm"># src/routes/_derived_body.py</span>
+def derived_body_model_for(tool, *, extra_fields=None) -&gt; type[BaseModel]:
+    """A request body carrying exactly ``DTO fields INTERSECT builder parameters``,
+    with BOTH read off the tool. REST and A2A used to write the pair out per call
+    site &mdash; 25 hand-written pairs restating what one lookup answers."""</code></pre>
 </section>
 
 <section>
@@ -344,7 +347,7 @@ for authored in ("Please choose a product with compatible pricing",
   <h2>What to do differently</h2>
   <ol class="rule-list">
     <li><strong>Adding a tool? Name the request DTO first.</strong> Write <code>build_&lt;tool&gt;_request</code> returning the SDK type, with the return annotation importable at module scope. Registration refuses anything else, so this is not advice — it is the only path.</li>
-    <li><strong>Never write a request shape twice.</strong> If you are typing field names into a REST <code>Body</code> or a signature, and the SDK ships a DTO for that tool, you are creating the drift this whole deck is about. <code>derived_body_model(name, dto, impl)</code>.</li>
+    <li><strong>Never write a request shape twice.</strong> If you are typing field names into a REST <code>Body</code> or a signature, and the SDK ships a DTO for that tool, you are creating the drift this whole deck is about. <code>derived_body_model_for(tool)</code> on REST, <code>select_request_fields_for(tool, bag)</code> on A2A &mdash; name the TOOL, never its DTO and builder.</li>
     <li><strong>Exposing a new spec field = making the impl accept it.</strong> There is no second place to update. No ledger, no unsupported map, no announcement to edit.</li>
     <li><strong>Before writing &ldquo;the spec doesn&rsquo;t have this&rdquo; — grep the spec&rsquo;s vocabulary, not ours.</strong> Search the schema tree by <em>capability</em> (<code>task</code>, <code>performance</code>, <code>propert</code>), not by our tool name. A tool published under a name that is in no spec version is undiscoverable, and that is a compliance defect, not a cosmetic one.</li>
     <li><strong>Never write a claim about &ldquo;the spec&rdquo; without a version.</strong> <em>&ldquo;Float per AdCP spec, not Budget object&rdquo;</em> was true when written and false by 3.1.1 — and nothing failed until a derivation forced the question. Cite the version, or do not write the comment.</li>
