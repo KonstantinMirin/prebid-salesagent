@@ -510,12 +510,18 @@ class TestStaticPreviewUpdate:
 
             env.call_impl(creatives=[_creative(creative_id="c_url_fallback_up")])
 
-            # Update WITH media_url via 'url' field on creative
+            # The media URL travels INSIDE the asset, which is where core/creative-asset.json
+            # puts it. It was assigned as a top-level ``creative["url"]`` -- a field the
+            # schema does not define on a creative -- and was redundant even then, because
+            # _creative()'s default asset already carries this URL and production reads it
+            # through _extract_url_from_assets. Stated on the asset so the fallback the test
+            # is named for is visible rather than implied.
+            media_url = "https://example.com/banner.png"
             creative = _creative(
                 creative_id="c_url_fallback_up",
                 name="Updated With URL",
+                assets=build_assets(image_spec("banner", url=media_url)),
             )
-            creative["url"] = "https://example.com/banner.png"
 
             result = env.call_impl(creatives=[creative])
             assert result.creatives[0].action == "updated"

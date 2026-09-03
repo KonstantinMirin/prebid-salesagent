@@ -1324,7 +1324,19 @@ class TestInlineCreativeObligations:
                 except Exception:
                     pass
 
-        mock_upload.assert_called_once_with(packages=ANY, context=ANY, testing_ctx=ANY)
+        # The three request fields the nested creative sync now needs are STATED, not left
+        # off: process_and_upload_package_creatives builds a real SyncCreativesRequest
+        # through the shared builder, and it can only do that if create_media_buy hands down
+        # its own account, client key and ContextObject. Naming them here is what would
+        # catch one being dropped -- ANY on the other three is pre-existing looseness.
+        mock_upload.assert_called_once_with(
+            packages=ANY,
+            context=ANY,
+            testing_ctx=ANY,
+            account=req.account,
+            idempotency_key=req.idempotency_key,
+            adcp_context=req.context,
+        )
 
     @pytest.mark.asyncio
     async def test_inline_creative_format_validation(self, integration_db):
