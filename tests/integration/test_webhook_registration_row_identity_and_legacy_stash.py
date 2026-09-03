@@ -189,10 +189,23 @@ class TestLegacyMultiSchemeStashNowRefuses:
             assert_signature_verifies_over_wire_body(env.last_delivery, STRONG_SECRET)
 
 
-class TestA2AReRegistrationUpsertsTheRowTheBuyerNamed:
-    """``push_notification_config.id`` keys the upsert, so re-registration updates one row."""
+class TestA2AReRegistrationUpsertsOneRowPerUrl:
+    """Re-registration updates ONE row, keyed by (tenant, principal, url).
 
-    def test_re_registering_the_same_id_updates_the_same_row(self, integration_db):
+    This class used to be TestA2AReRegistrationUpsertsTheRowTheBuyerNamed and asserted that
+    ``push_notification_config.id`` keyed the upsert. That contract is gone:
+    core/push-notification-config.json declares no ``id`` property, so a buyer cannot name a
+    row, and honouring one meant reading a field the schema does not define off the raw wire
+    payload. It also leaked across tenants -- push_notification_configs.id is a GLOBAL primary
+    key while the upsert lookup is correctly scoped to (tenant_id, principal_id), so a buyer
+    supplying another tenant's id found nothing, fell through to INSERT, and collided on the
+    primary key: an oracle telling them whether that id existed in ANY tenant.
+
+    The property that survives is the one that actually mattered -- re-registering a webhook
+    must not accumulate rows -- and it is now keyed on the URL, which IS a spec field.
+    """
+
+    def test_re_registering_the_same_url_updates_one_row(self, integration_db):
         with MediaBuyPushRegistrationEnv() as env:
             config = _webhook_url_of(env, _registration(row_id=BUYER_ROW_ID))
             seeded = _seed(env)
@@ -201,29 +214,30 @@ class TestA2AReRegistrationUpsertsTheRowTheBuyerNamed:
             _register_over_a2a(env, seeded, config)
 
             rows = env.persisted_config_rows()
-            assert [row.id for row in rows] == [BUYER_ROW_ID], (
-                f"re-registering the row the buyer named left {[row.id for row in rows]} — "
-                f"the id did not reach the upsert, so every re-registration inserts a new row "
-                f"and the buyer can no longer address the one they created"
+            assert len(rows) == 1, (
+                f"re-registering the same URL left {len(rows)} rows {[r.id for r in rows]} -- "
+                f"the (tenant, principal, url) lookup did not reach the upsert, so a buyer "
+                f"re-registering one webhook accumulates rows forever"
             )
 
-    def test_control_losing_the_row_identity_inserts_a_second_row(self, integration_db):
-        """Reverse-TDD: drop the id between wrapper and ``_impl``; the case above must go red."""
+    def test_the_buyer_supplied_id_is_not_honoured(self, integration_db):
+        """The other half: a buyer naming a row must NOT get that row.
+
+        Without this, the test above would pass just as well if we HAD honoured the id --
+        one row either way. This is what makes the assertion above grade the URL key
+        specifically rather than 'some key'.
+        """
         with MediaBuyPushRegistrationEnv() as env:
             config = _webhook_url_of(env, _registration(row_id=BUYER_ROW_ID))
             seeded = _seed(env)
 
-            with env.wrapper_loses_the_row_identity():
-                _register_over_a2a(env, seeded, config)
-                _register_over_a2a(env, seeded, config)
+            _register_over_a2a(env, seeded, config)
 
             rows = env.persisted_config_rows()
-            assert len(rows) == 2, (
-                f"the row identity was dropped and only {len(rows)} row(s) exist — the case above "
-                f"would stay green with the id gone, so it is not grading the upsert key"
-            )
-            assert BUYER_ROW_ID not in [row.id for row in rows], (
-                f"the buyer's id survived a mutation that removes it: {[row.id for row in rows]}"
+            assert [r.id for r in rows] != [BUYER_ROW_ID], (
+                f"the buyer's id reached the stored row ({[r.id for r in rows]}) -- "
+                f"push-notification-config.json declares no id property, so honouring one "
+                f"means reading a field the schema does not define"
             )
 
 

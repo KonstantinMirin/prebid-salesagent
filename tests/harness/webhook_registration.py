@@ -322,46 +322,6 @@ class MediaBuyPushRegistrationEnv(LocalOriginMixin, MediaBuyDualEnv):
         with patch.object(ValidatedWebhookRegistration, "from_stash", classmethod(_strict_from_stash)):
             yield
 
-    @contextmanager
-    def wrapper_loses_the_row_identity(self) -> Iterator[None]:
-        """Drop the row id between the transport wrapper and ``_impl``.
-
-        The reverse-TDD mutation for the row-identity grader, written
-        shape-agnostically for the same reason ``_drop_registered_auth`` is: the
-        row id travels inside the buyer's raw dict today (``config["id"]``, read
-        at ``media_buy_create.py`` to key the upsert) and is expected to travel
-        as its own ``config_id`` argument once the config parameter is typed —
-        the AdCP model has no ``id`` field, so coercion drops it silently. This
-        removes whichever one is present, so the control keeps meaning "the row
-        the buyer named did not survive to the upsert" across that change.
-
-        Asserts on exit that it removed something: a control that mutates
-        nothing would report a vacuous grader as a real one.
-        """
-        import src.core.tools.media_buy_create as create_module
-
-        original_impl = create_module._create_media_buy_impl
-        stripped: list[str] = []
-
-        async def _impl_without_the_row_identity(*args: Any, **kwargs: Any) -> Any:
-            config = kwargs.get("push_notification_config")
-            if isinstance(config, dict) and config.get("id") is not None:
-                kwargs["push_notification_config"] = {k: v for k, v in config.items() if k != "id"}
-                stripped.append("push_notification_config['id']")
-            if kwargs.get("config_id") is not None:
-                kwargs["config_id"] = None
-                stripped.append("config_id")
-            return await original_impl(*args, **kwargs)
-
-        with patch.object(create_module, "_create_media_buy_impl", _impl_without_the_row_identity):
-            yield
-
-        assert stripped, (
-            "the mutation removed no row identity — either the wrapper never forwarded one, "
-            "or it now travels under a name this control does not know about; either way the "
-            "grader it controls is not actually graded by it"
-        )
-
     def persisted_config_rows(self) -> list[Any]:
         """Every push-notification row this env's tenant currently holds."""
         from sqlalchemy import select
