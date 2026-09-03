@@ -713,18 +713,21 @@ jobs:
             mkdir -p "bdd-artifacts/$(basename "$d")"
             cp -n "$d"/*.json "bdd-artifacts/$(basename "$d")/" || true
           done
-          echo "collection records: $(ls bdd-artifacts/collection-manifest 2>/dev/null | wc -l)"
-          echo "liveness sessions:  $(ls bdd-artifacts/liveness-sessions 2>/dev/null | wc -l)"
+          # find, not ls: shellcheck SC2012, and a count is all this reports.
+          echo "collection records: $(find bdd-artifacts/collection-manifest -name '*.json' 2>/dev/null | wc -l)"
+          echo "liveness sessions:  $(find bdd-artifacts/liveness-sessions -name '*.json' 2>/dev/null | wc -l)"
       # The merge is NOT reimplemented here. `tox -e collection` runs tests that
       # call load()/load_run(), which apply the same _merge_record the liveness
       # controller already uses to fold its xdist workers -- so local runs,
       # `cassini run` and CI grade the artifacts through one code path, which is
       # the property this step exists to establish.
-      - name: Grade the collection and liveness artifacts
+      - uses: ./.github/actions/_pytest
         env:
           PYTEST_COLLECTION_MANIFEST: bdd-artifacts/collection-manifest
           BDD_LIVENESS_SESSIONS: bdd-artifacts/liveness-sessions
-        run: uv run tox -e collection
+        with:
+          paths: tests/collection/
+          extra_args: --timeout=300
 
   migration-roundtrip:
     name: Migration Roundtrip
