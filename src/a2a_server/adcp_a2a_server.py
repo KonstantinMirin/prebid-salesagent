@@ -1853,14 +1853,12 @@ class AdCPRequestHandler(RequestHandler):
 
         # push_notification_config is an A2A *transport-layer* parameter
         # (injected by _handle_explicit_skill from the SendMessageConfiguration).
-        # It is forwarded to core_create_media_buy_tool as a SEPARATE argument
-        # below — exactly like create_media_buy_raw / the MCP wrapper, which
-        # never fold it into CreateMediaBuyRequest. Validating it as part of
-        # the request body would apply the adcp Authentication.credentials
-        # MinLen(32) constraint to the whole create_media_buy, so a short
-        # webhook credential would (incorrectly) divert the request away from
-        # the manual-approval gate (gh-#1299).
-        push_notification_config = params.pop("push_notification_config", None)
+        # It stays IN params so the builder puts it on the request like every other field.
+        # It used to be popped out here and forwarded beside the request, so that the adcp
+        # Authentication.credentials MinLen(32) constraint would not apply to the whole
+        # create_media_buy (gh-#1299). That constraint now applies, deliberately: a payload
+        # that does not conform to the schema is refused AT the schema rather than carried
+        # past it. The bypass had one field announced by three separate mechanisms.
 
         # Normalize explicit brand through the shared coercion funnel (#1324).
         # Keep params JSON-serializable: raw_wire_payload falls back to params for
@@ -1914,11 +1912,6 @@ class AdCPRequestHandler(RequestHandler):
             req = _build_create_media_buy_request(**selected)
         response = await core_create_media_buy_tool(
             req=req,
-            # Forwarded BESIDE the request, not in it -- see the note above the pop: folding
-            # it in applies Authentication.credentials MinLen(32) to the whole
-            # create_media_buy and diverts short-credential requests away from the
-            # manual-approval gate (gh-#1299).
-            push_notification_config=push_notification_config,
             identity=identity,
             # The DataPart params AS SENT (pre-normalization, pre-mutation) are
             # the idempotency payload-hash input; the post-processed dict is the

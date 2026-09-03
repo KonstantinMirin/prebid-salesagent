@@ -397,9 +397,12 @@ async def test_create_media_buy_rejects_push_config_before_workflow() -> None:
         patch("src.core.tools.media_buy_create.get_context_manager", return_value=mock_ctx),
         pytest.raises(AdCPUrlNotAllowedError) as exc_info,
     ):
+        # ON THE REQUEST: push_notification_config is a request field, so the SSRF check
+        # reads it off req rather than from a parameter beside it. The ordering this test
+        # pins -- refuse the URL BEFORE any workflow metadata is written -- is unchanged.
+        req.push_notification_config = {"url": _METADATA_URL}
         await _create_media_buy_impl(
             req,
-            push_notification_config={"url": _METADATA_URL},
             identity=_identity(),
         )
     assert exc_info.value.field == "push_notification_config.url"

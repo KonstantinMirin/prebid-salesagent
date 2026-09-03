@@ -87,7 +87,13 @@ async def capture_mcp_forwarded_pnc(pnc: Any) -> Any:
         except Exception:
             pass  # ToolResult serialization with mock may raise; only _impl args matter
 
-    return captured.get("push_notification_config")
+    # READ OFF THE REQUEST. push_notification_config is a request field built through
+    # _build_create_media_buy_request, not a kwarg forwarded beside the request, so parity
+    # between MCP and A2A now means "both land the same value on req", not "both pass the
+    # same kwarg". Returning the model's dict keeps every caller's comparison unchanged.
+    req = captured.get("req")
+    pnc = getattr(req, "push_notification_config", None) if req is not None else None
+    return pnc
 
 
 async def capture_a2a_forwarded_pnc(pnc: Any) -> Any:
@@ -131,9 +137,15 @@ async def capture_a2a_forwarded_pnc(pnc: Any) -> Any:
                 end_time=req_dict["end_time"],
                 idempotency_key=req_dict["idempotency_key"],
                 account=req_dict.get("account"),
+                push_notification_config=pnc,
             ),
-            push_notification_config=pnc,
             identity=mock_identity,
         )
 
-    return captured.get("push_notification_config")
+    # READ OFF THE REQUEST. push_notification_config is a request field built through
+    # _build_create_media_buy_request, not a kwarg forwarded beside the request, so parity
+    # between MCP and A2A now means "both land the same value on req", not "both pass the
+    # same kwarg". Returning the model's dict keeps every caller's comparison unchanged.
+    req = captured.get("req")
+    pnc = getattr(req, "push_notification_config", None) if req is not None else None
+    return pnc

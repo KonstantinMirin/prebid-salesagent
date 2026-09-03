@@ -122,10 +122,6 @@ else:
         CreateMediaBuyRequestDTO,
         # The BUILDER -- the raw wrapper takes the built request now.
         media_buy_create_module._build_create_media_buy_request,
-        # push_notification_config is a DTO field the builder deliberately does NOT take
-        # (gh-#1299), so the intersection misses it. Declared here so the REST body keeps
-        # announcing it -- the route forwards it to the wrapper as its own argument.
-        extra_fields={"push_notification_config": (dict[str, Any] | None, None)},
     )
 
 if TYPE_CHECKING:
@@ -550,11 +546,10 @@ async def create_media_buy(
             ext=body.ext,
             idempotency_key=body.idempotency_key,
             paused=body.paused,
+            push_notification_config=push_notification_config,
         )
     response = await media_buy_create_module.create_media_buy_raw(
         req=req,
-        # Beside the request, not in it (gh-#1299) -- see create_media_buy_raw's note.
-        push_notification_config=push_notification_config,
         identity=identity,
         raw_wire_payload=raw_wire_payload,
     )

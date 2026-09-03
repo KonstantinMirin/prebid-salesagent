@@ -143,7 +143,7 @@ from src.core.helpers.creative_helpers import (
 )
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import to_brand_reference, to_push_notification_config
+from src.core.schema_helpers import to_brand_reference
 from src.core.schemas import (
     AssetStatus,
     CreateMediaBuyError,
@@ -2178,7 +2178,6 @@ def _resolve_idempotency_race_or_raise(
 
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
-    push_notification_config: PushNotificationConfig | None = None,
     config_id: str | None = None,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
@@ -2188,7 +2187,7 @@ async def _create_media_buy_impl(
 
     Args:
         req: Validated CreateMediaBuyRequest with all protocol fields
-        push_notification_config: Push notification config dict (transport wrapper serializes models)
+        (push_notification_config is a REQUEST field, read off ``req``)
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
         raw_wire_payload: The request dict as sent on the wire, threaded by the
             transport wrappers — the idempotency payload-hash input (AdCP defines
@@ -2233,9 +2232,9 @@ async def _create_media_buy_impl(
             field="reporting_webhook.url",
             context=req.context,
         )
-    if push_notification_config:
+    if req.push_notification_config:
         registration = accept_push_notification_config(
-            push_notification_config,
+            req.push_notification_config,
             field_prefix="push_notification_config",
             context=req.context,
         )
@@ -2313,7 +2312,7 @@ async def _create_media_buy_impl(
         # Create workflow step for tracking this operation
         # Pass model directly — ContextManager serializes at the DB boundary
         workflow_metadata: dict[str, Any] = {"protocol": identity.protocol}
-        if push_notification_config:
+        if req.push_notification_config:
             # The VALUE's canonical dump, not the buyer's raw dict: what
             # context_manager reads back at delivery time is then gate-receipted
             # data, rehydrated through the same gate via from_stash.
@@ -2332,7 +2331,7 @@ async def _create_media_buy_impl(
         # Register push notification config if provided (MCP/A2A protocol support)
         # Skip for dry_run mode (no database writes). URL was SSRF-checked above;
         # persist via repository upsert (registration gate + defense in depth).
-        if push_notification_config:
+        if req.push_notification_config:
             # Lazy: call-time import so tests that patch the UoW on the repositories package see their patched object (hoisting would bind the unpatched one at module load).
             from src.core.database.repositories import PushNotificationConfigUoW
 
@@ -4510,6 +4509,14 @@ async def _create_media_buy_impl(
 
 def _build_create_media_buy_request(
     *,
+    # A REQUEST FIELD, built through here like every other. It used to be routed around this
+    # builder and handed to _impl as its own argument (gh-#1299), on the grounds that folding
+    # it in makes the adcp Authentication.credentials MinLen(32) constraint apply to the whole
+    # create_media_buy. That is true and is now the intended behaviour: a payload that does not
+    # conform to the schema is refused at the schema, not carried past it. The bypass cost more
+    # than it bought -- one field ended up announced by three different mechanisms (the MCP
+    # wrapper declaring it, a REST extra_fields patch, and a duplicate _impl parameter).
+    push_notification_config: PushNotificationConfig | dict[str, Any] | None = None,
     brand: BrandReference | dict[str, Any] | str | None = None,
     # The MCP wrapper receives the internal PackageRequest subtype; the raw
     # wrapper the library type or wire dicts (A2A/REST) — CreateMediaBuyRequest
@@ -4545,6 +4552,7 @@ def _build_create_media_buy_request(
     # carrying the field path + suggestion.
     with adcp_validation_boundary(context="request"):
         return CreateMediaBuyRequest(
+            push_notification_config=push_notification_config,
             brand=to_brand_reference(brand),
             packages=packages,
             start_time=start_time,
@@ -4645,6 +4653,7 @@ async def create_media_buy(
     """
     # FastMCP already coerced JSON inputs to typed Pydantic models
     req = _build_create_media_buy_request(
+        push_notification_config=push_notification_config,
         brand=brand,
         packages=packages,
         start_time=start_time,
@@ -4677,7 +4686,6 @@ async def create_media_buy(
     # every _impl parameter.
     result = await _create_media_buy_impl(
         req=req,
-        push_notification_config=push_notification_config,
         config_id=None,
         identity=identity,
         context_id=_ctx_id,
@@ -4688,12 +4696,6 @@ async def create_media_buy(
 
 async def create_media_buy_raw(
     req: CreateMediaBuyRequest,
-    # DELIBERATELY not a builder parameter and not folded into CreateMediaBuyRequest.
-    # The adcp Authentication.credentials MinLen(32) constraint would then apply to the
-    # WHOLE create_media_buy, so a short webhook credential would divert the request away
-    # from the manual-approval gate instead of being handled (gh-#1299). It is a transport
-    # -layer argument here for the same reason the MCP wrapper keeps it separate.
-    push_notification_config: PushNotificationConfig | None = None,
     ctx: Context | ToolContext | None = None,
     identity: IdentityOrNotProvided = NOT_PROVIDED,
     raw_wire_payload: dict[str, Any] | None = None,
@@ -4739,7 +4741,13 @@ async def create_media_buy_raw(
     # id silently. Left unread, every A2A re-registration would stop upserting and
     # insert a fresh row instead. `id` names the ROW, not the registration — the
     # same reason validation_token is a kwarg rather than a value field.
-    config_id = push_notification_config.get("id") if isinstance(push_notification_config, dict) else None
+    # Read off the RAW WIRE PAYLOAD, not off req.push_notification_config: the typed
+    # PushNotificationConfig has no ``id`` field and is extra="ignore", so by the time the
+    # builder has validated it a buyer-supplied id is gone. ``id`` names the stored ROW, not
+    # the registration -- without it every A2A re-registration would insert a fresh row
+    # instead of upserting.
+    _pnc_wire = (raw_wire_payload or {}).get("push_notification_config")
+    config_id = _pnc_wire.get("id") if isinstance(_pnc_wire, dict) else None
 
     # Coerce here rather than forwarding a raw dict: this is the untyped seam. The
     # A2A skill hands us the buyer's dict straight off the wire, so without this
@@ -4747,7 +4755,6 @@ async def create_media_buy_raw(
     # forbids reaches _impl unchallenged.
     return await _create_media_buy_impl(
         req=req,
-        push_notification_config=to_push_notification_config(push_notification_config),
         config_id=config_id,
         identity=identity,
         context_id=_ctx_id,

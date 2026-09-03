@@ -145,20 +145,21 @@ class TestContextManagerAcceptsModel:
 class TestImplNoModelDump:
     """_create_media_buy_impl must not accept BaseModel for push_notification_config."""
 
-    def test_impl_push_notification_config_is_dict_only(self):
-        """_impl should only accept dict|None for push_notification_config, not BaseModel.
+    def test_impl_takes_no_push_notification_config_parameter(self):
+        """_impl reads push_notification_config off ``req``, so it has no parameter for it.
 
-        The transport wrapper is responsible for serializing the model before calling _impl.
+        This used to assert the parameter was dict-only, because the wrapper serialized a
+        model and handed it over beside the request. The field is a REQUEST field now --
+        built through _build_create_media_buy_request like every other one -- so a second
+        parameter would be a second way to supply the same value, which is the duplication
+        that let MCP, REST and _impl each carry their own copy.
         """
         import inspect
 
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         sig = inspect.signature(_create_media_buy_impl)
-        param = sig.parameters["push_notification_config"]
-        annotation = str(param.annotation)
-        # Should NOT contain "BaseModel"
-        assert "BaseModel" not in annotation, (
-            f"push_notification_config should be dict|None, not {annotation}. "
-            "Transport wrapper must serialize before calling _impl."
+        assert "push_notification_config" not in sig.parameters, (
+            "push_notification_config must reach _impl on req, not as its own parameter; "
+            f"found {sorted(sig.parameters)}"
         )

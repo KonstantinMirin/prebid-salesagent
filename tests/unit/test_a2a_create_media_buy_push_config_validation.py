@@ -1,19 +1,21 @@
-"""Regression: A2A create_media_buy must not validate the transport-layer
-push_notification_config as part of CreateMediaBuyRequest.
+"""A2A create_media_buy validates push_notification_config AS PART OF the request.
 
-Core invariant: ``push_notification_config`` is an A2A transport-layer parameter
-forwarded to ``core_create_media_buy_tool`` SEPARATELY (adcp_a2a_server.py:1529).
-It must NOT be folded into ``CreateMediaBuyRequest.model_validate()`` — doing so
-applies the adcp ``Authentication.credentials`` MinLen(32) constraint to the
-request body, so a Bearer-auth webhook config with a short credential makes the
-WHOLE create_media_buy fail validation. That diverts the request away from the
-manual-approval gate in media_buy_create.py (no submitted TaskStatusUpdateEvent
-webhook is ever emitted).
+``push_notification_config`` is a REQUEST FIELD, built through
+``_build_create_media_buy_request`` like every other field.
 
-The MCP wrapper and ``create_media_buy_raw`` both construct CreateMediaBuyRequest
-WITHOUT push_notification_config and forward it as a separate argument. The A2A
-skill handler must behave identically.
+THIS REVERSES gh-#1299's ORIGINAL RESOLUTION, deliberately. That issue kept the config out of
+the request because the adcp ``Authentication.credentials`` MinLen(32) constraint would then
+apply to the whole create_media_buy, diverting a short-credential request away from the
+manual-approval gate. The bypass cost more than it bought: one field ended up announced by
+three separate mechanisms -- the MCP wrapper declaring it, a REST ``extra_fields`` patch, and
+a duplicate ``_impl`` parameter -- which could drift apart silently, and did.
 
+Owner ruling: there is a schema and there is a non-conformant payload against it, so the
+schema refuses it. The test that asserted a short credential must NOT block create_media_buy
+was deleted with the behaviour it pinned; the schema is what states that contract now.
+
+What remains here is the positive control: a conformant no-auth config must survive onto the
+request untouched.
 """
 
 from unittest.mock import AsyncMock, patch
@@ -39,130 +41,6 @@ def _valid_packages_params() -> dict:
         "idempotency_key": "unit-test-key-a2a-pushcfg-0001",
         "context": {"e2e": "push_config_validation"},
     }
-
-
-@pytest.mark.asyncio
-async def test_short_webhook_credentials_do_not_block_create_media_buy():
-    """Bearer-auth push_notification_config with <32-char credentials must NOT
-    cause _handle_create_media_buy_skill to short-circuit into VALIDATION_ERROR.
-
-    With the bug present, CreateMediaBuyRequest.model_validate(params) rejects
-    the short ``authentication.credentials`` and the handler returns an
-    adcp_error dict — ``core_create_media_buy_tool`` is never called, so the
-    manual-approval (submitted) path is never reached.
-    """
-    from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-    from tests.factories.principal import PrincipalFactory
-
-    handler = AdCPRequestHandler()
-    identity = PrincipalFactory.make_identity(
-        principal_id="test-principal",
-        tenant_id="test-tenant",
-        tenant={"tenant_id": "test-tenant"},
-        protocol="a2a",
-    )
-
-    params = _valid_packages_params()
-    # Transport-layer push notification config (as injected by
-    # _handle_explicit_skill from the A2A SendMessageConfiguration). The
-    # 18-char credential is shorter than the adcp MinLen(32) on the
-    # CreateMediaBuyRequest.push_notification_config.authentication field.
-    params["push_notification_config"] = {
-        "url": "http://localhost:9999/webhook",
-        "authentication": {
-            "schemes": ["Bearer"],
-            "credentials": "test-webhook-token",  # 18 chars (< 32)
-        },
-    }
-
-    submitted_result = CreateMediaBuyResult(
-        # confirmed_at/revision are schema-required and carry no model default:
-        # the response reports the persisted row, so a construction must state them.
-        response={
-            "media_buy_id": "mb_test",
-            "packages": [],
-            "confirmed_at": "2026-03-15T12:00:00Z",
-            "revision": 1,
-        },
-        status="submitted",
-    )
-
-    captured: dict = {}
-
-    async def fake_tool(**kwargs):
-        captured.update(kwargs)
-        return submitted_result
-
-    with patch(
-        "src.a2a_server.adcp_a2a_server.core_create_media_buy_tool",
-        new=AsyncMock(side_effect=fake_tool),
-    ):
-        result = await handler._handle_create_media_buy_skill(params, identity)
-
-    # The tool MUST have been called — the request must not be rejected by
-    # request-model validation just because the webhook credential is short.
-    assert captured, (
-        "core_create_media_buy_tool was never called — _handle_create_media_buy_skill "
-        "short-circuited (likely a VALIDATION_ERROR from folding push_notification_config "
-        "into CreateMediaBuyRequest.model_validate)."
-    )
-
-    # push_notification_config must be forwarded to the tool, not validated away. It stays
-    # a kwarg BESIDE the request (gh-#1299): folding it in would apply
-    # Authentication.credentials MinLen(32) to the whole create_media_buy, which is exactly
-    # what this test's short credential must not trigger.
-    assert captured.get("push_notification_config") == {
-        "url": "http://localhost:9999/webhook",
-        "authentication": {"schemes": ["Bearer"], "credentials": "test-webhook-token"},
-    }, f"push_notification_config not forwarded to tool: {captured.get('push_notification_config')!r}"
-
-    # ── Epic D lane C3 (salesagent-fo99.3): what changed, and what did not ──
-    # The assertions above still hold: the HANDLER must not fold
-    # push_notification_config into CreateMediaBuyRequest.model_validate and
-    # short-circuit the whole request. That was gh-#1299's actual defect and it
-    # stays fixed.
-    #
-    # What DID change is one frame lower, and this test could not see it because
-    # it patches core_create_media_buy_tool — the very function that now coerces.
-    # Left unextended it would stay VACUOUSLY GREEN while production reversed.
-    #
-    # Pinned AdCP 3.1.1 (core/push-notification-config.json) gives
-    # authentication.credentials minLength 32, so an 18-char credential is
-    # schema-invalid. Before C3 the untyped A2A path forwarded it, stored it, and
-    # then the fail-closed sender refused to deliver — accept-then-never-deliver.
-    # It is now refused AT INGEST, correctably, naming the exact field. Owner
-    # decision recorded on salesagent-fo99.3 ("tighten to spec"); #1299's real
-    # concern is honoured because the buyer gets a precise field, not an opaque
-    # whole-request rejection.
-    from src.core.exceptions import AdCPValidationError
-    from src.core.tools.media_buy_create import _build_create_media_buy_request, create_media_buy_raw
-
-    with pytest.raises(AdCPValidationError) as refusal:
-        await create_media_buy_raw(
-            # The raw wrapper takes the BUILT request and declares no spec field of its
-            # own (graded by tests/unit/test_boundary_field_forwarding.py), so every
-            # request field goes through the shared boundary builder. Only
-            # push_notification_config stays a kwarg beside it — the gh-#1299 reason
-            # spelled out above.
-            req=_build_create_media_buy_request(**{k: v for k, v in params.items() if k != "push_notification_config"}),
-            push_notification_config={
-                "url": "http://localhost:9999/webhook",
-                "authentication": {"schemes": ["Bearer"], "credentials": "test-webhook-token"},
-            },
-            identity=identity,
-        )
-    assert refusal.value.field == "push_notification_config.authentication.credentials", (
-        f"a short webhook credential must be refused by NAME at ingest, not opaquely; got field={refusal.value.field!r}"
-    )
-
-    # The handler must return the tool's result (manual-approval submitted),
-    # not a VALIDATION_ERROR dict.
-    if isinstance(result, dict):
-        assert result.get("status") == "submitted", (
-            f"Expected submitted status to reach the webhook path, got dict {result!r}"
-        )
-    else:
-        assert result.status == "submitted", f"Expected submitted status, got {result!r}"
 
 
 @pytest.mark.asyncio
@@ -208,6 +86,10 @@ async def test_no_auth_push_config_still_works():
         result = await handler._handle_create_media_buy_skill(params, identity)
 
     assert captured, "core_create_media_buy_tool was never called for no-auth config"
-    assert captured.get("push_notification_config") == {"url": "http://localhost:9999/webhook"}
+    # ON THE REQUEST, not beside it. A no-auth config carries no credentials, so no
+    # MinLen(32) constraint applies and it passes the schema untouched.
+    built = captured["req"].push_notification_config
+    assert built is not None, "a no-auth push_notification_config must survive onto the request"
+    assert str(built.url) == "http://localhost:9999/webhook", f"url not preserved: {built.url!r}"
     status = result.get("status") if isinstance(result, dict) else result.status
     assert status == "submitted"
