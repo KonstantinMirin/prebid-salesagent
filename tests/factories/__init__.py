@@ -37,6 +37,15 @@ from tests.factories.media_buy import GetMediaBuysMediaBuyFactory, MediaBuyFacto
 from tests.factories.metrics import FormatPerformanceMetricsFactory
 from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory, ProductFactory
+from tests.factories.request import (
+    OMIT,
+    REQUEST_FACTORY_BY_TOOL,
+    CreateMediaBuyRequestFactory,
+    ListAccountsRequestFactory,
+    ListCreativeFormatsRequestFactory,
+    SyncAccountsRequestFactory,
+    SyncCreativesRequestFactory,
+)
 from tests.factories.targeting import (
     CollectionListReferenceFactory,
     PropertyListReferenceFactory,
@@ -74,6 +83,8 @@ ALL_FACTORIES = [
 
 __all__ = [
     "ALL_FACTORIES",
+    "OMIT",
+    "REQUEST_FACTORY_BY_TOOL",
     "AccountFactory",
     "AdapterConfigFactory",
     "AuthorizedPropertyFactory",
@@ -84,11 +95,14 @@ __all__ = [
     "CreativeAssetFactory",
     "CreativeAssignmentFactory",
     "CreativeFactory",
+    "CreateMediaBuyRequestFactory",
     "DeliverySimulationConfigFactory",
     "FormatFactory",
     "FormatIdFactory",
     "GetMediaBuysMediaBuyFactory",
     "InventoryProfileFactory",
+    "ListAccountsRequestFactory",
+    "ListCreativeFormatsRequestFactory",
     "CurrencyLimitFactory",
     "GAMInventoryFactory",
     "FormatPerformanceMetricsFactory",
@@ -102,6 +116,8 @@ __all__ = [
     "PublisherPartnerFactory",
     "PushNotificationConfigFactory",
     "SignalsAgentFactory",
+    "SyncAccountsRequestFactory",
+    "SyncCreativesRequestFactory",
     "TargetingFactory",
     "TenantAuthConfigFactory",
     "TenantFactory",

@@ -50,6 +50,7 @@ from src.core.schemas.creative import ListCreativeFormatsResponse
 from src.core.schemas.delivery import GetCreativeDeliveryResponse, GetMediaBuyDeliveryResponse
 from tests.helpers import pinned_schema
 from tests.helpers.adcp_factories import create_test_cpm_pricing_option, create_test_publisher_properties_by_tag
+from tests.helpers.request_schemas import REQUEST_SCHEMA_BY_TOOL, TOOLS_WITH_NO_PINNED_REQUEST_SCHEMA
 
 # AdCP schemas are read from the installed adcp SDK's own pinned tree
 # (tests/helpers/pinned_schema.py) — the SDK's own version IS the pin (moves
@@ -1996,46 +1997,9 @@ class TestPinnedBoundsUnreachableFromAnyRequest:
         )
 
 
-#: Registered tool -> the pinned request schema its DTO implements. Keyed by TOOL rather
-#: than by model because the tool registry is what the coverage test below reads: a request
-#: DTO that quietly stops being graded is the failure this pairing exists to prevent, and a
-#: model-keyed map cannot notice a tool it was never given.
-#:
-#: Not the same table as SCHEMA_TO_MODEL_MAP above, which drives three OTHER test classes
-#: whose membership is constrained by unrelated history (CreateMediaBuyRequest is held out of
-#: it pending brand_card). Merging them would couple this grading to that hold-out, which is
-#: exactly how list_accounts -- the tool with the one declared departure -- went ungraded.
-#:
-#: list_creative_formats resolves to the media-buy/ copy, not the creative/ one: the pinned
-#: tree ships BOTH, they differ (creative/ has account, include_pricing, type; media-buy/ has
-#: property_id, publisher_domain), and media-buy/ is the path the generated BR-UC-005
-#: storyboards cite at the pinned commit. Picking the other one grades this tool against a
-#: schema nothing else in the repo uses.
-_REQUEST_SCHEMA_BY_TOOL: dict[str, str] = {
-    "create_media_buy": "media-buy/create-media-buy-request.json",
-    "get_adcp_capabilities": "protocol/get-adcp-capabilities-request.json",
-    "get_media_buy_delivery": "media-buy/get-media-buy-delivery-request.json",
-    "get_media_buys": "media-buy/get-media-buys-request.json",
-    "get_products": "media-buy/get-products-request.json",
-    "get_task": "protocol/get-task-status-request.json",
-    "list_accounts": "account/list-accounts-request.json",
-    "list_creative_formats": "media-buy/list-creative-formats-request.json",
-    "list_creatives": "creative/list-creatives-request.json",
-    "list_tasks": "protocol/list-tasks-request.json",
-    "sync_accounts": "account/sync-accounts-request.json",
-    "sync_creatives": "creative/sync-creatives-request.json",
-    "update_media_buy": "media-buy/update-media-buy-request.json",
-}
-
-#: Tools AdCP 3.1.1 does not define, so there is no pinned request schema to grade them
-#: against. This is a statement about the SPEC, not an exemption granted here, and the
-#: coverage test PROVES each entry by showing the pinned tree really resolves no request
-#: schema under that name. Rebasing any of them onto a spec task (update_performance_index is
-#: the spec's provide_performance_feedback under an older name) moves it into the map above;
-#: the set only shrinks.
-_TOOLS_WITH_NO_PINNED_REQUEST_SCHEMA = frozenset(
-    {"complete_task", "list_authorized_properties", "update_performance_index"}
-)
+#: Both tables moved to tests/helpers/request_schemas.py when the request-FACTORY
+#: conformance suite began grading the same binding: two suites reading one map, so the
+#: DTO grading and the payload grading cannot drift onto different schemas.
 
 
 def _registered_tool_shapes() -> dict[str, tuple[type, set[str]]]:
@@ -2090,7 +2054,7 @@ class TestNoNonSpecFieldsAreAdvertised:
       there is ONE declaration, consumed by both the runtime refusal and these tests.
     """
 
-    @pytest.mark.parametrize("tool_name", sorted(_REQUEST_SCHEMA_BY_TOOL))
+    @pytest.mark.parametrize("tool_name", sorted(REQUEST_SCHEMA_BY_TOOL))
     def test_the_advertised_shape_carries_no_field_the_schema_lacks(self, tool_name: str) -> None:
         """What buyers actually SEE, graded against the spec.
 
@@ -2100,7 +2064,7 @@ class TestNoNonSpecFieldsAreAdvertised:
         from src.core.tools._announced_shape import non_schema_fields
 
         model_class, advertised = _registered_tool_shapes()[tool_name]
-        schema_ref = _REQUEST_SCHEMA_BY_TOOL[tool_name]
+        schema_ref = REQUEST_SCHEMA_BY_TOOL[tool_name]
         spec_fields = set(load_json_schema(schema_ref).get("properties", {}))
         assert spec_fields, f"{schema_ref} declares no properties — the pin moved, fix the ref"
 
@@ -2113,7 +2077,7 @@ class TestNoNonSpecFieldsAreAdvertised:
             f"{model_class.__name__}._NON_SCHEMA_FIELDS with the reason it is carried anyway."
         )
 
-    @pytest.mark.parametrize("tool_name", sorted(_REQUEST_SCHEMA_BY_TOOL))
+    @pytest.mark.parametrize("tool_name", sorted(REQUEST_SCHEMA_BY_TOOL))
     def test_no_locally_declared_field_is_absent_from_the_schema(self, tool_name: str) -> None:
         """The LATENT case: a field our subclass adds that no wrapper has exposed yet.
 
@@ -2130,7 +2094,7 @@ class TestNoNonSpecFieldsAreAdvertised:
         from src.core.tools._announced_shape import library_declared_fields, non_schema_fields
 
         model_class, _ = _registered_tool_shapes()[tool_name]
-        schema_ref = _REQUEST_SCHEMA_BY_TOOL[tool_name]
+        schema_ref = REQUEST_SCHEMA_BY_TOOL[tool_name]
         spec_fields = set(load_json_schema(schema_ref).get("properties", {}))
 
         locally_declared = {
@@ -2156,14 +2120,14 @@ class TestNoNonSpecFieldsAreAdvertised:
         schema for -- which the second half verifies rather than takes on trust.
         """
         registered = set(_registered_tool_shapes())
-        ungraded = registered - set(_REQUEST_SCHEMA_BY_TOOL) - _TOOLS_WITH_NO_PINNED_REQUEST_SCHEMA
+        ungraded = registered - set(REQUEST_SCHEMA_BY_TOOL) - TOOLS_WITH_NO_PINNED_REQUEST_SCHEMA
         assert not ungraded, (
             f"{sorted(ungraded)} announce a request DTO that nothing compares to the pinned "
-            f"schema. Add a row to _REQUEST_SCHEMA_BY_TOOL naming the schema it implements."
+            f"schema. Add a row to REQUEST_SCHEMA_BY_TOOL naming the schema it implements."
         )
 
         resolvable = {}
-        for tool_name in sorted(_TOOLS_WITH_NO_PINNED_REQUEST_SCHEMA & registered):
+        for tool_name in sorted(TOOLS_WITH_NO_PINNED_REQUEST_SCHEMA & registered):
             candidate = f"{tool_name.replace('_', '-')}-request.json"
             try:
                 pinned_schema.load(candidate)
@@ -2172,7 +2136,7 @@ class TestNoNonSpecFieldsAreAdvertised:
             resolvable[tool_name] = candidate
         assert not resolvable, (
             f"{resolvable} claim to have no pinned request schema, but the pinned tree "
-            f"resolves one for each. Move them into _REQUEST_SCHEMA_BY_TOOL and grade them."
+            f"resolves one for each. Move them into REQUEST_SCHEMA_BY_TOOL and grade them."
         )
 
 
