@@ -173,6 +173,11 @@ _WORKEROUTPUT_KEY = "bdd_scenario_liveness"
 #: worker's shard plus the controller's own (empty under xdist) records.
 _SHARDS: dict[str, dict[str, Any]] = {}
 
+#: Every xdist worker the controller saw shut down, and the subset that shipped
+#: its records. A worker in the first set and not the second lost its scenarios.
+_WORKERS_SEEN: set[str] = set()
+_WORKERS_REPORTED: set[str] = set()
+
 
 def _scenario_identifier(scenario: Scenario, feature: Feature) -> str | None:
     """The scenario's ``T-*`` identity tag, matching ``storyboard_spec``'s ``_IDENT_TAG_RE``."""
@@ -359,10 +364,25 @@ def pytest_testnodedown(node: Any, error: Any) -> None:
     xdist calls this for every node BEFORE the controller's ``runtestloop``
     returns — i.e. before the controller's own ``pytest_sessionfinish`` — so the
     merged artifact below is complete. This is the pattern pytest-cov uses.
+
+    A worker that ships nothing is RECORDED, not skipped. This hook used to read
+    ``if workeroutput and key in workeroutput`` and do nothing otherwise, so a
+    worker that died took its scenarios with it and the controller published a
+    file that looked whole. Nothing downstream could tell: the run scope is
+    written from the controller's own session, so it describes the full target
+    list either way.
+
+    Losing records is therefore not detected here — it is made unrepresentable.
+    The file names every worker that failed to report, and ``load_run`` refuses
+    a file that names any.
     """
+    worker_id = getattr(getattr(node, "gateway", None), "id", None) or repr(node)
+    _WORKERS_SEEN.add(worker_id)
+
     workeroutput = getattr(node, "workeroutput", None)
     if workeroutput and _WORKEROUTPUT_KEY in workeroutput:
         _merge_shard(workeroutput[_WORKEROUTPUT_KEY])
+        _WORKERS_REPORTED.add(worker_id)
 
 
 IN_PROCESS_TRANSPORTS = frozenset({"mcp", "a2a", "rest"})
@@ -464,6 +484,10 @@ def _run_scope(session: pytest.Session) -> dict[str, Any]:
         "markers": getattr(config.option, "markexpr", "") or "",
         "deselected": len(getattr(session, "deselected", ()) or ()),
         "workers": len(getattr(config, "workerinput", {})) or _worker_count(config),
+        # Which workers shut down without shipping records. Empty on a healthy
+        # run and on a serial one. A reader refuses a file where this is not
+        # empty, so a lost shard cannot be read as a complete measurement.
+        "workers_missing": sorted(_WORKERS_SEEN - _WORKERS_REPORTED),
         "exitstatus": int(session.exitstatus or 0),
         "testsfailed": int(session.testsfailed or 0),
     }
@@ -594,6 +618,13 @@ def load_run(directory: str | Path) -> dict[str, Any]:
         scope = payload.get("run", {})
         if scope.get("selection") or scope.get("markers"):
             continue
+        missing = scope.get("workers_missing") or []
+        if missing:
+            raise IncompleteLivenessRun(
+                f"{path.name} was written by a session whose workers {missing} shut down "
+                "without shipping their records, so the scenarios they ran are absent from "
+                "it. The file is a partial measurement wearing a whole run's target list."
+            )
         covered.update(scope.get("target", []))
         for record in payload.get("scenarios", []):
             existing = merged.get(record["scenario_id"])
