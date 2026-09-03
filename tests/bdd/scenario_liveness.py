@@ -55,6 +55,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -535,19 +536,45 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     # Controller (or a serial run): merge this process's own records over any
     # shards received, then write once.
     _merge_shard([_RECORDS[k].to_dict() for k in sorted(_RECORDS)])
-    path = artifact_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
     artifact = {"run": _run_scope(session), "scenarios": [_SHARDS[k] for k in sorted(_SHARDS)]}
-    path.write_text(json.dumps(artifact, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    body = json.dumps(artifact, indent=2, sort_keys=False) + "\n"
 
     # ALSO write a per-session copy, so a second session cannot silently replace
-    # this measurement with its own. The merged path above is kept as-is because
-    # other consumers read it by name; this directory is what `load_run` folds.
+    # this measurement with its own. The merged path is kept as-is because other
+    # consumers read it by name; the directory is what `load_run` folds.
     sessions = _write_sessions_dir()
-    sessions.mkdir(parents=True, exist_ok=True)
-    (sessions / _session_filename(artifact["run"])).write_text(
-        json.dumps(artifact, indent=2, sort_keys=False) + "\n", encoding="utf-8"
-    )
+    _write(artifact_path(), body)
+    _write(sessions / _session_filename(artifact["run"]), body)
+
+
+def _write(path: Path, body: str) -> None:
+    """Write one artifact file, reporting a write failure instead of raising.
+
+    A diagnostic never changes the outcome of the thing it measures. Both the
+    mkdir and the write raise on an unwritable parent, on a path occupied by a
+    regular file, and on a full disk; an exception out of `pytest_sessionfinish`
+    is an unhandled error, so a suite whose scenarios all passed exits nonzero
+    with no summary line. This plugin is registered for EVERY bdd session
+    (tests/bdd/conftest.py), which makes that the ordinary case rather than a
+    corner.
+
+    Losing the artifact is not silent, and that is why swallowing the write is
+    safe here: every consumer fails CLOSED on a missing or empty artifact --
+    `scripts/audit/scenario_liveness_join.load_artifact` refuses an empty file,
+    and `load_run` raises `IncompleteLivenessRun` when the session files do not
+    add up to the suite. The absence is detected where it is read, so it does
+    not also need to fail the run that produced it.
+
+    OSError, not Exception: PermissionError, FileExistsError, IsADirectoryError
+    and ENOSPC are all subclasses of it, while a defect in the artifact dict
+    stays loud instead of being hidden by the guard that tolerates a read-only
+    disk.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    except OSError as exc:
+        print(f"[scenario-liveness] could not write the artifact to {path}: {exc}", file=sys.stderr)
 
 
 class IncompleteLivenessRun(RuntimeError):
