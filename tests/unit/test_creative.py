@@ -56,8 +56,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types import CreativeAction, CreativeAsset
 from adcp.types import FormatId as AdcpFormatId
+from pydantic import ValidationError
 
-from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPAuthenticationError,
+    AdCPValidationError,
+    first_validation_error_field,
+)
 from src.core.schemas import (
     Creative,
     CreativeApprovalStatus,
@@ -83,6 +89,7 @@ from tests.factories.creative_asset import (
     video_spec,
 )
 from tests.harness._mock_uow import wire_effect_boundary
+from tests.helpers import assert_construction_rejects
 from tests.helpers.creative_test_helpers import creative_payload, sync_creatives_request
 
 # ---------------------------------------------------------------------------
@@ -1527,9 +1534,12 @@ class TestListCreativesValidation:
         """
         from src.core.schema_helpers import coerce_creative_filters
 
-        # The identifier is STRUCTURED: details/field, not prose.
-        with pytest.raises(AdCPValidationError):
-            coerce_creative_filters({field: "not-a-date"})
+        # The identifier is STRUCTURED: details/field, not prose. Graded on the field
+        # PATH rather than the exception class, because this seam is in-process: the
+        # coercion no longer opens a validation boundary of its own (the transport
+        # boundary derives the identical error one frame later, from the same
+        # exception), so what leaves this frame is the pydantic rejection itself.
+        assert_construction_rejects(lambda: coerce_creative_filters({field: "not-a-date"}), field=field)
 
 
 class TestListCreativesRawBoundaryCompleteness:
@@ -4197,29 +4207,30 @@ class TestExtensionGaps:
 
         This asserted the orchestrator records ``action=failed`` for such an item. That was
         reachable only while a caller could hand ``_sync_creatives_impl`` loose creatives;
-        every transport now builds a SyncCreativesRequest first (a2a and rest inside
-        ``adcp_validation_boundary``, mcp through FastMCP's coercion of the annotated
+        every transport now builds a SyncCreativesRequest first (a2a and rest by calling the
+        builder, mcp through FastMCP's coercion of the annotated
         ``list[CreativeAssetRequest]``), so the omission is refused at the request boundary
         and never reaches the per-creative loop. Same obligation -- a nameless creative is
         rejected, naming ``name`` -- one layer up.
         """
-        from src.core.exceptions import AdCPInvalidRequestError
-        from src.core.validation_helpers import adcp_validation_boundary
 
-        with pytest.raises(AdCPInvalidRequestError) as exc_info:
-            with adcp_validation_boundary(context="sync_creatives request"):
-                sync_creatives_request(
-                    creatives=[
-                        {
-                            "creative_id": "c_no_name",
-                            "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
-                            "assets": build_assets(image_spec("banner", url="https://example.com/b.png")),
-                        }
-                    ]
-                )
+        # Graded on the pydantic rejection and the FIELD PATH production derives from it.
+        # This used to open adcp_validation_boundary itself to reproduce what the transports
+        # did; they no longer do, so the wrapper simulated a frame that is gone. The typed
+        # error and its code are produced at the transport boundary and graded there
+        # (tests/unit/test_validation_error_at_the_boundary.py).
+        with pytest.raises(ValidationError) as exc_info:
+            sync_creatives_request(
+                creatives=[
+                    {
+                        "creative_id": "c_no_name",
+                        "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
+                        "assets": build_assets(image_spec("banner", url="https://example.com/b.png")),
+                    }
+                ]
+            )
 
-        assert exc_info.value.error_code == "INVALID_REQUEST"
-        assert exc_info.value.field == "name"
+        assert first_validation_error_field(exc_info.value) == "name"
 
     def test_ext_h_media_url_fallback(self):
         """No previews from agent but media_url provided => creative NOT failed.

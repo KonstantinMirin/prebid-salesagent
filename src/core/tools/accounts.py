@@ -61,7 +61,6 @@ from src.core.schemas.account import (
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
-from src.core.validation_helpers import adcp_validation_boundary
 from src.core.webhooks.registration import accept_push_notification_config
 from src.services.notification_proof_service import NotificationProofService, get_notification_proof_service
 
@@ -329,16 +328,15 @@ async def list_accounts(
     Returns:
         ToolResult with human-readable text and structured data.
     """
-    with adcp_validation_boundary(context="list_accounts request"):
-        req = build_list_accounts_request(
-            account=account,
-            status=status,
-            pagination=pagination,
-            sandbox=sandbox,
-            ext=ext,
-            context=context,
-            idempotency_key=idempotency_key,  # TEMPORARY -- see the builder parameter's comment
-        )
+    req = build_list_accounts_request(
+        account=account,
+        status=status,
+        pagination=pagination,
+        sandbox=sandbox,
+        ext=ext,
+        context=context,
+        idempotency_key=idempotency_key,  # TEMPORARY -- see the builder parameter's comment
+    )
 
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_accounts_impl(req, identity)
@@ -1925,16 +1923,15 @@ async def sync_accounts(
     Returns:
         ToolResult with human-readable text and structured data.
     """
-    with adcp_validation_boundary(context="sync_accounts request"):
-        req = build_sync_accounts_request(
-            accounts=accounts,
-            delete_missing=delete_missing,
-            dry_run=dry_run,
-            idempotency_key=idempotency_key,
-            push_notification_config=push_notification_config,
-            ext=ext,
-            context=context,
-        )
+    req = build_sync_accounts_request(
+        accounts=accounts,
+        delete_missing=delete_missing,
+        dry_run=dry_run,
+        idempotency_key=idempotency_key,
+        push_notification_config=push_notification_config,
+        ext=ext,
+        context=context,
+    )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = await _sync_accounts_impl(req, identity)
 

@@ -2913,10 +2913,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # empty set would xfail every row carrying the tag; see the account note in
             # _UC004_GENUINE_XFAIL_ROWS.) The reason -- "raises ValidationError, not
             # AdCPSalesAgentError(INVALID_REQUEST)" -- is disproved by production: the
-            # pydantic oneOf/extra_forbidden rejection is translated by
-            # adcp_validation_boundary (src/core/validation_helpers.py:49-52, entered at
-            # src/core/tools/media_buy_delivery.py:761) into a typed AdCPInvalidRequestError,
-            # which the boundary frames as INVALID_REQUEST -- the first code in the pinned
+            # pydantic oneOf/extra_forbidden rejection is translated into a typed
+            # AdCPInvalidRequestError, which the boundary frames as INVALID_REQUEST.
+            # (This used to cite adcp_validation_boundary inside the builder; that wrapper
+            # is gone and the TRANSPORT boundary makes the identical conversion, off the
+            # same exception, through the same adcp_error_for. The outcome is unchanged --
+            # which is the point -- but the citation would send a reader to a frame that no
+            # longer exists.) -- the first code in the pinned
             # v3.1.1 enums/error-code.json, correctable, with a suggestion. The scenario
             # names that exact outcome (error "INVALID_REQUEST" with suggestion) and grades
             # it through TransportResult.assert_wire_error -> assert_envelope_shape on the
@@ -2935,9 +2938,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             #
             # unknown_value ("failed") graduated on the evidence as it stood: the reason
             # "production accepts invalid values" is false — the value is not a pinned
-            # MediaBuyStatus, adcp_validation_boundary
-            # (src/core/validation_helpers.py:49-52) converts the pydantic rejection to a
-            # typed AdCPInvalidRequestError, and the wire carries INVALID_REQUEST +
+            # MediaBuyStatus, the transport boundary (adcp_error_for) converts the
+            # pydantic rejection to a typed AdCPInvalidRequestError -- it used to be
+            # converted a frame earlier, by adcp_validation_boundary inside the builder;
+            # same call, same result -- and the wire carries INVALID_REQUEST +
             # suggestion, exactly what the Example names and what assert_wire_error grades
             # on the captured envelope.
             #
@@ -3059,9 +3063,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Extension errors — error code mismatches / not implemented.
             "T-UC-019-ext-b",
             "T-UC-019-ext-c",
-            # Graduated (6szx): T-UC-019-ext-d — invalid parameter types are rejected
-            # inside the shared adcp_validation_boundary (_build_get_media_buys_request)
-            # with VALIDATION_ERROR, field-level details (field="media_buy_ids"),
+            # Graduated (6szx): T-UC-019-ext-d — invalid parameter types are rejected at
+            # request construction (_build_get_media_buys_request) and translated at the
+            # transport boundary, with field-level details (field="media_buy_ids"),
             # recovery=correctable and a top-level suggestion, on the A2A wire and via
             # the typed exception on the legacy MCP wrapper. Then steps assert wire-first.
             # Graduated (subdl): T-UC-019-ext-e — the xfail reason "feature not yet

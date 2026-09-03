@@ -212,13 +212,22 @@ async def adcp_error_handler(request: Request, exc: AdCPSalesAgentError) -> JSON
 
 @app.exception_handler(ValueError)
 async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
-    """Cross-transport symmetry: REST wraps raw ``ValueError`` as VALIDATION_ERROR.
+    """Cross-transport symmetry: REST hands a raw ``ValueError`` to ``adcp_error_for``.
 
-    MCP's ``_translate_to_tool_error`` and A2A's dispatcher both catch raw
-    ``ValueError`` and wrap it in a synthetic ``AdCPValidationError`` envelope.
-    REST mirrors that here so a buyer-facing ``ValueError`` raised by
-    application code surfaces with the same wire shape and HTTP 400 status
-    on every transport, not the 500 default FastAPI gives unhandled errors.
+    MCP's ``_translate_to_tool_error`` and A2A's skill dispatcher reach the SAME
+    function for the same exception, so there is one mapping and three routes to
+    it, not three translations. This docstring used to say the other two wrapped
+    raw ``ValueError`` in a "synthetic ``AdCPValidationError`` envelope", which
+    read as though each transport built its own answer; measured, all three emit a
+    byte-identical envelope, and ``tests/unit/test_validation_error_at_the_boundary.py``
+    grades that on the wire.
+
+    The mapping is type-keyed, and the order inside ``adcp_error_for`` is what makes
+    a pydantic ``ValidationError`` (a ``ValueError`` SUBCLASS, so it arrives at this
+    handler) come out as INVALID_REQUEST carrying ``field`` and ``issues`` rather than
+    as a bare VALIDATION_ERROR. That is why request DTOs are constructed with no
+    wrapper around them: populate, validate, let it throw, and the boundary names the
+    error from the exception CLASS.
 
     Does NOT catch FastAPI's ``RequestValidationError`` (separate class, not a
     ValueError subclass) — that has its own handler below.

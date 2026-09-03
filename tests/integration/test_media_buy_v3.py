@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types import AccountReference, MediaBuyStatus
 from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
+from pydantic import ValidationError
 from sqlalchemy import func, select
 
 from src.core.database.database_session import get_db_session
@@ -29,6 +30,7 @@ from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPCapabilityNotSupportedError,
     AdCPValidationError,
+    first_validation_error_field,
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -1043,28 +1045,30 @@ class TestUpdateMediaBuyMissingPackageId:
         package_id (or buyer_ref). Missing both raises AdCPInvalidRequestError
         (wire INVALID_REQUEST). Live wire coverage: BDD @T-UC-003-ext-h.
 
-        The validator raises a PYDANTIC error now, not a typed one: it runs inside
-        pydantic, which FastMCP drives through a TypeAdapter BEFORE the tool body, and a
-        typed error raised there reached the buyer as a masked prose ToolError with no
-        envelope. The typed AdCPInvalidRequestError is produced by the BOUNDARY, so this
-        constructs the model inside adcp_validation_boundary -- which is how every
-        transport reaches it -- rather than asserting on a raw constructor call.
+        The validator raises a PYDANTIC error, not a typed one: it runs inside pydantic,
+        which FastMCP drives through a TypeAdapter BEFORE the tool body, and a typed error
+        raised there reached the buyer as a masked prose ToolError with no envelope. The
+        typed AdCPInvalidRequestError is produced by the TRANSPORT BOUNDARY, one frame
+        above every construction site, so what is asserted here is the rejection itself and
+        the field path production derives from it -- the value that becomes error.field.
         """
-        from src.core.exceptions import AdCPInvalidRequestError
         from src.core.schemas import UpdateMediaBuyRequest
-        from src.core.validation_helpers import adcp_validation_boundary
 
-        with pytest.raises(AdCPInvalidRequestError) as exc_info:
-            with adcp_validation_boundary(context="update_media_buy request"):
-                UpdateMediaBuyRequest(
-                    account={"account_id": "acct_test"},
-                    idempotency_key="test-idem-key-0001",
-                    media_buy_id="mb_x",
-                    packages=[{"budget": 5000.0}],
-                )
+        # Graded on the pydantic rejection and the FIELD PATH production derives from it.
+        # This used to open adcp_validation_boundary itself to reproduce what the transports
+        # did; they no longer do, so the wrapper simulated a frame that is gone. The typed
+        # error and its code are produced at the transport boundary and graded there
+        # (tests/unit/test_validation_error_at_the_boundary.py).
+        with pytest.raises(ValidationError) as exc_info:
+            UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id="mb_x",
+                packages=[{"budget": 5000.0}],
+            )
         # core/error.json: `field` is JSONPath-lite and request-rooted ('packages[0].targeting'),
         # so the buyer is told WHICH package is missing the identifier.
-        assert exc_info.value.field == "packages[0].package_id", (
+        assert first_validation_error_field(exc_info.value) == "packages[0].package_id", (
             f"expected the request-rooted path, got {exc_info.value.field!r}"
         )
 
@@ -1080,25 +1084,27 @@ class TestUpdateMediaBuyMissingPackageId:
         G38 (docs/test-obligations/UC-003-update-media-buy.md): the update path does
         not support buyer_ref-based package identification.
 
-        The validator raises a PYDANTIC error now, not a typed one: it runs inside
-        pydantic, which FastMCP drives through a TypeAdapter BEFORE the tool body, and a
-        typed error raised there reached the buyer as a masked prose ToolError with no
-        envelope. The typed AdCPInvalidRequestError is produced by the BOUNDARY, so this
-        constructs the model inside adcp_validation_boundary -- which is how every
-        transport reaches it -- rather than asserting on a raw constructor call.
+        The validator raises a PYDANTIC error, not a typed one: it runs inside pydantic,
+        which FastMCP drives through a TypeAdapter BEFORE the tool body, and a typed error
+        raised there reached the buyer as a masked prose ToolError with no envelope. The
+        typed AdCPInvalidRequestError is produced by the TRANSPORT BOUNDARY, one frame
+        above every construction site, so what is asserted here is the rejection itself and
+        the field path production derives from it -- the value that becomes error.field.
         """
-        from src.core.exceptions import AdCPInvalidRequestError
         from src.core.schemas import UpdateMediaBuyRequest
-        from src.core.validation_helpers import adcp_validation_boundary
 
-        with pytest.raises(AdCPInvalidRequestError):
-            with adcp_validation_boundary(context="update_media_buy request"):
-                UpdateMediaBuyRequest(
-                    account={"account_id": "acct_test"},
-                    idempotency_key="test-idem-key-0001",
-                    media_buy_id="mb_x",
-                    packages=[{"buyer_ref": "pkg_ref_1", "budget": 5000.0}],
-                )
+        # Graded on the pydantic rejection and the FIELD PATH production derives from it.
+        # This used to open adcp_validation_boundary itself to reproduce what the transports
+        # did; they no longer do, so the wrapper simulated a frame that is gone. The typed
+        # error and its code are produced at the transport boundary and graded there
+        # (tests/unit/test_validation_error_at_the_boundary.py).
+        with pytest.raises(ValidationError):
+            UpdateMediaBuyRequest(
+                account={"account_id": "acct_test"},
+                idempotency_key="test-idem-key-0001",
+                media_buy_id="mb_x",
+                packages=[{"buyer_ref": "pkg_ref_1", "budget": 5000.0}],
+            )
 
 
 class TestGetMediaBuysStatusIsDateRefined:

@@ -7,12 +7,12 @@ to ensure consistent validation across all creative operations.
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 
 from src.core.errors.details import AdapterFailureDetails
-from src.core.exceptions import AdCPInvalidRequestError
+from src.core.exceptions import first_validation_error_field
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.creatives import _sync_creatives_impl
-from src.core.validation_helpers import adcp_validation_boundary
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.helpers.creative_test_helpers import (
     make_creative_dict,
@@ -183,9 +183,9 @@ class TestSyncCreativesFormatValidation:
         core/creative-asset.json @ AdCP 3.1.1 types ``format_id`` as the structured
         {agent_url, id} object; there is no string arm. This used to assert a per-creative
         ``action == "failed"``, which was reachable only because the payload went straight
-        into ``_sync_creatives_impl``. Every transport builds the request first (a2a and rest
-        inside ``adcp_validation_boundary``, mcp through FastMCP's own coercion of the
-        annotated ``list[CreativeAssetRequest]``), so no buyer could ever have observed the
+        into ``_sync_creatives_impl``. Every transport builds the request first (a2a and rest by
+        calling the builder, mcp through FastMCP's own coercion of the annotated
+        ``list[CreativeAssetRequest]``), so no buyer could ever have observed the
         per-creative result this pinned. The obligation is unchanged -- a string format_id is
         rejected and the rejection names format_id -- only the layer that states it.
         """
@@ -194,12 +194,15 @@ class TestSyncCreativesFormatValidation:
             "format_id": "display_300x250_image",  # String instead of the structured object
         }
 
-        with pytest.raises(AdCPInvalidRequestError) as exc_info:
-            with adcp_validation_boundary(context="sync_creatives request"):
-                sync_creatives_request(creatives=[creative_dict])
+        # Graded on the pydantic rejection and the FIELD PATH production derives from it.
+        # This used to open adcp_validation_boundary itself to reproduce what the transports
+        # did; they no longer do, so the wrapper simulated a frame that is gone. The typed
+        # error and its code are produced at the transport boundary and graded there
+        # (tests/unit/test_validation_error_at_the_boundary.py).
+        with pytest.raises(ValidationError) as exc_info:
+            sync_creatives_request(creatives=[creative_dict])
 
-        assert exc_info.value.error_code == "INVALID_REQUEST"
-        assert exc_info.value.field == "format_id"
+        assert first_validation_error_field(exc_info.value) == "format_id"
 
     def test_format_validation_multiple_creatives(self, identity, mock_tenant, mock_format_spec):
         """Test that format validation works correctly with multiple creatives."""
@@ -313,12 +316,15 @@ class TestSyncCreativesFormatValidation:
             "assets": build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
         }
 
-        with pytest.raises(AdCPInvalidRequestError) as exc_info:
-            with adcp_validation_boundary(context="sync_creatives request"):
-                sync_creatives_request(creatives=[creative_dict])
+        # Graded on the pydantic rejection and the FIELD PATH production derives from it.
+        # This used to open adcp_validation_boundary itself to reproduce what the transports
+        # did; they no longer do, so the wrapper simulated a frame that is gone. The typed
+        # error and its code are produced at the transport boundary and graded there
+        # (tests/unit/test_validation_error_at_the_boundary.py).
+        with pytest.raises(ValidationError) as exc_info:
+            sync_creatives_request(creatives=[creative_dict])
 
-        assert exc_info.value.error_code == "INVALID_REQUEST"
-        assert exc_info.value.field == "format_id"
+        assert first_validation_error_field(exc_info.value) == "format_id"
 
     def test_error_messages_distinguish_scenarios(self, identity, mock_tenant):
         """Test that error messages clearly distinguish between different failure scenarios."""

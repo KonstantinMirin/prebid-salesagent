@@ -16,12 +16,14 @@ from datetime import UTC, datetime
 import pytest
 from adcp.types import CreativeAction
 from adcp.types import FormatId as AdcpFormatId
+from pydantic import ValidationError
 
 from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPCreativeRejectedError,
     AdCPNotFoundError,
     AdCPPackageNotFoundError,
+    first_validation_error_field,
 )
 from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.factories.creative_asset import build_assets, image_spec, make_test_banner_creative
@@ -682,19 +684,20 @@ class TestCreativeIdsFilter:
         never reachable from the wire; it was reachable only from a caller handing _impl
         loose fields, which no longer exists.
         """
-        from src.core.exceptions import AdCPInvalidRequestError
-        from src.core.validation_helpers import adcp_validation_boundary
         from tests.helpers.creative_test_helpers import sync_creatives_request
 
-        with pytest.raises(AdCPInvalidRequestError) as exc_info:
-            with adcp_validation_boundary(context="sync_creatives request"):
-                sync_creatives_request(
-                    creatives=[_make_creative_asset(creative_id="c1", name="One")],
-                    creative_ids=[],
-                )
+        # Graded on the pydantic rejection and the FIELD PATH production derives from it.
+        # This used to open adcp_validation_boundary itself to reproduce what the transports
+        # did; they no longer do, so the wrapper simulated a frame that is gone. The typed
+        # error and its code are produced at the transport boundary and graded there
+        # (tests/unit/test_validation_error_at_the_boundary.py).
+        with pytest.raises(ValidationError) as exc_info:
+            sync_creatives_request(
+                creatives=[_make_creative_asset(creative_id="c1", name="One")],
+                creative_ids=[],
+            )
 
-        assert exc_info.value.error_code == "INVALID_REQUEST"
-        assert exc_info.value.field == "creative_ids"
+        assert first_validation_error_field(exc_info.value) == "creative_ids"
 
 
 class TestDryRunMode:
@@ -1809,24 +1812,25 @@ class TestSyncExtensions:
         SyncCreativesRequest before _impl runs, so the omission is refused at the request
         boundary and the per-creative arm is never reached. Same obligation, one layer up.
         """
-        from src.core.exceptions import AdCPInvalidRequestError
-        from src.core.validation_helpers import adcp_validation_boundary
         from tests.helpers.creative_test_helpers import sync_creatives_request
 
-        with pytest.raises(AdCPInvalidRequestError) as exc_info:
-            with adcp_validation_boundary(context="sync_creatives request"):
-                sync_creatives_request(
-                    creatives=[
-                        {
-                            "creative_id": "c_no_name",
-                            "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
-                            "assets": build_assets(image_spec("banner")),
-                        }
-                    ],
-                )
+        # Graded on the pydantic rejection and the FIELD PATH production derives from it.
+        # This used to open adcp_validation_boundary itself to reproduce what the transports
+        # did; they no longer do, so the wrapper simulated a frame that is gone. The typed
+        # error and its code are produced at the transport boundary and graded there
+        # (tests/unit/test_validation_error_at_the_boundary.py).
+        with pytest.raises(ValidationError) as exc_info:
+            sync_creatives_request(
+                creatives=[
+                    {
+                        "creative_id": "c_no_name",
+                        "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
+                        "assets": build_assets(image_spec("banner")),
+                    }
+                ],
+            )
 
-        assert exc_info.value.error_code == "INVALID_REQUEST"
-        assert exc_info.value.field == "name"
+        assert first_validation_error_field(exc_info.value) == "name"
 
     def test_unknown_format_fails_with_hint(self, integration_db):
         """Covers: UC-006-EXT-F-01 — format not in registry → failed with hint."""

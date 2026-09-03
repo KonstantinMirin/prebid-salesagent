@@ -99,7 +99,6 @@ if TYPE_CHECKING:
     from src.core.creative_agent_registry import FormatFetchResult
 from src.core.schemas import ListCreativeFormatsRequest, ListCreativeFormatsResponse, format_id_identity
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
-from src.core.validation_helpers import adcp_validation_boundary
 
 
 def _infer_asset_type(asset_id: str) -> str:
@@ -643,23 +642,22 @@ async def list_creative_formats(
     Returns:
         ToolResult with ListCreativeFormatsResponse data
     """
-    with adcp_validation_boundary(context="list_creative_formats request"):
-        req = build_list_creative_formats_request(
-            format_ids=format_ids,
-            output_format_ids=output_format_ids,
-            input_format_ids=input_format_ids,
-            is_responsive=is_responsive,
-            name_search=name_search,
-            asset_types=asset_types,
-            wcag_level=wcag_level,
-            min_width=min_width,
-            max_width=max_width,
-            min_height=min_height,
-            max_height=max_height,
-            disclosure_positions=disclosure_positions,
-            disclosure_persistence=disclosure_persistence,
-            context=context,
-        )
+    req = build_list_creative_formats_request(
+        format_ids=format_ids,
+        output_format_ids=output_format_ids,
+        input_format_ids=input_format_ids,
+        is_responsive=is_responsive,
+        name_search=name_search,
+        asset_types=asset_types,
+        wcag_level=wcag_level,
+        min_width=min_width,
+        max_width=max_width,
+        min_height=min_height,
+        max_height=max_height,
+        disclosure_positions=disclosure_positions,
+        disclosure_persistence=disclosure_persistence,
+        context=context,
+    )
 
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_creative_formats_impl(req, identity)

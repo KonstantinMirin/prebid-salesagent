@@ -33,7 +33,6 @@ from src.core.schemas import (
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
-from src.core.validation_helpers import adcp_validation_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -247,17 +246,16 @@ def _build_list_creatives_request(
     # model). exclude_none keeps an unset filter from becoming an explicit null.
     structured_filters = LibraryCreativeFilters(**filters.model_dump(exclude_none=True)) if filters else None
 
-    with adcp_validation_boundary(context="list_creatives request"):
-        return ListCreativesRequest(
-            filters=structured_filters,
-            pagination=structured_pagination,
-            sort=structured_sort,
-            fields=fields,
-            include_assignments=include_assignments,
-            context=context,
-            format=format,
-            page=page,
-        )
+    return ListCreativesRequest(
+        filters=structured_filters,
+        pagination=structured_pagination,
+        sort=structured_sort,
+        fields=fields,
+        include_assignments=include_assignments,
+        context=context,
+        format=format,
+        page=page,
+    )
 
 
 def _list_creatives_impl(

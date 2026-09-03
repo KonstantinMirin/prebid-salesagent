@@ -17,10 +17,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types import ContextObject
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import PackagePerformance, UpdatePerformanceIndexResponse
 from src.core.tool_context import ToolContext
+from tests.helpers import assert_construction_rejects, assert_envelope_shape
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -320,12 +321,14 @@ class TestHighRiskMCP:
         """
         identity = _make_identity()
 
-        with pytest.raises(AdCPValidationError) as exc_info:
-            _call_impl(
+        assert_construction_rejects(
+            lambda: _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1"}],  # missing performance_index
                 identity=identity,
-            )
+            ),
+            field="performance_index",
+        )
 
     # H7 ---------------------------------------------------------------
     def test_adapter_returns_false_status_failed(self):
@@ -364,29 +367,33 @@ class TestHighRiskA2A:
     # H8 ---------------------------------------------------------------
     @pytest.mark.asyncio
     async def test_a2a_validation_error_missing_params(self):
-        """H8: A2A handler raises typed AdCPValidationError when params are empty.
+        """H8: an empty A2A parameter bag comes back as INVALID_REQUEST naming media_buy_id.
 
         Covers: #30 T-UC-009-ext-b-rest
-        Identity is resolved at transport boundary so the handler receives it directly.
 
-        Skill handlers raise typed AdCPSalesAgentError on validation failure; the outer
-        dispatcher's _build_failed_skill_result produces the two-layer envelope
-        on the wire.
+        Driven through ``_handle_explicit_skill``, the A2A DISPATCHER, not through the
+        skill handler underneath it. The handler no longer opens a validation boundary of
+        its own -- the dispatcher normalizes every ValueError (a pydantic ValidationError
+        is one) through the shared ``adcp_error_for``, which is where A2A's answer is
+        actually decided. Calling the handler directly graded the wrapper that used to sit
+        inside it; calling the dispatcher grades the error the buyer receives.
         """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-        from src.core.exceptions import AdCPValidationError
+        from src.core.exceptions import AdCPSalesAgentError, build_two_layer_error_envelope
 
         handler = AdCPRequestHandler()
         mock_identity = _make_identity()
 
-        with pytest.raises(AdCPValidationError) as exc_info:
-            await handler._handle_update_performance_index_skill(
-                parameters={},
-                identity=mock_identity,
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
+            await handler._handle_explicit_skill(
+                "update_performance_index",
+                {},
+                mock_identity,
             )
 
-        assert exc_info.value.field == "media_buy_id"
-        assert exc_info.value.error_code == "INVALID_REQUEST"
+        envelope = build_two_layer_error_envelope(exc_info.value)
+        assert_envelope_shape(envelope, "INVALID_REQUEST", recovery="correctable")
+        assert envelope["adcp_error"]["field"] == "media_buy_id"
 
     # H9 ---------------------------------------------------------------
     @pytest.mark.asyncio
@@ -530,24 +537,28 @@ class TestErrorPaths:
         """E5: performance_data item missing product_id raises AdCPValidationError."""
         identity = _make_identity()
 
-        with pytest.raises(AdCPValidationError) as exc_info:
-            _call_impl(
+        assert_construction_rejects(
+            lambda: _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"performance_index": 1.0}],  # missing product_id
                 identity=identity,
-            )
+            ),
+            field="product_id",
+        )
 
     # E6 ---------------------------------------------------------------
     def test_validation_error_non_numeric_performance_index(self):
         """E6: Non-numeric performance_index raises AdCPValidationError."""
         identity = _make_identity()
 
-        with pytest.raises(AdCPValidationError):
-            _call_impl(
+        assert_construction_rejects(
+            lambda: _call_impl(
                 media_buy_id="mb_1",
                 performance_data=[{"product_id": "p1", "performance_index": "not_a_number"}],
                 identity=identity,
-            )
+            ),
+            field="performance_index",
+        )
 
 
 # ===========================================================================

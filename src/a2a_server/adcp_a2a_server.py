@@ -121,9 +121,6 @@ from src.core.tools.media_buy_delivery import (
     _build_get_media_buy_delivery_request,
     get_media_buy_delivery,
 )
-from src.core.validation_helpers import (
-    adcp_validation_boundary,
-)
 from src.core.version import get_version
 from src.core.webhook_validator import (
     webhook_url_for_log,
@@ -1797,8 +1794,7 @@ class AdCPRequestHandler(RequestHandler):
         # twenty-one fields the DTO declares.
         from src.core.tools.products import create_get_products_request, get_products
 
-        with adcp_validation_boundary(context="get_products request"):
-            req = create_get_products_request(**select_request_fields_for(get_products, parameters))
+        req = create_get_products_request(**select_request_fields_for(get_products, parameters))
         response = await core_get_products_tool(req=req, identity=identity)
 
         # Apply v2 compat for pre-3.0 clients at the boundary
@@ -1873,15 +1869,13 @@ class AdCPRequestHandler(RequestHandler):
         # the envelope builder and erases the real code on the buyer side.
         _require_params(params, ["brand", "packages", "start_time", "end_time"])
 
-        # Validate via the shared boundary so every A2A handler emits the same
-        # field + message + buyer-facing suggestion (AdCP POST-F3, #1417):
-        # idempotency_key_missing / duplicate_product_id rejections include a
-        # non-empty suggestion derived by adcp_validation_boundary.
+        # Validated for its rejection: a refusal here leaves the handler as a pydantic
+        # ValidationError and the dispatcher gives it the same field + message +
+        # buyer-facing suggestion every transport emits (AdCP POST-F3, #1417).
         # Validated for its rejection only: the values forwarded below are the wire values
         # (create_media_buy_raw re-validates them through this same model), so the model is
         # the boundary's gate rather than a container to pluck from.
-        with adcp_validation_boundary():
-            CreateMediaBuyRequest.model_validate(params)
+        CreateMediaBuyRequest.model_validate(params)
 
         # Call core function with validated parameters and identity.
         # Per AdCP 3.1.1 (media-buy/package-update.json) targeting_overlay and budgets live on each
@@ -1902,8 +1896,7 @@ class AdCPRequestHandler(RequestHandler):
         # CreateMediaBuyRequest), and to_account_reference is idempotent on an already
         # typed/dict account — but resolving at the boundary keeps all three handlers uniform.
         selected["account"] = to_account_reference(params.get("account"))
-        with adcp_validation_boundary(context="create_media_buy request"):
-            req = _build_create_media_buy_request(**selected)
+        req = _build_create_media_buy_request(**selected)
         response = await core_create_media_buy_tool(
             req=req,
             identity=identity,
@@ -1952,16 +1945,15 @@ class AdCPRequestHandler(RequestHandler):
         # leaves the request identical to the one MCP and REST build.
         from src.core.format_cache import upgrade_legacy_format_id
 
-        with adcp_validation_boundary(context="sync_creatives request"):
-            creatives = [
-                {**c, "format_id": upgrade_legacy_format_id(c["format_id"]).model_dump(mode="json")}
-                if isinstance(c, dict) and "format_id" in c
-                else c
-                for c in parameters["creatives"]
-            ]
+        creatives = [
+            {**c, "format_id": upgrade_legacy_format_id(c["format_id"]).model_dump(mode="json")}
+            if isinstance(c, dict) and "format_id" in c
+            else c
+            for c in parameters["creatives"]
+        ]
 
-            ctx_param = parameters.get("context")
-            context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param
+        ctx_param = parameters.get("context")
+        context = ContextObject(**ctx_param) if isinstance(ctx_param, dict) else ctx_param
 
         # Call core function with spec-compliant parameters (AdCP 2.5: full upsert
         # semantics, patch parameter removed).
@@ -1982,8 +1974,7 @@ class AdCPRequestHandler(RequestHandler):
         selected["creatives"] = creatives
         selected["context"] = context
         selected["account"] = to_account_reference(parameters.get("account"))
-        with adcp_validation_boundary(context="sync_creatives request"):
-            req = build_sync_creatives_request(**selected)
+        req = build_sync_creatives_request(**selected)
         response = core_sync_creatives_tool(req=req, identity=identity)
 
         return response
@@ -2012,8 +2003,7 @@ class AdCPRequestHandler(RequestHandler):
 
         selected = select_request_fields_for(list_creatives, parameters)
         selected["filters"] = filters
-        with adcp_validation_boundary(context="list_creatives request"):
-            req = _build_list_creatives_request(**selected)
+        req = _build_list_creatives_request(**selected)
         response = core_list_creatives_tool(req=req, identity=identity)
 
         return response
@@ -2041,12 +2031,11 @@ class AdCPRequestHandler(RequestHandler):
         # "1.0.0", which the envelope pattern rejects), but for THIS tool they are real
         # request data -- they drive version negotiation and the unsupported-version
         # advisory. Selecting alone would silently disable that negotiation.
-        with adcp_validation_boundary(context="get_adcp_capabilities request"):
-            req = build_get_adcp_capabilities_request(
-                **select_request_fields_for(get_adcp_capabilities, parameters),
-                adcp_version=parameters.get("adcp_version"),
-                adcp_major_version=parameters.get("adcp_major_version"),
-            )
+        req = build_get_adcp_capabilities_request(
+            **select_request_fields_for(get_adcp_capabilities, parameters),
+            adcp_version=parameters.get("adcp_version"),
+            adcp_major_version=parameters.get("adcp_major_version"),
+        )
         response = await get_adcp_capabilities_raw(req=req, identity=identity)
 
         return response
@@ -2061,13 +2050,10 @@ class AdCPRequestHandler(RequestHandler):
         # Build request from parameters (all optional).
         from src.core.tools.creative_formats import build_list_creative_formats_request, list_creative_formats
 
-        # Same context string as the REST route's boundary so buyer-invalid
-        # input produces a byte-identical envelope on every transport (klkg).
         # Selected off the TOOL rather than hand-listed: the 13-name list this
         # replaces already dropped ext, pagination, property_id and publisher_domain,
         # all of which ListCreativeFormatsRequest declares (a recorded gap Lane D).
-        with adcp_validation_boundary(context="list_creative_formats request"):
-            req = build_list_creative_formats_request(**select_request_fields_for(list_creative_formats, parameters))
+        req = build_list_creative_formats_request(**select_request_fields_for(list_creative_formats, parameters))
 
         # Call core function with identity
         response = core_list_creative_formats_tool(req=req, identity=identity)
@@ -2082,9 +2068,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         from src.core.tools.accounts import build_list_accounts_request, list_accounts
 
-        # Same context string as the REST route's boundary (klkg parity).
-        with adcp_validation_boundary(context="list_accounts request"):
-            request = build_list_accounts_request(**select_request_fields_for(list_accounts, parameters))
+        request = build_list_accounts_request(**select_request_fields_for(list_accounts, parameters))
         return core_list_accounts_tool(req=request, identity=identity)
 
     async def _handle_sync_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
@@ -2094,9 +2078,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         from src.core.tools.accounts import build_sync_accounts_request, sync_accounts
 
-        # Same context string as the REST route's boundary (klkg parity).
-        with adcp_validation_boundary(context="sync_accounts request"):
-            request = build_sync_accounts_request(**select_request_fields_for(sync_accounts, parameters))
+        request = build_sync_accounts_request(**select_request_fields_for(sync_accounts, parameters))
         return await core_sync_accounts_tool(req=request, identity=identity)
 
     async def _handle_list_authorized_properties_skill(
@@ -2122,15 +2104,13 @@ class AdCPRequestHandler(RequestHandler):
                 "This parameter was removed in AdCP 2.5 and will be ignored."
             )
 
-        # Same context string as the REST route's boundary (klkg parity).
-        with adcp_validation_boundary(context="list_authorized_properties request"):
-            request = ListAuthorizedPropertiesRequest.model_validate(
-                # accepted=None because this site builds the DTO itself rather than calling a
-                # narrower callee -- there is no signature to intersect with, so the DTO alone
-                # decides. Stated rather than defaulted into: the unnarrowed form is a real
-                # answer here, and making it explicit is what keeps it from being the easy one.
-                select_request_fields(ListAuthorizedPropertiesRequest, parameters, None)
-            )
+        request = ListAuthorizedPropertiesRequest.model_validate(
+            # accepted=None because this site builds the DTO itself rather than calling a
+            # narrower callee -- there is no signature to intersect with, so the DTO alone
+            # decides. Stated rather than defaulted into: the unnarrowed form is a real
+            # answer here, and making it explicit is what keeps it from being the easy one.
+            select_request_fields(ListAuthorizedPropertiesRequest, parameters, None)
+        )
 
         # Call core function with identity
         response = core_list_authorized_properties_tool(req=request, identity=identity)
@@ -2170,8 +2150,7 @@ class AdCPRequestHandler(RequestHandler):
         # validation gate, not from the request.
         validation_bag = select_request_fields(UpdateMediaBuyRequest, params, None)
         validation_bag.pop("packages", None)
-        with adcp_validation_boundary():
-            req = UpdateMediaBuyRequest.model_validate(validation_bag)
+        req = UpdateMediaBuyRequest.model_validate(validation_bag)
 
         # Selected off the TOOL rather than hand-listed. The
         # eight-name list this replaces silently dropped currency, daily_budget, ext,
@@ -2184,8 +2163,7 @@ class AdCPRequestHandler(RequestHandler):
 
         selected = select_request_fields_for(update_media_buy, params)
         selected["media_buy_id"] = req.media_buy_id or ""
-        with adcp_validation_boundary(context="update_media_buy request"):
-            built = _build_update_request(**selected)
+        built = _build_update_request(**selected)
         response = core_update_media_buy_tool(req=built, identity=identity)
 
         return response
@@ -2200,9 +2178,8 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.schemas import GetMediaBuysRequest
         from src.core.tools.media_buy_list import _build_get_media_buys_request, get_media_buys
 
-        with adcp_validation_boundary(context="get_media_buys request"):
-            GetMediaBuysRequest.model_validate(parameters)
-            req = _build_get_media_buys_request(**select_request_fields_for(get_media_buys, parameters))
+        GetMediaBuysRequest.model_validate(parameters)
+        req = _build_get_media_buys_request(**select_request_fields_for(get_media_buys, parameters))
         return core_get_media_buys_tool(req=req, identity=identity)
 
     async def _handle_get_media_buy_delivery_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
@@ -2235,14 +2212,13 @@ class AdCPRequestHandler(RequestHandler):
         # Deriving the field set makes that class of omission structurally impossible.
         # Raw values are forwarded for everything the builder coerces itself
         # (status_filter str→MediaBuyStatus, dates, the dimension/window objects).
-        with adcp_validation_boundary():
-            req = GetMediaBuyDeliveryRequest.model_validate(params)
-            selected = select_request_fields_for(get_media_buy_delivery, params)
-            # account is a typed AccountReference on GetMediaBuyDeliveryRequest (adcp SDK
-            # 5.7); forward the VALIDATED model field rather than the raw dict, because it
-            # reaches enrich_identity_with_account uncoerced (#1438).
-            selected["account"] = req.account
-            req = _build_get_media_buy_delivery_request(**selected)
+        req = GetMediaBuyDeliveryRequest.model_validate(params)
+        selected = select_request_fields_for(get_media_buy_delivery, params)
+        # account is a typed AccountReference on GetMediaBuyDeliveryRequest (adcp SDK
+        # 5.7); forward the VALIDATED model field rather than the raw dict, because it
+        # reaches enrich_identity_with_account uncoerced (#1438).
+        selected["account"] = req.account
+        req = _build_get_media_buy_delivery_request(**selected)
         response = core_get_media_buy_delivery_tool(req=req, identity=identity)
 
         return response
@@ -2258,15 +2234,8 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.schemas import UpdatePerformanceIndexRequest
         from src.core.tools.performance import _build_update_performance_index_request, update_performance_index
 
-        with adcp_validation_boundary(context="update_performance_index request"):
-            # Validated FIRST, for its rejection: the builder takes its required fields
-            # positionally, so a wire payload missing one would raise a bare TypeError
-            # instead of the typed error naming the field. The model is the gate; the
-            # builder is the seam.
-            UpdatePerformanceIndexRequest.model_validate(parameters)
-            req = _build_update_performance_index_request(
-                **select_request_fields_for(update_performance_index, parameters)
-            )
+        UpdatePerformanceIndexRequest.model_validate(parameters)
+        req = _build_update_performance_index_request(**select_request_fields_for(update_performance_index, parameters))
         return core_update_performance_index_tool(req=req, identity=identity)
 
     async def _get_products(self, query: str, identity: ResolvedIdentity | None) -> dict:
@@ -2291,8 +2260,7 @@ class AdCPRequestHandler(RequestHandler):
         from src.core.schemas.product import GetProductsRequest as _GetProductsRequest  # noqa: F401
         from src.core.tools.products import create_get_products_request
 
-        with adcp_validation_boundary(context="get_products request"):
-            req = create_get_products_request(brief=query)
+        req = create_get_products_request(brief=query)
         response = await core_get_products_tool(req=req, identity=identity)
 
         # Convert to A2A response format with v2.x backward compatibility

@@ -153,7 +153,6 @@ from src.core.schemas import (
 )
 from src.core.schemas._pinned_fields import revision_minimum
 from src.core.tools._mcp import mcp_result
-from src.core.validation_helpers import adcp_validation_boundary
 
 
 def _get_media_buys_impl(
@@ -424,22 +423,22 @@ def _build_get_media_buys_request(
 ) -> GetMediaBuysRequest:
     """Build a GetMediaBuysRequest from individual wire params.
 
-    Shared by the MCP wrapper and the A2A/REST raw wrapper so request
-    construction runs inside the ONE validation boundary — previously the raw
-    wrapper built the request unprotected and REST leaked a raw pydantic
-    ``ValidationError`` with no top-level suggestion (#1417).
+    Shared by the MCP wrapper and the A2A/REST raw wrapper so every transport
+    constructs the same request from the same payload. A ``ValidationError`` raised
+    here is not caught: each transport boundary converts it through the one
+    ``adcp_error_for`` mapping, which is what attaches the code, the field and the
+    top-level suggestion (#1417).
     """
-    with adcp_validation_boundary(context="get_media_buys request"):
-        return GetMediaBuysRequest(
-            media_buy_ids=media_buy_ids,
-            status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
-            account=account,
-            context=cast(ContextObject | None, context),
-            # A GetMediaBuysRequest field, so the BUILT request carries it. It used to
-            # travel as a separate parameter beside the request, which meant the model
-            # declared a field the built instance never held.
-            include_snapshot=include_snapshot,
-        )
+    return GetMediaBuysRequest(
+        media_buy_ids=media_buy_ids,
+        status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
+        account=account,
+        context=cast(ContextObject | None, context),
+        # A GetMediaBuysRequest field, so the BUILT request carries it. It used to
+        # travel as a separate parameter beside the request, which meant the model
+        # declared a field the built instance never held.
+        include_snapshot=include_snapshot,
+    )
 
 
 async def get_media_buys(

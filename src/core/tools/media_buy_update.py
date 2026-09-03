@@ -109,7 +109,7 @@ from src.core.tools.financial_validation import (
 )
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.utils import utc_flight_start
-from src.core.validation_helpers import adcp_validation_boundary, package_field_path
+from src.core.validation_helpers import package_field_path
 from src.services.targeting_capabilities import (
     collect_targeting_violations,
     property_list_unsupported_advisories,
@@ -1037,28 +1037,26 @@ def _update_media_buy_impl(
                         # No request_hash is passed -- there is no transmission here to
                         # canonicalise -- which is what keeps the borrowed key out of the
                         # shared (agent, account, key) cache scope.
-                        # INSIDE the validation boundary, exactly as the a2a and rest routes
-                        # wrap their own call to this builder: a buyer's malformed inline
-                        # creative must come back as a typed AdCP error naming their field,
-                        # not as a raw pydantic message escaping the tool.
-                        with adcp_validation_boundary(context="sync_creatives request"):
-                            sync_req = build_sync_creatives_request(
-                                creatives=pkg_update.creatives,
-                                account=req.account,
-                                idempotency_key=req.idempotency_key,
-                                context=req.context,
-                                # The typed Assignment the request model declares, not the
-                                # {creative_id: [package_id]} map this used to build. That
-                                # map was a second, internal-only spelling of the same
-                                # relation, and it forced _sync_creatives_impl to accept a
-                                # dict as well as the spec's list -- so the one internal
-                                # caller widened the type for every transport.
-                                assignments=[
-                                    Assignment(creative_id=c.creative_id, package_id=pkg_update.package_id)
-                                    for c in pkg_update.creatives
-                                    if c.creative_id
-                                ],
-                            )
+                        # A buyer's malformed inline creative raises here and travels
+                        # untouched to the transport boundary, which names their field --
+                        # nothing between this frame and that one may reclassify it.
+                        sync_req = build_sync_creatives_request(
+                            creatives=pkg_update.creatives,
+                            account=req.account,
+                            idempotency_key=req.idempotency_key,
+                            context=req.context,
+                            # The typed Assignment the request model declares, not the
+                            # {creative_id: [package_id]} map this used to build. That
+                            # map was a second, internal-only spelling of the same
+                            # relation, and it forced _sync_creatives_impl to accept a
+                            # dict as well as the spec's list -- so the one internal
+                            # caller widened the type for every transport.
+                            assignments=[
+                                Assignment(creative_id=c.creative_id, package_id=pkg_update.package_id)
+                                for c in pkg_update.creatives
+                                if c.creative_id
+                            ],
+                        )
                         sync_response = _sync_creatives_impl(
                             req=sync_req,
                             identity=identity,
@@ -1498,8 +1496,7 @@ def _build_update_request(
     if revision is not None:
         request_params["revision"] = revision
 
-    with adcp_validation_boundary(context="update_media_buy request"):
-        req = UpdateMediaBuyRequest(**request_params)
+    req = UpdateMediaBuyRequest(**request_params)
 
     # BR-RULE-022: reject empty updates (no updatable fields beyond identifier).
     # This is a SEMANTIC rejection of a schema-valid request (update fields are all

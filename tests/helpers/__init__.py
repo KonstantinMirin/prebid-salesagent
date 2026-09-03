@@ -98,6 +98,7 @@ _LAZY_EXPORTS: dict[str, str] = {
     "make_active_cached_success": "tests.helpers.idempotency_seeds",
     "rendered_log_calls": "tests.helpers.log_assertions",
     "seed_cached_success": "tests.helpers.idempotency_seeds",
+    "assert_construction_rejects": "tests.helpers.construction_assertions",
     "seed_media_buy": "tests.helpers.idempotency_seeds",
     "seed_principal": "tests.helpers.idempotency_seeds",
 }
@@ -123,6 +124,8 @@ __all__ = [
     "assert_resolve_auth_dep_passes_token",
     # Backoff schedule assertions
     "assert_backoff_schedule",
+    # In-process request-construction assertions
+    "assert_construction_rejects",
     # Envelope assertions
     "assert_envelope_shape",
     "locate_envelope_error",

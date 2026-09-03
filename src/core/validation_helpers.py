@@ -37,17 +37,31 @@ def adcp_validation_boundary(
     field: str | None = None,
     field_prefix: str | None = None,
 ) -> Iterator[None]:
-    """Translate a Pydantic ``ValidationError`` into a typed ``AdCPValidationError``.
+    """Requalify the FIELD a Pydantic ``ValidationError`` reports, then translate it.
 
-    Transport wrappers and skill handlers validate buyer parameters at the
-    boundary. A raw ``ValidationError`` leaking from ``model_validate`` (or a
-    typed-model constructor) would surface as an untyped error — and the outer
-    dispatcher only builds the two-layer error envelope for ``AdCPSalesAgentError``
-    subclasses, so the buyer would lose the real code/recovery.
+    NOT a translation seam. ``adcp_error_for`` is, and every transport boundary
+    already calls it: MCP through ``_translate_to_tool_error``, A2A through its skill
+    dispatcher, REST through ``@app.exception_handler(ValueError)`` (a pydantic
+    ``ValidationError`` IS a ``ValueError``). A ``ValidationError`` raised anywhere
+    inside a handler therefore reaches the buyer as INVALID_REQUEST with ``field``
+    and ``issues`` with no wrapper involved — measured on all three transports,
+    graded by ``tests/unit/test_validation_error_at_the_boundary.py``.
 
-    This is ERGONOMICS over ``adcp_error_for``, not a second translation: wrapping
-    a block is a different job from converting an exception already in hand, and
-    both produce the identical error. There is ONE mapping.
+    Which is why this used to wrap 48 sites and now wraps 2. Forty-six of them passed
+    NO arguments, and a bare block is exactly ``raise adcp_error_for(e, field=None)``
+    — the same call the boundary makes one frame later, off the same exception, with
+    the same result. Deleting them changed no envelope on any transport. The RULE is:
+    populate the DTO, validate, let it throw.
+
+    The two survivors are the two that are not bare, and both do the one job a
+    later frame genuinely cannot do — name the field of the document the BUYER sent.
+    A model coerced OUTSIDE its parent request has lost that context by the time the
+    error is in hand: pydantic's ``loc`` starts at the coerced model's own root, so
+    ``to_push_notification_config`` would report ``authentication.schemes[0]`` and
+    ``to_brand_reference`` would report ``domain`` — neither of which is a path into
+    what the buyer sent. Coercing the same value AS A DTO FIELD needs no wrapper (the
+    loc carries the field), so the honest end state for these two is to stop coercing
+    ahead of construction rather than to keep a wrapper. That move is not done.
 
     ``context`` names what was invalid in the message (e.g. ``"get_products
     request"``); the default renders the ``Invalid parameters`` prefix existing

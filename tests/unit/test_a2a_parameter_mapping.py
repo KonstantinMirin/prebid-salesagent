@@ -17,6 +17,7 @@ from adcp.types import AccountReference as LibraryAccountReference
 
 from src.core.schemas import GetMediaBuyDeliveryRequest
 from tests.factories.principal import PrincipalFactory
+from tests.helpers import assert_envelope_shape
 from tests.utils.a2a_helpers import assert_delivery_forwarded_account
 
 _MOCK_IDENTITY = PrincipalFactory.make_identity(
@@ -278,25 +279,34 @@ class TestA2AParameterMapping:
             assert_delivery_forwarded_account(mock_delivery, expected)
 
     def test_get_media_buy_delivery_rejects_malformed_account(self):
-        """Malformed account should fail validation and not call the core tool."""
+        """Malformed account should fail validation and not call the core tool.
+
+        Driven through ``_handle_explicit_skill``, the A2A DISPATCHER, rather than through
+        the skill handler under it. The handler no longer wraps its request construction in
+        a validation boundary; the dispatcher normalizes the escaping pydantic error
+        through the shared ``adcp_error_for``, so the dispatcher is where A2A's answer to a
+        malformed account is decided, and the envelope is asserted there.
+        """
+        import asyncio
+
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-        from src.core.exceptions import AdCPValidationError
+        from src.core.exceptions import AdCPSalesAgentError, build_two_layer_error_envelope
 
         handler = AdCPRequestHandler()
 
         with patch("src.a2a_server.adcp_a2a_server.core_get_media_buy_delivery_tool") as mock_delivery:
-            parameters = {"account": {}}
-
-            import asyncio
-
-            with pytest.raises(AdCPValidationError):
+            with pytest.raises(AdCPSalesAgentError) as exc_info:
                 asyncio.run(
-                    handler._handle_get_media_buy_delivery_skill(
-                        parameters=parameters,
-                        identity=_MOCK_IDENTITY,
+                    handler._handle_explicit_skill(
+                        "get_media_buy_delivery",
+                        {"account": {}},
+                        _MOCK_IDENTITY,
                     )
                 )
 
+            assert_envelope_shape(
+                build_two_layer_error_envelope(exc_info.value), "INVALID_REQUEST", recovery="correctable"
+            )
             mock_delivery.assert_not_called()
 
     def test_create_media_buy_validates_required_adcp_parameters(self):

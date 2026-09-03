@@ -3,9 +3,9 @@
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from src.core.exceptions import AdCPValidationError
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.validation_helpers import first_validation_error_field, format_validation_error
+from tests.helpers import assert_construction_rejects
 
 
 def test_first_validation_error_field_uses_bracket_notation():
@@ -44,8 +44,8 @@ def test_create_media_buy_boundary_validation_names_the_offending_field():
     """
     from src.core.tools.media_buy_create import _build_create_media_buy_request
 
-    with pytest.raises(AdCPValidationError) as exc_info:
-        _build_create_media_buy_request(
+    assert_construction_rejects(
+        lambda: _build_create_media_buy_request(
             brand={"domain": "wiretest.example"},
             packages=None,
             start_time=None,
@@ -57,10 +57,9 @@ def test_create_media_buy_boundary_validation_names_the_offending_field():
             account=None,
             idempotency_key=None,
             paused=None,
-        )
-
-    error = exc_info.value
-    assert error.field == "idempotency_key"
+        ),
+        field="idempotency_key",
+    )
 
 
 def test_brand_target_audience_must_be_string():

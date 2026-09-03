@@ -72,7 +72,6 @@ from src.core.schemas.capability_declarations import (
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
-from src.core.validation_helpers import adcp_validation_boundary
 from src.core.version_negotiation import negotiate_adcp_version
 from src.services.targeting_capabilities import supports_property_list_filtering
 
@@ -651,14 +650,13 @@ async def get_adcp_capabilities(
     """
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
-    with adcp_validation_boundary(context="get_adcp_capabilities request"):
-        req = build_get_adcp_capabilities_request(
-            protocols=protocols,
-            context=context,
-            adcp_version=adcp_version,
-            adcp_major_version=adcp_major_version,
-            ext=ext,
-        )
+    req = build_get_adcp_capabilities_request(
+        protocols=protocols,
+        context=context,
+        adcp_version=adcp_version,
+        adcp_major_version=adcp_major_version,
+        ext=ext,
+    )
 
     # Call shared implementation
     response = _get_adcp_capabilities_impl(req, identity)

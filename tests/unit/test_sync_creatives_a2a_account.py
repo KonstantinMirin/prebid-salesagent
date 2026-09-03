@@ -10,9 +10,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 from adcp.types import AccountReference as LibraryAccountReference
 
-from src.core.exceptions import AdCPSalesAgentError, AdCPValidationError
+from src.core.exceptions import AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import to_account_reference
+from tests.helpers import assert_construction_rejects
 
 _MOCK_IDENTITY = ResolvedIdentity(
     principal_id="principal_123",
@@ -113,9 +114,23 @@ class TestSyncCreativesAccountCoercion:
         only because the builder never ran under the patched wrapper. `account` is in
         /required on sync-creatives-request.json, so a request without one is not
         constructible, and forwarding a None was the permissive behavior the spec removed.
+
+        Graded on the field PATH rather than the exception class. The skill handler is
+        BELOW the A2A boundary: it no longer opens a validation boundary of its own, so
+        what leaves it is the pydantic rejection, and the dispatcher above it derives the
+        typed error -- from the same exception, by the same call, so the path is the same
+        either way.
+
+        The pinned path carries a UNION-MEMBER name the buyer never sent:
+        ``AccountReference`` is a union, and pydantic reports the first member's failure,
+        so ``first_validation_error_field`` renders ``account.AccountReference1``. That is
+        this codebase's answer today on every transport -- it is what the deleted wrapper
+        produced too, since a bare boundary derived the identical path -- so it is pinned
+        as measured rather than asserted as it ought to read. A field path is meant to
+        point into the document the buyer SENT; that it names a schema construct instead
+        is a real wart on the wire and is worth its own fix.
         """
-        with pytest.raises(AdCPSalesAgentError):
-            self._call_handler_with_account(None)
+        assert_construction_rejects(lambda: self._call_handler_with_account(None), field="account.AccountReference1")
 
     def test_already_typed_account_passes_through(self):
         """An already-validated AccountReference is forwarded by identity, not re-validated."""

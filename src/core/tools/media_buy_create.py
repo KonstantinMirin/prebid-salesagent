@@ -180,7 +180,6 @@ from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, reso
 # Import get_product_catalog from main (after refactor)
 from src.core.validation_helpers import (
     PACKAGES_FIELD,
-    adcp_validation_boundary,
     format_validation_error,
     package_field_path,
 )
@@ -4573,28 +4572,27 @@ def _build_create_media_buy_request(
     A2A, and REST share one funnel.
     """
     # brand string/dict/URL shorthand is normalized via ``to_brand_reference``
-    # (#1537). The validation boundary (#1417) is the SINGLE translation point:
-    # it turns a Pydantic ValidationError into a typed AdCPValidationError
-    # carrying the field path + suggestion.
-    with adcp_validation_boundary(context="request"):
-        return CreateMediaBuyRequest(
-            push_notification_config=push_notification_config,
-            brand=to_brand_reference(brand),
-            packages=packages,
-            start_time=start_time,
-            end_time=end_time,
-            po_number=po_number,
-            reporting_webhook=reporting_webhook,
-            context=context,
-            ext=ext,
-            account=account,
-            paused=paused,
-            # Omit-when-absent so a missing key rejects as "Field required",
-            # emitted as VALIDATION_ERROR (the 3.0.1 conformance storyboard
-            # accepts it; the spec prose prefers INVALID_REQUEST) — not as a
-            # None type error.
-            **({"idempotency_key": idempotency_key} if idempotency_key is not None else {}),
-        )
+    # (#1537). Everything else is left to raise: ``adcp_error_for`` at the transport
+    # boundary is the SINGLE translation point (#1417), turning a Pydantic
+    # ValidationError into a typed error carrying the field path + suggestion.
+    return CreateMediaBuyRequest(
+        push_notification_config=push_notification_config,
+        brand=to_brand_reference(brand),
+        packages=packages,
+        start_time=start_time,
+        end_time=end_time,
+        po_number=po_number,
+        reporting_webhook=reporting_webhook,
+        context=context,
+        ext=ext,
+        account=account,
+        paused=paused,
+        # Omit-when-absent so a missing key rejects as "Field required",
+        # emitted as VALIDATION_ERROR (the 3.0.1 conformance storyboard
+        # accepts it; the spec prose prefers INVALID_REQUEST) — not as a
+        # None type error.
+        **({"idempotency_key": idempotency_key} if idempotency_key is not None else {}),
+    )
 
 
 async def create_media_buy(

@@ -10,9 +10,9 @@ Covers:
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
-from src.core.exceptions import AdCPInvalidRequestError
-from src.core.validation_helpers import adcp_validation_boundary
+from src.core.exceptions import first_validation_error_field
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness import (
     CreativeFormatsEnv,
@@ -49,23 +49,27 @@ class TestMissingFormatIdRejectedAtTheRequestBoundary:
         layer that states it moved, and it moved to the layer a real buyer actually hits --
         no transport could ever have delivered the payload the old assertion described.
         """
-        with pytest.raises(AdCPInvalidRequestError) as exc_info:
-            with adcp_validation_boundary(context="sync_creatives request"):
-                sync_creatives_request(
-                    creatives=[
-                        {
-                            "creative_id": "c_no_format",
-                            "name": "Missing Format Creative",
-                            # format_id intentionally omitted
-                            "assets": build_assets(image_spec("banner")),
-                        }
-                    ],
-                )
+        # Graded on the pydantic rejection and the FIELD PATH production derives from it.
+        # This used to open adcp_validation_boundary itself to reproduce what the transports
+        # did; they no longer do, so the wrapper simulated a frame that is gone. The typed
+        # error and its code are produced at the transport boundary and graded there
+        # (tests/unit/test_validation_error_at_the_boundary.py).
+        with pytest.raises(ValidationError) as exc_info:
+            sync_creatives_request(
+                creatives=[
+                    {
+                        "creative_id": "c_no_format",
+                        "name": "Missing Format Creative",
+                        # format_id intentionally omitted
+                        "assets": build_assets(image_spec("banner")),
+                    }
+                ],
+            )
 
         assert exc_info.value.error_code == "INVALID_REQUEST"
         # WHICH field was rejected is graded on the structured `field` pointer, not on the
         # sentence — the sentence is a CODE_TABLE function of the code and cannot name it.
-        assert exc_info.value.field == "format_id"
+        assert first_validation_error_field(exc_info.value) == "format_id"
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from tests.factories import PrincipalFactory
 from tests.factories.creative_asset import build_assets, image_spec, make_creative_asset_minimal
+from tests.helpers import assert_construction_rejects
 from tests.helpers.creative_test_helpers import (
     make_creative_dict as _make_creative_dict,
 )
@@ -661,7 +662,6 @@ class TestListingEdgeCases:
         """
         from pydantic import ValidationError
 
-        from src.core.exceptions import AdCPValidationError
         from src.core.tools.creatives.listing import _build_list_creatives_request
 
         ve = ValidationError.from_exception_data(
@@ -676,11 +676,8 @@ class TestListingEdgeCases:
             ],
         )
 
-        with (
-            patch("src.core.tools.creatives.listing.ListCreativesRequest", side_effect=ve),
-            pytest.raises(AdCPValidationError),
-        ):
-            _build_list_creatives_request()
+        with patch("src.core.tools.creatives.listing.ListCreativesRequest", side_effect=ve):
+            assert_construction_rejects(_build_list_creatives_request, field="filters")
 
 
 # ===========================================================================

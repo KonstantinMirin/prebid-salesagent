@@ -27,7 +27,6 @@ from src.core.schemas import (
 from src.core.tools._mcp import mcp_result
 from src.core.tools.media_buy_update import _verify_principal
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
-from src.core.validation_helpers import adcp_validation_boundary
 
 
 def _build_update_performance_index_request(
@@ -50,11 +49,10 @@ def _build_update_performance_index_request(
     since a type mismatch is a bug and not something to record, but the deletion only settled
     the entry that had a test.
     """
-    with adcp_validation_boundary(context="update_performance_index request"):
-        performance_objects = [ProductPerformance.model_validate(perf) for perf in performance_data]
-        return UpdatePerformanceIndexRequest(
-            media_buy_id=media_buy_id, performance_data=performance_objects, context=context
-        )
+    performance_objects = [ProductPerformance.model_validate(perf) for perf in performance_data]
+    return UpdatePerformanceIndexRequest(
+        media_buy_id=media_buy_id, performance_data=performance_objects, context=context
+    )
 
 
 def _update_performance_index_impl(

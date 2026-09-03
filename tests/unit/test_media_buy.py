@@ -32,6 +32,7 @@ from src.core.exceptions import (
     AdCPConfigurationError,
     AdCPContextNotFoundError,
     AdCPCreativeRejectedError,
+    AdCPInvalidRequestError,
     AdCPProductNotFoundError,
     AdCPValidationError,
 )
@@ -2058,10 +2059,20 @@ class TestUpdateMediaBuyMainFlow:
         """
         from src.core.tools.media_buy_update import _build_update_request
 
-        # Update with only the identifier and nothing to change
-        with pytest.raises(AdCPValidationError) as _ei:
-            _build_update_request(media_buy_id="mb_empty")
-        # The identifier is STRUCTURED now: details/field, not prose.
+        # account and idempotency_key are supplied because UpdateMediaBuyRequest REQUIRES
+        # them. Without them the request never validated, so this test used to be graded on
+        # a missing-required-field rejection and never reached BR-RULE-022 at all -- it
+        # passed on the right exception class for the wrong reason. It now reaches the rule.
+        with pytest.raises(AdCPInvalidRequestError) as exc_info:
+            _build_update_request(
+                media_buy_id="mb_empty",
+                account={"account_id": "acct_1"},
+                idempotency_key="idem_empty_update",
+            )
+
+        # INVALID_REQUEST, not VALIDATION_ERROR: a schema-VALID request refused by a
+        # business rule (every update field is optional per update-media-buy-request.json).
+        assert exc_info.value.error_code == "INVALID_REQUEST"
 
 
 class TestUpdateMediaBuyPauseResume:

@@ -52,7 +52,6 @@ from src.core.tools import products as products_module
 from src.core.tools import properties as properties_module
 from src.core.tools.creatives import listing as creatives_listing_module
 from src.core.tools.creatives import sync_wrappers as creatives_sync_module
-from src.core.validation_helpers import adcp_validation_boundary
 from src.core.version_compat import apply_version_compat
 from src.routes._derived_body import DerivedBodyEnvelope, derived_body_model_for, derived_payload
 
@@ -340,14 +339,7 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
     ``ToolError`` propagates to the global handler in ``src.app`` for envelope
     translation; no defensive catch needed here.
     """
-    with adcp_validation_boundary(context="get_products request"):
-        # The body's OWN derivation, read off the body: GetProductsRequest fields INTERSECT
-        # the builder's parameters. The narrowing to the builder is what matters -- the model
-        # declares 13 fields this builder does not take (catalog, refine, pagination, ...),
-        # and handing it those would turn a key that is ignored today into a TypeError, a 500
-        # on a spec-conformant payload -- but it is the same narrowing GetProductsBody was
-        # generated with, so the route no longer states it a second time.
-        req = products_module.create_get_products_request(**derived_payload(body))
+    req = products_module.create_get_products_request(**derived_payload(body))
     # Through the raw wrapper like the other transports, not straight into _impl: an
     # explicit identity=None is passed through unchanged, so the auth-optional path is
     # preserved while the call shape stays the one shape.
@@ -361,11 +353,8 @@ async def get_adcp_capabilities(identity: ResolvedIdentity | None = resolve_auth
     """Get AdCP capabilities (auth-optional discovery skill)."""
     # Parameterless, but still built through the shared builder: the wrapper takes a
     # request, and an empty one is what "no filters" means. Calling with no request at all
-    # is the shape that made this route the odd one out. The boundary wraps it even though
-    # there is no buyer input to reject -- the rule is uniform per route, so a later
-    # argument added here cannot quietly escape it.
-    with adcp_validation_boundary(context="get_adcp_capabilities request"):
-        req = capabilities_module.build_get_adcp_capabilities_request()
+    # is the shape that made this route the odd one out.
+    req = capabilities_module.build_get_adcp_capabilities_request()
     response = await capabilities_module.get_adcp_capabilities_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
@@ -388,12 +377,11 @@ async def post_capabilities(body: GetAdcpCapabilitiesBody, identity: ResolvedIde
     # Version pair forwarded explicitly -- see the A2A handler's note: the selector strips
     # the version-envelope fields by design, but this tool negotiates on them.
     builder = capabilities_module.build_get_adcp_capabilities_request
-    with adcp_validation_boundary(context="get_adcp_capabilities request"):
-        req = builder(
-            **derived_payload(body),
-            adcp_version=body.adcp_version,
-            adcp_major_version=body.adcp_major_version,
-        )
+    req = builder(
+        **derived_payload(body),
+        adcp_version=body.adcp_version,
+        adcp_major_version=body.adcp_major_version,
+    )
     response = await capabilities_module.get_adcp_capabilities_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
@@ -405,9 +393,8 @@ async def list_creative_formats(body: ListCreativeFormatsBody, identity: Resolve
     # the same call A2A's _handle_list_creative_formats_skill makes, so the two transports
     # cannot construct different requests from the same payload.
     builder = creative_formats_module.build_list_creative_formats_request
-    with adcp_validation_boundary(context="list_creative_formats request"):
-        selected = derived_payload(body)
-        req = builder(**selected) if selected else None
+    selected = derived_payload(body)
+    req = builder(**selected) if selected else None
 
     response = creative_formats_module.list_creative_formats_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
@@ -421,9 +408,8 @@ async def list_authorized_properties(
     # Through the shared builder the MCP wrapper also calls -- see
     # build_list_authorized_properties_request.
     builder = properties_module.build_list_authorized_properties_request
-    with adcp_validation_boundary(context="list_authorized_properties request"):
-        selected = derived_payload(body)
-        req = builder(**selected) if selected else None
+    selected = derived_payload(body)
+    req = builder(**selected) if selected else None
 
     response = properties_module.list_authorized_properties_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
@@ -466,37 +452,36 @@ async def create_media_buy(
     Per AdCP 3.1.1 (media-buy/package-request.json) per-package fields (budget, product_id,
     targeting_overlay, creatives, pacing, daily_budget) live inside packages[].
     """
-    # Coerce wire dicts to the SDK types the raw wrapper declares, inside the
-    # shared boundary so a malformed object rejects with the two-layer envelope
-    # (top-level suggestion + field) instead of a raw-ValidationError leak.
-    # The string/dict brand shorthand (#1324/#1537) is coerced here too, so an
-    # invalid brand yields the same boundary-translated envelope.
-    with adcp_validation_boundary(context="create_media_buy request"):
-        account_ref = to_account_reference(body.account)
-        brand_ref = to_brand_reference(body.brand)
-        reporting_webhook = to_reporting_webhook(body.reporting_webhook)
-        push_notification_config = to_push_notification_config(body.push_notification_config)
-        context = to_context_object(body.context)
+    # Coerce wire dicts to the SDK types the raw wrapper declares. A malformed object
+    # raises, and the TRANSPORT boundary -- @app.exception_handler(ValueError) in src/app.py,
+    # which a pydantic ValidationError reaches because it IS a ValueError -- turns it into
+    # the two-layer envelope with field and issues. The string/dict brand shorthand
+    # (#1324/#1537) is coerced here too and lands the same way.
+    account_ref = to_account_reference(body.account)
+    brand_ref = to_brand_reference(body.brand)
+    reporting_webhook = to_reporting_webhook(body.reporting_webhook)
+    push_notification_config = to_push_notification_config(body.push_notification_config)
+    context = to_context_object(body.context)
 
-        # Built through the SHARED builder, then handed over -- the same two steps A2A and
-        # MCP take. INSIDE the boundary so a buyer-invalid payload surfaces as an envelope
-        # with a suggestion rather than a raw pydantic message.
-        req = media_buy_create_module._build_create_media_buy_request(
-            brand=brand_ref,
-            # packages stay wire dicts: CreateMediaBuyRequest validates them as the
-            # request's packages[] field, preserving full-request error field paths.
-            packages=body.packages,
-            start_time=body.start_time,
-            end_time=body.end_time,
-            po_number=body.po_number,
-            account=account_ref,
-            reporting_webhook=reporting_webhook,
-            context=context,
-            ext=body.ext,
-            idempotency_key=body.idempotency_key,
-            paused=body.paused,
-            push_notification_config=push_notification_config,
-        )
+    # Built through the SHARED builder, then handed over -- the same two steps A2A and
+    # MCP take. Unwrapped: a buyer-invalid payload raises here and the transport boundary
+    # names the error from the exception class.
+    req = media_buy_create_module._build_create_media_buy_request(
+        brand=brand_ref,
+        # packages stay wire dicts: CreateMediaBuyRequest validates them as the
+        # request's packages[] field, preserving full-request error field paths.
+        packages=body.packages,
+        start_time=body.start_time,
+        end_time=body.end_time,
+        po_number=body.po_number,
+        account=account_ref,
+        reporting_webhook=reporting_webhook,
+        context=context,
+        ext=body.ext,
+        idempotency_key=body.idempotency_key,
+        paused=body.paused,
+        push_notification_config=push_notification_config,
+    )
     response = await media_buy_create_module.create_media_buy_raw(
         req=req,
         identity=identity,
@@ -508,12 +493,11 @@ async def create_media_buy(
 @router.put("/media-buys/{media_buy_id}")
 async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity: ResolvedIdentity = require_auth):
     """Update an existing media buy (auth required)."""
-    # Same context string as _build_update_request's boundary, so a malformed
-    # object rejects with an identical message prefix wherever it validates.
-    with adcp_validation_boundary(context="update_media_buy request"):
-        push_notification_config = to_push_notification_config(body.push_notification_config)
-        context = to_context_object(body.context)
-        reporting_webhook = to_reporting_webhook(body.reporting_webhook)
+    # Coerced before the builder, so a malformed object raises here; the transport
+    # boundary gives it the same envelope it would get from anywhere else in this route.
+    push_notification_config = to_push_notification_config(body.push_notification_config)
+    context = to_context_object(body.context)
+    reporting_webhook = to_reporting_webhook(body.reporting_webhook)
     # Built through the SHARED builder, then handed over -- the same two steps A2A and
     # MCP take. media_buy_id comes from the PATH, not the body.
     req = media_buy_update_module._build_update_request(
@@ -547,8 +531,7 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
     # Builds through the shared builder and hands the request over. The account
     # enrichment this route used to perform inline now happens once, inside
     # get_media_buy_delivery_raw, off req.account.
-    with adcp_validation_boundary(context="get_media_buy_delivery request"):
-        account_ref = to_account_reference(body.account) if body.account is not None else None
+    account_ref = to_account_reference(body.account) if body.account is not None else None
     req = media_buy_delivery_module._build_get_media_buy_delivery_request(
         media_buy_ids=body.media_buy_ids,
         status_filter=body.status_filter,
@@ -589,8 +572,7 @@ async def get_media_buys(body: GetMediaBuysBody, identity: ResolvedIdentity = re
     # came back, which is the coverage this route exists to restore.
     account_ref = None
     if body.account is not None:
-        with adcp_validation_boundary(context="get_media_buys request"):
-            account_ref = to_account_reference(body.account)
+        account_ref = to_account_reference(body.account)
 
     # Built through the SHARED builder, then handed over as the request -- the same two
     # steps a2a and mcp take, instead of this route re-listing the DTO's fields.
@@ -611,36 +593,35 @@ async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = r
     # Coerce the raw account dict into an AccountReference so sync_creatives_raw
     # resolves it at the transport boundary (mirror create_media_buy / the sibling
     # handlers above — #1417).
-    with adcp_validation_boundary(context="sync_creatives request"):
-        account_ref = to_account_reference(body.account)
-        push_notification_config = to_push_notification_config(body.push_notification_config)
-        context = to_context_object(body.context)
+    account_ref = to_account_reference(body.account)
+    push_notification_config = to_push_notification_config(body.push_notification_config)
+    context = to_context_object(body.context)
 
-        # Built through the SHARED builder, then handed over -- the same two steps A2A and
-        # MCP take. account rides ON the request, and the wrapper enriches identity off
-        # req.account. INSIDE the boundary: a buyer-invalid payload must surface as an
-        # envelope with a suggestion, not a raw pydantic message.
-        req = creatives_sync_module.build_sync_creatives_request(
-            # creatives stay wire dicts: _sync_creatives_impl validates each entry
-            # individually (partial-success semantics with per-creative results).
-            creatives=body.creatives,
-            assignments=body.assignments,
-            creative_ids=body.creative_ids,
-            delete_missing=body.delete_missing,
-            dry_run=body.dry_run,
-            validation_mode=body.validation_mode,
-            push_notification_config=push_notification_config,
-            context=context,
-            account=account_ref,
-            # The buyer's key was NOT forwarded here. SyncCreativesBody carries it and
-            # sync-creatives-request.json lists it in /required, but the route omitted it from
-            # this call, so a REST buyer's key was discarded before anything looked at it --
-            # while mcp and a2a both forward it. What that costs today is the shape check:
-            # _sync_creatives_impl runs validate_idempotency_key_shape, so a malformed key was
-            # rejected on mcp and a2a and silently accepted on REST. It does NOT yet buy replay:
-            # sync_creatives, unlike create_media_buy, does not implement one.
-            idempotency_key=body.idempotency_key,
-        )
+    # Built through the SHARED builder, then handed over -- the same two steps A2A and
+    # MCP take. account rides ON the request, and the wrapper enriches identity off
+    # req.account. Unwrapped: a buyer-invalid payload raises and the transport boundary
+    # names the error from the exception class.
+    req = creatives_sync_module.build_sync_creatives_request(
+        # creatives stay wire dicts: _sync_creatives_impl validates each entry
+        # individually (partial-success semantics with per-creative results).
+        creatives=body.creatives,
+        assignments=body.assignments,
+        creative_ids=body.creative_ids,
+        delete_missing=body.delete_missing,
+        dry_run=body.dry_run,
+        validation_mode=body.validation_mode,
+        push_notification_config=push_notification_config,
+        context=context,
+        account=account_ref,
+        # The buyer's key was NOT forwarded here. SyncCreativesBody carries it and
+        # sync-creatives-request.json lists it in /required, but the route omitted it from
+        # this call, so a REST buyer's key was discarded before anything looked at it --
+        # while mcp and a2a both forward it. What that costs today is the shape check:
+        # _sync_creatives_impl runs validate_idempotency_key_shape, so a malformed key was
+        # rejected on mcp and a2a and silently accepted on REST. It does NOT yet buy replay:
+        # sync_creatives, unlike create_media_buy, does not implement one.
+        idempotency_key=body.idempotency_key,
+    )
     response = creatives_sync_module.sync_creatives_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
@@ -662,8 +643,7 @@ async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = r
     builder = creatives_listing_module._build_list_creatives_request
     selected = derived_payload(body)
     selected["filters"] = filters
-    with adcp_validation_boundary(context="list_creatives request"):
-        req = builder(**selected)
+    req = builder(**selected)
     response = creatives_listing_module.list_creatives_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
@@ -690,8 +670,7 @@ async def list_accounts(body: ListAccountsBody, identity: ResolvedIdentity = req
     """List accounts accessible to the authenticated agent (auth required)."""
     from src.core.tools.accounts import build_list_accounts_request
 
-    with adcp_validation_boundary(context="list_accounts request"):
-        req = build_list_accounts_request(**derived_payload(body))
+    req = build_list_accounts_request(**derived_payload(body))
     response = accounts_module.list_accounts_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
 
@@ -701,7 +680,6 @@ async def sync_accounts(body: SyncAccountsBody, identity: ResolvedIdentity = req
     """Sync accounts by natural key (auth required)."""
     from src.core.tools.accounts import build_sync_accounts_request
 
-    with adcp_validation_boundary(context="sync_accounts request"):
-        req = build_sync_accounts_request(**derived_payload(body))
+    req = build_sync_accounts_request(**derived_payload(body))
     response = await accounts_module.sync_accounts_raw(req=req, identity=identity)
     return response.model_dump(mode="json")

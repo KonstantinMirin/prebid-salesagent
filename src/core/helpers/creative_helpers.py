@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, TypedDict
 
 from adcp import FormatId as LibraryFormatId
 from adcp.types import ValidationMode
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 if TYPE_CHECKING:
     from adcp.types import AccountReference as LibraryAccountReference
@@ -561,7 +561,6 @@ def process_and_upload_package_creatives(
     # Lazy import to avoid circular dependency
     from src.core.exceptions import AdCPAdapterError, AdCPCreativeRejectedError, AdCPSalesAgentError
     from src.core.tools.creatives import _sync_creatives_impl, build_sync_creatives_request
-    from src.core.validation_helpers import adcp_validation_boundary
 
     logger = logging.getLogger(__name__)
     uploaded_by_product: dict[str, list[str]] = {}
@@ -587,25 +586,22 @@ def process_and_upload_package_creatives(
             # No request_hash is passed: there is no transmission here to canonicalise, and
             # that absence is what keeps the outer media buy's key out of the shared
             # (agent, account, key) idempotency cache scope -- see _sync_creatives_impl.
-            # INSIDE the validation boundary, exactly as the a2a and rest routes wrap their
-            # own call to this builder. Without it the builder's pydantic ValidationError
-            # falls to the `except Exception` below and is reclassified as
-            # AdCPAdapterError -- "Service temporarily unavailable" -- so a buyer who sent a
-            # malformed inline creative, or omitted a field the sync request requires, is
-            # told the SERVER is broken and to retry, instead of being told which of their
-            # fields to fix.
-            with adcp_validation_boundary(context="sync_creatives request"):
-                sync_req = build_sync_creatives_request(
-                    creatives=pkg.creatives,
-                    account=account,
-                    idempotency_key=idempotency_key,
-                    context=adcp_context,
-                    # AdCP 2.5: Full upsert semantics (no patch parameter)
-                    assignments=None,  # Assign separately after creation
-                    dry_run=testing_ctx.dry_run if testing_ctx else False,
-                    validation_mode=ValidationMode.strict,
-                    push_notification_config=None,
-                )
+            # A pydantic ValidationError from this builder must NOT reach the
+            # `except Exception` below, which reclassifies it as AdCPAdapterError --
+            # "Service temporarily unavailable" -- telling a buyer who sent a malformed
+            # inline creative that the SERVER is broken and to retry, instead of which of
+            # their fields to fix. That is why the handler list below re-raises it.
+            sync_req = build_sync_creatives_request(
+                creatives=pkg.creatives,
+                account=account,
+                idempotency_key=idempotency_key,
+                context=adcp_context,
+                # AdCP 2.5: Full upsert semantics (no patch parameter)
+                assignments=None,  # Assign separately after creation
+                dry_run=testing_ctx.dry_run if testing_ctx else False,
+                validation_mode=ValidationMode.strict,
+                push_notification_config=None,
+            )
             sync_response = _sync_creatives_impl(
                 req=sync_req,
                 identity=context,  # ResolvedIdentity for principal_id extraction
@@ -654,7 +650,16 @@ def process_and_upload_package_creatives(
             # Track uploads for return value
             uploaded_by_product[product_id] = uploaded_ids
 
-        except AdCPSalesAgentError:
+        except (AdCPSalesAgentError, ValidationError):
+            # ValidationError travels with the typed errors, not with the adapter
+            # failures. It is the buyer's document failing the request SCHEMA, and the
+            # transport boundary turns it into INVALID_REQUEST carrying the field and the
+            # issues (adcp_error_for tests ValidationError before ValueError, deliberately).
+            # Reclassifying it below as AdCPAdapterError would tell the buyer the server is
+            # unavailable and to retry an unfixed request. This arm is what replaced the
+            # adcp_validation_boundary that used to wrap the builder call: the boundary
+            # produced the same envelope, one frame earlier, at the cost of a translation
+            # this layer has no business performing.
             raise
         except Exception as e:
             error_msg = f"Failed to upload creatives for package with product_id {product_id}: {str(e)}"

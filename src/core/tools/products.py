@@ -45,7 +45,7 @@ from src.core.transport_helpers import (
     IdentityOrNotProvided,
     resolve_identity_if_not_provided,
 )
-from src.core.validation_helpers import adcp_validation_boundary, safe_parse_json_field
+from src.core.validation_helpers import safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
 logger = logging.getLogger(__name__)
@@ -861,21 +861,25 @@ async def get_products(
     Returns:
         ToolResult with human-readable text and structured data
     """
-    # create_get_products_request coerces string/dict brand via to_brand_reference
-    try:
-        with adcp_validation_boundary(context="get_products request"):
-            req = create_get_products_request(
-                brief=brief,
-                brand=brand,
-                filters=filters,
-                property_list=property_list,
-                context=context,
-            )
-    except ValueError as e:
-        # Helper raises ValueError for semantic (non-Pydantic) input problems.
-        raise AdCPValidationError(
-            internal_detail=e,
-        ) from e
+    # create_get_products_request coerces string/dict brand via to_brand_reference.
+    #
+    # NOT wrapped. This used to catch ValueError and re-raise AdCPValidationError,
+    # which was a translation the boundary performs anyway -- ``adcp_error_for`` maps a
+    # plain ValueError to exactly that class -- and which, once the request DTO stopped
+    # being constructed inside adcp_validation_boundary, started catching the pydantic
+    # ValidationError too. A ValidationError IS a ValueError, so it matched the handler
+    # and came out as a bare VALIDATION_ERROR: the ``field`` and the ``issues`` the
+    # buyer needs were discarded one frame before the boundary would have derived them.
+    # Populate the DTO, let it throw, and let the boundary name the error from the
+    # exception CLASS -- graded on the wire by
+    # tests/unit/test_validation_error_at_the_boundary.py.
+    req = create_get_products_request(
+        brief=brief,
+        brand=brand,
+        filters=filters,
+        property_list=property_list,
+        context=context,
+    )
 
     # Read identity pre-resolved by MCPAuthMiddleware
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None

@@ -118,7 +118,6 @@ from src.core.tools._media_buy_status import (
 )
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.utils import utc_flight_end, utc_flight_start
-from src.core.validation_helpers import adcp_validation_boundary
 
 
 def _simulation_clock(buy: MediaBuy, testing_ctx: "AdCPTestContext", default_dt: datetime) -> tuple[datetime, bool]:
@@ -729,10 +728,11 @@ def _build_get_media_buy_delivery_request(
 ) -> GetMediaBuyDeliveryRequest:
     """Build a GetMediaBuyDeliveryRequest from individual wire params.
 
-    Shared by the MCP wrapper and the A2A/REST raw wrapper so request
-    construction runs inside the ONE validation boundary — previously the raw
-    wrapper built the request unprotected and REST leaked a raw pydantic
-    ``ValidationError`` with no top-level suggestion (#1417).
+    Shared by the MCP wrapper and the A2A/REST raw wrapper so every transport
+    constructs the same request from the same payload. A ``ValidationError`` raised
+    here is not caught: each transport boundary converts it through the one
+    ``adcp_error_for`` mapping, which is what attaches the code, the field and the
+    top-level suggestion (#1417).
     """
     # account / include_window_breakdown / time_granularity are DECLARED
     # GetMediaBuyDeliveryRequest fields this builder used to drop, so the request it
@@ -757,8 +757,7 @@ def _build_get_media_buy_delivery_request(
     # OVERWRITE a non-None default: include_package_daily_breakdown and
     # include_window_breakdown both default to False, and forwarding None turned a
     # documented False into a null on every request that left them out.
-    with adcp_validation_boundary(context="get_media_buy_delivery request"):
-        return GetMediaBuyDeliveryRequest(**{k: v for k, v in fields.items() if v is not None})
+    return GetMediaBuyDeliveryRequest(**{k: v for k, v in fields.items() if v is not None})
 
 
 async def get_media_buy_delivery(

@@ -27,7 +27,6 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import adcp_validation_boundary
 from src.core.schemas import CompleteTaskRequestLocal, ContextObject, GetTaskRequest, enum_value
 
 logger = logging.getLogger(__name__)
@@ -70,18 +69,17 @@ def _build_list_tasks_request(
     tools. Its existence is what lets ``_register_tool(list_tasks)`` resolve the DTO
     from the builder instead of being handed one via the ``dto=`` escape hatch.
     """
-    with adcp_validation_boundary(context="list_tasks request"):
-        fields = {
-            "filters": filters,
-            "sort": sort,
-            "pagination": pagination,
-            "include_history": include_history,
-            "account": account,
-            "context": context,
-        }
-        # A None argument means the buyer did not send that field, so it is omitted and the
-        # model's own default applies rather than being overwritten with an explicit None.
-        return LibraryListTasksRequest(**{k: v for k, v in fields.items() if v is not None})
+    fields = {
+        "filters": filters,
+        "sort": sort,
+        "pagination": pagination,
+        "include_history": include_history,
+        "account": account,
+        "context": context,
+    }
+    # A None argument means the buyer did not send that field, so it is omitted and the
+    # model's own default applies rather than being overwritten with an explicit None.
+    return LibraryListTasksRequest(**{k: v for k, v in fields.items() if v is not None})
 
 
 async def list_tasks(

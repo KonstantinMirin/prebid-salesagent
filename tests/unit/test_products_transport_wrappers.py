@@ -14,8 +14,8 @@ Business logic is mocked via _get_products_impl.
 #
 # ARCH_BACKED (9 tests):
 #   test_mcp_wrapper_returns_tool_result — CLAUDE.md #5: MCP returns ToolResult
-#   test_mcp_wrapper_validation_error_raises_adcp_validation — CLAUDE.md #5 + no-ToolError guard
-#   test_mcp_wrapper_value_error_raises_adcp_validation — CLAUDE.md #5: error translation
+#   test_mcp_boundary_answers_invalid_request_for_a_validation_error — CLAUDE.md #5 + error-code.json
+#   test_mcp_boundary_answers_validation_error_for_a_plain_value_error — CLAUDE.md #5 + error-code.json
 #   test_mcp_wrapper_reads_identity_from_ctx_state — CLAUDE.md #5: wrapper resolves identity
 #   test_a2a_wrapper_returns_response_model — CLAUDE.md #5 + protocol-envelope.json notes
 #   test_a2a_wrapper_passes_identity_to_impl — CLAUDE.md #5: forward all params
@@ -36,15 +36,19 @@ Business logic is mocked via _get_products_impl.
 from __future__ import annotations
 
 import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from pydantic import ValidationError
 
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas import GetProductsResponse
+from src.core.tool_error_logging import with_error_logging
 from tests.factories import PrincipalFactory
+from tests.helpers import assert_envelope_shape
 from tests.helpers.capture_wrapper_req import capture_req_via_wrapper
 
 
@@ -116,8 +120,20 @@ class TestMcpGetProductsWrapper:
         assert "products" in result.structured_content
         assert result.content is not None  # Human-readable text
 
-    def test_mcp_wrapper_validation_error_raises_adcp_validation(self):
-        """MCP wrapper translates ValidationError to AdCPValidationError."""
+    def test_mcp_boundary_answers_invalid_request_for_a_validation_error(self):
+        """The MCP BOUNDARY answers a bad request with the two-layer envelope.
+
+        The wrapper itself translates nothing now. It used to catch ValueError and
+        re-raise AdCPValidationError -- a translation the boundary performs anyway (
+        adcp_error_for maps a plain ValueError to that exact class), and one which, being
+        keyed on ValueError, also swallowed the pydantic ValidationError that IS a
+        ValueError and answered a bare VALIDATION_ERROR where the buyer was owed
+        INVALID_REQUEST with the field and the issues.
+
+        So the grading moved one frame out, to ``with_error_logging`` -- the MCP boundary
+        FastMCP actually registers -- and became an assertion on the envelope rather than
+        on an exception class. A pydantic rejection earns INVALID_REQUEST and names the field.
+        """
         mock_ctx = MagicMock(spec=Context)
         mock_ctx.get_state = AsyncMock(return_value=None)
 
@@ -137,11 +153,29 @@ class TestMcpGetProductsWrapper:
         ):
             from src.core.tools.products import get_products
 
-            with pytest.raises(AdCPValidationError):
-                asyncio.run(get_products(brief="", ctx=mock_ctx))
+            with pytest.raises(ToolError) as exc_info:
+                asyncio.run(with_error_logging(get_products)(brief="", ctx=mock_ctx))
 
-    def test_mcp_wrapper_value_error_raises_adcp_validation(self):
-        """MCP wrapper translates ValueError to AdCPValidationError."""
+        envelope = json.loads(str(exc_info.value))
+        assert_envelope_shape(envelope, "INVALID_REQUEST", recovery="correctable")
+        assert envelope["adcp_error"]["field"] == "brief"
+
+    def test_mcp_boundary_answers_validation_error_for_a_plain_value_error(self):
+        """The MCP BOUNDARY answers a bad request with the two-layer envelope.
+
+        The wrapper itself translates nothing now. It used to catch ValueError and
+        re-raise AdCPValidationError -- a translation the boundary performs anyway (
+        adcp_error_for maps a plain ValueError to that exact class), and one which, being
+        keyed on ValueError, also swallowed the pydantic ValidationError that IS a
+        ValueError and answered a bare VALIDATION_ERROR where the buyer was owed
+        INVALID_REQUEST with the field and the issues.
+
+        So the grading moved one frame out, to ``with_error_logging`` -- the MCP boundary
+        FastMCP actually registers -- and became an assertion on the envelope rather than
+        on an exception class. A plain ValueError -- our own business logic refusing a
+        schema-valid value -- stays VALIDATION_ERROR, which is the distinction the wrapper
+        used to erase.
+        """
         mock_ctx = MagicMock(spec=Context)
         mock_ctx.get_state = AsyncMock(return_value=None)
 
@@ -151,8 +185,11 @@ class TestMcpGetProductsWrapper:
         ):
             from src.core.tools.products import get_products
 
-            with pytest.raises(AdCPValidationError):
-                asyncio.run(get_products(brief="ads", ctx=mock_ctx))
+            with pytest.raises(ToolError) as exc_info:
+                asyncio.run(with_error_logging(get_products)(brief="ads", ctx=mock_ctx))
+
+        envelope = json.loads(str(exc_info.value))
+        assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
 
     def test_mcp_wrapper_no_version_compat(self):
         """MCP wrapper does NOT apply version compat — that's the handler's job (parity with A2A)."""

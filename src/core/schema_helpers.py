@@ -294,8 +294,7 @@ def coerce_creative_filters(filters: dict[str, Any] | CreativeFilters | None) ->
     """
     if filters is None or isinstance(filters, CreativeFilters):
         return filters
-    with adcp_validation_boundary(context="list_creatives filters"):
-        return CreativeFilters.model_validate(filters)
+    return CreativeFilters.model_validate(filters)
 
 
 def create_get_products_request(

@@ -25,7 +25,7 @@ from src.core.testing_hooks import AdCPTestContext
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
-from src.core.validation_helpers import adcp_validation_boundary, safe_parse_json_field
+from src.core.validation_helpers import safe_parse_json_field
 
 logger = logging.getLogger(__name__)
 
@@ -238,12 +238,11 @@ async def list_authorized_properties(
     """
     # Same context string as the A2A handler and the REST route, so buyer-invalid input
     # produces a byte-identical envelope on every transport (#1882).
-    with adcp_validation_boundary(context="list_authorized_properties request"):
-        req = build_list_authorized_properties_request(
-            publisher_domains=publisher_domains,
-            property_tags=property_tags,
-            context=context,
-        )
+    req = build_list_authorized_properties_request(
+        publisher_domains=publisher_domains,
+        property_tags=property_tags,
+        context=context,
+    )
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
     response = _list_authorized_properties_impl(req, identity)
 
