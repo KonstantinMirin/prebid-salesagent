@@ -245,19 +245,8 @@ def non_schema_fields(model: type[BaseModel]) -> dict[str, str]:
     return citations
 
 
-def derived_signature(
-    fn: Callable[..., Any],
-    model: type[BaseModel],
-    *,
-    injected_from: Callable[..., Any] | None = None,
-) -> inspect.Signature:
+def derived_signature(fn: Callable[..., Any], model: type[BaseModel]) -> inspect.Signature:
     """``fn``'s own parameters, retyped from ``model`` wherever it declares the field.
-
-    ``injected_from`` supplies the INJECTED parameters (``ctx``) when ``fn`` is the builder
-    rather than the wrapper. The builder constructs a request and knows nothing about
-    transport plumbing, so it has no ``ctx`` to contribute -- but the registered callable
-    still needs one. Passing the wrapper here keeps the field set and the plumbing coming
-    from the places that actually own them, instead of requiring one function to own both.
 
     The advertised type is the DTO's, always. Where this agent accepts MORE than the library
     (the brand shorthand), the widening is declared ON THE MODEL, so advertised == accepted
@@ -271,11 +260,6 @@ def derived_signature(
         if _is_injected(parameter):
             parameters.append(parameter)
             continue
-        # A builder declares its fields keyword-only (``def build_x_request(*, ...)``) while a
-        # wrapper declares them positional-or-keyword. Normalising here lets either be the
-        # field source without the injected params, appended below, landing in an invalid
-        # order -- Python forbids POSITIONAL_OR_KEYWORD after KEYWORD_ONLY.
-        parameter = parameter.replace(kind=inspect.Parameter.POSITIONAL_OR_KEYWORD)
         field = model.model_fields.get(name)
         if field is None:
             # Declared by the tool but NOT by the DTO -- a non-spec parameter. Dropped from
@@ -302,19 +286,6 @@ def derived_signature(
         if description:
             annotation = Annotated[annotation, PydanticField(description=description)]
         parameters.append(parameter.replace(annotation=annotation))
-    if injected_from is not None:
-        have = {p.name for p in parameters}
-        for name, parameter in inspect.signature(injected_from).parameters.items():
-            if _is_injected(parameter) and name not in have:
-                parameters.append(parameter)
-
-        # The RETURN annotation belongs to the wrapper too. A builder returns the request it
-        # constructs (``-> ListAccountsRequest``); the registered tool returns a ToolResult.
-        # Inheriting the builder's would make FastMCP build an output schema from a REQUEST
-        # model -- which fails loudly on any model with a forward reference, and would quietly
-        # advertise the wrong output shape on any model without one.
-        return inspect.signature(injected_from).replace(parameters=parameters)
-
     return signature.replace(parameters=parameters)
 
 
@@ -385,19 +356,7 @@ def apply_dto_announced_shape(target: Callable[..., Any], source_fn: Callable[..
     model = request_model_for(source_fn)
     if model is None:
         return False
-
-    # THE FIELD SOURCE IS THE BUILDER, not the wrapper. The model is already resolved from
-    # the builder (request_model_for reads its return annotation), so deriving the FIELDS
-    # from the wrapper made the announced shape answer to a different function than the type
-    # did -- and than REST and A2A did, both of which select against accepted_kwargs(builder).
-    # That was two derivations from two sources, kept in step by hand: adcp_version and
-    # adcp_major_version sat in the builder and not on MCP for as long as anyone had looked.
-    # Reading the builder here is not a rule the transports must obey; it removes the second
-    # list, so there is nothing left to disagree.
-    builder = builder_for(source_fn)
-    if builder is None:
-        return False
-    signature = derived_signature(builder, model, injected_from=source_fn)
+    signature = derived_signature(source_fn, model)
     _refuse_fields_the_spec_does_not_define(source_fn, model, signature)
 
     # A REQUIRED DTO field the wrapper does not declare can never be populated: the builder
