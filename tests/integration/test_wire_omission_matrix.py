@@ -13,12 +13,17 @@ the field list differ, so those are DATA here and there is one place to add a ca
 * a row narrowed to fewer than every wire transport without saying why -- the
   reason is a required field, so "we quietly dropped REST" cannot be written.
 
-Not everything here is a row. Three obligations below are genuinely different
+Not everything here is a row. Two obligations below are genuinely different
 operations that merely lived next door: get_products' IMPL-level dump (no wire by
-definition), sync_creatives' "these fields are arrays, not just non-null", and the
-signals pair (unreachable on every transport). Collapsing those into the table
-would mean pretending different assertions are the same one, which is how the
-drift above started.
+definition) and sync_creatives' "these fields are arrays, not just non-null".
+Collapsing those into the table would mean pretending different assertions are the
+same one, which is how the drift above started.
+
+A third pair lived here until 2026-09-03: get_signals / activate_signal, carried as
+"the sweep's single documented exemption" because neither was reachable on any
+transport. They were unreachable because #826 unregistered them in 2025-12 and left
+the implementation behind; the implementation is now deleted, so the exemption is
+retired by removal rather than by wiring (GH #1353).
 """
 
 from __future__ import annotations
@@ -44,7 +49,6 @@ from tests.harness.capabilities import CapabilitiesEnv
 from tests.harness.creative_sync import CreativeSyncEnv
 from tests.harness.performance import PerformanceEnv
 from tests.harness.product import ProductEnv
-from tests.harness.signals import ActivateSignalEnv, GetSignalsEnv
 from tests.harness.transport import Transport
 from tests.helpers import pinned_schema
 
@@ -335,37 +339,3 @@ def test_sync_creatives_mcp_wire_changes_and_warnings_are_arrays(integration_db)
                         f"creatives[{i}].{name} must be an array on the MCP wire "
                         f"(spec 3.1.1 types it array), got {item[name]!r}"
                     )
-
-
-# get_signals / activate_signal are unreachable on EVERY transport: neither is
-# registered as an MCP tool, A2A intentionally excludes signals, and no REST route
-# exists — so there is no wire for a buyer to observe and no live-dispatch coverage
-# is possible. This is the sweep's single documented exemption. Whether the dead code
-# is removed or wired is tracked at
-# https://github.com/prebid/salesagent/issues/1353; that issue retires the exemption
-# either way. Until then these grade the typed model_dump() as defense-in-depth at the
-# model layer, and are NOT wire coverage.
-
-
-def test_get_signals_impl_payload_omits_signal_ref(integration_db):
-    """Production never sets signal_ref on the mock signals it returns."""
-    with GetSignalsEnv(tenant_id="wire-shape-signals", principal_id="test_principal") as env:
-        tenant = TenantFactory(tenant_id="wire-shape-signals")
-        PrincipalFactory(tenant=tenant, principal_id="test_principal")
-
-        payload = env.call_impl().model_dump(mode="json")
-        assert len(payload["signals"]) > 0, "expected non-empty signals list"
-        assert "signal_ref" not in payload["signals"][0], (
-            f"expected signals[0].signal_ref absent, got {payload['signals'][0].get('signal_ref')!r}"
-        )
-
-
-def test_activate_signal_impl_payload_omits_unset_fields(integration_db):
-    """errors is explicitly None on success and context is unset — both must be absent."""
-    with ActivateSignalEnv(tenant_id="wire-shape-activate-signal", principal_id="test_principal") as env:
-        tenant = TenantFactory(tenant_id="wire-shape-activate-signal")
-        PrincipalFactory(tenant=tenant, principal_id="test_principal")
-
-        payload = env.call_impl(signal_agent_segment_id="auto_intenders_q1_2025").model_dump(mode="json")
-        for name in ("errors", "context"):
-            assert name not in payload, f"expected '{name}' absent, got {payload.get(name)!r}"
