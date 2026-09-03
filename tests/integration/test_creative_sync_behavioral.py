@@ -683,7 +683,7 @@ class TestCreativeIdsFilter:
         loose fields, which no longer exists.
         """
         from src.core.exceptions import AdCPInvalidRequestError
-        from src.core.schema_helpers import adcp_validation_boundary
+        from src.core.validation_helpers import adcp_validation_boundary
         from tests.helpers.creative_test_helpers import sync_creatives_request
 
         with pytest.raises(AdCPInvalidRequestError) as exc_info:
@@ -1810,7 +1810,7 @@ class TestSyncExtensions:
         boundary and the per-creative arm is never reached. Same obligation, one layer up.
         """
         from src.core.exceptions import AdCPInvalidRequestError
-        from src.core.schema_helpers import adcp_validation_boundary
+        from src.core.validation_helpers import adcp_validation_boundary
         from tests.helpers.creative_test_helpers import sync_creatives_request
 
         with pytest.raises(AdCPInvalidRequestError) as exc_info:

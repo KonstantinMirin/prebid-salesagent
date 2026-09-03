@@ -561,6 +561,7 @@ def process_and_upload_package_creatives(
     # Lazy import to avoid circular dependency
     from src.core.exceptions import AdCPAdapterError, AdCPCreativeRejectedError, AdCPSalesAgentError
     from src.core.tools.creatives import _sync_creatives_impl, build_sync_creatives_request
+    from src.core.validation_helpers import adcp_validation_boundary
 
     logger = logging.getLogger(__name__)
     uploaded_by_product: dict[str, list[str]] = {}
@@ -586,17 +587,25 @@ def process_and_upload_package_creatives(
             # No request_hash is passed: there is no transmission here to canonicalise, and
             # that absence is what keeps the outer media buy's key out of the shared
             # (agent, account, key) idempotency cache scope -- see _sync_creatives_impl.
-            sync_req = build_sync_creatives_request(
-                creatives=pkg.creatives,
-                account=account,
-                idempotency_key=idempotency_key,
-                context=adcp_context,
-                # AdCP 2.5: Full upsert semantics (no patch parameter)
-                assignments=None,  # Assign separately after creation
-                dry_run=testing_ctx.dry_run if testing_ctx else False,
-                validation_mode=ValidationMode.strict,
-                push_notification_config=None,
-            )
+            # INSIDE the validation boundary, exactly as the a2a and rest routes wrap their
+            # own call to this builder. Without it the builder's pydantic ValidationError
+            # falls to the `except Exception` below and is reclassified as
+            # AdCPAdapterError -- "Service temporarily unavailable" -- so a buyer who sent a
+            # malformed inline creative, or omitted a field the sync request requires, is
+            # told the SERVER is broken and to retry, instead of being told which of their
+            # fields to fix.
+            with adcp_validation_boundary(context="sync_creatives request"):
+                sync_req = build_sync_creatives_request(
+                    creatives=pkg.creatives,
+                    account=account,
+                    idempotency_key=idempotency_key,
+                    context=adcp_context,
+                    # AdCP 2.5: Full upsert semantics (no patch parameter)
+                    assignments=None,  # Assign separately after creation
+                    dry_run=testing_ctx.dry_run if testing_ctx else False,
+                    validation_mode=ValidationMode.strict,
+                    push_notification_config=None,
+                )
             sync_response = _sync_creatives_impl(
                 req=sync_req,
                 identity=context,  # ResolvedIdentity for principal_id extraction

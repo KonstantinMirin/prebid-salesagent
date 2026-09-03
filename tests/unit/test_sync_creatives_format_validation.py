@@ -11,8 +11,8 @@ import pytest
 from src.core.errors.details import AdapterFailureDetails
 from src.core.exceptions import AdCPInvalidRequestError
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import adcp_validation_boundary
 from src.core.tools.creatives import _sync_creatives_impl
+from src.core.validation_helpers import adcp_validation_boundary
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.helpers.creative_test_helpers import (
     make_creative_dict,

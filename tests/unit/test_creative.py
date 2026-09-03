@@ -4204,7 +4204,7 @@ class TestExtensionGaps:
         rejected, naming ``name`` -- one layer up.
         """
         from src.core.exceptions import AdCPInvalidRequestError
-        from src.core.schema_helpers import adcp_validation_boundary
+        from src.core.validation_helpers import adcp_validation_boundary
 
         with pytest.raises(AdCPInvalidRequestError) as exc_info:
             with adcp_validation_boundary(context="sync_creatives request"):
