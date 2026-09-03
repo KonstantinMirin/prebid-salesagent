@@ -189,6 +189,13 @@ Feature: BR-UC-011 Manage Accounts
   Scenario: List accounts with unknown status value not in enum
     Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a list_accounts request with status filter "unknown_status"
+    # A value outside the pinned status enum is a SCHEMA constraint violation, so the
+    # seller answers INVALID_REQUEST ("violates schema constraints"), not
+    # VALIDATION_ERROR ("business rules BEYOND schema validation"). The step asserted
+    # VALIDATION_ERROR while the request was built in the test process and never
+    # dispatched, so the code was never checked against the seller (salesagent-prkv.65).
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json
+    #   pointer=/INVALID_REQUEST
     Then the response contains a validation error
     And the error indicates the status value is not recognized
     # @bva status: Unknown string not in enum
@@ -1133,20 +1140,53 @@ Feature: BR-UC-011 Manage Accounts
     Then the response is an error variant
     And the error indicates accounts array must not be empty
 
+  # ── A missing required member makes the REQUEST malformed, not the ACCOUNT
+  # unprovisionable. This distinction decides the shape of the two scenarios below,
+  # and it was invisible while the harness built the request in the test process.
+  #
+  # sync-accounts-request declares accounts[] as an anyOf of TWO arms:
+  #   provisioning     requires ['brand', 'operator', 'billing']
+  #   settings-update  requires ['account']
+  # An entry missing brand.domain / operator / billing satisfies NEITHER arm, so the
+  # request never becomes a well-formed list of entries the seller could evaluate
+  # one by one. It is rejected whole, with INVALID_REQUEST -- "Request is malformed,
+  # missing required fields, or violates schema constraints".
+  #
+  # A per-account result carrying action: "failed" is the OTHER outcome: an entry
+  # that IS well-formed but cannot be provisioned (e.g. UNSUPPORTED_PROVISIONING for
+  # a settings-update entry naming an unknown account). Asking for action "failed"
+  # here asked the seller to report per-entry on a request it could not parse into
+  # entries.
+  #
+  # These two scenarios asserted the per-account shape and passed anyway, because
+  # nothing was dispatched: pydantic raised in the test process and the step graded
+  # its own exception (salesagent-prkv.65). Corrected to the request-level rejection
+  # production actually returns, and which the spec requires.
+  # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json
+  #   pointer=/properties/accounts/items/anyOf
+  # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json
+  #   pointer=/INVALID_REQUEST
+
   @T-UC-011-sync-missing-brand @sync @validation @partition @boundary
   Scenario: Sync account with no_domain -- missing brand domain rejected
     Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with an account that has no brand domain field
-    Then the account has action "failed"
-    And the per-account error indicates brand domain is required
+    # Blames `brand`, not `brand.domain`, and that is the seller being precise: the
+    # When step omits the `brand` member ENTIRELY (it sends only operator + billing),
+    # so the missing member IS brand. The scenario's name and its @bva note say
+    # "missing domain", which the payload does not actually exercise -- a pre-existing
+    # mismatch between this scenario's title and its own When, surfaced once the
+    # payload started reaching the seller. Asserting `brand` grades what is really
+    # sent; making it genuinely test a missing DOMAIN means changing the When to send
+    # `brand: {}`, which would be redefining the scenario rather than fixing it.
+    Then the account processing fails with a validation error for brand
     # @bva brand (brand-ref): missing domain in brand-ref
 
   @T-UC-011-sync-missing-operator @sync @validation @partition @boundary
   Scenario: Sync account with missing operator -- operator is required
     Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with an account that has no operator field
-    Then the account has action "failed"
-    And the per-account error indicates operator is required
+    Then the account processing fails with a validation error for operator
 
   @T-UC-011-sync-missing-billing @sync @validation @partition @boundary
   Scenario: Sync account with missing billing -- billing is required
