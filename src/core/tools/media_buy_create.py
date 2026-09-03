@@ -975,6 +975,19 @@ def execute_approved_media_buy(
                 # so a synthetic spec-shaped key keeps reconstruction valid.
                 raw_request_data.setdefault("idempotency_key", f"legacy-approval-{media_buy_id}")
 
+                # Same situation, same remedy, for ``account`` -- required since
+                # salesagent-prkv.68, so buys stored before it carry none in raw_request and
+                # would fail to reconstruct here, leaving an approvable buy stuck in
+                # pending_approval forever. Read off the PERSISTED ROW rather than
+                # synthesised: MediaBuy.account_id is what the transport boundary resolved
+                # this buy's reference to, so it is the same account, not a stand-in. A row
+                # with no account_id predates accounts entirely and gets the internal-replay
+                # placeholder, exactly as the key above does.
+                if not raw_request_data.get("account"):
+                    raw_request_data["account"] = {
+                        "account_id": media_buy.account_id or f"legacy-approval-{media_buy_id}"
+                    }
+
                 request = CreateMediaBuyRequest(**raw_request_data)
                 # Mark this request as already approved to skip adapter's approval workflow
                 setattr(request, "_already_approved", True)  # noqa: B010

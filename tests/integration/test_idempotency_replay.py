@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from tests.harness._base import DEFAULT_TEST_ACCOUNT_ID
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.helpers import seed_principal
 
@@ -36,6 +37,7 @@ def _seed_success(tenant_id, principal_id, idempotency_key, *, payload_hash, med
         idempotency_key,
         response_model=make_active_cached_success(media_buy_id),
         payload_hash=payload_hash,
+        account_id=DEFAULT_TEST_ACCOUNT_ID,
     )
 
 
@@ -60,6 +62,12 @@ def _identity(tenant_id, principal_id):
     return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
+        # The RESOLVED account, as the transport boundary would have left it. These tests
+        # call _impl directly, so nothing runs enrich_identity_with_account for them -- and
+        # the idempotency cache is scoped by (principal, account, key), so an identity
+        # carrying no account would look in a different scope from the one the request's
+        # own ``account`` puts the row in.
+        account_id=DEFAULT_TEST_ACCOUNT_ID,
         testing_context=AdCPTestContext(test_session_id="replay_test"),
     )
 
@@ -122,13 +130,12 @@ class TestImplReplaysCachedSuccess:
         (here the bare request then fails downstream as a typed AdCPSalesAgentError — what
         matters is it is neither a replay, a conflict, nor a raw ValidationError).
         """
-        from pydantic import BaseModel
         from pydantic import ValidationError as PydanticValidationError
 
         from src.core.exceptions import AdCPSalesAgentError
         from src.core.idempotency_canonical import canonical_request_hash
         from src.core.tools.media_buy_create import _create_media_buy_impl
-        from tests.helpers import seed_cached_success
+        from tests.helpers import LegacyCachedShape, seed_cached_success
 
         idem_key = f"drift-{uuid.uuid4().hex}"
         tenant_id = f"drift_t_{uuid.uuid4().hex[:6]}"
@@ -136,17 +143,13 @@ class TestImplReplaysCachedSuccess:
 
         seed_principal(tenant_id, principal_id)
 
-        class _LegacyShape(BaseModel):
-            """A stored shape CreateMediaBuySuccess no longer validates (schema drift)."""
-
-            legacy_field: str = "older-deploy"
-
         seed_cached_success(
             tenant_id,
             principal_id,
             idem_key,
-            response_model=_LegacyShape(),
+            response_model=LegacyCachedShape(),
             payload_hash=canonical_request_hash(_make_request(idem_key)),
+            account_id=DEFAULT_TEST_ACCOUNT_ID,
         )
 
         with pytest.raises(AdCPSalesAgentError) as exc_info:
@@ -190,6 +193,7 @@ class TestImplReplaysCachedSuccess:
             cached = uow.idempotency_attempts.find_by_key(
                 principal_id=principal_id,
                 idempotency_key=other_key,
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
             )
             assert cached is not None, "A fresh successful create must cache its response"
             assert cached.payload_hash is not None
@@ -230,6 +234,7 @@ class TestOpportunisticEviction:
                 payload_hash="expired-row-hash",
                 ttl=timedelta(minutes=1),
                 now=seeded_at,
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
             )
 
             now = datetime.now(UTC)
@@ -254,12 +259,14 @@ class TestOpportunisticEviction:
                 principal_id=principal_id,
                 idempotency_key=expired_key,
                 now=seeded_at,
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
             )
             assert evicted is None, "the expired row must be deleted by the opportunistic eviction"
             # The fresh success's own row was written and survives.
             fresh = uow.idempotency_attempts.find_by_key(
                 principal_id=principal_id,
                 idempotency_key=fresh_key,
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
             )
             assert fresh is not None
 
@@ -346,6 +353,7 @@ class TestErrorsAreNeverCached:
             cached = uow.idempotency_attempts.find_by_key(
                 principal_id=principal_id,
                 idempotency_key=idem_key,
+                account_id=DEFAULT_TEST_ACCOUNT_ID,
             )
             assert cached is None, "Errors must never be cached — a retry must re-execute"
 
@@ -432,6 +440,7 @@ def test_suppressed_eviction_never_touches_the_create(integration_db, monkeypatc
             payload_hash="kept-row-hash",
             ttl=timedelta(minutes=1),
             now=seeded_at,
+            account_id=DEFAULT_TEST_ACCOUNT_ID,
         )
         now = datetime.now(UTC)
         result = env.call_impl(
@@ -449,8 +458,10 @@ def test_suppressed_eviction_never_touches_the_create(integration_db, monkeypatc
     with MediaBuyUoW(tenant_id) as uow:
         assert uow.idempotency_attempts is not None
         kept = uow.idempotency_attempts.find_by_key(
-            principal_id=principal_id, idempotency_key=expired_key, now=seeded_at
+            principal_id=principal_id, idempotency_key=expired_key, now=seeded_at, account_id=DEFAULT_TEST_ACCOUNT_ID
         )
         assert kept is not None, "suppressed eviction must leave the expired row in place"
-        fresh = uow.idempotency_attempts.find_by_key(principal_id=principal_id, idempotency_key=fresh_key)
+        fresh = uow.idempotency_attempts.find_by_key(
+            principal_id=principal_id, idempotency_key=fresh_key, account_id=DEFAULT_TEST_ACCOUNT_ID
+        )
         assert fresh is not None, "the fresh success caches regardless of eviction"

@@ -16,6 +16,7 @@ from factory import LazyAttribute, Sequence, SubFactory
 
 from src.core.database.models import MediaBuy, MediaPackage, is_media_buy_seller_confirmed
 from src.core.schemas import GetMediaBuysMediaBuy
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
 from tests.factories.core import TenantFactory
 from tests.factories.principal import PrincipalFactory
 
@@ -105,11 +106,42 @@ class MediaBuyFactory(factory.alchemy.SQLAlchemyModelFactory):
     # Opt out with an explicit ``confirmed_at=None`` (an explicit kwarg beats a
     # LazyAttribute in factory_boy) when the test grades the repository's own stamp.
     confirmed_at = LazyAttribute(lambda o: datetime.now(UTC) if is_media_buy_seller_confirmed(o.status) else None)
+    # A buy created by a conformant request carries an account: ``account`` is REQUIRED on
+    # create-media-buy-request.json, and the transport boundary resolves it onto the row. A
+    # factory buy without one is a shape production can no longer produce, and it makes the
+    # idempotency backstop -- scoped by (principal, account, key) -- miss its own row.
+    #
+    # The Account ROW is created too, not just the id: media_buys carries a composite FK to
+    # (tenant_id, account_id), and many tests mint an ad-hoc tenant with no account, so a
+    # bare id default is a ForeignKeyViolation on every one of them.
+    account_id = LazyAttribute(lambda o: _ensure_default_account(o.tenant_id))
     raw_request = LazyAttribute(
         lambda o: {
             "packages": [{"package_id": "pkg_001", "product_id": "prod_001"}],
+            "account": {"account_id": DEFAULT_TEST_ACCOUNT_ID},
         }
     )
+
+
+def _ensure_default_account(tenant_id: str) -> str:
+    """Get-or-create the tenant's default Account row and return its id.
+
+    Idempotent: several buys in one test share the tenant, and a second INSERT of the same
+    (tenant_id, account_id) is a unique violation rather than a no-op.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import Account
+    from tests.factories.account import AccountFactory
+
+    session = MediaBuyFactory._meta.sqlalchemy_session
+    existing = session.scalars(
+        select(Account).filter_by(tenant_id=tenant_id, account_id=DEFAULT_TEST_ACCOUNT_ID)
+    ).first()
+    if existing is None:
+        AccountFactory(tenant_id=tenant_id, account_id=DEFAULT_TEST_ACCOUNT_ID)
+        session.flush()
+    return DEFAULT_TEST_ACCOUNT_ID
 
 
 class MediaPackageFactory(factory.alchemy.SQLAlchemyModelFactory):

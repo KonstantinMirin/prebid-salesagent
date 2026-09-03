@@ -48,6 +48,7 @@ from enum import Enum  # noqa: E402
 
 from pydantic import BaseModel  # noqa: E402
 
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID  # noqa: E402  (re-export)
 from tests.harness.transport import DeliverResult, strip_a2a_protocol_fields  # noqa: E402
 
 if TYPE_CHECKING:
@@ -1570,6 +1571,15 @@ class IntegrationEnv(BaseTestEnv):
         ).first()
         if principal is None:
             principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
+
+        # An account comes with the tenant now. AdCP 3.1.1 makes ``account`` REQUIRED on
+        # create_media_buy, update_media_buy and sync_creatives alike, and the transport
+        # boundary RESOLVES the reference, so a tenant with no account cannot serve a valid
+        # request at all -- every scenario would answer ACCOUNT_NOT_FOUND before reaching
+        # what it grades. Seeded with the id the whole suite names (DEFAULT_TEST_ACCOUNT_ID),
+        # which is what makes a literal ``{"account_id": "acct_test"}`` in a test resolve
+        # instead of merely parse.
+        self._seed_default_account(tenant, self._principal_id)
         return tenant, principal
 
     def setup_default_account(self, principal_id: str | None = None) -> Any:
@@ -1588,24 +1598,35 @@ class IntegrationEnv(BaseTestEnv):
         Idempotent, like ``setup_default_data`` -- reuses an existing row so repeated
         Given steps do not collide.
         """
-        from sqlalchemy import select
-
-        from src.core.database.models import Account, AgentAccountAccess
-        from tests.factories.account import AccountFactory, AgentAccountAccessFactory
-
         tenant, principal = self.setup_default_data()
         # Access is granted to the principal that will actually SEND the request, which is
         # not always the env's default: a cross-principal isolation test drives a second
         # principal, and an account its principal cannot reach comes back as
         # AdCPAuthorizationError rather than the behaviour under test.
         grantee = principal_id or principal.principal_id
+        return self._seed_default_account(tenant, grantee)
+
+    def _seed_default_account(self, tenant: Any, grantee: str) -> Any:
+        """The body of ``setup_default_account``, callable from ``setup_default_data`` too.
+
+        Split out so the tenant seeder can seed an account without calling
+        ``setup_default_account``, which starts by calling the tenant seeder -- the two
+        would otherwise recurse.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.models import Account, AgentAccountAccess
+        from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
         account = self._session.scalars(select(Account).filter_by(tenant_id=self._tenant_id)).first()
         if account is None:
             # tenant_id, never tenant= -- Account.tenant is a real relationship, so handing
             # it a SubFactory's throwaway Tenant makes SQLAlchemy re-sync tenant_id FROM
             # that object at flush and silently relocate the row (see AccountFactory.Meta).
-            account = AccountFactory(tenant_id=tenant.tenant_id)
+            # A DETERMINISTIC id, not the factory Sequence: tests name this account by
+            # literal (``{"account_id": "acct_test"}``) in ~120 request constructions, and a
+            # sequence id would parse in all of them and resolve in none.
+            account = AccountFactory(tenant_id=tenant.tenant_id, account_id=DEFAULT_TEST_ACCOUNT_ID)
 
         # Only a principal that EXISTS can be granted access: agent_account_access carries
         # an FK to principals, and several scenarios drive a deliberately unknown identity

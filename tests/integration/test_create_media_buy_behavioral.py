@@ -128,6 +128,7 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
         "start_time": _future(1),
         "end_time": _future(8),
         "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+        "account": {"account_id": "acct_test"},
         "packages": [
             {
                 "product_id": "prod_1",

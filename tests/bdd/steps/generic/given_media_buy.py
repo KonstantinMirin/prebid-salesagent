@@ -93,6 +93,15 @@ def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
     # so ordinary dispatches create independent buys. Merging them would either make
     # every scenario replay or stop the replay scenarios replaying.
     ctx["request_kwargs"].setdefault("idempotency_key", f"bdd-key-{uuid.uuid4().hex}")
+
+    # account is REQUIRED on CreateMediaBuyRequest too (create-media-buy-request.json
+    # /required), and unlike the key it must RESOLVE: the transport boundary looks the
+    # reference up, so a literal id would answer ACCOUNT_NOT_FOUND and every scenario not
+    # about accounts would fail on resolution before reaching what it grades. Seeded through
+    # the env, which is idempotent, so repeated Given steps reuse one row. An account-shape
+    # scenario overrides this (or passes OMIT_ACCOUNT) and setdefault leaves it alone.
+    if "env" in ctx:
+        ctx["request_kwargs"].setdefault("account", {"account_id": ctx["env"].setup_default_account().account_id})
     return ctx["request_kwargs"]
 
 

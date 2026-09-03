@@ -21,6 +21,16 @@ from factory import LazyAttribute, Sequence, SubFactory
 from src.core.database.models import Account, AgentAccountAccess
 from tests.factories.core import TenantFactory
 
+#: The account every test names by literal. Deterministic on purpose: ``account`` is
+#: spec-REQUIRED on create_media_buy, update_media_buy and sync_creatives, and the transport
+#: boundary RESOLVES the reference, so an id a test writes and an id the harness seeds have
+#: to be the SAME string or the request parses and then answers ACCOUNT_NOT_FOUND.
+#:
+#: Defined HERE rather than in tests/harness/_base: the harness imports factories, so a
+#: factory importing the harness back is a cycle (tests.factories.media_buy ->
+#: tests.harness._base -> tests.factories).
+DEFAULT_TEST_ACCOUNT_ID = "acct_test"
+
 
 class AccountFactory(factory.alchemy.SQLAlchemyModelFactory):
     class Meta:

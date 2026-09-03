@@ -38,6 +38,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         auth_token: str | None = None,
         tenant: Any = _UNSET,
         testing_context: AdCPTestContext | None = None,
+        account_id: str | None = None,
         **tenant_overrides: object,
     ) -> ResolvedIdentity:
         """Build a ResolvedIdentity without DB persistence.
@@ -45,6 +46,13 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         Auto-derives tenant dict via TenantFactory.make_tenant().
         Pass explicit tenant=None for auth-error tests.
         Pass **tenant_overrides for domain fields (approval_mode, etc).
+
+        ``account_id`` is DECLARED, not left to **tenant_overrides. It is a
+        ``ResolvedIdentity`` field, not a tenant one, so the catch-all swallowed it into the
+        tenant dict and the identity came back with account_id=None -- silently, which cost
+        an afternoon: the idempotency cache is scoped by (principal, account, key), so a
+        test that thought it had set the account was probing a different scope. It is what
+        ``enrich_identity_with_account`` resolves onto the identity in production.
         Pass testing_context to override the default (e.g. set
         test_session_id for harness routing).
 
@@ -70,4 +78,5 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
             auth_token=auth_token,
             protocol=protocol,
             testing_context=testing_context,
+            account_id=account_id,
         )

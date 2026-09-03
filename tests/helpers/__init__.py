@@ -94,6 +94,7 @@ _LAZY_EXPORTS: dict[str, str] = {
     "create_test_property": "tests.helpers.adcp_factories",
     "create_test_property_dict": "tests.helpers.adcp_factories",
     "load_ledger_nodeids": "tests.helpers.ledger",
+    "LegacyCachedShape": "tests.helpers.idempotency_seeds",
     "make_active_cached_success": "tests.helpers.idempotency_seeds",
     "rendered_log_calls": "tests.helpers.log_assertions",
     "seed_cached_success": "tests.helpers.idempotency_seeds",

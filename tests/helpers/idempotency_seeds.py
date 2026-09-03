@@ -36,6 +36,17 @@ def make_active_cached_success(media_buy_id: str = "mb_seeded") -> CreateMediaBu
     )
 
 
+class LegacyCachedShape(BaseModel):
+    """A stored envelope shape that ``CreateMediaBuySuccess`` no longer validates.
+
+    The schema-drift stand-in: a row written by an older deploy, inside the replay TTL,
+    whose body the current model refuses. Both the replay and the race module seed it, and
+    they each carried a byte-identical private copy.
+    """
+
+    legacy_field: str = "older-deploy"
+
+
 def seed_cached_success(
     tenant_id: str,
     principal_id: str,
@@ -107,14 +118,18 @@ def seed_media_buy(
     does not duplicate across the repository and race test modules.
     """
     from tests.factories import AccountFactory, MediaBuyFactory, PrincipalFactory, TenantFactory
-    from tests.harness._base import BareIntegrationEnv
+    from tests.harness._base import DEFAULT_TEST_ACCOUNT_ID, BareIntegrationEnv
+
+    # A buy created by a conformant request carries an account, and the backstop lookup is
+    # scoped by (principal, account, key) -- a seeded buy with no account sits in a scope
+    # nothing looks in. Callers naming their own account keep it.
+    account_id = account_id or DEFAULT_TEST_ACCOUNT_ID
 
     with BareIntegrationEnv() as env:
         tenant = TenantFactory(tenant_id=tenant_id)
         principal = PrincipalFactory(tenant=tenant, principal_id=principal_id)
-        if account_id is not None:
-            # media_buys.account_id is a FK into accounts — seed the account first.
-            AccountFactory(tenant=tenant, account_id=account_id)
+        # media_buys.account_id is a FK into accounts — seed the account first.
+        AccountFactory(tenant=tenant, account_id=account_id)
         MediaBuyFactory(
             tenant=tenant,
             principal=principal,

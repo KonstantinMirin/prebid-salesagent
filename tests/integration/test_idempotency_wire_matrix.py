@@ -25,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from tests.harness._base import DEFAULT_TEST_ACCOUNT_ID
 from tests.harness.media_buy_create import OMIT_IDEMPOTENCY_KEY, MediaBuyCreateEnv
 from tests.harness.transport import Transport
 from tests.helpers import assert_envelope_shape
@@ -84,7 +85,9 @@ class TestIdempotencyWireMatrix:
 
             with MediaBuyUoW(env._tenant_id) as uow:
                 assert uow.media_buys is not None
-                existing = uow.media_buys.find_by_idempotency_key(key, env._principal_id)
+                existing = uow.media_buys.find_by_idempotency_key(
+                    key, env._principal_id, account_id=DEFAULT_TEST_ACCOUNT_ID
+                )
                 assert existing is not None
                 assert existing.media_buy_id == first.payload.response.media_buy_id
 
@@ -167,7 +170,7 @@ class TestIdempotencyWireMatrix:
             with MediaBuyUoW(env._tenant_id) as uow:
                 assert uow.idempotency_attempts is not None
                 row = uow.idempotency_attempts.find_including_expired(
-                    principal_id=env._principal_id, idempotency_key=key
+                    principal_id=env._principal_id, idempotency_key=key, account_id=DEFAULT_TEST_ACCOUNT_ID
                 )
                 assert row is not None, "the fresh create must have written a cache row"
                 row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
