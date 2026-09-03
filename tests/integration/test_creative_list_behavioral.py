@@ -17,9 +17,10 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from adcp.types import CreativeFilters
+from adcp.types import CreativeFilters, PaginationRequest
+from adcp.types.generated_poc.creative.list_creatives_request import Sort
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError
 from tests.factories import (
     CreativeAssignmentFactory,
     CreativeFactory,
@@ -29,6 +30,8 @@ from tests.factories import (
 )
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness import CreativeListEnv, make_identity
+from tests.harness._base import WireError
+from tests.helpers.envelope_assertions import assert_envelope_shape
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
 
@@ -73,25 +76,32 @@ class TestListAuth:
 
 
 class TestListValidation:
-    """Input validation for date filter parameters."""
+    """An unparseable date in the filters is refused ON THE WIRE, on every transport.
 
-    def test_invalid_created_after_raises(self, integration_db):
-        """Covers: UC-006-EXT-C-01 — invalid created_after date → AdCPValidationError."""
+    These used to call ``env.call_impl(created_after="not-a-date")`` and assert an
+    in-process ``AdCPValidationError``. Those flat parameters are gone -- AdCP 3.1.1 puts
+    both dates inside ``filters`` (core/creative-filters.json, format: date-time), no
+    transport could ever send the flat spelling, and the builder no longer parses one.
+
+    Grading the WIRE rather than the in-process raise is a strictly stronger assertion and
+    the one this file is placed to make: it proves the buyer receives an INVALID_REQUEST
+    envelope from A2A and REST both, which the old in-process form never reached.
+    """
+
+    @pytest.mark.parametrize("field", ["created_after", "created_before"])
+    @pytest.mark.parametrize("transport", ["a2a", "rest"])
+    def test_invalid_filter_date_is_refused_on_the_wire(self, integration_db, field: str, transport: str):
+        """Covers: UC-006-EXT-C-01 — an unparseable filter date → INVALID_REQUEST envelope."""
         with CreativeListEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             PrincipalFactory(tenant=tenant, principal_id="test_principal")
 
-            with pytest.raises(AdCPValidationError):
-                env.call_impl(created_after="not-a-date")
+            dispatch = env.call_a2a if transport == "a2a" else env.call_rest
+            with pytest.raises(WireError) as raised:
+                dispatch(filters={field: "not-a-date"})
 
-    def test_invalid_created_before_raises(self, integration_db):
-        """Covers: UC-006-EXT-C-01 — invalid created_before date → AdCPValidationError."""
-        with CreativeListEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            PrincipalFactory(tenant=tenant, principal_id="test_principal")
-
-            with pytest.raises(AdCPValidationError):
-                env.call_impl(created_before="not-a-date")
+        # recovery="correctable": the buyer can fix this by resending a parseable date.
+        assert_envelope_shape(raised.value.envelope, "INVALID_REQUEST", recovery="correctable")
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +132,7 @@ class TestListFiltering:
                 status="pending_review",
             )
 
-            response = env.call_impl(status="approved")
+            response = env.call_impl(filters=CreativeFilters(statuses=["approved"]))
 
         assert len(response.creatives) == 1
         assert response.creatives[0].creative_id == "c_approved"
@@ -191,7 +201,7 @@ class TestListPagination:
                     creative_id=f"c_page_{i}",
                 )
 
-            response = env.call_impl(limit=2)
+            response = env.call_impl(pagination=PaginationRequest(max_results=2))
 
         assert len(response.creatives) == 2
         assert response.pagination.has_more is True
@@ -209,8 +219,8 @@ class TestListPagination:
                     creative_id=f"c_offset_{i}",
                 )
 
-            page1 = env.call_impl(limit=2, page=1)
-            page2 = env.call_impl(limit=2, page=2)
+            page1 = env.call_impl(pagination=PaginationRequest(max_results=2), page=1)
+            page2 = env.call_impl(pagination=PaginationRequest(max_results=2), page=2)
 
         # Pages should return different creatives
         page1_ids = {c.creative_id for c in page1.creatives}
@@ -279,7 +289,7 @@ class TestListTagsFilter:
                 name="Winter Campaign Video",
             )
 
-            response = env.call_impl(tags=["Summer"])
+            response = env.call_impl(filters=CreativeFilters(tags=["Summer"]))
 
         assert len(response.creatives) == 1
         assert response.creatives[0].creative_id == "c_summer"
@@ -308,8 +318,8 @@ class TestListDateFilters:
                 created_at=now - timedelta(hours=1),
             )
 
-            cutoff = (now - timedelta(days=7)).isoformat()
-            response = env.call_impl(created_after=cutoff)
+            cutoff = now - timedelta(days=7)
+            response = env.call_impl(filters=CreativeFilters(created_after=cutoff))
 
         assert len(response.creatives) == 1
         assert response.creatives[0].creative_id == "c_new"
@@ -334,8 +344,8 @@ class TestListDateFilters:
                 created_at=now - timedelta(hours=1),
             )
 
-            cutoff = (now - timedelta(days=7)).isoformat()
-            response = env.call_impl(created_before=cutoff)
+            cutoff = now - timedelta(days=7)
+            response = env.call_impl(filters=CreativeFilters(created_before=cutoff))
 
         assert len(response.creatives) == 1
         assert response.creatives[0].creative_id == "c_old"
@@ -363,7 +373,7 @@ class TestListSearchFilter:
                 name="Footer Widget",
             )
 
-            response = env.call_impl(search="hero")
+            response = env.call_impl(filters=CreativeFilters(name_contains="hero"))
 
         assert len(response.creatives) == 1
         assert response.creatives[0].creative_id == "c_hero"
@@ -384,7 +394,7 @@ class TestListMediaBuyFilter:
             mb = MediaBuyFactory(tenant=tenant)
             CreativeAssignmentFactory(creative=c1, media_buy=mb)
 
-            response = env.call_impl(media_buy_id=mb.media_buy_id)
+            response = env.call_impl(filters=CreativeFilters(media_buy_ids=[mb.media_buy_id]))
 
         assert len(response.creatives) == 1
         assert response.creatives[0].creative_id == "c_assigned"
@@ -404,7 +414,7 @@ class TestListMediaBuyFilter:
             CreativeAssignmentFactory(creative=c1, media_buy=mb1)
             CreativeAssignmentFactory(creative=c2, media_buy=mb2)
 
-            response = env.call_impl(media_buy_ids=["mb_1", "mb_2"])
+            response = env.call_impl(filters=CreativeFilters(media_buy_ids=["mb_1", "mb_2"]))
 
         ids = {c.creative_id for c in response.creatives}
         assert ids == {"c_buy1", "c_buy2"}
@@ -429,12 +439,14 @@ class TestListStructuredFilters:
                 format="display_300x250",
             )
 
-            # Structured filters with name_contains + flat status
-            # Line 151: filters_dict = {**filters.model_dump(exclude_none=True), **filters_dict}
-            structured = CreativeFilters(name_contains="Creative")
-            response = env.call_impl(status="approved", filters=structured)
+            # Two criteria in ONE structured filters object. This used to pass
+            # ``status="approved"`` alongside ``filters=CreativeFilters(name_contains=...)``
+            # to grade the builder's flat-over-structured merge; the flat parameter is gone
+            # (AdCP 3.1.1 has no top-level ``status``), so the merge it graded no longer
+            # exists. The surviving obligation is the reportable one: every criterion the
+            # buyer supplied is named back in query_summary.filters_applied.
+            response = env.call_impl(filters=CreativeFilters(statuses=["approved"], name_contains="Creative"))
 
-        # Flat status AND structured name_contains both appear in filters_applied
         applied = response.query_summary.filters_applied
         assert any("statuses" in f for f in applied)
         assert any("search=" in f for f in applied)
@@ -459,7 +471,7 @@ class TestListSorting:
             CreativeFactory(tenant=tenant, principal=principal, creative_id="c_a", name="Alpha")
             CreativeFactory(tenant=tenant, principal=principal, creative_id="c_c", name="Charlie")
 
-            response = env.call_impl(sort_by="name", sort_order="asc")
+            response = env.call_impl(sort=Sort(field="name", direction="asc"))
 
         names = [c.name for c in response.creatives]
         assert names == ["Alpha", "Bravo", "Charlie"]
@@ -483,7 +495,7 @@ class TestListSorting:
                 status="approved",
             )
 
-            response = env.call_impl(sort_by="status", sort_order="asc")
+            response = env.call_impl(sort=Sort(field="status", direction="asc"))
 
         statuses = [str(c.status) for c in response.creatives]
         assert statuses == sorted(statuses)
@@ -495,7 +507,7 @@ class TestListSorting:
             principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
             CreativeFactory(tenant=tenant, principal=principal, creative_id="c_1")
 
-            response = env.call_impl(sort_by="name", sort_order="asc")
+            response = env.call_impl(sort=Sort(field="name", direction="asc"))
 
         sort = response.query_summary.sort_applied
         assert sort.field == "name"
@@ -520,7 +532,7 @@ class TestListQuerySummary:
             mb = MediaBuyFactory(tenant=tenant, media_buy_id="mb_qs_1")
             CreativeAssignmentFactory(creative=c1, media_buy=mb)
 
-            response = env.call_impl(media_buy_ids=["mb_qs_1"])
+            response = env.call_impl(filters=CreativeFilters(media_buy_ids=["mb_qs_1"]))
 
         assert any("media_buy_ids" in f for f in response.query_summary.filters_applied)
 
@@ -531,7 +543,7 @@ class TestListQuerySummary:
             principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
             CreativeFactory(tenant=tenant, principal=principal, creative_id="c_1")
 
-            response = env.call_impl(search="banner")
+            response = env.call_impl(filters=CreativeFilters(name_contains="banner"))
 
         assert any("search=" in f for f in response.query_summary.filters_applied)
 
@@ -543,8 +555,10 @@ class TestListQuerySummary:
             CreativeFactory(tenant=tenant, principal=principal, creative_id="c_1")
 
             response = env.call_impl(
-                created_after="2024-01-01T00:00:00+00:00",
-                created_before="2027-12-31T23:59:59+00:00",
+                filters=CreativeFilters(
+                    created_after=datetime(2024, 1, 1, tzinfo=UTC),
+                    created_before=datetime(2027, 12, 31, 23, 59, 59, tzinfo=UTC),
+                )
             )
 
         applied = response.query_summary.filters_applied
@@ -558,7 +572,7 @@ class TestListQuerySummary:
             principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
             CreativeFactory(tenant=tenant, principal=principal, creative_id="c_1", name="Test tag1")
 
-            response = env.call_impl(tags=["tag1"])
+            response = env.call_impl(filters=CreativeFilters(tags=["tag1"]))
 
         assert any("tags=" in f for f in response.query_summary.filters_applied)
 
@@ -623,7 +637,7 @@ class TestListResponseShape:
             for i in range(5):
                 CreativeFactory(tenant=tenant, principal=principal, creative_id=f"c_tc_{i}")
 
-            response = env.call_impl(limit=2)
+            response = env.call_impl(pagination=PaginationRequest(max_results=2))
 
         assert response.pagination.total_count == 5
         assert response.pagination.has_more is True
@@ -639,7 +653,7 @@ class TestListResponseShape:
             for i in range(4):
                 CreativeFactory(tenant=tenant, principal=principal, creative_id=f"c_msg_{i}")
 
-            response = env.call_impl(limit=2, page=1)
+            response = env.call_impl(pagination=PaginationRequest(max_results=2), page=1)
 
         # Paginated response has has_more
         assert response.pagination.has_more is True
@@ -707,8 +721,13 @@ class TestListTransportParity:
                 status="approved",
             )
 
-            impl_response = env.call_impl(status="approved")
-            a2a_response = env.call_a2a(status="approved")
+            # Spec vocabulary on BOTH sides. The flat ``status`` this used to send was
+            # never a ListCreativesRequest field, so A2A's select_request_fields dropped it
+            # while call_impl honoured it -- the two transports were being asked different
+            # questions and the test could only ever have caught a difference by accident.
+            # call_impl takes the TYPED filter; call_a2a takes the wire dict.
+            impl_response = env.call_impl(filters=CreativeFilters(statuses=["approved"]))
+            a2a_response = env.call_a2a(filters={"statuses": ["approved"]})
 
         assert len(impl_response.creatives) == len(a2a_response.creatives)
         assert impl_response.creatives[0].creative_id == a2a_response.creatives[0].creative_id
