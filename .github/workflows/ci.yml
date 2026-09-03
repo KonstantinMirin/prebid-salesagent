@@ -703,24 +703,33 @@ jobs:
         with:
           name: bdd-in-network-collection
           path: bdd-artifacts
-      - name: Flatten the in-network run's timestamped results dir
+      - name: Gather every producer's records into one directory
         run: |
-          # run_all_tests.sh writes into test-results/<timestamp>/, so the
-          # in-network artifact arrives one level deeper than the shards'.
-          shopt -s nullglob
-          for d in bdd-artifacts/test-results/*/collection-manifest bdd-artifacts/test-results/*/liveness-sessions; do
-            [ -d "$d" ] || continue
-            mkdir -p "bdd-artifacts/$(basename "$d")"
-            cp -n "$d"/*.json "bdd-artifacts/$(basename "$d")/" || true
+          set -euo pipefail
+          # Collect by DIRECTORY NAME wherever it sits, rather than by an
+          # assumed depth. upload-artifact strips the common prefix of the paths
+          # it matched, so the in-network job's `test-results/<ts>/...` arrives
+          # as `collection-manifest/...` while the shards' arrives at the root
+          # already. Keying on the name survives both layouts.
+          mkdir -p bdd-artifacts/collection-manifest bdd-artifacts/liveness-sessions
+          for kind in collection-manifest liveness-sessions; do
+            find bdd-artifacts -type f -name '*.json' -path "*/$kind/*" \
+              -not -path "bdd-artifacts/$kind/*" \
+              -exec cp -n {} "bdd-artifacts/$kind/" \;
           done
-          # find, not ls: shellcheck SC2012, and a count is all this reports.
-          echo "collection records: $(find bdd-artifacts/collection-manifest -name '*.json' 2>/dev/null | wc -l)"
-          echo "liveness sessions:  $(find bdd-artifacts/liveness-sessions -name '*.json' 2>/dev/null | wc -l)"
-      # The merge is NOT reimplemented here. `tox -e collection` runs tests that
-      # call load()/load_run(), which apply the same _merge_record the liveness
-      # controller already uses to fold its xdist workers -- so local runs,
-      # `cassini run` and CI grade the artifacts through one code path, which is
-      # the property this step exists to establish.
+
+          records=$(find bdd-artifacts/collection-manifest -name '*.json' | wc -l)
+          sessions=$(find bdd-artifacts/liveness-sessions -name '*.json' | wc -l)
+          echo "collection records: $records"
+          echo "liveness sessions:  $sessions"
+
+          # Fail here, with the cause, rather than in 32 tests that each report
+          # the same missing record. Three of the four collection observers need
+          # the FULL-TREE record, which only bdd-in-network produces.
+          # Fail here, with the cause, rather than in 32 tests that each
+          # report the same missing record.
+          python3 scripts/ci/assert_full_tree_record.py bdd-artifacts/collection-manifest
+
       - uses: ./.github/actions/_pytest
         env:
           PYTEST_COLLECTION_MANIFEST: bdd-artifacts/collection-manifest
