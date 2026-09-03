@@ -595,6 +595,16 @@ fi
 echo "Reports: $RESULTS_DIR/  (suites: $SUITES)"
 ls -1 "$RESULTS_DIR"/*.json 2>/dev/null || echo "  (no JSON reports extracted)"
 
+# The parallelism evidence, in the log beside the reports. The profile records
+# were written on every run and nothing read them; this is the reader. It fails
+# only when a suite's workers disagree on what they collected -- a
+# self-contradiction under `--dist load`, where every worker collects the whole
+# suite, and therefore a check that needs no baseline. It sets no threshold on
+# startup or idle: a threshold is a ratchet and a ratchet needs a baseline.
+if ! python3 scripts/ci/report_worker_profile.py "$RESULTS_DIR/worker-profile"; then
+    [ "$RC" -eq 0 ] && RC=1
+fi
+
 # A truncated suite is a failed suite, and the whole point is that it must not
 # be mistakable for a green one. The predicate is shared with
 # run_all_tests_host.sh -- see scripts/check_truncated_reports.py for why it
