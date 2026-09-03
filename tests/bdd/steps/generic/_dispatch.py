@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
-from tests.harness.transport import NO_IDENTITY_OVERRIDE
+from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
 
 if TYPE_CHECKING:
     from tests.harness._base import WireError
@@ -133,6 +133,46 @@ def _populate_ctx_from_result(ctx: WireCtx, result: TransportResult) -> None:
         ctx["wire_response"] = result.wire_response
 
 
+def _as_transport(ctx: dict, caller: str) -> Transport:
+    """Read ``ctx['transport']`` as a :class:`Transport`. The SINGLE normalizer.
+
+    ``ctx["transport"]`` is *usually* already the enum — the ``ctx`` fixture
+    injects it that way (``tests/bdd/conftest.py``, "gets a fresh dict with
+    ``ctx['transport']`` set to the Transport enum"). But three step modules
+    overwrite it with a STRING mid-scenario (``given_auth.py`` with ``"mcp"``,
+    ``uc010_capabilities.py`` with ``"MCP"``/``"A2A"``, ``uc011_accounts.py``
+    with ``"A2A"``), and the two spellings differ in case.
+
+    ``dispatch_request`` grew an inline map for that and ``dispatch_via_client``
+    did not, so the client seam raised ``KeyError``/``NoAddressForTransport`` on
+    exactly the scenarios that re-assign the key — a latent trap that only fires
+    once a string-assigning module is migrated onto the client. Normalizing in
+    ONE place means the two dispatch entry points cannot disagree about what the
+    key may hold (CLAUDE.md DRY invariant).
+
+    A missing transport is a WIRING BUG, not an IMPL fallback: BDD dispatches on
+    a wire transport only (IMPL was dropped from the default parametrization,
+    #1417), so fail loudly rather than silently bypassing the wire.
+    """
+    transport = ctx.get("transport")
+    if transport is None:
+        raise RuntimeError(
+            f"{caller}: ctx['transport'] is unset. BDD scenarios must dispatch "
+            "through a wire transport (a2a/mcp/rest); the IMPL call_impl fallback was removed."
+        )
+    if isinstance(transport, Transport):
+        return transport
+    if isinstance(transport, str):
+        try:
+            # Transport values are lowercase ("a2a"/"mcp"/"rest"/"e2e_rest"), so
+            # casefolding covers both the "mcp" and "MCP" spellings in use without
+            # a hand-maintained alias map that a new member would silently miss.
+            return Transport(transport.lower())
+        except ValueError as exc:
+            raise RuntimeError(f"{caller}: unrecognized wire transport {transport!r}") from exc
+    raise RuntimeError(f"{caller}: ctx['transport'] is neither a Transport nor a str: {transport!r}")
+
+
 def dispatch_request(ctx: dict, *, identity: Any = NO_IDENTITY_OVERRIDE, **kwargs: Any) -> None:
     """Dispatch a request through ctx['transport'] via ``env.call_via``.
 
@@ -148,33 +188,8 @@ def dispatch_request(ctx: dict, *, identity: Any = NO_IDENTITY_OVERRIDE, **kwarg
     if identity is not NO_IDENTITY_OVERRIDE:
         kwargs["identity"] = identity
 
-    transport = ctx.get("transport")
     env = ctx["env"]
-    # BDD dispatches on a wire transport only (IMPL was dropped from the default
-    # parametrization, #1417). A missing transport is a wiring bug, not
-    # an IMPL fallback — fail loudly rather than silently bypassing the wire.
-    if transport is None:
-        raise RuntimeError(
-            "dispatch_request: ctx['transport'] is unset. BDD scenarios must dispatch "
-            "through a wire transport (a2a/mcp/rest); the IMPL call_impl fallback was removed."
-        )
-
-    from tests.harness.transport import Transport
-
-    if isinstance(transport, Transport):
-        pass  # Already a Transport enum — use as-is
-    elif isinstance(transport, str):
-        transport_map = {
-            "MCP": Transport.MCP,
-            "mcp": Transport.MCP,
-            "A2A": Transport.A2A,
-            "a2a": Transport.A2A,
-            "REST": Transport.REST,
-            "rest": Transport.REST,
-        }
-        if transport not in transport_map:
-            raise RuntimeError(f"dispatch_request: unrecognized wire transport {transport!r}")
-        transport = transport_map[transport]
+    transport = _as_transport(ctx, "dispatch_request")
     try:
         result = env.call_via(transport, **kwargs)
         _populate_ctx_from_result(cast("WireCtx", ctx), result)
@@ -207,8 +222,9 @@ def dispatch_via_client(ctx: dict, tool: str, payload: dict[str, Any], *, identi
     (client.py's own anti-vacuity comment on ``call()``).
     """
     client = ctx["client"]
+    transport = _as_transport(ctx, "dispatch_via_client")
     if identity is not NO_IDENTITY_OVERRIDE:
-        result = client.call(tool, payload, ctx["transport"], identity=identity)
+        result = client.call(tool, payload, transport, identity=identity)
     else:
-        result = client.call(tool, payload, ctx["transport"])
+        result = client.call(tool, payload, transport)
     _populate_ctx_from_result(cast("WireCtx", ctx), result)

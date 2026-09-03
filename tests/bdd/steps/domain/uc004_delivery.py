@@ -3346,6 +3346,27 @@ def _validate_reporting_webhook_credentials(ctx: dict, auth_scheme: str, credent
     FIXME(#2109): this grades a Pydantic constructor in the test process, not
     production — nothing is dispatched, so the a2a/mcp/rest axis carries no
     information for the 14 auth-scheme and credential rows that route here.
+
+    WHY THE OBVIOUS FIX DOES NOT WORK, measured under salesagent-prkv.65 so the
+    next person does not spend the attempt again: converting this to
+    ``harness_create_request_kwargs(ctx)`` + a raw ``dispatch_request`` — the
+    template that fixed every other site in that ticket, and which
+    ``when_validate_webhook_config`` above already uses successfully — turns all
+    42 of these tests (14 rows x 3 transports) RED, valid rows included. The two
+    scenario outlines are routed to ``DeliveryPollEnv``, whose verb is
+    ``get_media_buy_delivery``; a create_media_buy-shaped kwargs bag dispatched
+    there comes back INVALID_REQUEST no matter what the credentials say.
+
+    So this is NOT a step-definition migration. It needs the
+    ``T-UC-004-partition-credentials`` / ``T-UC-004-boundary-credentials`` rows
+    routed to a create-capable env (an ENV_ROUTES change plus product/pricing
+    seeding), or the rows re-homed next to the ``T-UC-004-webhook-creds-*``
+    scenarios, which already dispatch a real create. That is a scenario-routing
+    decision, not a harness one.
+
+    Note the graduation note in conftest.py for these two tags says they pass "on
+    all transports" — they do, but only because this constructor check is
+    transport-independent. That is the gap #2109 names, not evidence of coverage.
     """
     from datetime import UTC, datetime
 

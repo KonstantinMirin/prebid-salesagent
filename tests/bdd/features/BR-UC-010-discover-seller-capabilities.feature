@@ -503,7 +503,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     And the Buyer has an invalid authentication token
     When the Buyer Agent sends a get_adcp_capabilities skill request via A2A with the token
-    Then the wire error envelope should carry code "AUTH_INVALID" with recovery "terminal"
+    Then the response arrives
+    And the response contains error code AUTH_INVALID
     # Graduated (salesagent-7moz): A2A now always validates a presented token
     # regardless of the requested skill's own auth requirement.
     # POST-F2: Buyer knows what failed and the error code
@@ -593,7 +594,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
     When the Buyer Agent calls get_adcp_capabilities with protocols filter ["marketing"]
-    Then the wire error envelope should carry code "INVALID_REQUEST" with recovery "correctable"
+    Then the response arrives
+    And the response contains error code INVALID_REQUEST
     # Graduated: build_get_adcp_capabilities_request now constructs a real typed
     # GetAdcpCapabilitiesRequest — Pydantic enforces the protocols enum, so "marketing"
     # (outside the closed 5-value enum) is rejected.
@@ -607,7 +609,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
     When the Buyer Agent calls get_adcp_capabilities with protocols filter []
-    Then the wire error envelope should carry code "INVALID_REQUEST" with recovery "correctable"
+    Then the response arrives
+    And the response contains error code INVALID_REQUEST
     # Graduated: build_get_adcp_capabilities_request now constructs a real typed
     # GetAdcpCapabilitiesRequest — Pydantic enforces minItems:1, so an empty protocols
     # array is rejected. Inverted 2026-07-13 from a @known-gap pin.
@@ -1419,7 +1422,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     And the seller speaks adcp release-precision versions "3.0", "3.1"
     When the Buyer Agent calls get_adcp_capabilities with adcp_version "4.0"
-    Then the wire error envelope should carry code "VERSION_UNSUPPORTED" with recovery "correctable"
+    Then the response arrives
+    And the response contains error code VERSION_UNSUPPORTED
     And the error details should carry supported_versions as a non-empty array
     And each supported_versions entry should match pattern "^\\d+\\.\\d+(-[a-zA-Z0-9.-]+)?$"
     # Graduated: version negotiation now implemented (src/core/version_negotiation.py) — a bad
@@ -1442,7 +1446,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Given a tenant is resolvable from the request context
     And the seller speaks adcp release-precision versions "3.0", "3.1"
     When the Buyer Agent calls get_adcp_capabilities with adcp_major_version 4
-    Then the wire error envelope should carry code "VERSION_UNSUPPORTED" with recovery "correctable"
+    Then the response arrives
+    And the response contains error code VERSION_UNSUPPORTED
     And the error details should include supported_versions containing "3.0" and "3.1"
     # Graduated: version negotiation now implemented (src/core/version_negotiation.py).
     # adcp_major_version pin honored through 3.x ("Servers MUST continue to honor this field
@@ -1461,7 +1466,8 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the seller speaks adcp release-precision versions "3.0", "3.1"
     And the seller's build_version is "3.1.2+scope3.deploy.4821"
     When the Buyer Agent calls get_adcp_capabilities with adcp_version "4.0"
-    Then the wire error envelope should carry code "VERSION_UNSUPPORTED" with recovery "correctable"
+    Then the response arrives
+    And the response contains error code VERSION_UNSUPPORTED
     And the error details should include build_version equal to "3.1.2+scope3.deploy.4821"
     And the error details should carry supported_versions as a non-empty array
     And each supported_versions entry should match pattern "^\\d+\\.\\d+(-[a-zA-Z0-9.-]+)?$"

@@ -9,6 +9,7 @@ No stub mode. No dict intermediaries -- assertions access Format attributes dire
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from enum import Enum
 from typing import Any
@@ -348,8 +349,30 @@ _KNOWN_FILTER_FIELDS = frozenset(
 _CREATIVE_AGENT_FIELDS = frozenset({"creative agent type", "creative agent asset type"})
 
 
+#: An outcome cell naming an AdCP error code, e.g. ``INVALID_REQUEST``.
+_OUTCOME_CODE_RE = re.compile(r"^[A-Z][A-Z_0-9]+$")
+
+
 def _assert_partition_outcome(ctx: dict, field: str, expected: str) -> None:
-    """Assert partition/boundary test outcome against real production results."""
+    """Assert a partition/boundary outcome: ``valid``, or a NAMED wire error code.
+
+    The rejection half used to accept ``expected == "invalid"`` and check only
+    that ``"error"`` was a key in ``ctx`` and that no payload came back. Both
+    halves of that were satisfiable WITHOUT the seller ever seeing the request:
+    the When built the typed model in the test process, pydantic raised, the step
+    stashed the exception, and this assertion passed. It could not distinguish a
+    client-side rejection from a server one, and it never looked at a code — so
+    ~36 UC-005 rows asserted only "something went wrong somewhere".
+
+    Now the outcome cell NAMES the code (the Examples table carries the
+    contract) and the assertion is made against the real two-layer envelope the
+    buyer received, via the harness's own ``assert_wire_error`` — the single
+    sanctioned surface, shared with ``then_error.py``'s wire-first steps rather
+    than re-spelled here (CLAUDE.md DRY invariant).
+
+    There is deliberately NO bare-``invalid`` branch left. Keeping one would let
+    an unmigrated row keep grading nothing, and every UC-005 row now names a code.
+    """
     assert field in _KNOWN_FILTER_FIELDS, (
         f"Unknown filter field '{field}' in partition/boundary test. Known fields: {sorted(_KNOWN_FILTER_FIELDS)}"
     )
@@ -363,18 +386,32 @@ def _assert_partition_outcome(ctx: dict, field: str, expected: str) -> None:
         assert isinstance(formats_attr, list), (
             f"Expected 'formats' to be a list for '{field}' filter, got {type(formats_attr).__name__}"
         )
-    elif expected == "invalid":
-        assert "error" in ctx, (
-            f"Expected '{field}' filter to be rejected as invalid, but operation "
-            f"succeeded with response: {payload_or_none(ctx)!r}"
+        return
+
+    if expected == "invalid":
+        raise AssertionError(
+            f"Outcome cell for '{field}' says a bare 'invalid'. Name the AdCP error code the "
+            "seller must return (e.g. INVALID_REQUEST) so the scenario grades WHICH rejection "
+            "the buyer receives, not merely that something failed."
         )
-        resp = payload_or_none(ctx)
-        assert resp is None, (
-            f"Expected no response on invalid '{field}' filter, got both error "
-            f"{ctx.get('error')!r} AND response {resp!r}"
+
+    if not _OUTCOME_CODE_RE.match(expected):
+        raise AssertionError(
+            f"Unexpected outcome value '{expected}' for '{field}' -- expected 'valid' or an AdCP error code"
         )
-    else:
-        raise AssertionError(f"Unexpected outcome value '{expected}' for '{field}' -- expected 'valid' or 'invalid'")
+
+    # The rejection must have crossed a transport. assert_wire_error hard-asserts a
+    # real captured envelope before comparing, so this cannot pass on a
+    # reconstructed exception or on a transport that swallowed the typed error.
+    result = ctx.get("result")
+    assert result is not None, (
+        f"Expected '{field}' to be rejected with {expected} on the wire, but no transport result "
+        f"was captured — the payload never reached the seller. ctx['error']={ctx.get('error')!r}"
+    )
+    try:
+        result.assert_wire_error(expected)
+    except AssertionError as exc:
+        raise AssertionError(f"[{field}] {exc}") from None
 
 
 def _assert_returned_formats_subset_of_registry(ctx: dict, field: str, label: str) -> None:

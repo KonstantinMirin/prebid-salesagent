@@ -532,6 +532,28 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F2: Error explains invalid structure
     # POST-F3: Suggestion for correct FormatId structure
 
+  # ── Rejection outcomes name their AdCP error code ──────────────────────────
+  # The outcome column of every "Invalid partitions" / boundary-rejection table below
+  # carries the CODE the seller must return, not a bare "invalid". A bare marker could
+  # be satisfied by any failure anywhere -- including a pydantic error raised in the
+  # TEST process before the payload ever crossed a transport, which is what these rows
+  # actually graded until salesagent-prkv.65 made the When steps dispatch raw.
+  #
+  # INVALID_REQUEST is the code for all of them because each invalid row violates a
+  # SCHEMA constraint (a value outside a pinned enum, an array below minItems=1, a
+  # FormatId missing a required member) rather than a business rule:
+  #   INVALID_REQUEST  "Request is malformed, missing required fields, or violates
+  #                     schema constraints. Recovery: correctable."
+  #   VALIDATION_ERROR "Request contains invalid field values or violates business
+  #                     rules BEYOND schema validation."
+  # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/INVALID_REQUEST
+  # (pinned locally at tests/fixtures/adcp_schemas_pinned/enums/error-code.json:102)
+  # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/media-buy/list-creative-formats-request.json
+  #   pointer=/properties/asset_types/minItems  (minItems=1 also on format_ids,
+  #   disclosure_positions, output_format_ids, input_format_ids)
+  # This matches the codes the ext-b error scenarios above already assert for the same
+  # conditions, so one feature no longer names two codes for one rejection.
+
   @T-UC-005-partition-type-filter @partition @format_type_filter
   Scenario Outline: Format type filter partition - <partition>
     Given a seller with formats of various types
@@ -548,7 +570,7 @@ Feature: BR-UC-005 Discover Creative Formats
 
     Examples: Invalid partitions
       | partition     | expected |
-      | invalid_type  | invalid  |
+      | invalid_type  | INVALID_REQUEST  |
 
   @T-UC-005-partition-format-ids @UC-005-MAIN-MCP-06 @partition @format_ids_filter
   Scenario Outline: Format IDs filter partition - <partition>
@@ -578,8 +600,8 @@ Feature: BR-UC-005 Discover Creative Formats
     Examples: Invalid partitions
       | partition                   | expected |
       | no_matching_formats         | valid    |
-      | unknown_asset_type          | invalid  |
-      | removed_promoted_offerings  | invalid  |
+      | unknown_asset_type          | INVALID_REQUEST  |
+      | removed_promoted_offerings  | INVALID_REQUEST  |
 
   @T-UC-005-partition-dimension @UC-005-MAIN-MCP-08 @partition @dimension_filter
   Scenario Outline: Dimension filter partition - <partition>
@@ -643,7 +665,7 @@ Feature: BR-UC-005 Discover Creative Formats
 
     Examples: Invalid partitions
       | partition      | expected |
-      | unknown_value  | invalid  |
+      | unknown_value  | INVALID_REQUEST  |
 
   @T-UC-005-partition-disclosure @UC-005-MAIN-MCP-18 @partition @disclosure_positions
   Scenario Outline: Disclosure positions filter partition - <partition>
@@ -661,9 +683,9 @@ Feature: BR-UC-005 Discover Creative Formats
 
     Examples: Invalid partitions
       | partition            | expected |
-      | unknown_position     | invalid  |
-      | empty_array          | invalid  |
-      | duplicate_positions  | invalid  |
+      | unknown_position     | INVALID_REQUEST  |
+      | empty_array          | INVALID_REQUEST  |
+      | duplicate_positions  | INVALID_REQUEST  |
 
   @T-UC-005-partition-disclosure-persistence @partition @disclosure_persistence
   Scenario Outline: Disclosure persistence filter partition - <partition>
@@ -682,9 +704,9 @@ Feature: BR-UC-005 Discover Creative Formats
 
     Examples: Invalid partitions
       | partition       | expected |
-      | unknown_mode    | invalid  |
-      | empty_array     | invalid  |
-      | duplicate_modes | invalid  |
+      | unknown_mode    | INVALID_REQUEST  |
+      | empty_array     | INVALID_REQUEST  |
+      | duplicate_modes | INVALID_REQUEST  |
 
   @T-UC-005-partition-output-fmtids @UC-005-MAIN-MCP-19 @partition @output_format_ids
   Scenario Outline: Output format IDs filter partition - <partition>
@@ -702,9 +724,9 @@ Feature: BR-UC-005 Discover Creative Formats
 
     Examples: Invalid partitions
       | partition                           | expected |
-      | empty_array                         | invalid  |
-      | invalid_format_id_missing_agent_url | invalid  |
-      | invalid_format_id_missing_id        | invalid  |
+      | empty_array                         | INVALID_REQUEST  |
+      | invalid_format_id_missing_agent_url | INVALID_REQUEST  |
+      | invalid_format_id_missing_id        | INVALID_REQUEST  |
 
   @T-UC-005-partition-input-fmtids @UC-005-MAIN-MCP-20 @partition @input_format_ids
   Scenario Outline: Input format IDs filter partition - <partition>
@@ -722,9 +744,9 @@ Feature: BR-UC-005 Discover Creative Formats
 
     Examples: Invalid partitions
       | partition                           | expected |
-      | empty_array                         | invalid  |
-      | invalid_format_id_missing_agent_url | invalid  |
-      | invalid_format_id_missing_id        | invalid  |
+      | empty_array                         | INVALID_REQUEST  |
+      | invalid_format_id_missing_agent_url | INVALID_REQUEST  |
+      | invalid_format_id_missing_id        | INVALID_REQUEST  |
 
   @T-UC-005-boundary-type-filter @boundary @format_type_filter
   Scenario Outline: Format type filter boundary - <boundary_point>
@@ -739,7 +761,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | audio (valid enum)          | valid    |
       | dooh (valid enum)           | valid    |
       | omitted (no filter)         | valid    |
-      | invalid type (rejected)     | invalid  |
+      | invalid type (rejected)     | INVALID_REQUEST  |
 
   @T-UC-005-boundary-format-ids @UC-005-MAIN-MCP-06 @boundary @format_ids_filter
   Scenario Outline: Format IDs filter boundary - <boundary_point>
@@ -768,8 +790,8 @@ Feature: BR-UC-005 Discover Creative Formats
       | brief (new asset type for generative formats)     | valid    |
       | catalog (new asset type for catalog-based formats) | valid    |
       | no formats match (empty result)                   | valid    |
-      | Unknown string not in enum                        | invalid  |
-      | promoted_offerings (removed from enum)            | invalid  |
+      | Unknown string not in enum                        | INVALID_REQUEST  |
+      | promoted_offerings (removed from enum)            | INVALID_REQUEST  |
 
   @T-UC-005-boundary-dimension @UC-005-MAIN-MCP-08 @boundary @dimension_filter
   Scenario Outline: Dimension filter boundary - <boundary_point>
@@ -822,7 +844,7 @@ Feature: BR-UC-005 Discover Creative Formats
       | A (first enum value — minimum conformance)       | valid    |
       | AAA (last enum value — highest conformance)      | valid    |
       | Not provided (no filter)                         | valid    |
-      | Unknown string not in enum                       | invalid  |
+      | Unknown string not in enum                       | INVALID_REQUEST  |
 
   @T-UC-005-boundary-disclosure @UC-005-MAIN-MCP-18 @boundary @disclosure_positions
   Scenario Outline: Disclosure positions filter boundary - <boundary_point>
@@ -836,9 +858,9 @@ Feature: BR-UC-005 Discover Creative Formats
       | all 8 positions (max meaningful array)                  | valid    |
       | omitted (no filter)                                     | valid    |
       | format has no supported_disclosure_positions (excluded)  | valid    |
-      | empty array []                                          | invalid  |
-      | unknown position string 'sidebar'                       | invalid  |
-      | duplicate positions ['prominent','prominent']           | invalid  |
+      | empty array []                                          | INVALID_REQUEST  |
+      | unknown position string 'sidebar'                       | INVALID_REQUEST  |
+      | duplicate positions ['prominent','prominent']           | INVALID_REQUEST  |
 
   @T-UC-005-boundary-disclosure-persistence @boundary @disclosure_persistence
   Scenario Outline: Disclosure persistence filter boundary - <boundary_point>
@@ -854,9 +876,9 @@ Feature: BR-UC-005 Discover Creative Formats
       | omitted (no filter)                                | valid    |
       | format has no disclosure_capabilities (excluded)   | valid    |
       | no format covers all requested modes               | valid    |
-      | empty array []                                     | invalid  |
-      | unknown mode string 'permanent'                    | invalid  |
-      | duplicate modes ['continuous','continuous']        | invalid  |
+      | empty array []                                     | INVALID_REQUEST  |
+      | unknown mode string 'permanent'                    | INVALID_REQUEST  |
+      | duplicate modes ['continuous','continuous']        | INVALID_REQUEST  |
 
   @T-UC-005-boundary-output-fmtids @UC-005-MAIN-MCP-19 @boundary @output_format_ids
   Scenario Outline: Output format IDs filter boundary - <boundary_point>
@@ -871,9 +893,9 @@ Feature: BR-UC-005 Discover Creative Formats
       | omitted (no filter)                              | valid    |
       | format has no output_format_ids (excluded)       | valid    |
       | no formats match requested output IDs            | valid    |
-      | empty array []                                   | invalid  |
-      | FormatId missing agent_url                       | invalid  |
-      | FormatId missing id                              | invalid  |
+      | empty array []                                   | INVALID_REQUEST  |
+      | FormatId missing agent_url                       | INVALID_REQUEST  |
+      | FormatId missing id                              | INVALID_REQUEST  |
 
   @T-UC-005-boundary-input-fmtids @UC-005-MAIN-MCP-20 @boundary @input_format_ids
   Scenario Outline: Input format IDs filter boundary - <boundary_point>
@@ -888,9 +910,9 @@ Feature: BR-UC-005 Discover Creative Formats
       | omitted (no filter)                              | valid    |
       | format has no input_format_ids (excluded)        | valid    |
       | no formats match requested input IDs             | valid    |
-      | empty array []                                   | invalid  |
-      | FormatId missing agent_url                       | invalid  |
-      | FormatId missing id                              | invalid  |
+      | empty array []                                   | INVALID_REQUEST  |
+      | FormatId missing agent_url                       | INVALID_REQUEST  |
+      | FormatId missing id                              | INVALID_REQUEST  |
 
   @T-UC-005-partition-agent-type @UC-005-MAIN-MCP-21 @partition @creative_agent_format_type
   Scenario Outline: Creative agent format type partition - <partition>
@@ -933,8 +955,8 @@ Feature: BR-UC-005 Discover Creative Formats
 
     Examples: Invalid partitions
       | partition      | expected |
-      | unknown_value  | invalid  |
-      | empty_array    | invalid  |
+      | unknown_value  | INVALID_REQUEST  |
+      | empty_array    | INVALID_REQUEST  |
 
   @T-UC-005-boundary-agent-type @UC-005-MAIN-MCP-21 @boundary @creative_agent_format_type
   Scenario Outline: Creative agent format type boundary - <boundary_point>
@@ -963,8 +985,8 @@ Feature: BR-UC-005 Discover Creative Formats
       | image (first enum value)                                        | valid    |
       | url (last enum value)                                           | valid    |
       | Not provided (no filter)                                        | valid    |
-      | vast (valid in media-buy variant but not in creative agent)     | invalid  |
-      | Empty array                                                     | invalid  |
+      | vast (valid in media-buy variant but not in creative agent)     | INVALID_REQUEST  |
+      | Empty array                                                     | INVALID_REQUEST  |
 
   @T-UC-005-sandbox-happy @UC-005-MAIN-MCP-23 @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account receives simulated creative formats with sandbox flag

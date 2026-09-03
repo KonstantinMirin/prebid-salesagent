@@ -233,52 +233,177 @@ def _assert_meaningful_error(error: object) -> None:
 # ── Wire error envelope (Error Verification Policy) ─────────────────
 
 
-@then(
-    parsers.re(
-        r'the wire error envelope should carry code "(?P<code>[A-Z_0-9]+)" with recovery "(?P<recovery>[a-z]+)"$'
-    )
-)
-def then_wire_envelope_code_and_recovery(ctx: dict, code: str, recovery: str) -> None:
-    """Graded on the REAL wire bytes only — the sanctioned single surface.
+# ══════════════════════════════════════════════════════════════════════
+# THE THREE ERROR PRIMITIVES — one assertion each, composed by the scenario
+# ══════════════════════════════════════════════════════════════════════
+#
+#     Then the response arrives
+#     And the response contains error code <code>
+#     And the response error field is <field>
+#
+# One property per step, so a scenario composes the subset it cares about and
+# nothing needs a second spelling when it wants a different combination. That is
+# precisely how the two bundled steps below came to exist: "the wire error
+# envelope should carry code X" grades arrived+code, and "the request is rejected
+# with X naming field Y" grades arrived+code+field, so the second is a superset of
+# the first and the pair must be kept in step by hand. Three orthogonal primitives
+# cover the whole space; two bundles cover two points in it.
+#
+# The MECHANISM is unchanged and deliberately so — every one of these reads the
+# real two-layer wire envelope through the harness's own ``assert_wire_error`` /
+# the guarded ``_outcome_helpers`` accessors. Only the decomposition is new.
+#
+# The success-path twin of the third is "the response field <field> equals
+# <value>"; between them, with <code>/<field>/<value> coming from the Examples
+# column, they express nearly every assertion this suite needs.
 
-    BDD dispatches on a wire transport in every run, so a missing envelope is a
-    wiring bug to surface; the synthesized fallback this used to accept let the
-    assertion pass on MCP with zero wire bytes captured.
+
+@then("the response arrives")
+def then_response_arrives(ctx: dict) -> None:
+    """A response came back AT ALL — not nothing, and not a client-side exception.
+
+    THE ANTI-VACUUM PRIMITIVE, and the reason it must be able to fail on its own.
+    Every other assertion in this file is conditional on a response existing; if
+    none does, they either skip their real check or grade a reconstructed
+    exception. This step makes "the payload never reached the seller" a FAILURE
+    that a scenario states explicitly, rather than a silent precondition.
+
+    It fails in exactly the two ways a dispatch can produce no response:
+
+    * nothing was dispatched -- no ``ctx['result']`` at all, so no transport was
+      reached and there is nothing the buyer received;
+    * the dispatch raised in the TEST PROCESS -- ``ctx['error']`` holds an
+      ordinary exception rather than the ``WireError`` carrier a wire rejection
+      produces. That is the defect salesagent-prkv.65 removed at 53 sites: a
+      pydantic error raised while BUILDING the request looks like a rejection to
+      any assertion that only checks "is there an error", but production was
+      never executed.
+
+    Deliberately does NOT require a specific outcome: a success and a rejection
+    both ARRIVE. Composing this with nothing else asserts only that the seller
+    answered, which is a real and sometimes sufficient claim.
     """
-    ctx["result"].assert_wire_error(code, recovery=recovery)
+    from tests.harness._base import WireError
+
+    result = ctx.get("result")
+    error = ctx.get("error")
+    assert result is not None, (
+        "No response arrived: nothing was dispatched, so no transport was reached and there is "
+        f"nothing the buyer received to assert on. ctx['error']={error!r}"
+    )
+    if error is not None and not isinstance(error, WireError):
+        raise AssertionError(
+            "No response arrived: the dispatch raised in the TEST PROCESS rather than returning "
+            f"something the buyer received -- {type(error).__name__}: {error}. A client-side "
+            "exception is not a response; dispatch the raw payload so the seller answers."
+        )
 
 
-@then(parsers.re(r'the wire error envelope should carry code "(?P<code>[A-Z_0-9]+)"$'))
-def then_wire_envelope_code(ctx: dict, code: str) -> None:
-    """Code-only variant for scenarios that don't pin recovery semantics.
+@then(parsers.re(r"the response contains error code (?P<code>[A-Z_0-9]+)$"))
+def then_response_error_code(ctx: dict, code: str) -> None:
+    """The response carries AdCP error ``code`` on the wire. One property only.
 
-    Anchored regex (not parse) so it cannot shadow the with-recovery form.
-    Recovery is not dropped by being unnamed here: ``assert_wire_error`` defaults
-    it to the pinned enum's classification for ``code``, so the scenario pins the
-    code and the pin supplies the retry semantics.
+    Graded through ``TransportResult.assert_wire_error`` -- the single sanctioned
+    error surface, which hard-asserts a real captured envelope before comparing
+    and defaults ``recovery`` from the pinned CODE_TABLE, so the assertion is
+    non-vacuous without the scenario restating retry semantics.
+
+    Does NOT also assert the field: that is :func:`then_response_error_field`, and
+    keeping them apart is the point of the decomposition.
     """
     ctx["result"].assert_wire_error(code)
 
 
-@then(parsers.re(r'the request is rejected with (?P<code>[A-Z_0-9]+) naming field "(?P<field>[\w.]+)"$'))
-def then_rejected_with_code_naming_field(ctx: dict, code: str, field: str) -> None:
-    """Reject graded on the wire envelope: the code AND the field it blames.
+@then(parsers.re(r"the response error field is (?P<field>[\w.\[\]]+)$"))
+def then_response_error_field(ctx: dict, field: str) -> None:
+    """The response's error detail names ``field``. One property only.
 
-    Routed through ``assert_wire_error``, which hard-asserts a real
-    ``wire_error_envelope`` was captured before forwarding to
-    ``assert_envelope_shape`` — so this cannot pass on a reconstructed
-    exception, and cannot pass at all on a transport that swallowed the typed
-    error instead of framing it.
+    ``field`` is the error.json pointer identifying WHICH request member was
+    rejected -- the thing that makes a rejection actionable rather than sending
+    the buyer to search its own payload. Read from the payload-layer error object
+    through the one locator, and checked on BOTH layers by
+    ``assert_envelope_shape`` (the ``adcp_error`` mirror must agree).
 
-    The field half is the point. A rejection that does not name the offending
-    field makes the buyer search the whole payload, and the blame is exactly
-    what goes generic when a coercion moves between layers.
-
-    Written because BR-UC-BRAND-SHORTHAND's 36 reject rows had no matching step
-    and were auto-xfailed as "Step definition not found", so the whole reject
-    half of that feature had never graded anything.
+    Separate from the code assertion so a scenario that pins only the code does
+    not have to pass a field it does not care about, and a scenario that pins the
+    field does not need a second, wider step to exist.
     """
-    ctx["result"].assert_wire_error(code, field=field)
+    from tests.helpers.envelope_assertions import assert_envelope_shape, locate_envelope_error
+
+    envelope = wire_error_dict(ctx)
+    error = locate_envelope_error(envelope)
+    assert error is not None, f"Response carries no payload-layer error object to read a field from: {envelope!r}"
+    code = error.get("code")
+    assert isinstance(code, str), f"Response error object carries no code: {error!r}"
+    assert_envelope_shape(envelope, code, recovery=error.get("recovery"), field=field)
+
+
+# DELETED — the three bundled steps that used to live here
+# (``the wire error envelope should carry code "<CODE>"``, its ``with recovery``
+# variant, and ``the request is rejected with <CODE> naming field "<FIELD>"``).
+#
+# They graded arrived+code, arrived+code+recovery and arrived+code+field, so the
+# third was a superset of the first and the set had to be kept in step by hand —
+# the same duplication this epic keeps finding, expressed in Gherkin instead of
+# Python. Replaced by the three orthogonal primitives above, which a scenario
+# composes into whichever subset it needs; all 23 call sites were converted.
+#
+# The ``with recovery`` variant lost nothing in the conversion: ``assert_wire_error``
+# already defaults recovery to the PINNED CODE_TABLE classification for the code,
+# so naming it in the scenario restated what the code already determines.
+
+
+@then(parsers.re(r"the response error issues include keyword (?P<keyword>\w+) for field (?P<field>[\w.\[\]]+)$"))
+def then_response_error_issue(ctx: dict, keyword: str, field: str) -> None:
+    """The rejection carries a STRUCTURED schema issue: *keyword* against *field*.
+
+    The fourth primitive, and like the other three it grades exactly one property:
+    that the seller's rejection came out of real schema validation and says which
+    rule the value broke.
+
+    WHY THIS IS THE DIRECT GRADING OF BR-RULE-209 INV-1, not a concession to it.
+    INV-1 (BR-UC-001-discover-available-inventory.feature:1420) reads "inputs
+    validated same as production" -- it says nothing about an exception object.
+    The assertion this replaces required a ``pydantic.ValidationError`` INSTANCE,
+    which was a PROXY: "an exception of the right class was constructed" standing
+    in for "validation really ran". The proxy stopped being satisfiable once the
+    rejection moved to the transport boundary, even though the property itself
+    became MORE true -- the payload is now rejected by production's own schema
+    boundary rather than by a model built in the test process
+    (salesagent-prkv.65).
+
+    An ``issues[]`` entry carrying the JSON-Schema ``keyword`` that failed and a
+    ``pointer`` at the offending member IS production's validation output. It is
+    also STRICTER than the type check it replaces: a sandbox-simulated or
+    hand-wrapped error would not carry that structure, whereas any
+    ``ValidationError`` -- including one synthesised in the test process --
+    satisfied an isinstance check.
+
+    *field* is matched against the issue POINTER by trailing segment, so
+    ``billing`` matches ``/accounts/0/Accounts/billing`` without the scenario
+    having to spell out pydantic's union-arm naming.
+    """
+    from tests.helpers.envelope_assertions import locate_envelope_error
+
+    envelope = wire_error_dict(ctx)
+    error = locate_envelope_error(envelope)
+    assert error is not None, f"Response carries no payload-layer error object: {envelope!r}"
+    issues = error.get("issues") or []
+    assert issues, (
+        f"Response carries no issues[], so it does not say WHICH schema rule the value broke "
+        f"-- there is no evidence real validation ran. Error object: {error!r}"
+    )
+    want = [c for c in field.split(".") if c]
+    for issue in issues:
+        if issue.get("keyword") != keyword:
+            continue
+        have = [c for c in str(issue.get("pointer", "")).replace("/", ".").split(".") if c]
+        if len(have) >= len(want) and have[len(have) - len(want) :] == want:
+            return
+    raise AssertionError(
+        f"No issue with keyword {keyword!r} pointing at {field!r}. Issues carried: "
+        f"{[(i.get('keyword'), i.get('pointer')) for i in issues]}"
+    )
 
 
 @then("the operation should fail")

@@ -27,16 +27,127 @@ from tests.bdd.steps._outcome_helpers import (
     wire_dict,
     wire_entry,
     wire_entry_errors,
+    wire_error_dict,
     wire_error_envelope_or_none,
     wire_field,
 )
-from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._dispatch import dispatch_request, dispatch_via_client
 from tests.bdd.steps.generic.then_error import _wire_code
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
 # ═══════════════════════════════════════════════════════════════════════
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════
+
+
+def _sync_raw(ctx: dict, **payload: Any) -> None:
+    """Dispatch a LITERAL sync_accounts payload — no ``SyncAccountsRequest`` first.
+
+    THE NEGATIVE-PATH DISPATCH for the sync verb. Every caller expects the SELLER
+    to reject the payload, so building the request model here would be fatal to
+    the test's meaning: pydantic raises in the test process, the old ``except
+    Exception: ctx["error"] = exc`` stashed a client-side exception, and
+    production was never executed. Several of those step docstrings said so
+    outright ("triggers Pydantic validation"). The scenario then graded the MODEL
+    and said nothing about the SERVER — so nothing checked that the transports
+    AGREE on a code.
+
+    Goes through ``env.call_via`` (a raw kwargs bag IS a raw dispatch — see
+    ``AccountSyncEnv.build_rest_body``'s explicit flat path) rather than
+    ``dispatch_via_client``, because ``sync_accounts`` has NO pinned response
+    model: the client seam resolves success through ``spec_response_model(tool)``
+    and would hand back ``payload=None`` with ``is_success`` False, whereas the
+    env's ``response_parser()`` hook types each verb correctly. That matters here
+    precisely BECAUSE some of these rows are expected to graduate — if production
+    accepts a payload the scenario thought invalid, this path reports a plain
+    success instead of an unparseable one, so the graduation is legible rather
+    than disguised as a failure.
+    """
+    dispatch_request(ctx, **payload)
+
+
+def _list_raw(ctx: dict, **payload: Any) -> None:
+    """Dispatch a LITERAL list_accounts payload, NAMING the tool explicitly.
+
+    Same rationale as :func:`_sync_raw` for why the payload must not go through
+    ``ListAccountsRequest`` — but this verb CANNOT use ``env.call_via`` with a raw
+    bag, and that is a genuine constraint rather than a preference:
+    ``AccountListDispatchMixin.is_list_request`` selects the verb with
+    ``isinstance(kwargs.get("req"), ListAccountsRequest)``. With no typed ``req``
+    the discriminator returns False and a raw list payload would be MISROUTED to
+    ``sync_accounts``. The client seam takes the tool name directly, so it is the
+    only raw path that can address this verb.
+
+    Safe on the success side too: ``list_accounts`` HAS a pinned response model
+    (``ListAccountsResponse``), of which the local schema is a subclass, so an
+    unexpected acceptance still parses and reads as a graduation.
+    """
+    dispatch_via_client(ctx, "list_accounts", payload)
+
+
+def _pointer_names(pointer: str, field: str) -> bool:
+    """Whether the envelope's ``field`` POINTER blames *field*.
+
+    Production points at the offending member with a full path
+    (``accounts.0.brand.domain``); a scenario names the member
+    (``brand.domain``). Suffix-match on dotted components rather than a
+    substring test, so "operator" does not match "operator_id" and a pointer
+    at a DIFFERENT member cannot satisfy the assertion.
+    """
+    want = [c for c in field.split(".") if c]
+    have = [c for c in str(pointer).split(".") if c]
+    return len(have) >= len(want) and have[len(have) - len(want) :] == want
+
+
+def _assert_wire_field_rejection(ctx: dict, field: str, code: str = "INVALID_REQUEST") -> None:
+    """Assert the SELLER rejected the request with *code*, blaming *field*.
+
+    THE rejection assertion for this module. Reads the two-layer envelope the
+    buyer actually received, through the harness's own ``assert_wire_error``
+    (the single sanctioned surface, shared with then_error.py) plus the guarded
+    ``wire_error_dict`` reader for the field pointer.
+
+    What it replaces, and why the replacement is STRONGER rather than merely
+    different: the previous assertions matched the scenario's field name as a
+    SUBSTRING of ``str(error)``, or required ``isinstance(error, ValidationError)``.
+    Both were satisfiable only while the request was built in the test process --
+    the substring could land anywhere in a long pydantic message, and the
+    isinstance check was literally asserting that production had NOT been reached.
+    This reads ``errors[0].field``, the error.json pointer whose whole job is to
+    name WHICH request member was rejected, at the position the spec defines it.
+
+    INVALID_REQUEST, not VALIDATION_ERROR, and the distinction is the finding:
+    the pinned ``sync-accounts-request`` declares ``accounts[]`` as an anyOf of
+    two arms requiring ``['brand','operator','billing']`` (provisioning) or
+    ``['account']`` (settings-update). An entry missing one of those satisfies
+    NEITHER arm, so the REQUEST is malformed -- "Request is malformed, missing
+    required fields, or violates schema constraints" -- rather than the ACCOUNT
+    being unprovisionable, which is what a per-account ``action: "failed"`` result
+    reports. VALIDATION_ERROR is for "business rules BEYOND schema validation".
+    @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json
+      pointer=/INVALID_REQUEST  (pinned: tests/fixtures/adcp_schemas_pinned/enums/error-code.json:102)
+    """
+    result = ctx.get("result")
+    assert result is not None, (
+        f"Expected the seller to reject this request naming {field!r}, but no transport result was "
+        f"captured -- the payload never reached it. ctx['error']={ctx.get('error')!r}"
+    )
+    result.assert_wire_error(code)
+    # wire_error_dict returns the ENVELOPE; locate_envelope_error is THE one locator
+    # for the payload-layer error object (errors[0]) inside it. Reading .get("field")
+    # off the envelope itself silently yields None — the envelope has no such member.
+    from tests.helpers.envelope_assertions import locate_envelope_error
+
+    error = locate_envelope_error(wire_error_dict(ctx))
+    assert error is not None, f"Envelope carries no payload-layer error object: {wire_error_dict(ctx)!r}"
+    pointer = error.get("field")
+    assert pointer is not None, (
+        f"Envelope carries {code} but no errors[0].field, so it does not tell the buyer WHICH "
+        f"member was rejected (expected one naming {field!r}). Error object: {error!r}"
+    )
+    assert _pointer_names(pointer, field), (
+        f"errors[0].field={pointer!r} does not name {field!r} -- the seller blamed a different member"
+    )
 
 
 def _setup_tenant_and_principal(ctx: dict) -> tuple[Any, Any]:
@@ -472,13 +583,7 @@ def when_list_accounts_unfiltered(ctx: dict) -> None:
 @when(parsers.parse('the Buyer Agent sends a list_accounts request with status filter "{status}"'))
 def when_list_accounts_status_filter(ctx: dict, status: str) -> None:
     """Send list_accounts with a status filter."""
-    from src.core.schemas.account import ListAccountsRequest
-
-    try:
-        req = ListAccountsRequest(status=status)
-        dispatch_request(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    _list_raw(ctx, status=status)
 
 
 @when("the Buyer Agent sends a list_accounts request without an authentication token")
@@ -497,15 +602,9 @@ def when_list_accounts_a2a_invalid_token(ctx: dict) -> None:
 @when(parsers.parse("the Buyer Agent sends a list_accounts request with max_results {value:d}"))
 def when_list_accounts_paginated(ctx: dict, value: int) -> None:
     """Send list_accounts with max_results pagination."""
-    from adcp.types import PaginationRequest
-
-    from src.core.schemas.account import ListAccountsRequest
-
-    try:
-        req = ListAccountsRequest(pagination=PaginationRequest(max_results=value))
-        dispatch_request(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    # BR-UC-011 Examples grade max_results 0 and 101 as "validation error", so the
+    # out-of-range rows must reach the seller rather than PaginationRequest.
+    _list_raw(ctx, pagination={"max_results": value})
 
 
 @when("the Buyer Agent sends a list_accounts request with the returned cursor")
@@ -529,15 +628,7 @@ def when_list_accounts_with_cursor(ctx: dict) -> None:
 @when(parsers.parse('the Buyer Agent sends a list_accounts request with cursor "{cursor}"'))
 def when_list_accounts_with_explicit_cursor(ctx: dict, cursor: str) -> None:
     """Send list_accounts with a specific cursor string (e.g. malformed base64)."""
-    from adcp.types import PaginationRequest
-
-    from src.core.schemas.account import ListAccountsRequest
-
-    try:
-        req = ListAccountsRequest(pagination=PaginationRequest(cursor=cursor))
-        dispatch_request(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    _list_raw(ctx, pagination={"cursor": cursor})
 
 
 @when(parsers.parse("the Buyer Agent sends a list_accounts request with sandbox equals {value}"))
@@ -740,72 +831,48 @@ def then_accounts_from_first_page(ctx: dict) -> None:
 
 @then("the response contains a validation error")
 def then_validation_error(ctx: dict) -> None:
-    """Assert the request was rejected as invalid.
+    """Assert the seller rejected the request as INVALID_REQUEST on the wire.
 
-    Two genuinely different rejections reach this step, and only one has a wire:
+    TWO CORRECTIONS, both forced by the payload now actually reaching production.
 
-    * the SERVER rejected it -> assert VALIDATION_ERROR on the envelope the buyer
-      received, not on a reconstructed exception (salesagent-3dawm.18).
-    * the request could not be CONSTRUCTED -> e.g.
-      ``ListAccountsRequest(status="unknown_status")`` raises in the When step at
-      :468 before ``dispatch_request`` is ever called, so there is no wire at
-      all and ``ctx["error"]`` holds the real pydantic exception.
+    THE CODE. This asserted VALIDATION_ERROR. The row that reaches it sends
+    ``status: "unknown_status"`` -- a value outside the pinned enum, i.e. a
+    SCHEMA constraint violation -- and production correctly answers
+    INVALID_REQUEST ("Request is malformed, missing required fields, or violates
+    schema constraints"). VALIDATION_ERROR is reserved for "invalid field values
+    or violates business rules BEYOND schema validation", which this is not.
+    @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json
+      pointer=/INVALID_REQUEST  (pinned locally at
+      tests/fixtures/adcp_schemas_pinned/enums/error-code.json:102 and :149)
 
-    The old ``isinstance(error, (AdCPValidationError, ValueError))`` collapsed
-    both into one weak type check that also admitted a bare ``ValueError`` from
-    anywhere.
+    THE FALLBACK. The "request could not be CONSTRUCTED" branch is gone. It
+    existed because ``ListAccountsRequest(status=...)`` raised in the When step
+    before ``dispatch_request`` was ever called, so there was no wire to read --
+    which is precisely the defect salesagent-prkv.65 removed. That When now
+    dispatches the raw payload, so an absent envelope no longer has an innocent
+    explanation: it means the payload never reached the seller, and accepting a
+    test-process exception here would reinstate the vacuum.
     """
-    from pydantic import ValidationError as PydanticValidationError
-
-    from src.core.exceptions import AdCPValidationError
-
     result = ctx.get("result")
-    if result is not None:
-        result.assert_wire_error("VALIDATION_ERROR")
-        return
-
-    error = ctx.get("error")
-    assert error is not None, (
-        "Expected a validation error, but the request neither reached the wire nor failed to build"
+    assert result is not None, (
+        "Expected a wire rejection, but no transport result was captured -- the payload never "
+        f"reached the seller. ctx['error']={ctx.get('error')!r}"
     )
-    assert isinstance(error, (PydanticValidationError, AdCPValidationError)), (
-        "no wire envelope was captured, so the request must have been rejected while being built — "
-        f"got {type(error).__name__}: {error}"
-    )
+    result.assert_wire_error("INVALID_REQUEST")
 
 
 @then("the error indicates the status value is not recognized")
 def then_error_invalid_status(ctx: dict) -> None:
-    """Assert the error specifically targets an unrecognized status value.
+    """Assert the rejection blames the ``status`` member specifically.
 
-    The error must reference the 'status' field AND indicate an invalid/
-    unrecognized enum value — not just be any generic validation error.
-    For Pydantic ValidationErrors, the error's loc must contain 'status'.
-    For other errors, the message must contain both 'status' and the
-    offending value or an explicit invalid-value indicator.
+    Reads ``errors[0].field`` -- the error.json pointer naming WHICH request
+    member was rejected -- rather than scanning the error's message text for the
+    word "status" plus one of several invalidity synonyms. The message is prose
+    the seller may reword; the pointer is the contract, and a generic rejection
+    that blames nothing must not satisfy a scenario asserting the status value
+    was the problem.
     """
-    from pydantic import ValidationError
-
-    error = _get_error(ctx)
-    msg = str(error).lower()
-
-    if isinstance(error, ValidationError):
-        # Structured error: at least one error detail must target the status field
-        found_status_error = False
-        for d in error.errors():
-            if any("status" in str(loc).lower() for loc in d.get("loc", ())):
-                found_status_error = True
-                break
-        assert found_status_error, (
-            f"ValidationError does not target 'status' field. Locations: {[d.get('loc') for d in error.errors()]}"
-        )
-    else:
-        # Unstructured error: must mention 'status' specifically (not just 'valid')
-        assert "status" in msg, f"Expected error to reference 'status' field, got: {error}"
-        # Must also indicate an invalid/unrecognized value condition
-        assert "invalid" in msg or "not recognized" in msg or "unknown" in msg or "not a valid" in msg, (
-            f"Expected error to indicate unrecognized value, got: {error}"
-        )
+    _assert_wire_field_rejection(ctx, "status")
 
 
 @then("the response contains accounts with all statuses")
@@ -1066,20 +1133,21 @@ def when_list_with_idempotency_envelope(ctx: dict, idem: str, ctx_json: str) -> 
     """
     from adcp.types import ContextObject
 
-    from src.core.schemas.account import ListAccountsRequest
-
     context_data = _parse_inline_context(ctx_json)
     ctx["sent_context"] = context_data
-    context_obj = ContextObject.model_validate(context_data)
-    try:
-        req = ListAccountsRequest(
-            idempotency_key=idem,  # type: ignore[call-arg]
-            ext={"probe": "read-tool-idempotency"},
-            context=context_obj,
-        )
-        dispatch_request(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    # Validated only to fail the TEST loudly on a malformed inline table; the
+    # dict below, not this object, is what crosses the wire.
+    ContextObject.model_validate(context_data)
+    # Dispatched RAW because the duty under test is the SERVER's TOLERANCE of an
+    # unlisted field. Building ListAccountsRequest here made dev/CI's
+    # extra="forbid" reject it in the test process, so the step recorded a
+    # client-side error and never once asked whether production tolerates it.
+    _list_raw(
+        ctx,
+        idempotency_key=idem,
+        ext={"probe": "read-tool-idempotency"},
+        context=context_data,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1137,7 +1205,6 @@ def _dispatch_sync_table(ctx: dict, datatable: Any, *, idempotency_key: str | No
     and mask what each transport actually does with the field — which is precisely
     the behavior these scenarios grade.
     """
-    from src.core.schemas.account import SyncAccountsRequest
 
     headers = datatable[0]
     rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
@@ -1162,14 +1229,17 @@ def _dispatch_sync_table(ctx: dict, datatable: Any, *, idempotency_key: str | No
         ctx["error"] = err
         return
 
-    try:
-        if idempotency_key is not None:
-            dispatch_request(ctx, accounts=accounts, idempotency_key=idempotency_key, **kwargs)
-        else:
-            req = SyncAccountsRequest(accounts=accounts)
-            dispatch_request(ctx, req=req, **kwargs)
-    except Exception as exc:
-        ctx["error"] = exc
+    # ONE dispatch shape for both branches. The idempotency arm already sent a raw
+    # bag while the other built SyncAccountsRequest here, so the SAME step graded the
+    # seller or the model depending only on whether the scenario happened to carry an
+    # idempotency key — and the rows that feed it invalid values (e.g. billing
+    # "prepaid", outside the enum) always took the model arm, so they never once
+    # reached production. Raw on both, and the swallowing try/except goes with it:
+    # dispatch_request already returns transport failures as a TransportResult
+    # carrying the real envelope.
+    if idempotency_key is not None:
+        kwargs["idempotency_key"] = idempotency_key
+    _sync_raw(ctx, accounts=accounts, **kwargs)
 
 
 @when("the Buyer Agent sends a sync_accounts request with:")
@@ -1329,14 +1399,9 @@ def when_sync_settings_update_unknown_account(ctx: dict, account_id: str) -> Non
     ("the seller MUST NOT create a new account — entries that would otherwise
     trigger provisioning are rejected with UNSUPPORTED_PROVISIONING").
     """
-    from src.core.schemas.account import SyncAccountsRequest
 
     _setup_tenant_and_principal(ctx)
-    try:
-        req = SyncAccountsRequest(accounts=[{"account": {"account_id": account_id}}])
-        dispatch_request(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    _sync_raw(ctx, accounts=[{"account": {"account_id": account_id}}])
 
 
 @when(
@@ -1352,23 +1417,19 @@ def when_sync_both_account_and_trio(ctx: dict) -> None:
 
     Spec: account/sync-accounts-request.json#/properties/accounts/items/oneOf.
     """
-    from src.core.schemas.account import SyncAccountsRequest
 
     _setup_tenant_and_principal(ctx)
-    try:
-        req = SyncAccountsRequest(
-            accounts=[
-                {
-                    "account": {"account_id": "acc_target_ref"},
-                    "brand": {"domain": "acme-corp.com"},
-                    "operator": "acme-corp.com",
-                    "billing": "operator",
-                }
-            ]
-        )
-        dispatch_request(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    _sync_raw(
+        ctx,
+        accounts=[
+            {
+                "account": {"account_id": "acc_target_ref"},
+                "brand": {"domain": "acme-corp.com"},
+                "operator": "acme-corp.com",
+                "billing": "operator",
+            }
+        ],
+    )
 
 
 @then(parsers.parse('the account payment_terms is "{pt}"'))
@@ -2222,24 +2283,13 @@ def then_failed_status_with_error(ctx: dict, status: str, code: str) -> None:
 
 @then(parsers.parse("the account processing fails with a validation error for {field}"))
 def then_field_validation_error(ctx: dict, field: str) -> None:
-    """Assert a field was rejected at schema or per-account validation level.
+    """Assert the seller rejected the request, blaming *field*, on the wire.
 
-    Checks that the field name appears in the error message or in Pydantic
-    ValidationError loc entries.
+    See :func:`_assert_wire_field_rejection` for why the code is INVALID_REQUEST
+    and why reading ``errors[0].field`` is stronger than the message
+    substring-match this used to do.
     """
-    from pydantic import ValidationError
-
-    error = ctx.get("error")
-    assert error is not None, f"Expected a validation error for {field}"
-    field_lower = field.lower()
-    error_str = str(error).lower()
-    if isinstance(error, ValidationError):
-        locs = [str(loc).lower() for err in error.errors() for loc in err.get("loc", [])]
-        assert field_lower in error_str or any(field_lower in loc for loc in locs), (
-            f"Expected field '{field}' in validation error locs/message, got: {error}"
-        )
-    else:
-        assert field_lower in error_str, f"Expected field '{field}' mentioned in error, got: {error}"
+    _assert_wire_field_rejection(ctx, field)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2964,69 +3014,34 @@ def when_request_with_context(ctx: dict, operation: str, ctx_json: str) -> None:
 @when("the Buyer Agent sends a sync_accounts request with an empty accounts array")
 def when_sync_empty_accounts(ctx: dict) -> None:
     """Send sync_accounts with an empty accounts array."""
-    from src.core.schemas.account import SyncAccountsRequest
 
-    try:
-        req = SyncAccountsRequest(accounts=[])
-        dispatch_request(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    _sync_raw(ctx, accounts=[])
 
 
 @when("the Buyer Agent sends a sync_accounts request with an account that has no brand domain field")
 def when_sync_no_brand_domain(ctx: dict) -> None:
     """Send sync with account missing brand.domain — triggers Pydantic validation."""
-    from pydantic import ValidationError
 
-    from src.core.schemas.account import SyncAccountsRequest
-
-    try:
-        req = SyncAccountsRequest(
-            accounts=[{"operator": "test.com", "billing": "operator"}],
-        )
-        dispatch_request(ctx, req=req)
-    except (ValidationError, Exception) as exc:
-        ctx["error"] = exc
+    _sync_raw(ctx, accounts=[{"operator": "test.com", "billing": "operator"}])
 
 
 @when("the Buyer Agent sends a sync_accounts request with an account that has no operator field")
 def when_sync_no_operator(ctx: dict) -> None:
     """Send sync with account missing operator — triggers Pydantic validation."""
-    from pydantic import ValidationError
 
-    from src.core.schemas.account import SyncAccountsRequest
-
-    try:
-        req = SyncAccountsRequest(
-            accounts=[{"brand": {"domain": "test.com"}, "billing": "operator"}],
-        )
-        dispatch_request(ctx, req=req)
-    except (ValidationError, Exception) as exc:
-        ctx["error"] = exc
+    _sync_raw(ctx, accounts=[{"brand": {"domain": "test.com"}, "billing": "operator"}])
 
 
 @when("the Buyer Agent sends a sync_accounts request with an account that has no billing field")
 def when_sync_no_billing(ctx: dict) -> None:
     """Send sync with account missing billing — triggers Pydantic validation."""
-    from pydantic import ValidationError
 
-    from src.core.schemas.account import SyncAccountsRequest
-
-    try:
-        req = SyncAccountsRequest(
-            accounts=[{"brand": {"domain": "test.com"}, "operator": "test.com"}],
-        )
-        dispatch_request(ctx, req=req)
-    except (ValidationError, Exception) as exc:
-        ctx["error"] = exc
+    _sync_raw(ctx, accounts=[{"brand": {"domain": "test.com"}, "operator": "test.com"}])
 
 
 @when(parsers.parse('the Buyer Agent sends a sync_accounts request with {field} set to "{value}"'))
 def when_sync_invalid_field(ctx: dict, field: str, value: str) -> None:
     """Send sync with an invalid field value for validation testing."""
-    from pydantic import ValidationError
-
-    from src.core.schemas.account import SyncAccountsRequest
 
     # Build account entry with the invalid field
     entry: dict[str, Any] = {
@@ -3044,11 +3059,7 @@ def when_sync_invalid_field(ctx: dict, field: str, value: str) -> None:
     else:
         entry[field] = value
 
-    try:
-        req = SyncAccountsRequest(accounts=[entry])
-        dispatch_request(ctx, req=req)
-    except (ValidationError, Exception) as exc:
-        ctx["error"] = exc
+    _sync_raw(ctx, accounts=[entry])
 
 
 @when(parsers.parse("the Buyer Agent sends a sync_accounts request with {count:d} accounts"))
@@ -3198,36 +3209,6 @@ def then_empty_accounts_error(ctx: dict) -> None:
     substring pair could only ever have passed by accident of wording.
     """
     ctx["result"].assert_wire_error("VALIDATION_ERROR", field="accounts")
-
-
-@then("the per-account error indicates brand domain is required")
-def then_brand_required_error(ctx: dict) -> None:
-    """Assert the error indicates brand domain is required.
-
-    The error must mention both 'brand'/'domain' AND 'required'/'missing'
-    to confirm it's specifically about the missing brand domain field.
-    """
-    error = _get_error(ctx)
-    msg = str(error).lower()
-    has_brand_ref = "brand" in msg or "domain" in msg
-    has_required_ref = "required" in msg or "missing" in msg
-    assert has_brand_ref and has_required_ref, f"Expected error about brand domain being required, got: {error}"
-
-
-@then("the per-account error indicates operator is required")
-def then_operator_required_error(ctx: dict) -> None:
-    """Assert the error is a validation error indicating operator is required.
-
-    Production raises Pydantic ValidationError because operator is a required
-    field in the SyncAccountsRequest account entry schema.
-    """
-    from pydantic import ValidationError
-
-    error = _get_error(ctx)
-    assert isinstance(error, ValidationError), f"Expected Pydantic ValidationError, got {type(error).__name__}: {error}"
-    msg = str(error).lower()
-    assert "operator" in msg, f"Expected error about 'operator', got: {error}"
-    assert "required" in msg or "missing" in msg, f"Expected 'required' or 'missing' in error, got: {error}"
 
 
 # ── Then: sandbox assertions ───────────────────────────────────────────
