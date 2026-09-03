@@ -56,3 +56,36 @@ def test_a_writable_directory_still_gets_the_record(
     module = _profile_module(monkeypatch, out)
     module.on_session_finish()
     assert list(out.glob("*.json")), "the guard suppressed a write that should have succeeded"
+
+
+class _Report:
+    """The two attributes `record_test_duration` reads off a pytest report."""
+
+    def __init__(self, duration: float, worker_id: str | None = None) -> None:
+        self.duration = duration
+        if worker_id is not None:
+            self.worker_id = worker_id
+
+
+def test_a_reemitted_worker_report_is_not_counted(
+    tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under -n the controller re-emits every worker's report.
+
+    Counting those made the controller's record carry the suite's whole test
+    time with `collected: 0`, so the busy-vs-wall ratio read as 1.0. xdist
+    attaches `worker_id` when it serializes a report to the controller, and
+    attaches it nowhere else — measured: present on the controller under -n,
+    absent on a worker's own report and absent in a serial run.
+    """
+    module = _profile_module(monkeypatch, Path(tmp_path) / "profile")
+    module.record_test_duration(_Report(1.5, worker_id="gw0"))
+    assert module._test_seconds == 0.0, "the controller counted a worker's work as its own"
+
+
+def test_this_process_own_report_is_counted(tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The filter must not drop the reports the profile exists to measure."""
+    module = _profile_module(monkeypatch, Path(tmp_path) / "profile")
+    module.record_test_duration(_Report(1.5))
+    module.record_test_duration(_Report(0.5))
+    assert module._test_seconds == 2.0

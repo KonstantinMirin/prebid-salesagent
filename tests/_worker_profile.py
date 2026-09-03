@@ -99,11 +99,41 @@ def on_loop_start() -> None:
         _mark("loop_start")
 
 
-def record_test_duration(seconds: float) -> None:
-    """Accumulate this worker's own execution time, phase by phase."""
-    if enabled:
-        global _test_seconds
-        _test_seconds += seconds or 0.0
+def record_test_duration(report: Any) -> None:
+    """Accumulate THIS process's own execution time, phase by phase.
+
+    Takes the report rather than a duration so the rule about whose work counts
+    lives here, with the record it shapes, instead of in the conftest hook.
+
+    Under ``-n`` the controller re-emits every worker's report through
+    ``pytest_runtest_logreport``. Counting those made the controller's record
+    report the suite's entire test time while carrying ``collected: 0`` and
+    ``import_s: 0.0`` -- so a reader comparing per-worker busy time against
+    suite wall time saw a ratio of 1.0 and read fully saturated workers.
+    Measured on 105 tests: at ``-n 4`` the four workers summed to 2.191s and
+    ``unit-main`` also reported 2.191s.
+
+    ``worker_id`` is the exact discriminator, verified rather than assumed --
+    xdist attaches it when serializing a report to the controller, so:
+
+    ======================  ===========
+    context                 worker_id
+    ======================  ===========
+    controller, parallel    present
+    worker, own report      absent
+    serial run              absent
+    ======================  ===========
+
+    Dropping reports that carry one keeps a worker's own work and a serial
+    run's, and drops only the duplicates.
+    """
+    if not enabled:
+        return
+    if getattr(report, "worker_id", None) is not None:
+        return
+
+    global _test_seconds
+    _test_seconds += getattr(report, "duration", 0.0) or 0.0
 
 
 def on_session_finish() -> None:

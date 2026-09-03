@@ -832,7 +832,7 @@ def pytest_runtestloop(session):
 
 
 def pytest_runtest_logreport(report):
-    _worker_profile.record_test_duration(getattr(report, "duration", 0.0))
+    _worker_profile.record_test_duration(report)
 
 
 def pytest_sessionfinish(session, exitstatus):
