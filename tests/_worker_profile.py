@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -110,7 +111,6 @@ def on_session_finish() -> None:
         return
     _mark("finish")
     out = Path(_OUT_DIR)
-    out.mkdir(parents=True, exist_ok=True)
 
     suite = os.environ.get("TOX_ENV_NAME") or _ADHOC_SUITE
     worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
@@ -133,7 +133,23 @@ def on_session_finish() -> None:
         "idle_s": round(max(0.0, (finish - loop_start) - _test_seconds), 3),
         "worker_wall_s": round(finish - _T_IMPORT, 3),
     }
-    (out / f"{record['suite']}-{record['worker']}.json").write_text(json.dumps(record), encoding="utf-8")
+    # A diagnostic never changes the outcome of the thing it measures. Both the
+    # mkdir and the write raise on an unwritable parent, on a path occupied by a
+    # regular file, and on a full disk, and an exception out of
+    # pytest_sessionfinish is an unhandled error: measured, a session with all
+    # six tests passing and a clean json-report exited 1 with no summary line.
+    # The profile is default-on for the in-network path, which CI takes twice,
+    # so this is the ordinary case rather than a corner.
+    #
+    # OSError, not Exception: PermissionError, FileExistsError, IsADirectoryError
+    # and ENOSPC are all subclasses of it, while a defect in the record dict
+    # above stays loud instead of being hidden by the guard that tolerates a
+    # read-only disk.
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+        (out / f"{record['suite']}-{record['worker']}.json").write_text(json.dumps(record), encoding="utf-8")
+    except OSError as exc:
+        print(f"[worker-profile] could not write the profile to {out}: {exc}", file=sys.stderr)
 
 
 def summarise(directory: str | Path) -> dict[str, Any]:
