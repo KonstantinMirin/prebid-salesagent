@@ -16,7 +16,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from tests.factories.request import OMIT, REQUEST_FACTORY_BY_TOOL, CreateMediaBuyRequestFactory
+from tests.factories.request import OMIT, CreateMediaBuyRequestFactory, request_factories_by_tool
 
 
 def test_an_override_may_carry_a_value_the_dto_would_reject() -> None:
@@ -67,11 +67,11 @@ def test_omitting_an_absent_key_is_not_an_error() -> None:
     assert "po_number" not in CreateMediaBuyRequestFactory.payload(po_number=OMIT)
 
 
-@pytest.mark.parametrize("tool_name", sorted(REQUEST_FACTORY_BY_TOOL))
+@pytest.mark.parametrize("tool_name", sorted(request_factories_by_tool()))
 def test_each_baseline_is_independent(tool_name: str) -> None:
     """Two calls must not share mutable state — a step that mutates one payload
     would otherwise poison every later scenario in the process."""
-    factory_class = REQUEST_FACTORY_BY_TOOL[tool_name]
+    factory_class = request_factories_by_tool()[tool_name]
     first, second = factory_class.payload(), factory_class.payload()
 
     first["injected"] = "mutation"

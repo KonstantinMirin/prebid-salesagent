@@ -229,23 +229,54 @@ class ListAccountsRequestFactory(_RequestFactory):
 class ListCreativeFormatsRequestFactory(_RequestFactory):
     """A list_creative_formats request conforming to ``media-buy/list-creative-formats-request.json``.
 
-    Empty baseline for the same reason as ``ListAccountsRequestFactory``. Note the
-    schema is the ``media-buy/`` copy, not the ``creative/`` one — see
-    ``tests.helpers.request_schemas`` for why that binding is what it is.
+    Empty baseline for the same reason as ``ListAccountsRequestFactory``. The pinned
+    tree ships the schema TWICE, under ``media-buy/`` and ``creative/``, and they
+    differ; the ``media-buy/`` copy is the one graded here — not by anyone choosing it,
+    but because ``ListCreativeFormatsRequest`` inherits
+    ``adcp.types...media_buy.list_creative_formats_request``, and that is where
+    ``tests.helpers.request_schemas`` reads the binding from.
     """
 
     class Meta:
         model = ListCreativeFormatsRequest
 
 
-#: Tool name -> its request factory. Read by the conformance suite, which grades
-#: every entry against the schema ``REQUEST_SCHEMA_BY_TOOL`` binds to the same tool.
-#: A factory added here without a schema binding fails that suite rather than
-#: going ungraded, which is the failure mode this registry exists to prevent.
-REQUEST_FACTORY_BY_TOOL: dict[str, type[_RequestFactory]] = {
-    "create_media_buy": CreateMediaBuyRequestFactory,
-    "list_accounts": ListAccountsRequestFactory,
-    "list_creative_formats": ListCreativeFormatsRequestFactory,
-    "sync_accounts": SyncAccountsRequestFactory,
-    "sync_creatives": SyncCreativesRequestFactory,
-}
+def declared_request_factories() -> dict[type, type[_RequestFactory]]:
+    """``request DTO -> factory`` for every factory THIS MODULE declares.
+
+    Read off each factory's own ``Meta.model``, which every ``factory.Factory``
+    subclass must already declare — so the binding a five-row ``REQUEST_FACTORY_BY_TOOL``
+    used to restate is taken from the declaration it was restating. Scoped to this
+    module's namespace rather than ``__subclasses__()`` so a throwaway factory defined
+    inside some other test cannot silently join the registry.
+    """
+    factories: dict[type, type[_RequestFactory]] = {}
+    for obj in list(globals().values()):
+        if not (isinstance(obj, type) and issubclass(obj, _RequestFactory) and obj is not _RequestFactory):
+            continue
+        model = obj._meta.model
+        if model in factories:
+            raise RuntimeError(
+                f"{obj.__name__} and {factories[model].__name__} both build {model.__name__}. "
+                f"A DTO has one baseline; two make 'the conformant payload' ambiguous."
+            )
+        factories[model] = obj
+    return factories
+
+
+def request_factories_by_tool() -> dict[str, type[_RequestFactory]]:
+    """``tool -> its request factory``, DERIVED by joining the two live declarations.
+
+    The tool -> DTO half comes from the MCP registry (the same lookup production
+    announces the tool's shape with) and the DTO -> factory half from ``Meta.model``.
+    Neither half is written here, so a factory cannot be bound to a DIFFERENT model than
+    the tool actually builds, and the join is what the conformance suite grades over.
+
+    A factory whose model no tool builds is absent from this map — and
+    ``test_every_declared_factory_is_bound_to_a_registered_tool`` fails on it, so
+    "absent" cannot mean "quietly ungraded".
+    """
+    from tests.helpers.registered_tools import registered_request_dtos
+
+    factories = declared_request_factories()
+    return {tool: factories[model] for tool, model in registered_request_dtos().items() if model in factories}

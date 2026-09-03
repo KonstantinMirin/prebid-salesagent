@@ -39,12 +39,12 @@ from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory, ProductFactory
 from tests.factories.request import (
     OMIT,
-    REQUEST_FACTORY_BY_TOOL,
     CreateMediaBuyRequestFactory,
     ListAccountsRequestFactory,
     ListCreativeFormatsRequestFactory,
     SyncAccountsRequestFactory,
     SyncCreativesRequestFactory,
+    request_factories_by_tool,
 )
 from tests.factories.targeting import (
     CollectionListReferenceFactory,
@@ -84,7 +84,7 @@ ALL_FACTORIES = [
 __all__ = [
     "ALL_FACTORIES",
     "OMIT",
-    "REQUEST_FACTORY_BY_TOOL",
+    "request_factories_by_tool",
     "AccountFactory",
     "AdapterConfigFactory",
     "AuthorizedPropertyFactory",

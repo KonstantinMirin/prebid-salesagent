@@ -29,28 +29,28 @@ from src.core.exceptions import AdCPInvalidRequestError
 from src.core.schemas import (
     CreateMediaBuyRequest,
     CreateMediaBuySuccess,
-    GetMediaBuyDeliveryRequest,
     GetMediaBuysResponse,
     GetProductsRequest,
     GetProductsResponse,
     GetSignalsResponse,
     ListAccountsResponse,
-    ListCreativesRequest,
     ListCreativesResponse,
     Product,
     Signal,
     SyncAccountsResponse,
-    SyncCreativesRequest,
     SyncCreativesResponse,
     SyncResponseAccount,
-    UpdateMediaBuyRequest,
     UpdateMediaBuySuccess,
 )
 from src.core.schemas.creative import ListCreativeFormatsResponse
 from src.core.schemas.delivery import GetCreativeDeliveryResponse, GetMediaBuyDeliveryResponse
 from tests.helpers import pinned_schema
 from tests.helpers.adcp_factories import create_test_cpm_pricing_option, create_test_publisher_properties_by_tag
-from tests.helpers.request_schemas import REQUEST_SCHEMA_BY_TOOL, TOOLS_WITH_NO_PINNED_REQUEST_SCHEMA
+from tests.helpers.registered_tools import registered_tool_shapes
+from tests.helpers.request_schemas import (
+    graded_request_schemas,
+    pinned_request_schema_candidates,
+)
 
 # AdCP schemas are read from the installed adcp SDK's own pinned tree
 # (tests/helpers/pinned_schema.py) — the SDK's own version IS the pin (moves
@@ -65,30 +65,27 @@ from tests.helpers.request_schemas import REQUEST_SCHEMA_BY_TOOL, TOOLS_WITH_NO_
 # and strip it here, which made a SECOND ref normalizer with rules that
 # disagreed with the shared one.
 
-# Map AdCP schema refs to Pydantic model classes. At 04f59d2d5, sync/list-creatives
-# live under `creative/` (relocated from `media-buy/` earlier in 3.x).
-#
-# NOTE: CreateMediaBuyRequest is temporarily excluded due to AdCP spec evolution.
-# The spec now requires brand_card, but we maintain backward compatibility
-# via brand_manifest. Full brand_card implementation will be added in a separate PR.
-SCHEMA_TO_MODEL_MAP = {
-    "media-buy/get-products-request.json": GetProductsRequest,
-    # "media-buy/create-media-buy-request.json": CreateMediaBuyRequest,  # Skipped - pending brand_card implementation
-    "media-buy/update-media-buy-request.json": UpdateMediaBuyRequest,
-    "media-buy/get-media-buy-delivery-request.json": GetMediaBuyDeliveryRequest,
-    "creative/sync-creatives-request.json": SyncCreativesRequest,
-    "creative/list-creatives-request.json": ListCreativesRequest,
-    # Note: GetSignalsRequest removed — signals is dead code (UC-008), not exposed via MCP or A2A
-}
-
-# get-products schema drift — tracked in #1308. The live AdCP schema carries
-# the `adcp_major_version` envelope plus `if_catalog_version`/`if_pricing_version`;
-# the pinned adcp library does not model them yet. Coverage:
-#   - adcp_major_version → excluded via _VERSION_FIELDS
-#   - if_catalog_version, if_pricing_version → excluded via KNOWN_SCHEMA_LIBRARY_MISMATCHES
-# Tests now pass; remove the prior strict-xfail wrapper.
-SCHEMA_TO_MODEL_PARAMS_WITH_GET_PRODUCTS_DRIFT_XFAIL = [
-    pytest.param(schema_ref, model_class) for schema_ref, model_class in SCHEMA_TO_MODEL_MAP.items()
+#: ``(schema ref, request DTO)`` for every registered tool the pinned tree grades.
+#:
+#: Was ``SCHEMA_TO_MODEL_MAP``, six hand-written rows of schema -> model, and it is worth
+#: recording what the six were: five live, and ``CreateMediaBuyRequest`` COMMENTED OUT
+#: since 52dc23104 "pending brand_card implementation". That is what a hand-written
+#: membership list buys — the ability to remove one model from the grading with a ``#``
+#: and leave the suite green. A real schema deviation went ungraded for months behind
+#: that character, which is the same failure the request-factory suite's own table
+#: produced for ``list_accounts``.
+#:
+#: Membership now comes from the LIVE MCP registry via ``graded_request_schemas()``: a
+#: tool is graded because it is registered and its DTO resolves a pinned schema, and
+#: there is no key set to omit it from. It grades thirteen models where the table graded
+#: five, and CreateMediaBuyRequest is among them again.
+#:
+#: Built at import, which is what a ``parametrize`` argument has to be — so collecting
+#: this module registers the MCP server. That is the cost of reading membership from the
+#: registry rather than restating it, and it is the cost the ticket is buying.
+REQUEST_SCHEMA_PARAMS = [
+    pytest.param(schema_ref, model_class, id=tool_name)
+    for tool_name, (schema_ref, model_class) in sorted(graded_request_schemas().items())
 ]
 
 # Version metadata fields present in AdCP JSON schemas that models don't declare explicitly.
@@ -98,9 +95,11 @@ _VERSION_FIELDS: frozenset[str] = frozenset({"adcp_version", "adcp_major_version
 # Fields the SDK's current schema tree defines but the local model does not yet
 # model. These are spec-vs-library mismatches, not bugs in our code.
 #
-# Keys MUST match the `schema_ref` values in SCHEMA_TO_MODEL_MAP verbatim;
+# Keys are schema refs as `pinned_request_schema_ref` derives them;
 # `KNOWN_SCHEMA_LIBRARY_MISMATCHES.get(schema_ref, set())` lookups silently fall back
-# to an empty set otherwise.
+# to an empty set otherwise. get-products drift is tracked in #1308: the live AdCP schema
+# carries `if_catalog_version`/`if_pricing_version`, which the pinned library does not
+# model yet (`adcp_major_version` is covered by `_VERSION_FIELDS` instead).
 KNOWN_SCHEMA_LIBRARY_MISMATCHES: dict[str, set[str]] = {
     "media-buy/get-products-request.json": set(),
     "media-buy/update-media-buy-request.json": set(),
@@ -164,6 +163,25 @@ def _unsynthesized_guess(field_name: str) -> str:
     'status' its blanket exclusion from requiredness grading).
     """
     return f"test_{field_name}_value"
+
+
+def _pad_to_min_length(value: str, field_spec: dict | None) -> str:
+    """Grow *value* to the pin's ``minLength``, padding with a character its pattern admits.
+
+    The naming and pattern rules above produce SHORT readable values, and some pinned
+    strings want a long one: ``idempotency_key`` is
+    ``^[A-Za-z0-9_.:-]{16,255}$``, so ``"test_value"`` matches the character class and
+    fails the length. Without this the generator hands a value the pin itself would
+    reject to a model that correctly rejects it, and the suite reports the instrument's
+    gap as a production defect — the failure mode ``_CannotSynthesize`` documents.
+
+    Pads with ``"0"``: every pattern branch that reaches here matched on ``a-z0-9``, so
+    the class admits digits and lengthening cannot invalidate the pattern that selected
+    the value. KNOWN CEILING — this is length only. A pin that constrains STRUCTURE
+    beyond a character class (a UUID shape, a prefix) still needs its own rule above.
+    """
+    minimum = (field_spec or {}).get("minLength", 0)
+    return value if len(value) >= minimum else value + "0" * (minimum - len(value))
 
 
 def generate_example_value(
@@ -294,7 +312,7 @@ def generate_example_value(
                 return "example.com"
             # Handle lowercase identifier patterns (e.g., brand_id: ^[a-z0-9_]+$)
             if "a-z0-9" in pattern:
-                return "test_value"
+                return _pad_to_min_length("test_value", field_spec)
 
         # Special cases for known field patterns
         if "date" in field_name.lower():
@@ -540,7 +558,7 @@ class TestPydanticSchemaAlignment:
 
     @pytest.mark.parametrize(
         "schema_ref,model_class",
-        SCHEMA_TO_MODEL_PARAMS_WITH_GET_PRODUCTS_DRIFT_XFAIL,
+        REQUEST_SCHEMA_PARAMS,
     )
     def test_model_accepts_all_schema_fields(self, schema_ref: str, model_class: type):
         """Test that Pydantic model accepts ALL fields defined in JSON schema.
@@ -570,8 +588,16 @@ class TestPydanticSchemaAlignment:
                 f"(custom validator → INVALID_REQUEST), stricter than the schema. Acceptable. Error: {e}"
             )
         except ValidationError as e:
-            # Extract which fields were rejected
-            rejected_fields = [err["loc"][0] for err in e.errors() if err["type"] == "extra_forbidden"]
+            # Extract which fields were rejected. TOP-LEVEL only: a nested
+            # ``extra_forbidden`` (loc ``("total_budget", "total")``) is the GENERATOR
+            # inventing a sub-key the pinned $ref does not declare, not the model
+            # rejecting a spec field. Reading ``loc[0]`` regardless reported
+            # ``total_budget`` as rejected while CreateMediaBuyRequest accepts it —
+            # the instrument's gap dressed as a production defect, which is what
+            # ``_CannotSynthesize`` exists to keep out of this suite.
+            rejected_fields = [
+                err["loc"][0] for err in e.errors() if err["type"] == "extra_forbidden" and len(err["loc"]) == 1
+            ]
             missing_fields = [err["loc"][0] for err in e.errors() if err["type"] == "missing"]
             value_errors = [err for err in e.errors() if err["type"] == "value_error"]
 
@@ -600,7 +626,7 @@ class TestPydanticSchemaAlignment:
                     f"This is acceptable. Error: {e}"
                 )
 
-    @pytest.mark.parametrize("schema_ref,model_class", SCHEMA_TO_MODEL_MAP.items())
+    @pytest.mark.parametrize("schema_ref,model_class", REQUEST_SCHEMA_PARAMS)
     def test_model_has_all_required_fields(self, schema_ref: str, model_class: type):
         """Test that Pydantic model requires all fields marked as required in JSON schema."""
         # Load the JSON schema
@@ -671,7 +697,7 @@ class TestPydanticSchemaAlignment:
                         f"This is acceptable for backward compatibility."
                     )
 
-    @pytest.mark.parametrize("schema_ref,model_class", SCHEMA_TO_MODEL_MAP.items())
+    @pytest.mark.parametrize("schema_ref,model_class", REQUEST_SCHEMA_PARAMS)
     def test_model_accepts_minimal_request(self, schema_ref: str, model_class: type):
         """Test that Pydantic model accepts minimal valid request (only required fields).
 
@@ -780,7 +806,7 @@ class TestFieldNameConsistency:
 
     @pytest.mark.parametrize(
         "schema_ref,model_class",
-        SCHEMA_TO_MODEL_PARAMS_WITH_GET_PRODUCTS_DRIFT_XFAIL,
+        REQUEST_SCHEMA_PARAMS,
     )
     def test_field_names_match_schema(self, schema_ref: str, model_class: type):
         """Test that Pydantic model field names match JSON schema property names."""
@@ -1998,29 +2024,10 @@ class TestPinnedBoundsUnreachableFromAnyRequest:
         )
 
 
-#: Both tables moved to tests/helpers/request_schemas.py when the request-FACTORY
-#: conformance suite began grading the same binding: two suites reading one map, so the
-#: DTO grading and the payload grading cannot drift onto different schemas.
-
-
-def _registered_tool_shapes() -> dict[str, tuple[type, set[str]]]:
-    """Tool name -> (request DTO, ADVERTISED parameter names), read from the LIVE registry.
-
-    Importing ``src.core.main`` is what registers the tools, so this sees exactly the set a
-    buyer sees rather than a list of names kept in this file.
-    """
-    import asyncio
-
-    from src.core import main
-    from src.core.tools._announced_shape import request_model_for
-
-    shapes: dict[str, tuple[type, set[str]]] = {}
-    for tool in asyncio.run(main.mcp.list_tools()):
-        source_fn = getattr(tool.fn, "__wrapped__", tool.fn)
-        model = request_model_for(source_fn)
-        if model is not None:
-            shapes[tool.name] = (model, set(tool.parameters.get("properties", {})))
-    return shapes
+#: The tool -> DTO reading moved to tests/helpers/registered_tools.py, and the tool ->
+#: schema binding to tests/helpers/request_schemas.py, so the DTO grading here and the
+#: payload grading in the request-FACTORY suite read the same derivation rather than two
+#: tables that can drift onto different schemas.
 
 
 class TestNoNonSpecFieldsAreAdvertised:
@@ -2055,7 +2062,7 @@ class TestNoNonSpecFieldsAreAdvertised:
       there is ONE declaration, consumed by both the runtime refusal and these tests.
     """
 
-    @pytest.mark.parametrize("tool_name", sorted(REQUEST_SCHEMA_BY_TOOL))
+    @pytest.mark.parametrize("tool_name", sorted(graded_request_schemas()))
     def test_the_advertised_shape_carries_no_field_the_schema_lacks(self, tool_name: str) -> None:
         """What buyers actually SEE, graded against the spec.
 
@@ -2064,8 +2071,8 @@ class TestNoNonSpecFieldsAreAdvertised:
         """
         from src.core.tools._announced_shape import non_schema_fields
 
-        model_class, advertised = _registered_tool_shapes()[tool_name]
-        schema_ref = REQUEST_SCHEMA_BY_TOOL[tool_name]
+        schema_ref, model_class = graded_request_schemas()[tool_name]
+        _, advertised = registered_tool_shapes()[tool_name]
         spec_fields = set(load_json_schema(schema_ref).get("properties", {}))
         assert spec_fields, f"{schema_ref} declares no properties — the pin moved, fix the ref"
 
@@ -2078,7 +2085,7 @@ class TestNoNonSpecFieldsAreAdvertised:
             f"{model_class.__name__}._NON_SCHEMA_FIELDS with the reason it is carried anyway."
         )
 
-    @pytest.mark.parametrize("tool_name", sorted(REQUEST_SCHEMA_BY_TOOL))
+    @pytest.mark.parametrize("tool_name", sorted(graded_request_schemas()))
     def test_no_locally_declared_field_is_absent_from_the_schema(self, tool_name: str) -> None:
         """The LATENT case: a field our subclass adds that no wrapper has exposed yet.
 
@@ -2094,8 +2101,7 @@ class TestNoNonSpecFieldsAreAdvertised:
         """
         from src.core.tools._announced_shape import library_declared_fields, non_schema_fields
 
-        model_class, _ = _registered_tool_shapes()[tool_name]
-        schema_ref = REQUEST_SCHEMA_BY_TOOL[tool_name]
+        schema_ref, model_class = graded_request_schemas()[tool_name]
         spec_fields = set(load_json_schema(schema_ref).get("properties", {}))
 
         locally_declared = {
@@ -2113,31 +2119,30 @@ class TestNoNonSpecFieldsAreAdvertised:
         )
 
     def test_every_registered_tool_is_graded_or_provably_has_no_spec_schema(self) -> None:
-        """No tool may drop out of the grading by simply not being added to the map.
+        """No tool may drop out of the grading by resolving no schema.
 
-        The escape this closes is the cheap one: a new tool lands, nobody adds a row, and its
-        DTO is never compared to anything. Membership is read from the live registry, and the
-        only other way to sit outside the map is to be a tool the PINNED TREE has no request
-        schema for -- which the second half verifies rather than takes on trust.
+        The escape this closes is the cheap one: a tool's DTO stops resolving a pinned
+        schema -- a new tool lands with no SDK grounding, or somebody deletes a
+        ``_PINNED_SCHEMA_REF`` line -- and from then on nothing compares it to anything,
+        greenly. Membership is read from the live registry, and the only way to sit
+        outside the grading is for the PINNED TREE to hold no request schema for the
+        tool, which is verified here rather than taken on trust.
+
+        The verification searches by NAME COVERAGE, not by exact filename. The version
+        this replaces probed ``<tool-name>-request.json`` and nothing else, so
+        ``get_task`` -- whose schema is ``get-task-status-request.json`` -- would have
+        passed as "no schema exists" the moment its binding was dropped. Every schema
+        whose stem's words cover the tool's is reported, so the extra-word case fails
+        loudly instead.
         """
-        registered = set(_registered_tool_shapes())
-        ungraded = registered - set(REQUEST_SCHEMA_BY_TOOL) - TOOLS_WITH_NO_PINNED_REQUEST_SCHEMA
-        assert not ungraded, (
-            f"{sorted(ungraded)} announce a request DTO that nothing compares to the pinned "
-            f"schema. Add a row to REQUEST_SCHEMA_BY_TOOL naming the schema it implements."
-        )
+        ungraded = sorted(set(registered_tool_shapes()) - set(graded_request_schemas()))
 
-        resolvable = {}
-        for tool_name in sorted(TOOLS_WITH_NO_PINNED_REQUEST_SCHEMA & registered):
-            candidate = f"{tool_name.replace('_', '-')}-request.json"
-            try:
-                pinned_schema.load(candidate)
-            except pinned_schema.PinnedSchemaError:
-                continue
-            resolvable[tool_name] = candidate
+        resolvable = {tool: cands for tool in ungraded if (cands := pinned_request_schema_candidates(tool))}
         assert not resolvable, (
-            f"{resolvable} claim to have no pinned request schema, but the pinned tree "
-            f"resolves one for each. Move them into REQUEST_SCHEMA_BY_TOOL and grade them."
+            f"{ {t: sorted(c) for t, c in resolvable.items()} } resolve no pinned request "
+            f"schema, but the pinned tree holds one whose name covers each. Their DTOs are "
+            f"graded against nothing. Ground the DTO in the adcp type for that schema, or "
+            f"declare _PINNED_SCHEMA_REF on it naming the schema it implements."
         )
 
 

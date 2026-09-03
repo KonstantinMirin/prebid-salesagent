@@ -3342,6 +3342,17 @@ class GetTaskRequest(SalesAgentBaseModel):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
+    #: The pinned schema this DTO implements, DECLARED because it cannot be derived.
+    #: Every other request DTO reaches an ``adcp`` generated type whose module path names
+    #: its schema file (``create_media_buy_request`` -> ``media-buy/create-media-buy-request.json``);
+    #: this one has no SDK ancestry to read, and the spec calls the task ``get-task-status``
+    #: while the tool is ``get_task``, so neither name produces the ref. Deleting this line
+    #: does not quietly ungrade the tool: the coverage test in
+    #: ``tests/unit/test_pydantic_schema_alignment.py`` searches the pinned tree for a
+    #: request schema whose name COVERS the tool's, finds ``get-task-status-request.json``,
+    #: and fails. Drop it when the SDK ships the type and this model inherits it.
+    _PINNED_SCHEMA_REF: ClassVar[str] = "protocol/get-task-status-request.json"
+
     task_id: str = Field(..., description="The task to retrieve")
     context: ContextObject | None = Field(default=None, description="Application-level context")
 

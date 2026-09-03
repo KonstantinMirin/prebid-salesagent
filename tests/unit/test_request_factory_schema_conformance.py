@@ -41,9 +41,9 @@ from __future__ import annotations
 
 import pytest
 
-from tests.factories.request import REQUEST_FACTORY_BY_TOOL
+from tests.factories.request import declared_request_factories, request_factories_by_tool
 from tests.helpers.pinned_schema import validator_for
-from tests.helpers.request_schemas import REQUEST_SCHEMA_BY_TOOL
+from tests.helpers.request_schemas import graded_request_schemas
 
 #: ``(tool_name, json_path)`` -> the citation that makes the departure deliberate.
 #:
@@ -57,24 +57,34 @@ from tests.helpers.request_schemas import REQUEST_SCHEMA_BY_TOOL
 _KNOWN_DIVERGENCES: dict[tuple[str, str], str] = {}
 
 
+#: Tools that have BOTH a request factory and a pinned schema — the set this suite
+#: grades. Both halves are derived (``request_factories_by_tool`` joins the MCP registry
+#: to each factory's ``Meta.model``; ``graded_request_schemas`` derives the schema from
+#: the DTO's SDK grounding), so a tool cannot be dropped from the grading by being left
+#: out of a dict. A factory that lands in NEITHER is caught by
+#: ``test_every_declared_factory_is_bound_to_a_registered_tool`` below.
+def _graded_tools() -> list[str]:
+    return sorted(set(request_factories_by_tool()) & set(graded_request_schemas()))
+
+
 def _violations(tool_name: str) -> dict[str, str]:
     """``{json_path: message}`` for the tool's baseline payload against the pin."""
-    payload = REQUEST_FACTORY_BY_TOOL[tool_name].payload()
-    validator = validator_for(REQUEST_SCHEMA_BY_TOOL[tool_name])
+    payload = request_factories_by_tool()[tool_name].payload()
+    validator = validator_for(graded_request_schemas()[tool_name][0])
     return {
         ".".join(str(part) for part in error.absolute_path) or "<root>": error.message
         for error in validator.iter_errors(payload)
     }
 
 
-@pytest.mark.parametrize("tool_name", sorted(REQUEST_FACTORY_BY_TOOL))
+@pytest.mark.parametrize("tool_name", _graded_tools())
 def test_the_baseline_payload_conforms_to_the_pinned_schema(tool_name: str) -> None:
     """The factory's unperturbed payload is one the spec would accept.
 
     This is the property every negative-path test leans on: perturb one field and
     the ONLY thing wrong with the request is that field.
     """
-    schema_ref = REQUEST_SCHEMA_BY_TOOL[tool_name]
+    schema_ref = graded_request_schemas()[tool_name][0]
     unexplained = {
         path: message for path, message in _violations(tool_name).items() if (tool_name, path) not in _KNOWN_DIVERGENCES
     }
@@ -87,18 +97,29 @@ def test_the_baseline_payload_conforms_to_the_pinned_schema(tool_name: str) -> N
     )
 
 
-@pytest.mark.parametrize("tool_name", sorted(REQUEST_FACTORY_BY_TOOL))
-def test_every_request_factory_is_bound_to_a_pinned_schema(tool_name: str) -> None:
-    """A factory cannot be added to the registry and go ungraded.
+def test_every_declared_factory_is_bound_to_a_registered_tool_and_a_pinned_schema() -> None:
+    """A factory cannot exist and go ungraded.
 
-    Without this, the way to silence the suite above would be to leave a new
-    factory out of ``REQUEST_SCHEMA_BY_TOOL`` — which reads as green and grades
-    nothing.
+    The suite above parametrizes over the INTERSECTION of "has a factory" and "has a
+    pinned schema", so a factory outside that intersection would simply not be
+    collected — green, grading nothing. This is the half that notices. It replaces an
+    assertion that a tool appeared in a hand-written schema table; the escape it closed
+    was leaving a row out, and the escape it closes now is a factory whose model no
+    registered tool builds, or one whose tool resolves no pinned schema.
     """
-    assert tool_name in REQUEST_SCHEMA_BY_TOOL, (
-        f"{tool_name} has a request factory but no row in REQUEST_SCHEMA_BY_TOOL, so its "
-        f"baseline is graded against nothing. Add the pinned request schema it implements "
-        f"to tests/helpers/request_schemas.py."
+    graded = set(_graded_tools())
+    bound = request_factories_by_tool()
+    unbound = sorted(
+        factory_class.__name__
+        for model, factory_class in declared_request_factories().items()
+        if factory_class not in {bound[tool] for tool in graded}
+    )
+    assert not unbound, (
+        f"{unbound} declare a baseline payload that nothing grades against the pin. A "
+        f"factory is graded when its Meta.model is the request DTO of a REGISTERED tool "
+        f"AND that DTO resolves a pinned schema. Either the model is not built by any "
+        f"tool, or its tool is ungraded — see "
+        f"tests/unit/test_pydantic_schema_alignment.py::TestNoNonSpecFieldsAreAdvertised."
     )
 
 
@@ -111,7 +132,7 @@ def test_every_allowlisted_divergence_is_still_live() -> None:
     stale = [
         (tool_name, path)
         for (tool_name, path) in _KNOWN_DIVERGENCES
-        if tool_name in REQUEST_FACTORY_BY_TOOL and path not in _violations(tool_name)
+        if tool_name in _graded_tools() and path not in _violations(tool_name)
     ]
     assert not stale, (
         f"_KNOWN_DIVERGENCES rows no longer describe a violation: {stale}. The baseline now "
