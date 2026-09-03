@@ -172,9 +172,18 @@ class TestAmbientContextIdentityBleed:
 
                 list_accounts_raw(ctx=None, identity=None)
             elif impl_patch_target.endswith("_sync_accounts_impl"):
+                from src.core.schemas import SyncAccountsRequest
                 from src.core.tools.accounts import sync_accounts_raw
+                from tests.factories.request import fresh_idempotency_key
 
-                await sync_accounts_raw(ctx=None, identity=None)
+                # A real request, like the get_products branch above: sync_accounts_raw
+                # no longer accepts None now that the DTO requires an idempotency_key
+                # (salesagent-prkv.86). The impl is mocked, so only the identity matters.
+                await sync_accounts_raw(
+                    req=SyncAccountsRequest(accounts=[], idempotency_key=fresh_idempotency_key()),
+                    ctx=None,
+                    identity=None,
+                )
             else:  # pragma: no cover — defensive, keeps parametrize additions honest
                 raise AssertionError(f"no dispatch wired for {impl_patch_target}")
 

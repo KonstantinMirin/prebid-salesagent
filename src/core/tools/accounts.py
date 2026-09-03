@@ -1568,7 +1568,7 @@ def _lookup_existing_for_entry(entry: SyncEntry, repo: AccountRepository) -> DBA
 
 
 async def _sync_accounts_impl(
-    req: SyncAccountsRequest | None = None,
+    req: SyncAccountsRequest,
     identity: ResolvedIdentity | None = None,
 ) -> SyncAccountsResponse:
     """Sync accounts by natural key — upsert, delete_missing, dry_run.
@@ -1589,12 +1589,6 @@ async def _sync_accounts_impl(
     Returns:
         SyncAccountsResponse with per-account action results.
     """
-    if req is None:
-        # No key is minted for the caller: idempotency_key is client-generated
-        # (sync-accounts-request.json 3.1.1). A keyless request stays keyless -- it then
-        # fails the empty-accounts check below, which is the honest outcome.
-        req = SyncAccountsRequest(accounts=[])
-
     # BR-RULE-055: sync requires auth (consistent with list_accounts). require_principal_id
     # first so the canonical auth message surfaces for a missing/anonymous token; require_identity
     # then narrows the type for _check_billing_policy below.
@@ -1944,7 +1938,7 @@ async def sync_accounts(
 
 
 async def sync_accounts_raw(
-    req: SyncAccountsRequest | None = None,
+    req: SyncAccountsRequest,
     ctx: Context | ToolContext | None = None,
     identity: IdentityOrNotProvided = NOT_PROVIDED,
 ) -> SyncAccountsResponse:
