@@ -7,9 +7,8 @@ notification subscriber as ``active: true``. This service performs that check.
 
 The project's architecture direction is that outbound I/O does NOT belong in the
 HTTP request cycle: accept, validate against Postgres, return pending, let a worker
-do the network call. This service is a deliberate exception, granted by
-KonstantinMirin on 2026-07-27 and recorded in
-``.claude/notes/async-sync-architecture.md``.
+do the network call. This service is a deliberate exception, granted on
+2026-07-27 as the #1592 T2 carve-out.
 
 The reason it is an exception rather than a precedent: the spec forbids the async
 shape here. There is no per-subscriber pending state -- ``active`` is a boolean and
@@ -33,11 +32,10 @@ policy that means we also declare no signing capability -- see FIXME(#1291).
 
 import logging
 
-import httpx
 from adcp.types import NotificationConfig
 
 from src.core.security.egress.policy import OutboundRequestBlocked, is_reserved_tld_host
-from src.core.security.outbound_http import validate_url
+from src.core.security.outbound_http import asend
 
 logger = logging.getLogger(__name__)
 
@@ -77,32 +75,33 @@ class NotificationProofService:
             )
             return False
 
-        # Full SSRF check at FIRE time (not write time): we are about to send a
-        # request, so where the name actually resolves now matters. This is the
-        # seam's own dial-time verdict (validate_url runs EgressPolicy.
-        # resolve_for_dial and discards the pin), not a second copy of it.
-        # The refusal is deliberately opaque -- AdCP 3.1.1 L1 security point 6
-        # forbids echoing the cause back -- so only the URL is logged.
-        try:
-            validate_url(url)
-        except OutboundRequestBlocked:
-            logger.info("Notification proof for account %s refused by egress policy: %s", account_id, url)
-            return False
-
         # FIXME(#1291): the challenge MUST be RFC 9421-signed. Signing is not
         # implemented, so the seller declares no signing capability (STRICT policy)
         # and this POST goes out unsigned. A buyer cannot yet verify the challenge
         # originated from us.
+        #
+        # The seam owns address, TLS, redirect and retry policy (CLAUDE.md pattern
+        # #9). It resolves once and PINS that address for the dial, which is why
+        # there is no separate pre-flight check here: validating first and dialling
+        # second resolved the name twice and left the gap between them.
+        # max_attempts=1 because this runs inside the buyer's request cycle -- the
+        # question is binary and a retry only spends latency the caller budgeted.
         try:
-            async with httpx.AsyncClient(timeout=CHALLENGE_TIMEOUT_SECONDS) as client:
-                response = await client.post(
-                    url,
-                    json={
-                        "type": "adcp.notification.proof_of_control",
-                        "account_id": account_id,
-                        "subscriber_id": config.subscriber_id,
-                    },
-                )
+            result = await asend(
+                url,
+                json={
+                    "type": "adcp.notification.proof_of_control",
+                    "account_id": account_id,
+                    "subscriber_id": config.subscriber_id,
+                },
+                timeout=CHALLENGE_TIMEOUT_SECONDS,
+                max_attempts=1,
+            )
+        except OutboundRequestBlocked:
+            # Deliberately opaque -- AdCP 3.1.1 L1 security point 6 forbids echoing
+            # the cause back -- so only the URL is logged.
+            logger.info("Notification proof for account %s refused by egress policy: %s", account_id, url)
+            return False
         except Exception as exc:
             # Any transport failure -- timeout, TLS, connection refused -- is "not
             # proven". Broad by intent: the question is binary and the safe answer
@@ -110,13 +109,13 @@ class NotificationProofService:
             logger.info("Notification proof for account %s failed for %s: %s", account_id, url, exc)
             return False
 
-        proven = 200 <= response.status_code < 300
+        proven = 200 <= result.http_status < 300
         if not proven:
             logger.info(
                 "Notification proof for account %s failed for %s: status %s",
                 account_id,
                 url,
-                response.status_code,
+                result.http_status,
             )
         return proven
 
