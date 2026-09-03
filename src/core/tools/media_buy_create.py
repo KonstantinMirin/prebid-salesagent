@@ -2347,16 +2347,22 @@ async def _create_media_buy_impl(
                 "[MCP/A2A] Registering push notification config url=%s",
                 webhook_url_for_log(registration.url),
             )
-            # ALWAYS a fresh row id. core/push-notification-config.json declares no ``id``
-            # property, so a buyer cannot name a row and nothing here reads one. An earlier
-            # version dug the id out of the raw wire payload to keep an A2A re-registration
-            # upserting -- that is processing a field the schema does not define, which is
-            # exactly the habit this seam exists to stop. If naming a stored row turns out
-            # to be needed, it needs a spec field first.
-            row_id = f"pnc_{uuid.uuid4().hex[:16]}"
-
+            # THE ROW IS IDENTIFIED BY ITS URL, not by anything the buyer names.
+            # core/push-notification-config.json declares no ``id`` property, so a buyer
+            # cannot name a row -- an earlier version dug one out of the raw wire payload,
+            # which is processing a field the schema does not define.
+            #
+            # But identity still has to come from somewhere, or every re-registration
+            # inserts and a buyer re-registering one webhook accumulates rows forever.
+            # (tenant, principal, url) is the natural key and it is made of SPEC fields:
+            # re-registering the same URL updates the same row, which is the behaviour
+            # A2A re-registration needs, without honouring a non-spec id to get it.
             with PushNotificationConfigUoW(tenant["tenant_id"]) as pnc_uow:
                 assert pnc_uow.push_notification_configs is not None
+                _existing = pnc_uow.push_notification_configs.find_by_url(
+                    principal_id, str(registration.url), active_only=False
+                )
+                row_id = _existing.id if _existing is not None else f"pnc_{uuid.uuid4().hex[:16]}"
                 _config, created = pnc_uow.push_notification_configs.upsert(
                     registration,
                     config_id=row_id,

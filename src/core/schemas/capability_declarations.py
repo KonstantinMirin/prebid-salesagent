@@ -79,10 +79,18 @@ _UNBACKED_BLOCKS: dict[str, str] = {
 # Deliberately ABSENT, same rule, opposite answer -- this is what keeps STRICT honest:
 #   brand    -> [get_brand_identity] : ZERO hits in src/  -> #1724.
 #   creative -> generative creative unimplemented         -> #1724.
-#   signals     -> [get_signals] : implemented (src/core/tools/signals.py), and the
-#                  bundle narrative is exactly what we do ("declare the signals protocol
-#                  in get_adcp_capabilities; respond to get_signals"). Graded by the
+#   signals     -> BACKED, but NOT by a get_signals tool. That justification was wrong:
+#                  src/core/tools/signals.py was unreachable from every transport -- never
+#                  registered on MCP, no REST route, no A2A skill -- because #826
+#                  ("remove signals tools", 2025-12-09) removed the registration and left
+#                  the implementation behind. The file is deleted.
+#                  What actually backs the protocol is the signals-AGENT integration:
+#                  src/services/dynamic_products.py queries signals agents to generate
+#                  product variants (reachable through get_products), and
+#                  src/admin/blueprints/signals_agents.py manages them. Still graded by the
 #                  `signal-owned` accept scenario, which needs it as the parent protocol.
+#                  NOTE the failure mode this row demonstrates: backing was checked by
+#                  "does an implementation file exist" rather than "can a buyer reach it".
 _BACKED_PROTOCOLS: frozenset[SupportedProtocol] = frozenset(
     {SupportedProtocol.media_buy, SupportedProtocol.measurement, SupportedProtocol.signals}
 )

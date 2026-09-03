@@ -59,8 +59,6 @@ A2A_RAW_WRAPPERS = [
     ("src.core.tools.accounts", "sync_accounts_raw"),
     ("src.core.tools.capabilities", "get_adcp_capabilities_raw"),
     ("src.core.tools.creative_formats", "list_creative_formats_raw"),
-    ("src.core.tools.signals", "get_signals_raw"),
-    ("src.core.tools.signals", "activate_signal_raw"),
     ("src.core.tools.performance", "update_performance_index_raw"),
 ]
 

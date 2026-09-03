@@ -110,20 +110,6 @@ class TestImplSignaturesAcceptResolvedIdentity:
         param = self._get_identity_param(_list_creatives_impl)
         assert param is not None, "_list_creatives_impl must have 'identity' parameter"
 
-    @pytest.mark.arch_guard
-    def test_signals_get_impl_accepts_resolved_identity(self):
-        from src.core.tools.signals import _get_signals_impl
-
-        param = self._get_identity_param(_get_signals_impl)
-        assert param is not None, "_get_signals_impl must have 'identity' parameter"
-
-    @pytest.mark.arch_guard
-    def test_signals_activate_impl_accepts_resolved_identity(self):
-        from src.core.tools.signals import _activate_signal_impl
-
-        param = self._get_identity_param(_activate_signal_impl)
-        assert param is not None, "_activate_signal_impl must have 'identity' parameter"
-
 
 # ---------------------------------------------------------------------------
 # Transport-agnostic invariant — no fastmcp imports in _impl files
@@ -149,7 +135,6 @@ class TestNoTransportImportsInImpl:
         ("src.core.tools.performance", "_update_performance_index_impl"),
         ("src.core.tools.creatives._sync", "_sync_creatives_impl"),
         ("src.core.tools.creatives.listing", "_list_creatives_impl"),
-        ("src.core.tools.signals", "_get_signals_impl"),
     ]
 
     @pytest.mark.parametrize("module_path,func_name", IMPL_FUNCTIONS)

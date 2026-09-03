@@ -168,21 +168,6 @@ class TestAuthenticationRequirements:
     # Signal Tools
     # =========================================================================
 
-    def test_activate_signal_requires_authentication(self):
-        """activate_signal must reject requests without authentication."""
-        import asyncio
-
-        from src.core.tools.signals import _activate_signal_impl, _build_activate_signal_request
-
-        # Call without identity (no auth) — require_identity rejects before proceeding.
-        req = _build_activate_signal_request(signal_agent_segment_id="test_signal", media_buy_id="test_buy")
-        with pytest.raises((AdCPAuthenticationError, AdCPValidationError, RuntimeError)) as exc_info:
-            asyncio.run(_activate_signal_impl(req=req, identity=None))
-
-
-class TestAuthenticationWithMockedContext:
-    """Test authentication behavior with various identity scenarios."""
-
     def test_identity_with_none_principal_id(self):
         """ResolvedIdentity with None principal_id should be rejected."""
         from src.core.tools.creatives import _sync_creatives_impl
