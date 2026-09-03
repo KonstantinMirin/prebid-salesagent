@@ -1,5 +1,6 @@
 """MCP and A2A wrapper functions for sync_creatives."""
 
+from collections.abc import Sequence
 from typing import Annotated, Any
 
 from adcp import PushNotificationConfig
@@ -7,9 +8,8 @@ from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ContextObject, ValidationMode
 from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 from fastmcp.server.context import Context
-from pydantic import Field
+from pydantic import BaseModel, Field
 
-from src.core.helpers import enum_value
 from src.core.idempotency_canonical import canonical_request_hash
 from src.core.schema_helpers import to_push_notification_config
 from src.core.schemas.creative import CreativeAssetRequest, SyncCreativesRequest
@@ -22,7 +22,18 @@ from ._sync import _sync_creatives_impl
 
 def build_sync_creatives_request(
     *,
-    creatives: list[CreativeAssetRequest],
+    # Widened to what this builder demonstrably ACCEPTS, for the same reason
+    # push_notification_config below is: the annotation used to say
+    # ``list[CreativeAssetRequest]`` while the body coerced anything model_validate could
+    # read, so it was decorative on every caller that is not the MCP wrapper -- A2A and
+    # REST hand over wire dicts, and the in-process media-buy callers hand over
+    # PackageRequest.creatives, which is typed as the listing RESPONSE model. What the body
+    # actually accepts is what ``model_validate(..., from_attributes=True)`` can read, so
+    # that is what this now says -- the same union ``_sync_creatives_impl`` already declared
+    # for the sequence it received. Widening changes no advertised shape:
+    # derived_body_model and accepted_kwargs read this signature for parameter NAMES only,
+    # taking field TYPES from the DTO.
+    creatives: Sequence[CreativeAssetRequest | BaseModel | dict[str, Any]],
     idempotency_key: str | None = None,
     account: LibraryAccountReference | None = None,
     assignments: list[Assignment] | None = None,
@@ -163,14 +174,10 @@ def sync_creatives_raw(
     Delegates to the shared implementation.
 
     Args:
-        creatives: List of CreativeAsset models
-        assignments: Bulk assignment map of creative_id to package_ids (spec-compliant)
-        creative_ids: Filter to limit sync scope to specific creatives (AdCP 2.5)
-        delete_missing: Delete creatives not in sync payload (use with caution)
-        dry_run: Preview changes without applying them
-        validation_mode: Validation strictness (strict or lenient)
-        push_notification_config: Push notification config for status updates
-        context: Application level context per adcp spec
+        req: The built SyncCreativesRequest — every protocol field travels on it. The
+            per-field parameters this docstring used to list (creatives, assignments,
+            creative_ids, delete_missing, dry_run, validation_mode,
+            push_notification_config, context) are fields of that request.
         ctx: FastMCP context (automatically provided)
         identity: ResolvedIdentity (transport-agnostic, preferred over ctx)
 
@@ -186,22 +193,13 @@ def sync_creatives_raw(
     identity = enrich_identity_with_account(identity, req.account)
 
     return _sync_creatives_impl(
+        req=req,
+        identity=identity,
         # Canonicalised HERE, from the built request, because _impl must not call
         # model_dump (the no-model-dump-in-impl guard) and must not rebuild the request.
+        # It is the ONE argument that travels beside the request rather than on it: the
+        # hash is a property of the TRANSMISSION (the RFC 8785 canonical form of what
+        # arrived), not a field the buyer sends, and nothing in the pinned
+        # creative/sync-creatives-request.json declares it.
         request_hash=canonical_request_hash(req) if req.idempotency_key and not req.dry_run else None,
-        creatives=req.creatives,
-        assignments=req.assignments,
-        creative_ids=req.creative_ids,
-        delete_missing=bool(req.delete_missing),
-        dry_run=bool(req.dry_run),
-        validation_mode=enum_value(req.validation_mode) or "strict",
-        # Already typed: this wrapper takes the BUILT request, and the builder coerces
-        # push_notification_config through to_push_notification_config. The seam that used
-        # to be untyped here -- a raw wire dict forwarded straight to _impl -- moved up to
-        # build_sync_creatives_request, which is now the one place every transport
-        # constructs through.
-        push_notification_config=req.push_notification_config,
-        context=req.context,
-        idempotency_key=req.idempotency_key,
-        identity=identity,
     )

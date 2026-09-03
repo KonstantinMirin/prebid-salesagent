@@ -47,6 +47,7 @@ from tests.factories import WebhookTaskContextFactory
 from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
 from tests.helpers.adcp_factories import create_test_media_buy_request_dict, valid_reporting_webhook
+from tests.helpers.creative_test_helpers import sync_creatives_request
 from tests.helpers.egress_hatches import egress_hatch_env
 from tests.helpers.local_http_origin import run_local_origin
 from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
@@ -414,8 +415,10 @@ def test_sync_creatives_rejects_unsafe_push_config_url() -> None:
     """sync_creatives must reject metadata URL at registration before DB work."""
     with pytest.raises(AdCPUrlNotAllowedError) as exc_info:
         _sync_creatives_impl(
-            creatives=[],
-            push_notification_config={"url": _METADATA_URL},
+            # creatives defaults to one valid item: this test is about the webhook URL gate, and
+            # sync-creatives-request.json declares creatives minItems 1, so an empty array is a
+            # request refused before the gate under test is ever reached.
+            req=sync_creatives_request(push_notification_config={"url": _METADATA_URL}),
             identity=_identity(),
         )
     assert exc_info.value.field == "push_notification_config.url"

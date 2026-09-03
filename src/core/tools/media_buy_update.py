@@ -100,7 +100,7 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools._mcp import mcp_result
-from src.core.tools.creatives import _sync_creatives_impl
+from src.core.tools.creatives import _sync_creatives_impl, build_sync_creatives_request
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
     validate_budget_positive,
@@ -1026,8 +1026,22 @@ def _update_media_buy_impl(
                             )
 
                         # Sync creatives (upload/update)
-                        sync_response = _sync_creatives_impl(
+                        # Built through the SAME builder the three transports use, rather
+                        # than handed to _impl as loose fields. _sync_creatives_impl takes a
+                        # request; an in-process caller that could not produce one was
+                        # reaching into the tool instead of invoking it.
+                        #
+                        # account and idempotency_key are the OUTER request's, not invented:
+                        # these creatives belong to that account, and that key is the
+                        # client-generated identifier of the operation they are part of.
+                        # No request_hash is passed -- there is no transmission here to
+                        # canonicalise -- which is what keeps the borrowed key out of the
+                        # shared (agent, account, key) cache scope.
+                        sync_req = build_sync_creatives_request(
                             creatives=pkg_update.creatives,
+                            account=req.account,
+                            idempotency_key=req.idempotency_key,
+                            context=req.context,
                             # The typed Assignment the request model declares, not the
                             # {creative_id: [package_id]} map this used to build. That map
                             # was a second, internal-only spelling of the same relation, and
@@ -1039,6 +1053,9 @@ def _update_media_buy_impl(
                                 for c in pkg_update.creatives
                                 if c.creative_id
                             ],
+                        )
+                        sync_response = _sync_creatives_impl(
+                            req=sync_req,
                             identity=identity,
                         )
 

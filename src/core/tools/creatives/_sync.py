@@ -6,10 +6,8 @@ from collections.abc import Sequence
 from contextlib import ExitStack
 from typing import Any
 
-from adcp import PushNotificationConfig
-from adcp.types import ContextObject, CreativeAction, CreativeAsset
+from adcp.types import CreativeAction, CreativeAsset
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
-from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 
@@ -22,13 +20,14 @@ _IDEMPOTENCY_TOOL_NAME = "sync_creatives"
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import ValidationDetails
 from src.core.exceptions import AdCPSalesAgentError, adcp_error_for
-from src.core.helpers import log_tool_activity
+from src.core.helpers import enum_value, log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     SyncCreativeResult,
     SyncCreativesResponse,
     validate_idempotency_key_shape,  # noqa: F401
 )
+from src.core.schemas.creative import SyncCreativesRequest
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
 from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
@@ -79,21 +78,16 @@ def _replay_cached_sync(envelope: dict[str, object]) -> SyncCreativesResponse | 
 
 
 def _sync_creatives_impl(
-    creatives: Sequence[CreativeAsset | BaseModel | dict[str, Any]],
-    assignments: list[Assignment] | None = None,
-    creative_ids: list[str] | None = None,
-    delete_missing: bool = False,
-    dry_run: bool = False,
-    validation_mode: str = "strict",
-    push_notification_config: PushNotificationConfig | None = None,
-    context: ContextObject | dict | None = None,
-    idempotency_key: str | None = None,
-    # Computed by the transport wrapper from the request it already built. Passed in rather
+    req: SyncCreativesRequest,
+    identity: ResolvedIdentity | None = None,
+    # PLUMBING, not a request field: the RFC 8785 canonical hash of the transmission the
+    # wrapper received, computed there from the request it already built. Passed in rather
     # than derived here because canonicalising means dumping the request model, and an
     # _impl must not call model_dump (the no-model-dump-in-impl guard) -- nor rebuild the
-    # request, which would be a second construction path.
+    # request, which would be a second construction path. It is also the switch that says
+    # a TRANSMISSION happened: an in-process caller has no wire bytes, so it passes None
+    # and the at-most-once machinery below stays out of its way.
     request_hash: str | None = None,
-    identity: ResolvedIdentity | None = None,
 ) -> SyncCreativesResponse:
     """Sync creative assets to centralized library (AdCP v2.5 spec compliant endpoint).
 
@@ -103,33 +97,41 @@ def _sync_creatives_impl(
     - Support for both hosted assets (media_url) and third-party tags (snippet)
     - Scoped updates via creative_ids filter, dry-run mode, and validation options
 
+    Every protocol field arrives ON ``req``. This used to be ten separate parameters --
+    creatives, assignments, creative_ids, delete_missing, dry_run, validation_mode,
+    push_notification_config, context, idempotency_key -- so the request was spread across
+    the call signature and there was no single object for "the request was validated" to
+    mean anything about. Nine of the ten are declared fields of the pinned
+    creative/sync-creatives-request.json and are read off ``req``; only ``request_hash``
+    is not a request field, and it stays a parameter beside ``identity``.
+
     Args:
-        creatives: Array of creative assets to sync
-        assignments: Bulk assignment map of creative_id to package_ids (spec-compliant)
-        creative_ids: Filter to limit sync scope to specific creatives (AdCP 2.5).
-            - None (default): Process all creatives in payload
-            - Empty list []: Process no creatives (filter matches nothing)
-            - List of IDs: Only process creatives whose IDs appear in both payload AND this filter
-        delete_missing: Delete creatives not in sync payload (use with caution)
-        dry_run: Preview changes without applying them
-        validation_mode: Validation strictness (strict or lenient)
-        push_notification_config: Push notification config for status updates (AdCP spec, optional)
-        context: Application level context per adcp spec
+        req: Validated SyncCreativesRequest carrying every protocol field
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
+        request_hash: canonical hash of the transmission (see above), or None in-process
 
     Returns:
         SyncCreativesResponse with synced creatives and assignments
     """
 
+    # Normalised ONCE, here, because each needs a transformation the request does not carry:
+    # ``creatives`` is narrowed below by the creative_ids filter, and the two tri-state
+    # booleans plus the validation mode have an absent-means-default rule that the rest of
+    # this function must not have to restate at every read. Everything else is read as
+    # ``req.<field>`` at its use site -- no alias, so the request stays the one carrier.
+    creatives: Sequence[CreativeAsset | BaseModel | dict[str, Any]] = req.creatives
+    dry_run = bool(req.dry_run)
+    validation_mode = enum_value(req.validation_mode) or "strict"
+
     # AdCP 3.1.1 requires this key and defines it as CLIENT-generated so that resending
-    # after a lost response is at-most-once. Its SHAPE is enforced here so a malformed key
+    # after a lost response is at-most-once. Its SHAPE is re-checked here so a malformed key
     # is a buyer-facing VALIDATION_ERROR rather than silence.
     #
     # The key is HONOURED, not merely accepted: the probe below replays a stored success
     # for a repeated key and refuses a repeated key carrying a different payload. Accepting
     # it without deduplicating was worse than not taking it, because the spec attaches the
     # at-most-once promise to the field's presence.
-    validate_idempotency_key_shape(idempotency_key)
+    validate_idempotency_key_shape(req.idempotency_key)
     from pydantic import ValidationError
 
     # Phase 1a: Models flow through to helpers (which convert via isinstance guard).
@@ -137,8 +139,8 @@ def _sync_creatives_impl(
 
     # AdCP 2.5: Filter creatives by creative_ids if provided
     # This allows scoped updates to specific creatives without affecting others
-    if creative_ids:
-        creative_ids_set = set(creative_ids)
+    if req.creative_ids:
+        creative_ids_set = set(req.creative_ids)
         creatives = [c for c in creatives if _get_field(c, "creative_id") in creative_ids_set]
         logger.info(f"[sync_creatives] Filtered to {len(creatives)} creatives by creative_ids filter")
 
@@ -147,9 +149,9 @@ def _sync_creatives_impl(
     # Authentication — principal_id is required for creative sync (NOT NULL in database).
     # require_principal_id first so the canonical auth message surfaces for missing/anonymous auth;
     # require_identity narrows the type. Tenant is resolved at the transport boundary.
-    principal_id = require_principal_id(identity, context=context)
-    identity = require_identity(identity, context=context)
-    tenant = require_tenant(identity, context=context)
+    principal_id = require_principal_id(identity, context=req.context)
+    identity = require_identity(identity, context=req.context)
+    tenant = require_tenant(identity, context=req.context)
 
     # At-most-once probe, through the SHARED machinery media_buy_create uses -- one cache,
     # one conflict rule, one ceiling. A dry run is excluded deliberately: it performs no
@@ -158,12 +160,21 @@ def _sync_creatives_impl(
     #
     # Ahead of the SSRF gate below on purpose: a replay returns a stored response and
     # performs no registration, so there is no URL to stash and nothing to gate.
-    if idempotency_key and not dry_run:
+    #
+    # Gated on request_hash as well as the key -- the SAME condition the cache WRITE below
+    # already carried, so for every transport this is unchanged (the wrappers compute the
+    # hash under exactly `idempotency_key and not dry_run`). What it excludes is the
+    # in-process caller, which has no transmission to hash. That caller carries the OUTER
+    # media buy's client key, and the cache scope is the spec's (agent, account, key) tuple
+    # with NO tool dimension (IdempotencyAttemptRepository.find_by_key), so probing with it
+    # would hit the media buy's own row and -- passing request_hash=None against a stored
+    # hash -- raise IDEMPOTENCY_CONFLICT on a perfectly good nested sync.
+    if request_hash is not None and req.idempotency_key and not dry_run:
         replay = lookup_cached_replay(
             tenant_id=tenant["tenant_id"],
             principal_id=principal_id,
             account_id=identity.account_id,
-            idempotency_key=idempotency_key,
+            idempotency_key=req.idempotency_key,
             request_hash=request_hash,
             deserialize=_replay_cached_sync,
         )
@@ -183,11 +194,11 @@ def _sync_creatives_impl(
     # SEND-time gate and re-checks with DNS when the callback is actually dialed —
     # so no second address check belongs on this path.
     webhook_url = None
-    if push_notification_config:
+    if req.push_notification_config:
         registration = accept_push_notification_config(
-            push_notification_config,
+            req.push_notification_config,
             field_prefix="push_notification_config",
-            context=context,
+            context=req.context,
         )
         webhook_url = registration.url
         if webhook_url is not None and str(webhook_url).strip():
@@ -322,7 +333,7 @@ def _sync_creatives_impl(
                             approval_mode=approval_mode,
                             tenant=tenant,
                             webhook_url=webhook_url,
-                            context=context,
+                            context=req.context,
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
@@ -382,7 +393,7 @@ def _sync_creatives_impl(
                             approval_mode=approval_mode,
                             tenant=tenant,
                             webhook_url=webhook_url,
-                            context=context,
+                            context=req.context,
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
@@ -477,7 +488,7 @@ def _sync_creatives_impl(
                 results.append(_failed_sync_result(creative_id, typed))
 
         # Archive creatives not in the sync payload when delete_missing=True
-        if delete_missing:
+        if req.delete_missing:
             # Collect all creative IDs from the payload (regardless of success/failure)
             payload_creative_ids = {_get_field(c, "creative_id") for c in creatives}
             payload_creative_ids.discard(None)
@@ -511,8 +522,8 @@ def _sync_creatives_impl(
                 principal_id=principal_id,
                 tenant=tenant,
                 approval_mode=approval_mode,
-                push_notification_config=push_notification_config,
-                context=context,
+                push_notification_config=req.push_notification_config,
+                context=req.context,
                 identity=identity,
                 uow=uow,
             )
@@ -545,7 +556,7 @@ def _sync_creatives_impl(
         # status transition run either way — dry_run differs only in which
         # transaction they run in and that it is discarded.
         assignment_list = _process_assignments(
-            assignments=assignments,
+            assignments=req.assignments,
             results=results,
             tenant=tenant,
             validation_mode=validation_mode,
@@ -560,7 +571,7 @@ def _sync_creatives_impl(
         synced_creatives=synced_creatives,
         failed_creatives=failed_creatives,
         assignment_list=assignment_list,
-        creative_ids=creative_ids,
+        creative_ids=req.creative_ids,
         dry_run=dry_run,
         created_count=created_count,
         updated_count=updated_count,
@@ -597,7 +608,7 @@ def _sync_creatives_impl(
     response = SyncCreativesResponse(
         creatives=results,
         dry_run=dry_run,
-        context=context,
+        context=req.context,
     )
 
     # Cached only on the success path, so an error is never replayed (AdCP
@@ -605,13 +616,13 @@ def _sync_creatives_impl(
     # request_hash is set by the wrapper under exactly this condition, so the extra check
     # narrows the type rather than adding a case: a cache row without a payload hash carries
     # no conflict signal, and writing one would make a later reuse silently replayable.
-    if idempotency_key and not dry_run and request_hash is not None:
+    if req.idempotency_key and not dry_run and request_hash is not None:
         cache_success(
             tenant_id=tenant["tenant_id"],
             principal_id=principal_id,
             account_id=identity.account_id,
             tool_name=_IDEMPOTENCY_TOOL_NAME,
-            idempotency_key=idempotency_key,
+            idempotency_key=req.idempotency_key,
             response_model=response,
             protocol_status=AdcpTaskStatus.completed.value,
             payload_hash=request_hash,

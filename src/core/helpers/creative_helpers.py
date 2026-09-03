@@ -11,9 +11,13 @@ import logging
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from adcp import FormatId as LibraryFormatId
+from adcp.types import ValidationMode
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
+    from adcp.types import AccountReference as LibraryAccountReference
+    from adcp.types import ContextObject
+
     from src.core.database.models import Product as DBProduct
     from src.core.resolved_identity import ResolvedIdentity
     from src.core.schemas import Creative, FormatId, PackageRequest, Product
@@ -510,6 +514,14 @@ def process_and_upload_package_creatives(
     packages: list["PackageRequest"],
     context: "ResolvedIdentity | None" = None,
     testing_ctx: "TestingContext | None" = None,
+    *,
+    # The OUTER create_media_buy's own values, threaded down because the nested sync is
+    # built as a real SyncCreativesRequest now -- see the builder call below. They are not
+    # invented here: these creatives belong to that account, and that key is the
+    # client-generated identifier of the operation this upload is part of.
+    account: "LibraryAccountReference | None" = None,
+    idempotency_key: str | None = None,
+    adcp_context: "ContextObject | None" = None,
 ) -> tuple[list["PackageRequest"], dict[str, list[str]]]:
     """Upload creatives from package.creatives arrays and return updated packages.
 
@@ -526,6 +538,9 @@ def process_and_upload_package_creatives(
         packages: List of Package objects to process
         context: FastMCP context (for principal_id extraction)
         testing_ctx: Optional testing context for dry_run mode
+        account: The outer create_media_buy's account, carried onto the nested sync request
+        idempotency_key: The outer create_media_buy's client key, carried the same way
+        adcp_context: The outer request's ContextObject, so errors name the right context
 
     Returns:
         Tuple of (updated_packages, uploaded_ids_by_product):
@@ -545,7 +560,7 @@ def process_and_upload_package_creatives(
 
     # Lazy import to avoid circular dependency
     from src.core.exceptions import AdCPAdapterError, AdCPCreativeRejectedError, AdCPSalesAgentError
-    from src.core.tools.creatives import _sync_creatives_impl
+    from src.core.tools.creatives import _sync_creatives_impl, build_sync_creatives_request
 
     logger = logging.getLogger(__name__)
     uploaded_by_product: dict[str, list[str]] = {}
@@ -563,13 +578,27 @@ def process_and_upload_package_creatives(
         try:
             # Step 1: Upload creatives to database via sync_creatives
             # Phase 1a: Pass models directly (impl handles both models and dicts)
-            sync_response = _sync_creatives_impl(
+            # Built through the SAME builder the three transports use, rather than handed
+            # to _impl as loose fields. _sync_creatives_impl takes a request; an in-process
+            # caller that could not produce one was reaching into the tool instead of
+            # invoking it.
+            #
+            # No request_hash is passed: there is no transmission here to canonicalise, and
+            # that absence is what keeps the outer media buy's key out of the shared
+            # (agent, account, key) idempotency cache scope -- see _sync_creatives_impl.
+            sync_req = build_sync_creatives_request(
                 creatives=pkg.creatives,
+                account=account,
+                idempotency_key=idempotency_key,
+                context=adcp_context,
                 # AdCP 2.5: Full upsert semantics (no patch parameter)
                 assignments=None,  # Assign separately after creation
                 dry_run=testing_ctx.dry_run if testing_ctx else False,
-                validation_mode="strict",
+                validation_mode=ValidationMode.strict,
                 push_notification_config=None,
+            )
+            sync_response = _sync_creatives_impl(
+                req=sync_req,
                 identity=context,  # ResolvedIdentity for principal_id extraction
             )
 

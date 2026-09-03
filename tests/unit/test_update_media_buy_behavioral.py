@@ -17,9 +17,10 @@ BDD scenario cross-references:
 from datetime import UTC, datetime
 from decimal import Decimal
 from itertools import repeat
-from unittest.mock import ANY, MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
+from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 from pydantic import ValidationError
 
 from src.core.errors.codes import ErrorCode
@@ -39,6 +40,7 @@ from src.core.schemas import (
     UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
 )
+from src.core.tools.creatives import build_sync_creatives_request
 from src.core.tools.media_buy_update import _update_media_buy_impl
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness.media_buy_update import MediaBuyUpdateEnv
@@ -1297,10 +1299,24 @@ class TestUC003UploadInlineCreatives:
                 result = _update_media_buy_impl(req=req, identity=identity)
 
             assert isinstance(result.response, UpdateMediaBuySuccess)
+            # The REQUEST, stated exactly, not three ANYs. _sync_creatives_impl takes a
+            # SyncCreativesRequest now, so what update_media_buy owes the creative sync is a
+            # request built through the shared builder -- carrying THIS request's account,
+            # client key and context, and the typed Assignments derived from the package.
+            # Asserting the whole object is what makes "the nested call is a real request"
+            # checkable at all; ANY could not tell that account or idempotency_key was lost.
             mock_sync.assert_called_once_with(
-                creatives=ANY,
-                identity=ANY,
-                assignments=ANY,
+                req=build_sync_creatives_request(
+                    creatives=req.packages[0].creatives,
+                    account=req.account,
+                    idempotency_key=req.idempotency_key,
+                    context=req.context,
+                    assignments=[
+                        Assignment(creative_id="c1", package_id="pkg_1"),
+                        Assignment(creative_id="c2", package_id="pkg_1"),
+                    ],
+                ),
+                identity=identity,
             )
             # affected_packages should track the creative upload
             assert len(result.response.affected_packages) >= 1

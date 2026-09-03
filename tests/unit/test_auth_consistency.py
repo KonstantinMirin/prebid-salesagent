@@ -18,6 +18,7 @@ from fastmcp.exceptions import ToolError
 from src.core.exceptions import AdCPAuthenticationError, AdCPSalesAgentError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.services.policy_check_service import PolicyStatus
+from tests.helpers.creative_test_helpers import sync_creatives_request
 
 # --- Helpers ---
 
@@ -75,7 +76,7 @@ class TestMissingTokenConsistency:
         identity = _make_identity(principal_id=None)
 
         with pytest.raises(AdCPAuthenticationError):
-            _sync_creatives_impl(creatives=[], identity=identity)
+            _sync_creatives_impl(req=sync_creatives_request(), identity=identity)
 
     def test_list_creatives_requires_auth(self):
         """list_creatives should fail when no auth token is provided."""
@@ -160,7 +161,7 @@ class TestInvalidTokenConsistency:
         identity = _make_identity(principal_id=None)
 
         with pytest.raises(AdCPAuthenticationError):
-            _sync_creatives_impl(creatives=[], identity=identity)
+            _sync_creatives_impl(req=sync_creatives_request(), identity=identity)
 
     def test_list_creatives_invalid_token(self):
         """list_creatives should fail for identity with no principal."""

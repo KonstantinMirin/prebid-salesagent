@@ -16,8 +16,9 @@ from adcp.types import FormatId
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tools.creatives import _sync_creatives_impl
 from src.core.validation_helpers import run_async_in_sync_context
-from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import make_mock_uow
+from tests.helpers.creative_test_helpers import sync_creatives_request
 
 
 class TestRunAsyncInSyncContext:
@@ -101,59 +102,19 @@ def _make_creative_uow():
 
 
 class TestSyncCreativesErrorHandling:
-    """Test sync_creatives error handling paths that use creative_id."""
+    """Test sync_creatives error handling paths that use creative_id.
 
-    @pytest.mark.asyncio
-    async def test_creative_id_defined_in_error_path(self):
-        """Test that creative_id is available when validation fails (new creative path).
-
-        Before the fix, this would raise:
-        "cannot access local variable 'creative_id' where it is not associated with a value"
-
-        This tests the new creative creation path where validation fails.
-        """
-        mock_uow, mock_creative_repo = _make_creative_uow()
-
-        # ResolvedIdentity replaces context-based auth
-        identity = ResolvedIdentity(
-            principal_id="test_principal",
-            tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant", "approval_mode": "auto-approve"},
-            protocol="mcp",
-        )
-
-        # Create a creative that will fail validation (missing required fields)
-        invalid_creative = {
-            "creative_id": "test_creative_123",
-            # Missing required fields like name, format_id
-        }
-
-        with patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls:
-            mock_uow_cls.return_value.__enter__.return_value = mock_uow
-
-            with patch("src.core.helpers.context_helpers.ensure_tenant_context"):
-                # Mock the Creative schema to raise ValidationError
-                with patch("src.core.schemas.Creative") as mock_creative_class:
-                    from pydantic import ValidationError
-
-                    # Simulate validation error
-                    mock_creative_class.side_effect = ValidationError.from_exception_data(
-                        "Creative", [{"type": "missing", "loc": ("name",), "msg": "Field required"}]
-                    )
-
-                    # This should NOT raise "cannot access local variable 'creative_id'"
-                    # Instead, it should handle the error gracefully
-                    result = _sync_creatives_impl(
-                        creatives=[invalid_creative],
-                        context=None,
-                        identity=identity,
-                    )
-
-                    # Verify the error was captured with the correct creative_id
-                    assert len(result.creatives) == 1
-                    assert result.creatives[0].creative_id == "test_creative_123"
-                    assert result.creatives[0].action == "failed"
-                    assert len(result.creatives[0].errors) > 0
+    ``test_creative_id_defined_in_error_path`` used to live here. Its premise was that a
+    creative dict missing ``name`` and ``format_id`` reaches the per-creative loop and fails
+    THERE with ``creative_id`` bound. That premise is now inverted: every caller builds a
+    SyncCreativesRequest first, and core/creative-asset.json makes both fields required, so
+    such an item is refused at the request boundary and never reaches the loop. The branch it
+    graded -- the loop's ``except (ValidationError, ValueError)`` arm, and that it names the
+    offending creative_id -- is still reached by a spec-legal item that fails
+    ``_validate_creative_input``, and is graded by
+    test_sync_creatives_format_validation.py::test_format_validation_unknown_format and
+    test_creative.py::TestExtensionGaps::test_ext_c_validation_failure_strict_others_processed.
+    """
 
     @pytest.mark.asyncio
     async def test_creative_id_in_preview_failure_path(self):
@@ -178,12 +139,16 @@ class TestSyncCreativesErrorHandling:
             protocol="mcp",
         )
 
-        # Creative WITHOUT URL - this should fail when preview returns no previews
+        # Creative with NO URL anywhere - this should fail when preview returns no previews.
+        # ``assets`` is spec-REQUIRED (core/creative-asset.json), so the slot map cannot
+        # simply be omitted the way it was when this payload went straight into _impl; a TEXT
+        # asset satisfies the schema while still carrying no URL, which is what the preview
+        # path here needs.
         creative = {
             "creative_id": "test_creative_456",
             "name": "Test Creative",
             "format_id": {"agent_url": "https://example.com", "id": "display_300x250"},
-            # NO assets, NO url - preview is required
+            "assets": build_assets(text_spec("message", content="No URL anywhere")),
         }
 
         with patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls:
@@ -224,11 +189,7 @@ class TestSyncCreativesErrorHandling:
                     mock_reg_instance.preview_creative = mock_preview
 
                     # This should handle the error gracefully with creative_id available
-                    result = _sync_creatives_impl(
-                        creatives=[creative],
-                        context=None,
-                        identity=identity,
-                    )
+                    result = _sync_creatives_impl(req=sync_creatives_request(creatives=[creative]), identity=identity)
 
                     # Verify error was captured with correct creative_id
                     assert len(result.creatives) == 1
@@ -321,9 +282,7 @@ class TestSyncCreativesAsyncScenario:
                     # This is the critical test: calling from async context should work
                     # Before the fix, this would raise RuntimeError about asyncio.run()
                     result = _sync_creatives_impl(
-                        creatives=[creative],
-                        context=None,
-                        identity=identity,
+                        req=sync_creatives_request(creatives=[creative], context=None), identity=identity
                     )
 
                     # Verify it succeeded

@@ -25,7 +25,7 @@ from ._sync import _sync_creatives_impl
 from ._validation import _get_field, _validate_creative_input
 from ._workflow import _audit_log_sync, _create_sync_workflow_steps, _send_creative_notifications
 from .listing import _list_creatives_impl, list_creatives, list_creatives_raw
-from .sync_wrappers import sync_creatives, sync_creatives_raw
+from .sync_wrappers import build_sync_creatives_request, sync_creatives, sync_creatives_raw
 
 __all__ = [
     # Re-exported dependencies (for mock.patch compatibility)
@@ -37,6 +37,7 @@ __all__ = [
     "list_creatives",
     "list_creatives_raw",
     # Sync wrappers (MCP + A2A)
+    "build_sync_creatives_request",
     "sync_creatives",
     "sync_creatives_raw",
     # Validation

@@ -29,6 +29,7 @@ from tests.helpers.creative_test_helpers import (
 from tests.helpers.creative_test_helpers import (
     make_format_spec,
     make_registry_mock,
+    sync_creatives_request,
 )
 from tests.helpers.creative_test_helpers import (
     sync_patches as _sync_patches,
@@ -94,9 +95,11 @@ class TestSyncPushNotificationConfig:
 
         with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
             response = _sync_creatives_impl(
-                creatives=[_make_creative_dict()],
+                req=sync_creatives_request(
+                    creatives=[_make_creative_dict()],
+                    push_notification_config={"url": f"{UNDIALLED_PUBLIC_HTTPS_ORIGIN}/hook"},
+                ),
                 identity=identity,
-                push_notification_config={"url": f"{UNDIALLED_PUBLIC_HTTPS_ORIGIN}/hook"},
             )
         assert response.creatives[0].action == "created"
 
@@ -113,9 +116,8 @@ class TestSyncPushNotificationConfig:
         )
         with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
             response = _sync_creatives_impl(
-                creatives=[_make_creative_dict()],
+                req=sync_creatives_request(creatives=[_make_creative_dict()], push_notification_config=config),
                 identity=identity,
-                push_notification_config=config,
             )
         assert response.creatives[0].action == "created"
 
@@ -136,10 +138,7 @@ class TestSyncBaseModelNormalization:
             variants: list = []
 
         with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
-            response = _sync_creatives_impl(
-                creatives=[CustomCreative()],
-                identity=identity,
-            )
+            response = _sync_creatives_impl(req=sync_creatives_request(creatives=[CustomCreative()]), identity=identity)
         assert len(response.creatives) == 1
         # Should either succeed or fail validation — but line 171 is hit either way
         assert response.creatives[0].creative_id == "c_custom"
@@ -161,9 +160,7 @@ class TestSyncDryRunExistingCreative:
             mock_creative_repo.get_by_id.return_value = mock_existing
 
             response = _sync_creatives_impl(
-                creatives=[_make_creative_dict()],
-                identity=identity,
-                dry_run=True,
+                req=sync_creatives_request(creatives=[_make_creative_dict()], dry_run=True), identity=identity
             )
 
         assert len(response.creatives) == 1
@@ -202,8 +199,7 @@ class TestSyncUnchangedCount:
                 return_value=(unchanged_result, False),
             ):
                 response = _sync_creatives_impl(
-                    creatives=[_make_creative_dict()],
-                    identity=identity,
+                    req=sync_creatives_request(creatives=[_make_creative_dict()]), identity=identity
                 )
 
         assert len(response.creatives) == 1
@@ -256,8 +252,7 @@ class TestSyncAiReviewReasonOnUpdate:
                 ),
             ):
                 response = _sync_creatives_impl(
-                    creatives=[_make_creative_dict()],
-                    identity=identity,
+                    req=sync_creatives_request(creatives=[_make_creative_dict()]), identity=identity
                 )
 
         assert len(response.creatives) == 1
@@ -317,8 +312,7 @@ class TestSyncProvenanceWarningOnUpdate:
                 ),
             ):
                 response = _sync_creatives_impl(
-                    creatives=[_make_creative_dict()],
-                    identity=identity,
+                    req=sync_creatives_request(creatives=[_make_creative_dict()]), identity=identity
                 )
 
         assert len(response.creatives) == 1
@@ -361,7 +355,7 @@ class TestSyncMixedMessageSuffix:
                 return_value=(update_result, False),
             ):
                 response = _sync_creatives_impl(
-                    creatives=[_make_creative_dict("c1"), _make_creative_dict("c2")],
+                    req=sync_creatives_request(creatives=[_make_creative_dict("c1"), _make_creative_dict("c2")]),
                     identity=identity,
                 )
 

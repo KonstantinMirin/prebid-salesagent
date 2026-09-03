@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from src.core.schemas import Creative, FormatId, SyncCreativesRequest
 from tests.factories.creative_asset import build_assets, image_spec, make_creative_asset_request
+from tests.helpers.creative_test_helpers import creative_payload, sync_creatives_request
 
 
 class TestSyncCreativesCreativeIdsFilter:
@@ -84,29 +85,22 @@ class TestSyncCreativesCreativeIdsFilter:
         mock_uow_cls.return_value.__exit__.return_value = None
 
         # Create multiple creatives
+        # ``assets`` is spec-REQUIRED (core/creative-asset.json); these items omitted it and
+        # only cleared validation because they went straight into _impl. The subject here is
+        # the creative_ids filter, so the items are completed rather than the filter graded
+        # against a payload the request boundary refuses.
         creatives = [
-            {
-                "creative_id": "creative_1",
-                "name": "Creative 1",
-                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display"},
-            },
-            {
-                "creative_id": "creative_2",
-                "name": "Creative 2",
-                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display"},
-            },
-            {
-                "creative_id": "creative_3",
-                "name": "Creative 3",
-                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display"},
-            },
+            creative_payload(
+                creative_id=f"creative_{n}",
+                name=f"Creative {n}",
+                format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display"},
+            )
+            for n in (1, 2, 3)
         ]
 
         # Sync with creative_ids filter - should only process creative_1 and creative_3
         response = _sync_creatives_impl(
-            creatives=creatives,
-            creative_ids=["creative_1", "creative_3"],  # Filter
-            dry_run=True,  # Don't actually persist
+            req=sync_creatives_request(creatives=creatives, creative_ids=["creative_1", "creative_3"], dry_run=True),
             identity=identity,
         )
 

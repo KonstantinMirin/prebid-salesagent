@@ -130,6 +130,12 @@ def creative_fingerprint(creative: Any) -> tuple[str, str]:
     return (creative.status, repr(creative.data))
 
 
+#: Distinguishes "the caller stated request_hash=None" (meaning: no transmission, so keep
+#: the at-most-once machinery out) from "the caller said nothing", which derives the hash as
+#: a transport wrapper would. A plain None default would collapse the two.
+_UNSET = object()
+
+
 class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
     """Integration test environment for _sync_creatives_impl.
 
@@ -666,26 +672,54 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
     def call_impl(self, **kwargs: Any) -> SyncCreativesResponse:
         """Call _sync_creatives_impl with real DB.
 
-        Accepts all _sync_creatives_impl kwargs. The 'identity' kwarg
-        defaults to self.identity if not provided.
+        Takes the same per-field kwargs a scenario always wrote and BUILDS the request from
+        them, through ``build_sync_creatives_request`` — the one seam the three transports
+        construct through. ``_sync_creatives_impl`` takes ``(req, identity, request_hash)``
+        now, so a harness that forwarded loose fields would be the only caller in the tree
+        still spreading a request across a call signature, and would grade a shape
+        production no longer has.
 
-        If 'account' is present, resolves it via enrich_identity_with_account
-        (same as the transport wrappers do) before calling _impl.
+        The 'identity' kwarg defaults to self.identity. If 'account' is present it is
+        resolved via enrich_identity_with_account (same as the transport wrappers do); an
+        absent one still reaches the REQUEST, because the schema requires the field, but is
+        never resolved — so a scenario about an unknown tenant keeps reaching the auth
+        rejection it grades rather than an account-resolution error.
+
+        ``request_hash`` is derived by the wrappers' own rule unless the caller states one,
+        so the direct-impl path exercises the same at-most-once behaviour as a transport.
         """
+        from src.core.idempotency_canonical import canonical_request_hash
         from src.core.tools.creatives._sync import _sync_creatives_impl
+        from src.core.tools.creatives.sync_wrappers import build_sync_creatives_request
 
         self._commit_factory_data()
         kwargs.setdefault("identity", self.identity)
         kwargs = self._with_required_request_fields(kwargs, with_account=False)
+
+        identity = kwargs.pop("identity")
+        stated_hash = kwargs.pop("request_hash", _UNSET)
 
         # Handle account kwarg — resolve at boundary, same as wrappers
         account = kwargs.pop("account", None)
         if account is not None:
             from src.core.transport_helpers import enrich_identity_with_account
 
-            kwargs["identity"] = enrich_identity_with_account(kwargs["identity"], account)
+            identity = enrich_identity_with_account(identity, account)
 
-        return _sync_creatives_impl(**kwargs)
+        req = build_sync_creatives_request(
+            # The schema REQUIRES account, and this path deliberately does not resolve one
+            # (see the docstring), so an unstated account gets a syntactically valid
+            # reference that no lookup will ever consult. _sync_creatives_impl reads
+            # identity, never req.account.
+            account=account if account is not None else AccountReference(root={"account_id": "acct_unresolved"}),
+            **kwargs,
+        )
+        request_hash = (
+            (canonical_request_hash(req) if req.idempotency_key and not req.dry_run else None)
+            if stated_hash is _UNSET
+            else stated_hash
+        )
+        return _sync_creatives_impl(req=req, identity=identity, request_hash=request_hash)
 
     def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
         """Dispatch sync_creatives through the REAL A2A ``on_message_send`` pipeline.

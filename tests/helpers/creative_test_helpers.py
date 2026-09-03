@@ -11,28 +11,70 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from uuid import uuid4
+
+from adcp.types import AccountReference
 
 from tests.factories.creative_asset import AssetSpec, assert_assets, build_assets, image_spec
 from tests.helpers.adcp_factories import create_test_format_id
 
 if TYPE_CHECKING:
     from src.core.schemas import Creative
+    from src.core.schemas.creative import SyncCreativesRequest
 
 
 def make_creative_dict(creative_id: str = "c1", name: str = "Test Banner") -> dict:
-    """Build a valid creative dict with SDK 5.7 asset structure."""
+    """Build a valid creative REQUEST dict (core/creative-asset.json @ AdCP 3.1.1).
+
+    ``variants`` was in here and is not a request field at all -- it is delivery-only (see
+    test_adcp_contract.py's delivery_only_fields, and the listing-response assertions that
+    it must NOT appear). It survived while these payloads went straight into
+    ``_sync_creatives_impl``, which coerced to the response model; now that every caller
+    builds a SyncCreativesRequest first, CreativeAssetRequest refuses it -- as every
+    transport already did for a real buyer.
+    """
     return {
         "creative_id": creative_id,
         "name": name,
         "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"},
         "assets": build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
-        "variants": [],
     }
 
 
 _DEFAULT_AGENT_URL = "https://creative.test.example.com"
+
+#: Stands in for an account a test is not about. ``_sync_creatives_impl`` never reads
+#: ``req.account`` -- the transport wrapper resolves the reference into ``identity`` before
+#: the call -- so nothing ever looks this id up. It exists because
+#: creative/sync-creatives-request.json lists ``account`` in /required, and a request that
+#: omits it is a request the schema rejects before the test reaches its subject.
+_PLACEHOLDER_ACCOUNT_ID = "acct_test_placeholder"
+
+
+def sync_creatives_request(**fields: Any) -> SyncCreativesRequest:
+    """Build a SyncCreativesRequest from the loose per-field kwargs tests used to pass.
+
+    ``_sync_creatives_impl`` takes ``(req, identity, request_hash)``; every protocol field
+    travels on the request. Tests construct it through the SAME builder the three transports
+    use, so a test cannot grade a shape no transport can produce.
+
+    ``account`` and ``idempotency_key`` are spec-REQUIRED. A test that is about neither gets
+    a placeholder for the first and a fresh key for the second — fresh, not fixed, because
+    sync_creatives honours the key: a constant would make two calls in one test the same
+    request, and the second would replay the first instead of executing.
+    """
+    fields.setdefault("creatives", [creative_payload()])
+    fields.setdefault("idempotency_key", f"test-sync-idem-{uuid4().hex}")
+    if fields.get("account") is None:
+        fields["account"] = AccountReference(root={"account_id": _PLACEHOLDER_ACCOUNT_ID})
+
+    # Imported at call time: this module is imported by tests that patch objects inside the
+    # creatives package, and a module-level import would bind before their patches.
+    from src.core.tools.creatives.sync_wrappers import build_sync_creatives_request
+
+    return build_sync_creatives_request(**fields)
 
 
 def creative_payload(**overrides: object) -> dict:

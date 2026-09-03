@@ -671,19 +671,30 @@ class TestCreativeIdsFilter:
         assert result_ids == {"c1", "c3"}
         assert "c2" not in result_ids
 
-    def test_empty_creative_ids_processes_all(self, integration_db):
-        """Behavior: UC-006-CREATIVE-IDS-SCOPE-02 — empty list is falsy, processes all creatives."""
-        with CreativeSyncEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+    def test_empty_creative_ids_is_refused_by_the_request(self, integration_db):
+        """Behavior: UC-006-CREATIVE-IDS-SCOPE-02 — an EMPTY creative_ids array is refused.
 
-            response = env.call_impl(
-                creatives=[_make_creative_asset(creative_id="c1", name="One")],
-                creative_ids=[],
-            )
+        This asserted the opposite of what it was named for: that ``creative_ids=[]`` is
+        falsy in ``if creative_ids:`` and therefore processes ALL creatives. Both readings
+        are moot now. creative/sync-creatives-request.json @ AdCP 3.1.1 gives creative_ids
+        ``minItems: 1``, so an empty array is a request the schema refuses, and every
+        transport builds the request before _impl sees it. The filter's falsy branch was
+        never reachable from the wire; it was reachable only from a caller handing _impl
+        loose fields, which no longer exists.
+        """
+        from src.core.exceptions import AdCPInvalidRequestError
+        from src.core.schema_helpers import adcp_validation_boundary
+        from tests.helpers.creative_test_helpers import sync_creatives_request
 
-        # Empty list is falsy in `if creative_ids:` — all creatives processed
-        assert len(response.creatives) == 1
+        with pytest.raises(AdCPInvalidRequestError) as exc_info:
+            with adcp_validation_boundary(context="sync_creatives request"):
+                sync_creatives_request(
+                    creatives=[_make_creative_asset(creative_id="c1", name="One")],
+                    creative_ids=[],
+                )
+
+        assert exc_info.value.error_code == "INVALID_REQUEST"
+        assert exc_info.value.field == "creative_ids"
 
 
 class TestDryRunMode:
@@ -1790,25 +1801,32 @@ class TestSyncExtensions:
         result_by_id = {r.creative_id: r for r in response.creatives}
         assert result_by_id["c_bad"].action == "failed"
 
-    def test_missing_name_field_fails_validation(self, integration_db):
-        """Covers: UC-006-EXT-D-02 — dict without name → action=failed with errors."""
-        with CreativeSyncEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            PrincipalFactory(tenant=tenant, principal_id="test_principal")
+    def test_missing_name_field_is_refused_by_the_request(self, integration_db):
+        """Covers: UC-006-EXT-D-02 — a creative without ``name`` is refused BY THE REQUEST.
 
-            response = env.call_impl(
-                creatives=[
-                    {
-                        "creative_id": "c_no_name",
-                        "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
-                        "assets": build_assets(image_spec("banner")),
-                    }
-                ],
-            )
+        This asserted a per-creative ``action=failed``. ``name`` is required by
+        core/creative-asset.json @ AdCP 3.1.1, and every transport builds a
+        SyncCreativesRequest before _impl runs, so the omission is refused at the request
+        boundary and the per-creative arm is never reached. Same obligation, one layer up.
+        """
+        from src.core.exceptions import AdCPInvalidRequestError
+        from src.core.schema_helpers import adcp_validation_boundary
+        from tests.helpers.creative_test_helpers import sync_creatives_request
 
-        assert len(response.creatives) == 1
-        assert response.creatives[0].action == "failed"
-        assert len(response.creatives[0].errors) > 0
+        with pytest.raises(AdCPInvalidRequestError) as exc_info:
+            with adcp_validation_boundary(context="sync_creatives request"):
+                sync_creatives_request(
+                    creatives=[
+                        {
+                            "creative_id": "c_no_name",
+                            "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
+                            "assets": build_assets(image_spec("banner")),
+                        }
+                    ],
+                )
+
+        assert exc_info.value.error_code == "INVALID_REQUEST"
+        assert exc_info.value.field == "name"
 
     def test_unknown_format_fails_with_hint(self, integration_db):
         """Covers: UC-006-EXT-F-01 — format not in registry → failed with hint."""

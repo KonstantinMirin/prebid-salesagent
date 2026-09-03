@@ -26,6 +26,7 @@ from fastmcp.exceptions import ToolError
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.helpers.creative_test_helpers import creative_payload, sync_creatives_request
 
 
 class TestAuthenticationRequirements:
@@ -39,20 +40,11 @@ class TestAuthenticationRequirements:
         """sync_creatives must reject requests without authentication."""
         from src.core.tools.creatives import _sync_creatives_impl
 
-        creatives = [
-            {
-                "creative_id": "test_creative",
-                "name": "Test Creative",
-                "format_id": "display_728x90_image",
-                "assets": build_assets(
-                    image_spec("banner_image", url="https://example.com/banner.png", width=728, height=90)
-                ),
-            }
-        ]
+        creatives = [creative_payload(creative_id="test_creative", name="Test Creative")]
 
         # Call without identity (no auth) — _impl raises AdCPAuthenticationError (transport-agnostic)
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _sync_creatives_impl(creatives=creatives, identity=None)
+            _sync_creatives_impl(req=sync_creatives_request(creatives=creatives), identity=None)
 
     def test_sync_creatives_with_invalid_auth(self):
         """sync_creatives must reject requests with invalid authentication."""
@@ -65,13 +57,13 @@ class TestAuthenticationRequirements:
             {
                 "creative_id": "test_creative",
                 "name": "Test Creative",
-                "format_id": "display_728x90_image",
-                "assets": {"banner_image": {"url": "https://example.com/banner.png"}},
+                "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90_image"},
+                "assets": build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
             }
         ]
 
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _sync_creatives_impl(creatives=creatives, identity=invalid_identity)
+            _sync_creatives_impl(req=sync_creatives_request(creatives=creatives), identity=invalid_identity)
 
     def test_list_creatives_requires_authentication(self):
         """list_creatives must reject requests without authentication."""
@@ -175,10 +167,13 @@ class TestAuthenticationRequirements:
         # ResolvedIdentity with None principal_id (invalid token scenario)
         identity = ResolvedIdentity(principal_id=None, tenant_id="test_tenant")
 
-        creatives = [{"creative_id": "test", "name": "Test", "assets": {}}]
+        # A SPEC-LEGAL item (core/creative-asset.json requires format_id and non-empty
+        # assets). The stub that was here never crossed a request boundary, so it graded the
+        # auth gate against a payload no transport would have delivered.
+        creatives = [creative_payload(creative_id="test", name="Test")]
 
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _sync_creatives_impl(creatives=creatives, identity=identity)
+            _sync_creatives_impl(req=sync_creatives_request(creatives=creatives), identity=identity)
 
     def test_identity_with_empty_string_principal_id(self):
         """ResolvedIdentity with empty string principal_id should be rejected."""
@@ -187,10 +182,13 @@ class TestAuthenticationRequirements:
         # ResolvedIdentity with empty principal_id
         identity = ResolvedIdentity(principal_id="", tenant_id="test_tenant")
 
-        creatives = [{"creative_id": "test", "name": "Test", "assets": {}}]
+        # A SPEC-LEGAL item (core/creative-asset.json requires format_id and non-empty
+        # assets). The stub that was here never crossed a request boundary, so it graded the
+        # auth gate against a payload no transport would have delivered.
+        creatives = [creative_payload(creative_id="test", name="Test")]
 
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _sync_creatives_impl(creatives=creatives, identity=identity)
+            _sync_creatives_impl(req=sync_creatives_request(creatives=creatives), identity=identity)
 
 
 class TestAuthenticationErrorMessages:
@@ -201,7 +199,7 @@ class TestAuthenticationErrorMessages:
         from src.core.tools.creatives import _sync_creatives_impl
 
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _sync_creatives_impl(creatives=[], identity=None)
+            _sync_creatives_impl(req=sync_creatives_request(), identity=None)
         # Should mention the header name so users know what to fix
 
     def test_update_media_buy_error_message_actionable(self):

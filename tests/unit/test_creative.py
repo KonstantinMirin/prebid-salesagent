@@ -83,6 +83,7 @@ from tests.factories.creative_asset import (
     video_spec,
 )
 from tests.harness._mock_uow import wire_effect_boundary
+from tests.helpers.creative_test_helpers import creative_payload, sync_creatives_request
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -626,7 +627,7 @@ class TestSyncCreativesAuth:
         from src.core.tools.creatives import _sync_creatives_impl
 
         with pytest.raises(AdCPAuthenticationError):
-            _sync_creatives_impl(creatives=[{"creative_id": "c1", "name": "x", "assets": {}}])
+            _sync_creatives_impl(req=sync_creatives_request(creatives=[creative_payload(creative_id="c1")]))
 
     def test_identity_without_principal_raises(self):
         """Identity with None principal_id raises AdCPAuthenticationError.
@@ -642,7 +643,7 @@ class TestSyncCreativesAuth:
         )
         with pytest.raises(AdCPAuthenticationError):
             _sync_creatives_impl(
-                creatives=[{"creative_id": "c1", "name": "x", "assets": {}}],
+                req=sync_creatives_request(creatives=[creative_payload(creative_id="c1")]),
                 identity=identity,
             )
 
@@ -661,7 +662,7 @@ class TestSyncCreativesAuth:
         )
         with pytest.raises(AdCPAuthenticationError) as _ei:
             _sync_creatives_impl(
-                creatives=[{"creative_id": "c1", "name": "x", "assets": {}}],
+                req=sync_creatives_request(creatives=[creative_payload(creative_id="c1")]),
                 identity=identity,
             )
         # The old pattern matched the AUTHORED sentence; the sentence is the
@@ -678,12 +679,16 @@ class TestSyncCreativesAuth:
         from src.core.tools.creatives import _sync_creatives_impl
 
         # Multiple creatives -- none should be processed
+        # Spec-legal items. They were {"creative_id", "name", "assets": {}} stubs, which
+        # core/creative-asset.json refuses (no format_id, empty assets): these tests are
+        # about the OPERATION-level auth failure, and a payload the request boundary would
+        # have refused first cannot demonstrate that the auth gate precedes processing.
         creatives = [
-            {"creative_id": "c1", "name": "Banner", "assets": {}},
-            {"creative_id": "c2", "name": "Video", "assets": {}},
+            creative_payload(creative_id="c1", name="Banner"),
+            creative_payload(creative_id="c2", name="Video"),
         ]
         with pytest.raises(AdCPAuthenticationError):
-            _sync_creatives_impl(creatives=creatives)
+            _sync_creatives_impl(req=sync_creatives_request(creatives=creatives))
         # No return value -- exception is the entire response
 
     def test_tenant_error_is_operation_level(self):
@@ -700,12 +705,16 @@ class TestSyncCreativesAuth:
             tenant_id="t1",
             tenant=None,
         )
+        # Spec-legal items. They were {"creative_id", "name", "assets": {}} stubs, which
+        # core/creative-asset.json refuses (no format_id, empty assets): these tests are
+        # about the OPERATION-level auth failure, and a payload the request boundary would
+        # have refused first cannot demonstrate that the auth gate precedes processing.
         creatives = [
-            {"creative_id": "c1", "name": "Banner", "assets": {}},
-            {"creative_id": "c2", "name": "Video", "assets": {}},
+            creative_payload(creative_id="c1", name="Banner"),
+            creative_payload(creative_id="c2", name="Video"),
         ]
         with pytest.raises(AdCPAuthenticationError):
-            _sync_creatives_impl(creatives=creatives, identity=identity)
+            _sync_creatives_impl(req=sync_creatives_request(creatives=creatives), identity=identity)
         # No return value -- exception is the entire response
 
 
@@ -757,8 +766,7 @@ class TestCrossPrincipalIsolation:
             # The creative will fail validation (no format in registry)
             # but the filter_by call happens before that
             result = _sync_creatives_impl(
-                creatives=[_make_creative_asset()],
-                identity=identity,
+                req=sync_creatives_request(creatives=[_make_creative_asset()]), identity=identity
             )
 
             # Should have processed (possibly failed) but not crashed
@@ -825,12 +833,12 @@ class TestCrossPrincipalIsolation:
 
             # Sync same creative_id for principal_1
             _sync_creatives_impl(
-                creatives=[_make_creative_asset(creative_id="c_shared")],
+                req=sync_creatives_request(creatives=[_make_creative_asset(creative_id="c_shared")]),
                 identity=identity_p1,
             )
             # Sync same creative_id for principal_2
             _sync_creatives_impl(
-                creatives=[_make_creative_asset(creative_id="c_shared")],
+                req=sync_creatives_request(creatives=[_make_creative_asset(creative_id="c_shared")]),
                 identity=identity_p2,
             )
 
@@ -2601,8 +2609,7 @@ class TestDeleteMissing:
 
             # Sync only c1, with delete_missing=True
             result = _sync_creatives_impl(
-                creatives=[_make_creative_asset(creative_id="c1")],
-                delete_missing=True,
+                req=sync_creatives_request(creatives=[_make_creative_asset(creative_id="c1")], delete_missing=True),
                 identity=identity,
             )
 
@@ -2682,8 +2689,7 @@ class TestDryRun:
             mock_db.return_value.__exit__.return_value = None
 
             result = _sync_creatives_impl(
-                creatives=[_make_creative_asset(creative_id="c1")],
-                dry_run=True,
+                req=sync_creatives_request(creatives=[_make_creative_asset(creative_id="c1")], dry_run=True),
                 identity=identity,
             )
 
@@ -3140,9 +3146,7 @@ class TestValidationModeSemantics:
             c3 = _make_creative_asset(creative_id="c3", name="Valid 3")
 
             result = _sync_creatives_impl(
-                creatives=[c1, c2, c3],
-                identity=identity,
-                validation_mode="lenient",
+                req=sync_creatives_request(creatives=[c1, c2, c3], validation_mode="lenient"), identity=identity
             )
 
             assert len(result.creatives) == 3
@@ -3804,10 +3808,7 @@ class TestSyncCreativesMainFlowGaps:
             mock_db.return_value.__exit__.return_value = None
 
             creatives = [_make_creative_asset(creative_id=f"c_{i}", name=f"Creative {i}") for i in range(5)]
-            result = _sync_creatives_impl(
-                creatives=creatives,
-                identity=identity,
-            )
+            result = _sync_creatives_impl(req=sync_creatives_request(creatives=creatives), identity=identity)
 
             assert len(result.creatives) == 5
             result_ids = {r.creative_id for r in result.creatives}
@@ -3867,8 +3868,7 @@ class TestSyncCreativesMainFlowGaps:
             mock_creative_repo.get_by_id.return_value = mock_existing
 
             result = _sync_creatives_impl(
-                creatives=[_make_creative_asset()],
-                identity=identity,
+                req=sync_creatives_request(creatives=[_make_creative_asset()]), identity=identity
             )
 
             assert len(result.creatives) == 1
@@ -3977,7 +3977,7 @@ class TestSyncCreativesMainFlowGaps:
             mock_db.return_value.__exit__.return_value = None
 
             creatives = [_make_creative_asset(creative_id=f"c_{i}", name=f"Creative {i}") for i in range(3)]
-            _sync_creatives_impl(creatives=creatives, identity=identity)
+            _sync_creatives_impl(req=sync_creatives_request(creatives=creatives), identity=identity)
 
             # run_async_in_sync_context called ONCE at orchestrator level for
             # registry.list_all_formats — not per-creative
@@ -4027,8 +4027,7 @@ class TestSyncCreativesMainFlowGaps:
             mock_db.return_value.__exit__.return_value = None
 
             result = _sync_creatives_impl(
-                creatives=[_make_creative_asset()],
-                identity=identity,
+                req=sync_creatives_request(creatives=[_make_creative_asset()]), identity=identity
             )
 
             # Result must be a valid SyncCreativesResponse
@@ -4065,10 +4064,7 @@ class TestExtensionGaps:
         )
 
         with pytest.raises(AdCPAuthenticationError) as _ei:
-            _sync_creatives_impl(
-                creatives=[_make_creative_asset()],
-                identity=identity,
-            )
+            _sync_creatives_impl(req=sync_creatives_request(creatives=[_make_creative_asset()]), identity=identity)
         # The old pattern matched the AUTHORED sentence; the sentence is the
         # code's table entry now, so assert it exactly.
 
@@ -4119,9 +4115,8 @@ class TestExtensionGaps:
             bad_creative = _make_creative_asset(creative_id="c_bad", name="Bad")
 
             result = _sync_creatives_impl(
-                creatives=[bad_creative, good_creative],
+                req=sync_creatives_request(creatives=[bad_creative, good_creative], validation_mode="strict"),
                 identity=identity,
-                validation_mode="strict",
             )
 
             # Both creatives should have results (per-creative validation is independent)
@@ -4184,9 +4179,7 @@ class TestExtensionGaps:
             good = _make_creative_asset(creative_id="c_good", name="Good")
 
             result = _sync_creatives_impl(
-                creatives=[bad, good],
-                identity=identity,
-                validation_mode="lenient",
+                req=sync_creatives_request(creatives=[bad, good], validation_mode="lenient"), identity=identity
             )
 
             assert len(result.creatives) == 2
@@ -4197,56 +4190,36 @@ class TestExtensionGaps:
             assert bad_action == "failed"
 
     def test_ext_d_missing_name_field(self):
-        """Creative with no name at all should fail validation.
+        """Creative with no name at all is refused BY THE REQUEST.
 
         Spec: CONFIRMED -- creative-asset.json requires 'name' (type: string).
-        When a dict input omits 'name', CreativeAsset validation fails and the
-        orchestrator records action=failed with the validation error.
         Covers: UC-006-EXT-D-02
+
+        This asserted the orchestrator records ``action=failed`` for such an item. That was
+        reachable only while a caller could hand ``_sync_creatives_impl`` loose creatives;
+        every transport now builds a SyncCreativesRequest first (a2a and rest inside
+        ``adcp_validation_boundary``, mcp through FastMCP's coercion of the annotated
+        ``list[CreativeAssetRequest]``), so the omission is refused at the request boundary
+        and never reaches the per-creative loop. Same obligation -- a nameless creative is
+        rejected, naming ``name`` -- one layer up.
         """
-        from src.core.tools.creatives._sync import _sync_creatives_impl
+        from src.core.exceptions import AdCPInvalidRequestError
+        from src.core.schema_helpers import adcp_validation_boundary
 
-        identity = PrincipalFactory.make_identity(
-            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
-        )
+        with pytest.raises(AdCPInvalidRequestError) as exc_info:
+            with adcp_validation_boundary(context="sync_creatives request"):
+                sync_creatives_request(
+                    creatives=[
+                        {
+                            "creative_id": "c_no_name",
+                            "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
+                            "assets": build_assets(image_spec("banner", url="https://example.com/b.png")),
+                        }
+                    ]
+                )
 
-        with (
-            patch("src.core.tools.creatives._sync.CreativeUoW") as mock_db,
-            patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_reg_getter,
-            patch("src.core.tools.creatives._sync.run_async_in_sync_context") as mock_run_async,
-            patch("src.core.tools.creatives._sync.log_tool_activity"),
-            patch("src.core.tools.creatives._workflow.get_audit_logger"),
-            patch("src.core.tools.creatives._workflow.WorkflowUoW"),
-        ):
-            mock_reg = MagicMock()
-            mock_run_async.return_value = []
-            mock_reg_getter.return_value = mock_reg
-
-            mock_uow = MagicMock()
-            mock_creative_repo = MagicMock()
-            mock_creative_repo.get_provenance_policies.return_value = []
-            mock_creative_repo.get_by_id.return_value = None
-            mock_creative_repo.create.side_effect = _mock_creative_repo_create
-            mock_uow.creatives = mock_creative_repo
-            mock_db.return_value.__enter__.return_value = mock_uow
-            mock_db.return_value.__exit__.return_value = None
-
-            # Dict input with no 'name' field at all
-            result = _sync_creatives_impl(
-                creatives=[
-                    {
-                        "creative_id": "c_no_name",
-                        "format_id": {"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"},
-                        "assets": build_assets(image_spec("banner", url="https://example.com/b.png")),
-                    }
-                ],
-                identity=identity,
-            )
-
-            assert len(result.creatives) == 1
-            assert result.creatives[0].action == "failed" or result.creatives[0].action.value == "failed"
-            assert result.creatives[0].errors is not None
-            assert len(result.creatives[0].errors) > 0
+        assert exc_info.value.error_code == "INVALID_REQUEST"
+        assert exc_info.value.field == "name"
 
     def test_ext_h_media_url_fallback(self):
         """No previews from agent but media_url provided => creative NOT failed.
@@ -4335,8 +4308,7 @@ class TestExtensionGaps:
             mock_db.return_value.__exit__.return_value = None
 
             result = _sync_creatives_impl(
-                creatives=[_make_creative_asset()],
-                identity=identity,
+                req=sync_creatives_request(creatives=[_make_creative_asset()]), identity=identity
             )
 
             assert len(result.creatives) == 1
@@ -4387,8 +4359,7 @@ class TestExtensionGaps:
             mock_db.return_value.__exit__.return_value = None
 
             result = _sync_creatives_impl(
-                creatives=[_make_creative_asset()],
-                identity=identity,
+                req=sync_creatives_request(creatives=[_make_creative_asset()]), identity=identity
             )
 
             assert len(result.creatives) == 1
@@ -4877,8 +4848,7 @@ class TestDeleteMissingDefault:
 
             # Only sync c1, not c2 (which "exists" in DB but is not in payload)
             result = _sync_creatives_impl(
-                creatives=[_make_creative_asset(creative_id="c1")],
-                delete_missing=False,
+                req=sync_creatives_request(creatives=[_make_creative_asset(creative_id="c1")], delete_missing=False),
                 identity=identity,
             )
 
@@ -4997,9 +4967,7 @@ class TestCreativeIdsScopeFilterGap:
             ]
 
             result = _sync_creatives_impl(
-                creatives=creatives,
-                creative_ids=["C1", "C3"],
-                identity=identity,
+                req=sync_creatives_request(creatives=creatives, creative_ids=["C1", "C3"]), identity=identity
             )
 
             # Only C1 and C3 should be processed

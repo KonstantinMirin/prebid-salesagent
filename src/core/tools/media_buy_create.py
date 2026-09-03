@@ -2863,6 +2863,12 @@ async def _create_media_buy_impl(
                     packages=cast(list[PackageRequest], req.packages),
                     context=identity,
                     testing_ctx=testing_ctx,
+                    # The nested creative sync is built as a real SyncCreativesRequest, so
+                    # it carries THIS request's account, client key and context rather than
+                    # a set of loose fields with no request behind them.
+                    account=req.account,
+                    idempotency_key=req.idempotency_key,
+                    adcp_context=req.context,
                 )
                 # Replace packages with updated versions (functional approach)
                 req.packages = cast(list[AdcpPackageRequest], updated_packages)  # type: ignore[assignment]
