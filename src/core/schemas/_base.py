@@ -22,7 +22,6 @@ if TYPE_CHECKING:
     from src.core.schemas.creative import Creative
 
 from adcp import Error as _LibraryError
-from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import BrandReference as LibraryBrandReference
 from adcp.types import (
     ContextObject,
@@ -2193,14 +2192,16 @@ class CreateMediaBuyRequest(LibraryCreateMediaBuyRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # AdCP 3.1.1 makes account and idempotency_key required (see the /required list of
-    # create-media-buy-request.json and update-media-buy-request.json).  Our impl resolves
-    # identity at the transport layer (ResolvedIdentity), not from the request
-    # payload, so account stays optional here.  idempotency_key inherits the
-    # library's REQUIRED field (MinLen 16 + pattern) — a missing key rejects at
-    # the boundary as VALIDATION_ERROR (the AdCP 3.0.1 conformance storyboard
-    # accepts it; the spec prose prefers INVALID_REQUEST).
-    account: LibraryAccountReference | None = None  # type: ignore[assignment]
+    # account and idempotency_key are REQUIRED by AdCP 3.1.1
+    # (media-buy/create-media-buy-request.json /required = [account, brand, end_time,
+    # idempotency_key, start_time]) and are inherited as required from the library type.
+    # ``account`` was overridden to optional here on the grounds that "our impl resolves
+    # identity at the transport layer, not from the request payload" -- an argument the
+    # override's own comment undercut, since it cited update-media-buy-request.json's
+    # /required list too, and salesagent-prkv.28 rejected exactly that argument for
+    # update_media_buy and sync_creatives. This was the last surviving instance of it: the
+    # same reasoning, the opposite outcome, in one comment. Our job on a required field is
+    # compliance, not judgement, so the override is gone and all three tools agree.
 
     # Override packages to use our PackageRequest (which overrides targeting_overlay
     # to Targeting instead of library TargetingOverlay, enabling the legacy normalizer).

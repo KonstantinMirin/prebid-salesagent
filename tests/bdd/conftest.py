@@ -504,9 +504,12 @@ _XFAIL_TAGS: dict[str, str] = {
     # Test passes trivially; real HMAC assertion gap tracked separately.
     # RESOLVED: T-UC-004-webhook-creds-short — DB setup fix exposed that Then steps are pending (no-op).
     # Test passes trivially; real credential assertion gap tracked separately.
-    # FIXME: UC-002 account field absent — production doesn't require account field
-    # Spec says account is required (BR-RULE-080 INV-1), but production accepts requests without it.
-    "T-UC-002-inv-080-1": "account field not required by production — spec-production gap",
+    # Graduated: T-UC-002-inv-080-1 ("account field absent"). The entry said production
+    # accepts a create_media_buy without account while BR-RULE-080 INV-1 and
+    # create-media-buy-request.json /required both demand it. CreateMediaBuyRequest.account
+    # is REQUIRED now (salesagent-prkv.68; it was the last surviving instance of
+    # salesagent-prkv.28, which had already fixed update_media_buy and sync_creatives), so
+    # an absent account is refused at the request boundary as the scenario always said.
     # FIXME: rate limiting + payload size validation not implemented
     # Rate limiting middleware does not exist (AdCPRateLimitError never raised).
     # No ASGI middleware checks content-length for oversized bodies.

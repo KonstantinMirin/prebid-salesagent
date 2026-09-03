@@ -184,7 +184,10 @@ def _minimal_create_media_buy_kwargs() -> dict:
         "reporting_webhook": None,
         "context": None,
         "ext": None,
-        "account": None,
+        # The factory's account, not an explicit None: create-media-buy-request.json lists
+        # account in /required, so None no longer builds. This helper is about the BRAND
+        # shorthand, so it takes the spec-conformant default like every other field here.
+        "account": req_dict["account"],
         "idempotency_key": req_dict["idempotency_key"],
         # Required keyword-only on this branch's builder (AdCP 3.1.1 pause-on-create param).
         "paused": None,
@@ -243,6 +246,7 @@ def _capture_req_via_create_media_buy(brand):
             "start_time": req_dict["start_time"],
             "end_time": req_dict["end_time"],
             "idempotency_key": req_dict["idempotency_key"],
+            "account": req_dict["account"],
         },
     )
 

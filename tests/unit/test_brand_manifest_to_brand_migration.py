@@ -69,6 +69,7 @@ class TestCreateMediaBuyRequestRejectsBrandManifest:
 
         with pytest.raises(ValidationError):
             CreateMediaBuyRequest(
+                account={"account_id": "acct_test"},
                 brand_manifest={"name": "Adidas UltraBoost 2025 running shoes"},
                 po_number="PO-V24-67890",
                 packages=[],

@@ -89,6 +89,7 @@ class TestMCPContractValidation:
     def test_create_media_buy_minimal(self):
         """Test create_media_buy with minimal required fields per AdCP v3.12 spec."""
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -111,6 +112,7 @@ class TestMCPContractValidation:
         """
         # Test: Multiple packages with product IDs
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="PO-12345",
             packages=[
@@ -237,6 +239,7 @@ class TestSchemaDefaultValues:
 
         # CreateMediaBuyRequest (with required fields per AdCP v3.12 spec)
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(

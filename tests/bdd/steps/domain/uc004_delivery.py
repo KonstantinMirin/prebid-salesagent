@@ -3385,6 +3385,7 @@ def _validate_reporting_webhook_credentials(ctx: dict, auth_scheme: str, credent
         # It shared the key with dispatch responses, so a Then could read a
         # request believing it had a response — the ambiguity lane gra7.5 removes.
         ctx["constructed_request"] = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "buyer.example.com"},
             start_time=datetime(2025, 1, 1, tzinfo=UTC),
             end_time=datetime(2025, 2, 1, tzinfo=UTC),

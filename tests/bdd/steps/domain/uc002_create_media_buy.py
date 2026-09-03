@@ -55,15 +55,19 @@ def _attach_raw_account_shape(ctx: dict, account_value: Any | None) -> None:
     Instead we stash the raw flat kwargs (``request_kwargs`` minus a typed
     account, plus the raw ``account_value`` verbatim) and dispatch them as a RAW
     body (``dispatch_mode="create_raw"``). Production's route + Pydantic then
-    builds the request and either accepts it (account omitted is valid — account
-    is optional) or rejects the oneOf-both shape with VALIDATION_ERROR on the wire.
+    builds the request and rejects it: an ABSENT account is INVALID_REQUEST naming
+    ``account`` (create-media-buy-request.json /required lists it — this used to say
+    "account omitted is valid, account is optional", which was the deviation
+    salesagent-prkv.68 removed), and the oneOf-both shape is a VALIDATION_ERROR.
     """
     from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
+    from tests.harness.media_buy_create import OMIT_ACCOUNT
 
     kwargs = _ensure_request_defaults(ctx)
-    kwargs.pop("account", None)
-    if account_value is not None:
-        kwargs["account"] = account_value
+    # The SENTINEL, not a pop: the harness defaults a seeded account into any request that
+    # does not name one, so popping would hand this scenario an account and it would stop
+    # grading the absence it exists for.
+    kwargs["account"] = OMIT_ACCOUNT if account_value is None else account_value
     ctx["dispatch_mode"] = "create_raw"
 
 
@@ -343,9 +347,11 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
 
     elif partition == "missing_account":
         # Schema-shape case: dispatch the create with NO account field at all.
-        # account is OPTIONAL on CreateMediaBuyRequest (account-management mid-spec),
-        # so production accepts it and creates the buy — outcome is success, not
-        # a rejection (see #1417 empirical trace).
+        # account is REQUIRED on CreateMediaBuyRequest (create-media-buy-request.json
+        # /required), so production refuses it with INVALID_REQUEST naming account.
+        # This said the opposite, citing a #1417 empirical trace: production DID accept it,
+        # and the scenario was reconciled to that rather than to the spec. The deviation is
+        # gone (salesagent-prkv.68), so the scenario grades the refusal again.
         _attach_raw_account_shape(ctx, None)
         return
 
@@ -538,9 +544,9 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
         ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-suspended"))
 
     elif "no account" in config:
-        # Schema-shape case: account field omitted entirely. account is OPTIONAL
-        # on CreateMediaBuyRequest, so production accepts and creates the buy →
-        # success, not a rejection (#1417 empirical trace).
+        # Schema-shape case: account field omitted entirely. account is REQUIRED on
+        # CreateMediaBuyRequest, so production refuses it — see the missing_account
+        # partition above for why this comment used to claim the opposite.
         _attach_raw_account_shape(ctx, None)
         return
 

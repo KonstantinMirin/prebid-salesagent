@@ -290,9 +290,13 @@ class TestA2AResponseShape:
             assert "products" in data, "get_products response must have 'products' field"
             assert isinstance(data["products"], list)
 
+    # account is spec-required now, so the A2A wrapper always has one to resolve and would
+    # open a real AccountUoW here. Patched to a pass-through: this test grades the RESPONSE
+    # SHAPE the transport returns, not account resolution.
+    @patch("src.core.transport_helpers.enrich_identity_with_account", side_effect=lambda i, a=None: i)
     @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
     @patch("src.core.tools.media_buy_create._create_media_buy_impl")
-    def test_create_media_buy_response_shape(self, mock_impl, mock_resolve, client, auth_headers):
+    def test_create_media_buy_response_shape(self, mock_impl, mock_resolve, mock_enrich, client, auth_headers):
         """create_media_buy response must have media_buy_id."""
         from adcp.types.aliases import CreateMediaBuySuccessResponse
 
@@ -313,6 +317,7 @@ class TestA2AResponseShape:
                 "start_time": "2026-03-01T00:00:00Z",
                 "end_time": "2026-03-31T00:00:00Z",
                 "idempotency_key": "unit-test-key-a2a-shape-0001",
+                "account": {"account_id": "acct_test"},
             },
         )
         response = client.post("/a2a", json=payload, headers=auth_headers)

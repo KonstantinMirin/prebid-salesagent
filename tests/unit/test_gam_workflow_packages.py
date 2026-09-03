@@ -42,6 +42,7 @@ def sample_request():
     end_time = start_time + timedelta(days=30)
     # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
     return CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         idempotency_key="unit-test-key-gamwf-0001",
         packages=[

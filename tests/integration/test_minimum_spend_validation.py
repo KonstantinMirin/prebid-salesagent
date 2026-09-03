@@ -337,6 +337,7 @@ class TestMinimumSpendValidation:
 
         # Should fail validation and raise typed AdCPValidationError that propagates past _impl boundary.
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
             packages=[
@@ -371,6 +372,7 @@ class TestMinimumSpendValidation:
         # Try to create media buy below product override ($5000)
         # Should fail validation and raise typed AdCPValidationError past _impl boundary.
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
             packages=[
@@ -405,6 +407,7 @@ class TestMinimumSpendValidation:
         # Create media buy above product minimum ($500) but below currency limit ($1000)
         # Should succeed because product override is lower
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
             packages=[
@@ -437,6 +440,7 @@ class TestMinimumSpendValidation:
 
         # Create media buy above minimum - should succeed
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
             packages=[
@@ -471,6 +475,7 @@ class TestMinimumSpendValidation:
         # Try to create media buy with excessive budget
         # $100,000 USD produces 10M impressions which exceeds the adapter limit
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
             packages=[
@@ -503,6 +508,7 @@ class TestMinimumSpendValidation:
         # $800 should fail (below $1000 USD minimum)
         # Should fail validation and raise typed AdCPValidationError past _impl boundary.
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
             packages=[
@@ -547,6 +553,7 @@ class TestMinimumSpendValidation:
 
         # Create media buy with low budget in GBP (should succeed - no minimum)
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
             packages=[

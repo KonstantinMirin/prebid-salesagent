@@ -82,6 +82,7 @@ class TestDuplicateProductValidation:
             # Should raise typed AdCPValidationError about duplicate products
             # (propagates past _impl boundary catch since 572b55b4f).
             req = CreateMediaBuyRequest(
+                account={"account_id": "acct_test"},
                 brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,
@@ -160,6 +161,7 @@ class TestDuplicateProductValidation:
             # Should raise typed AdCPValidationError listing both duplicate products
             # (propagates past _impl boundary catch since 572b55b4f).
             req = CreateMediaBuyRequest(
+                account={"account_id": "acct_test"},
                 brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,
@@ -230,6 +232,7 @@ class TestDuplicateProductValidation:
             # Should fail on currency validation (since we didn't set that up)
             # but NOT on duplicate product validation
             req = CreateMediaBuyRequest(
+                account={"account_id": "acct_test"},
                 brand={"domain": "testbrand.com"},
                 packages=packages,
                 start_time=start_time,

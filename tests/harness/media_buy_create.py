@@ -34,20 +34,11 @@ from tests.harness.transport import DeliverResult
 # tests/harness/.
 OMIT_IDEMPOTENCY_KEY: Any = object()
 
-
-def _ensure_idempotency_key(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Default a per-call-unique idempotency_key unless the test controls it.
-
-    ``idempotency_key`` is REQUIRED on ``CreateMediaBuyRequest``; most tests don't
-    care, so the harness supplies a fresh spec-shaped key per call — unique because
-    a reused key would replay the original response (or raise IDEMPOTENCY_CONFLICT)
-    instead of creating a new buy. Pass ``OMIT_IDEMPOTENCY_KEY`` to send no key.
-    """
-    if kwargs.get("idempotency_key") is OMIT_IDEMPOTENCY_KEY:
-        kwargs.pop("idempotency_key")
-    else:
-        kwargs.setdefault("idempotency_key", f"test-key-{uuid.uuid4().hex}")
-    return kwargs
+# The sibling sentinel for ``account``, which create-media-buy-request.json also lists in
+# /required. A scenario that means to send NO account cannot signal that by omitting the
+# kwarg -- omission is what every scenario that simply does not care about accounts also
+# looks like, and those get the seeded default. Same shape, same reason, as the key above.
+OMIT_ACCOUNT: Any = object()
 
 
 def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> None:
@@ -346,6 +337,43 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
 
         self.mock["format_spec"].side_effect = _format_spec_side_effect
 
+    def _ensure_required_request_fields(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Default the two fields create-media-buy-request.json lists in /required.
+
+        ``idempotency_key`` gets a fresh spec-shaped key per call — unique because a reused
+        key would replay the original response (or raise IDEMPOTENCY_CONFLICT) instead of
+        creating a new buy. Pass ``OMIT_IDEMPOTENCY_KEY`` to send none.
+
+        ``account`` gets the tenant's SEEDED account, not a literal: the create wrappers
+        resolve the reference at the transport boundary, so a fabricated id would come back
+        as ACCOUNT_NOT_FOUND and every scenario that is not about accounts would fail on
+        account resolution instead of reaching what it grades. A scenario that IS about
+        accounts sets its own ``account``, and one that means to send none passes
+        ``OMIT_ACCOUNT``. Was a free ``_ensure_idempotency_key`` function; it needs ``self``
+        now because seeding the account needs the env's session.
+        """
+        if kwargs.get("idempotency_key") is OMIT_IDEMPOTENCY_KEY:
+            kwargs.pop("idempotency_key")
+        else:
+            kwargs.setdefault("idempotency_key", f"test-key-{uuid.uuid4().hex}")
+
+        if kwargs.get("account") is OMIT_ACCOUNT:
+            kwargs.pop("account")
+        elif kwargs.get("account") is None:
+            kwargs["account"] = {"account_id": self._default_account_id()}
+        return kwargs
+
+    def _default_account_id(self) -> str:
+        """The seeded account's id, or a literal when there is no DB bound.
+
+        A contract test building a body outside ``with env:`` has nothing to seed against
+        and nothing that will resolve the reference, so a literal gives the body its
+        required SHAPE, which is all such a caller is asking for.
+        """
+        if self._session is None:
+            return "acct_unbound"
+        return self.setup_default_account().account_id
+
     def call_impl(self, **kwargs: Any) -> CreateMediaBuyResult:
         """Call _create_media_buy_impl with real DB."""
         from src.core.tools.media_buy_create import _create_media_buy_impl
@@ -357,7 +385,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         # Build request from kwargs if not provided directly
         req = kwargs.pop("req", None)
         if req is None:
-            req = CreateMediaBuyRequest(**_ensure_idempotency_key(kwargs))
+            req = CreateMediaBuyRequest(**self._ensure_required_request_fields(kwargs))
 
         identity = enrich_identity_with_account(identity, req.account)
         return asyncio.run(_create_media_buy_impl(req=req, identity=identity))
@@ -374,7 +402,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             # NOT json_safe'd: the MCP/A2A wrappers take TYPED parameters, so a raw bag
             # goes to them as-is. Only the REST body needs JSON, and build_rest_body
             # normalizes there.
-            return _ensure_idempotency_key(kwargs)
+            return self._ensure_required_request_fields(kwargs)
         flat = req.model_dump(mode="json", exclude_none=True)
         # Keep ``account``: the create_media_buy wrappers declare it and resolve it
         # at the transport boundary (998ad1be2). Stripping it here regresses
@@ -422,7 +450,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         # The RAW path: normalize to JSON. A step dispatching a raw bag (so a
         # schema-invalid payload actually reaches the transport) may hand us typed objects
         # it built for setup; a REST body cannot carry them.
-        return json_safe(_ensure_idempotency_key(kwargs))
+        return json_safe(self._ensure_required_request_fields(kwargs))
 
     def parse_rest_response(self, data: dict[str, Any]) -> CreateMediaBuyResult:
         """Parse a flattened create_media_buy wire body back into a CreateMediaBuyResult.

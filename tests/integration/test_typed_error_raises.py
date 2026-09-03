@@ -84,6 +84,7 @@ class TestTypedAdCPErrorRaises:
         future_end = future_start + timedelta(days=30)
 
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "typedraise.example"},
             packages=[
                 create_test_package_request_dict(

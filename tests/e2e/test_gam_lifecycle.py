@@ -427,6 +427,7 @@ def _make_create_request(product_id: str, po_number: str, delivery_type: str = "
     )
 
     request = CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         po_number=po_number,
         start_time=start_time,

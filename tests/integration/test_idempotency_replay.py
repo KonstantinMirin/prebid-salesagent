@@ -43,6 +43,7 @@ def _make_request(idempotency_key, *, po_number="REPLAY-1"):
     from src.core.schemas import CreateMediaBuyRequest
 
     return CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "replay-test.example.com"},
         packages=[{"product_id": "prod_1", "budget": 1000, "pricing_option_id": "po_1"}],
         start_time=datetime(2026, 6, 1, tzinfo=UTC),

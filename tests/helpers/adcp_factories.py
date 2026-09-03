@@ -679,6 +679,10 @@ def create_test_media_buy_request_dict(
         # Required by AdCP 3.0.1 — unique per call (a reused key would replay the
         # original response instead of creating a new buy). Override via kwargs.
         "idempotency_key": f"test-key-{uuid.uuid4().hex}",
+        # Required by create-media-buy-request.json /required, like the key above it. A test
+        # about accounts overrides this; a test about anything else should not have to name
+        # it, which is the whole point of the factory carrying it.
+        "account": {"account_id": "acct_test"},
     }
 
     # Handle targeting_overlay specially (goes in all packages, not top-level)
@@ -691,6 +695,34 @@ def create_test_media_buy_request_dict(
     request.update(kwargs)
 
     return request
+
+
+def create_test_media_buy_request(*, packages: list[Any], start_time: Any, end_time: Any, **overrides: Any) -> Any:
+    """The TYPED sibling of ``create_test_media_buy_request_dict``.
+
+    Same purpose, different consumer: the dict serves tests that need a wire body, this
+    serves the ones that need the model. What it exists to stop being repeated is the
+    spec-required scaffolding -- ``account``, ``brand`` and a per-call-unique
+    ``idempotency_key`` -- which a caller has to state on every construction and which is
+    identical everywhere it is not the subject. The pricing/GAM integration files were
+    carrying three verbatim copies of it.
+
+    Any of the three can be overridden by a test that IS about one of them.
+    """
+    from src.core.schemas import CreateMediaBuyRequest
+
+    fields: dict[str, Any] = {
+        "account": {"account_id": "acct_test"},
+        "brand": {"domain": "testbrand.com"},
+        # Unique per call: a reused key replays the original response instead of creating a
+        # new buy, which silently turns a second construction into the first one's answer.
+        "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+        "packages": packages,
+        "start_time": start_time,
+        "end_time": end_time,
+    }
+    fields.update(overrides)
+    return CreateMediaBuyRequest(**fields)
 
 
 def valid_reporting_webhook(url: str) -> dict[str, Any]:

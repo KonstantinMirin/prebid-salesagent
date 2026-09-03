@@ -214,6 +214,7 @@ class TestCreateRequestPackagesFlow:
         from tests.helpers.adcp_factories import create_test_package_request
 
         return CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -296,6 +297,7 @@ class TestAdvisoryComputedOnFreshCreate:
         from tests.helpers.adcp_factories import create_test_package_request
 
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
@@ -333,6 +335,7 @@ class TestAdvisoryComputedOnFreshCreate:
             supports_property_list_filtering = True
 
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(

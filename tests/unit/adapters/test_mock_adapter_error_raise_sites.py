@@ -25,6 +25,7 @@ def _make_request() -> CreateMediaBuyRequest:
     start_time = datetime.now(UTC)
     end_time = start_time + timedelta(days=30)
     return CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "example.com"},
         idempotency_key="unit-test-key-mockraise-0001",
         start_time=start_time,

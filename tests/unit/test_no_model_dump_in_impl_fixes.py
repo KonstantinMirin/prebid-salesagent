@@ -17,6 +17,7 @@ from src.core.schemas import CreateMediaBuyRequest
 def _make_minimal_request() -> CreateMediaBuyRequest:
     """Build a minimal CreateMediaBuyRequest for testing."""
     return CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "po_1"}],
         start_time=(datetime.now(UTC) + timedelta(days=1)).isoformat(),

@@ -1425,6 +1425,7 @@ class TestProposalBasedObligations:
         """
         # proposal_id and total_budget coexist on the schema
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "test.com"},
             start_time=_future(1),
             end_time=_future(8),

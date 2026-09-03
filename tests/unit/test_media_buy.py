@@ -114,6 +114,7 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
         # Required by AdCP 3.0.1; mocked-UoW tests must stub the probe to a miss
         # (find_by_key -> None) — make_mock_uow does this by default.
         "idempotency_key": "unit-test-default-key-0001",
+        "account": {"account_id": "acct_test"},
     }
     defaults.update(overrides)
     return CreateMediaBuyRequest(**defaults)
@@ -212,6 +213,7 @@ class TestCreateMediaBuySchemaCompliance:
         """
         with pytest.raises(ValidationError):
             CreateMediaBuyRequest(
+                account={"account_id": "acct_test"},
                 start_time=_future(1),
                 end_time=_future(8),
                 packages=[{"product_id": "p1", "budget": 1000.0}],
@@ -239,6 +241,7 @@ class TestCreateMediaBuySchemaCompliance:
         """
         with pytest.raises(ValidationError):
             CreateMediaBuyRequest(
+                account={"account_id": "acct_test"},
                 brand={"domain": "test.com"},
                 start_time="2026-03-01T00:00:00",  # no tz
                 end_time=_future(8),
@@ -656,6 +659,7 @@ class TestCreateMediaBuyValidation:
         """
         with pytest.raises(ValidationError):
             CreateMediaBuyRequest(
+                account={"account_id": "acct_test"},
                 brand={"domain": "test.com"},
                 # start_time omitted
                 end_time=_future(8),
@@ -675,6 +679,7 @@ class TestCreateMediaBuyValidation:
         """
         # In adcp 3.12, end < start is accepted at schema level; _impl validates this
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "test.com"},
             start_time=_future(10),
             end_time=_future(3),  # end before start
@@ -1379,8 +1384,13 @@ class TestIdempotencyKeyRequired:
 
     The create-side optional override was removed: the field inherits the library's
     required str with MinLen(16) + pattern ^[A-Za-z0-9_.:-]{16,255}$. A missing key
-    rejects at the schema boundary (storyboard missing_key step). update_media_buy's
-    enforcement is a deliberate fast-follow and stays optional.
+    rejects at the schema boundary (storyboard missing_key step).
+
+    The last line here said "update_media_buy's enforcement is a deliberate fast-follow and
+    stays optional". That fast-follow landed in salesagent-prkv.28, which made the key AND
+    account required on update_media_buy and sync_creatives. create_media_buy's ``account``
+    was the one instance left behind and is required now too, so all three tools agree and
+    there is no fast-follow outstanding.
     """
 
     def _kwargs(self, **overrides):
@@ -1389,6 +1399,7 @@ class TestIdempotencyKeyRequired:
             "packages": [{"product_id": "prod_1", "budget": 1000, "pricing_option_id": "po_1"}],
             "start_time": datetime(2026, 6, 1, tzinfo=UTC),
             "end_time": datetime(2026, 6, 30, tzinfo=UTC),
+            "account": {"account_id": "acct_test"},
         }
         base.update(overrides)
         return base

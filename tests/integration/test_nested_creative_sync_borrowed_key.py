@@ -95,12 +95,19 @@ class TestNestedSyncBorrowsTheOuterKey:
     def test_both_in_process_callers_borrow_a_required_outer_key(self):
         """Both converted call sites borrow, so the gate protects both — not just one.
 
-        ``update_media_buy``'s account and idempotency_key are both spec-REQUIRED on
-        UpdateMediaBuyRequest, and ``create_media_buy``'s idempotency_key is required too, so
-        neither nested upload can avoid carrying a real outer key. Read off the models rather
-        than asserted in prose, so a requiredness change here fails this test.
+        Both fields the nested request needs -- ``account`` and ``idempotency_key`` -- are
+        spec-REQUIRED on BOTH outer requests, so neither nested upload can avoid carrying a
+        real outer key, and neither can fail to supply an account. Read off the models rather
+        than asserted in prose, so a requiredness change fails this test instead of silently
+        invalidating the reasoning the gate rests on.
+
+        create_media_buy's ``account`` was the one exception when this test was written --
+        the last surviving instance of salesagent-prkv.28 -- and it is required now, so the
+        four assertions below are symmetric. That symmetry IS the finding: an asymmetry here
+        is what made the nested request unformable for one caller and not the other.
         """
         from src.core.schemas import CreateMediaBuyRequest, UpdateMediaBuyRequest
 
-        assert CreateMediaBuyRequest.model_fields["idempotency_key"].is_required()
-        assert UpdateMediaBuyRequest.model_fields["idempotency_key"].is_required()
+        for model in (CreateMediaBuyRequest, UpdateMediaBuyRequest):
+            assert model.model_fields["idempotency_key"].is_required(), model.__name__
+            assert model.model_fields["account"].is_required(), model.__name__

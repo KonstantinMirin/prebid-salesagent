@@ -120,6 +120,7 @@ def _assert_stamped_between(
 
 def _make_request(idempotency_key: str) -> CreateMediaBuyRequest:
     return CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         packages=[{"product_id": "prod_1", "budget": 5000.0, "pricing_option_id": "po_1"}],
         start_time=(datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1)).isoformat(),

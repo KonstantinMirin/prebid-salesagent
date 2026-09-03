@@ -244,6 +244,7 @@ class TestCreateMediaBuyV24Format:
         # This exercises the FULL serialization path including response_packages construction
         # NOTE: budget is at package level per AdCP v2.4 spec (not a top-level parameter)
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
@@ -308,6 +309,7 @@ class TestCreateMediaBuyV24Format:
         )
 
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
@@ -384,6 +386,7 @@ class TestCreateMediaBuyV24Format:
         total_budget_value = sum(pkg.budget for pkg in packages)
 
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
@@ -428,6 +431,7 @@ class TestCreateMediaBuyV24Format:
         )
 
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[p.model_dump() for p in packages],
             start_time=datetime.now(UTC) + timedelta(days=1),
@@ -467,6 +471,7 @@ class TestCreateMediaBuyV24Format:
         # Standard AdCP format with explicit package
         # pricing_option_id format: {model}_{currency}_{fixed|auction}
         req = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[
                 PackageRequest(

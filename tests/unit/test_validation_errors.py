@@ -93,6 +93,7 @@ def test_create_media_buy_request_invalid_brand_manifest():
     # In adcp 3.6.0, brand is a BrandReference with optional domain field
     # Missing domain does not raise an error since domain is optional
     req = CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         end_time="2026-02-01T00:00:00Z",
         start_time="2026-01-01T00:00:00Z",

@@ -41,6 +41,7 @@ class TestRestErrorSuggestionPreservation:
 
         now = datetime.now(UTC)
         return CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             start_time=(now + timedelta(days=1)).isoformat(),
             end_time=(now + timedelta(days=8)).isoformat(),

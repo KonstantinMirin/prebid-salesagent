@@ -95,6 +95,7 @@ async def test_create_rejects_property_list_when_product_disallows(property_targ
     """
     start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -133,6 +134,7 @@ async def test_create_accepts_property_list_when_product_allows(property_targeti
     """Product with property_targeting_allowed=True passes the validation."""
     start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(
@@ -170,6 +172,7 @@ async def test_create_accepts_collection_list_without_property_list(property_tar
     """collection_list alone never triggers the property_list check."""
     start, end = future_iso_date_range()
     request = CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         packages=[
             create_test_package_request(

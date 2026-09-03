@@ -38,6 +38,7 @@ def _future(days: int) -> str:
 
 def _make_request(product_id: str) -> CreateMediaBuyRequest:
     return CreateMediaBuyRequest(
+        account={"account_id": "acct_test"},
         brand={"domain": "testbrand.com"},
         start_time=_future(1),
         end_time=_future(8),

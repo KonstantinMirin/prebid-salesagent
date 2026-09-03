@@ -48,11 +48,17 @@ def _make_mock_media_buy():
     mb.end_time = datetime.now(UTC) + timedelta(days=8)
     mb.budget = Decimal("5000.00")
     mb.currency = "USD"
+    # The PERSISTED request, which execute_approved_media_buy reconstructs through
+    # CreateMediaBuyRequest. account is spec-required (create-media-buy-request.json
+    # /required), so a stored payload without one no longer reconstructs — which is exactly
+    # what a real pending-approval row written by a conformant request will carry.
     mb.raw_request = {
         "brand": {"domain": "testbrand.com"},
         "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
         "end_time": (datetime.now(UTC) + timedelta(days=8)).isoformat(),
         "packages": [{"product_id": "prod_1", "pricing_option_id": "po_1", "budget": 5000.0}],
+        "account": {"account_id": "acct_test"},
+        "idempotency_key": "approved-exec-key-0001",
     }
     return mb
 

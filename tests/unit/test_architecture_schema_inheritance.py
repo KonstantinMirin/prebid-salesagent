@@ -161,9 +161,14 @@ def _is_admissible(child: object, parent: object) -> bool:
 
     A redeclaration that satisfies SHAPE but is WEAKER is not admitted here and is not
     rejected either -- it requires a row naming the weakened axis. That routing is
-    load-bearing: most such rows already exist and record a deliberate divergence
-    (``account`` is optional because identity is resolved at the transport boundary),
-    and a rule that admitted them would delete that documentation.
+    load-bearing: such a row names itself and can be audited, and a rule that admitted
+    them would delete that documentation. The example this used to give --
+    ``CreateMediaBuyRequest.account`` is optional because identity is resolved at the
+    transport boundary -- is gone, because the row was not documenting a deliberate
+    divergence at all. It was the last surviving instance of salesagent-prkv.28: the pin
+    lists ``account`` in /required for all three of create_media_buy, update_media_buy and
+    sync_creatives, prkv.28 rejected the transport-boundary argument for the latter two,
+    and create_media_buy was simply left behind. The row is deleted with the override.
     """
     import typing
 
@@ -445,7 +450,6 @@ class TestSchemaInheritance:
             ("GetCreativeDeliveryResponse", "creatives"),
             # adcp 3.9 field overrides — library added fields we already had locally
             # with wider types (optional vs required) or salesagent-specific semantics
-            ("CreateMediaBuyRequest", "account"),  # optional override (library requires it)
             # GetMediaBuyDeliveryRequest: SDK 5.7 provides all fields; no local
             # redeclarations remain. Removed: account, attribution_window,
             # include_package_daily_breakdown, reporting_dimensions.
@@ -457,10 +461,12 @@ class TestSchemaInheritance:
             ("GetProductsRequest", "buying_mode"),
             ("UpdateMediaBuyRequest", "end_time"),  # datetime|None (library uses AwareDatetime)
             ("UpdateMediaBuyRequest", "start_time"),  # datetime|Literal["asap"]|None (wider type)
-            # AdCP 3.1.1 field overrides — the library made these required; we keep them
-            # optional because identity is resolved at the transport boundary, and
-            # required-key enforcement rolls out create_media_buy-first
-            # (CreateMediaBuyRequest.idempotency_key now inherits the required field)
+            # AdCP 3.1.1 field overrides — the library made these required and these two are
+            # still relaxed. The rollout this comment used to describe ("required-key
+            # enforcement rolls out create_media_buy-first") is finished for the media-buy
+            # and creative tools: create_media_buy, update_media_buy and sync_creatives all
+            # inherit BOTH account and idempotency_key as required now, so their rows are
+            # gone. SyncAccountsRequest is the remaining tool.
             ("Product", "reporting_capabilities"),  # optional override (not all products have it)
             ("SyncAccountsRequest", "idempotency_key"),  # optional override (required-key fast-follow)
             # Pattern #4: ListAccountsResponse.accounts uses local Account subclass

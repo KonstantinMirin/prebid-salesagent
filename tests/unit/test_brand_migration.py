@@ -26,6 +26,7 @@ class TestCreateMediaBuyRequestBrandMigration:
 
         with pytest.raises(ValidationError) as exc_info:
             CreateMediaBuyRequest(
+                account={"account_id": "acct_test"},
                 brand_manifest={"name": "Test Brand"},
                 packages=[{"product_id": "prod_1", "budget": 1000, "pricing_option_id": "po_1"}],
                 start_time="asap",
@@ -50,6 +51,7 @@ class TestCreateMediaBuyRequestBrandMigration:
         # Should NOT raise for the brand field (may raise for other missing fields
         # like packages, but brand itself should be accepted)
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[{"product_id": "prod_1", "budget": 1000, "pricing_option_id": "po_1"}],
             start_time="asap",
@@ -65,6 +67,7 @@ class TestCreateMediaBuyRequestBrandMigration:
 
         with pytest.raises(ValidationError) as exc_info:
             CreateMediaBuyRequest(
+                account={"account_id": "acct_test"},
                 packages=[{"product_id": "prod_1", "budget": 1000, "pricing_option_id": "po_1"}],
                 start_time="asap",
                 end_time="2026-12-31T23:59:59Z",

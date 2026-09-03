@@ -39,6 +39,7 @@ def _valid_packages_params() -> dict:
         "start_time": "2099-01-01T00:00:00Z",
         "end_time": "2099-01-31T23:59:59Z",
         "idempotency_key": "unit-test-key-a2a-pushcfg-0001",
+        "account": {"account_id": "acct_test"},
         "context": {"e2e": "push_config_validation"},
     }
 

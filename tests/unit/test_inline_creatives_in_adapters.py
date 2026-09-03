@@ -47,6 +47,7 @@ class TestInlineCreativesInAdapters:
         # Per AdCP v2.2.0: budget removed from top-level (now at package level)
         # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
         return CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "example.com"},
             idempotency_key="unit-test-key-inline-creatives-0001",
             start_time=datetime.now(UTC),

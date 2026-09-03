@@ -81,6 +81,7 @@ async def capture_mcp_forwarded_pnc(pnc: Any) -> Any:
                 start_time=req_dict["start_time"],
                 end_time=req_dict["end_time"],
                 idempotency_key=req_dict["idempotency_key"],
+                account=req_dict["account"],
                 push_notification_config=pnc,
                 ctx=mock_ctx,
             )
@@ -122,13 +123,22 @@ async def capture_a2a_forwarded_pnc(pnc: Any) -> Any:
         captured.update(kwargs)
         return mock_result
 
-    with patch(
-        "src.core.tools.media_buy_create._create_media_buy_impl",
-        side_effect=_capture,
+    with (
+        patch(
+            "src.core.tools.media_buy_create._create_media_buy_impl",
+            side_effect=_capture,
+        ),
+        # create_media_buy_raw resolves req.account into the identity, and account is
+        # REQUIRED now, so this wrapper call would open a real AccountUoW -- which the unit
+        # conftest refuses. Patched to a pass-through: this helper grades what the wrapper
+        # forwards to _impl, not how it resolves an account.
+        patch(
+            "src.core.transport_helpers.enrich_identity_with_account",
+            side_effect=lambda identity, account_ref=None: identity,
+        ),
     ):
-        # push_notification_config stays a kwarg BESIDE the request (gh-#1299) -- folding
-        # it in would apply Authentication.credentials MinLen(32) to the whole
-        # create_media_buy. Everything else goes through the shared builder.
+        # Everything, push_notification_config included, goes through the shared builder --
+        # it is a request FIELD (1f13cca0a), not a kwarg forwarded beside the request.
         await create_media_buy_raw(
             req=_build_create_media_buy_request(
                 brand=req_dict["brand"],

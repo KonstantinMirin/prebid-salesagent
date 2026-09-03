@@ -917,6 +917,7 @@ class TestAdCPContract:
         # Per AdCP spec, packages is required and budget is at package level
         # In adcp 3.6.0, brand_manifest is replaced by brand (BrandReference with domain field)
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "nike.com"},  # Required in adcp 3.6.0 (was brand_manifest)
             # Required per AdCP spec
             packages=[
@@ -2658,6 +2659,7 @@ class TestAdCPContract:
         # Per AdCP spec, budget is at package level, not request level
         # adcp 3.6.0: brand_manifest replaced by brand (BrandReference with required domain)
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "flashsale.com"},
             start_time="asap",  # AdCP v1.7.0 supports literal "asap"
             end_time=end_date,
@@ -2703,6 +2705,7 @@ class TestAdCPContract:
         # Per AdCP spec, budget is at package level, not request level
         # adcp 3.6.0: brand_manifest replaced by brand (BrandReference with required domain)
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "scheduled.com"},
             start_time=start_date,
             end_time=end_date,
@@ -2784,6 +2787,7 @@ class TestAdCPContract:
         # Test with inline brand reference
         # Per AdCP spec, budget is at package level, not request level
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "nike.com"},
             packages=[{"product_id": "product_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
             start_time=start_date,
@@ -2805,6 +2809,7 @@ class TestAdCPContract:
 
         # Test with brand reference + optional brand_id
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "nike.com", "brand_id": "brand_nike_001"},
             packages=[{"product_id": "product_1", "pricing_option_id": "test_pricing", "budget": 5000.0}],
             start_time=start_date,

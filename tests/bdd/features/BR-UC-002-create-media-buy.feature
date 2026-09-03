@@ -1193,12 +1193,14 @@ Feature: BR-UC-002 Create Media Buy
       | explicit_account_id          | account resolution succeeds           |
       | natural_key_unambiguous      | account resolution succeeds           |
       | natural_key_sandbox          | account resolution succeeds           |
-      # account is OPTIONAL on CreateMediaBuyRequest (account-management mid-spec):
-      # an omitted account field is accepted and the buy is created.
-      | missing_account              | account resolution succeeds           |
 
     Examples: Invalid partitions
       | partition                    | outcome                                         |
+      # account is REQUIRED by create-media-buy-request.json /required, so an omitted
+      # account field is refused. This row sat under "Valid partitions" saying the
+      # omission is accepted and the buy created -- reconciled to a production that
+      # deviated from the pin, rather than to the pin (salesagent-prkv.68).
+      | missing_account              | error INVALID_REQUEST                             |
       | invalid_oneOf_both           | error INVALID_REQUEST                             |
       | explicit_not_found           | error ACCOUNT_NOT_FOUND terminal                  |
       | natural_key_not_found        | error ACCOUNT_NOT_FOUND terminal                  |
@@ -1658,7 +1660,7 @@ Feature: BR-UC-002 Create Media Buy
       | account resolved + setup incomplete                  | acc setup-needed         | error ACCOUNT_SETUP_REQUIRED correctable          |
       | account resolved + payment due                       | acc payment-due          | error ACCOUNT_PAYMENT_REQUIRED terminal           |
       | account resolved + suspended                         | acc suspended            | error ACCOUNT_SUSPENDED terminal                 |
-      | account field absent                                 | no account               | account resolution succeeds                      |
+      | account field absent                                 | no account               | error INVALID_REQUEST                            |
       | both account_id and brand/operator present           | both fields              | error INVALID_REQUEST                            |
       | brand + operator + sandbox:true present + sandbox account exists + active | brand+op+sandbox active | account resolution succeeds                      |
 

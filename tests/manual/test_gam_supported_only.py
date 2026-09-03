@@ -105,6 +105,7 @@ class SupportedTargetingTester:
         )
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="GEO_SUPPORTED",
             total_budget=1.00,
@@ -168,6 +169,7 @@ class SupportedTargetingTester:
             raise ValueError("No custom targeting keys configured in test config")
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="AEE_AXE_SIGNALS",
             total_budget=2.00,
@@ -221,6 +223,7 @@ class SupportedTargetingTester:
             key_value_pairs["axex"] = values[1] if len(values) > 1 else values[0]
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="GEO_AEE_COMBINED",
             total_budget=3.00,
@@ -260,6 +263,7 @@ class SupportedTargetingTester:
         )
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="DEVICE_MUST_FAIL",
             total_budget=1.00,
@@ -298,6 +302,7 @@ class SupportedTargetingTester:
         )
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="OS_MUST_FAIL",
             total_budget=1.00,
@@ -336,6 +341,7 @@ class SupportedTargetingTester:
         )
 
         request = CreateMediaBuyRequest(
+            account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             po_number="KEYWORD_MUST_FAIL",
             total_budget=1.00,
