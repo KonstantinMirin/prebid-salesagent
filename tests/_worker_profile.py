@@ -167,7 +167,13 @@ def on_session_finish() -> None:
         "import_s": round(collect_start - _T_IMPORT, 3),
         "collect_s": round(collect_finish - collect_start, 3),
         "tests_s": round(_test_seconds, 3),
-        "idle_s": round(max(0.0, (finish - loop_start) - _test_seconds), 3),
+        # No max(0.0, ...) clamp. The residual cannot legitimately go negative:
+        # a worker runs its tests one at a time, so their summed durations fit
+        # inside the loop that contains them. Flooring it would therefore only
+        # ever hide an accounting defect -- the controller double-count above was
+        # exactly such a defect, and the clamp turned it into a plausible 0.0
+        # rather than the negative number that would have exposed it.
+        "idle_s": round((finish - loop_start) - _test_seconds, 3),
         "worker_wall_s": round(finish - _T_IMPORT, 3),
     }
     # A diagnostic never changes the outcome of the thing it measures. Both the
@@ -262,6 +268,10 @@ def _summarise_suite(records: list[dict[str, Any]]) -> dict[str, Any]:
         "slowest_worker_wall_s": round(max(r["worker_wall_s"] for r in workers), 1),
     }
     if controller is not None:
-        summary["controller_collect_s"] = controller["collect_s"]
+        # Only the wall time. `controller["collect_s"]` is 0.0 by construction --
+        # `DSession.pytest_collection` returns True and, registered at configure
+        # time, runs ahead of the rootdir conftest under pluggy's LIFO
+        # firstresult, so the collection hooks never fire on the controller.
+        # A field that is always the same constant reports nothing.
         summary["controller_wall_s"] = controller["worker_wall_s"]
     return summary
