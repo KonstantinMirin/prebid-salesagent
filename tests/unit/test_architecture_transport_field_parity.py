@@ -69,44 +69,24 @@ WHOLESALE_MARKERS = (
 #: A divergence can no longer be papered over here -- it has to be fixed at the seam.
 ALLOWLIST: dict[tuple[str, str], str] = {}
 
-#: PRE-3.1.1 FLAT ALIASES that MCP and A2A still accept and REST deliberately does not.
+#: PRE-3.1.1 FLAT ALIASES that MCP and A2A accepted and REST deliberately did not.
 #:
-#: These are NOT allowlisted divergences and are kept out of ALLOWLIST on purpose. A field
-#: in ALLOWLIST means "both transports should carry it and one does not, yet". These are the
-#: opposite: REST is the CORRECT surface. list-creatives-request.json declares filters, sort
-#: and pagination OBJECTS -- none of the flat names below -- so the derived REST body cannot
-#: announce them and should not. MCP and A2A accept them as legacy conveniences that
-#: _build_list_creatives_request folds into the structured request.
+#: EMPTY, and the emptying is the resolution this comment used to defer: "Resolution is
+#: REMOVAL from the MCP wrapper and the builder, not an entry here." All fourteen names are
+#: gone from ``list_creatives`` and ``_build_list_creatives_request`` (salesagent-prkv.69,
+#: closing salesagent-prkv.46) -- the ten flat filter/sort/pagination aliases outright, and
+#: ``format``/``page`` by becoming internal ``exclude=True`` fields on ListCreativesRequest,
+#: which every derivation already drops. ``include_performance``/``include_sub_assets`` were
+#: deleted: adcp 3.10 removed both from the spec and nothing in ``src/`` read either.
 #:
-#: They surfaced only when this guard regained sight of REST: every body in api_v1 is now a
-#: derived_body_model ASSIGNMENT, and the old AST ClassDef scan found none of them, so REST
-#: had dropped out of the comparison entirely. The divergence predates that fix.
+#: The removal was not buyer-visible. MCP publishes DTO fields INTERSECT the wrapper's
+#: signature, so a name ListCreativesRequest never declared was never advertised and FastMCP
+#: never passed one; REST derives its body from the same pair; A2A selects through
+#: select_request_fields, which drops what the DTO does not declare.
 #:
-#: Resolution is REMOVAL from the MCP wrapper and the builder, not an entry here -- pre-3.x
-#: payloads do not belong at tool-definition level. That is a buyer-visible surface change,
-#: so it is its own task. This set may only SHRINK.
-_LEGACY_FLAT_ALIASES: dict[str, frozenset[str]] = {
-    "list_creatives": frozenset(
-        {
-            # Folded into filters/sort/pagination by the builder.
-            "media_buy_id",
-            "media_buy_ids",
-            "status",
-            "tags",
-            "search",
-            "created_after",
-            "created_before",
-            "limit",
-            "sort_by",
-            "sort_order",
-            # Not ListCreativesRequest fields at all: out-of-band _impl parameters.
-            "format",
-            "page",
-            "include_performance",
-            "include_sub_assets",
-        }
-    ),
-}
+#: This set may only SHRINK, and it has nowhere left to shrink to. A new entry means a
+#: transport has grown a name the spec does not define -- fix the seam, do not record it.
+_LEGACY_FLAT_ALIASES: dict[str, frozenset[str]] = {}
 
 
 def _mcp_tool_params() -> dict[str, set[str]]:

@@ -20,8 +20,7 @@ from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.codes import ErrorCode
-from src.core.errors.details import EntityRefDetails, ValidationDetails
-from src.core.exceptions import AdCPValidationError
+from src.core.errors.details import EntityRefDetails
 from src.core.helpers import enum_value, log_tool_activity
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity
@@ -172,74 +171,55 @@ def _blob_log_context(creative_id: str, tenant_id: str, principal_id: str) -> st
     )
 
 
-def _merge_structured_filters(filters: "CreativeFilters | None", flat_params: dict) -> dict:
-    """Merge a structured CreativeFilters model into flat params (flat take precedence).
-
-    The model->dict conversion lives in this helper rather than inside the _impl
-    because it is internal request normalization, not the wire serialization that
-    the no-model_dump-in-_impl guard targets.
-    """
-    if filters:
-        return {**filters.model_dump(exclude_none=True), **flat_params}
-    return flat_params
-
-
 def _build_list_creatives_request(
-    media_buy_id: str | None = None,
-    media_buy_ids: list[str] | None = None,
-    status: str | None = None,
-    tags: list[str] | None = None,
-    created_after: str | None = None,
-    created_before: str | None = None,
-    search: str | None = None,
     filters: "CreativeFilters | None" = None,
     fields: list[str] | None = None,
     include_assignments: bool = False,
-    limit: int = 50,
-    sort_by: str = "created_date",
-    sort_order: str = "desc",
     sort: "Sort | None" = None,
     pagination: "PaginationRequest | None" = None,
     context: ContextObject | None = None,
+    # INTERNAL, and ListCreativesRequest FIELDS -- see the two exclude=True declarations on
+    # that model. They used to be routed AROUND this builder and handed to
+    # _list_creatives_impl as its own arguments, which made the builder a non-superset of
+    # what the tool accepts; deriving the announced shape from a non-superset is what forced
+    # that derivation to be reverted once already. Threaded like every other field now.
+    format: str | None = None,
+    page: int = 1,
 ) -> "ListCreativesRequest":
-    """Build a ListCreativesRequest from individual wire params.
+    """Build a ListCreativesRequest from the wire's request parameters.
 
-    Folds the flat filter/sort/pagination params (status, tags, search, dates,
-    media_buy_ids, sort_by/sort_order, limit) into the spec-compliant structured
-    request, merges any structured ``filters`` (flat take precedence), and
-    translates Pydantic/parse errors into AdCPValidationError. Shared by both
-    transport wrappers so this construction lives in one place.
+    Every parameter here is a ListCreativesRequest FIELD -- the builder is a superset of
+    nothing and a subset of the model, which is the property the announced-shape derivation
+    ("announced = DTO fields INTERSECT the implementation's arguments") needs in order to
+    mean anything.
 
-    Note: ``format``, ``page``, ``include_performance`` and ``include_sub_assets``
-    are NOT representable on ListCreativesRequest and stay as out-of-band _impl
-    kwargs.
+    The TEN pre-3.1.1 flat aliases this used to accept -- media_buy_id, media_buy_ids,
+    status, tags, search, created_after, created_before, limit, sort_by, sort_order -- are
+    gone. None of them is a field of any 3.1.1 request: list-creatives-request.json declares
+    the filters/sort/pagination OBJECTS, and core/creative-filters.json declares only the
+    plural media_buy_ids. They were announced NOWHERE (MCP publishes DTO INTERSECT signature,
+    so a name the DTO does not declare is never advertised; REST derives its body from the
+    same pair; A2A selects through select_request_fields), and nothing in the compat
+    middleware mapped onto them -- so no buyer could send one and removing them is not a
+    surface change. Their spec-shaped replacements are already the graded path in
+    BR-UC-018: filters.media_buy_ids, filters.statuses, filters.tags, filters.name_contains,
+    filters.created_after/before, sort.field/direction and pagination.max_results.
+
+    Two coercions the flat path carried are deliberately NOT reproduced. sort_by outside the
+    field map used to fall back to created_date and sort_order outside {asc, desc} to desc;
+    under the spec's closed enums (enums/creative-sort-field.json, enums/sort-direction.json)
+    an out-of-enum value is a VALIDATION_ERROR instead, which is what BR-UC-018's
+    sort.direction='random' and sort.field='unknown_field' rows now assert on all three
+    transports. Silently answering a different question than the buyer asked was the defect,
+    not the tolerance.
     """
-    # Structured -> flat, FIRST, so the flat guards below still run. This block moved
-    # here from the MCP wrapper (prkv.5 R1). It MUST produce flat values rather than
-    # writing sort/pagination straight onto ListCreativesRequest: doing the latter would
-    # bypass three silent coercions buyers rely on -- unknown sort field -> "created_date"
-    # (field_mapping), sort_order not in {asc,desc} -> "desc", limit -> min(limit, 1000) --
-    # each of which is a graded row in BR-UC-018 (prkv.5 F1).
-    #
-    # Ungated. This was behind `accept_structured_sort`, whose comment said spec
-    # sort/pagination were "NOT yet exposed on A2A/REST" and that "MCP is the ONE caller that
-    # passes True". Both claims were false: BOTH callers passed True, so the False branch was
-    # unreachable, and every transport reaches THIS builder, which declares both -- MCP
-    # advertises them off the DTO, A2A forwards the bag through the request seam, and the
-    # derived ListCreativesBody carries them on REST. The deferred surface change had already
-    # shipped. A flag with one reachable value is not a gate, it is a comment that disagrees
-    # with its own code.
-    #
-    # (The sentence above named list_creatives_raw as what declares them, which was true when
-    # it was written and stopped being true when the wrappers moved to taking the built
-    # request -- its parameters are now req/format/include_performance/include_sub_assets/page.
-    # The behaviour is unchanged; the artifact that carries the shape moved down here.)
     # Coerce the wire's JSON objects into the typed models before reading attributes.
     # A2A and REST hand these through as plain dicts; only MCP's own validation builds
     # the models for us. Without this the builder raised
     # AttributeError: 'dict' object has no attribute 'field' -- an untyped 500 -- and
     # constructing the model here also makes an out-of-enum value a proper
     # ValidationError, which is what the spec's closed enums call for.
+    from adcp.types import CreativeFilters as LibraryCreativeFilters
     from adcp.types import PaginationRequest as _LibPagination
     from adcp.types.generated_poc.creative.list_creatives_request import Sort as _LibSort
 
@@ -247,93 +227,25 @@ def _build_list_creatives_request(
         sort = _LibSort(**sort)
     if isinstance(pagination, dict):
         pagination = _LibPagination(**pagination)
-    if sort is not None:
-        if sort.field is not None:
-            sort_by = enum_value(sort.field)
-        if sort.direction is not None:
-            sort_order = enum_value(sort.direction)
-    if pagination is not None and pagination.max_results is not None:
-        limit = pagination.max_results
 
-    from adcp.types import CreativeFilters as LibraryCreativeFilters
-    from adcp.types import PaginationRequest as LibraryPagination
-    from adcp.types.generated_poc.creative.list_creatives_request import Sort as LibrarySort
+    # Enforce the reader's max page size. min() rather than a rejection because
+    # pagination.max_results already carries the spec's own 1..100 bound (the model refuses
+    # anything outside it), so this only ever caps a value a direct in-process caller chose.
+    effective_limit = min(pagination.max_results, 1000) if pagination and pagination.max_results else 50
+    structured_pagination = _LibPagination(max_results=effective_limit)
 
-    # Parse datetime strings if provided
-    created_after_dt = None
-    created_before_dt = None
-    if created_after:
-        try:
-            created_after_dt = datetime.fromisoformat(created_after.replace("Z", "+00:00"))
-        except ValueError:
-            raise AdCPValidationError(
-                details=ValidationDetails(rejected_value=str(created_after)),
-                field="created_after",
-            )
-    if created_before:
-        try:
-            created_before_dt = datetime.fromisoformat(created_before.replace("Z", "+00:00"))
-        except ValueError:
-            raise AdCPValidationError(
-                details=ValidationDetails(rejected_value=str(created_before)),
-                field="created_before",
-            )
+    # sort defaults to the reader's documented ordering (created_date desc) when the buyer
+    # sends none. Rebuilt rather than passed through so the request always carries an
+    # explicit Sort -- _list_creatives_impl reports it back as query_summary.sort_applied,
+    # and "the default ordering" is an answer the buyer is entitled to see.
+    sort_field = enum_value(sort.field) if sort and sort.field else "created_date"
+    sort_direction = enum_value(sort.direction) if sort and sort.direction else "desc"
+    structured_sort = _LibSort(field=sort_field, direction=sort_direction)
 
-    # Validate sort_order is valid Literal
-    from typing import Literal
-
-    valid_sort_order: Literal["asc", "desc"] = cast(
-        Literal["asc", "desc"], sort_order if sort_order in ["asc", "desc"] else "desc"
-    )
-
-    # Enforce max limit
-    effective_limit = min(limit, 1000)
-
-    # Build spec-compliant filters from flat parameters
-    # Library CreativeFilters uses plural field names (statuses, formats)
-    filters_dict: dict[str, Any] = {}
-    if status:
-        filters_dict["statuses"] = [status]
-    # Note: flat 'format' param is handled by DB query directly in _impl,
-    # not via CreativeFilters. adcp 3.10 format_ids requires FormatId objects
-    # which need agent_url — structured filters.format_ids handles this properly.
-    if tags:
-        filters_dict["tags"] = tags
-    if created_after_dt:
-        filters_dict["created_after"] = created_after_dt
-    if created_before_dt:
-        filters_dict["created_before"] = created_before_dt
-    if search:
-        filters_dict["name_contains"] = search
-
-    # Build media_buy_ids filter array
-    effective_media_buy_ids = list(media_buy_ids) if media_buy_ids else []
-    if media_buy_id and media_buy_id not in effective_media_buy_ids:
-        effective_media_buy_ids.append(media_buy_id)
-    if effective_media_buy_ids:
-        filters_dict["media_buy_ids"] = effective_media_buy_ids
-
-    # Merge structured filters with flat params (flat params take precedence)
-    filters_dict = _merge_structured_filters(filters, filters_dict)
-
-    # Build structured objects
-    structured_filters = LibraryCreativeFilters(**filters_dict) if filters_dict else None
-
-    # Build pagination
-    # 3.6.0: PaginationRequest is cursor-based (max_results, cursor). DB query uses offset/limit internally.
-    structured_pagination = LibraryPagination(max_results=effective_limit)
-
-    # Build sort
-    field_mapping = {
-        "created_date": "created_date",
-        "updated_date": "updated_date",
-        "name": "name",
-        "status": "status",
-        "assignment_count": "assignment_count",
-        "performance_score": "performance_score",
-    }
-    mapped_field = field_mapping.get(sort_by, "created_date")
-    structured_sort = LibrarySort(field=mapped_field, direction=valid_sort_order)
+    # Normalize to the LIBRARY type so the request carries one shape regardless of which
+    # transport built the filters (MCP hands over the local subclass, A2A/REST a coerced
+    # model). exclude_none keeps an unset filter from becoming an explicit null.
+    structured_filters = LibraryCreativeFilters(**filters.model_dump(exclude_none=True)) if filters else None
 
     with adcp_validation_boundary(context="list_creatives request"):
         return ListCreativesRequest(
@@ -343,15 +255,13 @@ def _build_list_creatives_request(
             fields=fields,
             include_assignments=include_assignments,
             context=context,
+            format=format,
+            page=page,
         )
 
 
 def _list_creatives_impl(
     req: "ListCreativesRequest",
-    format: str | None = None,
-    include_performance: bool = False,
-    include_sub_assets: bool = False,
-    page: int = 1,
     identity: ResolvedIdentity | None = None,
 ) -> ListCreativesResponse:
     """List and search creative library (AdCP v2.5 spec endpoint).
@@ -360,11 +270,9 @@ def _list_creatives_impl(
     Supports pagination, sorting, and multiple filter criteria.
 
     Args:
-        req: Typed list-creatives request (filters, sort, pagination, fields, context)
-        format: Filter by creative format — out-of-band (not a request field)
-        include_performance: Include performance metrics — out-of-band (not a request field)
-        include_sub_assets: Include sub-assets — out-of-band (not a request field)
-        page: Page number for pagination (default: 1) — out-of-band (pagination is cursor-based)
+        req: Typed list-creatives request — EVERY request value, including the two
+            internal ``format`` / ``page`` fields that used to arrive as separate
+            arguments beside it
         identity: ResolvedIdentity with principal/tenant info (transport-agnostic)
 
     Returns:
@@ -374,6 +282,10 @@ def _list_creatives_impl(
 
     # Derive flat DB-query params from the structured request.
     req_filters = req.filters
+    # Internal fields, read off the request like every other value it carries. They were
+    # ``_impl`` PARAMETERS until this was fixed, which meant a caller could hand the reader
+    # a page or a format the request it was answering did not describe.
+    page = req.page
     # This status string is matched against the RAW persisted `creatives.status` column
     # (CreativeRepository.get_by_principal), while the value rendered on the wire is
     # derived from it below — and for a row whose stored status is not a CreativeStatus
@@ -434,7 +346,7 @@ def _list_creatives_impl(
         result = uow.creatives.get_by_principal(
             principal_id,
             status=status,
-            format=format,
+            format=req.format,
             tags=tags,
             created_after=created_after_dt,
             created_before=created_before_dt,
@@ -688,42 +600,13 @@ def _list_creatives_impl(
 
 
 async def list_creatives(
-    media_buy_id: Annotated[str | None, PydanticField(description="Filter creatives by a single media buy ID")] = None,
-    media_buy_ids: list[str] = None,
-    status: Annotated[
-        str | None,
-        PydanticField(description="Filter by creative status (e.g. 'approved', 'pending_review', 'rejected')"),
-    ] = None,
-    format: Annotated[str | None, PydanticField(description="Filter by creative format ID")] = None,
-    tags: list[str] = None,
-    created_after: Annotated[
-        str, PydanticField(description="Filter creatives created after this ISO 8601 datetime")
-    ] = None,
-    created_before: Annotated[
-        str, PydanticField(description="Filter creatives created before this ISO 8601 datetime")
-    ] = None,
-    search: Annotated[
-        str | None, PydanticField(description="Free-text search across creative name and metadata")
-    ] = None,
     filters: CreativeFilters | None = None,
     sort: Sort | None = None,
     pagination: PaginationRequest | None = None,
     fields: list[FieldModel | str] | None = None,
-    include_performance: Annotated[
-        bool, PydanticField(description="Include performance metrics for each creative")
-    ] = False,
     include_assignments: Annotated[
         bool, PydanticField(description="Include package assignment details for each creative")
     ] = False,
-    include_sub_assets: Annotated[
-        bool, PydanticField(description="Include sub-assets (e.g. individual sizes in a responsive creative)")
-    ] = False,
-    page: Annotated[int, PydanticField(description="Page number for pagination (1-based)")] = 1,
-    limit: Annotated[int, PydanticField(description="Maximum number of creatives per page")] = 50,
-    sort_by: Annotated[
-        str, PydanticField(description="Field to sort by (e.g. 'created_date', 'name')")
-    ] = "created_date",
-    sort_order: Annotated[str, PydanticField(description="Sort direction: 'asc' or 'desc'")] = "desc",
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
 ):
@@ -731,12 +614,17 @@ async def list_creatives(
 
     MCP tool wrapper that delegates to the shared implementation.
     FastMCP automatically validates and coerces JSON inputs to Pydantic models.
-    Supports both flat parameters (status, format, etc.) and nested objects (filters, sort, pagination)
-    for maximum flexibility.
 
-    Args:
-        media_buy_id: Filter by single media buy ID (backward compat)
-        media_buy_ids: Filter by multiple media buy IDs (AdCP 2.5)
+    The FOURTEEN parameters this used to declare beyond the ones above are gone, and none
+    of the removals is buyer-visible. Ten were pre-3.1.1 FLAT ALIASES (media_buy_id,
+    media_buy_ids, status, tags, search, created_after, created_before, limit, sort_by,
+    sort_order) that _build_list_creatives_request folded into the structured request;
+    ``format``, ``page``, ``include_performance`` and ``include_sub_assets`` were routed
+    around the builder entirely. MCP advertises DTO fields INTERSECT this signature, so a
+    name ListCreativesRequest does not declare was never advertised and FastMCP therefore
+    never passed one -- all fourteen took their default on every real call. Measured before
+    the removal, the advertised property set was exactly context/fields/filters/
+    include_assignments/pagination/sort; it is unchanged after it.
 
     Returns:
         ToolResult with ListCreativesResponse data
@@ -746,79 +634,33 @@ async def list_creatives(
     # Pass typed Pydantic models directly (no model_dump conversion needed)
     fields_list = [enum_value(f) for f in fields] if fields else None
 
-    # The structured->flat coercion lives in _build_list_creatives_request now, so every
-    # transport that reaches the builder gets identical treatment instead of MCP alone
-    # doing it at its own boundary (prkv.5 R1). No caller ENABLES it and none is special:
-    # the accept_structured_sort flag this line used to describe is gone (it had one
-    # reachable value), and spec sort/pagination are live on the other two transports as
-    # well -- the derived ListCreativesBody declares both, and the A2A skill forwards the
-    # parameter bag through the same seam. BR-UC-018's pagination/sorting partitions grade
-    # the coercions on every transport, which is what retired the deferred ticket.
     req = _build_list_creatives_request(
         sort=sort,
         pagination=pagination,
-        media_buy_id=media_buy_id,
-        media_buy_ids=media_buy_ids,
-        status=status,
-        tags=tags,
-        created_after=created_after,
-        created_before=created_before,
-        search=search,
         filters=filters,
         fields=fields_list,
         include_assignments=include_assignments,
-        limit=limit,
-        sort_by=sort_by,
-        sort_order=sort_order,
         context=context,
     )
-    response = _list_creatives_impl(
-        req=req,
-        format=format,
-        include_performance=include_performance,
-        include_sub_assets=include_sub_assets,
-        page=page,
-        identity=identity,
-    )
+    response = _list_creatives_impl(req=req, identity=identity)
     return mcp_result(response)
 
 
 def list_creatives_raw(
     req: "ListCreativesRequest",
-    # NOT ListCreativesRequest fields: `format` filters, `page` drives the offset, and the
-    # two include_* flags widen the payload. They mirror _list_creatives_impl's own
-    # out-of-band parameters exactly, so this wrapper's signature is "_impl's signature
-    # plus transport args" -- there is no second field list here to drift from the model.
-    format: str | None = None,
-    include_performance: bool = False,
-    include_sub_assets: bool = False,
-    page: int = 1,
     ctx: Context | ToolContext | None = None,
     identity: IdentityOrNotProvided = NOT_PROVIDED,
 ):
     """List creative assets with filtering and pagination (raw function for A2A server use, AdCP v2.5).
 
-    Delegates to the shared implementation.
+    Delegates to the shared implementation. Every request value travels ON ``req``: the four
+    out-of-band arguments this wrapper used to take beside it (``format``, ``page``,
+    ``include_performance``, ``include_sub_assets``) are gone -- the first two are internal
+    ListCreativesRequest fields now, and the last two were removed from the AdCP spec at 3.10
+    and read by nothing in this codebase, so forwarding them was a no-op through three layers.
 
     Args:
-        media_buy_id: Filter by single media buy ID (backward compat)
-        media_buy_ids: Filter by multiple media buy IDs (AdCP 2.5)
-        status: Filter by status (optional)
-        format: Filter by creative format (optional)
-        tags: Filter by creative group tags (optional)
-        created_after: Filter creatives created after this date (ISO format) (optional)
-        created_before: Filter creatives created before this date (ISO format) (optional)
-        search: Search in creative name or description (optional)
-        filters: Advanced filtering options (CreativeFilters model, optional)
-        fields: Specific fields to return (optional)
-        include_performance: Include performance metrics (optional)
-        include_assignments: Include package assignments (optional)
-        include_sub_assets: Include sub-assets (optional)
-        page: Page number for pagination (default: 1)
-        limit: Number of results per page (default: 50, max: 1000)
-        sort_by: Sort field (default: created_date)
-        sort_order: Sort order (default: desc)
-        context: Application level context per adcp spec
+        req: The built ListCreativesRequest
         ctx: FastMCP context (automatically provided)
         identity: ResolvedIdentity (transport-agnostic, preferred over ctx)
 
@@ -827,11 +669,4 @@ def list_creatives_raw(
     """
     identity = resolve_identity_if_not_provided(identity, ctx)
 
-    return _list_creatives_impl(
-        req=req,
-        format=format,
-        include_performance=include_performance,
-        include_sub_assets=include_sub_assets,
-        page=page,
-        identity=identity,
-    )
+    return _list_creatives_impl(req=req, identity=identity)

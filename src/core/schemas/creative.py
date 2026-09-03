@@ -625,19 +625,46 @@ class ListCreativeFormatsResponse(NestedModelSerializerMixin, LibraryListCreativ
 class ListCreativesRequest(LibraryListCreativesRequest):
     """Extends library ListCreativesRequest from AdCP spec.
 
-    Per AdCP spec, all fields are optional:
-    - context: dict (application-level context)
-    - ext: dict (extension object for custom fields)
-    - fields: list[FieldModel] (specific fields to return)
-    - filters: CreativeFilters (structured filter object)
-    - include_assignments: bool (include package assignments, default True)
-    - include_performance: bool (include performance metrics, default False)
-    - include_sub_assets: bool (include sub-assets, default False)
-    - pagination: Pagination (structured pagination object)
-    - sort: Sort (structured sort object)
+    Every spec field is inherited from the library parent and none is redeclared;
+    3.1.1's list-creatives-request.json carries filters, sort, pagination, fields,
+    account, context, ext and the ``include_*`` projection flags. The list this
+    docstring used to enumerate named ``include_performance`` and
+    ``include_sub_assets`` among them, which stopped being true at adcp 3.10 when
+    both were removed from the spec — a reader checking "is this field spec'd?"
+    against the docstring got the wrong answer for two years' worth of SDK bumps.
+    Enumerate nothing: the parent is the list.
+
+    ``format`` and ``page`` below are the two INTERNAL fields, and they are here
+    rather than beside the request because a parameter routed AROUND the builder
+    makes the builder a non-superset of what the tool accepts — the exact shape
+    that forced the announced-shape derivation to be reverted once already.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # INTERNAL (exclude=True), not AdCP 3.1.1 fields — and exclude=True is what keeps
+    # them off every buyer-facing surface at once: derived_signature drops them from the
+    # MCP announcement, derived_body_model drops them from the REST body, and
+    # select_request_fields drops them from the A2A parameter bag. So this is exactly the
+    # reach they had as out-of-band _impl arguments (no transport could set either), with
+    # the builder now a superset of the request instead of a sibling of it.
+    #
+    # Their spec-shaped successors already exist and are live: `filters.format_ids` for
+    # format filtering and `pagination.cursor` for paging. Neither is a drop-in — format_ids
+    # takes FormatId objects (agent_url and all) where this takes a bare id string, and the
+    # reader is offset-based underneath — so migrating is its own task, not a rename. Until
+    # then these two carry the DB-query behaviour (`format` narrows the query,
+    # `page` drives the offset) that the successors do not yet reach.
+    format: str | None = Field(
+        default=None,
+        description="Internal: filter by a bare creative format id (superseded by filters.format_ids)",
+        exclude=True,
+    )
+    page: int = Field(
+        default=1,
+        description="Internal: 1-based page index driving the reader's offset (superseded by pagination.cursor)",
+        exclude=True,
+    )
 
 
 class QuerySummary(LibraryQuerySummary):

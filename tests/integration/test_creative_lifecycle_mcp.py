@@ -57,18 +57,17 @@ def _seed_account(tenant_id: str, principal_ids: tuple[str, ...]) -> None:
 
 
 def _list_creatives(**kwargs):
-    """Build a ListCreativesRequest from flat filters, then call the wrapper.
+    """Build a ListCreativesRequest from its fields, then call the wrapper.
 
-    list_creatives_raw takes the BUILT request; only `format` and `page` remain
-    out-of-band (they are not ListCreativesRequest fields). Routing every call in this
-    module through one seam keeps the flat, readable call sites without re-listing the
-    request's fields at each of them.
+    ``list_creatives_raw`` takes the BUILT request and nothing beside it. ``format`` and
+    ``page`` used to be split out here as out-of-band kwargs; they are internal
+    ListCreativesRequest fields now, so they go through the builder with everything else and
+    this helper has only the transport arguments left to separate.
     """
     from src.core.tools.creatives.listing import _build_list_creatives_request, list_creatives_raw
 
-    out_of_band = {k: kwargs.pop(k) for k in ("format", "page") if k in kwargs}
     transport = {k: kwargs.pop(k) for k in ("ctx", "identity") if k in kwargs}
-    return list_creatives_raw(req=_build_list_creatives_request(**kwargs), **out_of_band, **transport)
+    return list_creatives_raw(req=_build_list_creatives_request(**kwargs), **transport)
 
 
 def _sync_creatives(**kwargs):

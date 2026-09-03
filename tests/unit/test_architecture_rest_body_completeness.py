@@ -45,6 +45,20 @@ _TRANSPORT_PARAMS = {"ctx", "identity", "raw_wire_payload"}
 # Body-only meta field (not a raw-wrapper param).
 _BODY_META = {"adcp_version"}
 
+
+def _internal_fields(dto: type) -> set[str]:
+    """The DTO's ``exclude=True`` fields — internal, so never body fields.
+
+    ``derived_body_model`` skips them, for the same reason ``derived_signature`` keeps them
+    out of the MCP announcement and ``select_request_fields`` out of the A2A bag: exclude=True
+    is this codebase's "never reaches a buyer". Subtracted here so the expectation is computed
+    by the generator's rule rather than by a paraphrase of it — a restatement that omits a rule
+    reads a correct body as broken, which is what it did the day ListCreativesRequest first
+    declared an internal field its builder accepts.
+    """
+    return {name for name, field in dto.model_fields.items() if field.exclude}
+
+
 # Allowlisted omissions: {BodyClassName: {param_name: justification}}.
 # Allowlists can only SHRINK — every entry needs a real reason, never a blanket escape.
 _ALLOWLIST: dict[str, dict[str, str]] = {
@@ -190,7 +204,11 @@ def test_hand_written_bodies_carry_the_derived_field_set():
         # whose impl really takes it -- get_adcp_capabilities negotiates ON the version pair,
         # so adcp_version is in the intersection there and a body that dropped it would have
         # read as compliant.
-        expected = (set(dto.model_fields) & set(inspect.signature(impl).parameters)) | set(extras) | _BODY_META
+        expected = (
+            ((set(dto.model_fields) - _internal_fields(dto)) & set(inspect.signature(impl).parameters))
+            | set(extras)
+            | _BODY_META
+        )
         # media_buy_id travels in the URL path on the update route, never in the body.
         expected -= set(_ALLOWLIST.get(body_cls.__name__, {}))
         actual = set(body_cls.model_fields)
@@ -265,7 +283,11 @@ def test_derived_bodies_carry_exactly_the_dto_fields_the_impl_accepts():
         # a silently dropped field, still fails -- which is the whole point of this test.
         extras = getattr(body_cls, "__derived_extra_fields__", frozenset())
         path = getattr(body_cls, "__derived_path_fields__", frozenset())
-        expected = ((set(dto.model_fields) & set(inspect.signature(impl).parameters)) - path) | _BODY_META | extras
+        expected = (
+            (((set(dto.model_fields) - _internal_fields(dto)) & set(inspect.signature(impl).parameters)) - path)
+            | _BODY_META
+            | extras
+        )
         actual = set(body_cls.model_fields)
         assert actual == expected, (
             f"{body_cls.__name__} carries {sorted(actual ^ expected)} outside "

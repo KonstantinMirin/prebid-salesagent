@@ -147,10 +147,20 @@ class TestSchemaMatchesLibrary:
         local_fields = set(LocalCreateMediaBuyRequest.model_fields.keys())
         assert lib_fields == local_fields, f"CreateMediaBuyRequest drift: lib={lib_fields}, local={local_fields}"
 
-        # ListCreativesRequest - now extends library, should match
+        # ListCreativesRequest - extends library with two internal-only fields
+        # format, page — internal-only (exclude=True), not in AdCP 3.1.1. They carry the
+        #   reader's bare-format-id filter and its offset paging, whose spec-shaped
+        #   successors (filters.format_ids, pagination.cursor) are not drop-in replacements.
+        #   Declared on the model rather than passed beside the request so
+        #   _build_list_creatives_request stays a SUBSET of the DTO — the property the
+        #   announced-shape derivation needs. exclude=True keeps them off all three buyer
+        #   surfaces (MCP announcement, REST body, A2A selection).
         lib_fields = set(LibListCreativesRequest.model_fields.keys())
         local_fields = set(LocalListCreativesRequest.model_fields.keys())
-        assert lib_fields == local_fields, f"ListCreativesRequest drift: lib={lib_fields}, local={local_fields}"
+        local_extensions = {"format", "page"}
+        assert lib_fields == local_fields - local_extensions, (
+            f"ListCreativesRequest drift: lib={lib_fields}, local={local_fields}"
+        )
 
         # ListCreativeFormatsRequest - now extends library, should match
         lib_fields = set(LibListCreativeFormatsRequest.model_fields.keys())

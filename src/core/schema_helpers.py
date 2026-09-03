@@ -423,6 +423,14 @@ def select_request_fields(
     """
     values = source.model_dump(exclude_none=True) if isinstance(source, BaseModel) else source
     names = set(model.model_fields) - _VERSION_ENVELOPE_FIELDS
+    # INTERNAL fields are not buyer input. ``exclude=True`` is how this codebase says "never
+    # reaches a buyer", and the other two derivations of the same rule already honour it:
+    # ``derived_signature`` drops such a field from the MCP announcement and
+    # ``derived_body_model`` from the REST body. This was the third derivation and the only
+    # one that did not, so an internal field a builder happened to accept was settable over
+    # A2A alone -- one transport quietly wider than the other two, which is the exact
+    # single-transport hole these derivations exist to close.
+    names -= {name for name, field in model.model_fields.items() if field.exclude}
     if accepted is not None:
         names &= set(accepted)
     selected = {name: value for name, value in values.items() if name in names and value is not None}

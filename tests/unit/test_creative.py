@@ -1497,33 +1497,31 @@ class TestListCreativesValidation:
     Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/creative-filters.json
     """
 
-    def test_invalid_created_after_date_raises(self):
-        """Invalid date string for created_after raises AdCPValidationError.
+    @pytest.mark.parametrize("field", ["created_after", "created_before"])
+    def test_invalid_filter_date_raises(self, field: str):
+        """An unparseable date-time in the STRUCTURED filters is a typed AdCPValidationError.
 
-        Spec: CONFIRMED -- creative-filters.json defines created_after as
+        Spec: CONFIRMED -- creative-filters.json defines created_after and created_before as
         type: string, format: date-time.
+
+        Graded at ``coerce_creative_filters``, which is where the obligation now lives. It
+        used to be graded on ``_build_list_creatives_request(created_after=...)``: a FLAT
+        alias that AdCP 3.1.1 does not define anywhere, that no transport could send (MCP
+        announces DTO fields INTERSECT the wrapper's signature, and ListCreativesRequest
+        never declared it), and that is now removed. The spec-shaped path -- the one A2A and
+        REST actually take -- is the filters object, and it must reject the same value.
+
+        One parametrized body rather than two near-identical methods: the two fields differ
+        in NAME only, and the repo's DRY invariant treats a copy with a substituted variable
+        as a defect.
+
         Covers: UC-006-EXT-C-01
         """
-        from src.core.tools.creatives.listing import _build_list_creatives_request
+        from src.core.schema_helpers import coerce_creative_filters
 
-        # Date-string parsing moved into the request builder; the invalid-date
-        # rejection now surfaces at build time (the boundary), before _impl.
-        with pytest.raises(AdCPValidationError) as _ei:
-            _build_list_creatives_request(created_after="not-a-date")
-        # The identifier is STRUCTURED now: details/field, not prose.
-
-    def test_invalid_created_before_date_raises(self):
-        """Spec: CONFIRMED -- creative-filters.json defines created_before as format: date-time.
-
-        Covers: UC-006-EXT-C-01
-        """
-        from src.core.tools.creatives.listing import _build_list_creatives_request
-
-        # Date-string parsing moved into the request builder; the invalid-date
-        # rejection now surfaces at build time (the boundary), before _impl.
-        with pytest.raises(AdCPValidationError) as _ei:
-            _build_list_creatives_request(created_before="not-a-date")
-        # The identifier is STRUCTURED now: details/field, not prose.
+        # The identifier is STRUCTURED: details/field, not prose.
+        with pytest.raises(AdCPValidationError):
+            coerce_creative_filters({field: "not-a-date"})
 
 
 class TestListCreativesRawBoundaryCompleteness:
@@ -1564,30 +1562,6 @@ class TestListCreativesRawBoundaryCompleteness:
             assert req.filters is not None
             assert req.filters.tags == ["promo"]
 
-    def test_raw_forwards_include_performance(self):
-        """list_creatives_raw must forward include_performance parameter to _list_creatives_impl.
-
-        Covers: UC-006-MAIN-REST-01
-        """
-        from src.core.tools.creatives.listing import (
-            _build_list_creatives_request,
-            list_creatives_raw,
-        )
-
-        identity = PrincipalFactory.make_identity(
-            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
-        )
-
-        with patch("src.core.tools.creatives.listing._list_creatives_impl") as mock_impl:
-            mock_impl.return_value = ListCreativesResponse(
-                creatives=[],
-                pagination=Pagination(has_more=False),
-                query_summary=QuerySummary(returned=0, total_matching=0),
-            )
-            list_creatives_raw(req=_build_list_creatives_request(), include_performance=True, identity=identity)
-            mock_impl.assert_called_once()
-            assert mock_impl.call_args.kwargs["include_performance"] is True
-
     def test_raw_forwards_include_assignments(self):
         """list_creatives_raw must forward include_assignments parameter to _list_creatives_impl.
 
@@ -1617,12 +1591,17 @@ class TestListCreativesRawBoundaryCompleteness:
 
 
 class TestListCreativesRequestRejectsInternalFlags:
-    """Regression: internal behavior flags must NOT be on ListCreativesRequest.
+    """Regression: include_performance / include_sub_assets are not accepted anywhere.
 
-    External callers must never control _impl behavior through request objects.
-    The flags include_performance and include_sub_assets are not part of the
-    AdCP ListCreativesRequest spec (adcp 3.10). They must be passed as explicit
-    _impl parameters by transport wrappers, never accepted from buyers.
+    adcp 3.10 removed both from list-creatives-request.json, so ListCreativesRequest must
+    keep refusing them -- that half is unchanged and still graded below.
+
+    What changed is the OTHER half. This docstring used to prescribe the remedy: "they must
+    be passed as explicit _impl parameters by transport wrappers". They were, through three
+    layers -- and nothing in ``src/`` ever read either one, so the whole chain was a no-op
+    with a wrapper parameter, an _impl parameter and a forwarding line each. Both are deleted
+    now. A field the spec does not define and the reader does not honour is not routed around
+    the request; it is removed.
     """
 
     def test_include_performance_rejected(self):
@@ -1659,13 +1638,21 @@ class TestListCreativesRequestRejectsInternalFlags:
         req = ListCreativesRequest(include_assignments=True)
         assert req.include_assignments is True
 
-    def test_impl_receives_flags_as_parameters_not_from_request(self):
-        """_list_creatives_impl must use function params for non-spec include_* flags.
+    def test_impl_takes_the_request_and_nothing_beside_it(self):
+        """_list_creatives_impl's signature is exactly ``(req, identity)``.
 
-        The request object should NOT carry include_performance or
-        include_sub_assets (non-spec internal flags); transport wrappers pass them
-        as explicit kwargs. include_assignments IS an AdCP spec field, so it lives
-        on the typed request, not as an _impl param.
+        This test previously asserted the OPPOSITE -- that ``include_performance`` and
+        ``include_sub_assets`` must BE _impl parameters. They are gone: adcp 3.10 removed
+        both from the spec and nothing in ``src/`` read either, so the parameters carried a
+        value that changed no behaviour.
+
+        The surviving obligation is the general one, and it is stronger than the two names:
+        NOTHING travels beside the request. ``format`` and ``page`` were out-of-band _impl
+        arguments too, and they are ListCreativesRequest fields now -- so a parameter list of
+        exactly (req, identity) is what makes ``_build_list_creatives_request`` a subset of
+        the DTO, which is the property the announced-shape derivation rests on. Asserting the
+        exact list rather than the absence of four names is what makes a fifth out-of-band
+        argument fail here instead of being added unnoticed.
 
         Covers: SEC-001 — separation of external request from internal flags.
         """
@@ -1673,12 +1660,11 @@ class TestListCreativesRequestRejectsInternalFlags:
 
         from src.core.tools.creatives.listing import _list_creatives_impl
 
-        sig = inspect.signature(_list_creatives_impl)
-        params = list(sig.parameters.keys())
-        assert "include_performance" in params, "_impl must accept include_performance as param"
-        assert "include_sub_assets" in params, "_impl must accept include_sub_assets as param"
-        # include_assignments is a spec request field — it travels on req, not as a param
-        assert "include_assignments" not in params, "include_assignments belongs on the request, not _impl params"
+        params = list(inspect.signature(_list_creatives_impl).parameters)
+        assert params == ["req", "identity"], (
+            f"_list_creatives_impl must take the request and the identity and nothing else; got {params}. "
+            f"A value routed beside the request makes the builder a non-superset of what the tool accepts."
+        )
 
 
 # ============================================================================
@@ -4657,11 +4643,21 @@ class TestA2ATransportGaps:
             mock_notifier_getter.assert_not_called()
 
     def test_list_creatives_raw_boundary(self):
-        """list_creatives_raw forwards parameters to _list_creatives_impl.
+        """list_creatives_raw hands _list_creatives_impl the request and nothing beside it.
+
+        Every value the buyer supplied travels ON the request, including the two internal
+        fields. The flat spelling this used to use (media_buy_id / status / limit as builder
+        arguments, format / page as wrapper arguments) is gone: the first three are pre-3.1.1
+        aliases the builder no longer takes, and the last two are ListCreativesRequest fields
+        now. Asserting the forwarded KWARG SET, not merely the values, is what catches a
+        parameter reappearing beside the request.
 
         STUB: list_creatives A2A boundary -- list_creatives_raw forwards all params.
         Covers: UC-006-MAIN-REST-01
         """
+        from adcp import CreativeFilters
+        from adcp.types import PaginationRequest
+
         from src.core.tools.creatives.listing import (
             _build_list_creatives_request,
             list_creatives_raw,
@@ -4674,25 +4670,21 @@ class TestA2ATransportGaps:
         with patch("src.core.tools.creatives.listing._list_creatives_impl") as mock_impl:
             mock_impl.return_value = MagicMock()
 
-            # Spec request fields go through the BUILDER; format/page are the non-spec
-            # out-of-band kwargs the wrapper still takes, mirroring _impl's own signature.
-            list_creatives_raw(
-                req=_build_list_creatives_request(media_buy_id="mb_1", status="approved", limit=25),
+            req = _build_list_creatives_request(
+                filters=CreativeFilters(media_buy_ids=["mb_1"], statuses=["approved"]),
+                pagination=PaginationRequest(max_results=25),
                 format="display",
                 page=2,
-                identity=identity,
             )
+            list_creatives_raw(req=req, identity=identity)
 
-            mock_impl.assert_called_once()
-            call_kwargs = mock_impl.call_args[1]
-            req = call_kwargs["req"]
+            mock_impl.assert_called_once_with(req=req, identity=identity)
             assert req.filters is not None
             assert "mb_1" in req.filters.media_buy_ids
             assert any(getattr(s, "value", s) == "approved" for s in req.filters.statuses)
             assert req.pagination.max_results == 25
-            assert call_kwargs["format"] == "display"
-            assert call_kwargs["page"] == 2
-            assert call_kwargs["identity"] is identity
+            assert req.format == "display"
+            assert req.page == 2
 
     def test_list_creative_formats_raw_boundary(self):
         """list_creative_formats_raw forwards filter params to _list_creative_formats_impl.

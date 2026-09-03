@@ -57,28 +57,23 @@ class CreativeListEnv(IntegrationEnv):
     def call_impl(self, **kwargs: Any) -> ListCreativesResponse:
         """Call _list_creatives_impl with real DB.
 
-        _list_creatives_impl now takes a typed ``req: ListCreativesRequest`` plus
-        the out-of-band ``format`` / ``include_performance`` / ``include_sub_assets``
-        / ``page`` kwargs. This method accepts either a pre-built ``req=`` or the
-        flat request fields and builds the request (matching MediaBuyCreateEnv).
+        ``_list_creatives_impl`` takes ``(req, identity)`` and nothing else, so this method
+        has no out-of-band bag to keep any more: ``format`` and ``page`` are internal
+        ListCreativesRequest fields that ``_build_list_creatives_request`` threads on like
+        every other, and ``include_performance`` / ``include_sub_assets`` are gone (adcp 3.10
+        removed both from the spec and nothing read them). Accepts either a pre-built ``req=``
+        or the request fields to build one from (matching MediaBuyCreateEnv).
         """
         from src.core.tools.creatives.listing import _build_list_creatives_request, _list_creatives_impl
 
         self._commit_factory_data()
         identity = kwargs.pop("identity", self.identity)
 
-        # Out-of-band params not representable on ListCreativesRequest
-        out_of_band = {
-            key: kwargs.pop(key)
-            for key in ("format", "include_performance", "include_sub_assets", "page")
-            if key in kwargs
-        }
-
         req = kwargs.pop("req", None)
         if req is None:
             req = _build_list_creatives_request(**kwargs)
 
-        return _list_creatives_impl(req=req, identity=identity, **out_of_band)
+        return _list_creatives_impl(req=req, identity=identity)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to ListCreativesBody shape for REST POST.
