@@ -193,6 +193,123 @@ def _pad_to_min_length(value: str, field_spec: dict | None) -> str:
     return value if len(value) >= minimum else value + "0" * (minimum - len(value))
 
 
+#: Substring of a field's NAME -> the example value that name implies. A naming
+#: heuristic, not a reading of the pin: it is what the generator falls back on when the
+#: schema states no enum, const or pattern to derive from. Ordered — the first match
+#: wins, so "date" is tested before "time" ("start_date" must not become a datetime).
+_STRING_BY_FIELD_NAME: tuple[tuple[str, str], ...] = (
+    ("date", "2025-02-01"),
+    ("time", "2025-02-01T00:00:00Z"),
+    ("url", "https://example.com/test"),
+    ("email", "test@example.com"),
+    ("version", "1.0.0"),
+    ("offering", "Nike Air Jordan 2025 basketball shoes"),
+    ("po_number", "PO-TEST-12345"),
+)
+
+
+def _example_string(field_name: str, field_spec: dict | None) -> str | None:
+    """A string satisfying *field_spec*, or None when no rule matches.
+
+    Returns rather than raises so the ONE caller owns both the strict refusal and the
+    minLength padding; every rule used to return directly, and each new constraint had
+    to be remembered at eight exits.
+    """
+    pattern = (field_spec or {}).get("pattern")
+    if pattern:
+        if pattern == r"^\d{4}-\d{2}-\d{2}$":
+            return "2025-02-01"
+        # Domain patterns (lowercase alphanumeric + hyphens + dots).
+        if "a-z0-9" in pattern and "\\." in pattern:
+            return "example.com"
+        # Lowercase identifier patterns (e.g. brand_id: ^[a-z0-9_]+$).
+        if "a-z0-9" in pattern:
+            return "test_value"
+    for fragment, value in _STRING_BY_FIELD_NAME:
+        if fragment in field_name.lower():
+            return value
+    # Checked after the table so a name like "valid_id" cannot capture "date"/"time".
+    if "id" in field_name.lower():
+        return f"test_{field_name}_123"
+    return None
+
+
+def _unambiguous_arms(arms: list[Any]) -> list[Any]:
+    """*arms* minus those whose value would ALSO satisfy a broader sibling.
+
+    ``oneOf`` means exactly one arm matches, so an arm that narrows a sibling by
+    ``const``/``enum`` is a trap for a generator: its value matches the narrow arm AND
+    the broad one, and the instance fails validation for matching twice.
+    ``core/start-timing.json`` is the live case — ``{const: "asap"}`` beside
+    ``{type: string, format: date-time}`` — and because this repo's validator asserts no
+    date-time format checker, EVERY string satisfies the second arm. Picking "asap"
+    yields a payload the pin rejects; picking a timestamp matches only the second.
+    ``CreateMediaBuyRequestFactory`` already documents the same reasoning for the same
+    field, reached by hand.
+
+    KNOWN CEILING: overlap is judged on ``type`` alone. Two arms that overlap through
+    ranges, patterns or object shapes are not detected, and the first is taken. Widen
+    this when a pinned schema actually needs it, not before — the alternative is
+    synthesizing a candidate per arm and validating each, which costs a validator per
+    node for a case the pin does not yet contain.
+    """
+    broad_types = {
+        arm.get("type") for arm in arms if isinstance(arm, dict) and "const" not in arm and "enum" not in arm
+    }
+    unambiguous = [
+        arm
+        for arm in arms
+        if not (isinstance(arm, dict) and ("const" in arm or "enum" in arm) and arm.get("type") in broad_types)
+    ]
+    return unambiguous or arms
+
+
+def _first_disjunct(node: dict[str, Any]) -> dict[str, Any]:
+    """Fold the FIRST arm of a root ``oneOf``/``anyOf`` into *node*.
+
+    A disjunctive schema states "an instance looks like ONE of these", so a synthesizer
+    has to CHOOSE an arm; reading only the root leaves ``properties`` and ``required``
+    empty and yields ``{}``. ``core/account-ref.json`` is the live case — a bare
+    ``type: object`` whose whole shape lives in two ``oneOf`` arms (account_id, or
+    brand+operator) — and ``{}`` is what made three tools skip while reporting that the
+    SPEC does not require ``account``, which it does.
+
+    First arm, not a search for one that validates: the choice has to be deterministic
+    or the generated payload changes between runs. Arms are ordered in the pin and the
+    first is the canonical spelling — except where taking it would produce a value that
+    satisfies TWO arms, which ``oneOf`` (exactly one) rejects. See
+    :func:`_unambiguous_arms`.
+    """
+    for keyword in ("oneOf", "anyOf"):
+        arms = node.get(keyword)
+        if not arms:
+            continue
+        arms = _unambiguous_arms(arms)
+        arm = pinned_schema.load_canonicalized(arms[0]["$ref"]) if "$ref" in arms[0] else arms[0]
+        rest = {key: value for key, value in node.items() if key != keyword}
+        return {
+            **rest,
+            **arm,
+            "properties": {**rest.get("properties", {}), **arm.get("properties", {})},
+            "required": sorted(set(rest.get("required", [])) | set(arm.get("required", []))),
+        }
+    return node
+
+
+def _derived_pinned_shape(node: dict[str, Any]) -> dict[str, Any]:
+    """*node* with its composition folded in: ``allOf`` arms merged, one disjunct chosen.
+
+    The whole point of the instrument is that the shape comes from the PIN. A node whose
+    shape is composed rather than declared inline reads as empty otherwise, and an empty
+    read is indistinguishable from "the pin declares nothing" — which is how invented
+    shapes got hardcoded here in the first place.
+
+    ``_merge_composed`` is the response side's allOf/if-then-else merge, shared rather
+    than reimplemented: there is one rule for what a composed pinned node's fields are.
+    """
+    return _first_disjunct(_merge_composed(node, node))
+
+
 def generate_example_value(
     field_type: str, field_name: str = "", field_spec: dict = None, *, strict: bool = False
 ) -> Any:
@@ -209,50 +326,31 @@ def generate_example_value(
     if field_spec and "enum" in field_spec:
         return field_spec["enum"][0]
 
-    # Handle $ref fields (complex nested objects)
+    # ``const`` is a one-member enum and the pin uses it for oneOf DISCRIMINATORS —
+    # core/signal-id.json fixes ``source`` at "catalog" on one arm and "agent" on the
+    # other. Reading enum but not const means the generator invents a value for the one
+    # field whose value the pin states outright, and the arm it just chose is then
+    # discriminated to the wrong branch. Handling oneOf without handling const is half
+    # a fix, because const is how a oneOf says which arm you are on.
+    if field_spec and "const" in field_spec:
+        return field_spec["const"]
+
+    # Handle $ref fields (complex nested objects). DERIVED FROM THE PIN, never from a
+    # table of shapes keyed on the ref's spelling. Fifteen such shapes used to sit here
+    # — budget, package, brand-manifest, reporting-webhook, context, ext and the rest —
+    # each matched by substring against the ref path and each frozen on the day it was
+    # written. A shape that does not move with the pin is not a sample of the pinned
+    # schema, it is an assertion about it, and when the two disagree the suite reports
+    # the disagreement AGAINST PRODUCTION: that is how CreateMediaBuyRequest came to be
+    # excluded from the alignment guard for six months over `total_budget`, a field the
+    # model gets exactly right.
     if field_spec and "$ref" in field_spec:
-        # Generate sensible defaults for known $ref types
         ref = field_spec["$ref"]
-        if "budget" in ref.lower():
-            return {"total": 5000.0, "currency": "USD"}
-        elif "package-update" in ref.lower():
-            return {"package_id": "pkg_1"}
-        elif "package" in ref.lower():
-            return [{"product_ids": ["prod_1"], "budget": {"total": 5000.0, "currency": "USD"}}]
-        elif "creative" in ref.lower():
-            return []  # Empty array is valid for creative lists
-        elif "brand-manifest" in ref.lower():
-            return {"name": "Test Brand"}
-        elif "property-list" in ref.lower():
-            return {"agent_url": "https://example.com", "list_id": "list_1"}
-        elif "promoted-products" in ref.lower():
-            return {"manifest_skus": ["SKU-001"]}
-        elif "pagination-request" in ref.lower():
-            return {"max_results": 50}
-        elif "product-filters" in ref.lower():
-            return {"delivery_type": "guaranteed"}
-        elif "reporting-webhook" in ref.lower():
-            return {
-                "url": "https://example.com/webhook",
-                "reporting_frequency": "daily",
-                "authentication": {"credentials": "test-token", "schemes": ["Bearer"]},
-            }
-        elif "start-timing" in ref.lower():
-            return "2025-02-01T00:00:00Z"
-        elif "push-notification" in ref.lower():
-            return {"url": "https://example.com/notify"}
-        elif "validation-mode" in ref.lower():
-            return "strict"
-        elif "context" in ref.lower():
-            return {"session_id": "test-session"}
-        elif "ext" in ref.lower():
-            return {"custom_field": "test"}
-        # For unknown refs, resolve the schema and generate from its properties
         try:
-            ref_schema = load_json_schema(ref)
-            ref_type = ref_schema.get("type", "object")
-            if ref_type == "string" and "enum" in ref_schema:
+            ref_schema = _derived_pinned_shape(load_json_schema(ref))
+            if "enum" in ref_schema:
                 return ref_schema["enum"][0]
+            ref_type = ref_schema.get("type", "object")
             if ref_type != "object":
                 return generate_example_value(ref_type, field_name, ref_schema, strict=strict)
             # Generate object with required fields from the resolved schema
@@ -262,11 +360,12 @@ def generate_example_value(
                 if prop_name in required_fields:
                     prop_type = prop_spec.get("type", "string")
                     obj[prop_name] = generate_example_value(prop_type, prop_name, prop_spec, strict=strict)
-            if obj:
+            if obj or not required_fields:
+                # No required properties is a real answer, not a failure to read one: a
+                # pinned object that requires nothing is satisfied by {}. Returning it
+                # is derived; what must not happen is returning {} because the shape
+                # was UNREADABLE, which the composition merge above now prevents.
                 return obj
-            # Empty half only: the schema loaded but this resolver reads just
-            # type/enum/properties, so a $ref whose structure is a discriminated
-            # oneOf yields nothing and {} would be invented, not derived.
             if strict:
                 raise _cannot_synthesize(
                     field_type, field_name, field_spec, f"resolved $ref {ref!r} exposes no readable required properties"
@@ -310,44 +409,20 @@ def generate_example_value(
         return generate_example_value(variant_type, field_name, first_variant, strict=strict)
 
     if field_type == "string":
-        # Check for pattern constraints in schema
-        if field_spec and "pattern" in field_spec:
-            pattern = field_spec["pattern"]
-            # Handle common date pattern: YYYY-MM-DD
-            if pattern == r"^\d{4}-\d{2}-\d{2}$":
-                return "2025-02-01"
-            # Handle domain patterns (lowercase alphanumeric + hyphens + dots)
-            if "a-z0-9" in pattern and "\\." in pattern:
-                return "example.com"
-            # Handle lowercase identifier patterns (e.g., brand_id: ^[a-z0-9_]+$)
-            if "a-z0-9" in pattern:
-                return _pad_to_min_length("test_value", field_spec)
-
-        # Special cases for known field patterns
-        if "date" in field_name.lower():
-            # Use date format (YYYY-MM-DD) not datetime
-            return "2025-02-01"
-        if "time" in field_name.lower():
-            # For time fields use full ISO 8601
-            return "2025-02-01T00:00:00Z"
-        if "id" in field_name.lower():
-            return f"test_{field_name}_123"
-        if "url" in field_name.lower():
-            return "https://example.com/test"
-        if "email" in field_name.lower():
-            return "test@example.com"
-        if "version" in field_name.lower():
-            return "1.0.0"
-        if "offering" in field_name.lower():
-            return "Nike Air Jordan 2025 basketball shoes"
-        if "po_number" in field_name.lower():
-            return "PO-TEST-12345"
-        if strict:
-            # Reached recursively for a container's property too, where the guess is
-            # embedded in the returned object and _synthesize_sample's top-level
-            # sentinel check never sees it.
-            raise _cannot_synthesize(field_type, field_name, field_spec, "no naming or pattern rule matched")
-        return _unsynthesized_guess(field_name)
+        matched = _example_string(field_name, field_spec)
+        if matched is None:
+            if strict:
+                # Reached recursively for a container's property too, where the guess is
+                # embedded in the returned object and _synthesize_sample's top-level
+                # sentinel check never sees it.
+                raise _cannot_synthesize(field_type, field_name, field_spec, "no naming or pattern rule matched")
+            matched = _unsynthesized_guess(field_name)
+        # ONE exit, so the pin's minLength is honoured whichever rule produced the value.
+        # It used to be applied on the pattern branch alone, and `credentials` — pinned
+        # minLength 32 with no pattern — came back as a 22-character guess that the pin
+        # itself rejects. A sample the pin would reject cannot grade whether a model
+        # accepts pinned samples.
+        return _pad_to_min_length(matched, field_spec)
     elif field_type == "number":
         return 100.0
     elif field_type == "integer":
@@ -373,30 +448,32 @@ def generate_example_value(
                         from tests.factories.creative_asset import make_creative_asset_request
 
                         return [make_creative_asset_request()]
-                    # Resolve the ref to check if it's an enum or simple type
-                    try:
-                        ref_schema = load_json_schema(ref)
-                        if "enum" in ref_schema:
-                            return [ref_schema["enum"][0]]
-                        ref_type = ref_schema.get("type", "object")
-                        if ref_type != "object":
-                            return [generate_example_value(ref_type, field_name, ref_schema, strict=strict)]
-                    except _CannotSynthesize:
-                        raise
-                    except Exception as exc:
-                        if strict:
-                            raise _cannot_synthesize(
-                                field_type, field_name, field_spec, f"array items $ref {ref!r} could not be resolved"
-                            ) from exc
-                    # For other refs, return minimal object
+                    # The ELEMENT is generated by the same $ref rule as any other value,
+                    # rather than by a second resolver that reads less. The old one gave
+                    # up on an object-typed item and returned [{}] — an invented element
+                    # for a shape the pin describes in full — which is why the generated
+                    # create_media_buy carried `packages: [{}]` and the suite then read
+                    # the model's correct refusal of it as a conformance failure.
+                    item = generate_example_value(
+                        items_spec.get("type", "object"), field_name, items_spec, strict=strict
+                    )
+                    # ``{}`` is the ONE result that means "read nothing": every other
+                    # value, falsy ones included (0, "", []), is what the pin declares.
+                    if item != {}:
+                        return [item]
                     if strict:
                         raise _cannot_synthesize(
                             field_type, field_name, field_spec, f"array items $ref {ref!r} resolves to an unread object"
                         )
-                    return [{}]
+                    return [item]
 
                 item_type = items_spec.get("type", "string")
                 if item_type == "object":
+                    # Composition folded in first, same as every other object: an INLINE
+                    # item schema can be a discriminated oneOf too. get-products' `refine`
+                    # is one — its properties live entirely in the arms — so reading only
+                    # the top level produced [] against a pinned minItems of 1.
+                    items_spec = _derived_pinned_shape(items_spec)
                     # Generate a proper object with required fields
                     obj = {}
                     if "properties" in items_spec:
@@ -427,22 +504,21 @@ def generate_example_value(
             raise _cannot_synthesize(field_type, field_name, field_spec, "array has no readable 'items' schema")
         return []
     elif field_type == "object":
-        # Generate sensible defaults for known object types
-        if "budget" in field_name.lower():
-            return {
-                "total": 5000.0,
-                "currency": "USD",
-                "pacing": "even",
-            }
-        if "targeting" in field_name.lower():
-            return {
-                "geo_countries": ["US"],
-            }
-        if field_spec and "properties" in field_spec:
+        # Two shapes keyed on the FIELD NAME used to sit here — {total, currency, pacing}
+        # for anything named *budget*, {geo_countries: [US]} for anything named
+        # *targeting* — and they returned BEFORE the derivation below, so they shadowed
+        # the pinned schema even when it was perfectly readable. That is strictly worse
+        # than the ref-keyed table: `total_budget` is an INLINE object whose pinned
+        # properties are {amount, currency}, both required, and our model declares
+        # exactly those — yet the generator emitted `total`/`pacing`, the model
+        # correctly rejected them, and the suite read that as the MODEL rejecting spec
+        # fields. Derived from the pin now, like everything else.
+        spec = _derived_pinned_shape(field_spec) if field_spec else None
+        if spec and "properties" in spec:
             # Generate a minimal object with required fields
             obj = {}
-            required_fields = field_spec.get("required", [])
-            for prop_name, prop_spec in field_spec["properties"].items():
+            required_fields = spec.get("required", [])
+            for prop_name, prop_spec in spec["properties"].items():
                 if prop_name in required_fields:
                     prop_type = prop_spec.get("type", "string")
                     obj[prop_name] = generate_example_value(prop_type, prop_name, prop_spec, strict=strict)
@@ -852,6 +928,91 @@ class TestFieldNameConsistency:
                     f"   These fields are defined in AdCP spec but not in Pydantic model.\n"
                     f"   Schema: {schema_ref}\n"
                 )
+
+
+class TestTheGeneratorAgreesWithThePin:
+    """The instrument's own output, graded against the pin it claims to sample.
+
+    Every other class here feeds a synthesized payload to a model and reports what the
+    model does with it. NOTHING checked the payload itself, so an invalid sample was
+    indistinguishable from a non-conformant model — and the suite reported the model.
+    That is not hypothetical: the generator emitted ``total_budget: {total, currency,
+    pacing}`` against a pin declaring ``{amount, currency}``, CreateMediaBuyRequest
+    correctly refused it, the refusal read as "REJECTED AdCP spec fields", and the model
+    was commented out of the alignment map on 2026-02-24 under a rationale about
+    ``brand_card`` — a property the pin does not contain. It stayed out for six months
+    and prkv.28 then missed a real deviation in a model nothing was grading.
+
+    This is the check that makes the instrument accountable to the same artifact it
+    grades production against. A rule that invents a shape now fails HERE, at the
+    generator, instead of over there, as a false accusation.
+
+    Scoped to the MINIMAL request: it is the payload built purely from ``/required``, so
+    "the pin accepts it" is unambiguous. The FULL request deliberately carries every
+    property at once, which a schema with if/then/else conditionals can reject for
+    reasons that are not the generator's fault — see the module-level note on
+    get-products' ``buying_mode``.
+    """
+
+    @pytest.mark.parametrize("tool_name", sorted(graded_request_schemas()))
+    def test_the_minimal_request_is_one_the_pinned_schema_accepts(self, tool_name: str) -> None:
+        schema_ref, _ = graded_request_schemas()[tool_name]
+        payload = generate_minimal_valid_request(load_json_schema(schema_ref))
+
+        violations = {
+            ".".join(str(part) for part in error.absolute_path) or "<root>": error.message
+            for error in pinned_schema.validator_for(schema_ref).iter_errors(payload)
+        }
+
+        assert not violations, (
+            f"the generator's minimal {tool_name} request is not valid against {schema_ref}:\n"
+            + "\n".join(f"  at {path}: {message}" for path, message in sorted(violations.items()))
+            + "\n\nFix the GENERATOR, not the model. A sample the pin rejects cannot grade "
+            "whether a model accepts pinned samples — it can only produce a false accusation."
+        )
+
+    @pytest.mark.parametrize("tool_name", sorted(graded_request_schemas()))
+    def test_every_full_request_property_matches_its_own_pinned_subschema(self, tool_name: str) -> None:
+        """Each generated property, graded against the pin's declaration OF THAT PROPERTY.
+
+        This is the one that catches an invented SHAPE, and the minimal-request check
+        above cannot: ``total_budget`` is not in create-media-buy's ``/required``, so the
+        minimal payload never carries it and the six-month exclusion would have been
+        reproduced under a green minimal check.
+
+        Per-property rather than whole-document, deliberately. The full request carries
+        every property AT ONCE, and a pinned schema may forbid exactly that:
+        get-products' ``allOf`` states "if you send if_pricing_version then buying_mode
+        must be 'wholesale'", so a document holding both is invalid for a reason that is
+        the full-request STRATEGY's, not the generator's. Grading each value against
+        ``properties[name]`` asks the question this test is actually about — is the shape
+        the generator invented the shape the pin declares — and leaves document-level
+        conditionals to the model, which is where they are enforced.
+        """
+        schema_ref, _ = graded_request_schemas()[tool_name]
+        schema = load_json_schema(schema_ref)
+        validator = pinned_schema.validator_for(schema_ref)
+        declared = schema.get("properties", {})
+
+        violations = {}
+        for field, value in generate_full_valid_request(schema).items():
+            if field not in declared:
+                continue
+            # Validated as a one-key document so the pin's own $ref resolution applies;
+            # errors are then filtered to those rooted at this field, which drops the
+            # document-level conditionals this test deliberately does not grade.
+            for error in validator.iter_errors({field: value}):
+                if error.absolute_path and error.absolute_path[0] == field:
+                    violations[".".join(str(part) for part in error.absolute_path)] = error.message
+
+        assert not violations, (
+            f"the generator built {tool_name} properties that {schema_ref} does not "
+            f"declare that way:\n"
+            + "\n".join(f"  at {path}: {message}" for path, message in sorted(violations.items()))
+            + "\n\nFix the GENERATOR. A value the pin rejects, handed to a model that "
+            "correctly rejects it too, is reported by this suite as the MODEL rejecting a "
+            "spec field — which is how CreateMediaBuyRequest left the guard for six months."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1346,12 +1507,15 @@ def _resolve_response_item_schema(alignment: ResponseAlignment) -> dict[str, Any
 #                   what makes them honour load_json_schema's own HARD-FAILURE
 #                   contract instead of trading one silence for another.
 _NO_RULE_EXITS = [
-    # The $ref resolved and was read, but the resolver inspects only
-    # type/enum/properties — never oneOf — so a discriminated union yields {}.
-    # core/signal-id.json is entirely a oneOf; it reaches signals[].signal_id.
-    pytest.param(
-        "object", "signal_id", {"$ref": "core/signal-id.json"}, {}, False, id="ref-read-but-unreadable-198-else"
-    ),
+    # NOTE: the "$ref resolved but was unreadable" exit used to be driven from here by
+    # core/signal-id.json, because the resolver read only type/enum/properties and a
+    # discriminated union therefore yielded {}. The resolver now folds allOf and picks a
+    # oneOf/anyOf arm, so signal-id derives in full and has moved to _DERIVED_HALVES.
+    # Its row is NOT replaced with another driver: a sweep of the whole pinned 3.1 tree
+    # finds ZERO schemas that still reach that exit, and every row here is required to be
+    # reachable in the pinned tree. The raise remains in the code as the refusal for a
+    # shape a future pin might introduce; inventing a synthetic fixture to keep a row
+    # alive would assert about a shape the spec does not contain.
     # The $ref did not resolve at all: swallowed by ``except Exception: return {}``.
     pytest.param("object", "thing", {"$ref": "core/unresolvable-thing.json"}, {}, True, id="ref-unresolvable-199"),
     # A guessed string embedded in a container. _synthesize_sample's sentinel check
@@ -1377,15 +1541,20 @@ _NO_RULE_EXITS = [
         True,
         id="array-items-ref-unresolvable-296",
     ),
-    # Array items whose $ref resolved to an object: [{}] is invented for an element
-    # shape the generator declined to read.
+    # Array items whose $ref resolved to an object that REQUIRES NOTHING: [{}] is the
+    # element the generator invents when the pin gives it no property it must fill.
+    # The driver used to be core/error.json, which required code+message all along —
+    # the generator simply never recursed into an object-typed item and returned [{}]
+    # for every one of them. It recurses now, so a schema that genuinely requires
+    # nothing is needed to reach this exit; 94 pinned schemas qualify, and
+    # core/async-response-data.json is one.
     pytest.param(
         "array",
-        "errors",
-        {"type": "array", "items": {"$ref": "core/error.json"}},
+        "datas",
+        {"type": "array", "items": {"$ref": "core/async-response-data.json"}},
         [{}],
         False,
-        id="array-items-ref-object-298",
+        id="array-items-ref-object-no-required",
     ),
     # Array of inline objects that declare no required and no *id* property: the
     # EMPTY half only — [obj] for a non-empty obj is derived, not guessed.
@@ -1440,6 +1609,19 @@ _DERIVED_HALVES = [
         {"type": "array", "items": {"type": "object", "required": ["foo"], "properties": {"foo": {"type": "integer"}}}},
         [{"foo": 100}],
         id="310-non-empty-half",
+    ),
+    # core/signal-id.json — a schema that is ENTIRELY a discriminated oneOf, and the
+    # shape that used to prove the resolver could not read one. It derives completely
+    # now: the arm supplies data_provider_domain and id, and `source` comes back as the
+    # pin's own const rather than a guessed string. Kept as a derived row rather than
+    # deleted, because it is the live proof that both halves of that fix hold together
+    # — pick an arm, then honour the const that says which arm it is.
+    pytest.param(
+        "object",
+        "signal_id",
+        {"$ref": "core/signal-id.json"},
+        {"source": "catalog", "data_provider_domain": "example.com", "id": "test_id_123"},
+        id="oneof-arm-with-const-discriminator",
     ),
 ]
 
