@@ -10,49 +10,130 @@ creative agent-based format discovery per AdCP v2.4.
 
 import json
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from typing import Any
 
+from adcp.canonical_formats import CANONICAL_CREATIVE_AGENT_URL, format_is_supported
 from adcp.types import FormatId as LibraryFormatId
 
 from src.core.database.database_session import get_db_session
 from src.core.errors.details import EntityRefDetails
 from src.core.exceptions import AdCPFormatNotFoundError, AdCPSalesAgentError
 from src.core.schemas import Format, format_id_identity
+from src.core.security.outbound_http import UrlProvenance
 from src.core.validation_helpers import run_async_in_sync_context
+
+# What callers may hand the identity helpers: a structured reference, a bare
+# dict off the wire, or a legacy string id.
+FormatRef = str | LibraryFormatId | Mapping[str, Any]
+
+
+def _as_ref(value: FormatRef) -> Any:
+    """Normalize a reference to the shape the SDK predicates accept.
+
+    A Pydantic model is dumped to its wire dict: the SDK reads (agent_url, id)
+    off a mapping, and dumping is also what strips the LOCAL SUBCLASS identity
+    that made ``==`` fail in the first place — the value survives, the class
+    does not, which is the whole point.
+    """
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json", exclude_none=True)
+    return value
+
 
 logger = logging.getLogger(__name__)
 
 
-def fetch_format_spec(agent_url: str, format_id: str) -> Format | None:
-    """Fetch one format spec from the creative-agent registry (sync bridge).
+# ── Format identity and kind: asked here, never re-decided at a call site ─────
+#
+# Two format references name the same format when they share a federation
+# identity — the ``(canonical agent_url, id)`` pair ``format_id_identity``
+# computes. Call sites used to compare with ``==`` on the model, which is
+# Pydantic's STRUCTURAL equality — same fields AND same class. That works only
+# while every producer happens to build the same concrete class, an invariant
+# nothing declared and one transport quietly broke: the local ``FormatId``
+# subclass (schemas/_base.py, four convenience methods, zero extra fields) never
+# compares equal to the library value every other producer makes, so a lookup
+# keyed on ``==`` missed on A2A and the whole agent-dial arm was skipped in
+# silence.
+#
+# Identity is (agent_url, id) per the pinned core/format-id.json, and
+# ``src.core.schemas.format_id_identity`` is the ONE implementation of it in
+# this codebase — including the spec-mandated canonicalization of agent_url,
+# which it delegates to the SDK. Nothing here re-implements that; these are
+# thin, named delegations so there is ONE answer to "same format?" instead of
+# one per call site. A second rule (the SDK's own ``formats_are_equivalent``,
+# which additionally legacy-upgrades ``display_300x250`` into a parameterized
+# canonical id) would answer differently for the same pair of references, which
+# is precisely the split ``tests/unit/test_guards_format_id_value_comparison.py``
+# exists to prevent — so equivalence is asked of ``format_id_identity`` and of
+# nothing else. Directional SUPPORT is a different question, and that one is
+# still the SDK's (see :func:`format_accepted_by`).
 
-    THE single fetch path for format specs — create_media_buy,
-    sync_creatives validation, and get_format all route through here so typed
-    transient errors behave identically on every tool:
 
-    - Typed ``AdCPSalesAgentError`` from the registry (429 -> AdCPRateLimitError,
-      5xx/timeout/connect -> AdCPServiceUnavailableError) PROPAGATES: it carries
-      its own recovery semantics, and swallowing it into ``None`` degrades a
-      transient agent failure to a terminal "unknown format" rejection.
-    - ``None`` means the agent genuinely doesn't expose the format (unknown-
-      format semantics — the caller decides how to reject or fall back).
-    - Untyped exceptions are logged and become ``None``: the registry types all
-      its network errors, so an untyped one here is a programming surprise, not
-      a transport signal.
+def format_ref_id(ref: FormatRef) -> str | None:
+    """The bare ``id`` of a format reference, whatever shape it arrives in.
+
+    A ``format_id`` reaches this module as a structured model, as a wire dict,
+    or as a legacy bare string, depending on which producer built it — so
+    reaching for ``.id`` works only until it does not. Asking here keeps that
+    fact in ONE place instead of at each call site, which is the same mistake
+    the ``==`` comparisons made about class identity.
     """
-    from src.core.creative_agent_registry import get_creative_agent_registry
-
-    registry = get_creative_agent_registry()
-    try:
-        return run_async_in_sync_context(registry.get_format(agent_url, format_id))
-    except AdCPSalesAgentError:
-        raise
-    except Exception as e:
-        logger.warning(f"Could not fetch format {format_id} from {agent_url}: {e}")
-        return None
+    if isinstance(ref, str):
+        return ref
+    if isinstance(ref, Mapping):
+        value = ref.get("id")
+        return str(value) if value is not None else None
+    value = getattr(ref, "id", None)
+    return str(value) if value is not None else None
 
 
-def find_format(formats: Iterable[Format], format_id: LibraryFormatId) -> Format | None:
+def format_identity(ref: FormatRef) -> tuple[str, str]:
+    """The federation identity of a format reference, in any shape it arrives in.
+
+    Delegates the rule itself to ``src.core.schemas.format_id_identity`` — the
+    single place allowed to decide what "the same format" means — and adds only
+    the shape normalization: a wire dict is validated into the library model, and
+    a bare id is namespaced to the canonical creative agent (the same default the
+    SDK applies when a reference omits ``agent_url``).
+
+    That default is why this is the WRONG helper for an unscoped "search every
+    agent for this id" lookup: namespacing a bare string silently narrows the
+    search to the reference agent. Match on :func:`format_ref_id` there instead —
+    ``get_format``'s no-``agent_url`` branch does exactly that.
+    """
+    if isinstance(ref, str):
+        ref = LibraryFormatId.model_validate({"agent_url": CANONICAL_CREATIVE_AGENT_URL, "id": ref})
+    elif isinstance(ref, Mapping):
+        ref = LibraryFormatId.model_validate({"agent_url": CANONICAL_CREATIVE_AGENT_URL, **ref})
+    return format_id_identity(ref)
+
+
+def same_format(left: FormatRef, right: FormatRef) -> bool:
+    """Whether two format references name the same format.
+
+    Deliberately NOT ``==``: that compares Python classes as well as values.
+    Deliberately not a hand-rolled string compare either — the pinned schema
+    makes canonicalizing ``agent_url`` before treating two references as one a
+    MUST, and :func:`format_identity` is where that happens.
+    """
+    return format_identity(left) == format_identity(right)
+
+
+def format_accepted_by(requested: FormatRef, supported: FormatRef) -> bool:
+    """Whether *supported* satisfies a request for *requested*.
+
+    Distinct from :func:`same_format`: support is directional (a parameterized
+    supported format can satisfy a narrower request), which is why the SDK gives
+    it its own predicate rather than reusing equivalence — and why this one
+    delegates to ``adcp.canonical_formats.format_is_supported`` rather than to
+    the identity pair, which cannot express direction.
+    """
+    return format_is_supported(_as_ref(requested), _as_ref(supported))
+
+
+def find_format(formats: Iterable[Format], format_id: FormatRef) -> Format | None:
     """The format in *formats* that *format_id* names, or None.
 
     ONE definition of "is this the format the buyer asked for", so no caller can
@@ -69,13 +150,97 @@ def find_format(formats: Iterable[Format], format_id: LibraryFormatId) -> Format
     PARAMETERIZED reference resolves to the template it parameterizes -- which is
     the point of a template format, and what lets a 300x250 request find the
     ``display`` format's spec.
+
+    PURE: no HTTP and no DB, so it is callable from inside a savepoint where
+    ``get_format`` is not — the creative-sync paths pre-fetch their catalog
+    outside the transaction for exactly that reason and then need to select from
+    it without dialling anything.
     """
-    wanted = format_id_identity(format_id)
-    return next((fmt for fmt in formats if format_id_identity(fmt.format_id) == wanted), None)
+    wanted = format_identity(format_id)
+    return next((fmt for fmt in formats if format_identity(fmt.format_id) == wanted), None)
+
+
+def is_agent_backed(fmt: Format) -> bool:
+    """Whether this format is served by a creative agent.
+
+    Asks the format, rather than probing it: ``fmt.agent_url`` is a declared
+    property on the local Format (schemas/_base.py), not an attribute that may
+    or may not be there. Compose with — do not duplicate —
+    :func:`is_dialled_agent_url`: an adapter pseudo-URL is agent-backed but
+    never dialled.
+    """
+    return fmt.agent_url is not None
+
+
+def is_generative(fmt: Format) -> bool:
+    """Whether this format is built by the agent rather than supplied whole.
+
+    ``output_format_ids`` IS a declared field on ``adcp.types.Format``, so the
+    ``getattr(fmt, "output_format_ids", None)`` guard call sites used protected
+    against nothing while the sibling read of ``agent_url`` — the one that could
+    actually surprise — went undefended.
+    """
+    return bool(fmt.output_format_ids)
+
+
+def is_dialled_agent_url(agent_url: str) -> bool:
+    """Whether *agent_url* names an endpoint we will actually dial over HTTP.
+
+    False for an adapter-provided pseudo-URL like ``broadstreet://<tenant_id>``
+    (advertised by ``creative_formats.py`` and the Broadstreet adapter): those
+    formats are served by the adapter in-process, so there is no request to
+    make, no address to judge, and an egress gate applied to one would refuse
+    a format the SELLER published to the buyer.
+
+    Shared by every format-fetch call site (``creatives/_validation.py``'s
+    ingest gate, ``media_buy_create.py``'s pre-adapter validation and asset
+    build) so the adapter-format exemption is decided once, here, rather than
+    re-derived per call site.
+    """
+    return agent_url.startswith(("http://", "https://"))
+
+
+def fetch_format_spec(agent_url: str, format_id: str, *, provenance: UrlProvenance | None = None) -> Format | None:
+    """Fetch one format spec from the creative-agent registry (sync bridge).
+
+    THE single fetch path for format specs — create_media_buy,
+    sync_creatives validation, and get_format all route through here so typed
+    transient errors behave identically on every tool:
+
+    - Typed ``AdCPSalesAgentError`` from the registry (429 -> AdCPRateLimitError,
+      5xx/timeout/connect -> AdCPServiceUnavailableError) PROPAGATES: it carries
+      its own recovery semantics, and swallowing it into ``None`` degrades a
+      transient agent failure to a terminal "unknown format" rejection.
+    - ``None`` means the agent genuinely doesn't expose the format (unknown-
+      format semantics — the caller decides how to reject or fall back).
+    - Untyped exceptions are logged and become ``None``: the registry types all
+      its network errors, so an untyped one here is a programming surprise, not
+      a transport signal.
+
+    ``provenance`` passes straight through to the registry — a
+    :class:`CounterpartyUrl` when a buyer's request document supplied
+    ``agent_url``, optionally naming the request path; ``None`` for an
+    operator-registered agent.
+    """
+    from src.core.creative_agent_registry import get_creative_agent_registry
+
+    registry = get_creative_agent_registry()
+    try:
+        return run_async_in_sync_context(registry.get_format(agent_url, format_id, provenance=provenance))
+    except AdCPSalesAgentError:
+        raise
+    except Exception as e:
+        logger.warning(f"Could not fetch format {format_id} from {agent_url}: {e}")
+        return None
 
 
 def get_format(
-    format_id: str, agent_url: str | None = None, tenant_id: str | None = None, product_id: str | None = None
+    format_id: str,
+    agent_url: str | None = None,
+    tenant_id: str | None = None,
+    product_id: str | None = None,
+    *,
+    provenance: UrlProvenance | None = None,
 ) -> Format:
     """Resolve format with priority: product override → creative agent discovery.
 
@@ -84,6 +249,12 @@ def get_format(
         agent_url: Optional creative agent URL (defaults to AdCP standard agent)
         tenant_id: Optional tenant ID for agent lookup
         product_id: Optional product ID for product-level overrides
+        provenance: Whose URL ``agent_url`` is, forwarded to
+            :func:`fetch_format_spec` unchanged. A caller re-dialling a
+            buyer-supplied URL it already fetched once (e.g. a fallback path)
+            MUST pass the same ``CounterpartyUrl`` it used the first time —
+            omitting it silently reclassifies the same URL as operator
+            configuration and routes it off the egress seam entirely.
 
     Returns:
         Format object with all configuration
@@ -105,21 +276,28 @@ def get_format(
     # If agent_url provided, get format directly from that agent
     # Coerce to str: FormatId.agent_url is Pydantic AnyUrl (not a str subclass)
     if agent_url:
-        fmt = fetch_format_spec(str(agent_url), format_id)
+        fmt = fetch_format_spec(str(agent_url), format_id, provenance=provenance)
         if fmt:
             return fmt
     else:
-        # Search all agents for this format
+        # Search all agents for this format. The caller supplied NO agent scope,
+        # so the match is on the id alone — matching on full (agent_url, id)
+        # identity here would silently narrow "any agent" to "the reference
+        # agent", because upgrading a bare string defaults agent_url to the
+        # canonical creative agent.
+        #
+        # This branch was dead before: it compared ``fmt.format_id`` (a FormatId
+        # MODEL) against ``format_id`` (a str), which is never equal — so the
+        # one canonical resolver's fallback always fell through to the raise.
         all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant_id))
-        # `fmt.format_id.id == format_id`, the same component comparison
-        # CreativeAgentRegistry.get_format uses, because this parameter is a bare
-        # `str`. Comparing it against the FormatId MODEL -- as this line did -- is
-        # False for every format, so the branch resolved nothing at all (#2093).
-        # An id with no agent_url to namespace it is inherently ambiguous across
-        # agents; first in listing order wins, which is what "search all agents"
-        # has always meant here.
+        # The id component alone, read through ``format_ref_id``: the same
+        # component comparison ``CreativeAgentRegistry.get_format`` makes, and the
+        # only one available when this parameter is a bare ``str`` (#2093). An id
+        # with no agent_url to namespace it is inherently ambiguous across agents;
+        # first in listing order wins, which is what "search all agents" has
+        # always meant here.
         for fmt in all_formats:
-            if fmt.format_id.id == format_id:
+            if format_ref_id(fmt.format_id) == format_id:
                 return fmt
 
     # Not found anywhere. The identifiers travel as structured detail rather than

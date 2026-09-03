@@ -26,10 +26,12 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPServiceUnavailableError,
 )
-from src.core.format_resolver import find_format
+from src.core.format_resolver import find_format, is_agent_backed, is_generative
 from src.core.helpers import _extract_format_info, _validate_creative_assets
+from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
 from src.core.schemas import Error as AdCPErrorDetail
+from src.core.security.outbound_http import OperatorEndpoint, OutboundError
 from src.core.validation_helpers import run_async_in_sync_context
 
 from ._assets import _build_creative_data, _extract_message_from_assets, _extract_url_from_assets
@@ -324,11 +326,8 @@ def _update_existing_creative(
             # every generative creative to a static one (salesagent-kyc89).
             format_obj = find_format(all_formats, creative_format)
 
-            if format_obj and format_obj.agent_url:
-                # Check if format is generative (has output_format_ids)
-                is_generative = bool(getattr(format_obj, "output_format_ids", None))
-
-                if is_generative:
+            if format_obj and is_agent_backed(format_obj):
+                if is_generative(format_obj):
                     # Generative creative update - rebuild using AI
                     logger.info(
                         f"[sync_creatives] Detected generative format update: {creative_format}, "
@@ -596,6 +595,22 @@ def _update_existing_creative(
                 ),
                 False,
             )
+        except OutboundError as outbound_error:
+            # A refused/undeliverable egress request is already correctly classified
+            # by the seam — delegate rather than laundering it into the generic
+            # transient arm below. This arm MUST precede the typed arm: both
+            # OutboundError subclasses are also AdCPSalesAgentError subclasses
+            # (OutboundRequestBlocked/AdCPBlockedUrlError,
+            # OutboundDeliveryFailed/AdCPServiceUnavailableError), so a typed catch
+            # first would swallow the provenance classification.
+            # raise_mapped_outbound_error always raises; the mapped error propagates
+            # out of this function to _sync.py's per-creative typed handler, which
+            # builds the per-item result from the typed error itself.
+            raise_mapped_outbound_error(
+                outbound_error,
+                provenance=OperatorEndpoint("the creative agent"),
+                logger=logger,
+            )
         except AdCPSalesAgentError as typed_error:
             # GENERALIZES the AdCPConfigurationError arm above. That arm was added so a
             # missing GEMINI_API_KEY would not read as a transient creative-agent outage;
@@ -693,11 +708,8 @@ def _create_new_creative(
             # every generative creative to a static one (salesagent-kyc89).
             format_obj = find_format(all_formats, creative_format)
 
-            if format_obj and format_obj.agent_url:
-                # Check if format is generative (has output_format_ids)
-                is_generative = bool(getattr(format_obj, "output_format_ids", None))
-
-                if is_generative:
+            if format_obj and is_agent_backed(format_obj):
+                if is_generative(format_obj):
                     # Generative creative - call build_creative
                     logger.info(
                         f"[sync_creatives] Detected generative format: {creative_format}, checking for Gemini API key"
@@ -942,6 +954,22 @@ def _create_new_creative(
                     ),
                 ),
                 False,
+            )
+        except OutboundError as outbound_error:
+            # A refused/undeliverable egress request is already correctly classified
+            # by the seam — delegate rather than laundering it into the generic
+            # transient arm below. This arm MUST precede the typed arm: both
+            # OutboundError subclasses are also AdCPSalesAgentError subclasses
+            # (OutboundRequestBlocked/AdCPBlockedUrlError,
+            # OutboundDeliveryFailed/AdCPServiceUnavailableError), so a typed catch
+            # first would swallow the provenance classification.
+            # raise_mapped_outbound_error always raises; the mapped error propagates
+            # out of this function to _sync.py's per-creative typed handler, which
+            # builds the per-item result from the typed error itself.
+            raise_mapped_outbound_error(
+                outbound_error,
+                provenance=OperatorEndpoint("the creative agent"),
+                logger=logger,
             )
         except AdCPSalesAgentError as typed_error:
             # Same generalization as the update path above.

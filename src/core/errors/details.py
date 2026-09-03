@@ -63,6 +63,7 @@ __all__ = [
     "EntityRefDetails",
     "ErrorDetails",
     "ErrorProblem",
+    "OutboundDeliveryDetails",
     "ProblemsDetails",
     "ProductRefDetails",
     "UpstreamCallDetails",
@@ -256,6 +257,58 @@ class AdapterFailureDetails(EntityRefDetails, UpstreamCallDetails, ProblemsDetai
     is why ``AdCPAdapterError`` needs no type parameter of its own -- its five
     taxonomy subclasses all draw from the same three axes.
     """
+
+
+class OutboundDeliveryDetails(AdapterFailureDetails):
+    """A destination that was REACHED but did not take the request.
+
+    Extends ``AdapterFailureDetails`` rather than standing alone: an outbound
+    delivery failure IS a call out of this seller, so it is the same axis, and
+    the exception that carries it (``AdCPServiceUnavailableError``, via
+    ``src.core.security.egress.attempts.OutboundDeliveryFailed``) declares that
+    detail type. The two fields below are the pair the egress seam adds --
+    what a retry SCHEDULE knows that a single call does not.
+
+    The names are the pinned acceptance criterion, not a preference. AdCP 3.1.1
+    ``core/error.json`` types ``details`` as ``{"type": "object",
+    "additionalProperties": true}`` -- "Additional task-specific error details"
+    -- so the spec mandates no key set here and cannot decide the spelling.
+    What does decide it is AC6 of the egress seam that introduced this failure
+    shape, which requires ``attempts``/``last_status`` to survive a refactor
+    unchanged; it is graded by
+    ``tests/integration/test_outbound_http.py::test_details_carries_exactly_the_declared_detail_keys``
+    and ``tests/integration/test_outbound_error_mapping_parity.py::test_503_exhausted_preserves_attempts_and_last_status``.
+    The seam's internal attribute for the second one is ``http_status``; the KEY
+    stays ``last_status`` because the wire payload is a pre-existing
+    buyer-facing contract, of the same character as the
+    ``WebhookDeliveryLog.http_status_code`` column. One internal name, mapped to
+    each external name exactly once, at the boundary that owns that name.
+
+    Deliberately NOT spelled with ``UpstreamCallDetails``'s inherited
+    ``status_code``/``max_retries``: ``max_retries`` is the configured ceiling,
+    a different fact from how many attempts were actually made, and reusing it
+    would report a limit where the buyer reads a count.
+    """
+
+    attempts: int
+    last_status: int | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        """Emit both keys ALWAYS, including ``last_status: None``.
+
+        The base drops ``None`` because an unset optional is noise. Here it is
+        not unset: ``last_status: None`` is the ANSWER -- the delivery died at
+        the transport level, so there was never a response to read a status
+        from -- and a buyer distinguishing "no status" from "we did not say"
+        needs the key present. Both graded envelopes assert on it literally
+        (``{"attempts": 1, "last_status": None}``), and the fixed two-key shape
+        is what lets a timeout envelope and a hang-up envelope be byte-identical
+        (spec point 6: which failure mode it was is a liveness probe for
+        internal hosts and stays inside).
+        """
+        wire = super().to_wire()
+        wire["last_status"] = self.last_status
+        return wire
 
 
 class ValueRejectionDetails(ErrorDetails):

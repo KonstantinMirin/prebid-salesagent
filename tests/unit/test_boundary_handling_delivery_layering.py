@@ -26,17 +26,19 @@ from tests.harness.transport import TransportResult
 DELIVERY_FIELD = "reporting_dimensions"  # a delivery-domain boundary field
 
 
+# ctx key for a payload produced WITHOUT dispatching, which is what these
+# unit tests do: they drive a Then directly to exercise its assertion logic.
 def _delivery_response(deliveries):
     return SimpleNamespace(media_buy_deliveries=deliveries)
 
 
 def test_valid_delivery_boundary_with_deliveries_passes():
-    ctx = {"response": _delivery_response([SimpleNamespace(media_buy_id="mb1")])}
+    ctx = {"self_dispatched_response": _delivery_response([SimpleNamespace(media_buy_id="mb1")])}
     then_boundary_handling_result(ctx, DELIVERY_FIELD, "valid")  # no raise
 
 
 def test_valid_delivery_boundary_empty_deliveries_raises():
-    ctx = {"response": _delivery_response([])}
+    ctx = {"self_dispatched_response": _delivery_response([])}
     with pytest.raises(AssertionError):
         then_boundary_handling_result(ctx, DELIVERY_FIELD, "valid")
 
@@ -52,7 +54,10 @@ def test_invalid_delivery_boundary_with_wire_rejection_passes():
     requires a real envelope, so the fixture builds one from a real rejection.
     """
     envelope = build_two_layer_error_envelope(AdCPValidationError(field=DELIVERY_FIELD))
-    ctx = {"result": TransportResult(error=None, wire_error_envelope=envelope)}
+    # has_wire=True: the fixture stands in for a dispatch whose rejection was
+    # CAPTURED off the wire, which is the state the step must read from. The
+    # envelope is built by the production builder only so the shape is genuine.
+    ctx = {"result": TransportResult(error=None, wire_error_envelope=envelope, has_wire=True)}
     then_boundary_handling_result(ctx, DELIVERY_FIELD, "invalid")  # no raise
 
 
@@ -72,6 +77,6 @@ def test_invalid_delivery_boundary_with_build_failure_passes():
 
 
 def test_invalid_delivery_boundary_without_error_raises():
-    ctx = {"response": _delivery_response([SimpleNamespace(media_buy_id="mb1")])}
+    ctx = {"self_dispatched_response": _delivery_response([SimpleNamespace(media_buy_id="mb1")])}
     with pytest.raises(AssertionError):
         then_boundary_handling_result(ctx, DELIVERY_FIELD, "invalid")

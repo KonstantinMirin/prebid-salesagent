@@ -11,7 +11,7 @@ method silently no-ops over e2e_rest instead of realizing the intent or
 declaring it unrealizable, so a scenario that thinks it configured a fault
 actually asserts against unconfigured server state.
 
-Four escape hatches, each requiring a pinned, reasoned entry (ratchet like
+Escape hatches, each requiring a pinned, reasoned entry (ratchet like
 ``EXPECTED_LEDGER`` / ``EXPECTED_UNSUPPORTED_DECLARATIONS`` — adding OR
 removing an entry requires updating this file in the same change and saying
 why):
@@ -33,6 +33,14 @@ why):
     step starts calling it — re-run the scan then.
   * ``ALLOWLIST_UNIT_ONLY_ENV`` -- the owning class is ``BaseTestEnv``-rooted
     (not ``IntegrationEnv``), so it never runs over e2e by construction.
+  * ``ALLOWLIST_PURE_BUILDER`` -- the method BUILDS and returns a value and
+    mutates nothing: no mock, no DB row, no server state. The disease is a
+    setter that silently no-ops over e2e, and a method that sets nothing has
+    nothing to no-op; ``@realize_e2e`` would have no second branch to dispatch
+    to. The name regex matches these on the ``make_`` verb alone, so they are
+    named here rather than narrowed out of the regex -- a hand-written row can
+    be audited, whereas a regex carve-out is a silent hole for every future
+    method that happens to fit it.
 
 Methods decorated with ``@realize_e2e(e2e_unsupported(...))`` are the honest
 declaration itself and are excluded from this guard entirely (not an escape
@@ -81,6 +89,16 @@ ALLOWLIST_ALWAYS_DB_WRITE: frozenset[tuple[str, str]] = frozenset(
         # same shape.
         ("tests/harness/delivery_circuit_breaker.py", "make_webhook_config"),
         ("tests/harness/delivery_circuit_breaker.py", "set_db_webhooks"),
+        # ProtocolWebhookEnv.make_config is make_webhook_config's twin: the same
+        # PushNotificationConfigFactory row, through the same env-bound session.
+        # WebhookOutcomeRowsMixin.make_media_buy is the MediaBuyFactory row the
+        # delivery log's foreign key requires. Every factory is bound to
+        # ``self._session`` in ``BaseTestEnv.__enter__``, and over e2e that session
+        # is bound to an engine built from the live server's ``postgres_url`` --
+        # "so factory writes land in the DB the HTTP server reads" (_base.py) --
+        # which is this bucket's rule exactly: one code path, correct in both modes.
+        ("tests/harness/protocol_webhook.py", "make_config"),
+        ("tests/harness/_mixins.py", "make_media_buy"),
     }
 )
 
@@ -95,15 +113,27 @@ ALLOWLIST_NOT_WIRE_DISPATCHED: frozenset[tuple[str, str]] = frozenset(
         # _impl" case. The mock takes effect identically in every parametrized
         # "transport" row because the call itself never leaves the process, so
         # @realize_e2e would be an inert no-op wrapper (salesagent-689e scan).
-        ("tests/harness/_mixins.py", "set_http_status"),
-        ("tests/harness/_mixins.py", "set_http_sequence"),
+        #
+        # set_http_status and set_http_sequence LEFT this bucket by being FIXED:
+        # both now carry @realize_e2e(_e2e_set_http_status / _e2e_set_http_sequence)
+        # and program the e2e capture service, so the guard no longer sees them at
+        # all. set_url_invalid/set_url_valid left by being DELETED -- neither name
+        # exists anywhere under tests/ any more. Both are the sanctioned shrink
+        # direction ("violation fixed, remove from allowlist"), not a re-classification.
         ("tests/harness/_mixins.py", "set_http_error"),
-        ("tests/harness/_mixins.py", "set_url_invalid"),
-        # set_url_valid is set_url_invalid's mirror (same in-process SSRF mock
-        # knob, opposite value; added by #1697) -- same never-leaves-the-process
-        # classification as the rest of this bucket.
-        ("tests/harness/_mixins.py", "set_url_valid"),
         ("tests/harness/_mixins.py", "set_http_response"),
+        # CircuitBreakerMixin.set_breaker_state seeds the state of a CircuitBreaker
+        # held in the in-process WebhookDeliveryService's ``_circuit_breakers`` dict.
+        # It belongs to the same class as set_http_response above and is dispatched
+        # the same way: call_send/call_deliver/call_impl invoke
+        # ``WebhookDeliveryService.send_delivery_webhook`` DIRECTLY, never through
+        # call_via/dispatch_request, so the breaker the scenario seeds is the breaker
+        # production consults in every parametrized "transport" row. Its unflagged
+        # siblings in that seam (seed_breaker_failures, elapse_breaker_timeout,
+        # drive_breaker_transition -- verbs the name regex does not match) say the
+        # same thing out loud: "under e2e_rest the breaker being consulted is the
+        # test process's, not the server's".
+        ("tests/harness/_mixins.py", "set_breaker_state"),
     }
 )
 
@@ -130,6 +160,16 @@ ALLOWLIST_UNIT_ONLY_ENV: frozenset[tuple[str, str]] = frozenset(
         ("tests/harness/delivery_poll_unit.py", "set_pricing_options"),
         ("tests/harness/media_buy_update.py", "set_currency_limit"),
         ("tests/harness/media_buy_update.py", "set_media_buy"),
+    }
+)
+
+ALLOWLIST_PURE_BUILDER: frozenset[tuple[str, str]] = frozenset(
+    {
+        # ProtocolWebhookEnv.make_payload calls create_mcp_webhook_payload and
+        # RETURNS the McpWebhookPayload. It touches no mock, no session and no
+        # server: there is no state for an e2e branch to realize, so wrapping it
+        # would add a second branch that does the same thing as the first.
+        ("tests/harness/protocol_webhook.py", "make_payload"),
     }
 )
 
@@ -190,6 +230,7 @@ def _all_pinned_pairs() -> set[tuple[str, str]]:
         | set(ALLOWLIST_NOT_WIRE_DISPATCHED)
         | set(ALLOWLIST_NOT_BDD_REACHABLE)
         | set(ALLOWLIST_UNIT_ONLY_ENV)
+        | set(ALLOWLIST_PURE_BUILDER)
         | {(relpath, name) for relpath, name, _ticket in ALLOWLIST_DEFERRED}
     )
 

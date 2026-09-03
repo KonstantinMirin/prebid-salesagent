@@ -26,6 +26,7 @@ from tests.factories import (
     ProductFactory,
 )
 from tests.helpers.adcp_factories import valid_reporting_webhook
+from tests.helpers.egress_hatches import UNDIALLED_PUBLIC_HTTPS_ORIGIN
 
 # Gherkin date token resolver — single source for all BDD step files.
 # Matches {now}, {N days from now}, {N days ago}.
@@ -93,6 +94,26 @@ def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
     # every scenario replay or stop the replay scenarios replaying.
     ctx["request_kwargs"].setdefault("idempotency_key", f"bdd-key-{uuid.uuid4().hex}")
     return ctx["request_kwargs"]
+
+
+def harness_create_request_kwargs(ctx: dict) -> dict[str, Any]:
+    """Request kwargs for a create dispatched from a harness-seeded scenario.
+
+    ``_ensure_request_defaults`` only reads ``default_product`` /
+    ``default_pricing_option`` when it FIRST builds ``request_kwargs``; a
+    scenario whose Given steps created ``request_kwargs`` earlier (before the
+    UC-004 create arm seeded the harness data) would dispatch against the
+    placeholder ids. Re-pinning the package to the harness product here is what
+    both create-dispatching When steps share instead of each carrying a copy.
+    """
+    kwargs = _ensure_request_defaults(ctx)
+    product = ctx.get("default_product")
+    pricing_option = ctx.get("default_pricing_option")
+    if product is not None:
+        kwargs["packages"][0]["product_id"] = product.product_id
+    if pricing_option is not None:
+        kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(pricing_option)
+    return kwargs
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2839,8 +2860,8 @@ def given_adapter_error(ctx: dict) -> None:
     mock_adapter = env.mock["adapter"].return_value
     # recovery is not stated: it is a function of the code. This step previously injected
     # "retryable", which is not in RecoveryHint at all — the parameter's deletion made that
-    # unrepresentable, and AdCPAdapterError's table recovery ("transient") is what a buyer
-    # should see for an ad-server outage anyway.
+    # unrepresentable, and AdCPAdapterError's SERVICE_UNAVAILABLE table recovery
+    # ("transient") is what a buyer should see for an ad-server outage anyway.
     error = AdCPAdapterError(
         details={"suggestion": "Retry the operation or contact ad server support"},
     )
@@ -2855,6 +2876,12 @@ def given_adapter_error(ctx: dict) -> None:
         fail_on_create=True,
         fail_on_update=True,
         error_message="Ad server unavailable",
+        # No recovery= knob: the DOCKER-hosted MockAdServer maps the injected value to
+        # an exception CLASS, and its default for an absent knob is already "transient"
+        # -> AdCPAdapterError, which is what this scenario means by an ad-server outage.
+        # Naming it would only re-state the default; naming "retryable" (the old value)
+        # would trip that mapping's loud-raise branch and hand e2e a terminal
+        # CONFIGURATION_ERROR instead.
     )
     # Ensure tenant is auto-approval so production code doesn't short-circuit
     _seed_auto_approval(ctx, sync_adapter=False)
@@ -3242,7 +3269,10 @@ def given_webhook_configured(ctx: dict) -> None:
     Stores both the config in ctx (Given→Then contract) and wires it into
     request_kwargs so production receives it when the media buy is created.
     """
-    webhook_url = "https://buyer.example.com/webhooks/adcp-notifications"
+    # Must pass ingest egress policy under every hatch posture (validate_url
+    # runs inside _create_media_buy_impl): https public-unicast IP literal, no
+    # DNS dependency. Never fetched by these scenarios.
+    webhook_url = f"{UNDIALLED_PUBLIC_HTTPS_ORIGIN}/webhooks/adcp-notifications"
     push_config = {"url": webhook_url, "events": ["status_change"]}
     ctx["push_notification_config"] = push_config
     # Also wire into request_kwargs if they exist (for create requests)

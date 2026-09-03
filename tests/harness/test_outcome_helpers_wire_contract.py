@@ -24,6 +24,14 @@ from tests.bdd.steps._outcome_helpers import WIRE_MISSING, wire_absent, wire_dic
 from tests.harness.transport import Transport, TransportResult
 from tests.helpers.envelope_assertions import assert_envelope_shape
 
+# ``has_wire`` is declared PER SITE on the fixtures below, exactly as at a real
+# dispatch site: True wherever the fixture carries the envelope a real wire
+# produced — which is the state these readers exist to be graded against — and
+# False on the two sites that model a dispatch which captured nothing, where
+# nothing (no synthesized envelope) stands in for one either. False is also the
+# reader's most permissive branch, so a read that still comes back empty there
+# is graded on real absence rather than on a structurally closed-off fallback.
+
 
 def _ctx(wire: dict, transport: Transport = Transport.REST) -> dict:
     """A minimal ctx carrying a captured success-path wire, as dispatch_request writes it."""
@@ -253,7 +261,9 @@ class TestEnvelopeFieldPointer:
         assert_envelope_shape(_error_envelope(None), "VALIDATION_ERROR", recovery="correctable")
 
     def test_assert_wire_error_forwards_field(self):
-        result = TransportResult(payload=None, envelope={}, wire_error_envelope=_error_envelope("budget"))
+        result = TransportResult(
+            has_wire=True, payload=None, envelope={}, wire_error_envelope=_error_envelope("budget")
+        )
         result.assert_wire_error("VALIDATION_ERROR", field="budget")
         with pytest.raises(AssertionError, match=r"errors\[0\].field='budget'"):
             result.assert_wire_error("VALIDATION_ERROR", field="promoted_offering")
@@ -359,7 +369,9 @@ class TestEnvelopeDetailsSubset:
         assert_envelope_shape(_details_envelope(None), "VERSION_UNSUPPORTED", recovery="correctable")
 
     def test_assert_wire_error_forwards_details(self):
-        result = TransportResult(payload=None, envelope={}, wire_error_envelope=_details_envelope(_SUPPORTED))
+        result = TransportResult(
+            has_wire=True, payload=None, envelope={}, wire_error_envelope=_details_envelope(_SUPPORTED)
+        )
         result.assert_wire_error("VERSION_UNSUPPORTED", details={"build_version": "3.1.1"})
         with pytest.raises(AssertionError, match=r"details"):
             result.assert_wire_error("VERSION_UNSUPPORTED", details={"build_version": "3.0.0"})
@@ -536,7 +548,9 @@ class TestEnvelopeIssuesSubset:
         assert_envelope_shape(_issues_envelope(None), "VALIDATION_ERROR", recovery="correctable")
 
     def test_assert_wire_error_forwards_issues(self):
-        result = TransportResult(payload=None, envelope={}, wire_error_envelope=_issues_envelope([_TOKEN_ISSUE]))
+        result = TransportResult(
+            has_wire=True, payload=None, envelope={}, wire_error_envelope=_issues_envelope([_TOKEN_ISSUE])
+        )
         result.assert_wire_error("VALIDATION_ERROR", issues=[{"keyword": "minLength"}])
         with pytest.raises(AssertionError, match=r"issues"):
             result.assert_wire_error("VALIDATION_ERROR", issues=[{"keyword": "maxLength"}])
@@ -555,29 +569,36 @@ class TestWireErrorDetailsReader:
     """
 
     def test_returns_the_details_block_at_the_protocol_position(self):
-        result = TransportResult(payload=None, envelope={}, wire_error_envelope=_details_envelope(_SUPPORTED))
+        result = TransportResult(
+            has_wire=True, payload=None, envelope={}, wire_error_envelope=_details_envelope(_SUPPORTED)
+        )
         assert result.wire_error_details("VERSION_UNSUPPORTED") == _SUPPORTED
 
     def test_asserts_the_code_before_returning(self):
         """A details block from the WRONG error must not be readable."""
-        result = TransportResult(payload=None, envelope={}, wire_error_envelope=_details_envelope(_SUPPORTED))
+        result = TransportResult(
+            has_wire=True, payload=None, envelope={}, wire_error_envelope=_details_envelope(_SUPPORTED)
+        )
         with pytest.raises(AssertionError, match="VALIDATION_ERROR"):
             result.wire_error_details("VALIDATION_ERROR")
 
     def test_asserts_the_recovery_it_is_given(self):
-        result = TransportResult(payload=None, envelope={}, wire_error_envelope=_details_envelope(_SUPPORTED))
+        result = TransportResult(
+            has_wire=True, payload=None, envelope={}, wire_error_envelope=_details_envelope(_SUPPORTED)
+        )
         with pytest.raises(AssertionError, match="recovery"):
             result.wire_error_details("VERSION_UNSUPPORTED", recovery="terminal")
 
     def test_absent_details_block_raises_rather_than_returning_none(self):
         """Required-not-optional: a caller must never have to None-check the block."""
-        result = TransportResult(payload=None, envelope={}, wire_error_envelope=_details_envelope(None))
+        result = TransportResult(has_wire=True, payload=None, envelope={}, wire_error_envelope=_details_envelope(None))
         with pytest.raises(AssertionError, match=r"details"):
             result.wire_error_details("VERSION_UNSUPPORTED")
 
     def test_no_wire_envelope_raises(self):
         """No wire bytes, no read — the same hard failure ``assert_wire_error`` gives."""
-        result = TransportResult(payload=None, envelope={}, wire_error_envelope=None)
+        # has_wire=False — nothing was captured (see the module note above).
+        result = TransportResult(has_wire=False, payload=None, envelope={}, wire_error_envelope=None)
         with pytest.raises(AssertionError):
             result.wire_error_details("VERSION_UNSUPPORTED")
 
@@ -598,7 +619,9 @@ class TestWireErrorTolerantReaders:
     """
 
     def _errored(self) -> TransportResult:
-        return TransportResult(payload=None, envelope={}, wire_error_envelope=_details_envelope(_SUPPORTED))
+        return TransportResult(
+            has_wire=True, payload=None, envelope={}, wire_error_envelope=_details_envelope(_SUPPORTED)
+        )
 
     def test_wire_error_code_reads_the_wire_code(self):
         assert self._errored().wire_error_code() == "VERSION_UNSUPPORTED"
@@ -609,7 +632,8 @@ class TestWireErrorTolerantReaders:
 
     @pytest.mark.parametrize("reader", ["wire_error_code", "wire_error_object"])
     def test_no_envelope_reads_as_none_not_a_raise(self, reader):
-        result = TransportResult(payload=None, envelope={}, wire_error_envelope=None)
+        # has_wire=False — nothing was captured (see the module note above).
+        result = TransportResult(has_wire=False, payload=None, envelope={}, wire_error_envelope=None)
         assert getattr(result, reader)() is None
 
 

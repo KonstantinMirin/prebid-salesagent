@@ -25,6 +25,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from tests.harness.capabilities import CapabilitiesEnv
+from tests.harness.transport import Transport
 
 
 @pytest.mark.requires_db
@@ -87,10 +88,13 @@ class TestA2AWireIntegerSerialization:
         with CapabilitiesEnv() as env:
             env.setup_default_data()
 
-            env.call_a2a()
+            result = env.call_via(Transport.A2A)
 
-            wire = env._last_wire_response
-            assert wire is not None, "A2A dispatch did not capture a wire response"
+            # require_wire() is the guarded read on the object that HOLDS the wire:
+            # it fails loudly both when the dispatch errored and when a successful
+            # dispatch stashed no body, so this assertion can never silently grade a
+            # harness-side reconstruction of the payload instead of the real bytes.
+            wire = result.require_wire()
             replay_ttl_seconds = wire["adcp"]["idempotency"]["replay_ttl_seconds"]
             assert isinstance(replay_ttl_seconds, int), (
                 "adcp.idempotency.replay_ttl_seconds must be a JSON integer on the "

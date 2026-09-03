@@ -24,7 +24,15 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import WIRE_MISSING, wire_absent, wire_dict, wire_field, wire_lookup
+from tests.bdd.steps._outcome_helpers import (
+    WIRE_MISSING,
+    payload_or_none,
+    require_payload,
+    wire_absent,
+    wire_dict,
+    wire_field,
+    wire_lookup,
+)
 from tests.bdd.steps.generic._dispatch import dispatch_request
 
 #: 3.1.1 billing-party enum (dist/schemas/3.1.1/enums/billing-party.json).
@@ -109,15 +117,43 @@ def _assert_schema_valid(ctx: dict) -> None:
     GetAdcpCapabilitiesResponse.model_validate(wire_dict(ctx))
 
 
+def _assert_wire_paths_present(ctx: dict, *paths: str) -> None:
+    """Grade that every dotted *path* is on the success wire, present AND non-null.
+
+    The one implementation of the "these blocks must be on the wire" verdict —
+    three copies of the same loop lived in this module. wire_field carries the dual
+    assert, and its loud guard reports the RECORDED ERROR when the dispatch failed,
+    so this is a verdict on every path: a Then delegating here can never return
+    having graded nothing.
+    """
+    for path in paths:
+        wire_field(ctx, path)
+
+
+def _assert_satisfy_row(ctx: dict, table: dict[str, Any], row: str, *, kind: str) -> None:
+    """Run the wired assertion for one ``... should satisfy <row>`` outline column.
+
+    Sole dispatcher behind :func:`then_targeting_satisfies` and
+    :func:`then_response_satisfies`, whose bodies were byte-identical over two
+    different tables. Every path here ends in a verdict: a wired row EXECUTES its
+    assertion, and a lookup miss RAISES — an unwired Examples row is a wiring
+    defect, never a quiet pass.
+    """
+    key = row.strip()
+    assertion = table.get(key)
+    if assertion is None:
+        raise NotImplementedError(f"UC-010 {kind} row not wired: {key!r} (#1592)")
+    assertion(ctx)
+
+
 def _assert_capabilities_success(ctx: dict) -> None:
     """A valid (possibly degraded) capabilities response: no recorded error, no wire error
     envelope, and the top-level required blocks (adcp, supported_protocols) on the wire
     (get-adcp-capabilities-response.json#/required = [adcp, supported_protocols])."""
-    # No hand-rolled "did it error?" check: wire_field below reads through
-    # _wire_body, which already raises "expected a success response, got error: ..."
-    # naming the error — one primitive per envelope region.
-    for path in ("adcp", "supported_protocols"):
-        wire_field(ctx, path)
+    # No hand-rolled "did it error?" check: wire_field reads through _wire_body,
+    # which already raises "expected a success response, got error: ..." naming the
+    # error — one primitive per envelope region.
+    _assert_wire_paths_present(ctx, "adcp", "supported_protocols")
 
 
 def _assert_capabilities_config_error(ctx: dict) -> None:
@@ -522,12 +558,15 @@ def _call_capabilities(ctx: dict, **kwargs: Any) -> None:
     """Single funnel for every capabilities dispatch (DRY).
 
     Honors ctx["identity"] = None (no-tenant Givens) and appends each
-    response to ctx["response_history"] for dual-call comparisons.
+    dispatch's typed payload to ctx["response_history"] for dual-call
+    comparisons. The payload comes from payload_or_none, which reads THIS
+    dispatch's TransportResult: it is None exactly when the dispatch errored
+    (or never happened), which is the distinction the dual-call Then grades.
     """
     if "identity" not in kwargs and "identity" in ctx:
         kwargs["identity"] = ctx["identity"]
     dispatch_request(ctx, **kwargs)
-    ctx.setdefault("response_history", []).append((ctx.get("response"), ctx.get("error")))
+    ctx.setdefault("response_history", []).append((payload_or_none(ctx), ctx.get("error")))
 
 
 @when("the Buyer Agent calls get_adcp_capabilities")
@@ -1039,7 +1078,14 @@ def then_media_buy_section_state(ctx: dict, section: str, state: str) -> None:
     (production choice; the spec is silent on WHY a section is present). 'present'
     pins the dual assert (non-null JSON object); 'absent' pins wire-key absence —
     a JSON null would be schema-invalid for these optional-object fields, so it is
-    NOT treated as absent."""
+    NOT treated as absent.
+
+    Every row of @T-UC-010-degradation-sections REQUIRES a completed dispatch — the
+    adapter/capability state under test changes which SECTIONS are emitted, never
+    whether a response is emitted — so require_payload takes the verdict on the
+    errored path up front, naming the recorded error, instead of leaving the branch
+    below to decide nothing."""
+    require_payload(ctx)
     path = f"media_buy.{section}"
     if state == "absent":
         wire_absent(ctx, path)
@@ -1198,8 +1244,7 @@ def then_auth_outcome(ctx: dict, outcome: str) -> None:
         # [adcp, supported_protocols]). The fuller section shape is graded by the
         # companion "a success outcome should carry ..." Then.
         # wire_field's loud guard reports the error itself (see _assert_capabilities_success).
-        for path in ("adcp", "supported_protocols"):
-            wire_field(ctx, path)
+        _assert_capabilities_success(ctx)
         return
     ctx["result"].assert_wire_error("AUTH_INVALID", recovery="terminal")
 
@@ -1208,10 +1253,19 @@ def then_auth_outcome(ctx: dict, outcome: str) -> None:
     "a success outcome should carry adcp.major_versions, adcp.idempotency, supported_protocols and the media_buy section"
 )
 def then_success_carries_sections(ctx: dict) -> None:
-    if ctx.get("response") is None:
-        return  # conditional Then: only grades success outcomes
-    for path in ("adcp.major_versions", "adcp.idempotency", "supported_protocols", "media_buy"):
-        wire_field(ctx, path)
+    """Both arms of the @T-UC-010-auth outline get a verdict.
+
+    The step's claim is conditional on a success outcome, but the outline it is
+    bound to also carries ONE error row — invalid token over A2A — and this step
+    runs on it too. That row is graded as the auth rejection the outline pins
+    (AUTH_INVALID / recovery terminal, enums/error-code.json), not skipped: a
+    silent return here would have reported "verified" for a dispatch that never
+    produced a response at all.
+    """
+    if payload_or_none(ctx) is None:
+        ctx["result"].assert_wire_error("AUTH_INVALID", recovery="terminal")
+    else:
+        _assert_wire_paths_present(ctx, "adcp.major_versions", "adcp.idempotency", "supported_protocols", "media_buy")
 
 
 @then("both responses should contain identical capabilities data ignoring last_updated and context")
@@ -1230,7 +1284,9 @@ def then_dual_call_identity(ctx: dict) -> None:
 
 @then("the response should be a success carrying adcp.major_versions, adcp.idempotency and supported_protocols")
 def then_mcp_invalid_token_success(ctx: dict) -> None:
-    assert ctx.get("response") is not None, f"expected success, got error: {ctx.get('error')!r}"
+    # Requires a payload: require_payload raises, naming the recorded error, when
+    # the dispatch errored instead of succeeding.
+    require_payload(ctx)
     for path in ("adcp.major_versions", "adcp.idempotency", "supported_protocols"):
         wire_field(ctx, path)
 
@@ -1444,10 +1500,8 @@ _TARGETING_SATISFY: dict[str, Any] = {
 
 @then(parsers.parse("media_buy.execution.targeting should satisfy {expected_targeting}"))
 def then_targeting_satisfies(ctx: dict, expected_targeting: str) -> None:
-    assertion = _TARGETING_SATISFY.get(expected_targeting.strip())
-    if assertion is None:
-        raise NotImplementedError(f"UC-010 targeting assertion row not wired: {expected_targeting!r} (#1592)")
-    assertion(ctx)
+    """Dispatch one targeting Examples row to its wired assertion (see _assert_satisfy_row)."""
+    _assert_satisfy_row(ctx, _TARGETING_SATISFY, expected_targeting, kind="targeting assertion")
 
 
 # ── Thens: degradation + features-partitions outline dispatch ────────
@@ -1538,10 +1592,8 @@ _SATISFY_TABLE: dict[str, Any] = {
 
 @then(parsers.parse("the response should satisfy {expected_assertion}"))
 def then_response_satisfies(ctx: dict, expected_assertion: str) -> None:
-    assertion = _SATISFY_TABLE.get(expected_assertion.strip())
-    if assertion is None:
-        raise NotImplementedError(f"UC-010 assertion row not wired yet: {expected_assertion!r} (#1592)")
-    assertion(ctx)
+    """Dispatch one degradation/features Examples row to its wired assertion (see _assert_satisfy_row)."""
+    _assert_satisfy_row(ctx, _SATISFY_TABLE, expected_assertion, kind="assertion")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1793,9 +1845,14 @@ def then_webhook_signing_supported(ctx: dict, expected: str) -> None:
         actual = wire_field(ctx, path)
         assert actual is (expected == "equal to true"), f"{path} expected {expected}, got {actual!r}"
         return
+    # The no-trigger row ("true or false (both schema-valid)"): no cross-field constraint
+    # fires, so the admissible wire states are a boolean OR — webhook_signing being optional
+    # at top level — no block at all. Graded as ONE tri-state verdict, so the absent case is
+    # an asserted outcome rather than an unasserted `if` with no else.
     value = wire_lookup(ctx, path)
-    if value is not WIRE_MISSING:
-        assert isinstance(value, bool), f"{path} present but not a boolean: {value!r}"
+    assert value is WIRE_MISSING or isinstance(value, bool), (
+        f"{path} must be absent or a boolean when no mutating-webhook emission is declared, got {value!r}"
+    )
 
 
 # ── Thens: brand block ───────────────────────────────────────────────────

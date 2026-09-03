@@ -78,11 +78,21 @@ class CapabilitiesEnv(IntegrationEnv):
 
     Transport routing:
     - call_impl(): direct _get_adcp_capabilities_impl (sync)
-    - call_a2a(): real AdCPRequestHandler pipeline
-    - call_mcp(): real FastMCP in-memory Client (wire_response is real wire)
-    - REST: /api/v1/capabilities is a GET route with no body — _run_rest_request
-      is overridden to GET (the base implementation POSTs)
+    - MCP / A2A: declared, not hand-written. MCP_TOOL / A2A_SKILL /
+      RESPONSE_MODEL route both through the base's deliver_mcp / deliver_a2a,
+      which dispatch via the one AdCPTestClient core and return a DeliverResult
+      carrying the real wire alongside the parsed payload — so the invalid-token
+      rows (@T-UC-010-ext-c-a2a / @T-UC-010-ext-c-mcp) grade a real
+      wire_error_envelope rather than a reconstructed exception.
+    - REST: /api/v1/capabilities answers on BOTH verbs — _run_rest_request GETs
+      the parameterless discovery call and POSTs a body when request params are
+      present. REST_METHOD pins the e2e dispatcher to the GET route.
     """
+
+    # Dispatch declaration: the base owns call_mcp/call_a2a.
+    MCP_TOOL = "get_adcp_capabilities"
+    A2A_SKILL = "get_adcp_capabilities"
+    RESPONSE_MODEL = GetAdcpCapabilitiesResponse
 
     EXTERNAL_PATCHES = {
         "adapter": "src.core.tools.capabilities.get_adapter_class_for_tenant",
@@ -226,8 +236,8 @@ class CapabilitiesEnv(IntegrationEnv):
         major_patcher = patch("src.core.version_negotiation.SUPPORTED_ADCP_MAJORS", majors)
         self.mock["supported_versions"] = version_patcher.start()
         self.mock["supported_majors"] = major_patcher.start()
-        self._patchers.append(version_patcher)
-        self._patchers.append(major_patcher)
+        self._guard("patch:supported_versions", version_patcher.stop)
+        self._guard("patch:supported_majors", major_patcher.stop)
 
     @realize_e2e(
         e2e_unsupported(
@@ -240,7 +250,7 @@ class CapabilitiesEnv(IntegrationEnv):
         """Override the advisory build_version surfaced on a VERSION_UNSUPPORTED error."""
         patcher = patch("src.core.version.get_version", return_value=build_version)
         self.mock["build_version"] = patcher.start()
-        self._patchers.append(patcher)
+        self._guard("patch:build_version", patcher.stop)
 
     @realize_e2e(
         e2e_unsupported(
@@ -279,7 +289,7 @@ class CapabilitiesEnv(IntegrationEnv):
             return_value=posture,
         )
         self.mock["idempotency_posture"] = patcher.start()
-        self._patchers.append(patcher)
+        self._guard("patch:idempotency_posture", patcher.stop)
 
     @realize_e2e(
         e2e_unsupported("no production DB fault hook; TenantConfigUoW read failure cannot be injected over real HTTP")
@@ -287,9 +297,10 @@ class CapabilitiesEnv(IntegrationEnv):
     def break_tenant_config_db(self) -> None:
         """Make the publisher-partner DB read fail — production degrades to placeholder.
 
-        Patches TenantConfigUoW at the capabilities module seam. Tracked on
-        ctx-independent env teardown via the standard patcher list. In-process
-        only — no server-side DB-fault-injection surface exists (e2e branch
+        Patches TenantConfigUoW at the capabilities module seam. Registered
+        with ``_guard``, so it is stopped on ctx-independent env teardown along
+        with everything else — including when a later ``__enter__`` step raises.
+        In-process only — no server-side DB-fault-injection surface exists (e2e branch
         declares E2EUnsupportedSetup).
         """
         patcher = patch(
@@ -297,7 +308,7 @@ class CapabilitiesEnv(IntegrationEnv):
             side_effect=Exception("tenant config DB failure (harness)"),
         )
         self.mock["tenant_config_uow"] = patcher.start()
-        self._patchers.append(patcher)
+        self._guard("patch:tenant_config_uow", patcher.stop)
 
     # invalid_token_identity() / anonymous_identity() live on BaseTestEnv
     # (tests/harness/_base.py) — every Env subclass inherits them.
@@ -325,14 +336,6 @@ class CapabilitiesEnv(IntegrationEnv):
         if req is None and kwargs:
             req = self._build_request(**kwargs)
         return _get_adcp_capabilities_impl(req, identity)
-
-    def call_a2a(self, **kwargs: Any) -> GetAdcpCapabilitiesResponse:
-        """Call get_adcp_capabilities via real AdCPRequestHandler — full A2A pipeline."""
-        return self._run_a2a_handler("get_adcp_capabilities", GetAdcpCapabilitiesResponse, **kwargs)
-
-    def call_mcp(self, **kwargs: Any) -> GetAdcpCapabilitiesResponse:
-        """Call get_adcp_capabilities via Client(mcp) — full pipeline dispatch."""
-        return self._run_mcp_client("get_adcp_capabilities", GetAdcpCapabilitiesResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Flat kwargs (protocols/context/adcp_version/adcp_major_version) map

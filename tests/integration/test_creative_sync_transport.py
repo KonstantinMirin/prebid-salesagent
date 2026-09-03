@@ -45,6 +45,26 @@ def _error_codes(errors: list | None) -> list[str]:
 # All four transports: IMPL, A2A, REST, MCP
 ALL_TRANSPORTS = [Transport.A2A, Transport.REST, Transport.MCP]
 
+# GRADUATED — the A2A ledger shrank to zero, so there is no A2A_LEDGERED_TRANSPORTS
+# list any more and every case below is back on plain ALL_TRANSPORTS.
+#
+# The ledger existed because routing the a2a seat through the real
+# on_message_send pipeline (instead of calling sync_creatives_raw directly)
+# exposed GH #2011: _handle_sync_creatives_skill constructed CreativeAsset(**c)
+# at the boundary, which (a) dropped the inputs the generative build path reads,
+# so a generative creative was silently created as STATIC, and (b) raised a
+# request-level VALIDATION_ERROR for a legitimately-partial creative that _impl
+# would have reported as a per-creative action='failed'. It was marked
+# strict=True with the instruction that the list must shrink the moment #2011
+# was fixed.
+#
+# It is fixed: _handle_sync_creatives_skill now passes the creatives array
+# through UNCONSTRUCTED (see its comment in src/a2a_server/adcp_a2a_server.py),
+# which is what the pinned sync-creatives-response schema requires — items with
+# action='failed' are per-item validation failures, not operation-level ones.
+# All eleven ledgered cases XPASS(strict) against that handler, so keeping the
+# xfails would fail the suite while claiming a defect that no longer exists.
+
 
 @pytest.mark.requires_db
 class TestSyncCreativeCreateTransport:
@@ -746,7 +766,7 @@ class TestFormatValidationAdapter:
 class TestFormatValidationUnreachable:
     """Unreachable creative agent → request-level TRANSIENT failure.
 
-    Production-grounded : the registry types every network
+    Production-grounded: the registry types every network
     failure (connect/timeout -> AdCPServiceUnavailableError), and typed
     transient errors PROPAGATE out of sync_creatives with their recovery
     semantics on every transport — a down agent is not a creative problem.
@@ -770,7 +790,6 @@ class TestFormatValidationUnreachable:
                 "making A2A emit the envelope, never restoring a fallback."
             )
         from src.core.exceptions import AdCPServiceUnavailableError
-        from tests.helpers import assert_envelope_shape
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()
@@ -786,12 +805,15 @@ class TestFormatValidationUnreachable:
             )
 
             assert result.is_error, f"[{transport.value}] transient agent failure must fail the request"
-            envelope = result.wire_error_envelope
-            assert_envelope_shape(
-                envelope,
-                "SERVICE_UNAVAILABLE",
-                recovery="transient",
-            )
+            # Graded through the result rather than by handing an envelope to the
+            # primitive: assert_wire_error reads wire_error_envelope ONLY (never the
+            # synthesized stand-in the two removed fallbacks used to supply), fails
+            # loudly when no envelope was captured, and adds the CODE_TABLE
+            # emittability check. main's result.error_envelope() would also accept the
+            # IMPL-synthesized envelope, which is the tautology the xfail above
+            # describes; tests/unit/test_architecture_one_wire_error_assertion.py
+            # requires this spelling for a TransportResult.
+            result.assert_wire_error("SERVICE_UNAVAILABLE", recovery="transient")
 
 
 @pytest.mark.requires_db
@@ -1428,7 +1450,7 @@ class TestAsyncLifecycleSubmitted:
     """
 
     @pytest.mark.xfail(
-        reason="Async lifecycle not implemented ",
+        reason="Async lifecycle not implemented",
         strict=True,
     )
     def test_queued_sync_returns_submitted(self, integration_db):
@@ -1464,7 +1486,7 @@ class TestAsyncLifecycleWorking:
     """
 
     @pytest.mark.xfail(
-        reason="Async lifecycle not implemented ",
+        reason="Async lifecycle not implemented",
         strict=True,
     )
     def test_in_progress_returns_working_with_progress(self, integration_db):
@@ -1512,7 +1534,7 @@ class TestAsyncLifecycleInputRequired:
     """
 
     @pytest.mark.xfail(
-        reason="Async lifecycle not implemented ",
+        reason="Async lifecycle not implemented",
         strict=True,
     )
     def test_approval_needed_returns_input_required(self, integration_db):

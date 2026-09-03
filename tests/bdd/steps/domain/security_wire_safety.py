@@ -33,6 +33,7 @@ import logging
 
 from pytest_bdd import given, parsers, then, when
 
+from tests.bdd.steps._outcome_helpers import wire_error_dict
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.helpers import assert_no_marker_in_envelope
 
@@ -106,7 +107,12 @@ def then_safe_wire_envelope(ctx: dict, code: str) -> None:
     """
     result = ctx["result"]
     result.assert_wire_error(code, recovery="transient")
-    assert_no_marker_in_envelope(result.wire_error_envelope, _FAKE_DSN_MARKER)
+    # The envelope goes through the guarded accessor (wire_error_dict), never a direct
+    # result.wire_error_envelope read: only the accessor knows whether the bytes are a
+    # real wire capture. The LOUD accessor rather than the tolerant one because
+    # assert_wire_error above has already established an envelope exists, so a None here
+    # is a harness fault that must raise, not a scan over nothing.
+    assert_no_marker_in_envelope(wire_error_dict(ctx), _FAKE_DSN_MARKER)
 
     records = ctx["security001_caplog"].records
     assert any(

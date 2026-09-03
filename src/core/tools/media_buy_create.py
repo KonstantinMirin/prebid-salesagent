@@ -50,7 +50,6 @@ from src.core.exceptions import (
     AdCPCreativeRejectedError,
     AdCPFormatNotFoundError,
     AdCPIdempotencyExpiredError,
-    AdCPInternalError,
     AdCPInvalidRequestError,
     AdCPProductNotFoundError,
     AdCPSalesAgentError,
@@ -87,9 +86,11 @@ def validate_agent_url(url: str | None) -> bool:
     during approval processing against URLs that are already stored in
     the database — not against live user-supplied input.
 
-    SSRF protection for user-supplied agent URLs is enforced at the admin
-    ingestion boundary in src/admin/blueprints/signals_agents.py using
-    check_url_ssrf(), which includes DNS resolution.
+    Egress policy for user-supplied agent URLs is enforced at the admin
+    ingestion boundary (src/admin/blueprints/signals_agents.py) via
+    src.admin.utils.url_policy, which applies the seam's validate_url —
+    address validation and DNS resolution belong to adcp.signing, reached
+    through src/core/security/outbound_http.py.
 
     Args:
         url: URL string to validate
@@ -142,7 +143,7 @@ from src.core.helpers.creative_helpers import (
 )
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schema_helpers import to_brand_reference
+from src.core.schema_helpers import to_brand_reference, to_push_notification_config
 from src.core.schemas import (
     AssetStatus,
     CreateMediaBuyError,
@@ -163,6 +164,7 @@ from src.core.schemas import (
 from src.core.schemas import (
     url as make_url,
 )
+from src.core.security.outbound_http import CounterpartyUrl, UrlProvenance
 from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testing_hooks
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
@@ -182,7 +184,11 @@ from src.core.validation_helpers import (
     format_validation_error,
     package_field_path,
 )
-from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
+from src.core.webhook_validator import (
+    reject_unsafe_webhook_registration_url,
+    webhook_url_for_log,
+)
+from src.core.webhooks.registration import accept_push_notification_config
 from src.services.activity_feed import activity_feed
 from src.services.gam_product_config_service import GAMProductConfigService
 from src.services.targeting_capabilities import (
@@ -330,7 +336,7 @@ def _determine_media_buy_status(
     return PersistedMediaBuyStatus.ACTIVE
 
 
-def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
+def _get_format_spec_sync(agent_url: str, format_id: str, *, provenance: UrlProvenance | None = None) -> Any | None:
     """Get format specification synchronously from the async registry.
 
     Thin delegate kept for its patch surface (tests/harness envs patch this
@@ -338,10 +344,18 @@ def _get_format_spec_sync(agent_url: str, format_id: str) -> Any | None:
     keep their recovery semantics, #1430: transient-error taxonomy fix), untyped errors log and
     become None (unknown-format) — lives in the SINGLE shared fetch path,
     format_resolver.fetch_format_spec (#1430 review).
+
+    ``provenance`` carries BUYER provenance for a stored creative's ``agent_url``
+    (it came out of the buyer's own prior sync_creatives call, not this
+    deployment's configuration) — a ``CounterpartyUrl`` routes a refusal through
+    the seam's counterparty-aware path (VALIDATION_ERROR/correctable) instead of
+    the operator path (CONFIGURATION_ERROR/terminal), UNLESS the url happens to
+    also be a real tenant-registered operator agent, which stays terminal
+    regardless (salesagent-ypgd).
     """
     from src.core.format_resolver import fetch_format_spec
 
-    return fetch_format_spec(agent_url, format_id)
+    return fetch_format_spec(agent_url, format_id, provenance=provenance)
 
 
 def _validate_creatives_before_adapter_call(
@@ -373,6 +387,8 @@ def _validate_creatives_before_adapter_call(
     """
     if session is None:
         raise ValueError("session is required for _validate_creatives_before_adapter_call")
+
+    from src.core.format_resolver import is_dialled_agent_url
 
     # Collect all creative IDs from all packages
     all_creative_ids = set()
@@ -416,22 +432,36 @@ def _validate_creatives_before_adapter_call(
             )
             continue
 
-        # Get format specification from creative agent (uses in-memory cache with 30min TTL)
+        # Get format specification from creative agent (uses in-memory cache with 30min TTL).
+        # Skip the fetch entirely for an adapter-provided pseudo-URL (e.g.
+        # broadstreet://<tenant_id>): those formats are served by the adapter
+        # in-process, so no dialled agent could ever resolve them, and the
+        # unconditional fetch below would reject a format the seller itself
+        # advertised (salesagent-ypgd). CounterpartyUrl marks BUYER provenance for
+        # a genuinely-dialled url — see _get_format_spec_sync's docstring. No
+        # field: create-media-buy-request.json defines no creative:{id} path, so
+        # there is no canonical request-document locator to name (a fabricated
+        # one is not honest — CounterpartyUrl(field=None) states that plainly).
         format_spec = None
-        if creative.format:
-            format_spec = _get_format_spec_sync(creative.agent_url, str(creative.format))
-
-        # Fail validation if format spec not found (no skipping!)
-        if not format_spec:
-            validation_errors.append(
-                f"Creative {creative.creative_id} has unknown format '{creative.format}' "
-                f"from agent {creative.agent_url}. Format must be registered with the creative agent."
+        if creative.format and creative.agent_url and is_dialled_agent_url(creative.agent_url):
+            format_spec = _get_format_spec_sync(
+                creative.agent_url,
+                str(creative.format),
+                provenance=CounterpartyUrl(field=None),
             )
-            continue
+
+            # Fail validation if format spec not found (no skipping!) — only
+            # meaningful once we know the agent SHOULD have it (a dialled url).
+            if not format_spec:
+                validation_errors.append(
+                    f"Creative {creative.creative_id} has unknown format '{creative.format}' "
+                    f"from agent {creative.agent_url}. Format must be registered with the creative agent."
+                )
+                continue
 
         # Skip validation for generative formats - they need conversion first
         # Generative formats have output_format_ids (they generate reference formats)
-        if format_spec.output_format_ids:
+        if format_spec and format_spec.output_format_ids:
             logger.info(
                 log_safe(
                     f"Skipping validation for generative creative {creative.creative_id} "
@@ -683,9 +713,20 @@ def _build_adapter_asset_from_creative(
     # fallback must not mask it by re-fetching from the same throttled agent
     # (#1430 review). AdCPFormatNotFoundError from the resolver = genuinely
     # unknown -> proceed without a spec (extraction falls back to raw data).
-    if creative.format:
-        format_spec = _get_format_spec_sync(creative.agent_url, str(creative.format))
-    if format_spec is None and creative.format:
+    #
+    # Skip BOTH the fetch and the fallback for an adapter-provided pseudo-URL
+    # (e.g. broadstreet://<tenant_id>) — served in-process, so no dialled agent
+    # could ever resolve it (salesagent-ypgd). Extraction below already falls
+    # back to the creative's raw data fields when format_spec stays None.
+    from src.core.format_resolver import is_dialled_agent_url
+
+    if creative.format and creative.agent_url and is_dialled_agent_url(creative.agent_url):
+        format_spec = _get_format_spec_sync(
+            creative.agent_url,
+            str(creative.format),
+            provenance=CounterpartyUrl(field=None),
+        )
+    if format_spec is None and creative.format and creative.agent_url and is_dialled_agent_url(creative.agent_url):
         from src.core.exceptions import AdCPFormatNotFoundError
         from src.core.format_resolver import get_format
 
@@ -695,6 +736,11 @@ def _build_adapter_asset_from_creative(
                 agent_url=creative.agent_url,
                 tenant_id=tenant_id,
                 product_id=None,
+                # Same buyer-supplied URL as the first fetch above — omitting
+                # provenance here would silently reclassify it as operator
+                # configuration and route it off the egress seam (salesagent-6gpt.1
+                # diff-review finding).
+                provenance=CounterpartyUrl(field=None),
             )
         except AdCPFormatNotFoundError as e:
             # Genuinely unknown format — proceed without a spec (extraction
@@ -1844,7 +1890,7 @@ def _raise_degraded_replay_outcome(
     body the buyer cannot distinguish from a faithful replay is the named
     failure mode, so this path never fabricates a response. Outcomes, in order:
 
-    - no same-key buy: terminal validation error (impossible-state guard),
+    - no same-key buy: terminal ``CONFIGURATION_ERROR`` (impossible-state guard),
     - buy outlived the replay TTL: ``IDEMPOTENCY_EXPIRED`` (rule 6 fail-closed),
     - canonical payload differs from the stored hash: ``IDEMPOTENCY_CONFLICT``
       (rule 5 — exactly as at the probe),
@@ -1860,7 +1906,16 @@ def _raise_degraded_replay_outcome(
         assert uow.idempotency_attempts is not None
         existing = uow.media_buys.find_by_idempotency_key(idempotency_key, principal_id, account_id=account_id)
         if existing is None:
-            raise AdCPInternalError(details=EntityRefDetails(idempotency_key=idempotency_key))
+            # Impossible-state guard: the race resolved, yet no buy carries the key.
+            # TERMINAL is load-bearing here and the docstring above depends on it —
+            # the very next outcome is a TRANSIENT SERVICE_UNAVAILABLE for "the
+            # winner's cache write is in flight, retry". Grading this one transient
+            # too would collapse the two into one wire answer and invite a retry of
+            # a state that cannot resolve itself. CONFIGURATION_ERROR is the pinned
+            # TERMINAL code and its meaning fits: a server-side inconsistency only a
+            # human at the seller can act on. INTERNAL_ERROR does NOT fit: its pinned
+            # recovery is transient.
+            raise AdCPConfigurationError(details=ConfigurationDetails(idempotency_key=idempotency_key))
 
         # Rule 6 (security.mdx#idempotency): a key the seller has seen whose
         # replay window has expired rejects rather than silently re-deriving —
@@ -2123,7 +2178,8 @@ def _resolve_idempotency_race_or_raise(
 
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
-    push_notification_config: dict[str, Any] | None = None,
+    push_notification_config: PushNotificationConfig | None = None,
+    config_id: str | None = None,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
     raw_wire_payload: dict[str, Any] | None = None,
@@ -2178,10 +2234,9 @@ async def _create_media_buy_impl(
             context=req.context,
         )
     if push_notification_config:
-        pnc_url = push_notification_config.get("url")
-        reject_unsafe_webhook_registration_url(
-            str(pnc_url) if pnc_url is not None else None,
-            field="push_notification_config.url",
+        registration = accept_push_notification_config(
+            push_notification_config,
+            field_prefix="push_notification_config",
             context=req.context,
         )
 
@@ -2229,6 +2284,14 @@ async def _create_media_buy_impl(
         # Miss or unusable cached envelope — proceed as a fresh execution; the
         # MediaBuy backstop resolves any resulting duplicate to the degraded path.
 
+    # No second webhook-URL verdict here: the stored-then-fetched URLs already
+    # got their correctable refusal at the registration gate above, before any
+    # DB write. The egress seam's DNS-resolving verdict is deliberately NOT
+    # repeated at ingest — registration must accept a public hostname whose DNS
+    # has not propagated yet, and the seam re-resolves on every send anyway
+    # (a resolution cached across that gap is the rebinding window it closes),
+    # so the address policy is enforced where the socket is opened.
+
     # Context management and workflow step creation - create workflow step FIRST
     # Skip for dry_run mode (no side effects, no database writes)
     ctx_manager = get_context_manager()
@@ -2251,7 +2314,10 @@ async def _create_media_buy_impl(
         # Pass model directly — ContextManager serializes at the DB boundary
         workflow_metadata: dict[str, Any] = {"protocol": identity.protocol}
         if push_notification_config:
-            workflow_metadata["push_notification_config"] = push_notification_config
+            # The VALUE's canonical dump, not the buyer's raw dict: what
+            # context_manager reads back at delivery time is then gate-receipted
+            # data, rehydrated through the same gate via from_stash.
+            workflow_metadata["push_notification_config"] = registration.to_stash()
 
         step = ctx_manager.create_workflow_step(
             context_id=persistent_ctx.context_id,
@@ -2270,40 +2336,41 @@ async def _create_media_buy_impl(
             # Lazy: call-time import so tests that patch the UoW on the repositories package see their patched object (hoisting would bind the unpatched one at module load).
             from src.core.database.repositories import PushNotificationConfigUoW
 
-            url = push_notification_config.get("url")
-            authentication = push_notification_config.get("authentication", {})
+            # No blank-URL guard here any more, and that is the TYPE doing the work
+            # rather than an omission. Lane C2 needed one: _impl took a dict, the
+            # registration gate is a documented no-op on blank/None URLs, so a value
+            # existed for url="   " and an unguarded write persisted it. Now _impl
+            # takes PushNotificationConfig, whose url is a pydantic AnyUrl —
+            # PushNotificationConfig(url="   ") raises url_parsing, so a blank-url
+            # config cannot be constructed, let alone arrive here. A whitespace URL
+            # is refused at the wrapper, correctably, naming push_notification_config.url.
+            # Log scheme+host+path only — never credentials / full auth blob.
+            logger.info(
+                "[MCP/A2A] Registering push notification config id=%s url=%s",
+                config_id,
+                webhook_url_for_log(registration.url),
+            )
+            # The row the buyer named, or a fresh one. The fallback lives HERE and
+            # only here — wrappers pass through the id they saw (or None) rather
+            # than each minting their own.
+            row_id = config_id or f"pnc_{uuid.uuid4().hex[:16]}"
 
-            # Match the pre-gate: whitespace-only URL must not reach upsert.
-            # Log only inside the guard so blank URLs stay silent (same as sync).
-            if url is not None and str(url).strip():
-                # Log scheme+host+path only — never credentials / full auth blob.
-                logger.info(
-                    "[MCP/A2A] Registering push notification config id=%s url=%s",
-                    push_notification_config.get("id"),
-                    webhook_url_for_log(str(url)),
+            with PushNotificationConfigUoW(tenant["tenant_id"]) as pnc_uow:
+                assert pnc_uow.push_notification_configs is not None
+                _config, created = pnc_uow.push_notification_configs.upsert(
+                    registration,
+                    config_id=row_id,
+                    principal_id=principal_id,
+                    # Recorded so a later delivery knows which dialect to speak.
+                    # The scheduler fires long after this request and has no
+                    # identity of its own (salesagent-pldmk.39).
+                    protocol=identity.protocol if identity else None,
                 )
-                schemes = authentication.get("schemes", []) if authentication else []
-                auth_type = schemes[0] if schemes else None
-                credentials = authentication.get("credentials") if authentication else None
-                config_id = push_notification_config.get("id") or f"pnc_{uuid.uuid4().hex[:16]}"
-
-                # Save to database. validation_token/session_id are omitted on
-                # purpose: upsert preserves them on an existing row (a token set
-                # via A2A set_push_notification_config must survive this path).
-                with PushNotificationConfigUoW(tenant["tenant_id"]) as pnc_uow:
-                    assert pnc_uow.push_notification_configs is not None
-                    _config, created = pnc_uow.push_notification_configs.upsert(
-                        config_id=config_id,
-                        principal_id=principal_id,
-                        url=str(url),
-                        authentication_type=auth_type,
-                        authentication_token=credentials,
-                    )
-                    logger.info(
-                        "[MCP/A2A] Push notification config %s: %s",
-                        "created" if created else "updated",
-                        config_id,
-                    )
+                logger.info(
+                    "[MCP/A2A] Push notification config %s: %s",
+                    "created" if created else "updated",
+                    config_id,
+                )
 
     try:
         # Validate input parameters
@@ -4603,14 +4670,15 @@ async def create_media_buy(
 
     identity = enrich_identity_with_account(identity, req.account)
 
-    # Serialize PushNotificationConfig model to dict for _impl (which accepts dict|None).
-    # Use mode='json' so Pydantic v2 converts AnyUrl fields to plain str and enum fields
-    # to their string values — plain model_dump() preserves typed objects that SQLAlchemy
-    # String columns cannot coerce, causing StatementError at flush time.
-    pnc_dict = push_notification_config.model_dump(mode="json") if push_notification_config else None
+    # The typed model goes through untouched. config_id is None because the AdCP
+    # model carries no id: an MCP registration has never been able to name a row,
+    # and this preserves that rather than changing it. Passed EXPLICITLY because
+    # test_architecture_boundary_completeness requires every wrapper to forward
+    # every _impl parameter.
     result = await _create_media_buy_impl(
         req=req,
-        push_notification_config=pnc_dict,
+        push_notification_config=push_notification_config,
+        config_id=None,
         identity=identity,
         context_id=_ctx_id,
         raw_wire_payload=raw_wire_payload,
@@ -4666,19 +4734,21 @@ async def create_media_buy_raw(
     # pass identity directly without ctx, so this is best-effort)
     _ctx_id = (await ctx.get_state("context_id")) if isinstance(ctx, Context) else None
 
-    # Serialize SDK model to dict for _impl (which uses dict-based config access).
-    # Use mode='json' so Pydantic v2 converts AnyUrl fields to plain str and enum fields
-    # to their string values — plain model_dump() preserves typed objects that SQLAlchemy
-    # String columns cannot coerce, causing StatementError at flush time.
-    pnc_dict = (
-        push_notification_config.model_dump(mode="json")
-        if isinstance(push_notification_config, PushNotificationConfig)
-        else push_notification_config
-    )
+    # Row identity is read BEFORE coercion and threaded separately: the AdCP model
+    # has no `id` field and is extra="ignore", so coercing DROPS a buyer-supplied
+    # id silently. Left unread, every A2A re-registration would stop upserting and
+    # insert a fresh row instead. `id` names the ROW, not the registration — the
+    # same reason validation_token is a kwarg rather than a value field.
+    config_id = push_notification_config.get("id") if isinstance(push_notification_config, dict) else None
 
+    # Coerce here rather than forwarding a raw dict: this is the untyped seam. The
+    # A2A skill hands us the buyer's dict straight off the wire, so without this
+    # the typed annotation below is decorative and a document the pinned schema
+    # forbids reaches _impl unchallenged.
     return await _create_media_buy_impl(
         req=req,
-        push_notification_config=pnc_dict,
+        push_notification_config=to_push_notification_config(push_notification_config),
+        config_id=config_id,
         identity=identity,
         context_id=_ctx_id,
         raw_wire_payload=raw_wire_payload,

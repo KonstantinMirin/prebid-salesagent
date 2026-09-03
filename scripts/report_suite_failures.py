@@ -17,7 +17,7 @@ leaves the other unable to see the problem. The host path is the worse case: it
 decides success purely from tox exit codes and never looked at the reports at
 all.
 
-Usage: report_suite_failures.py <results-dir>
+Usage: python3 -m scripts.report_suite_failures <results-dir>
 Exit 0 when every suite reports 0 failed and 0 error, 1 otherwise.
 """
 
@@ -26,7 +26,7 @@ from __future__ import annotations
 import os
 import sys
 
-from _suite_reports import scan_suite_summaries
+from scripts._suite_reports import scan_suite_summaries
 
 
 def _failure_problems(name: str, summary: dict) -> list[str]:

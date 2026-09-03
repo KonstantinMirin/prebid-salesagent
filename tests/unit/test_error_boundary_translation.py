@@ -10,8 +10,9 @@ than in the table, and that nothing else in the suite exercises:
 - ``handle_tool_error`` — the body of ``@app.exception_handler(ToolError)``
   wired at ``src/app.py``. A typed ``AdCPToolError`` forwards its envelope and
   its ``status_code``; a plain ``ToolError`` is rebuilt from a synthetic error
-  whose HTTP status comes from ``_ERROR_CODE_TO_STATUS`` and whose code falls
-  back to ``INTERNAL_ERROR`` when the wire string is unrecognized.
+  whose code is resolved through ``_CODE_BY_VALUE`` — falling back to
+  ``INTERNAL_ERROR`` when the wire string is unrecognized — and whose HTTP
+  status follows from that code's ``CODE_TABLE`` entry.
 - ``AdCPSalesAgentError.status_code`` — a read-only function of the wire code,
   read from ``CODE_TABLE``. What is graded is that one code cannot be answered
   with two statuses, and that the answer does not move with the import set.
@@ -28,6 +29,16 @@ than in the table, and that nothing else in the suite exercises:
   the status, so the value itself is a table read — what is NOT a table read is
   whether it survives the handler stack and lands on the response, which is what
   driving each exception through REST grades.
+
+The final section carries the translation paths origin/main graded here and this
+branch had no equivalent for — a TYPED error crossing MCP and A2A, the A2A
+dispatcher's two envelope branches, and the app actually having the ToolError
+handler registered. They are kept, not dropped, but re-grounded: origin/main
+wrote them against the retired constructor (a positional ``message``, a
+``recovery=`` override) and against per-class statuses that no longer exist, so
+every expectation there is derived from the code — ``_code`` and ``CODE_TABLE``
+— rather than transcribed from the branch that wrote it. What is asserted is
+that production PRODUCED the value, never what the pinned table says it means.
 """
 
 from __future__ import annotations
@@ -46,9 +57,14 @@ from fastmcp.exceptions import ToolError
 from src.core.errors.codes import CODE_TABLE, Recovery
 from src.core.exceptions import (
     AdCPAdapterError,
+    AdCPAuthenticationError,
+    AdCPAuthorizationError,
+    AdCPBudgetExhaustedError,
+    AdCPBudgetTooLowError,
     AdCPConflictError,
     AdCPGoneError,
     AdCPMediaBuyNotFoundError,
+    AdCPNotFoundError,
     AdCPRateLimitError,
     AdCPSalesAgentError,
     AdCPServiceUnavailableError,
@@ -56,6 +72,7 @@ from src.core.exceptions import (
     build_two_layer_error_envelope,
 )
 from src.core.tool_error_logging import (
+    _CODE_BY_VALUE,
     AdCPToolError,
     _coerce_recovery,
     _translate_to_tool_error,
@@ -134,11 +151,12 @@ class TestHandleToolError:
         assert json.loads(response.body) == before
 
     def test_plain_tool_error_with_known_code_uses_the_status_map(self):
-        """``ToolError("VALIDATION_ERROR", ...)`` resolves 400 through ``_ERROR_CODE_TO_STATUS``.
+        """``ToolError("VALIDATION_ERROR", ...)`` resolves 400 through the code lookup.
 
         Legacy paths construct ``ToolError`` directly and carry no typed source
-        that owns ``status_code``, so the map is the only thing standing between
-        a 4xx condition and a 500 response.
+        that owns ``status_code``, so resolving the wire string against
+        ``_CODE_BY_VALUE`` is the only thing standing between a 4xx condition and
+        a 500 response.
         """
         response = handle_tool_error(ToolError("VALIDATION_ERROR", "missing required field"))
 
@@ -512,6 +530,13 @@ class TestRestStatusCodeRoundtrip:
     @pytest.mark.parametrize(
         ("exc_cls", "expected_status"),
         [
+            # The first three rows are origin/main's per-status REST methods
+            # (400 / 404 / 409 / 503), folded into the parametrize rather than
+            # kept as four near-identical methods — the duplication this table
+            # exists to prevent.
+            (AdCPValidationError, 400),
+            (AdCPMediaBuyNotFoundError, 404),
+            (AdCPNotFoundError, 404),
             (AdCPConflictError, 409),
             (AdCPGoneError, 410),
             (AdCPServiceUnavailableError, 503),
@@ -537,9 +562,407 @@ class TestRestStatusCodeRoundtrip:
         one whose recovery is ``terminal``, so it also pins that a terminal
         classification does not get downgraded on the way out.
         """
-        from src.core.exceptions import AdCPBudgetExhaustedError
-
         response = _capabilities_response(AdCPBudgetExhaustedError())
 
         assert response.status_code == 422
         assert_envelope_shape(response.json(), "BUDGET_EXHAUSTED", recovery="terminal")
+
+
+# ---------------------------------------------------------------------------
+# Translation paths origin/main graded here, re-grounded on the merged code
+#
+# Everything below came in from origin/main (#1802 / #1858). Each one covers a
+# boundary this branch's rewrite left ungraded, so none of them is dropped. What
+# IS dropped from each is the part the merged production makes unstateable:
+#   * a positional ``message`` and a ``recovery=`` override — the constructor is
+#     keyword-only and message-free, and recovery is a read-only CODE_TABLE
+#     property, so ``AdCPValidationError("bad field", recovery="terminal")`` is
+#     now a TypeError, not a weaker assertion;
+#   * per-class HTTP statuses — ``AdCPAdapterError`` answers 503, not the 502
+#     origin/main asserted, because the status belongs to SERVICE_UNAVAILABLE;
+#   * ``to_dict()`` and ``AdCPError("...")`` — the method is gone and the name is
+#     an alias for the abstract base, which cannot be constructed without a code;
+#   * ``ToolError("AUTH_REQUIRED")`` — that code is not in the merged CODE_TABLE.
+#     PERMISSION_DENIED is the code the merged mapping actually emits for the
+#     condition, and 403 is still the status being graded.
+# Expectations are read off ``_code`` / ``CODE_TABLE`` wherever a literal would
+# only be restating the table; the literals that remain (400/404/correctable/…)
+# are the ones origin/main asserted and the merged table confirms.
+# ---------------------------------------------------------------------------
+
+
+def _synthetic_tool_error(source: AdCPSalesAgentError) -> AdCPToolError:
+    """Wrap a typed error as the ``AdCPToolError`` a REST route catches defensively."""
+    return AdCPToolError(build_two_layer_error_envelope(source), status_code=source.status_code)
+
+
+class TestExtractErrorInfoTypedBranches:
+    """``extract_error_info`` on the two branches that READ a typed error.
+
+    :class:`TestExtractErrorInfoUntypedBranches` grades the plain-``ToolError``
+    parsing; these are the branches ahead of it. origin/main graded them one
+    method per class with the message each raise site passed in — a shape the
+    message-free constructor deletes. Kept as one table over the same classes,
+    with the expectation taken from the class's own ``_code`` and that code's
+    table entry: what is graded is that the extractor reports the exception's
+    derived values rather than inventing, defaulting, or dropping one.
+    """
+
+    _CLASSES = [
+        AdCPValidationError,
+        AdCPNotFoundError,
+        AdCPAdapterError,
+        AdCPGoneError,
+        AdCPServiceUnavailableError,
+        AdCPRateLimitError,
+        AdCPConflictError,
+        AdCPBudgetExhaustedError,
+    ]
+
+    @pytest.mark.parametrize("exc_cls", _CLASSES, ids=lambda cls: cls.__name__)
+    def test_typed_error_reports_its_derived_code_message_and_recovery(
+        self, exc_cls: type[AdCPSalesAgentError]
+    ) -> None:
+        error = exc_cls()
+        entry = CODE_TABLE[exc_cls._code]
+
+        code, message, recovery = extract_error_info(error)
+
+        assert code == exc_cls._code
+        assert message == entry.message
+        assert recovery is entry.recovery
+
+    def test_the_typed_table_is_not_empty(self):
+        """Non-vacuity: an empty parametrize would make every row above pass by absence."""
+        assert len(self._CLASSES) == 8
+
+    def test_adcp_tool_error_is_read_from_its_envelope_not_its_args(self):
+        """``AdCPToolError`` is checked BEFORE ``AdCPSalesAgentError`` and reads the envelope.
+
+        It is a ``ToolError``, so if the envelope branch were removed the legacy
+        arg-parsing branch would answer instead — with the placeholder
+        ``TOOL_ERROR`` rather than the code the envelope carries.
+        """
+        source = AdCPMediaBuyNotFoundError()
+
+        code, message, recovery = extract_error_info(_synthetic_tool_error(source))
+
+        assert code == source.error_code == "MEDIA_BUY_NOT_FOUND"
+        assert message == source.message
+        assert recovery is source.recovery
+
+
+class TestMCPBoundaryTypedErrorTranslation:
+    """A TYPED error crossing ``with_error_logging`` becomes a wire envelope.
+
+    :class:`TestAdcpErrorForAtEveryBoundary` grades the UNTYPED inputs at this
+    boundary (``ValueError`` / ``PermissionError``), and
+    :class:`TestRestStatusCodeRoundtrip` drives typed errors through REST. This
+    is the one origin/main covered that neither of those does: the typed error
+    that skips ``adcp_error_for``'s wrapping entirely, on the MCP transport.
+    """
+
+    @pytest.mark.parametrize(
+        ("exc_cls", "expected_code", "expected_recovery"),
+        [
+            (AdCPValidationError, "VALIDATION_ERROR", "correctable"),
+            (AdCPAdapterError, "SERVICE_UNAVAILABLE", "transient"),
+            (AdCPBudgetExhaustedError, "BUDGET_EXHAUSTED", "terminal"),
+        ],
+        ids=lambda value: value.__name__ if isinstance(value, type) else str(value),
+    )
+    def test_typed_error_becomes_a_tool_error_carrying_the_envelope(
+        self, exc_cls: type[AdCPSalesAgentError], expected_code: str, expected_recovery: str
+    ) -> None:
+        """One row per recovery classification, so a collapse to a constant fails here."""
+
+        def failing_tool():
+            raise exc_cls()
+
+        with pytest.raises(ToolError) as exc_info:
+            with_error_logging(failing_tool)()
+
+        assert_envelope_shape(exc_info.value, expected_code, check_mcp_tool_error=True, recovery=expected_recovery)
+        assert exc_info.value.status_code == CODE_TABLE[exc_cls._code].status
+
+    @pytest.mark.asyncio
+    async def test_async_typed_error_lands_identically(self):
+        """The async wrapper shares ``_handle_tool_exception``; it must not diverge."""
+
+        async def failing_tool():
+            raise AdCPValidationError()
+
+        with pytest.raises(ToolError) as exc_info:
+            await with_error_logging(failing_tool)()
+
+        assert_envelope_shape(exc_info.value, "VALIDATION_ERROR", check_mcp_tool_error=True, recovery="correctable")
+        assert exc_info.value.status_code == 400
+
+
+class TestA2AExplicitSkillReraise:
+    """``_handle_explicit_skill``'s except-clause: what reaches the outer dispatcher.
+
+    Handler-internal, by design — the wire-level A2A envelope is graded in
+    ``tests/integration/test_a2a_error_responses.py``. What is graded here is
+    the branch that decides WHICH exception the dispatcher gets to wrap: a typed
+    error is re-raised as the identical object, an untyped one is replaced by
+    the ``adcp_error_for`` normalization, and an ``A2AError`` never enters the
+    normalizing clause at all.
+
+    ``get_products`` is used because it is in ``DISCOVERY_SKILLS``, so ``identity``
+    may be ``None`` — which also keeps ``record_boundary_error`` off its
+    tenant-scoped sinks, leaving this a unit test with no database.
+    """
+
+    @pytest.mark.asyncio
+    async def test_typed_error_is_reraised_as_the_same_object(self):
+        """``normalized is e`` takes the bare ``raise``: no re-wrap, no new instance.
+
+        Identity, not equality: re-wrapping a typed error would rebuild it from
+        ``adcp_error_for``, discarding the ``details`` / ``issues`` / ``field``
+        the raise site attached and that the envelope carries to the buyer.
+        """
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        handler = AdCPRequestHandler()
+        raised = AdCPValidationError(field="packages[0].budget")
+
+        async def mock_skill(parameters, identity):
+            raise raised
+
+        with patch.object(handler, "_handle_get_products_skill", mock_skill):
+            with pytest.raises(AdCPValidationError) as exc_info:
+                await handler._handle_explicit_skill("get_products", {}, None)
+
+        assert exc_info.value is raised
+        assert exc_info.value.field == "packages[0].budget"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("raised", "expected_cls"),
+        [
+            (ValueError("invalid input shape"), AdCPValidationError),
+            (PermissionError("access denied"), AdCPAuthorizationError),
+        ],
+        ids=["ValueError", "PermissionError"],
+    )
+    async def test_untyped_error_is_replaced_by_its_normalization(
+        self, raised: Exception, expected_cls: type[AdCPSalesAgentError]
+    ) -> None:
+        """A2A applies the same ``adcp_error_for`` mapping MCP and REST do."""
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        handler = AdCPRequestHandler()
+
+        async def mock_skill(parameters, identity):
+            raise raised
+
+        with patch.object(handler, "_handle_get_products_skill", mock_skill):
+            with pytest.raises(expected_cls) as exc_info:
+                await handler._handle_explicit_skill("get_products", {}, None)
+
+        assert exc_info.value.error_code == expected_cls._code
+        assert exc_info.value.__cause__ is raised
+
+    @pytest.mark.asyncio
+    async def test_a2a_error_passes_through_untouched(self):
+        """``except A2AError`` sits ahead of the normalizing clause and re-raises as-is."""
+        from a2a.types import MethodNotFoundError
+
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        handler = AdCPRequestHandler()
+        raised = MethodNotFoundError(message="not found")
+
+        async def mock_skill(parameters, identity):
+            raise raised
+
+        with patch.object(handler, "_handle_get_products_skill", mock_skill):
+            with pytest.raises(MethodNotFoundError) as exc_info:
+                await handler._handle_explicit_skill("get_products", {}, None)
+
+        assert exc_info.value is raised
+
+
+class TestA2ADispatcherFailedSkillResult:
+    """``_build_failed_skill_result`` gives every failure ONE envelope shape.
+
+    :class:`TestAdcpErrorForAtEveryBoundary` drives its untyped inputs; these are
+    the typed branch, the arbitrary-exception fallthrough, and the parity between
+    them. Storyboard runners read ``adcp_error.code`` and ``errors[0].code`` off
+    whichever branch produced the failure, so a branch that populated one key
+    differently would be invisible to every per-branch test and visible only
+    here.
+    """
+
+    def test_typed_error_keeps_its_own_code(self):
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        result = AdCPRequestHandler._build_failed_skill_result("get_products", AdCPValidationError())
+
+        assert result["success"] is False
+        assert result["skill"] == "get_products"
+        assert_envelope_shape(result["error_envelope"], "VALIDATION_ERROR", recovery="correctable")
+
+    def test_arbitrary_exception_becomes_internal_error(self):
+        """A ``RuntimeError`` is answered INTERNAL_ERROR — and NOT with its own text.
+
+        origin/main asserted the RuntimeError's message reached the buyer
+        verbatim. That is the leak ``adcp_error_for`` closes deliberately: an
+        untyped exception's string has no provenance guarantee, so the code's
+        table sentence is what goes on the wire and the original is logged
+        server-side. Asserting the absence is the whole point of the row.
+        """
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        result = AdCPRequestHandler._build_failed_skill_result("get_products", RuntimeError("db://user:pw@host"))
+
+        envelope = result["error_envelope"]
+        assert result["success"] is False
+        assert_envelope_shape(envelope, "INTERNAL_ERROR", recovery="transient")
+        assert "db://user:pw@host" not in json.dumps(envelope)
+
+    def test_both_branches_produce_the_same_envelope_shape(self):
+        """Same keys, and every key both branches share is populated in both.
+
+        Key-set equality alone would pass if one branch nulled a value the other
+        fills, which is exactly how a ``recovery`` regression would hide.
+        """
+        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+
+        typed = AdCPRequestHandler._build_failed_skill_result("s", AdCPValidationError())
+        untyped = AdCPRequestHandler._build_failed_skill_result("s", RuntimeError("boom"))
+
+        assert set(typed) == set(untyped)
+        assert set(typed["error_envelope"]) == set(untyped["error_envelope"])
+        assert set(typed["error_envelope"]["adcp_error"]) == set(untyped["error_envelope"]["adcp_error"])
+        assert set(typed["error_envelope"]["errors"][0]) == set(untyped["error_envelope"]["errors"][0])
+
+        for branch in (typed, untyped):
+            envelope = branch["error_envelope"]
+            assert envelope["adcp_error"]["code"]
+            assert envelope["adcp_error"]["recovery"]
+            assert envelope["errors"][0]["code"]
+            assert envelope["errors"][0]["message"]
+            assert envelope["errors"][0]["recovery"]
+
+
+class TestHandleToolErrorStatusForTypedSources:
+    """A ``ToolError`` built from a typed error answers with THAT error's status.
+
+    ``TestHandleToolError`` grades the two branches; this grades the range the
+    typed branch has to carry. Before the source's ``status_code`` was forwarded,
+    every defensively-caught ``ToolError`` was a 500, so a buyer's 4xx came back
+    as a server fault. One row per status band, so a collapse to any single
+    number fails.
+    """
+
+    @pytest.mark.parametrize(
+        ("source_cls", "expected_status"),
+        [
+            (AdCPValidationError, 400),
+            (AdCPAuthenticationError, 401),
+            (AdCPAuthorizationError, 403),
+            (AdCPMediaBuyNotFoundError, 404),
+            (AdCPBudgetTooLowError, 422),
+            # 503: origin/main's row said 502, which was this class's old
+            # per-class declaration. It emits SERVICE_UNAVAILABLE, so 503.
+            (AdCPAdapterError, 503),
+        ],
+        ids=lambda value: value.__name__ if isinstance(value, type) else str(value),
+    )
+    def test_source_status_is_forwarded(self, source_cls: type[AdCPSalesAgentError], expected_status: int) -> None:
+        source = source_cls()
+        response = handle_tool_error(_synthetic_tool_error(source))
+
+        assert response.status_code == expected_status
+        assert json.loads(response.body)["errors"][0]["code"] == str(source_cls._code)
+
+    @pytest.mark.parametrize(
+        ("wire_code", "expected_status"),
+        [
+            ("VALIDATION_ERROR", 400),
+            # origin/main's row was ToolError("AUTH_REQUIRED") -> 403. That code
+            # is not in the merged CODE_TABLE; PERMISSION_DENIED is the one the
+            # merged mapping emits for a refused caller, and 403 is unchanged.
+            ("PERMISSION_DENIED", 403),
+            ("MEDIA_BUY_NOT_FOUND", 404),
+            ("SERVICE_UNAVAILABLE", 503),
+        ],
+    )
+    def test_plain_tool_error_resolves_its_wire_code_to_a_status(self, wire_code: str, expected_status: int) -> None:
+        """The legacy raise site carries no typed source, so the code is all there is.
+
+        Without the lookup every one of these is a 500 — the fallback is only
+        correct for a code the table does not know.
+        """
+        response = handle_tool_error(ToolError(wire_code, "legacy raise site"))
+
+        assert response.status_code == expected_status
+        assert json.loads(response.body)["errors"][0]["code"] == wire_code
+
+
+class TestSynthesizedRestEnvelopeFollowsItsCode:
+    """A rebuilt envelope's recovery comes from the CODE, never from the wire input.
+
+    A plain ``ToolError`` can carry a third positional ``recovery`` that
+    CONTRADICTS its code, and ``extract_error_info`` still reports that value for
+    its logging consumers. The rebuild must not use it: the buyer decodes an
+    unknown code by reading ``recovery``, so an envelope pairing
+    SERVICE_UNAVAILABLE with ``terminal`` tells them not to retry something the
+    pin classifies as retryable.
+
+    The contradiction is what makes this a grader — with a two-arg ``ToolError``
+    the extractor returns ``None`` and both answers coincide, so the test could
+    not fail.
+    """
+
+    def test_a_contradicting_recovery_on_the_wire_is_not_propagated(self):
+        response = handle_tool_error(ToolError("SERVICE_UNAVAILABLE", "upstream is down", "terminal"))
+
+        body = json.loads(response.body)
+        # Read back through the table for the code the fallback actually
+        # resolved, rather than restating a literal: this fails if the envelope
+        # ever starts sourcing recovery from anywhere but the code again.
+        expected = str(CODE_TABLE[_CODE_BY_VALUE[body["adcp_error"]["code"]]].recovery)
+
+        assert expected == "transient", "the fixture no longer contradicts the code; it grades nothing"
+        assert_envelope_shape(body, "SERVICE_UNAVAILABLE", recovery=expected)
+        assert response.status_code == 503
+
+
+class TestToolErrorHandlerIsRegisteredOnTheApp:
+    """``handle_tool_error`` is only reachable because ``src/app.py`` registers it.
+
+    Every other test in this module calls the function directly. This is the one
+    that fails if the ``@app.exception_handler(ToolError)`` registration is
+    dropped — at which point a ``ToolError`` escaping a route becomes an
+    unhandled 500 with no envelope at all, and no direct-call test notices.
+    """
+
+    def test_adcp_tool_error_reaches_the_wire_through_the_app(self):
+        source = AdCPMediaBuyNotFoundError()
+
+        response = _capabilities_response(_synthetic_tool_error(source))
+
+        assert response.status_code == 404
+        assert_envelope_shape(response.json(), "MEDIA_BUY_NOT_FOUND", recovery="correctable")
+
+    def test_plain_tool_error_reaches_the_wire_through_the_app(self):
+        response = _capabilities_response(ToolError("VALIDATION_ERROR", "missing field"))
+
+        assert response.status_code == 400
+        assert_envelope_shape(response.json(), "VALIDATION_ERROR", recovery="correctable")
+
+    def test_request_validation_error_is_not_shadowed_by_the_value_error_handler(self):
+        """FastAPI's own 422 body for a malformed request must survive our handler.
+
+        The REST boundary registers a ``ValueError`` handler so an
+        application-raised ``ValueError`` gets the AdCP envelope instead of a
+        bare 500. If ``RequestValidationError`` were a ``ValueError``, that
+        handler would swallow FastAPI's request-body 422 as well — a structural
+        fact about the framework, so it is pinned structurally.
+        """
+        from fastapi.exceptions import RequestValidationError
+
+        assert not issubclass(RequestValidationError, ValueError)

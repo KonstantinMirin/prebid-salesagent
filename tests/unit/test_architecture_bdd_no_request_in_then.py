@@ -76,16 +76,17 @@ _DISPATCH_IN_THEN_ALLOWLIST: set[str] = {
     # was migrated from env.call_impl to the shared wire dispatcher
     # (dispatch_request) so that, when these scenarios are wired, they exercise
     # the parametrized transport on the wire (#1417). Rate limiting and
-    # payload size remain spec-production gaps (FIXME salesagent-9vgz.92).
-    "bdd/steps/domain/uc002_nfr.py:146 then_auth_before_business_logic",
-    "bdd/steps/domain/uc002_nfr.py:215 then_rate_limiting_enforced",
-    "bdd/steps/domain/uc002_nfr.py:262 then_payload_size_limits",
-    # These four entries are keyed by LINE NUMBER, so an unrelated edit above one of them moves
-    # it without changing the violation. Two such moves are recorded here: removing six
-    # message-substring branches from then_payload_size_limits (411 -> 406), and the origin/main
-    # merge dropping the beads ids out of the FIXME comments while adding a spec-gap note
-    # (147/216/258/429 -> 146/215/262/433). Same four functions, same four defects.
-    "bdd/steps/domain/uc002_nfr.py:433 then_budget_validated_against_min_order",
+    # payload size remain spec-production gaps (FIXME: no GitHub issue filed).
+    #
+    # These four entries are keyed by LINE NUMBER, so an unrelated edit above one of them
+    # moves the key without changing the violation. Same four functions, same four defects
+    # throughout: removing six message-substring branches from then_payload_size_limits,
+    # dropping the local beads ids out of the FIXME comments, and re-adding the spec-gap
+    # note each shifted the numbers below.
+    "bdd/steps/domain/uc002_nfr.py:147 then_auth_before_business_logic",
+    "bdd/steps/domain/uc002_nfr.py:218 then_rate_limiting_enforced",
+    "bdd/steps/domain/uc002_nfr.py:264 then_payload_size_limits",
+    "bdd/steps/domain/uc002_nfr.py:434 then_budget_validated_against_min_order",
 }
 
 _ASSERT_ON_REQUEST_ALLOWLIST: set[str] = set()

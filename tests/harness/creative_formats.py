@@ -27,18 +27,30 @@ from unittest.mock import AsyncMock, MagicMock
 from src.core.schemas import ListCreativeFormatsResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import E2EUnsupportedSetup, realize_e2e
+from tests.harness.transport import DeliverResult
 
 
-def _format_id_key(fmt: Any) -> str:
-    """Stable comparable id for a Format / FormatId / raw string.
+def _format_identity_key(fmt: Any) -> tuple[str, str]:
+    """Federation identity ``(canonical agent_url, id)`` of a Format / FormatId / bare id.
 
-    The reference catalog keys on the namespaced ``format_id.id`` (e.g.
-    ``"display_300x250"``); ``str(format_id)`` is a verbose structured repr and
-    is NOT a stable identity. Accepts a ``Format`` (``.format_id.id``), a bare
-    ``FormatId`` (``.id``), or a plain string id.
+    Delegates to ``src.core.format_resolver.format_identity``, which is the ONE
+    place that answers "same format?" — it normalizes the three shapes a
+    reference actually arrives in (model, wire dict, legacy bare string) and then
+    hands the rule itself to ``src.core.schemas.format_id_identity``. The pinned
+    ``core/format-id.json`` makes canonicalizing ``agent_url`` before treating two
+    references as one a MUST, so a harness that compared ``.format_id.id`` alone
+    (what this helper used to do) would call a third-party format that merely
+    shares an id "already in the reference catalog" and silently skip the
+    unrealizable-setup error the scenario needs.
+
+    Accepts a ``Format`` (unwrapped via ``.format_id``), a bare ``FormatId``, a
+    wire dict, or a plain string id — a bare id is namespaced to the canonical
+    creative agent, which is the agent every entry in the reference fixture
+    carries.
     """
-    format_id = getattr(fmt, "format_id", fmt)
-    return str(getattr(format_id, "id", format_id))
+    from src.core.format_resolver import format_identity
+
+    return format_identity(getattr(fmt, "format_id", fmt))
 
 
 def _validate_registry_formats(env: Any, formats: list[Any]) -> None:
@@ -54,6 +66,11 @@ def _validate_registry_formats(env: Any, formats: list[Any]) -> None:
     - requested ids ⊆ reference set -> no-op: the server already serves them.
     - requested ⊄ reference set -> unrealizable: name the missing ids and point
       at the fixture-refresh path.
+
+    Membership is decided on the ``(canonical agent_url, id)`` federation pair
+    (:func:`_format_identity_key`), never on the bare id: two agents may publish
+    the same ``id``, and only the pair says whether the LIVE catalog actually
+    serves the format this scenario asked for.
     """
     from src.core.format_cache import load_reference_formats
 
@@ -62,12 +79,13 @@ def _validate_registry_formats(env: Any, formats: list[Any]) -> None:
             "live stack always serves the agent catalog; an empty catalog cannot be realized over e2e"
         )
 
-    reference_ids = {_format_id_key(f) for f in load_reference_formats()}
-    requested_ids = {_format_id_key(f) for f in formats}
+    reference_ids = {_format_identity_key(f) for f in load_reference_formats()}
+    requested_ids = {_format_identity_key(f) for f in formats}
     missing = requested_ids - reference_ids
     if missing:
+        named = sorted(f"{format_id} @ {agent_url}" for agent_url, format_id in missing)
         raise E2EUnsupportedSetup(
-            f"requested formats not in the reference catalog: {sorted(missing)}. "
+            f"requested formats not in the reference catalog: {named}. "
             "Register them in the creative agent registry and refresh the fixture "
             "(`make creative-formats-refresh`)."
         )
@@ -79,6 +97,26 @@ class CreativeFormatsEnv(IntegrationEnv):
     Mocks creative agent registry (external service) and audit logger.
     The format processing logic runs for real.
     """
+
+    # Dispatch declaration: the base owns call_mcp/call_a2a.
+    RESPONSE_MODEL = ListCreativeFormatsResponse
+
+    # JUSTIFIED OVERRIDE — does NOT declare MCP_TOOL/A2A_SKILL, so it does not
+    # take the base's client-core delegation. AdCPTestClient's UNWRAP parses the
+    # wire into spec_response_model("list_creative_formats") — the PINNED
+    # ListCreativeFormatsResponse — and our real format-registry wire does not
+    # satisfy it (measured: 2520 errors, e.g. formats.N.assets.M.max_count /
+    # .assets required by the pinned Assets variants but absent from ours).
+    # That is a list_creative_formats-vs-pinned-schema conformance gap, NOT a
+    # dispatch defect, so it is recorded and graded elsewhere rather than being
+    # hidden by making the core's parse swallow ValidationError.
+    def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
+        """Dispatch list_creative_formats via the real FastMCP Client pipeline."""
+        return self._run_mcp_client("list_creative_formats", ListCreativeFormatsResponse, **kwargs)
+
+    def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
+        """Dispatch list_creative_formats via the real A2A handler pipeline."""
+        return self._run_a2a_handler("list_creative_formats", ListCreativeFormatsResponse, **kwargs)
 
     EXTERNAL_PATCHES = {
         "registry": "src.core.creative_agent_registry.get_creative_agent_registry",
@@ -138,14 +176,6 @@ class CreativeFormatsEnv(IntegrationEnv):
         kwargs.setdefault("identity", self.identity)
         kwargs.setdefault("req", None)
         return _list_creative_formats_impl(**kwargs)
-
-    def call_a2a(self, **kwargs: Any) -> ListCreativeFormatsResponse:
-        """Call list_creative_formats via real AdCPRequestHandler — full A2A pipeline."""
-        return self._run_a2a_handler("list_creative_formats", ListCreativeFormatsResponse, **kwargs)
-
-    def call_mcp(self, **kwargs: Any) -> ListCreativeFormatsResponse:
-        """Call list_creative_formats via Client(mcp) — full pipeline dispatch."""
-        return self._run_mcp_client("list_creative_formats", ListCreativeFormatsResponse, **kwargs)
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Forward FLAT kwargs to the REST body, matching a2a/mcp.

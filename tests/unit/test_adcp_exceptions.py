@@ -1,10 +1,12 @@
 """Exception-hierarchy behavior that has no other grader in this suite.
 
-Everything this module once asserted about a code's ``message``, ``recovery`` or
-``suggestion`` is gone: all three are read-only properties over ``CODE_TABLE``
-(``src/core/errors/codes.py``, built at import from the pinned adcp SDK's own
-enums), so pinning them per exception class copies the pinned table into a
-second place instead of grading production. The "class code is in the
+Every per-class *value* this module once asserted for a code's ``message``,
+``recovery`` or ``suggestion`` is gone: all three are read-only properties over
+``CODE_TABLE`` (``src/core/errors/codes.py``, built at import from the pinned
+adcp SDK's own enums), so pinning them per exception class copies the pinned
+table into a second place instead of grading production. What survives that
+excision is the *absence of the arguments* that used to author those values —
+a constructor-signature fact, not a table copy — kept below. The "class code is in the
 vocabulary" checks are gone for the same reason inverted:
 ``AdCPSalesAgentError.__init_subclass__`` raises ``TypeError`` at class-creation
 time for a ``_code`` the table does not classify, so a violating class cannot be
@@ -28,6 +30,17 @@ nothing else in the suite exercises:
   response body. The BDD lines that would grade it have no step definition and
   are converted to xfail by ``tests/bdd/conftest.py``, so no scenario reaches
   it.
+- The excision of the ``message`` / ``recovery`` / ``suggestion`` constructor
+  arguments. A raise site does not choose a classification, it chooses a CLASS;
+  the free kwargs let any call site pair any code with any text or recovery, and
+  the wire carried the contradiction. Only ``status_code=`` has an equivalent
+  grader elsewhere
+  (``test_error_boundary_translation.py::test_a_caller_cannot_name_a_status_that_contradicts_the_code``),
+  so the other three are pinned here.
+- The two dead A2A translation symbols staying dead. A2A error translation lives
+  in ``_build_error_envelope()`` in ``adcp_a2a_server.py``; ``exceptions.py``
+  carried a second, unreachable copy (PR #1083 review), and nothing else in the
+  suite notices if it comes back.
 
 Retry-after on both envelope layers, the IDEMPOTENCY_* code/recovery pairs, and
 the two-layer envelope shape itself are all graded elsewhere (respectively
@@ -51,6 +64,69 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPValidationError,
 )
+
+# ---------------------------------------------------------------------------
+# The excised constructor arguments
+# ---------------------------------------------------------------------------
+
+
+class TestTheRaiseSiteCannotAuthorTheCodesOwnValues:
+    """A raise site cannot choose a ``message``, ``recovery`` or ``suggestion``.
+
+    REPLACES ``test_recovery_can_be_overridden_per_instance`` and
+    ``test_to_dict_includes_overridden_recovery``, which pinned the exact
+    behavior this epic exists to remove: free ``message=`` / ``recovery=`` /
+    ``suggestion=`` arguments let a call site pair any code with any text and any
+    classification, and the wire carried the contradiction (SERVICE_UNAVAILABLE
+    paired with ``terminal``) with a green test grading it. The contract is
+    excised, so the tests that pinned it are replaced rather than deleted — what
+    was "callers can" is now "callers cannot", asserted the only way an excised
+    argument can be.
+
+    This is the one thing about those three names that is NOT a copy of
+    ``CODE_TABLE``: the values live in the table and are graded there, but the
+    *shape of the constructor* lives in ``src/core/exceptions.py`` and is graded
+    nowhere else. The sibling excision, ``status_code=``, is graded by
+    ``test_error_boundary_translation.py::TestRestStatusCodeRoundtrip::test_a_caller_cannot_name_a_status_that_contradicts_the_code``
+    and is deliberately not restated here.
+    """
+
+    @pytest.mark.parametrize("excised", ["message", "recovery", "suggestion"])
+    def test_the_authoring_kwarg_is_gone(self, excised: str):
+        """Naming an excised value is a ``TypeError``, not a silently ignored kwarg.
+
+        Keyword-only and unknown: the constructor has no ``**kwargs`` sink, so an
+        argument that used to be honored now fails loudly at the raise site
+        instead of being dropped on the way to the wire.
+        """
+        with pytest.raises(TypeError):
+            AdCPValidationError(**{excised: "terminal"})  # type: ignore[arg-type]
+
+    def test_there_is_no_positional_message_either(self):
+        """``AdCPValidationError("some text")`` is a ``TypeError``.
+
+        Closing the kwarg alone would leave the older spelling open — the whole
+        pre-epic codebase raised these positionally — and a positional message
+        would reach ``BaseException.args`` and, through ``__str__``, the wire.
+        """
+        with pytest.raises(TypeError):
+            AdCPValidationError("permanent schema mismatch")  # type: ignore[call-arg]
+
+    def test_the_derived_values_stand_on_their_own(self):
+        """Non-vacuity: with nothing passed, the three values still resolve.
+
+        A constructor that rejected everything would satisfy the assertions above
+        while emitting nothing. VALIDATION_ERROR's classification is the one
+        value transcribed here, and only as the anchor for that check — its
+        delivery to a buyer is graded at the boundary by
+        ``test_error_boundary_translation.py::test_extract_error_info_reports_the_derived_recovery``.
+        """
+        exc = AdCPValidationError()
+
+        assert exc.recovery == "correctable"
+        assert exc.message and exc.message == str(exc)
+        assert isinstance(exc.suggestion, str)
+
 
 # ---------------------------------------------------------------------------
 # HTTP status is the one graded value CODE_TABLE does not own
@@ -222,3 +298,37 @@ class TestErrorEnvelopeContextEcho:
 
         assert response.status_code == 400
         assert response.json()["context"] == {"correlation_id": "trace-xyz"}
+
+
+# ---------------------------------------------------------------------------
+# The dead A2A translation map must stay dead
+# ---------------------------------------------------------------------------
+
+
+class TestNoDeadA2AMap:
+    """Dead A2A error map must not exist in exceptions module (PR #1083 review).
+
+    A2A error translation has one home, ``_build_error_envelope()`` in
+    ``adcp_a2a_server.py``. ``exceptions.py`` once carried a second, unreachable
+    copy; a re-introduction would compile, pass every other test, and only show
+    up as two transports disagreeing about a code. Kept from origin/main because
+    nothing else in the suite grades the absence.
+    """
+
+    def test_no_a2a_error_code_map_in_exceptions(self):
+        """_A2A_ERROR_CODE_MAP was dead code — real translation is in adcp_a2a_server.py."""
+        import src.core.exceptions as exc_module
+
+        msg = (
+            "_A2A_ERROR_CODE_MAP is dead code — A2A translation lives in _build_error_envelope() in adcp_a2a_server.py"
+        )
+        assert not hasattr(exc_module, "_A2A_ERROR_CODE_MAP"), msg
+
+    def test_no_to_a2a_error_code_in_exceptions(self):
+        """to_a2a_error_code() was dead code — real translation is in adcp_a2a_server.py."""
+        import src.core.exceptions as exc_module
+
+        msg = (
+            "to_a2a_error_code() is dead code — A2A translation lives in _build_error_envelope() in adcp_a2a_server.py"
+        )
+        assert not hasattr(exc_module, "to_a2a_error_code"), msg

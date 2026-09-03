@@ -201,6 +201,11 @@ async def _get_products_impl(
 
     # Enforce policy-based validation
     if brand_manifest_policy == "require_brand" and not offering:
+        # Message is NOT authored at the raise site: AdCPSalesAgentError.__init__
+        # is keyword-only and has no ``message`` parameter — buyer-facing text
+        # comes from CODE_TABLE[PERMISSION_DENIED]. origin/main's
+        # "Brand manifest required by tenant policy" string is dropped for that
+        # reason, not because the condition changed.
         raise AdCPAuthorizationError()
     elif brand_manifest_policy == "require_auth" and not principal_id:
         # No credential presented at all -> AUTH_MISSING per v3.1.1

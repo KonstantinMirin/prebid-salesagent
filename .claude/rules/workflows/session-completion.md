@@ -86,5 +86,7 @@ This project uses ephemeral branches:
 - Work happens on feature branches
 - Branches are merged to main **locally** (not pushed)
 - Nothing needs to be done for beads at commit time — one shared tracker, automatic
-  export, automatic replication
+  export, automatic replication. Filing is globally visible the moment it happens,
+  so `bd sync` and every sync variant are FORBIDDEN; `.claude/agents/executor.md`
+  and `.claude/commands/team.md` carry the same prohibition as a hard rule.
 - No upstream tracking — don't run `git push`

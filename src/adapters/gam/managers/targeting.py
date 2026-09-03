@@ -10,6 +10,8 @@ import logging
 import os
 from typing import Any
 
+from adcp.types.generated_poc.enums.metro_system import MetroAreaSystem
+
 from src.core.errors.details import CapabilityRefusalDetails
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -721,7 +723,7 @@ class GAMTargetingManager:
             # Map metros (GeoMetro: validate system, extract values)
             if targeting_overlay.geo_metros:
                 for metro in targeting_overlay.geo_metros:
-                    if metro.system.value != "nielsen_dma":
+                    if metro.system != MetroAreaSystem.nielsen_dma:
                         raise AdCPCapabilityNotSupportedError(
                             details=CapabilityRefusalDetails(
                                 capability="geo_system",
@@ -763,7 +765,7 @@ class GAMTargetingManager:
             # Map excluded metros
             if targeting_overlay.geo_metros_exclude:
                 for metro in targeting_overlay.geo_metros_exclude:
-                    if metro.system.value != "nielsen_dma":
+                    if metro.system != MetroAreaSystem.nielsen_dma:
                         raise AdCPCapabilityNotSupportedError(
                             details=CapabilityRefusalDetails(
                                 capability="geo_system",

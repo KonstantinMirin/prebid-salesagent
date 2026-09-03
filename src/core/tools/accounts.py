@@ -62,6 +62,7 @@ from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.validation_helpers import adcp_validation_boundary
+from src.core.webhooks.registration import accept_push_notification_config
 from src.services.notification_proof_service import NotificationProofService, get_notification_proof_service
 
 if TYPE_CHECKING:
@@ -998,7 +999,10 @@ def _check_domain_validity(brand_domain: str) -> list[GateFailure] | None:
     Returns a list of Error objects if invalid, None if valid.
     Reserved TLDs (.test, .invalid, .example, .localhost) are rejected.
     """
-    from src.core.security.url_validator import RESERVED_TLDS
+    # RESERVED_TLDS moved verbatim into the egress package when GH #1802 deleted
+    # url_validator.py; policy.py is where host classification is owned now, and
+    # its comment names THIS function as the single source's other consumer.
+    from src.core.security.egress.policy import RESERVED_TLDS
 
     for tld in RESERVED_TLDS:
         if brand_domain.endswith(tld):
@@ -1127,8 +1131,6 @@ def _check_notification_configs(configs: Iterable[NotificationConfig] | None) ->
     These are per-account failures INSIDE a transport-level success -- the caller
     turns them into ``_build_failed_result``, never a transport error.
     """
-    from src.core.security.url_validator import check_url_syntax
-
     if not configs:
         return None
 
@@ -1154,17 +1156,52 @@ def _check_notification_configs(configs: Iterable[NotificationConfig] | None) ->
                     )
                 ]
 
-        url = getattr(config, "url", None)
-        # Syntax only -- NOT the DNS-resolving check_url_ssrf. A buyer may register
-        # a webhook before standing the endpoint up, so requiring resolution at
-        # write time would reject legitimate registrations. Reachability is the
-        # activation proof's job (F4c), at fire time.
-        url_ok, url_error = check_url_syntax(str(url), require_https=True)
-        if not url_ok:
+        # `notification_configs[].url` is the SAME wire contract as
+        # `push-notification-config.url` (notification-config.json says so in
+        # words), and its `authentication` block carries "the same precedence and
+        # semantics as push-notification-config.authentication". So it is a
+        # registration in exactly the sense src.core.webhooks.registration exists
+        # to accept, and it goes through the ONE registration gate rather than a
+        # local URL-only check.
+        #
+        # BOTH HALVES, not just the URL. A URL-only check accepts an
+        # `HMAC-SHA256` subscriber with no usable secret -- a registration the
+        # fail-closed sender can never deliver against, persisted as though it
+        # were live. The gate refuses it here, naming
+        # `notification_configs[j].authentication.credentials`, while the buyer's
+        # sync_accounts request still exists to carry the refusal.
+        #
+        # Registration-time and therefore DNS-FREE -- deliberately NOT the egress
+        # seam (EgressPolicy.check_registration / resolve_for_dial). A buyer may
+        # register a webhook before standing the endpoint up, so resolving at
+        # write time would reject legitimate registrations; the seam is the
+        # SEND-time gate and re-resolves when the endpoint is actually dialled
+        # (Strategy C, gh-#1697 / gh-#1589). Reachability is the activation
+        # proof's job (F4c). The scheme / hostname / blocklist / IP-literal
+        # verdict and the unconditional https requirement are unchanged: the gate
+        # delegates its URL half to reject_unsafe_webhook_registration_url, which
+        # runs over the same shared address predicate.
+        #
+        # The refusal CAUSE is deliberately dropped rather than reported: AdCP 3.1.1 L1
+        # Security Considerations forbid echoing internal hostnames or addresses back to
+        # the party that supplied the URL, and the buyer already gets the field pointer.
+        # `exc.field` is the gate's own pointer -- it is built from this prefix, so
+        # it names the refused half (`.url` or `.authentication.credentials`)
+        # without carrying any refused host or credential into buyer-facing text.
+        auth = getattr(config, "authentication", None)
+        try:
+            accept_push_notification_config(
+                {
+                    "url": getattr(config, "url", None),
+                    "authentication": auth.model_dump(mode="json", exclude_none=True) if auth is not None else None,
+                },
+                field_prefix=f"notification_configs[{index}]",
+            )
+        except AdCPValidationError as exc:
             return [
                 GateFailure(
                     failure_class="notification_config_invalid",
-                    field=f"notification_configs[{index}].url",
+                    field=getattr(exc, "field", None) or f"notification_configs[{index}].url",
                 )
             ]
     return None
@@ -1574,6 +1611,21 @@ async def _sync_accounts_impl(
     # failed" and no way to know what to fix.
     if not req.accounts:
         raise AdCPValidationError(field="accounts")
+
+    # Request-level webhook ingest. `push_notification_config` is stored now and
+    # dialled later, so ingest is the only point with a request left to refuse
+    # into -- same reasoning and same gate as sync_creatives / create_media_buy.
+    # Both halves run: an unsafe URL and a credential-less HMAC registration are
+    # each refused with a correctable VALIDATION_ERROR naming its own field.
+    # Runs after auth (so an unauthenticated caller still gets the auth answer
+    # first) and before any write.
+    if req.push_notification_config:
+        accept_push_notification_config(
+            req.push_notification_config,
+            field_prefix="push_notification_config",
+            context=req.context,
+        )
+
     dry_run = bool(req.dry_run)
     delete_missing = bool(req.delete_missing)
 

@@ -172,8 +172,13 @@ all of them have caused real defects when skipped.
    scenario never ran — it auto-xfailed at fixture setup (missing step defs and
    unwired harness routes xfail silently by design). After touching step files, run
    the touched slice with `-rxX` and READ the output: sub-second wall time and
-   "No harness wired" / `StepDefinitionNotFoundError` reasons are the tells
-   (`make check-dormant` is the incoming wrapper for this check). Ground scenarios in
+   "No harness wired" / `StepDefinitionNotFoundError` reasons are the tells. A real
+   run measures this for you: `tests/bdd/scenario_liveness.py` emits
+   `test-results/bdd_scenario_liveness.json` with `steps_bound` / `harness_wired` /
+   `ledgered` per storyboard-tagged scenario, and
+   `scripts/audit/scenario_liveness_join.py` joins it against the `ENV_ROUTES`
+   registry and the conformance ledger, so a tagged-but-never-executing scenario
+   reads as a gap instead of as coverage. Ground scenarios in
    the pinned spec (`docs/adcp-spec-version.md`), cite version+file on any divergence,
    and remember: xfail ledgers and guard allowlists only shrink. The e2e_rest xfail
    ROUTES in the bdd conftest are pinned too (`EXPECTED_XFAIL_ROUTES` in
@@ -233,21 +238,57 @@ to all factories automatically. Just use factories inside a `with env:` block.
 
 ## Obligation Tests
 
-Tests tagged with `Covers: <obligation-id>` verify behavioral contracts from `docs/test-obligations/`.
+Tests tagged with `Covers: <obligation-id>` verify behavioral contracts.
 
-### Six hard rules
+The obligation DOCUMENTS these ids referred to are no longer committed: they were
+generated reports, and a generated report kept in the tree drifts from its
+generator. `docs/test-obligations/` now holds only curated inputs
+(`storyboard-issue-map.yaml`, `storyboard-wireability.yaml`,
+`bdd-traceability.yaml`). The rules below still bind any test carrying a
+`Covers:` tag; do not add new tags against a document that no longer exists.
+
+### Five hard rules
 
 1. MUST import from `src.*`
 2. MUST call a production function (not just import it)
 3. MUST assert on production output
-4. MUST have `Covers:` tag in docstring
-5. MUST use factory-boy factories for data setup
-6. MUST NOT be mock-echo only (asserting mock return values)
+4. MUST use factory-boy factories for data setup
+5. MUST NOT be mock-echo only (asserting mock return values)
 
-### Enforced by structural guards
+Rule 4 was "MUST have a `Covers:` tag". It is gone: there is no longer a document
+to tag against, and the guard that graded it was deleted with those documents.
+Telling a contributor both to add a tag and not to add one is worse than neither.
 
-- `test_architecture_obligation_coverage.py` — every behavioral obligation has a test
-- `test_architecture_obligation_test_quality.py` — obligation tests actually call production code
+## Storyboard Conformance (`tests/storyboard/`)
+
+What grades protocol behavior against AdCP is not a generated obligation report but a
+MEASURED run of the real `@adcp/sdk` storyboard runner, surfaced as ordinary
+parametrized pytest tests — one per `(protocol, track, storyboard_id, step_id)`
+(`tests/storyboard/test_storyboard_conformance.py`). The runner executes once per
+PROTOCOL: the agent serves both MCP and A2A, so grading only MCP would let the A2A
+surface drift non-conformant with CI green.
+
+```bash
+tox -e storyboard    # needs the full Docker stack + tests/storyboard/runner/ npm deps
+```
+
+- **Ledger, not skips.** Only a genuine check FAILURE is ledgered, in
+  `tests/storyboard/known_failures.txt` (+ `tests/storyboard/conftest.py`) — the same
+  discipline as `tests/bdd/e2e_rest_known_failures.txt`. Runner-reported skips
+  (`missing_test_controller`, `missing_tool`, `prerequisite_failed`) become native
+  `pytest.skip()` calls and never become ledger entries.
+- **Curated inputs, not generated reports.** `docs/test-obligations/` holds the three
+  judgements a program cannot derive: `storyboard-issue-map.yaml` (which GitHub issue
+  tracks a gap), `storyboard-wireability.yaml` (per-`(storyboard, step)` triage of
+  whether it can be wired end-to-end), and `bdd-traceability.yaml`.
+- **Guards.** `ls tests/unit/test_architecture_storyboard_*.py` is the current list.
+  Binding (`test_architecture_storyboard_binding.py`) requires a `@storyboard-v3.1` tag to cite a binding that
+  resolves at the pin; wireability and issue-map require every gradable step to carry a
+  triage decision; check-index liveness
+  (`test_architecture_storyboard_check_index_liveness.py`) separates
+  "claimed by a scenario" from "graded by a LIVE scenario", so a tagged scenario with
+  zero bound steps stops counting as coverage; ledger guards pin the single owner of the
+  check-id grammar in `scripts/audit/ledger.py`.
 
 ## Anti-Patterns in This Codebase
 
@@ -466,25 +507,20 @@ and ~80 BDD steps asserted on reconstructed exceptions and "continue to work"; b
 claims expired when the reconstruction was deleted. Those assertions do not silently
 work — on a wire transport they raise, because `result.error` is a `WireError` with no
 `.error_code`. The BDD steps were migrated wholesale (`salesagent-3dawm.18`), and the
-wire-discipline guard's allowlists are EMPTY.
+wire-discipline guard (`tests/unit/test_architecture_bdd_wire_discipline.py`) holds the
+line; like every ratchet here, its allowlists only shrink.
 
-What remains is a short, enumerated list rather than a programme:
-
-1. **New error tests**: use `result.assert_wire_error(code, recovery=...)` when you hold
-   a `TransportResult`; `assert_envelope_shape(...)` only for a bare envelope or an
-   `AdCPToolError` where no `TransportResult` exists.
-2. **The known off-path sites** — three that hand-index `wire_error_envelope`
-   (`test_mcp_unknown_field_handling`, `test_cross_principal_creative_scoping`,
-   `test_idempotency_rate_limit`) and two that read `result.error.error_code`
-   (`test_creative_formats_discovery`). One of the three is FORCED: no helper can express
-   `retry_after`, so it has to be added before that site can move.
+What remains is a rule, not a programme: **new error tests** use
+`result.assert_wire_error(code, recovery=...)` when you hold a `TransportResult`, and
+`assert_envelope_shape(...)` only for a bare envelope or an `AdCPToolError` where no
+`TransportResult` exists.
 
 ### TransportResult.wire_error_envelope
 
 `TransportResult` exposes `wire_error_envelope: dict | None` — the two-layer
-error envelope captured at the transport boundary. Populated by all
-dispatchers on error; `None` on success. This is the canonical field for
-error verification.
+error envelope captured at the transport boundary. Populated on error by
+every dispatcher — each of them has a real wire — and `None` on success.
+This is the canonical field for error verification.
 
 **Authenticity per transport (matters for what regressions the field catches):**
 
@@ -494,19 +530,28 @@ error verification.
 | MCP | JSON string in the raised `ToolError` (real wire) | `_handle_tool_exception` + `build_two_layer_error_envelope` |
 | A2A | Failed Task's artifact DataPart, carried on the raised `WireError` as `.envelope` (`tests/harness/_base.py`) | `on_message_send` + `_serialize_for_a2a` + envelope build |
 
-`synthesized_error_envelope` is DELETED. It exposed "what production WOULD emit
+The synthesized envelope is DELETED. It exposed "what production WOULD emit
 at the boundary for this exception", which could not catch a regression in the
 production boundary translator: both sides called `build_two_layer_error_envelope`
 over the same in-memory exception, so the value moved in lockstep with whatever
 the builder produced. A field that cannot fail is not a weak check, it is a
 zero-information one — and it was actively harmful, because it stood in for a
 missing wire and made a dead transport path indistinguishable from a live one
-(salesagent-b2wny is an A2A gap it concealed). Every wire-shape assertion now runs
-on REST, MCP or A2A, which observe actual wire bytes.
+(salesagent-b2wny is an A2A gap it concealed; on MCP it masked `MediaBuyListEnv`
+failing to capture its wire at all, which is the general rule: on a transport that
+HAS a wire, a synthesized value is either redundant or it is hiding a lost
+capture). Every wire-shape assertion now runs on REST, MCP or A2A, which observe
+actual wire bytes. `tests/unit/test_harness_mcp_never_synthesizes.py` pins that MCP
+never substitutes.
 
 `result.error` is the raised or captured exception, not a reconstruction: on
 REST/A2A it is a `WireError` carrying the envelope verbatim, on MCP the raw
-`ToolError`. Assert on `wire_error_envelope` through the helpers below.
+`ToolError`. Assert on the wire, through the helpers below — `assert_wire_error`
+for an assertion, or the `error_envelope()` / `error_envelope_or_none()` accessor
+pair when a test needs the envelope itself. `error_envelope()` RAISES when no
+envelope was captured, rather than letting a dead wire path pass on a rebuilt
+shape; `error_envelope_or_none()` is the sibling for callers that branch on
+envelope-presence as control flow.
 
 ### TransportResult.wire_response (success-path wire)
 
@@ -515,7 +560,7 @@ success-path response body**, the success-path analogue of `wire_error_envelope`
 Populated on success by the REST dispatcher (HTTP body) and by the A2A/MCP
 dispatchers **only when the env routes through `_run_a2a_handler` /
 `_run_mcp_client`** (which stash the wire). The direct `*_raw` wrappers do not
-stash, so `wire_response` is `None` there — as it is on error and on IMPL. (The
+stash, so `wire_response` is `None` there — as it is on error. (The
 legacy `_run_mcp_wrapper` bypass is DELETED: it skipped the FastMCP middleware
 chain, so an env using it captured no wire envelope at all.) Today
 `CreativeFormatsEnv` and `CreativeListEnv` read it.

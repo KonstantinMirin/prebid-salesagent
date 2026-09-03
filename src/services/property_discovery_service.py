@@ -25,6 +25,7 @@ from sqlalchemy.sql import Select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuthorizedProperty, PropertyTag
+from src.services.adagents_error_messages import describe_adagents_error
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,9 @@ async def _fetch_domain_data(domain: str, delay: float, stats: dict[str, Any]) -
     try:
         await asyncio.sleep(delay)
         logger.info(f"Fetching adagents.json from {domain}")
+        # Sanctioned self-pinning dialer, deliberately outside the
+        # egress seam -- see src/core/security/outbound_http.py's
+        # module docstring.
         adagents_data = await fetch_adagents(domain)
         return (domain, adagents_data)
     except AdagentsNotFoundError:
@@ -98,9 +102,11 @@ async def _fetch_domain_data(domain: str, delay: float, stats: dict[str, Any]) -
         _record_fetch_error(stats, msg)
         logger.warning(f"\u26a0\ufe0f {msg}")
     except AdagentsValidationError as e:
-        msg = f"{domain}: Invalid adagents.json - {e!s}"
+        # The raw error can carry a resolved IP and an SSRF range classification,
+        # so only the log sees it; stats gets the fixed, non-disclosing text.
+        logger.error(f"\u274c {domain}: Invalid adagents.json - {e}")
+        msg = f"{domain}: {describe_adagents_error(e)}"
         _record_fetch_error(stats, msg)
-        logger.error(f"\u274c {msg}")
     except Exception as e:
         msg = f"{domain}: {e!s}"
         _record_fetch_error(stats, msg)

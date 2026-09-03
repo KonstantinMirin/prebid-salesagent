@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, NoReturn, Protocol
+from typing import TYPE_CHECKING, NoReturn
 
 from pydantic import ValidationError
 
 if TYPE_CHECKING:
-    from adcp import AgentConfig
     from adcp.exceptions import ADCPError
 
     from src.adapters import AdServerAdapter
@@ -26,40 +25,24 @@ if TYPE_CHECKING:
     TenantLike = DBTenant | IdentityTenant | None
 
 
-class _HasAgentFields(Protocol):
-    """Structural type for objects with agent config fields (CreativeAgent, SignalsAgent)."""
+from src.adapters.google_ad_manager import GoogleAdManager
+from src.adapters.kevel import Kevel
+from src.adapters.mock_ad_server import MockAdServer as MockAdServerAdapter
+from src.adapters.triton_digital import TritonDigital
+from src.core.schemas import Principal
+from src.core.testing_hooks import MockTestBehavior
 
-    name: str
-    agent_url: str
-    auth: dict[str, str] | None
-    auth_header: str | None
-    timeout: int
+logger = logging.getLogger(__name__)
 
 
-def build_agent_config(agent: _HasAgentFields) -> AgentConfig:
-    """Build an adcp AgentConfig from any object with standard agent fields.
-
-    Shared by CreativeAgentRegistry and SignalsAgentRegistry to avoid
-    duplicating the auth-extraction and config-building logic.
-    """
-    from adcp import AgentConfig as _AgentConfig
-    from adcp import Protocol as AdcpProtocol
-
-    auth_type = "token"
-    auth_token = None
-    if agent.auth:
-        auth_type = agent.auth.get("type", "token")
-        auth_token = agent.auth.get("credentials")
-
-    return _AgentConfig(
-        id=agent.name,
-        agent_uri=str(agent.agent_url),
-        protocol=AdcpProtocol.MCP,
-        auth_token=auth_token,
-        auth_type=auth_type,
-        auth_header=agent.auth_header or "x-adcp-auth",
-        timeout=float(agent.timeout),
-    )
+# ``build_agent_config`` and its ``_HasAgentFields`` Protocol used to sit here.
+# salesagent-4n88 (#1802) deleted them: both registries that built an adcp
+# ``AgentConfig`` for ``ADCPMultiAgentClient`` now dial the guarded MCP seam
+# (``src.core.utils.operator_mcp.call_operator_mcp_tool``), so nothing
+# constructs one any more. Keeping a second, unreachable way to build agent
+# auth would be the duplication the CLAUDE.md DRY invariant forbids.
+# ``raise_mapped_adcp_error`` below is NOT part of that removal: the registries
+# still catch the SDK's own ``ADCPError`` and delegate the mapping here.
 
 
 def raise_mapped_adcp_error(exc: ADCPError, *, agent_label: str, logger: logging.Logger) -> NoReturn:
@@ -123,16 +106,6 @@ def raise_mapped_adcp_error(exc: ADCPError, *, agent_label: str, logger: logging
         details={"agent": agent_label},
         internal_detail=f"{failure_mode}: {exc.message}",
     ) from exc
-
-
-from src.adapters.google_ad_manager import GoogleAdManager
-from src.adapters.kevel import Kevel
-from src.adapters.mock_ad_server import MockAdServer as MockAdServerAdapter
-from src.adapters.triton_digital import TritonDigital
-from src.core.schemas import Principal
-from src.core.testing_hooks import MockTestBehavior
-
-logger = logging.getLogger(__name__)
 
 
 def _resolve_tenant_id_and_fallback_adapter(tenant: DBTenant | IdentityTenant) -> tuple[str, str]:

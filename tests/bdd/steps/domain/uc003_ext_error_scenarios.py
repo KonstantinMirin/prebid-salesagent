@@ -708,6 +708,10 @@ def given_adapter_error_during_update(ctx: dict) -> None:
 
     env = ctx["env"]
     mock_adapter = env.mock["adapter"].return_value
+    # "retryable" was never a recovery classification — the pinned vocabulary is
+    # transient / correctable / terminal — and it reached the wire verbatim because
+    # the kwarg was a free string. AdCPAdapterError's wire code SERVICE_UNAVAILABLE
+    # is pinned transient, which is what this scenario always meant.
     error = AdCPAdapterError(
         details={"suggestion": "Retry the operation or contact ad server support"},
     )

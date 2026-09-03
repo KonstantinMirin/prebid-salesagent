@@ -7,9 +7,11 @@ AdCP 3.0.1 graded steps pinned at the real wire (not reconstructed exceptions):
   booking exists.
 - ``key_reuse_conflict``: the same key with a different canonical payload rejects
   with ``IDEMPOTENCY_CONFLICT`` on every transport.
-- ``missing_key``: a create without idempotency_key rejects as VALIDATION_ERROR
-  (the REST pin lives in test_idempotency_replay; A2A/MCP are pinned here — the
-  IMPL transport cannot express absence, the model requires the field).
+- ``missing_key``: a create without idempotency_key rejects as INVALID_REQUEST —
+  idempotency_key is in create-media-buy-request.json /required, so its absence
+  violates a SCHEMA constraint (the REST pin lives in test_idempotency_replay;
+  A2A/MCP are pinned here — a direct _impl call cannot express absence at all,
+  the model requires the field).
 - ``fresh_key_new_resource``: a different key with an identical payload creates a
   NEW media buy (no cross-key replay).
 
@@ -109,9 +111,13 @@ class TestIdempotencyWireMatrix:
             second = env.call_via(transport, **mutated)
 
         assert second.is_error, f"conflicting payload must reject on {transport.value}"
-        envelope = second.wire_error_envelope
-        assert envelope is not None, f"conflict must carry the two-layer envelope on {transport.value}"
-        assert_envelope_shape(envelope, "IDEMPOTENCY_CONFLICT", recovery="correctable")
+        # One assertion surface for every leg, owned by the result rather than by
+        # this test: assert_wire_error reads the REAL wire bytes this dispatch
+        # captured (never a harness-side reconstruction), fails loudly when no
+        # envelope was captured instead of comparing against None, and grades the
+        # code against CODE_TABLE. There is no IMPL branch left to write — this
+        # matrix dispatches only transports that HAVE a wire.
+        second.assert_wire_error("IDEMPOTENCY_CONFLICT", recovery="correctable")
 
     def test_fresh_key_identical_payload_creates_new_buy(self, integration_db, transport):
         """A different key with an identical payload creates a NEW media buy."""
@@ -169,9 +175,11 @@ class TestIdempotencyWireMatrix:
             second = env.call_via(transport, **dict(kwargs))
 
         assert second.is_error, f"an expired replay window must reject on {transport.value}"
+        # Same single surface as the conflict leg above. The suggestion checks
+        # below need the envelope itself, so it is read back AFTER the shape
+        # assertion has already proved a wire envelope was captured.
+        second.assert_wire_error("IDEMPOTENCY_EXPIRED", recovery="correctable")
         envelope = second.wire_error_envelope
-        assert envelope is not None, f"EXPIRED must carry the two-layer envelope on {transport.value}"
-        assert_envelope_shape(envelope, "IDEMPOTENCY_EXPIRED", recovery="correctable")
         # The spec's buyer-recovery guidance (the natural-key check that MAKES
         # EXPIRED correctable) must ride the WIRE on both envelope layers — not
         # just live at the raise site — on every transport.
@@ -217,7 +225,7 @@ class TestMissingKeyWireMatrix:
     """Storyboard ``missing_key`` on the A2A and MCP wires (REST is pinned in
     test_idempotency_replay; IMPL cannot express absence — the model requires it)."""
 
-    def test_missing_key_rejects_validation_error(self, integration_db, transport):
+    def test_missing_key_rejects_invalid_request(self, integration_db, transport):
         with MediaBuyCreateEnv() as env:
             _tenant, _principal, product, _pricing = env.setup_media_buy_data()
             kwargs = _create_kwargs(product, idempotency_key=OMIT_IDEMPOTENCY_KEY)

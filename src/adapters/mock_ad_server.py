@@ -1,12 +1,9 @@
 import logging
 import random
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from src.core.schemas import Snapshot
 
 # adcp 3.6.0: BrandManifest removed from CreateMediaBuyRequest; now uses BrandReference (brand field)
 from pydantic import Field
@@ -18,6 +15,7 @@ from src.adapters.base import (
     BaseProductConfig,
     TargetingCapabilities,
 )
+from src.adapters.utils.pricing import resolve_package_rate
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import (
     CapabilityRefusalDetails,
@@ -50,9 +48,11 @@ from src.core.schemas import (
     MediaPackage,
     PackagePerformance,
     ReportingPeriod,
+    Snapshot,
     UpdateMediaBuyResponse,
     UpdateMediaBuySuccess,
 )
+from src.core.security.webhook_egress import deliver_webhook
 from src.core.validation_helpers import package_field_path
 
 
@@ -386,15 +386,48 @@ class MockAdServer(AdServerAdapter):
         first-class ``suggestion=`` param for that; the param was deleted
         (salesagent-3dawm.12) and the derivation replaced it, so a copy buried in
         ``details`` is still wrong but there is no longer anything to hand over.
-        ``error_details`` from test behavior stays in ``details`` for any other
-        injected keys.
+        The injected ``recovery`` knob selects the exception CLASS rather than a
+        wire value (#1802): ``recovery`` is derived from the raised code, so
+        "give me a terminal failure" is expressible only as "raise the class the
+        pin classifies terminal". ``error_details``/``error_message`` from test
+        behavior are server-side diagnostics and ride ``internal_detail``.
         """
         test_behavior = self._read_test_behavior()
         if not test_behavior.get(flag):
             return
-        from src.core.exceptions import AdCPAdapterError
+        from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError, AdCPValidationError
 
-        raise AdCPAdapterError(
+        # The injected knob selects a CLASS, not a recovery value. ``recovery`` is
+        # derived from the wire code now, so "give me a terminal failure" is
+        # expressible only as "raise the class the pin classifies terminal" — which
+        # is the invariant this epic exists to establish, holding for injected test
+        # failures exactly as it does for real ones.
+        recovery_to_class = {
+            "transient": AdCPAdapterError,  # SERVICE_UNAVAILABLE
+            "terminal": AdCPConfigurationError,  # CONFIGURATION_ERROR
+            "correctable": AdCPValidationError,  # VALIDATION_ERROR
+        }
+        requested = test_behavior.get("recovery", "transient")
+        try:
+            error_cls = recovery_to_class[requested]
+        except KeyError:
+            # No Quiet Failures: a misspelt knob used to sail through as a free
+            # string on the wire (the "retryable" spelling did exactly that).
+            # Typed, not ValueError: a bad knob is deployment/test configuration,
+            # which is what CONFIGURATION_ERROR means, and src/ may not grow new
+            # bare ValueError raises (test_architecture_no_value_error_in_impl).
+            raise AdCPConfigurationError(
+                # internal_detail, not a positional message: buyer-facing text comes
+                # from CODE_TABLE and no raise site may author it. A misspelt knob is
+                # a server-side diagnostic, so the explanation goes to the log.
+                internal_detail=(
+                    f"test_behavior recovery={requested!r} is not a recovery classification. "
+                    f"Use one of {sorted(recovery_to_class)} — each selects the exception class "
+                    f"whose pinned enumMetadata recovery is that value."
+                )
+            ) from None
+
+        raise error_cls(
             # The injected error_details rode `details` while this comment said it
             # belongs server-side. It does: internal_detail below carries the injected
             # text, and a fault-injection knob has no business shaping a buyer's
@@ -574,8 +607,6 @@ class MockAdServer(AdServerAdapter):
 
         from datetime import UTC, datetime
 
-        import requests
-
         payload = {
             "event": "task_completed",
             "step_id": step_id,
@@ -586,14 +617,28 @@ class MockAdServer(AdServerAdapter):
             "timestamp": datetime.now(UTC).isoformat(),
         }
 
-        try:
-            response = requests.post(
-                self.async_webhook_url, json=payload, headers={"Content-Type": "application/json"}, timeout=10
-            )
-            response.raise_for_status()
+        # Through the webhook module, not the raw seam. This notification is
+        # unauthenticated by design — it is a dev adapter telling a local listener a
+        # step finished — but "unauthenticated" is a value the module understands,
+        # not a reason to skip it: the body still gets the canonical serialization,
+        # the destination still gets checked, and the result is an outcome rather
+        # than an exception to guess at. max_attempts=1 keeps the previous
+        # behaviour: a step-completion ping that silently retries is noise.
+        # No scheme/credentials: this notification is unauthenticated by design —
+        # a dev adapter telling a local listener a step finished. deliver_webhook
+        # takes the stored primitives, and their absence IS "unauthenticated"; it is
+        # not a reason to bypass the module, which still owns the canonical body,
+        # the destination check, and the outcome.
+        outcome = deliver_webhook(
+            self.async_webhook_url,
+            payload,
+            timeout=10.0,
+            max_attempts=1,
+        )
+        if outcome.kind == "delivered":
             self.log(f"📤 Sent webhook notification for {step_id}")
-        except Exception as e:
-            self.log(f"⚠️ Webhook failed for {step_id}: {e}")
+        else:
+            self.log(f"⚠️ Webhook failed for {step_id}: {outcome.kind} — {outcome.detail}")
 
     def create_media_buy(
         self,
@@ -928,15 +973,7 @@ class MockAdServer(AdServerAdapter):
                 total_budget += budget_amount
             elif p.delivery_type == "guaranteed":
                 # Fallback: calculate from CPM * impressions (legacy)
-                # Use pricing_info if available (pricing_option_id flow), else fallback to package.cpm
-                pricing_info = package_pricing_info.get(p.package_id) if package_pricing_info else None
-                if pricing_info:
-                    # Use rate from pricing option (fixed) or bid_price (auction)
-                    rate = pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info.get("bid_price", p.cpm)
-                else:
-                    # Fallback to legacy package.cpm
-                    rate = p.cpm
-                total_budget += rate * p.impressions / 1000
+                total_budget += resolve_package_rate(p, package_pricing_info) * p.impressions / 1000
 
         # Apply strategy-based bid adjustment
         if self.strategy_context and hasattr(self.strategy_context, "get_bid_adjustment"):

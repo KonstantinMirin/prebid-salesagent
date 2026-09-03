@@ -1,6 +1,6 @@
 """MCP and A2A wrapper functions for sync_creatives."""
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from adcp import PushNotificationConfig
 from adcp.types import AccountReference as LibraryAccountReference
@@ -11,6 +11,7 @@ from pydantic import Field
 
 from src.core.helpers import enum_value
 from src.core.idempotency_canonical import canonical_request_hash
+from src.core.schema_helpers import to_push_notification_config
 from src.core.schemas.creative import CreativeAssetRequest, SyncCreativesRequest
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
@@ -29,7 +30,10 @@ def build_sync_creatives_request(
     delete_missing: bool | None = None,
     dry_run: bool | None = None,
     validation_mode: ValidationMode | None = None,
-    push_notification_config: PushNotificationConfig | None = None,
+    # Widened deliberately: A2A hands the buyer's raw wire dict straight to this builder
+    # (select_request_fields off the parameter bag), so a bare PushNotificationConfig
+    # annotation here would be decorative. It is coerced below.
+    push_notification_config: PushNotificationConfig | dict[str, Any] | None = None,
     context: ContextObject | None = None,
 ) -> SyncCreativesRequest:
     """Build the shared sync_creatives request for transport wrappers.
@@ -65,7 +69,13 @@ def build_sync_creatives_request(
         delete_missing=delete_missing,
         dry_run=dry_run,
         validation_mode=validation_mode,
-        push_notification_config=push_notification_config,
+        # Coerced through the shared funnel rather than left to the model's own validation:
+        # this is the seam where the untyped wire document arrives (A2A forwards the buyer's
+        # raw dict), and to_push_notification_config carries the boundary with it -- a
+        # document the pinned schema forbids refuses HERE as a typed AdCP error naming
+        # push_notification_config.<field>, instead of reaching _impl unchallenged. It is
+        # idempotent for the callers (MCP, REST) that already hold a typed config.
+        push_notification_config=to_push_notification_config(push_notification_config),
         context=context,
     )
 
@@ -114,11 +124,6 @@ async def sync_creatives(
     """
     identity = (await ctx.get_state("identity")) if isinstance(ctx, Context) else None
 
-    # Resolve account at transport boundary (before _impl)
-    from src.core.transport_helpers import enrich_identity_with_account
-
-    identity = enrich_identity_with_account(identity, account)
-
     # Build the typed request FIRST, so the schema's own rules (idempotency_key's pattern,
     # account's presence, the assignments item shape) are enforced here rather than only on
     # whichever transport happened to construct the model. This is also the seam that makes
@@ -136,19 +141,16 @@ async def sync_creatives(
         context=context,
     )
 
-    response = _sync_creatives_impl(
-        creatives=req.creatives,
-        assignments=req.assignments,
-        creative_ids=req.creative_ids,
-        delete_missing=bool(req.delete_missing),
-        dry_run=bool(req.dry_run),
-        validation_mode=enum_value(req.validation_mode) or "strict",
-        push_notification_config=req.push_notification_config,
-        context=req.context,
-        idempotency_key=req.idempotency_key,
-        identity=identity,
-    )
-    return mcp_result(response)
+    # Delegated to the raw wrapper rather than calling _impl a second time. Idempotency is
+    # transport-agnostic (AdCP 3.1.1 idempotency.yaml: the at-most-once promise is attached
+    # to the field, not to a channel), but the request_hash that carries it was threaded in
+    # from ONE of the two call sites: this one dropped it, so `cache_success` never fired on
+    # MCP and a repeated key re-executed the sync there while replaying on a2a and rest.
+    # A second call site is a second chance to drop the next parameter, so there is now one:
+    # a2a, rest and mcp all reach _impl through sync_creatives_raw, which resolves identity
+    # (explicit here, so it is returned unchanged rather than re-resolved from ambient
+    # context) and enriches it off req.account exactly as this wrapper used to inline.
+    return mcp_result(sync_creatives_raw(req=req, identity=identity))
 
 
 def sync_creatives_raw(
@@ -193,6 +195,11 @@ def sync_creatives_raw(
         delete_missing=bool(req.delete_missing),
         dry_run=bool(req.dry_run),
         validation_mode=enum_value(req.validation_mode) or "strict",
+        # Already typed: this wrapper takes the BUILT request, and the builder coerces
+        # push_notification_config through to_push_notification_config. The seam that used
+        # to be untyped here -- a raw wire dict forwarded straight to _impl -- moved up to
+        # build_sync_creatives_request, which is now the one place every transport
+        # constructs through.
         push_notification_config=req.push_notification_config,
         context=req.context,
         idempotency_key=req.idempotency_key,

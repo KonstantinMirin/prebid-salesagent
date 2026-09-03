@@ -36,7 +36,8 @@ import logging
 import httpx
 from adcp.types import NotificationConfig
 
-from src.core.security.url_validator import check_url_ssrf, is_reserved_tld_host
+from src.core.security.egress.policy import OutboundRequestBlocked, is_reserved_tld_host
+from src.core.security.outbound_http import validate_url
 
 logger = logging.getLogger(__name__)
 
@@ -77,10 +78,15 @@ class NotificationProofService:
             return False
 
         # Full SSRF check at FIRE time (not write time): we are about to send a
-        # request, so where the name actually resolves now matters.
-        safe, reason = check_url_ssrf(url, require_https=True)
-        if not safe:
-            logger.info("Notification proof for account %s refused: %s", account_id, reason)
+        # request, so where the name actually resolves now matters. This is the
+        # seam's own dial-time verdict (validate_url runs EgressPolicy.
+        # resolve_for_dial and discards the pin), not a second copy of it.
+        # The refusal is deliberately opaque -- AdCP 3.1.1 L1 security point 6
+        # forbids echoing the cause back -- so only the URL is logged.
+        try:
+            validate_url(url)
+        except OutboundRequestBlocked:
+            logger.info("Notification proof for account %s refused by egress policy: %s", account_id, url)
             return False
 
         # FIXME(#1291): the challenge MUST be RFC 9421-signed. Signing is not

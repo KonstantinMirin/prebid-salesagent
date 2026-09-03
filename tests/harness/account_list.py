@@ -43,6 +43,16 @@ class AccountListEnv(AccountListDispatchMixin, IntegrationEnv):
     - Real query building, filtering, pagination
     """
 
+    # Dispatch declaration: the base owns call_mcp/call_a2a, routing both through
+    # the ONE AdCPTestClient core (BaseTestEnv._deliver_via_client), so the wire
+    # rides back on DeliverResult.wire_response / the raised error's
+    # wire_error_envelope instead of a per-env stash.
+    # test_architecture_harness_single_dispatch names this env in the converted
+    # set: an override here would be a new violation, not an allowlist row.
+    MCP_TOOL = "list_accounts"
+    A2A_SKILL = "list_accounts"
+    RESPONSE_MODEL = ListAccountsResponse
+
     EXTERNAL_PATCHES = {
         "audit_logger": "src.core.tools.accounts.get_audit_logger",
     }
@@ -52,9 +62,12 @@ class AccountListEnv(AccountListDispatchMixin, IntegrationEnv):
         mock_logger = MagicMock()
         self.mock["audit_logger"].return_value = mock_logger
 
-    # The four transport methods live in AccountListDispatchMixin — AccountSyncEnv
-    # dispatches the same verb as its second verb, and one shared implementation is
-    # what keeps the two envs from grading the same production call two ways.
+    # The non-transport halves of the list verb — the _impl call, the REST path
+    # and the REST parser — stay in AccountListDispatchMixin because AccountSyncEnv
+    # dispatches list_accounts as its SECOND verb and must grade the same
+    # production call the same way. Its MCP/A2A halves are what the base's
+    # declaration above replaces here; the dual-verb env still needs a
+    # request-content discriminator, so it keeps overriding deliver_* itself.
 
     def call_impl(self, **kwargs: Any) -> ListAccountsResponse:
         """Call _list_accounts_impl with real DB.
@@ -63,14 +76,6 @@ class AccountListEnv(AccountListDispatchMixin, IntegrationEnv):
         defaults to self.identity if not provided.
         """
         return self._call_list_impl(**kwargs)
-
-    def call_a2a(self, **kwargs: Any) -> ListAccountsResponse:
-        """Call list_accounts via real AdCPRequestHandler — full A2A pipeline."""
-        return self._call_list_a2a(**kwargs)
-
-    def call_mcp(self, **kwargs: Any) -> ListAccountsResponse:
-        """Call list_accounts via Client(mcp) — full pipeline dispatch."""
-        return self._call_list_mcp(**kwargs)
 
     REST_ENDPOINT = AccountListDispatchMixin.LIST_REST_ENDPOINT
 

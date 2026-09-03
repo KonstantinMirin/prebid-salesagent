@@ -11,11 +11,11 @@ Covers uncovered lines in:
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp import PushNotificationConfig
-from adcp.types import CreativeAction
+from adcp.types import CreativeAction, ErrorCode
 from pydantic import BaseModel
 
 from tests.factories import PrincipalFactory
@@ -28,10 +28,12 @@ from tests.helpers.creative_test_helpers import (
 )
 from tests.helpers.creative_test_helpers import (
     make_format_spec,
+    make_registry_mock,
 )
 from tests.helpers.creative_test_helpers import (
     sync_patches as _sync_patches,
 )
+from tests.helpers.egress_hatches import UNDIALLED_PUBLIC_HTTPS_ORIGIN
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -51,6 +53,18 @@ def identity():
 
 @pytest.fixture
 def mock_format_spec():
+    """The ONE shared registry-listing stand-in, not a local hand-roll.
+
+    ``make_format_spec`` already carries the fix origin/main made here — it STATES
+    ``output_format_ids`` (empty list) instead of leaving it to Mock's auto-attribute,
+    which answers truthy and would make every static format claim to be a GENERATIVE
+    one the moment the catalog lookup started matching. It also fixes the half that
+    the local hand-roll still had wrong: ``format_id`` is a FormatId MODEL, not a bare
+    string. ``format_resolver`` compares on ``format_id_identity(...)`` -> ``(canonical
+    agent_url, id)``, so a string ``format_id`` has no ``.agent_url`` at all — a shape
+    production never produces, and one that only stayed green while the lookup matched
+    nothing (#2093).
+    """
     return make_format_spec()
 
 
@@ -64,7 +78,15 @@ def _make_creative_uow():
 
 
 class TestSyncPushNotificationConfig:
-    """Lines 117-121: push_notification_config dict and model forms."""
+    """Lines 117-121: push_notification_config dict and model forms.
+
+    The URL is an https public-unicast IP literal: sync_creatives now runs the
+    seam's ingest verdict on it (src/core/webhook_validator.py, reject_unsafe_webhook_registration_url), and an IP
+    literal passes under every hatch posture without resolving DNS — a
+    hostname here would make a unit test do live DNS and NXDOMAIN-refuse.
+    The refusal path itself is graded by
+    tests/integration/test_webhook_url_ingest_refusal.py.
+    """
 
     def test_push_notification_config_dict_form(self, identity, mock_format_spec):
         """Line 117-118: dict push_notification_config extracts URL."""
@@ -74,7 +96,7 @@ class TestSyncPushNotificationConfig:
             response = _sync_creatives_impl(
                 creatives=[_make_creative_dict()],
                 identity=identity,
-                push_notification_config={"url": "https://hook.example.com"},
+                push_notification_config={"url": f"{UNDIALLED_PUBLIC_HTTPS_ORIGIN}/hook"},
             )
         assert response.creatives[0].action == "created"
 
@@ -86,7 +108,7 @@ class TestSyncPushNotificationConfig:
         from src.core.tools.creatives import _sync_creatives_impl
 
         config = PushNotificationConfig(
-            url="https://hook.example.com",
+            url=f"{UNDIALLED_PUBLIC_HTTPS_ORIGIN}/hook",
             authentication=Authentication(credentials="a" * 32, schemes=[AuthenticationScheme.Bearer]),
         )
         with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
@@ -377,11 +399,19 @@ class TestWorkflowStatusBranches:
     """Status-dependent branches in _workflow.py._create_sync_workflow_steps."""
 
     def test_principal_none_raises_auth_error(self):
-        """principal_id=None raises AdCPAuthenticationError."""
-        from src.core.exceptions import AdCPAuthenticationError
+        """principal_id=None raises the AUTH_MISSING error, not AUTH_INVALID.
+
+        The pre-prkv.16 form pinned this with ``match="Principal ID required"``.
+        The typed errors derive their text from the code table, so no raise site
+        carries that string any more; the code itself is the stronger pin, and it
+        is the distinction that matters here — an ABSENT credential is
+        ``AUTH_MISSING`` (correctable: present one and retry), not the terminal
+        ``AUTH_INVALID`` its base class emits.
+        """
+        from src.core.exceptions import AdCPAuthRequiredError
         from src.core.tools.creatives._workflow import _create_sync_workflow_steps
 
-        with pytest.raises(AdCPAuthenticationError):
+        with pytest.raises(AdCPAuthRequiredError) as exc_info:
             _create_sync_workflow_steps(
                 creatives_needing_approval=[{"creative_id": "c1", "name": "Test", "format": "f1"}],
                 principal_id=None,
@@ -391,6 +421,8 @@ class TestWorkflowStatusBranches:
                 context=None,
                 uow=_uow_stub(),
             )
+
+        assert exc_info.value.error_code is ErrorCode.AUTH_MISSING
 
     def test_context_none_raises_adapter_error(self):
         """A context the unit of work could not create raises AdCPAdapterError.
@@ -405,7 +437,7 @@ class TestWorkflowStatusBranches:
         uow = _uow_stub()
         uow.workflows.create_context.return_value = None
 
-        with pytest.raises(AdCPAdapterError):
+        with pytest.raises(AdCPAdapterError) as exc_info:
             _create_sync_workflow_steps(
                 creatives_needing_approval=[{"creative_id": "c1", "name": "Test", "format": "f1"}],
                 principal_id="p1",
@@ -415,6 +447,10 @@ class TestWorkflowStatusBranches:
                 context=None,
                 uow=uow,
             )
+
+        # Replaces the pre-prkv.16 ``match="Failed to create workflow context"``:
+        # the message is derived from the code, so the code is what to pin.
+        assert exc_info.value.error_code is ErrorCode.SERVICE_UNAVAILABLE
 
     def test_rejected_status_comment(self):
         """Rejected status produces a 'rejected by AI review' comment."""
@@ -558,11 +594,14 @@ class TestValidationEdgeCases:
             variants=[],
         )
 
-        async def mock_get_format(agent_url, format_id):
-            return mock_format_spec
-
-        mock_registry = Mock()
-        mock_registry.get_format = mock_get_format
+        # The ONE registry stand-in rather than a local hand-roll. It carries both
+        # halves origin/main added here: ``get_format`` swallows keyword arguments
+        # (production's grew a keyword-only ``provenance`` with the SSRF egress seam,
+        # #1802) and ``preview_creative`` is an actual coroutine. It also fixes the
+        # half the hand-roll had wrong — the preview answer is a ``previews`` LIST,
+        # not a top-level ``preview_url``, which is a shape _processing never reads
+        # and the agent never returns.
+        mock_registry = make_registry_mock([mock_format_spec])
 
         result = _validate_creative_input(creative, mock_registry, "p1")
         assert result.tags == ["automotive", "display"]

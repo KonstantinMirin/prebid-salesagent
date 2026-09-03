@@ -18,9 +18,9 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 import pytz
-import requests
 
 from src.core.exceptions import AdCPAdapterError, AdCPSalesAgentError
+from src.core.security.outbound_http import OperatorEndpoint, OutboundError, send
 
 logger = logging.getLogger(__name__)
 
@@ -362,19 +362,37 @@ class GAMReportingService:
             ):
                 raise AdCPAdapterError()
 
-            # Download the report using requests with proper timeout and error handling
+            # Download the report through the guarded egress seam, with proper timeout and error handling
             try:
-                response = requests.get(
+                # The ALLOWED_DOMAINS provenance check above stays: it asserts the URL
+                # came from GAM, which is a different question from whether the address
+                # is safe to dial. max_attempts=1 — this download did not retry.
+                # The seam caps the body, which is what `stream=True` was reaching for.
+                response = send(
                     download_url,
-                    timeout=(ReportingConfig.HTTP_CONNECT_TIMEOUT, ReportingConfig.HTTP_READ_TIMEOUT),
+                    method="GET",
                     headers={"User-Agent": ReportingConfig.USER_AGENT},
-                    stream=True,  # For better memory handling of large files
+                    timeout=float(ReportingConfig.HTTP_READ_TIMEOUT),
+                    max_attempts=1,
                 )
-                response.raise_for_status()
-            except requests.exceptions.Timeout as e:
-                raise AdCPAdapterError(internal_detail=e) from e
-            except requests.exceptions.RequestException as e:
-                raise AdCPAdapterError(internal_detail=e) from e
+            except OutboundError as e:
+                # `raise_for_status()` and the two `requests.exceptions` arms this
+                # replaces are subsumed, not dropped: the seam already raises
+                # OutboundError on a non-2xx terminal status and on a transport
+                # timeout, and the mapper below turns both into the same typed
+                # AdCP error those arms were migrated to raise -- with the status
+                # classification they could not carry.
+                # Delegates instead of rewrapping, the same way kevel.py:782 and
+                # triton_digital.py:707 did at this migration. The bare Exception
+                # here was this branch's one holdout from its own mapping rule: it
+                # lost `attempts`/`last_status` and the operator-endpoint terminal
+                # classification, and interpolated the seam's fixed message into a
+                # message of its own. Imported locally for the same reason the two
+                # siblings do: src.core.helpers.__init__ pulls in adapter_helpers,
+                # which imports the adapters.
+                from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
+
+                raise_mapped_outbound_error(e, provenance=OperatorEndpoint("Google Ad Manager"), logger=logger)
 
             # Parse the CSV data directly from the response with memory limits
             try:
@@ -405,11 +423,18 @@ class GAMReportingService:
             return data
 
         except AdCPSalesAgentError:
-            # Every typed error raised inside this body -- the job-failed and
-            # timeout arms above, the URL refusal, the parse failure -- already
-            # names its own fault. Re-raise rather than relabel them all
-            # AdCPAdapterError, which is what the broad arm below did.
+            # The typed error IS the answer. Every typed error raised inside this
+            # body -- the job-failed and timeout arms above, the URL refusal, the
+            # parse failure, and whatever `raise_mapped_outbound_error` just
+            # classified -- already names its own fault. Without this arm the
+            # catch-all below relabels them all AdCPAdapterError, and the download
+            # branch's migration off `raise Exception(...)` buys nothing
+            # observable: the buyer sees the same relabelled string either way,
+            # minus `attempts`, `last_status` and the operator-endpoint terminal
+            # classification. (AdCPSalesAgentError is this branch's name for the
+            # base class origin/main spelled AdCPError.)
             raise
+
         except Exception as e:
             raise AdCPAdapterError(internal_detail=e) from e
 

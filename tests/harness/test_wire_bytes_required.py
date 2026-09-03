@@ -52,7 +52,13 @@ def _no_wire_ctx(envelope: dict) -> dict:
     """
     return {
         "transport": Transport.REST,
-        "result": TransportResult(payload=None, envelope={}, wire_error_envelope=None),
+        # has_wire=False: nothing came back. The production analogue is
+        # client.py's ``unwrap_rest_error`` — a REST DELIVER exception, no HTTP
+        # body at all. False is also the READER's most permissive branch (the
+        # only one on which a synthesized envelope may stand in for a wire), so
+        # a step that still reddens here reddens on genuine absence rather than
+        # because the fallback was structurally closed off.
+        "result": TransportResult(payload=None, envelope={}, wire_error_envelope=None, has_wire=False),
         "error": RuntimeError(envelope["errors"][0]["message"]),
     }
 
@@ -62,7 +68,10 @@ def _wire_ctx(envelope: dict) -> dict:
     return {
         "transport": Transport.REST,
         "wire_error_envelope": envelope,
-        "result": TransportResult(payload=None, envelope={}, wire_error_envelope=envelope),
+        # has_wire=True: the positive control IS the captured-wire case — the
+        # envelope below is what ``unwrap_rest_response`` recovered from a real
+        # >= 400 HTTP body.
+        "result": TransportResult(payload=None, envelope={}, wire_error_envelope=envelope, has_wire=True),
     }
 
 
@@ -149,7 +158,10 @@ class TestPackageOutcomeDispatchRequiresWireBytes:
     def _reconstructed_ctx(self, error: dict) -> dict:
         return {
             "transport": Transport.REST,
-            "result": TransportResult(payload=None, envelope={}, wire_error_envelope=None),
+            # has_wire=False, as in ``_no_wire_ctx``: nothing was captured, and
+            # nothing (no synthesized envelope) stands in for one — the state a
+            # reconstructed ctx["error"] is all that survives from.
+            "result": TransportResult(payload=None, envelope={}, wire_error_envelope=None, has_wire=False),
             "error": error,
         }
 

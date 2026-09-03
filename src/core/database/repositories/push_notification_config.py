@@ -14,12 +14,12 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import PushNotificationConfig
-from src.core.webhook_validator import WebhookURLValidator
+from src.core.webhooks.registration import ValidatedWebhookRegistration
 
 # Preserve-if-not-passed sentinel for upsert(): distinguishes "caller did not
 # supply this field" (keep the existing row's value) from an explicit None
@@ -51,6 +51,23 @@ class PushNotificationConfigRepository:
     # Lookups
     # ------------------------------------------------------------------
 
+    def _scoped(self, principal_id: str, *, active_only: bool) -> Select[tuple[PushNotificationConfig]]:
+        """The (tenant, principal) scope every lookup here shares, in ONE place.
+
+        This module's core invariant -- every query is scoped by tenant AND
+        principal -- was previously enforced by prose repeated per method and by
+        each method retyping the same two predicates. A third lookup would have
+        made it a third copy, and the pair is exactly the thing that must not be
+        forgotten once. Callers append their own single predicate.
+        """
+        stmt = select(PushNotificationConfig).where(
+            PushNotificationConfig.tenant_id == self._tenant_id,
+            PushNotificationConfig.principal_id == principal_id,
+        )
+        if active_only:
+            stmt = stmt.where(PushNotificationConfig.is_active.is_(True))
+        return stmt
+
     def get_by_id(
         self,
         config_id: str,
@@ -67,37 +84,34 @@ class PushNotificationConfigRepository:
                 ``is_active`` is True. Pass False to include soft-deleted rows
                 (e.g. for an upsert that needs to re-activate them).
         """
-        stmt = select(PushNotificationConfig).where(
-            PushNotificationConfig.tenant_id == self._tenant_id,
-            PushNotificationConfig.principal_id == principal_id,
-            PushNotificationConfig.id == config_id,
-        )
-        if active_only:
-            stmt = stmt.where(PushNotificationConfig.is_active.is_(True))
+        stmt = self._scoped(principal_id, active_only=active_only).where(PushNotificationConfig.id == config_id)
+        return self._session.scalars(stmt).first()
+
+    def find_by_url(
+        self,
+        principal_id: str,
+        url: str,
+        *,
+        active_only: bool = True,
+    ) -> PushNotificationConfig | None:
+        """Find a config by its URL within the (tenant, principal) scope.
+
+        The duplicate check at registration used to hand-write this query in the
+        admin route and omit ``is_active``, so a URL that had been deactivated
+        still read as "already registered" -- the operator could not re-register
+        it, and (before the same change) could not delete or re-enable it either.
+
+        ``active_only=False`` is what the registration path passes: it needs to
+        SEE the soft-deleted row so it can reuse that row's id and let
+        :meth:`upsert` reactivate it, rather than inserting a second row for the
+        same (principal, url) and leaving the first as debris.
+        """
+        stmt = self._scoped(principal_id, active_only=active_only).where(PushNotificationConfig.url == url)
         return self._session.scalars(stmt).first()
 
     def list_active_by_principal(self, principal_id: str) -> list[PushNotificationConfig]:
         """Return all active configs for a principal within this tenant."""
-        return list(
-            self._session.scalars(
-                select(PushNotificationConfig).where(
-                    PushNotificationConfig.tenant_id == self._tenant_id,
-                    PushNotificationConfig.principal_id == principal_id,
-                    PushNotificationConfig.is_active.is_(True),
-                )
-            ).all()
-        )
-
-    def get_active_by_url(self, principal_id: str, url: str) -> PushNotificationConfig | None:
-        """Return the active config with this exact URL, if any."""
-        return self._session.scalars(
-            select(PushNotificationConfig).where(
-                PushNotificationConfig.tenant_id == self._tenant_id,
-                PushNotificationConfig.principal_id == principal_id,
-                PushNotificationConfig.url == url,
-                PushNotificationConfig.is_active.is_(True),
-            )
-        ).first()
+        return list(self._session.scalars(self._scoped(principal_id, active_only=True)).all())
 
     # ------------------------------------------------------------------
     # Writes
@@ -105,53 +119,66 @@ class PushNotificationConfigRepository:
 
     def upsert(
         self,
+        registration: ValidatedWebhookRegistration,
         *,
         config_id: str,
         principal_id: str,
-        url: str,
-        authentication_type: str | None,
-        authentication_token: str | None,
         validation_token: str | None = _UNSET,
         session_id: str | None = _UNSET,
         webhook_secret: str | None = _UNSET,
+        protocol: str | None = _UNSET,
     ) -> tuple[PushNotificationConfig, bool]:
         """Insert or update a config within the (tenant, principal) scope.
 
-        ``validation_token`` / ``session_id`` / ``webhook_secret`` are
-        preserve-if-not-passed: omitting one keeps the existing row's value
-        (``None`` on insert); passing ``None`` explicitly clears it.
+        Takes the VALUE, not three loose strings. ``ValidatedWebhookRegistration``
+        is the receipt that both ingest preconditions ran — the registration SSRF
+        gate on the URL half and the pinned ``Authentication`` model built inside
+        ``_accept`` on the credential half — so persisting a config that skipped a
+        gate no longer type-checks.
+
+        That is why this module no longer re-validates the URL. The former
+        "defense-in-depth" check here existed because the receipt evaporated at
+        this boundary: a caller that had never gated looked exactly like one that
+        had. It also could not produce a good error — the repository cannot know
+        the request path, so ``error.field`` was lost. SEND time is not this
+        module's business either: every outbound request goes through the egress
+        seam (``src.core.security.outbound_http``), which re-resolves and re-judges
+        the URL when it is actually dialled.
+
+        The four kwargs are deliberately NOT value fields, and every one of them
+        is preserve-if-not-passed: omitting one keeps the existing row's value
+        (``None`` on insert), passing ``None`` explicitly clears it.
+        ``validation_token`` is sender-side ``X-Webhook-Token`` material, outside
+        the auth resolver, and only the A2A ``setTaskPushNotificationConfig`` path
+        stores one; ``webhook_secret`` is the admin-registered HMAC secret;
+        ``protocol`` is the dialect the buyer registered over, which only the
+        transport that received the registration knows. Callers share config ids
+        across paths, so a caller that does not OWN a field must not null it —
+        an unconditional write would let the create-media-buy path silently clear
+        a ``validation_token`` set through A2A, or an admin re-registration clear
+        the recorded dialect a later scheduler-driven delivery still needs.
 
         Returns:
             (config, created): ``created`` is True if a new row was inserted,
             False if an existing row was updated (or reactivated).
-
-        Raises:
-            ValueError: If ``url`` fails the *registration* SSRF gate
-                (``WebhookURLValidator.validate_webhook_url_registration`` —
-                no DNS; optional localhost under ``ADCP_TESTING``). Deliberate
-                defense-in-depth: callers also gate before upsert. Outbound
-                protocol send uses ``validate_outbound_webhook_url``;
-                application delivery (``kind="Application"``) uses the same
-                ``reject_unsafe_outbound_webhook_url`` /
-                ``validate_outbound_webhook_url`` path.
         """
-        is_valid, error_msg = WebhookURLValidator.validate_webhook_url_registration(url)
-        if not is_valid:
-            raise ValueError(f"Invalid webhook URL: {error_msg}")
+        columns = registration.to_columns()
 
         existing = self.get_by_id(config_id, principal_id, active_only=False)
         now = datetime.now(UTC)
 
         if existing is not None:
-            existing.url = url
-            existing.authentication_type = authentication_type
-            existing.authentication_token = authentication_token
+            existing.url = columns["url"]
+            existing.authentication_type = columns["authentication_type"]
+            existing.authentication_token = columns["authentication_token"]
             if validation_token is not _UNSET:
                 existing.validation_token = validation_token
             if session_id is not _UNSET:
                 existing.session_id = session_id
             if webhook_secret is not _UNSET:
                 existing.webhook_secret = webhook_secret
+            if protocol is not _UNSET:
+                existing.protocol = protocol
             existing.updated_at = now
             existing.is_active = True
             self._session.flush()
@@ -162,11 +189,12 @@ class PushNotificationConfigRepository:
             tenant_id=self._tenant_id,
             principal_id=principal_id,
             session_id=None if session_id is _UNSET else session_id,
-            url=url,
-            authentication_type=authentication_type,
-            authentication_token=authentication_token,
+            url=columns["url"],
+            authentication_type=columns["authentication_type"],
+            authentication_token=columns["authentication_token"],
             validation_token=None if validation_token is _UNSET else validation_token,
             webhook_secret=None if webhook_secret is _UNSET else webhook_secret,
+            protocol=None if protocol is _UNSET else protocol,
             is_active=True,
         )
         self._session.add(config)
@@ -193,31 +221,38 @@ class PushNotificationConfigRepository:
 
     def register_admin_webhook(
         self,
+        registration: ValidatedWebhookRegistration,
         *,
         principal_id: str,
-        url: str,
-        authentication_type: str | None,
-        authentication_token: str | None,
         webhook_secret: str | None,
     ) -> PushNotificationConfig | None:
         """Race-safe admin registration of a webhook URL.
+
+        Takes the same receipt :meth:`upsert` does. The admin route is one of the
+        five registration surfaces, and it is not allowed to be the one that
+        persists a config which skipped the ingest gates.
+
+        Keyed on ``registration.url``, never a raw form value: what gets STORED is
+        the normalized ``AnyUrl`` — host lowercased, default port stripped,
+        trailing slash added — so a pre-check keyed on a non-canonical spelling
+        misses the row it just wrote, and a second active config is inserted for
+        the same URL (the sender then delivers twice).
 
         Returns the EXISTING active config when this URL is already registered
         for the principal — whether the pre-check saw it or this call lost the
         insert race to a concurrent registration — and ``None`` when a config
         was created (or a soft-deleted one reactivated).
         """
+        url = registration.url
 
         def conflict() -> PushNotificationConfig | None:
-            return self.get_active_by_url(principal_id, url)
+            return self.find_by_url(principal_id, url)
 
         def write() -> None:
             self.upsert(
+                registration,
                 config_id=self.admin_config_id(self._tenant_id, principal_id, url),
                 principal_id=principal_id,
-                url=url,
-                authentication_type=authentication_type,
-                authentication_token=authentication_token,
                 webhook_secret=webhook_secret,
             )
 

@@ -6,20 +6,87 @@ Auth: Access token passed as query parameter.
 """
 
 import logging
-from typing import Any
+from types import MappingProxyType
+from typing import Any, NoReturn
 
-import requests
-from requests.exceptions import RequestException
+from pydantic import JsonValue
 
+from src.adapters.vendor_http import VendorHttpClient
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAdapterResourceNotFoundError,
     AdCPAuthorizationError,
-    AdCPRateLimitError,
-    AdCPServiceUnavailableError,
+    AdCPSalesAgentError,
+)
+from src.core.security.outbound_http import (
+    OperatorEndpoint,
+    OutboundDeliveryFailed,
+    OutboundError,
+    QueryParams,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _raise_broadstreet_error(exc: OutboundError) -> NoReturn:
+    """Re-raise an egress-seam failure as the AdCP error the upstream status warrants.
+
+    AdCP 3.1.1 ``transport-errors.mdx`` Rule 1 mandates translating a vendor's
+    HTTP status into an AdCP code. Three rows are Broadstreet's own, because a
+    vendor ad server's 4xx carries RESOURCE semantics the shared
+    operator-endpoint table cannot express -- it reads every non-429 4xx as
+    ``CONFIGURATION_ERROR``, "this deployment is misconfigured":
+
+    * 403 is the access token being denied -> ``PERMISSION_DENIED``.
+    * 404 is an advertiser, campaign, advertisement or zone the ad server says
+      does not exist -> ``REFERENCE_NOT_FOUND``, the case
+      :class:`AdCPAdapterResourceNotFoundError` was minted for.
+    * any other terminal 4xx -> ``AdCPAdapterError``.
+
+    Every remaining row delegates to
+    :func:`~src.core.helpers.outbound_error_mapping.raise_mapped_outbound_error`,
+    which already produces exactly the classes this client wants -- 429 ->
+    ``AdCPRateLimitError`` carrying the clamped ``retry_after``; a 5xx or a dial
+    that never reached the wire -> the seam's own
+    ``AdCPServiceUnavailableError``, re-raised with its ``attempts``/
+    ``last_status`` intact; an egress-policy refusal ->
+    ``AdCPConfigurationError``. Copying those rows here is the drift that module
+    exists to prevent, so they are not copied. 429 is tested BEFORE the 4xx
+    range below for the same reason: the range then needs no second copy of the
+    retryable-status set to exclude it.
+
+    The vendor's response BODY appears in none of these errors. It used to ride
+    in ``internal_detail`` (non-wire by construction, because a third party's
+    body has no provenance guarantee -- AdCP 3.1.1 Security Considerations
+    MUST-NOT list); the egress seam now declines to carry a counterparty's error
+    body back at all, so operators keep the status and lose the vendor's message
+    text.
+
+    Imported inside the function, not at module level: ``src.core.helpers``'s
+    package ``__init__`` pulls in ``adapter_helpers``, which imports the
+    adapters -- including the one that owns this client.
+    """
+    status = exc.http_status if isinstance(exc, OutboundDeliveryFailed) else None
+    upstream = f"broadstreet HTTP {status}"
+
+    error: AdCPSalesAgentError[Any] | None = None
+    if status == 403:
+        error = AdCPAuthorizationError(internal_detail=upstream)
+    elif status == 404:
+        error = AdCPAdapterResourceNotFoundError(internal_detail=upstream)
+    elif status == 429:
+        # Owned by the shared table (see the docstring): delegating keeps the
+        # clamped retry_after a locally-built AdCPRateLimitError would drop.
+        pass
+    elif status is not None and 400 <= status < 500:
+        error = AdCPAdapterError(internal_detail=upstream)
+
+    if error is not None:
+        raise error from exc
+
+    from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
+
+    raise_mapped_outbound_error(exc, provenance=OperatorEndpoint("Broadstreet"), logger=logger)
 
 
 class BroadstreetClient:
@@ -54,80 +121,21 @@ class BroadstreetClient:
         self.network_id = network_id
         self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
         self.timeout = timeout
-
-    def _build_url(self, path: str, query_params: dict[str, Any] | None = None) -> str:
-        """Build full URL with access token.
-
-        Args:
-            path: API endpoint path (e.g., "/networks/123/advertisers")
-            query_params: Optional additional query parameters
-
-        Returns:
-            Full URL with access token
-        """
-        from urllib.parse import urlencode
-
-        url = f"{self.base_url}{path}"
-        params = {"access_token": self.access_token}
-        if query_params:
-            params.update(query_params)
-
-        # Filter None values and properly URL-encode all parameters
-        query_string = urlencode({k: v for k, v in params.items() if v is not None})
-        return f"{url}?{query_string}"
-
-    def _handle_response(self, response: requests.Response) -> Any:
-        """Handle API response and raise errors if needed.
-
-        Args:
-            response: Requests response object
-
-        Returns:
-            Parsed JSON response body
-
-        Raises:
-            AdCPSalesAgentError: The subclass for the upstream status (see the mapping below).
-        """
-        try:
-            body = response.json() if response.content else None
-        except ValueError:
-            body = response.text
-
-        # HTTP status to AdCP code. AdCP 3.1.1 transport-errors.mdx Rule 1 mandates
-        # this translation and names the 429 row itself: "An HTTP 429 from a
-        # seller's internal API becomes RATE_LIMITED."
-        #
-        # The upstream ``body`` never reaches the buyer. It goes to
-        # ``internal_detail``, which is non-wire by construction, because a third
-        # party's response body has no provenance guarantee (Security
-        # Considerations MUST-NOT list).
-        upstream = f"broadstreet HTTP {response.status_code}: {str(body)[:500]}"
-
-        if response.status_code == 403:
-            raise AdCPAuthorizationError(internal_detail=upstream)
-
-        if response.status_code == 404:
-            raise AdCPAdapterResourceNotFoundError(internal_detail=upstream)
-
-        if response.status_code == 429:
-            raise AdCPRateLimitError(internal_detail=upstream)
-
-        if response.status_code >= 500:
-            raise AdCPServiceUnavailableError(internal_detail=upstream)
-
-        if response.status_code >= 400:
-            raise AdCPAdapterError(
-                internal_detail=upstream,
-            )
-
-        return body
+        # Broadstreet authenticates by query parameter, so the token is a
+        # client-level dial coordinate — fixed here, never reassembled per call.
+        self._vendor = VendorHttpClient(
+            base_url=self.base_url,
+            headers={},
+            params=MappingProxyType({"access_token": access_token}),
+            timeout=float(timeout),
+        )
 
     def _request(
         self,
         method: str,
         path: str,
-        data: dict[str, Any] | None = None,
-        query_params: dict[str, Any] | None = None,
+        data: dict[str, JsonValue] | None = None,
+        query_params: QueryParams | None = None,
     ) -> Any:
         """Make an API request.
 
@@ -141,31 +149,28 @@ class BroadstreetClient:
             Parsed response body
 
         Raises:
-            AdCPSalesAgentError: The subclass for the upstream failure.
+            AdCPSalesAgentError: The subclass for the upstream failure — see
+                :func:`_raise_broadstreet_error`.
         """
-        url = self._build_url(path, query_params)
-
         try:
-            response = requests.request(
-                method=method,
-                url=url,
-                json=data if data else None,
-                timeout=self.timeout,
-            )
-            return self._handle_response(response)
-        except RequestException as e:
-            # The request never completed. Transient by nature: retry with backoff.
-            raise AdCPServiceUnavailableError(internal_detail=f"broadstreet request failed: {e}") from e
+            result = self._vendor.call(method, path, json=data if data else None, params=query_params)
+        except OutboundError as e:
+            # One arm, not two: OutboundDeliveryFailed is an OutboundError, and
+            # the status it carries is the only thing the classifier reads.
+            _raise_broadstreet_error(e)
 
-    def get(self, path: str, query_params: dict[str, Any] | None = None) -> Any:
+        body = result.json() if result.content else None
+        return body
+
+    def get(self, path: str, query_params: QueryParams | None = None) -> Any:
         """Make a GET request."""
         return self._request("GET", path, query_params=query_params)
 
-    def post(self, path: str, data: dict[str, Any]) -> Any:
+    def post(self, path: str, data: dict[str, JsonValue]) -> Any:
         """Make a POST request."""
         return self._request("POST", path, data=data)
 
-    def put(self, path: str, data: dict[str, Any]) -> Any:
+    def put(self, path: str, data: dict[str, JsonValue]) -> Any:
         """Make a PUT request."""
         return self._request("PUT", path, data=data)
 
@@ -228,7 +233,7 @@ class BroadstreetClient:
         Returns:
             Created campaign data
         """
-        data: dict[str, Any] = {"name": name}
+        data: dict[str, JsonValue] = {"name": name}
         if start_date:
             data["start_date"] = start_date
         if end_date:
@@ -253,7 +258,7 @@ class BroadstreetClient:
         advertiser_id: str,
         name: str,
         ad_type: str,
-        params: dict[str, Any] | None = None,
+        params: dict[str, JsonValue] | None = None,
     ) -> dict[str, Any]:
         """Create a new advertisement.
 
@@ -266,7 +271,7 @@ class BroadstreetClient:
         Returns:
             Created advertisement data
         """
-        data: dict[str, Any] = {"name": name, "type": ad_type, "active": 1}
+        data: dict[str, JsonValue] = {"name": name, "type": ad_type, "active": 1}
         if params:
             data.update(params)
 
@@ -281,7 +286,9 @@ class BroadstreetClient:
         result = self.get(f"/networks/{self.network_id}/advertisers/{advertiser_id}/advertisements/{advertisement_id}")
         return result.get("advertisement", result) if result else {}
 
-    def update_advertisement(self, advertiser_id: str, advertisement_id: str, params: dict[str, Any]) -> dict[str, Any]:
+    def update_advertisement(
+        self, advertiser_id: str, advertisement_id: str, params: dict[str, JsonValue]
+    ) -> dict[str, Any]:
         """Update an advertisement."""
         result = self.put(
             f"/networks/{self.network_id}/advertisers/{advertiser_id}/advertisements/{advertisement_id}",
@@ -294,7 +301,7 @@ class BroadstreetClient:
         advertiser_id: str,
         advertisement_id: str,
         source_type: str,
-        params: dict[str, Any] | None = None,
+        params: dict[str, JsonValue] | None = None,
     ) -> dict[str, Any]:
         """Set the source/template for an advertisement.
 
@@ -311,7 +318,7 @@ class BroadstreetClient:
         Returns:
             Updated advertisement data
         """
-        data: dict[str, Any] = {"type": source_type}
+        data: dict[str, JsonValue] = {"type": source_type}
         if params:
             data.update(params)
 
@@ -343,7 +350,7 @@ class BroadstreetClient:
         Returns:
             List of report records
         """
-        query_params: dict[str, Any] = {}
+        query_params: dict[str, str | int | float | bool] = {}
         if start_date:
             query_params["start_date"] = start_date
         if end_date:
@@ -377,7 +384,7 @@ class BroadstreetClient:
         Returns:
             Created placement data
         """
-        data = {
+        data: dict[str, JsonValue] = {
             "zone_id": zone_id,
             "advertisement_id": advertisement_id,
         }
@@ -411,7 +418,7 @@ class BroadstreetClient:
         Returns:
             Created zone data
         """
-        data: dict[str, Any] = {"name": name}
+        data: dict[str, JsonValue] = {"name": name}
         if alias:
             data["alias"] = alias
         data["self_serve"] = self_serve

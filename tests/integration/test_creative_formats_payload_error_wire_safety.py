@@ -36,6 +36,7 @@ an SDK model, so it has no ``internal_detail`` slot to route it through.
 
 from __future__ import annotations
 
+import contextlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -67,6 +68,49 @@ _AGENT_URL = "https://creative-agent.internal.svc.cluster.local:8443/mcp"
 _TRANSPORTS = [Transport.A2A, Transport.MCP, Transport.REST]
 
 
+@contextlib.contextmanager
+def _one_unreachable_agent(env):
+    """Fault ONLY the per-agent dial, leaving the aggregation arm under test real.
+
+    Both tests below need the identical injection, so it is spelled once
+    (CLAUDE.md DRY invariant). Two things are patched and no more:
+
+    * ``_get_tenant_agents`` — supplies the seller-configured agent, because
+      there is no tenant row for one.
+    * ``_fetch_formats_operator`` — the DEEPEST production method on the
+      operator dial, so ``get_formats_for_agent`` (provenance branch, testing
+      short-circuit, cache) and ``list_all_formats_with_errors`` (the
+      ``except`` arm this module grades) both run for real.
+
+    The fetch method used to be ``_fetch_formats_from_agent``, patched alongside
+    a ``_build_adcp_client``. Neither name exists any more: the egress-seam
+    migration renamed the operator dial to ``_fetch_formats_operator`` and
+    deleted the SDK-client builder outright in favour of
+    ``call_operator_mcp_tool``, whose httpx stack egress policy can reach
+    (adcp 6.6.0 exposes no transport knob — adcp-client-python#1004). Patching a
+    name that no longer exists is what the re-point fixes; the injected fault and
+    everything asserted about it are unchanged.
+    """
+    real_registry = CreativeAgentRegistry()
+
+    agent = MagicMock()
+    agent.agent_url = _AGENT_URL
+    agent.name = "Internal Creative Agent"
+
+    with (
+        patch.object(CreativeAgentRegistry, "_get_tenant_agents", return_value=[agent]),
+        patch.object(
+            CreativeAgentRegistry,
+            "_fetch_formats_operator",
+            new=AsyncMock(side_effect=ConnectionError(_RAW_FAILURE_TEXT)),
+        ),
+    ):
+        # Run the REAL aggregation method (the construction site under test)
+        # instead of the harness stub; only the per-agent fetch is faulted.
+        env.mock["registry"].return_value.list_all_formats_with_errors = real_registry.list_all_formats_with_errors
+        yield
+
+
 @pytest.mark.parametrize("transport", _TRANSPORTS, ids=lambda t: t.value)
 def test_unreachable_agent_yields_a_safe_payload_error(integration_db, transport, monkeypatch):
     """errors[0] names the failure in first-party terms and carries no raw text."""
@@ -78,23 +122,7 @@ def test_unreachable_agent_yields_a_safe_payload_error(integration_db, transport
         tenant = TenantFactory(tenant_id="fmt-wire-safety", subdomain="fmt-wire-safety")
         PrincipalFactory(tenant=tenant, principal_id="fmt-wire-principal")
 
-        agent = MagicMock()
-        agent.agent_url = _AGENT_URL
-        agent.name = "Internal Creative Agent"
-
-        # Run the REAL aggregation method (the construction site under test)
-        # instead of the harness stub; only the per-agent fetch is faulted.
-        real_registry = CreativeAgentRegistry()
-        with (
-            patch.object(CreativeAgentRegistry, "_get_tenant_agents", return_value=[agent]),
-            patch.object(CreativeAgentRegistry, "_build_adcp_client", return_value=MagicMock()),
-            patch.object(
-                CreativeAgentRegistry,
-                "_fetch_formats_from_agent",
-                new=AsyncMock(side_effect=ConnectionError(_RAW_FAILURE_TEXT)),
-            ),
-        ):
-            env.mock["registry"].return_value.list_all_formats_with_errors = real_registry.list_all_formats_with_errors
+        with _one_unreachable_agent(env):
             result = env.call_via(transport)
 
         assert not result.is_error, f"an unreachable agent must degrade, not fail the request: {result.payload!r}"
@@ -152,21 +180,7 @@ def test_requested_format_id_on_a_failed_agent_is_reference_not_found(integratio
         tenant = TenantFactory(tenant_id="fmt-ref-nf", subdomain="fmt-ref-nf")
         PrincipalFactory(tenant=tenant, principal_id="fmt-ref-principal")
 
-        agent = MagicMock()
-        agent.agent_url = _AGENT_URL
-        agent.name = "Internal Creative Agent"
-
-        real_registry = CreativeAgentRegistry()
-        with (
-            patch.object(CreativeAgentRegistry, "_get_tenant_agents", return_value=[agent]),
-            patch.object(CreativeAgentRegistry, "_build_adcp_client", return_value=MagicMock()),
-            patch.object(
-                CreativeAgentRegistry,
-                "_fetch_formats_from_agent",
-                new=AsyncMock(side_effect=ConnectionError(_RAW_FAILURE_TEXT)),
-            ),
-        ):
-            env.mock["registry"].return_value.list_all_formats_with_errors = real_registry.list_all_formats_with_errors
+        with _one_unreachable_agent(env):
             result = env.call_via(transport, format_ids=[{"agent_url": _AGENT_URL, "id": "display_300x250"}])
 
         assert not result.is_error, f"a failed agent must still degrade, not fail the request: {result.payload!r}"

@@ -30,7 +30,8 @@ from src.core.schemas import (
     validate_idempotency_key_shape,  # noqa: F401
 )
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
-from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
+from src.core.webhook_validator import webhook_url_for_log
+from src.core.webhooks.registration import accept_push_notification_config
 
 from ._assignments import _process_assignments
 from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative
@@ -84,7 +85,7 @@ def _sync_creatives_impl(
     delete_missing: bool = False,
     dry_run: bool = False,
     validation_mode: str = "strict",
-    push_notification_config: PushNotificationConfig | dict | None = None,
+    push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | dict | None = None,
     idempotency_key: str | None = None,
     # Computed by the transport wrapper from the request it already built. Passed in rather
@@ -154,6 +155,9 @@ def _sync_creatives_impl(
     # one conflict rule, one ceiling. A dry run is excluded deliberately: it performs no
     # write, so there is no side effect to deduplicate, and caching one would let a dry run
     # answer a subsequent real sync carrying the same key.
+    #
+    # Ahead of the SSRF gate below on purpose: a replay returns a stored response and
+    # performs no registration, so there is no URL to stash and nothing to gate.
     if idempotency_key and not dry_run:
         replay = lookup_cached_replay(
             tenant_id=tenant["tenant_id"],
@@ -166,18 +170,26 @@ def _sync_creatives_impl(
         if replay is not None:
             return replay
 
-    # Registration SSRF gate before any DB / workflow writes that stash the URL.
+    # Registration SSRF gate on the buyer-supplied webhook URL, taken HERE: before
+    # any DB / workflow write stashes the URL, and before the per-creative loop,
+    # whose per-item `try` would turn this correctable VALIDATION_ERROR into a
+    # per-item transient failure and tell the buyer to retry a URL that will never
+    # be allowed. The AI-review callback fires from a background worker, so ingest
+    # is the only gate with a request left to refuse into.
+    #
+    # Deliberately the no-DNS registration gate (gh-#1697), NOT the outbound seam's
+    # validate_url (gh-#1589): validate_url always resolves, so at registration it
+    # would reject a buyer whose hostname has not yet propagated. The seam stays the
+    # SEND-time gate and re-checks with DNS when the callback is actually dialed —
+    # so no second address check belongs on this path.
     webhook_url = None
     if push_notification_config:
-        if isinstance(push_notification_config, dict):
-            webhook_url = push_notification_config.get("url")
-        else:
-            webhook_url = str(push_notification_config.url) if push_notification_config.url else None
-        reject_unsafe_webhook_registration_url(
-            webhook_url,
-            field="push_notification_config.url",
+        registration = accept_push_notification_config(
+            push_notification_config,
+            field_prefix="push_notification_config",
             context=context,
         )
+        webhook_url = registration.url
         if webhook_url is not None and str(webhook_url).strip():
             # Log scheme+host+path only — never credentials / full auth blob.
             logger.info(
@@ -240,7 +252,7 @@ def _sync_creatives_impl(
             )
 
         # Process each creative with proper transaction isolation
-        for raw_creative in creatives:
+        for creative_index, raw_creative in enumerate(creatives):
             try:
                 # Normalize to CreativeAsset model (handles dicts from A2A raw, BaseModel subclasses)
                 if isinstance(raw_creative, CreativeAsset):
@@ -255,7 +267,7 @@ def _sync_creatives_impl(
 
                 # Validate the creative against schema and business rules
                 try:
-                    validated_creative = _validate_creative_input(creative, registry, principal_id)
+                    validated_creative = _validate_creative_input(creative, registry, principal_id, creative_index)
                     format_value = validated_creative.format
 
                 except (ValidationError, ValueError) as validation_error:
@@ -432,6 +444,20 @@ def _sync_creatives_impl(
                     {"creative_id": creative_id, "name": _get_field(raw_creative, "name"), "error": error_msg}
                 )
                 failed_count += 1
+                # Carry the typed error's OWN classification onto the per-item
+                # result, by handing over the EXCEPTION rather than a message plus
+                # hand-plucked kwargs. Falling back to the SERVICE_UNAVAILABLE
+                # default reported the SELLER as unavailable for a problem in the
+                # buyer's own document and dropped the `field` that says which input
+                # to fix — worst for an egress refusal, whose message deliberately
+                # says nothing.
+                #
+                # Passing the exception is what makes that ONE conversion:
+                # AdCPErrorDetail.from_exception reads code, field and the typed
+                # details class off `e` and resolves sentence/recovery/suggestion
+                # from CODE_TABLE — the same derivation the transport envelope uses,
+                # so the per-creative advisory and the request-level envelope cannot
+                # disagree. Nothing here forwards a recovery: it follows from the code.
                 results.append(_failed_sync_result(creative_id, e))
             except Exception as e:
                 # Savepoint automatically rolls back this creative only

@@ -928,7 +928,22 @@ class TestMainFlowObligations:
             with pytest.raises(AdCPConfigurationError) as exc_info:
                 await _create_media_buy_impl(req=req, identity=identity)
 
-            assert exc_info.value.error_code == "CONFIGURATION_ERROR"
+            # Incomplete tenant setup is a SELLER configuration fault: the buyer
+            # cannot resolve it by resending, so the pinned-terminal
+            # CONFIGURATION_ERROR carries the verdict rather than a correctable
+            # VALIDATION_ERROR with a hand-typed terminal recovery.
+            exc = exc_info.value
+            assert exc.error_code == "CONFIGURATION_ERROR"
+            assert exc.recovery == "terminal"
+            # This assertion used to be spelled `pytest.raises(..., match="Setup
+            # incomplete")`. `message` is now a read-only CODE_TABLE sentence
+            # ("Configuration error") and `__init__` takes no message parameter, so no
+            # free text reaches the buyer to match on. The obligation that match was
+            # grading -- the error says WHICH seller setup step is missing -- now lives
+            # in the structured details the boundary builds, and is graded there by
+            # exact value rather than by substring.
+            assert exc.details is not None
+            assert exc.details.missing_tasks == ["Configure Products"]
 
     @pytest.mark.asyncio
     async def test_ordering_mode_detection_package_based(self):
@@ -1837,11 +1852,21 @@ class TestExtensionObligations:
             with pytest.raises(AdCPConfigurationError) as excinfo:
                 env.call_impl(req=req)
 
+        # A product with no pricing_options is the SELLER's data-integrity fault,
+        # not a malformed buyer request: CONFIGURATION_ERROR, whose pinned
+        # enumMetadata recovery is terminal. (It used to be VALIDATION_ERROR, whose
+        # pinned recovery is correctable — telling the buyer to fix and resend a
+        # request that will fail identically until the seller fixes the catalogue.)
         # The former shape tagged details={"error_code": "PRICING_ERROR"} while the wire
         # code stayed VALIDATION_ERROR, and asserted the same thing twice. Both are gone:
         # the code IS the classification now, and details carries the product identity.
         exc = excinfo.value
         assert exc.error_code == "CONFIGURATION_ERROR"
+        assert exc.recovery == "terminal"
+        # `assert "pricing_options" in exc.message` graded the same obligation before
+        # `message` became a read-only CODE_TABLE sentence: the error must identify the
+        # miscatalogued product rather than blame the buyer. The raise site now carries
+        # that identity in ConfigurationDetails(product_id=...), so it is graded there.
         assert exc.details is not None
         assert exc.details.product_id is not None
 

@@ -63,7 +63,11 @@ def _mirrored_envelope(*, errors_suggestion: str | None, adcp_suggestion: str | 
 
 
 def _result(envelope: dict) -> TransportResult:
-    return TransportResult(payload=None, envelope={}, wire_error_envelope=envelope)
+    # has_wire=True: every caller hands in a captured two-layer envelope — the
+    # state a real >= 400 wire body leaves behind. These tests grade what
+    # ``assert_wire_error`` does with bytes that WERE received; declaring no
+    # wire would model a dispatch that never reached a boundary at all.
+    return TransportResult(payload=None, envelope={}, wire_error_envelope=envelope, has_wire=True)
 
 
 class TestRequireSuggestionDemandsBothMirroredLayers:

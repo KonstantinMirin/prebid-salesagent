@@ -87,7 +87,7 @@ class TestCreateMediaBuyFormatFetchTransientErrors:
         from src.core.exceptions import AdCPRateLimitError, AdCPServiceUnavailableError
         from tests.factories import CreativeFactory
         from tests.harness.media_buy_create import MediaBuyCreateEnv
-        from tests.integration.media_buy_helpers import _make_create_request
+        from tests.integration.media_buy_helpers import _single_creative_request
 
         exc = AdCPRateLimitError() if raised == "rate_limit" else AdCPServiceUnavailableError()
 
@@ -103,19 +103,7 @@ class TestCreateMediaBuyFormatFetchTransientErrors:
             )
             env.mock["format_spec"].side_effect = exc
 
-            result = env.call_via(
-                transport,
-                req=_make_create_request(
-                    packages=[
-                        {
-                            "product_id": "prod_1",
-                            "budget": 5000.0,
-                            "pricing_option_id": "cpm_usd_fixed",
-                            "creative_ids": ["c_fetch_transient"],
-                        }
-                    ]
-                ),
-            )
+            result = env.call_via(transport, req=_single_creative_request("c_fetch_transient"))
 
             assert result.is_error, (
                 f"A transient fetch failure must fail create_media_buy transiently: {result.payload!r}"

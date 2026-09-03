@@ -23,13 +23,19 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TESTS_DIR = REPO_ROOT / "tests"
 
-# (file, lineno) pairs permitted to violate — shrink-only. Both are
-# legitimate per prkv.18's disposition table: no harness Env instance in
-# scope (test_error_envelope.py) or the raw client IS the stated purpose,
-# proving real-HTTP wiring distinct from the harness's in-process capture
-# (test_a2a_wire_integer_serialization.py).
+# (file, lineno) pairs permitted to violate — shrink-only. The one remaining
+# entry is legitimate per prkv.18's disposition table: the raw client IS the
+# stated purpose, proving real-HTTP wiring distinct from the harness's
+# in-process capture (test_a2a_wire_integer_serialization.py). The harness
+# capability this guard steers toward — inject_untyped_exception() +
+# call_via(Transport.REST, ...) — grades an untyped-exception REST envelope,
+# which is not what that test observes (A2A JSON-RPC integer round-tripping
+# through src.app's ASGI wrapper), so there is nothing to migrate it onto.
+#
+# Line 41 -> 42: pure drift. Same call, same method, same class; the class
+# docstring above it gained one wrapped line during the spec-gaps-1210 merge.
 ALLOWLIST: set[tuple[str, int]] = {
-    ("tests/integration/test_a2a_wire_integer_serialization.py", 41),
+    ("tests/integration/test_a2a_wire_integer_serialization.py", 42),
 }
 
 

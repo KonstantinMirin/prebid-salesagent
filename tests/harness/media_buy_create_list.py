@@ -13,14 +13,23 @@ and route by request type. The get_media_buys dispatch itself is inherited from
 ``MediaBuyListDispatchMixin`` rather than re-implemented, so this env and
 ``MediaBuyListEnv`` grade the same tool through the same code.
 
+Routing happens at the ``deliver_*`` frame, not ``call_*``: ``BaseTestEnv`` owns
+the one ``call_mcp``/``call_a2a`` pair as ``deliver_*(...).payload``, and the wire
+channel a scenario grades — ``DeliverResult.wire_response`` — travels on the
+RETURN VALUE. A ``call_*`` override here would both violate the single-dispatch
+guard (``tests/unit/test_architecture_harness_single_dispatch.py``) and throw the
+list arm's real wire away.
+
 REST is routed too, and has to be: ``get_media_buys`` answers on
 ``POST /api/v1/media-buys/query`` and ``_NO_REST_UC_TAG_PREFIXES`` is now EMPTY
 (tests/bdd/conftest.py), so every UC-019 scenario — this composite's included — is
 parametrized on rest and e2e_rest. The list arm switches the endpoint, the body
 builder and the response parser together, exactly as ``AccountSyncEnv`` switches
 between its two verbs; the create arm is untouched.
+``tests/integration/test_harness_rest_refusal.py`` pins all three switches, and
+pins that the non-list arm still delegates through ``super()``.
 
-GH #1900
+GH #1900, GH #1941
 """
 
 from __future__ import annotations
@@ -29,11 +38,13 @@ from typing import Any
 
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.media_buy_list import MediaBuyListDispatchMixin
+from tests.harness.transport import DeliverResult
 
 # The list-vs-create discriminator is ``MediaBuyListDispatchMixin.is_list_request``,
 # inherited rather than restated here: a local copy is a second definition of the
 # same predicate, and the transport whose copy went stale would dispatch a different
-# tool than the other three (CLAUDE.md DRY invariant).
+# tool than the other three (CLAUDE.md DRY invariant). Same shape as
+# ``AccountListDispatchMixin.is_list_request``, which ``AccountSyncEnv`` routes on.
 
 
 class MediaBuyCreateListEnv(MediaBuyListDispatchMixin, MediaBuyCreateEnv):
@@ -42,11 +53,11 @@ class MediaBuyCreateListEnv(MediaBuyListDispatchMixin, MediaBuyCreateEnv):
     A ``req=GetMediaBuysRequest(...)`` kwarg routes to the list path; anything
     else falls through to the inherited create path. ``req=`` is a free
     discriminator because the dispatchers this env actually uses —
-    ``_run_a2a_handler`` and ``_run_mcp_client`` (MediaBuyListDispatchMixin.call_mcp
-    and MediaBuyCreateEnv.call_mcp both route through the latter) — already flatten
-    a request model into the flat skill/tool parameters those wrappers accept.
-    Not ``_run_mcp_wrapper``: it is deprecated, no env here calls it, and unlike
-    ``_run_mcp_client`` it never stashes the real MCP wire.
+    ``_run_a2a_handler`` and ``_run_mcp_client`` (the list mixin's
+    ``_deliver_list_*`` and ``MediaBuyCreateEnv.deliver_*`` both route through
+    them) — already flatten a request model into the flat skill/tool parameters
+    those wrappers accept. Not ``_run_mcp_wrapper``: it is deprecated, no env here
+    calls it, and unlike ``_run_mcp_client`` it carries back no wire.
 
     No extra patches: get_media_buys is a pure DB read with no external services,
     and the inherited create patches target the create module only.
@@ -57,25 +68,42 @@ class MediaBuyCreateListEnv(MediaBuyListDispatchMixin, MediaBuyCreateEnv):
             return self._call_list_impl(**kwargs)
         return super().call_impl(**kwargs)
 
-    def call_a2a(self, **kwargs: Any) -> Any:
-        if self.is_list_request(kwargs):
-            return self._call_list_a2a(**kwargs)
-        return super().call_a2a(**kwargs)
+    def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
+        """Route by request CONTENT: list requests to the list mixin, else create.
 
-    def call_mcp(self, **kwargs: Any) -> Any:
+        JUSTIFIED OVERRIDE (``_KNOWN_DELIVER_OVERRIDES``): this env selects the
+        tool AND the parser from request content, so it can declare no single
+        ``A2A_SKILL`` for the base to dispatch on.
+
+        The ``DeliverResult`` is returned AS IS — ``_deliver_list_a2a`` drives
+        ``_run_a2a_handler``, which already yields one carrying the REAL artifact
+        wire. Re-wrapping it would double-nest the payload and discard that wire,
+        which is precisely what the ``call_*``-frame routing this replaced did.
+        """
         if self.is_list_request(kwargs):
-            return self._call_list_mcp(**kwargs)
-        return super().call_mcp(**kwargs)
+            return self._deliver_list_a2a(**kwargs)
+        return super().deliver_a2a(**kwargs)
+
+    def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
+        """Content router; see :meth:`deliver_a2a`.
+
+        ``_deliver_list_mcp`` returns the ``DeliverResult`` whose
+        ``wire_response`` is the real ``structured_content`` — the MCP bytes the
+        envelope ``status`` assertions (#1941) grade.
+        """
+        if self.is_list_request(kwargs):
+            return self._deliver_list_mcp(**kwargs)
+        return super().deliver_mcp(**kwargs)
 
     # -- REST: one env, two endpoints -----------------------------------------
     #
     # ``_active_list`` is set by BOTH writers below, unconditionally, because the two
     # REST paths read ``REST_ENDPOINT`` in OPPOSITE orders: ``RestE2EDispatcher``
     # calls ``build_rest_body`` first and then reads the attribute, while the
-    # in-process ``call_rest`` reads the attribute BEFORE building the body. Setting
-    # the flag in both makes either order correct, and setting it unconditionally
-    # means a create request always clears the flag a preceding list request left.
-    # (The ``AccountSyncEnv`` shape, for the identical two-verb reason.)
+    # in-process ``RestDispatcher``/``call_rest`` read the attribute BEFORE building
+    # the body. Setting the flag in both makes either order correct, and setting it
+    # unconditionally means a create request always clears the flag a preceding list
+    # request left. (The ``AccountSyncEnv`` shape, for the identical two-verb reason.)
     _active_list: bool = False
 
     @property
@@ -112,12 +140,12 @@ class MediaBuyCreateListEnv(MediaBuyListDispatchMixin, MediaBuyCreateEnv):
     def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
         """Route the in-process REST call to the endpoint of the verb being dispatched.
 
-        ``call_rest`` resolved ``endpoint`` from ``REST_ENDPOINT`` before the flag for
-        THIS request was set, so the list arm recomputes it. The other arm forwards
-        the argument UNCHANGED rather than recomputing: below this class sits
-        ``MediaBuyDualEnv``, whose ``REST_ENDPOINT`` is a property over its own
-        create-vs-update flag that is not set until its ``_run_rest_request`` runs —
-        reading it here would resolve against the PREVIOUS request's verb.
+        ``call_rest``/``RestDispatcher`` resolved ``endpoint`` from ``REST_ENDPOINT``
+        before the flag for THIS request was set, so the list arm recomputes it. The
+        other arm forwards the argument UNCHANGED rather than recomputing: below this
+        class sits ``MediaBuyDualEnv``, whose ``REST_ENDPOINT`` is a property over its
+        own create-vs-update flag that is not set until its ``_run_rest_request``
+        runs — reading it here would resolve against the PREVIOUS request's verb.
         """
         self._active_list = self.is_list_request(kwargs)
         if self._active_list:
@@ -136,7 +164,9 @@ class MediaBuyCreateListEnv(MediaBuyListDispatchMixin, MediaBuyCreateEnv):
         Building the create body for a list request is not an option either, which is
         what the refusal was protecting against: it is create-shaped and dies inside
         ``_restore_creative_ids`` reading a ``packages`` attribute the list request
-        does not have. The fix is to build the right body, not to refuse.
+        does not have. The fix is to build the right body, not to refuse. The refusal
+        DIALECT is still graded, for the envs that genuinely cannot dispatch a
+        transport — ``tests/integration/test_harness_rest_refusal.py``.
         """
         self._active_list = self.is_list_request(kwargs)
         if self._active_list:
@@ -151,9 +181,9 @@ class MediaBuyCreateListEnv(MediaBuyListDispatchMixin, MediaBuyCreateEnv):
 
         No reset of ``_active_list`` here, unlike the ``MediaBuyDualEnv`` precedent:
         both writers above set it unconditionally at the start of every request, so a
-        stale value cannot survive into the next one — and the E2E error path calls
-        ``parse_rest_error_envelope`` instead of this, which would leave a
-        reset-here flag stale exactly when it matters.
+        stale value cannot survive into the next one — and the E2E error path parses
+        the error envelope instead of calling this, which would leave a reset-here
+        flag stale exactly when it matters.
         """
         if self._active_list:
             return self._parse_list_rest_response(data)

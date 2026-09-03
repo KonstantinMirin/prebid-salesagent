@@ -26,6 +26,7 @@ from __future__ import annotations
 from pytest_bdd import given, parsers, then
 
 from src.core.errors.details import RejectionReasonDetails
+from tests.bdd.steps._outcome_helpers import wire_error_envelope_or_none
 
 # Surfaced to the buyer in the rejection details by the mock adapter.
 _REJECTION_REASON = "Budget too low for this campaign"
@@ -117,9 +118,18 @@ def then_error_carries_declared_code(ctx: dict, code: str) -> None:
 
 @then("the wire error carries a non-empty suggestion")
 def then_wire_suggestion_present(ctx: dict) -> None:
+    """Assert the wire envelope carries a non-empty suggestion at the protocol position.
+
+    The envelope is read through ``wire_error_envelope_or_none`` — the single
+    guarded accessor for ``TransportResult.wire_error_envelope`` — rather than by
+    reaching for the attribute here. The tolerant accessor, not ``wire_error_dict``,
+    because this step owns the no-wire diagnosis below: its message names why a
+    no-wire run cannot satisfy a scenario whose whole claim is about a WIRE field,
+    which the accessor's generic guard would not say.
+    """
     from tests.harness.transport import extract_wire_suggestion
 
-    envelope = ctx["result"].wire_error_envelope
+    envelope = wire_error_envelope_or_none(ctx)
     assert envelope is not None, (
         "No wire error envelope captured — this scenario grades a WIRE field, so a "
         "no-wire (IMPL) run cannot satisfy it. Wire the env rather than relaxing this."

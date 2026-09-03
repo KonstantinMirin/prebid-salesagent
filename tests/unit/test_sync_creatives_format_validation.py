@@ -75,7 +75,7 @@ class TestSyncCreativesFormatValidation:
             async def mock_list_all_formats(tenant_id=None):
                 return [mock_format_spec]
 
-            async def mock_get_format(agent_url, format_id):
+            async def mock_get_format(agent_url, format_id, **_kwargs):
                 return mock_format_spec
 
             mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
@@ -106,7 +106,7 @@ class TestSyncCreativesFormatValidation:
             async def mock_list_all_formats(tenant_id=None):
                 return []
 
-            async def mock_get_format(agent_url, format_id):
+            async def mock_get_format(agent_url, format_id, **_kwargs):
                 return None  # Format not found
 
             mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
@@ -154,7 +154,7 @@ class TestSyncCreativesFormatValidation:
             async def mock_list_all_formats(tenant_id=None):
                 return []
 
-            async def mock_get_format(agent_url, format_id):
+            async def mock_get_format(agent_url, format_id, **_kwargs):
                 raise AdCPServiceUnavailableError(details=AdapterFailureDetails(status="Connection failed"))
 
             mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
@@ -162,6 +162,13 @@ class TestSyncCreativesFormatValidation:
 
             with pytest.raises(AdCPServiceUnavailableError) as exc_info:
                 _sync_creatives_impl(creatives=[valid_creative_dict], identity=identity)
+
+            # Both obligations the pre-merge test carried, kept — asserted where the
+            # values live now. ``match="Connection refused"`` could not survive: the
+            # message is a read-only function of the code (CODE_TABLE), so the
+            # provenance of the failure is carried by the TYPED details instead.
+            assert exc_info.value.details.status == "Connection failed"
+            assert exc_info.value.recovery == "transient"
 
     def test_format_validation_with_string_format_id(self, identity, mock_tenant, mock_format_spec):
         """Test that string format_ids are rejected (FormatId object required)."""
@@ -186,7 +193,7 @@ class TestSyncCreativesFormatValidation:
             async def mock_list_all_formats(tenant_id=None):
                 return [mock_format_spec]
 
-            async def mock_get_format(agent_url, format_id):
+            async def mock_get_format(agent_url, format_id, **_kwargs):
                 return mock_format_spec
 
             mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
@@ -229,7 +236,7 @@ class TestSyncCreativesFormatValidation:
                 return [mock_format_spec]
 
             # Mock get_format to return format_spec for valid format, None for invalid
-            async def mock_get_format(agent_url, format_id):
+            async def mock_get_format(agent_url, format_id, **_kwargs):
                 if format_id == "display_300x250_image":
                     return mock_format_spec
                 return None
@@ -282,7 +289,7 @@ class TestSyncCreativesFormatValidation:
             async def mock_list_all_formats(tenant_id=None):
                 return [mock_format_spec]
 
-            async def mock_get_format(agent_url, format_id):
+            async def mock_get_format(agent_url, format_id, **_kwargs):
                 return mock_format_spec
 
             mock_registry = make_registry_mock(list_all_formats=mock_list_all_formats, get_format=mock_get_format)
@@ -376,7 +383,7 @@ class TestSyncCreativesFormatValidation:
             async def mock_list_all_formats(tenant_id=None):
                 return []
 
-            async def mock_get_format(agent_url, format_id):
+            async def mock_get_format(agent_url, format_id, **_kwargs):
                 if "offline.example.com" in agent_url:
                     raise AdCPServiceUnavailableError(details=AdapterFailureDetails(status="Connection failed"))
 
@@ -398,6 +405,13 @@ class TestSyncCreativesFormatValidation:
             # Down agent: request-level TRANSIENT failure — the creative is fine.
             with pytest.raises(AdCPServiceUnavailableError) as exc_info:
                 _sync_creatives_impl(creatives=[creative_unreachable], identity=identity)
+
+            # Both obligations the pre-merge test carried, kept — asserted where the
+            # values live now. ``match="Connection refused"`` could not survive: the
+            # message is a read-only function of the code (CODE_TABLE), so the
+            # provenance of the failure is carried by the TYPED details instead.
+            assert exc_info.value.details.status == "Connection failed"
+            assert exc_info.value.recovery == "transient"
 
 
 class TestFormatValidationOptimization:

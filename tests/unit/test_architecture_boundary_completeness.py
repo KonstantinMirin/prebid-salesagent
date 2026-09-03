@@ -78,22 +78,26 @@ def _find_wrapper_info(module_path: str, impl_name: str) -> dict:
     a2a_name = f"{base_name}_raw"
 
     mod = importlib.import_module(module_path)
-    result = {}
 
-    result["mcp"] = (mcp_name, module_path) if hasattr(mod, mcp_name) else None
-    result["a2a"] = (a2a_name, module_path) if hasattr(mod, a2a_name) else None
+    def _locate(wrapper_name: str) -> tuple[str, str] | None:
+        """Find *wrapper_name* beside the _impl, else in the package's wrappers module.
 
-    # Check sibling modules for A2A wrapper
-    if result["a2a"] is None:
+        The sibling fallback used to be A2A-only. That asymmetry was a hole, not a
+        detail: sync_creatives keeps BOTH its wrappers in ``creatives.sync_wrappers``,
+        so the MCP arm resolved to None and the guard skipped it silently — which is
+        how ``sync_creatives`` came to drop ``request_hash`` (idempotency replay was
+        live on a2a/rest and dead on MCP) with the guard green. One lookup, both kinds.
+        """
+        if hasattr(mod, wrapper_name):
+            return (wrapper_name, module_path)
         parent_module = module_path.rsplit(".", 1)[0]
         try:
             sibling = importlib.import_module(f"{parent_module}.sync_wrappers")
-            if hasattr(sibling, a2a_name):
-                result["a2a"] = (a2a_name, f"{parent_module}.sync_wrappers")
         except ImportError:
-            pass
+            return None
+        return (wrapper_name, f"{parent_module}.sync_wrappers") if hasattr(sibling, wrapper_name) else None
 
-    return result
+    return {"mcp": _locate(mcp_name), "a2a": _locate(a2a_name)}
 
 
 def _find_impl_call_args_in_function(file_path: Path, wrapper_name: str, impl_name: str) -> list[tuple[set[str], int]]:

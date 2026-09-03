@@ -86,7 +86,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from tests.bdd.steps._outcome_helpers import _require_response, wire_field
+from tests.bdd.steps._outcome_helpers import require_payload, wire_field
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.helpers.envelope_assertions import assert_envelope_shape
@@ -239,9 +239,9 @@ def _serialized_response(ctx: dict) -> dict[str, Any]:
     is not a valid array/object/boolean).
 
     The 4-transport parametrization still exercises each dispatch path end to end:
-    a broken transport surfaces as a missing/errored ``ctx["response"]`` here.
+    a broken transport surfaces as a missing/errored dispatch payload here.
     """
-    return _require_response(ctx).model_dump(mode="json", exclude_none=True)
+    return require_payload(ctx).model_dump(mode="json", exclude_none=True)
 
 
 @then("the creatives array should include each of the synced creatives")
@@ -363,12 +363,16 @@ def when_list_creatives_concept_ids(ctx: dict, concept_list: str) -> None:
 def _wire_creatives(ctx: dict) -> list[dict[str, Any]]:
     """Return the creatives array as the buyer sees it on the wire.
 
-    REST/A2A/MCP stash the real serialized response on ``ctx["wire_response"]``
-    (CreativeListEnv stashes on all three wire transports), so the concept-field
-    assertions check the actual on-the-wire bytes rather than a re-serialization.
     Delegates to the canonical :func:`wire_field` guard (GH #1744 collapsed the
-    private guard clone this used to carry): only an explicit ``Transport.IMPL``
-    may serialize the typed payload; an unset transport raises loudly.
+    private guard clone this used to carry, and #1858 replaced its last
+    remnant). The guard branches on the DECLARATION the dispatcher made
+    (``TransportResult.has_wire``) and raises when a declared wire was not
+    captured, so the concept-field assertions read the actual on-the-wire bytes
+    rather than a re-serialization. This function used to key on transport
+    IDENTITY (``transport not in (None, Transport.IMPL)``), which is the
+    spelling the shared helper replaced across the suite: a lookup against an
+    enum member reclassifies every result the day that member moves, and it made
+    this the last site free to drift from the guard the others share.
     """
     return wire_field(ctx, "creatives")
 
@@ -433,7 +437,8 @@ def then_each_creative_carries_concept(ctx: dict, concept_id: str) -> None:
 # creative_id against the per-principal id sets recorded at seed time — CreativeFactory
 # assigns a globally-unique creative_id per row, so the two principals' id sets are
 # disjoint and the isolation assertion is well-formed. Assertions read
-# ctx["wire_response"] (the real serialized bytes on a2a/mcp/rest) via _wire_creatives,
+# the real serialized bytes on a2a/mcp/rest via _wire_creatives (which reads the
+# dispatcher's own wire declaration through wire_field),
 # satisfying the "actual wire bytes" constraint.
 
 _ISOLATION_CREATIVES_KEY = "isolation_creatives_by_principal"

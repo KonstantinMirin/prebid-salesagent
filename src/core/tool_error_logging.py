@@ -392,7 +392,10 @@ def handle_tool_error(e: ToolError) -> JSONResponse:
         # so we copy to preserve the envelope-builder's immutability contract.
         return JSONResponse(status_code=e.status_code, content=dict(e.envelope))
 
-    error_code, error_message, recovery = extract_error_info(e)
+    # ``recovery`` and the message from extract_error_info are for the LOGGING
+    # consumers (already recorded server-side above); neither reaches the wire
+    # from here, so both are bound to throwaway names.
+    error_code, _error_message, _recovery = extract_error_info(e)
     # A plain ToolError carries its code as an unvalidated string. Resolve it
     # against the vocabulary, with an explicit named fallback rather than an
     # implicit one: an unknown code becomes INTERNAL_ERROR because that is what

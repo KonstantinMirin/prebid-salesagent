@@ -11,6 +11,7 @@ to help buyer agents decide whether to retry, fix, or abandon a request.
 from __future__ import annotations
 
 import logging
+import math
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from adcp.server.helpers import adcp_error
@@ -32,7 +33,6 @@ from src.core.errors.details import (
     ProductRefDetails,
     RejectionReasonDetails,
     ValidationDetails,
-    ValueRejectionDetails,
     VersionUnsupportedDetails,
 )
 from src.core.errors.issues import ErrorIssue, issues_from_validation_error, pointer_to_field
@@ -63,6 +63,43 @@ logger = logging.getLogger(__name__)
 # server-only set. Message, recovery and suggestion are all functions of the code
 # (see docs/decisions/adr-010-graded-wire-fields-are-functions-of-the-code.md), so a
 # raise site cannot make one of them disagree with the pin.
+#
+# That openness is the PIN's own words, not this module's preference. AdCP 3.1.1
+# ``core/error.json`` types ``error.code`` as a bare ``string`` (minLength 1,
+# maxLength 64) and states: "the standard codes published in
+# ``enums/error-code.json`` are documentary, and senders MAY emit codes outside
+# that set ... Receivers MUST decode unknown codes — treat the response as
+# well-formed, read ``error.recovery`` for the recovery classification".
+#
+# Reconciliation note (merge of origin/main's #1858 storyboard-conformance work).
+# origin/main answered the same problem with a different apparatus, all of which
+# ``CODE_TABLE`` SUBSUMES, so none of it is carried here:
+#
+#   * ``RECOVERY_BY_WIRE_CODE`` / ``_load_pinned_recovery()`` — read ``recovery``
+#     out of the pinned ``enums/error-code.json`` ``enumMetadata``. ``CODE_TABLE``
+#     reads the same normative block of the same file and carries recovery
+#     ALONGSIDE suggestion, message and status, so re-adding it would be a second
+#     load of one file answering a question this one already answers.
+#   * ``_SPEC_SUPPLEMENT_CODES`` (CREATIVE_NOT_FOUND, CONFIGURATION_ERROR) and
+#     ``_SPEC_DEMOTED_CODES`` (NOT_SUPPORTED) — both existed to reconcile the SDK
+#     helper's 38-code list against the pin. Loading the pin directly makes the
+#     reconciliation unnecessary: the table classifies the two supplements and does
+#     not contain the demoted one.
+#   * ``WIRE_STANDARD_CODES`` / ``INTERNAL_CODES`` / ``ERROR_CODE_MAPPING`` /
+#     ``translate_error_code`` / ``to_wire_error_code`` — a closed wire set plus a
+#     boundary translator. The pin quoted above forbids the premise: a code outside
+#     the published 92 is legal, and a receiver is REQUIRED to decode it from
+#     ``recovery``. Collapsing MEDIA_BUY_REJECTED to POLICY_VIOLATION destroyed
+#     information the spec says the buyer may consume.
+#   * ``wire_advisory()`` — the one constructor for an ``errors[]`` advisory, which
+#     derived recovery from the pin. ``build_error_object()`` below derives recovery
+#     AND message AND suggestion from the same pin, and takes the typed exception
+#     rather than a loose (code, message) pair, so a code and its details cannot
+#     be paired wrongly at the call site.
+#
+# What DID come across from origin/main, because nothing here subsumed it:
+# ``RETRY_AFTER_MAX`` / :func:`clamp_retry_after` below, and the two-families
+# reading of :class:`AdCPConfigurationError`.
 
 
 def _serialize_context(
@@ -98,6 +135,29 @@ def _serialize_context(
         )
         return None
     return context.model_dump(mode="json", exclude_none=True)
+
+
+# The pinned spec bounds retry_after: AdCP 3.1.1 ``core/error.json`` →
+# ``retry_after`` is ``{"type": "number", "minimum": 1, "maximum": 3600}`` and its
+# description reads "Sellers MUST return values between 1 and 3600. Clients MUST
+# clamp values outside this range." Never emit more even when the underlying wait
+# is longer. A spec constant, not an operational knob — deliberately not
+# env-tunable.
+RETRY_AFTER_MAX = 3600
+
+
+def clamp_retry_after(seconds: float) -> int:
+    """Clamp a raw retry_after to the spec Error model's [1, RETRY_AFTER_MAX] bound.
+
+    The single home for the floor/ceiling every emitter shares — the idempotency
+    policy's rejection branches and the egress seam's Retry-After passthrough.
+    Callers layer any context-specific cap (e.g. an insert-rate window) on top.
+
+    It lives here rather than beside either caller because this module already
+    owns ``AdCPSalesAgentError.retry_after`` and the spec Error shape, so neither
+    emitter ends up importing the other.
+    """
+    return min(max(1, math.ceil(seconds)), RETRY_AFTER_MAX)
 
 
 def _rebuild_error(cls: type[AdCPSalesAgentError], code: ErrorCodeT) -> AdCPSalesAgentError:
@@ -632,13 +692,27 @@ class AdCPAdapterError(AdCPSalesAgentError[AdapterFailureDetails]):
 class AdCPConfigurationError(AdCPSalesAgentError[ConfigurationDetails]):
     """Server-side configuration is broken (500).
 
-    Raised when encrypted secrets cannot be decrypted (key rotation,
-    corruption, missing ENCRYPTION_KEY). Callers should NOT silently
-    fall back — the configuration needs admin intervention, so recovery is
-    ``terminal``: the buyer has no lever to fix server config and per the
-    pinned enum "MUST NOT auto-retry". CONFIGURATION_ERROR is a code the pinned
-    table classifies — it reaches the wire untranslated
-    (#1430 review).
+    Two families of raise site, one meaning — this deployment is pointed at
+    something wrong, and only an operator can repoint it:
+
+    * local config: encrypted secrets that cannot be decrypted (key rotation,
+      corruption, missing ENCRYPTION_KEY), a missing API key.
+    * a REMOTE endpoint that is operator configuration — a registered creative
+      or signals agent — refusing us, rejecting us with a terminal 4xx, or
+      answering with something unparseable. The address came from this
+      deployment, not from the buyer, so the buyer has no lever either way.
+
+    Callers should NOT silently fall back — the configuration needs admin
+    intervention, so recovery is ``terminal``: the buyer has no lever to fix
+    server config and per the pinned enum "MUST NOT auto-retry". Choosing this
+    class IS how a raise site says terminal; there is no ``recovery=`` knob to
+    say it with, because recovery is a function of the code (ADR-010).
+    CONFIGURATION_ERROR is a code the pinned table classifies — it reaches the
+    wire untranslated (#1430 review).
+
+    NOT for a buyer-supplied URL: that is :class:`AdCPUrlNotAllowedError`.
+    Telling a buyer the SELLER is misconfigured about an address they chose
+    inverts the provenance.
     """
 
     _code: ClassVar[ErrorCodeT] = ErrorCode.CONFIGURATION_ERROR
@@ -703,7 +777,7 @@ class AdCPInternalError(AdCPSalesAgentError[EntityRefDetails]):
     _code: ClassVar[ErrorCodeT] = AppErrorCode.INTERNAL_ERROR
 
 
-class AdCPUrlNotAllowedError(AdCPSalesAgentError[ValueRejectionDetails]):
+class AdCPUrlNotAllowedError(AdCPValidationError):
     """A buyer-supplied URL names a host this seller will not contact (400).
 
     Emits the PUBLISHED ``VALIDATION_ERROR``, not a platform code. This class briefly
@@ -724,7 +798,20 @@ class AdCPUrlNotAllowedError(AdCPSalesAgentError[ValueRejectionDetails]):
 
     The class survives the code change on purpose: the A2A boundary catches it BY TYPE to
     select ``InvalidParamsError``, which a bare ``AdCPValidationError`` could not express
-    without also catching every other validation failure.
+    without also catching every other validation failure. Being a SUBCLASS costs nothing
+    there — ``isinstance`` still discriminates the URL refusal exactly.
+
+    It is a subclass rather than a sibling because two fail-closed handlers depend on the
+    subsumption, and both are load-bearing rather than incidental:
+    ``src/services/delivery_webhook_scheduler.py`` and ``src/core/context_manager.py`` each
+    wrap the registration gate (``webhooks/registration.py`` →
+    ``reject_unsafe_webhook_registration_url``) in ``except AdCPValidationError`` precisely
+    so a refused registration becomes a logged non-delivery instead of an exception that
+    kills the scheduler loop or fails a status transition. As a direct
+    ``AdCPSalesAgentError`` subclass — which is how this branch declared it — an SSRF
+    refusal escapes both. The parent's ``ValidationDetails`` replaces the
+    ``ValueRejectionDetails`` this class was parameterized on; no raise site in the tree
+    passes ``details=`` to it, so that parameter was carrying nothing.
 
     The buyer's actionable signal is the CODE plus ``field`` (which URL was refused). The
     rejection REASON never reaches the buyer -- the spec's Security Considerations forbid
@@ -1199,3 +1286,41 @@ def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPSalesAgentEr
     if isinstance(exc, PermissionError):
         return AdCPAuthorizationError()
     return AdCPSalesAgentError(error_code=AppErrorCode.INTERNAL_ERROR)
+
+
+# ---------------------------------------------------------------------------
+# Names origin/main spells differently
+# ---------------------------------------------------------------------------
+# Aliases, not classes: each pair below is ONE concept that the two branches
+# named differently, so binding a second name costs nothing, while defining a
+# second class would put two answers on the wire for one failure.
+#
+# ``AdCPError`` is this branch's ``AdCPSalesAgentError`` under its former name.
+# The rename is repo-wide here (42 modules) but origin/main's egress work landed
+# after it, so ``src/core/helpers/outbound_error_mapping.py`` and
+# ``src/core/security/egress/policy.py`` still import the old spelling. Those two
+# modules ALSO still call the retired constructor API — a positional ``message``
+# and a plain-dict ``details``, both of which this base class refuses — so this
+# alias makes them import, not work. They need porting to the keyword-only,
+# typed-details constructor before either can raise. Delete this name in the same
+# change.
+AdCPError = AdCPSalesAgentError
+
+# ``AdCPBlockedUrlError`` is origin/main's name for the SSRF refusal, and the two
+# were ONE condition, not two: the pinned 3.1.1 ``enums/error-code.json`` defines
+# no URL/SSRF code at all (the nearest, AGENT_BLOCKED, is about a blocked AGENT),
+# and both branches already resolved a refused URL to the same published
+# VALIDATION_ERROR — "invalid field values or violates business rules beyond
+# schema validation", as against INVALID_REQUEST's "malformed ... or violates
+# schema constraints". A schema-valid https URI refused by a deny-list is the
+# former. So the spec distinguishes nothing here for a second class to carry, and
+# there is one class with one alias.
+#
+# The surviving class takes origin/main's HIERARCHY (subclass of
+# AdCPValidationError) and this branch's NAME and body — see the class docstring
+# for why the hierarchy half is a behavior fix rather than a preference.
+# origin/main's other difference, an authored ``_default_message`` ("URL resolves
+# to a restricted range."), is subsumed: the message here is the code's own table
+# sentence, which is the ADR-010 rule the whole taxonomy follows and which keeps
+# the refused host out of buyer-facing text by construction.
+AdCPBlockedUrlError = AdCPUrlNotAllowedError

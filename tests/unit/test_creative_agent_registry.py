@@ -1,12 +1,36 @@
-"""Unit tests for Creative Agent Registry adcp library integration."""
+"""Unit tests for Creative Agent Registry.
 
-from unittest.mock import AsyncMock, Mock
+``TestCreativeAgentRegistry`` (build/fetch against a mocked ``adcp.ADCPMultiAgentClient``)
+was retired by salesagent-4n88: the OPERATOR agent path no longer constructs
+that SDK client at all — it dials through the guarded MCP seam
+(``src.core.utils.mcp_client.call_mcp_tool``, reached through
+``src.core.utils.operator_mcp.call_operator_mcp_tool``) instead, via
+``_fetch_formats_operator``. ``_build_adcp_client``, ``_fetch_formats_from_agent``
+and ``_as_format_dict`` no longer exist, so every test that mocked them tested a
+mechanism rather than a behaviour. Their contracts are re-expressed against a
+real local origin — the project's stated preference over mocking the thing under
+test's own dependency:
+
+* auth propagation (custom header, default header, no auth) —
+  ``tests/integration/test_auth_header_propagation.py``
+* connection-alias routing — ``tests/unit/test_creative_agent_connection_alias.py``
+* error taxonomy — ``tests/integration/test_operator_agent_mcp_seam_egress.py``
+  and ``tests/integration/test_operator_probe_agent.py``
+
+The message-provenance pairs this branch added to the retired class (the
+buyer-facing ``message`` is the CODE_TABLE sentence, the upstream SDK text
+reaches only ``internal_detail``, per AdCP 3.1.1 transport-errors.mdx
+§ Security Considerations) survive one layer out and one notch stronger: they
+are graded on the wire envelope, not on a reconstructed exception, by
+``tests/integration/test_creative_agent_egress.py::TestTaxonomy::test_a_delivery_failure_does_not_echo_the_operators_endpoint``
+— which asserts the operator's host, port AND the origin's response body are all
+absent from the serialized envelope.
+"""
 
 import pytest
 from pydantic import AnyUrl
 
-from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
-from src.core.exceptions import AdCPAdapterError, AdCPAuthenticationError, AdCPServiceUnavailableError
+from src.core.creative_agent_registry import CreativeAgentRegistry
 
 
 class TestCacheKeyAcceptsAnyUrl:
@@ -42,301 +66,7 @@ class TestCacheKeyAcceptsAnyUrl:
         async def mock_fetch(*args, **kwargs):
             return []
 
-        monkeypatch.setattr(registry, "_fetch_formats_from_agent", mock_fetch)
+        monkeypatch.setattr(registry, "_fetch_formats_operator", mock_fetch)
 
         result = await registry.get_format(AnyUrl("https://creative.adcontextprotocol.org/"), "display_300x250_image")
         assert result is None  # Not found, but no TypeError
-
-
-class TestCreativeAgentRegistry:
-    """Test suite for Creative Agent Registry adcp integration."""
-
-    def test_build_adcp_client_with_custom_auth_header(self):
-        """Test _build_adcp_client correctly maps custom auth headers."""
-        registry = CreativeAgentRegistry()
-
-        # Test agent with custom auth header
-        test_agents = [
-            CreativeAgent(
-                agent_url="https://test-agent.example.com/mcp",
-                name="Test Agent",
-                enabled=True,
-                priority=1,
-                auth={"type": "bearer", "credentials": "test-token-123"},
-                auth_header="Authorization",  # Custom header
-            )
-        ]
-
-        client = registry._build_adcp_client(test_agents)
-
-        # Verify client was created
-        assert client is not None
-
-        # Verify agent config is correct (check via client._agents if accessible)
-        # Note: We can't easily verify internal AgentConfig without accessing private attrs
-        # But we can verify the method doesn't raise and returns a client
-        assert hasattr(client, "agent")
-
-    def test_build_adcp_client_with_default_auth_header(self):
-        """Test _build_adcp_client uses default x-adcp-auth when no custom header."""
-        registry = CreativeAgentRegistry()
-
-        test_agents = [
-            CreativeAgent(
-                agent_url="https://default-agent.example.com/mcp",
-                name="Default Agent",
-                enabled=True,
-                priority=1,
-                auth={"type": "token", "credentials": "token-456"},
-                auth_header=None,  # No custom header
-            )
-        ]
-
-        client = registry._build_adcp_client(test_agents)
-
-        assert client is not None
-        assert hasattr(client, "agent")
-
-    def test_build_adcp_client_with_no_auth(self):
-        """Test _build_adcp_client handles agents without auth."""
-        registry = CreativeAgentRegistry()
-
-        test_agents = [
-            CreativeAgent(
-                agent_url="https://public-agent.example.com/mcp",
-                name="Public Agent",
-                enabled=True,
-                priority=1,
-                auth=None,
-                auth_header=None,
-            )
-        ]
-
-        client = registry._build_adcp_client(test_agents)
-
-        assert client is not None
-
-    @pytest.mark.asyncio
-    async def test_fetch_formats_from_agent_with_adcp_success(self):
-        """Test _fetch_formats_from_agent with successful adcp response."""
-        registry = CreativeAgentRegistry()
-
-        test_agent = CreativeAgent(
-            agent_url="https://test-agent.example.com/mcp",
-            name="Test Agent",
-            enabled=True,
-            priority=1,
-        )
-
-        # Mock ADCPMultiAgentClient
-        mock_client = Mock()
-        mock_agent_client = Mock()
-
-        # Mock format data as dicts (as returned by adcp library)
-        # Using spec-compliant renders array for dimensions (not top-level dimensions field)
-        mock_formats = [
-            {
-                "format_id": {"agent_url": "https://test-agent.example.com/mcp", "id": "display_300x250"},
-                "name": "Display 300x250",
-                "type": "display",
-                "renders": [{"role": "primary", "dimensions": {"width": 300, "height": 250, "unit": "px"}}],
-            },
-            {
-                "format_id": {"agent_url": "https://test-agent.example.com/mcp", "id": "display_728x90"},
-                "name": "Display 728x90",
-                "type": "display",
-                "renders": [{"role": "primary", "dimensions": {"width": 728, "height": 90, "unit": "px"}}],
-            },
-        ]
-
-        mock_result = Mock()
-        mock_result.status = "completed"
-        mock_result.data = Mock()
-        mock_result.data.formats = mock_formats
-
-        mock_agent_client.list_creative_formats = AsyncMock(return_value=mock_result)
-        mock_client.agent = Mock(return_value=mock_agent_client)
-
-        # Call the method
-        formats = await registry._fetch_formats_from_agent(mock_client, test_agent, max_width=1920, max_height=1080)
-
-        # Verify results
-        assert len(formats) == 2
-        assert formats[0].format_id.id == "display_300x250"
-        assert formats[1].format_id.id == "display_728x90"
-
-        # Verify agent_url was set
-        # Note: Can't directly check since Format is constructed, but method should set it
-
-    @pytest.mark.asyncio
-    async def test_fetch_formats_from_agent_with_async_submission(self):
-        """Test _fetch_formats_from_agent handles async webhook submission."""
-        registry = CreativeAgentRegistry()
-
-        test_agent = CreativeAgent(
-            agent_url="https://test-agent.example.com/mcp",
-            name="Test Agent",
-            enabled=True,
-            priority=1,
-        )
-
-        # Mock async submission response
-        mock_client = Mock()
-        mock_agent_client = Mock()
-
-        mock_result = Mock()
-        mock_result.status = "submitted"
-        mock_result.submitted = Mock()
-        mock_result.submitted.webhook_url = "https://webhook.example.com/callback"
-
-        mock_agent_client.list_creative_formats = AsyncMock(return_value=mock_result)
-        mock_client.agent = Mock(return_value=mock_agent_client)
-
-        # Submitted status is anomalous for list_creative_formats — must raise
-        # Fix for salesagent-kwws: silent return [] masked failures as 'no formats'
-        with pytest.raises(AdCPAdapterError):
-            await registry._fetch_formats_from_agent(mock_client, test_agent)
-
-    @pytest.mark.asyncio
-    async def test_fetch_formats_from_agent_handles_auth_error(self):
-        """Test _fetch_formats_from_agent handles authentication errors."""
-        from adcp.exceptions import ADCPAuthenticationError
-
-        registry = CreativeAgentRegistry()
-
-        test_agent = CreativeAgent(
-            agent_url="https://test-agent.example.com/mcp",
-            name="Test Agent",
-            enabled=True,
-            priority=1,
-        )
-
-        # Mock authentication error
-        mock_client = Mock()
-        mock_agent_client = Mock()
-
-        auth_error = ADCPAuthenticationError("Invalid credentials")
-        mock_agent_client.list_creative_formats = AsyncMock(side_effect=auth_error)
-        mock_client.agent = Mock(return_value=mock_agent_client)
-
-        # Should re-raise as typed src.core.AdCPAuthenticationError (wrapped).
-        # Matching only the first-party PREFIX was vacuous with respect to
-        # message provenance — it passed whether or not the SDK's text was
-        # appended. Paired form: first-party sentence present, SDK text absent
-        # (AdCP 3.1.1 transport-errors.mdx § Security Considerations).
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            await registry._fetch_formats_from_agent(mock_client, test_agent)
-
-        # Paired assertion, both halves: the buyer-facing sentence is the code's
-        # first-party one (present) and the SDK's free text is not appended (absent).
-        assert exc_info.value.message == AdCPAuthenticationError().message
-        assert "Invalid credentials" not in exc_info.value.message
-        assert "Authentication failed" in str(exc_info.value.internal_detail or "")
-
-    @pytest.mark.asyncio
-    async def test_fetch_formats_from_agent_handles_timeout_error(self):
-        """Test _fetch_formats_from_agent handles timeout errors."""
-        from adcp.exceptions import ADCPTimeoutError
-
-        registry = CreativeAgentRegistry()
-
-        test_agent = CreativeAgent(
-            agent_url="https://test-agent.example.com/mcp",
-            name="Test Agent",
-            enabled=True,
-            priority=1,
-        )
-
-        # Mock timeout error
-        mock_client = Mock()
-        mock_agent_client = Mock()
-
-        timeout_error = ADCPTimeoutError(
-            message="Request timed out",
-            agent_id="Test Agent",
-            agent_uri="https://test-agent.example.com/mcp",
-            timeout=30.0,
-        )
-        mock_agent_client.list_creative_formats = AsyncMock(side_effect=timeout_error)
-        mock_client.agent = Mock(return_value=mock_agent_client)
-
-        # Should raise typed AdCPServiceUnavailableError. "Request timed out" is now
-        # the operator-facing mode label on internal_detail, not the buyer sentence.
-        with pytest.raises(AdCPServiceUnavailableError) as exc_info:
-            await registry._fetch_formats_from_agent(mock_client, test_agent)
-
-        assert exc_info.value.message == AdCPServiceUnavailableError().message
-        assert "Request timed out" in str(exc_info.value.internal_detail or "")
-
-    @pytest.mark.asyncio
-    async def test_fetch_formats_from_agent_handles_connection_error(self):
-        """Test _fetch_formats_from_agent handles connection errors."""
-        from adcp.exceptions import ADCPConnectionError
-
-        registry = CreativeAgentRegistry()
-
-        test_agent = CreativeAgent(
-            agent_url="https://test-agent.example.com/mcp",
-            name="Test Agent",
-            enabled=True,
-            priority=1,
-        )
-
-        # Mock connection error
-        mock_client = Mock()
-        mock_agent_client = Mock()
-
-        conn_error = ADCPConnectionError("Connection refused")
-        mock_agent_client.list_creative_formats = AsyncMock(side_effect=conn_error)
-        mock_client.agent = Mock(return_value=mock_agent_client)
-
-        # Should raise typed AdCPServiceUnavailableError. Same conversion as the
-        # authentication case above: prefix-only matching could not tell a safe
-        # message from a leaking one, so the SDK's "Connection refused" is now
-        # asserted ABSENT from the buyer-facing message.
-        with pytest.raises(AdCPServiceUnavailableError) as exc_info:
-            await registry._fetch_formats_from_agent(mock_client, test_agent)
-
-        assert exc_info.value.message == AdCPServiceUnavailableError().message
-        assert "Connection refused" not in exc_info.value.message
-        assert "Connection failed" in str(exc_info.value.internal_detail or "")
-
-    @pytest.mark.asyncio
-    async def test_fetch_formats_from_agent_handles_library_format(self):
-        """Test _fetch_formats_from_agent converts library Format to local Format via model_validate."""
-        from adcp.types import Format as LibraryFormat
-
-        registry = CreativeAgentRegistry()
-
-        test_agent = CreativeAgent(
-            agent_url="https://test-agent.example.com/mcp",
-            name="Test Agent",
-            enabled=True,
-            priority=1,
-        )
-
-        # Use a real library Format object (as returned by adcp client)
-        mock_client = Mock()
-        mock_agent_client = Mock()
-
-        library_format = LibraryFormat(
-            format_id={"agent_url": "https://test-agent.example.com/mcp", "id": "display_300x250"},
-            name="Display 300x250",
-            type="display",
-            renders=[{"role": "primary", "dimensions": {"width": 300, "height": 250}}],
-        )
-
-        mock_result = Mock()
-        mock_result.status = "completed"
-        mock_result.data = Mock()
-        mock_result.data.formats = [library_format]
-
-        mock_agent_client.list_creative_formats = AsyncMock(return_value=mock_result)
-        mock_client.agent = Mock(return_value=mock_agent_client)
-
-        # Call the method
-        formats = await registry._fetch_formats_from_agent(mock_client, test_agent)
-
-        # Verify format was constructed as our local Format subclass
-        assert len(formats) == 1
-        assert formats[0].format_id.id == "display_300x250"

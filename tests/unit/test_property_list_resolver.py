@@ -1,20 +1,61 @@
-"""Unit tests for property list resolver with caching."""
+"""The one property-list resolver behaviour the egress seam cannot own: the Bearer header.
 
-import ipaddress
-import re
-from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+Most of this module was deleted by prebid/salesagent#1802 and re-expressed in
+``tests/integration/test_property_list_resolver.py``. That deletion was right:
+every class here patched ``httpx.AsyncClient`` or
+``src.core.security.url_validator``, and ``src/core/property_list_resolver.py``
+touches neither any more — it fetches through
+``src/core/security/outbound_http.py``, which owns scheme policy, address
+validation, IP pinning, redirect refusal, the response-size cap and retry
+classification and grades all of them once in
+``tests/integration/test_outbound_http.py``. Those cases asserted the mock's own
+configuration. Their replacements grade the resolver's **cache** against a real
+local origin (``origin.hits == 1`` beats a mock's ``call_count``) and the wire
+class of a **refusal** (VALIDATION_ERROR / correctable, naming
+``property_list.agent_url``) on the envelope through ``get_products``.
 
-import httpx
+One fact survived that move ungraded, so it is graded here.
+
+``PropertyListReference.auth_token`` is the credential a buyer hands the seller
+to read a PROTECTED property list, and the resolver is the only code that turns
+it into a request header::
+
+    if ref.auth_token:
+        headers["Authorization"] = f"Bearer {ref.auth_token}"
+
+That is a pure input mapping, not an egress decision: the seam is handed a
+``headers`` mapping and forwards it, so it can neither supply the header nor
+notice its absence. Nothing else in the tree asserts it — the integration
+module's ``origin_ref`` accepts an ``auth_token`` but no case passes one, and
+its origin never inspects ``Authorization``. Dropping the two lines above would
+leave every other test green while every authenticated property list started
+resolving as a 401, so the mapping keeps a test.
+
+Mocking is legitimate for exactly this shape and no other: ``asend`` is
+substituted to CAPTURE the call the resolver composed, and the assertion is on
+arguments the resolver computed from its own input — not on a response the test
+chose. Anything that depends on what comes BACK from the network belongs in the
+integration module, against a real origin.
+"""
+
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from adcp.types import PropertyListReference
 
-from src.core.exceptions import AdCPAdapterError, AdCPUrlNotAllowedError
+from src.core.property_list_resolver import _DEFAULT_TIMEOUT, _REFUSED_FIELD_PATH
+from src.core.security.egress.response import OutboundResult
+from src.core.security.outbound_http import CounterpartyUrl
 
 
 @pytest.fixture(autouse=True)
 def _clear_cache():
-    """Clear the property list cache before each test."""
+    """Clear the module-level cache around each test.
+
+    The cache outlives a test function, so a previous entry would answer this
+    module's call before ``asend`` was ever reached and the captured-call
+    assertion would fail on zero calls.
+    """
     from src.core.property_list_resolver import clear_cache
 
     clear_cache()
@@ -22,578 +63,80 @@ def _clear_cache():
     clear_cache()
 
 
-@pytest.fixture(autouse=True)
-def _stub_dns():
-    """Stub DNS resolution so tests don't make real DNS lookups.
+def _empty_list_result() -> OutboundResult:
+    """A real ``OutboundResult`` carrying the smallest valid list response.
 
-    Returns a public IP for all hostnames by default. Tests in
-    TestSSRFProtection override this where needed.
+    Constructed rather than mocked: ``OutboundResult`` is a frozen dataclass
+    closed over its five fields (``tests/unit/test_outbound_result_is_closed.py``),
+    so building one keeps this double honest — a field added to or removed from
+    the seam's return type breaks this line instead of being silently absorbed
+    by a ``MagicMock``.
     """
-    with patch(
-        "src.core.security.url_validator.socket.gethostbyname",
-        return_value="93.184.216.34",
-    ):
-        yield
+    return OutboundResult(
+        http_status=200,
+        headers={"content-type": "application/json"},
+        content=b'{"list": {"list_id": "list-1", "name": "Test List"}}',
+        attempts=1,
+        duration_seconds=0.0,
+    )
 
 
-def _make_ref(
-    agent_url: str = "https://example.com",
-    list_id: str = "list-1",
-    auth_token: str | None = "test-token",
-) -> PropertyListReference:
+def _make_ref(auth_token: str | None) -> PropertyListReference:
     return PropertyListReference(
-        agent_url=agent_url,
-        list_id=list_id,
+        agent_url="https://agent.example.com",
+        list_id="list-1",
         auth_token=auth_token,
     )
 
 
-def _make_response_json(
-    identifiers: list[dict] | None = None,
-    cache_valid_until: str | None = None,
-) -> dict:
-    """Build a raw JSON dict that matches GetPropertyListResponse shape."""
-    result: dict = {
-        "list": {
-            "list_id": "list-1",
-            "name": "Test List",
-        },
-    }
-    if identifiers is not None:
-        result["identifiers"] = identifiers
-    if cache_valid_until is not None:
-        result["cache_valid_until"] = cache_valid_until
-    return result
-
-
-def _make_mock_response(response_json: dict, status_code: int = 200) -> MagicMock:
-    """Create a mock httpx.Response with sync .json() and .raise_for_status()."""
-    mock_response = MagicMock()
-    mock_response.status_code = status_code
-    mock_response.json.return_value = response_json
-    return mock_response
-
-
-# The stable, first-party sentence the resolver publishes for EVERY SSRF
-# rejection. Deliberately reason-free: ``check_url_ssrf`` returns text like
-# "URL resolves to private/internal IP address: <ip>" — the DNS-resolution
-# result for the buyer's hostname as seen from the SELLER's network — and
-# AdCP 3.1.1 dist/docs/3.1.1/building/operating/transport-errors.mdx
-# § Security Considerations / Seller Requirements (lines 659-670) forbids
-# "internal service names, hostnames, or IP addresses" on a client-facing
-# field. Echoing the reason also turns get_products into a buyer-driven DNS
-# oracle over the seller's internal network view.
-# The buyer-facing sentence is SERVICE_UNAVAILABLE's table entry now — no raise site
-# authors it, so a wording drift can only come from the pinned table itself.
-def _assert_ssrf_rejection(exc: AdCPUrlNotAllowedError, *, detail_pattern: str, absent: str | None = None) -> None:
-    """Grade one SSRF rejection: safe on the wire, still discriminating server-side.
-
-    These assertions used to run against the buyer-facing message
-    (``match="HTTPS"``, ``match="blocked"``, ``match="[Bb]locked|[Pp]rivate|
-    [Ii]nternal"``), i.e. they REQUIRED the disclosure the spec forbids. The
-    discrimination they were really after now lives on the non-wire
-    ``internal_detail`` slot, so each test keeps its specific expectation
-    without the message carrying it.
-    """
-    # The buyer's actionable signal is the CODE and the FIELD. VALIDATION_ERROR
-    # (correctable, per the pin) says a different URL will work; the previous
-    # AdCPAdapterError said SERVICE_UNAVAILABLE / transient — "retry with exponential
-    # backoff" — for a condition retrying can never resolve. Recovery and suggestion are
-    # read-only properties over CODE_TABLE, so neither is asserted here: with the code
-    # pinned, either assert would grade the table against itself.
-    assert exc.error_code == "VALIDATION_ERROR", f"expected VALIDATION_ERROR, got {exc.error_code}"
-    assert re.search(detail_pattern, str(exc.internal_detail)), (
-        f"the rejection reason must survive server-side on internal_detail; "
-        f"expected /{detail_pattern}/ in {exc.internal_detail!r}"
-    )
-    if absent is not None:
-        pass  # the operation must raise; its message is not asserted
-
-
-def _make_mock_client(get_side_effect=None, get_return_value=None) -> AsyncMock:
-    """Create a mock httpx.AsyncClient with proper async context manager."""
-    mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-    if get_side_effect is not None:
-        mock_client.get = AsyncMock(side_effect=get_side_effect)
-    elif get_return_value is not None:
-        mock_client.get = AsyncMock(return_value=get_return_value)
-    return mock_client
-
-
-class TestResolvePropertyList:
-    """Tests for resolve_property_list()."""
+class TestAuthTokenBecomesABearerHeader:
+    """``ref.auth_token`` -> ``Authorization: Bearer <token>``, and nothing when absent."""
 
     @pytest.mark.asyncio
-    async def test_successful_resolution(self):
-        """Successful HTTP call returns identifier value strings."""
+    async def test_auth_token_is_sent_as_a_bearer_header(self):
+        """A present ``auth_token`` reaches the agent service as a Bearer credential."""
         from src.core.property_list_resolver import resolve_property_list
-
-        ref = _make_ref()
-        response_json = _make_response_json(
-            identifiers=[
-                {"type": "domain", "value": "example.com"},
-                {"type": "domain", "value": "test.org"},
-            ],
-        )
-        mock_response = _make_mock_response(response_json)
-
-        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
-            mock_client = _make_mock_client(get_return_value=mock_response)
-            mock_client_cls.return_value = mock_client
-
-            result = await resolve_property_list(ref)
-
-        assert result == ["example.com", "test.org"]
-
-    @pytest.mark.asyncio
-    async def test_bearer_auth_header_sent(self):
-        """When auth_token is present, Bearer header is sent."""
-        from src.core.property_list_resolver import resolve_property_list
-
-        ref = _make_ref(auth_token="my-secret-token")
-        response_json = _make_response_json(
-            identifiers=[{"type": "domain", "value": "a.com"}],
-        )
-        mock_response = _make_mock_response(response_json)
-
-        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
-            mock_client = _make_mock_client(get_return_value=mock_response)
-            mock_client_cls.return_value = mock_client
-
-            await resolve_property_list(ref)
-
-        call_kwargs = mock_client.get.call_args
-        assert call_kwargs.kwargs["headers"]["Authorization"] == "Bearer my-secret-token"
-
-    @pytest.mark.asyncio
-    async def test_no_auth_header_when_token_is_none(self):
-        """When auth_token is None, no Authorization header is sent."""
-        from src.core.property_list_resolver import resolve_property_list
-
-        ref = _make_ref(auth_token=None)
-        response_json = _make_response_json(
-            identifiers=[{"type": "domain", "value": "a.com"}],
-        )
-        mock_response = _make_mock_response(response_json)
-
-        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
-            mock_client = _make_mock_client(get_return_value=mock_response)
-            mock_client_cls.return_value = mock_client
-
-            await resolve_property_list(ref)
-
-        call_kwargs = mock_client.get.call_args
-        assert "Authorization" not in call_kwargs.kwargs["headers"]
-
-    @pytest.mark.asyncio
-    async def test_correct_url_construction(self):
-        """GET request is sent to {agent_url}/lists/{list_id}."""
-        from src.core.property_list_resolver import resolve_property_list
-
-        ref = _make_ref(agent_url="https://agent.example.com", list_id="my-list-42")
-        response_json = _make_response_json(
-            identifiers=[{"type": "domain", "value": "a.com"}],
-        )
-        mock_response = _make_mock_response(response_json)
-
-        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
-            mock_client = _make_mock_client(get_return_value=mock_response)
-            mock_client_cls.return_value = mock_client
-
-            await resolve_property_list(ref)
-
-        call_args = mock_client.get.call_args
-        url = call_args.args[0] if call_args.args else call_args.kwargs.get("url")
-        assert url == "https://agent.example.com/lists/my-list-42"
-
-    @pytest.mark.asyncio
-    async def test_empty_identifiers_returns_empty_list(self):
-        """When identifiers is None in response, return empty list."""
-        from src.core.property_list_resolver import resolve_property_list
-
-        ref = _make_ref()
-        response_json = _make_response_json(identifiers=None)
-        mock_response = _make_mock_response(response_json)
-
-        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
-            mock_client = _make_mock_client(get_return_value=mock_response)
-            mock_client_cls.return_value = mock_client
-
-            result = await resolve_property_list(ref)
-
-        assert result == []
-
-
-class TestCaching:
-    """Tests for cache behavior."""
-
-    @pytest.mark.asyncio
-    async def test_cached_result_avoids_http_call(self):
-        """Second call with same ref returns cached result, no HTTP."""
-        from src.core.property_list_resolver import resolve_property_list
-
-        ref = _make_ref()
-        future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
-        response_json = _make_response_json(
-            identifiers=[{"type": "domain", "value": "cached.com"}],
-            cache_valid_until=future,
-        )
-        mock_response = _make_mock_response(response_json)
-
-        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
-            mock_client = _make_mock_client(get_return_value=mock_response)
-            mock_client_cls.return_value = mock_client
-
-            result1 = await resolve_property_list(ref)
-            result2 = await resolve_property_list(ref)
-
-        assert result1 == ["cached.com"]
-        assert result2 == ["cached.com"]
-        assert mock_client.get.call_count == 1  # Only one HTTP call
-
-    @pytest.mark.asyncio
-    async def test_expired_cache_causes_refetch(self):
-        """Expired cache entry triggers a new HTTP call."""
-        from src.core.property_list_resolver import resolve_property_list
-
-        ref = _make_ref()
-        past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
-        response_json = _make_response_json(
-            identifiers=[{"type": "domain", "value": "fresh.com"}],
-            cache_valid_until=past,
-        )
-        mock_response = _make_mock_response(response_json)
-
-        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
-            mock_client = _make_mock_client(get_return_value=mock_response)
-            mock_client_cls.return_value = mock_client
-
-            await resolve_property_list(ref)
-            await resolve_property_list(ref)
-
-        assert mock_client.get.call_count == 2  # Both calls hit HTTP
-
-    @pytest.mark.asyncio
-    async def test_no_cache_valid_until_uses_default_ttl(self):
-        """When cache_valid_until is None, cache with default TTL."""
-        from src.core.property_list_resolver import resolve_property_list
-
-        ref = _make_ref()
-        response_json = _make_response_json(
-            identifiers=[{"type": "domain", "value": "default-ttl.com"}],
-            cache_valid_until=None,
-        )
-        mock_response = _make_mock_response(response_json)
-
-        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
-            mock_client = _make_mock_client(get_return_value=mock_response)
-            mock_client_cls.return_value = mock_client
-
-            result1 = await resolve_property_list(ref)
-            result2 = await resolve_property_list(ref)
-
-        assert result1 == ["default-ttl.com"]
-        assert result2 == ["default-ttl.com"]
-        assert mock_client.get.call_count == 1  # Cached despite no cache_valid_until
-
-    @pytest.mark.asyncio
-    async def test_different_list_ids_cached_separately(self):
-        """Different list_ids have separate cache entries."""
-        from src.core.property_list_resolver import resolve_property_list
-
-        future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
-
-        ref1 = _make_ref(list_id="list-a")
-        ref2 = _make_ref(list_id="list-b")
-
-        response_a = _make_response_json(
-            identifiers=[{"type": "domain", "value": "a.com"}],
-            cache_valid_until=future,
-        )
-        response_b = _make_response_json(
-            identifiers=[{"type": "domain", "value": "b.com"}],
-            cache_valid_until=future,
-        )
-
-        call_count = 0
-
-        async def mock_get(url, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            resp = MagicMock()
-            resp.status_code = 200
-            if "list-a" in url:
-                resp.json.return_value = response_a
-            else:
-                resp.json.return_value = response_b
-            return resp
-
-        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
-            mock_client = _make_mock_client()
-            mock_client.get = mock_get
-            mock_client_cls.return_value = mock_client
-
-            result_a = await resolve_property_list(ref1)
-            result_b = await resolve_property_list(ref2)
-
-        assert result_a == ["a.com"]
-        assert result_b == ["b.com"]
-        assert call_count == 2
-
-
-class TestErrorHandling:
-    """Tests for error wrapping -- core invariant: no raw httpx exceptions escape."""
-
-    @pytest.mark.asyncio
-    async def test_http_error_raises_adcp_adapter_error(self):
-        """HTTP 4xx/5xx errors are wrapped in AdCPAdapterError."""
-        from src.core.property_list_resolver import resolve_property_list
-
-        ref = _make_ref()
-
-        mock_response = MagicMock()
-        mock_response.status_code = 404
-        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-            "Not Found",
-            request=httpx.Request("GET", "https://example.com/lists/list-1"),
-            response=httpx.Response(404),
-        )
-
-        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
-            mock_client = _make_mock_client(get_return_value=mock_response)
-            mock_client_cls.return_value = mock_client
-
-            with pytest.raises(AdCPAdapterError) as _ei:
-                await resolve_property_list(ref)
-            # The failing URL is what the buyer can act on, and it is a DECLARED field
-            # now, not a dict key -- so a typo in the name is a typecheck failure rather
-            # than a KeyError at assert time. The sentence itself is
-            # SERVICE_UNAVAILABLE's table entry.
-            assert _ei.value.details is not None
-            assert _ei.value.details.url is not None
-            assert _ei.value.details.url.startswith("https://")
-
-    @pytest.mark.asyncio
-    async def test_timeout_raises_adcp_adapter_error(self):
-        """httpx.TimeoutException is wrapped in AdCPAdapterError."""
-        from src.core.property_list_resolver import resolve_property_list
-
-        ref = _make_ref()
-
-        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
-            mock_client = _make_mock_client(
-                get_side_effect=httpx.TimeoutException("timed out"),
-            )
-            mock_client_cls.return_value = mock_client
-
-            with pytest.raises(AdCPAdapterError) as _ei:
-                await resolve_property_list(ref)
-            # The timeout's own text is server-side only; internal_detail keeps it.
-
-    @pytest.mark.asyncio
-    async def test_connection_error_raises_adcp_adapter_error(self):
-        """httpx.ConnectError is wrapped in AdCPAdapterError."""
-        from src.core.property_list_resolver import resolve_property_list
-
-        ref = _make_ref()
-
-        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
-            mock_client = _make_mock_client(
-                get_side_effect=httpx.ConnectError("connection refused"),
-            )
-            mock_client_cls.return_value = mock_client
-
-            with pytest.raises(AdCPAdapterError) as exc_info:
-                await resolve_property_list(ref)
-
-        # ``url`` derives from the buyer's own ref.agent_url, so echoing it back
-        # discloses nothing. httpx's own text does NOT go on the wire — it
-        # routinely carries resolver/proxy targets (transport-errors.mdx
-        # § Security Considerations). It survives on the non-wire slot.
-
-    @pytest.mark.asyncio
-    async def test_failed_requests_are_not_cached(self):
-        """Failed HTTP calls should not populate the cache."""
-        from src.core.property_list_resolver import resolve_property_list
-
-        ref = _make_ref()
-
-        future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
-        success_response_json = _make_response_json(
-            identifiers=[{"type": "domain", "value": "success.com"}],
-            cache_valid_until=future,
-        )
-
-        call_count = 0
-
-        async def mock_get(url, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise httpx.TimeoutException("timed out")
-            resp = MagicMock()
-            resp.status_code = 200
-            resp.json.return_value = success_response_json
-            return resp
-
-        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
-            mock_client = _make_mock_client()
-            mock_client.get = mock_get
-            mock_client_cls.return_value = mock_client
-
-            with pytest.raises(AdCPAdapterError):
-                await resolve_property_list(ref)
-
-            # Second call should succeed (not return cached error)
-            result = await resolve_property_list(ref)
-
-        assert result == ["success.com"]
-        assert call_count == 2
-
-
-class TestSSRFProtection:
-    """Tests for SSRF protection — buyer-supplied agent_url must be validated."""
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "malicious_url,description",
-        [
-            ("http://127.0.0.1:8080", "loopback IPv4 via HTTP"),
-            ("http://localhost:9200", "localhost hostname via HTTP"),
-            ("http://10.0.0.1/internal", "RFC1918 class A via HTTP"),
-            ("http://172.16.0.1/internal", "RFC1918 class B via HTTP"),
-            ("http://192.168.1.1/internal", "RFC1918 class C via HTTP"),
-            ("http://169.254.169.254/latest/meta-data", "AWS metadata via HTTP"),
-            ("http://metadata.google.internal", "GCP metadata via HTTP"),
-            ("http://[::1]:8080", "loopback IPv6 via HTTP"),
-        ],
-    )
-    async def test_rejects_http_scheme(self, malicious_url, description):
-        """HTTP URLs must be rejected regardless of destination (HTTPS required)."""
-        from src.core.property_list_resolver import resolve_property_list
-
-        ref = _make_ref(agent_url=malicious_url)
-
-        with pytest.raises(AdCPUrlNotAllowedError) as exc_info:
-            await resolve_property_list(ref)
-        _assert_ssrf_rejection(exc_info.value, detail_pattern="HTTPS")
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "malicious_url,resolved_ip,description",
-        [
-            ("https://evil.com", "127.0.0.1", "DNS rebind to loopback"),
-            ("https://evil.com", "10.0.0.1", "DNS rebind to RFC1918 class A"),
-            ("https://evil.com", "172.16.0.1", "DNS rebind to RFC1918 class B"),
-            ("https://evil.com", "192.168.1.1", "DNS rebind to RFC1918 class C"),
-            ("https://evil.com", "169.254.169.254", "DNS rebind to link-local"),
-        ],
-    )
-    async def test_rejects_private_ip_after_dns_resolution(self, malicious_url, resolved_ip, description):
-        """HTTPS URLs that resolve to private/internal IPs must be rejected."""
-        from src.core.property_list_resolver import resolve_property_list
-
-        ref = _make_ref(agent_url=malicious_url)
 
         with patch(
-            "src.core.security.url_validator.socket.gethostbyname",
-            return_value=resolved_ip,
-        ):
-            with pytest.raises(AdCPUrlNotAllowedError) as exc_info:
-                await resolve_property_list(ref)
+            "src.core.property_list_resolver.asend",
+            new_callable=AsyncMock,
+            return_value=_empty_list_result(),
+        ) as mock_asend:
+            await resolve_property_list(_make_ref(auth_token="my-secret-token"))
 
-        # The sharpest form of the obligation: ``resolved_ip`` is the
-        # DNS-resolution RESULT for a buyer-supplied hostname, seen from the
-        # seller's network. Emitting it would let a buyer use get_products as a
-        # DNS/network oracle. It must be absent from every buyer-facing field
-        # and present only on the non-wire slot.
-        _assert_ssrf_rejection(
-            exc_info.value,
-            detail_pattern="[Bb]locked|[Pp]rivate|[Ii]nternal",
-            absent=resolved_ip,
-        )
-        # The detail names the blocked CIDR the address fell into — assert the
-        # address really is inside it, so this stays a value comparison rather
-        # than a substring coincidence.
-        blocked_cidr = re.search(r"\d{1,3}(?:\.\d{1,3}){3}/\d{1,2}", str(exc_info.value.internal_detail))
-        assert blocked_cidr, f"internal_detail must name the blocked range: {exc_info.value.internal_detail!r}"
-        assert ipaddress.ip_address(resolved_ip) in ipaddress.ip_network(blocked_cidr.group()), (
-            f"{resolved_ip} is not inside the reported range {blocked_cidr.group()}"
+        # Atomic rather than split (assert_called_once() + call_args): the whole
+        # composed call is the claim. ``timeout`` and ``provenance`` are read from
+        # the module's own constants — this test does not grade them, and restating
+        # their values would pin production against a second copy of itself.
+        mock_asend.assert_called_once_with(
+            "https://agent.example.com/lists/list-1",
+            method="GET",
+            headers={"Authorization": "Bearer my-secret-token"},
+            timeout=_DEFAULT_TIMEOUT,
+            provenance=CounterpartyUrl(field=_REFUSED_FIELD_PATH),
         )
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "hostname",
-        ["localhost", "metadata.google.internal", "169.254.169.254"],
-    )
-    async def test_rejects_blocked_hostnames(self, hostname):
-        """Known internal hostnames must be rejected even with HTTPS."""
+    async def test_no_authorization_header_when_the_ref_carries_no_token(self):
+        """An absent ``auth_token`` sends NO ``Authorization`` header at all.
+
+        Not an empty one: ``Authorization: Bearer `` is a malformed credential a
+        strict agent service answers 401 to, which is a worse failure than an
+        unauthenticated request to a public list.
+        """
         from src.core.property_list_resolver import resolve_property_list
 
-        ref = _make_ref(agent_url=f"https://{hostname}")
+        with patch(
+            "src.core.property_list_resolver.asend",
+            new_callable=AsyncMock,
+            return_value=_empty_list_result(),
+        ) as mock_asend:
+            await resolve_property_list(_make_ref(auth_token=None))
 
-        with pytest.raises(AdCPUrlNotAllowedError) as exc_info:
-            await resolve_property_list(ref)
-        # The hostname came from the buyer, but the fact that THIS seller
-        # blocklists it is seller-internal network topology, so the reason stays
-        # off the wire and is graded on internal_detail instead.
-        _assert_ssrf_rejection(exc_info.value, detail_pattern="blocked")
-        assert hostname in str(exc_info.value.internal_detail)
-
-    @pytest.mark.asyncio
-    async def test_rejects_non_https_url(self):
-        """Plain HTTP agent_url must be rejected (HTTPS required)."""
-        from src.core.property_list_resolver import resolve_property_list
-
-        ref = _make_ref(agent_url="http://external-agent.example.com")
-
-        with pytest.raises(AdCPUrlNotAllowedError) as exc_info:
-            await resolve_property_list(ref)
-        _assert_ssrf_rejection(exc_info.value, detail_pattern="HTTPS")
-
-    @pytest.mark.asyncio
-    async def test_rejects_non_http_schemes(self):
-        """Non-HTTP schemes (file://, ftp://, etc.) must be rejected."""
-        from src.core.property_list_resolver import resolve_property_list
-
-        ref = _make_ref(agent_url="file:///etc/passwd")
-
-        with pytest.raises(AdCPUrlNotAllowedError) as exc_info:
-            await resolve_property_list(ref)
-        _assert_ssrf_rejection(exc_info.value, detail_pattern="HTTPS")
-
-    @pytest.mark.asyncio
-    async def test_allows_valid_https_public_url(self):
-        """A valid HTTPS URL to a public host must still work."""
-        from src.core.property_list_resolver import resolve_property_list
-
-        ref = _make_ref(agent_url="https://agent.example.com")
-        response_json = _make_response_json(
-            identifiers=[{"type": "domain", "value": "pub.com"}],
+        mock_asend.assert_called_once_with(
+            "https://agent.example.com/lists/list-1",
+            method="GET",
+            headers={},
+            timeout=_DEFAULT_TIMEOUT,
+            provenance=CounterpartyUrl(field=_REFUSED_FIELD_PATH),
         )
-        mock_response = _make_mock_response(response_json)
-
-        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
-            mock_client = _make_mock_client(get_return_value=mock_response)
-            mock_client_cls.return_value = mock_client
-
-            result = await resolve_property_list(ref)
-
-        assert result == ["pub.com"]
-
-    @pytest.mark.asyncio
-    async def test_validation_happens_before_http_request(self):
-        """URL validation must reject BEFORE any network I/O."""
-        from src.core.property_list_resolver import resolve_property_list
-
-        ref = _make_ref(agent_url="http://evil.internal:9200")
-
-        with patch("src.core.property_list_resolver.httpx.AsyncClient") as mock_client_cls:
-            with pytest.raises(AdCPUrlNotAllowedError) as exc_info:
-                await resolve_property_list(ref)
-
-            # AsyncClient should never have been instantiated
-            mock_client_cls.assert_not_called()
-        _assert_ssrf_rejection(exc_info.value, detail_pattern="HTTPS")

@@ -18,7 +18,7 @@ which otherwise decides success from tox's exit code alone). A predicate that
 existed on only one of them would leave the documented no-Docker path -- the one
 CLAUDE.md points developers at -- unable to see a truncated run.
 
-Usage: check_truncated_reports.py <results-dir>
+Usage: python3 -m scripts.check_truncated_reports <results-dir>
 Exit 0 when every suite is whole, 1 when any suite is short.
 """
 
@@ -27,7 +27,7 @@ from __future__ import annotations
 import os
 import sys
 
-from _suite_reports import scan_suite_summaries
+from scripts._suite_reports import scan_suite_summaries
 
 
 def _truncation_problems(name: str, summary: dict) -> list[str]:

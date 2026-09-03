@@ -28,10 +28,11 @@ import asyncio
 from typing import Any
 from unittest.mock import MagicMock
 
-from src.core.schemas.account import SyncAccountsResponse
+from src.core.schemas.account import ListAccountsResponse, SyncAccountsResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import AccountListDispatchMixin
 from tests.harness._realize import realize_e2e
+from tests.harness.transport import DeliverResult
 
 
 class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
@@ -44,17 +45,34 @@ class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
 
     Both sync and async call patterns are supported:
     - call_impl() / call_a2a(): sync wrappers for BDD steps and dispatchers
-    - call_impl_async() / call_a2a_async(): for @pytest.mark.asyncio tests
+      (``call_a2a``/``call_mcp`` AND the ``deliver_*`` pair beneath them are all
+      the base's, defined once; this env overrides neither)
+    - call_impl_async(): for @pytest.mark.asyncio tests
 
     Constructor accepts ``supported_billing`` to configure billing policy
     on the identity (BR-RULE-059).
 
-    Dispatches TWO verbs: ``sync_accounts`` (primary) and ``list_accounts``, the
-    latter through ``AccountListDispatchMixin`` behind a request-type
-    discriminator. Scenarios that need to read accounts back therefore dispatch
-    list over the real transport instead of calling ``_list_accounts_impl``
-    directly, which would grade ``_impl`` on all four transports.
+    Dispatches TWO verbs: ``sync_accounts`` (primary) and ``list_accounts``,
+    selected by a request-type discriminator (``AccountListDispatchMixin.
+    is_list_request``). Scenarios that need to read accounts back therefore
+    dispatch list over the real transport instead of calling
+    ``_list_accounts_impl`` directly, which would grade ``_impl`` on all four
+    transports.
     """
+
+    # Dispatch declaration for the PRIMARY verb: the base owns call_mcp/call_a2a
+    # AND deliver_mcp/deliver_a2a, which dispatch sync_accounts through the one
+    # AdCPTestClient core (PR #1858). sync_accounts has no pinned SDK response
+    # model, so RESPONSE_MODEL names the parser the base's response_parser() uses.
+    MCP_TOOL = "sync_accounts"
+    A2A_SKILL = "sync_accounts"
+    RESPONSE_MODEL = SyncAccountsResponse
+
+    #: The SECOND verb. It cannot be a class attribute like the pair above,
+    #: because which verb is in flight is a property of the REQUEST, not of the
+    #: env — so it is applied in _deliver_via_client() below, at the one frame
+    #: that has both the request and the tool name in hand.
+    LIST_TOOL = "list_accounts"
 
     #: Which verb the in-flight REST request is for — read by ``REST_ENDPOINT``.
     _active_list: bool = False
@@ -182,7 +200,7 @@ class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
         reason it fails in process. If the request is anything else, the intent
         genuinely has no realization and we say so rather than pretending.
         """
-        from src.core.security.url_validator import is_reserved_tld_host
+        from src.core.security.egress.policy import is_reserved_tld_host
 
         if succeeds:
             raise RuntimeError(
@@ -295,17 +313,43 @@ class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
             return self._call_list_impl(**kwargs)
         return asyncio.run(self.call_impl_async(**kwargs))
 
-    def call_a2a(self, **kwargs: Any) -> Any:
-        """Call sync_accounts (or list_accounts) via real AdCPRequestHandler."""
-        if self.is_list_request(kwargs):
-            return self._call_list_a2a(**kwargs)
-        return self._run_a2a_handler("sync_accounts", SyncAccountsResponse, **kwargs)
+    def _deliver_via_client(self, transport: Any, tool: str, kwargs: dict[str, Any]) -> DeliverResult:
+        """Re-address a list request onto the list verb, then DELEGATE dispatch.
 
-    def call_mcp(self, **kwargs: Any) -> Any:
-        """Call sync_accounts (or list_accounts) via Client(mcp) — full pipeline dispatch."""
+        The one place this dual-verb env diverges from a single-verb one. It is
+        not a second dispatch implementation: ADDRESS, WRAP, DELIVER and UNWRAP
+        all still happen exactly once, inside ``BaseTestEnv._deliver_via_client``
+        -> ``_dispatch_core`` -> the one ``AdCPTestClient`` core, for BOTH verbs.
+        All this override changes is WHICH tool name the core is asked to
+        address — the request-content discriminator the class attributes above
+        structurally cannot carry, expressed at the one frame that holds the
+        request and the tool name together.
+
+        This is why ``deliver_mcp``/``deliver_a2a`` are gone (they were
+        allowlisted at ``test_architecture_harness_single_dispatch``): each
+        re-implemented the list leg on ``_run_mcp_client``/``_run_a2a_handler``
+        directly, SKIPPING the core's address resolution and shared unwrap, so
+        the two verbs were graded through two different dispatch paths. Now they
+        are graded through one — and per-transport genuineness is unchanged,
+        because the core's own MCP/A2A DELIVER calls those very same env
+        primitives (``tests/harness/client.py``: ``_deliver_mcp`` /
+        ``_deliver_a2a``).
+        """
         if self.is_list_request(kwargs):
-            return self._call_list_mcp(**kwargs)
-        return self._run_mcp_client("sync_accounts", SyncAccountsResponse, **kwargs)
+            tool = self.LIST_TOOL
+        return super()._deliver_via_client(transport, tool, kwargs)
+
+    def response_parser(self, tool: str) -> Any:
+        """Type each verb's wire into its OWN response model.
+
+        The base would hand both verbs ``RESPONSE_MODEL`` (sync_accounts', which
+        has no pinned SDK model), so the list wire would be parsed as a
+        ``SyncAccountsResponse``. This is the sanctioned hook for an env that
+        selects a parser from request content — see ``BaseTestEnv.response_parser``.
+        """
+        if tool == self.LIST_TOOL:
+            return ListAccountsResponse
+        return super().response_parser(tool)
 
     SYNC_REST_ENDPOINT = "/api/v1/accounts/sync"
 

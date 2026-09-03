@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from tests.factories.creative_asset import AssetSpec, assert_assets, build_assets, image_spec
-from tests.harness import make_mock_uow
 from tests.helpers.adcp_factories import create_test_format_id
 
 if TYPE_CHECKING:
@@ -94,6 +93,13 @@ def make_creative_uow(*, include_assignments: bool = False):
 
     mock_creative_repo.create.side_effect = mock_create
 
+    # Deferred, and from the DEFINING module rather than the ``tests.harness`` package:
+    # ``tests/helpers/`` is the lower layer that ``tests/harness/`` builds on, and several
+    # harness envs (``creative_sync``) import this module. A module-level import here --
+    # of the package OR of a submodule, since either executes ``tests/harness/__init__.py``
+    # and its eager env imports -- closes that loop.
+    from tests.harness._mock_uow import make_mock_uow
+
     repos: dict = {"creatives": mock_creative_repo}
     if include_assignments:
         repos["assignments"] = MagicMock()
@@ -137,6 +143,8 @@ def make_registry_mock(
     *,
     list_all_formats=None,
     get_format=None,
+    preview_creative=None,
+    build_creative=None,
 ) -> Mock:
     """A CreativeAgentRegistry stand-in, with the async methods actually async.
 
@@ -159,20 +167,34 @@ def make_registry_mock(
             and ``get_format`` returns its first entry (or None).
         list_all_formats: an async callable, when the site needs its own.
         get_format: an async callable, when the site needs its own.
+        preview_creative: an async callable, when the site asserts on the preview.
+        build_creative: an async callable, when the site asserts on the generative build.
     """
     listing = list(formats or [])
 
-    async def _default_list_all_formats(tenant_id=None):
+    # The defaults swallow keyword arguments because production's do too:
+    # ``CreativeAgentRegistry.get_format`` grew a keyword-only ``provenance`` with the
+    # SSRF egress seam (#1802) and ``format_resolver`` passes it on every call, while
+    # ``list_all_formats`` takes a bag of filter kwargs. A stand-in that accepts only
+    # the two positional parameters is a shape production no longer has, and raises
+    # TypeError the moment the lookup it is standing in for actually runs.
+    async def _default_list_all_formats(tenant_id=None, **_kwargs):
         return listing
 
-    async def _default_get_format(agent_url, format_id):
+    async def _default_get_format(agent_url, format_id, **_kwargs):
         return listing[0] if listing else None
 
     registry = Mock()
     registry.list_all_formats = list_all_formats or _default_list_all_formats
     registry.get_format = get_format or _default_get_format
-    registry.build_creative = AsyncMock(return_value={})
-    registry.preview_creative = AsyncMock(return_value={})
+    # Both defaults are the INERT no-result case _processing already guards for
+    # (``if build_result:`` / ``if preview_result and preview_result.get("previews")``),
+    # so a site that does not care about these arms sees no extra data written. The
+    # preview default is spelled the way the agent actually answers with nothing --
+    # a ``previews`` list -- not a bare ``preview_url``, which is a shape the
+    # preview_creative response never has at the top level.
+    registry.build_creative = build_creative or AsyncMock(return_value={})
+    registry.preview_creative = preview_creative or AsyncMock(return_value={"previews": []})
     return registry
 
 

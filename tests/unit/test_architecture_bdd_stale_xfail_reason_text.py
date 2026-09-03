@@ -29,19 +29,51 @@ production gap" in its Gherkin comment has ever actually run against production
    ``_UC010_WIRED_TAGS`` and fast-xfail via the generic dormant fallback. Their Gherkin
    comments must say so honestly (DORMANT), not claim a graded "#1592 production gap"
    they never actually run against.
+
+Where the obligation lives NOW
+------------------------------
+The property is unchanged; only the LOCATORS moved, and both moved the same way —
+from source shape to live value:
+
+* ``_xfail_tags_reasons()`` required ``_XFAIL_TAGS`` to be a module-level
+  ``ast.Dict`` of constant-to-constant pairs. It now reads the dict object
+  ``conftest.py:1651`` actually iterates, so a reason built any other way is graded
+  rather than skipped.
+* The wired-tag gate was scanned as a bare ``_UC010_WIRED_TAGS`` set literal. #1858
+  moved it inside ``_uc010_wired_tags()`` as ``frozenset({...})`` — an ``ast.Call``
+  — and every check here died on that assert. It is now obtained by CALLING the
+  accessor.
+* The mi0x Gherkin check sliced 2000 characters after ``text.index(f"@{tag}")``.
+  A window is not a scenario: too short and it misses a comment at the foot of the
+  block, too long and it reports the NEXT scenario's comment against this tag. It
+  now uses the same Gherkin block parser the citation guard uses.
+
+Absence is the failure mode all three shared: a drained locator reports "no
+violations", which is what compliance looks like. :class:`TestGuardIsNotVacuous`
+pins the subjects so the next such move fails loudly here instead.
 """
 
 from __future__ import annotations
 
-import ast
+import importlib
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from tests.unit.test_architecture_bdd_no_stale_xfail_citations import _uc010_wired_tags
+from tests.unit._architecture_helpers import (
+    assert_guard_subject_resolves,
+    assert_scanned_paths_exist,
+)
+from tests.unit.test_architecture_bdd_no_stale_xfail_citations import _parse_scenarios, _uc_tags
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONFTEST_PATH = _REPO_ROOT / "tests" / "bdd" / "conftest.py"
+_FEATURE_PATH = _REPO_ROOT / "tests" / "bdd" / "features" / "BR-UC-010-discover-seller-capabilities.feature"
+
+_CONFTEST_MODULE = "tests.bdd.conftest"
+_XFAIL_TAGS_NAME = "_XFAIL_TAGS"
+_WIRED_ACCESSOR = "_uc010_wired_tags"
 
 _MI0X_TAGS: tuple[str, ...] = (
     "T-UC-010-v31-creative-multiplicity",
@@ -51,27 +83,91 @@ _MI0X_TAGS: tuple[str, ...] = (
 )
 
 
+def _bdd_conftest() -> Any:
+    """The BDD conftest as a module — the same dotted name pytest imports it under."""
+    return importlib.import_module(_CONFTEST_MODULE)
+
+
 def _xfail_tags_reasons() -> dict[str, str]:
-    """Every ``{tag: reason}`` pair in conftest.py's module-level ``_XFAIL_TAGS`` dict literal."""
-    tree = ast.parse(_CONFTEST_PATH.read_text(encoding="utf-8"))
-    for node in tree.body:
-        if isinstance(node, (ast.Assign, ast.AnnAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for target in targets:
-                if isinstance(target, ast.Name) and target.id == "_XFAIL_TAGS":
-                    assert node.value is not None, "_XFAIL_TAGS has no value"
-                    assert isinstance(node.value, ast.Dict), "_XFAIL_TAGS is not a dict literal"
-                    reasons: dict[str, str] = {}
-                    for key, value in zip(node.value.keys, node.value.values, strict=True):
-                        if (
-                            isinstance(key, ast.Constant)
-                            and isinstance(key.value, str)
-                            and isinstance(value, ast.Constant)
-                            and isinstance(value.value, str)
-                        ):
-                            reasons[key.value] = value.value
-                    return reasons
-    raise AssertionError(f"_XFAIL_TAGS not found at module level in {_CONFTEST_PATH}")
+    """Every ``{tag: reason}`` pair conftest's xfail hook actually iterates.
+
+    Read live, not out of the source: ``conftest.py:1651`` walks this very dict,
+    so this is the reason a scenario really xfails with. The previous locator
+    required ``_XFAIL_TAGS`` to be a module-level ``ast.Dict`` literal and would
+    have silently under-reported any entry built some other way.
+    """
+    return dict(getattr(_bdd_conftest(), _XFAIL_TAGS_NAME))
+
+
+def _uc010_wired_tags() -> frozenset[str]:
+    """The wired-tag allowlist, asked of production rather than pattern-matched.
+
+    #1858 moved this set inside ``_uc010_wired_tags()``, where it is built as
+    ``frozenset({...})``. Every guard that scanned conftest's source for a bare
+    ``_UC010_WIRED_TAGS`` set literal died on that move; calling the accessor
+    answers for whatever shape the set takes next.
+    """
+    return frozenset(getattr(_bdd_conftest(), _WIRED_ACCESSOR)())
+
+
+def _scenario_block_for_tag(tag: str) -> list[str]:
+    """The lines of the scenario carrying ``@tag``, parsed — never a fixed-size window.
+
+    This used to slice 2000 characters after ``text.index(f"@{tag}")``. Two ways
+    that lies: a window shorter than the scenario misses a comment at its foot,
+    and a window longer than it bleeds into the NEXT scenario and reports that
+    one's comment against this tag. Both are silent.
+    """
+    lines = _FEATURE_PATH.read_text(encoding="utf-8").splitlines()
+    blocks = [lines[start:end] for tags, start, end in _parse_scenarios(lines) if tag in _uc_tags(tags)]
+    assert blocks, f"@{tag} tags no scenario in {_FEATURE_PATH.name} — this guard needs updating."
+    return [line for block in blocks for line in block]
+
+
+class TestGuardIsNotVacuous:
+    """Every check below is "this string is absent" or "this tag is absent".
+
+    Absence is what a drained guard reports too: if the reasons map came back
+    empty, or the feature file moved, every one of them would pass while grading
+    nothing. That is exactly how the previous locator failed — it asserted a
+    source SHAPE, and the shape moved. These tests pin the subjects.
+    """
+
+    @pytest.mark.arch_guard
+    def test_guard_subjects_still_resolve(self) -> None:
+        assert_guard_subject_resolves(
+            _CONFTEST_MODULE,
+            _XFAIL_TAGS_NAME,
+            _WIRED_ACCESSOR,
+            why="Nothing else checks that a REGISTERED xfail's reason text still describes the "
+            "failure production currently produces, nor that a tag claiming a graded gap is wired.",
+        )
+        assert_scanned_paths_exist(
+            [str(_CONFTEST_PATH), str(_FEATURE_PATH)],
+            why="This guard reads both by path; a rename would drain it silently.",
+        )
+
+    @pytest.mark.arch_guard
+    def test_the_reasons_map_has_entries_to_grade(self) -> None:
+        """An empty map makes every reason-accuracy check below vacuous."""
+        assert _xfail_tags_reasons(), (
+            f"{_XFAIL_TAGS_NAME} is empty. If no scenario is xfail-routed any more, retire this "
+            "guard deliberately rather than leaving it green over an empty map."
+        )
+
+    @pytest.mark.arch_guard
+    def test_the_wired_set_has_entries_to_grade(self) -> None:
+        """An empty wired set would make the mi0x dormancy checks pass by construction."""
+        assert _uc010_wired_tags(), (
+            f"{_WIRED_ACCESSOR}() is empty — 'tag not in wired' would hold for every tag, "
+            "including ones that ARE wired."
+        )
+
+    @pytest.mark.parametrize("tag", _MI0X_TAGS)
+    @pytest.mark.arch_guard
+    def test_each_mi0x_tag_still_names_a_scenario(self, tag: str) -> None:
+        """A tag no scenario carries makes its dormancy checks grade nothing."""
+        assert _scenario_block_for_tag(tag)
 
 
 class TestUC010MainReasonAccuracy:
@@ -131,9 +227,6 @@ class TestUC010TargetingReasonAccuracy:
         )
 
 
-_FEATURE_PATH = _REPO_ROOT / "tests" / "bdd" / "features" / "BR-UC-010-discover-seller-capabilities.feature"
-
-
 class TestMi0xScenariosHonestlyDormant:
     """The 4 v3.1.1 mi0x-cluster scenarios (creative_multiplicity,
     creative_agentic_flags, governance_aware, vendor_metric_optimization) have no
@@ -152,12 +245,11 @@ class TestMi0xScenariosHonestlyDormant:
             "definitions -- wiring without steps produces a false xfail reason."
         )
 
-    def test_feature_file_does_not_claim_a_graded_gap_for_the_mi0x_cluster(self) -> None:
-        text = _FEATURE_PATH.read_text(encoding="utf-8")
-        for tag in _MI0X_TAGS:
-            tag_index = text.index(f"@{tag}")
-            scenario_block = text[tag_index : tag_index + 2000]
-            assert "XFAIL-EXPECTED" not in scenario_block, (
-                f"{tag}'s scenario claims XFAIL-EXPECTED (graded) but has no step "
-                "definitions and never runs -- comment must say DORMANT instead."
-            )
+    @pytest.mark.parametrize("tag", _MI0X_TAGS)
+    def test_feature_file_does_not_claim_a_graded_gap_for_the_mi0x_cluster(self, tag: str) -> None:
+        block = _scenario_block_for_tag(tag)
+        offenders = [line.strip() for line in block if "XFAIL-EXPECTED" in line]
+        assert not offenders, (
+            f"{tag}'s scenario claims XFAIL-EXPECTED (graded) but has no step "
+            f"definitions and never runs -- comment must say DORMANT instead: {offenders}"
+        )

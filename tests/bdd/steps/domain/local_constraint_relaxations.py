@@ -155,9 +155,19 @@ def then_refused_on_wire(ctx: dict, code: str, recovery: str, field: str) -> Non
     # envelope here: the refusal must name the offending field — the buyer's
     # remediation target — and a generic "something was invalid" answer is what the
     # pre-constraint SERVICE_UNAVAILABLE path produced. Where the spec puts that
-    # pointer is the harness's business (assert_wire_error -> assert_envelope_shape
-    # pins ``errors[0].field``), and a missing envelope fails there with the
-    # never-reached-a-boundary diagnosis this step used to raise itself.
+    # pointer (one protocol position, or both mirrored layers) is decided ONCE in
+    # ``assert_envelope_shape``, which ``assert_wire_error`` forwards to; a local
+    # re-assertion here would be a second copy of the two-layer invariant that
+    # drifts from the primitive, and — since it would have to subscript
+    # ``adcp_error``/``errors`` — a hand-rolled envelope parse that
+    # ``test_architecture_bdd_wire_discipline.py`` Check C forbids outright.
+    #
+    # Reading the envelope through ``wire_error_envelope_or_none(ctx)`` first (the
+    # guarded accessor Check E requires of any direct reader) is likewise
+    # unnecessary rather than merely optional: with no direct read left there is
+    # nothing for Check E to guard, and ``assert_wire_error`` raises the
+    # never-reached-a-boundary diagnosis this step used to raise itself, naming the
+    # swallowed-typed-error case as well.
     result.assert_wire_error(code, recovery=recovery, field=field)
 
 

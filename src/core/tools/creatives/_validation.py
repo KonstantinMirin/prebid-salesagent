@@ -9,6 +9,7 @@ from adcp.types import CreativeAsset
 
 from src.core.errors.details import ValidationDetails
 from src.core.exceptions import AdCPValidationError
+from src.core.format_resolver import is_dialled_agent_url
 from src.core.schemas import Creative, CreativePolicy, CreativeStatusEnum
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ def _validate_creative_input(
     creative: CreativeAsset,
     registry: Any,
     principal_id: str,
+    index: int = 0,
 ) -> Creative:
     """Validate a CreativeAsset and return a validated Creative model.
 
@@ -39,6 +41,11 @@ def _validate_creative_input(
         creative: CreativeAsset model from the sync payload.
         registry: CreativeAgentRegistry instance for format validation.
         principal_id: Authenticated principal ID for ownership.
+        index: This creative's position in the request's ``creatives`` array,
+            used to build the JSONPath-lite ``field`` carried on a refusal of the
+            buyer-supplied ``agent_url`` — a sync may hold up to 100 creatives and
+            the refusal message says nothing, so an unindexed path would leave the
+            buyer unable to tell WHICH one to fix.
 
     Returns:
         Validated Creative schema object.
@@ -114,7 +121,7 @@ def _validate_creative_input(
     # Skip external validation for adapter-provided formats (non-HTTP URLs)
     # These formats are served by the adapter itself (e.g., broadstreet://default)
     # and validation is handled internally by the adapter
-    is_adapter_format = not agent_url.startswith(("http://", "https://"))
+    is_adapter_format = not is_dialled_agent_url(agent_url)
 
     if not is_adapter_format:
         # Check if the format exists via the SINGLE shared fetch path
@@ -125,8 +132,11 @@ def _validate_creative_input(
         # creative problem . None = the agent genuinely
         # doesn't expose the format.
         from src.core.format_resolver import fetch_format_spec
+        from src.core.security.outbound_http import CounterpartyUrl
 
-        format_spec = fetch_format_spec(agent_url, format_id)
+        format_spec = fetch_format_spec(
+            agent_url, format_id, provenance=CounterpartyUrl(field=f"creatives[{index}].format_id.agent_url")
+        )
         if not format_spec:
             raise AdCPValidationError(
                 details=ValidationDetails(format_id=format_id, agent_url=agent_url),

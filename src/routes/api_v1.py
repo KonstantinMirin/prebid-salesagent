@@ -412,7 +412,7 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
 
 
 @router.get("/capabilities")
-async def get_capabilities(identity: ResolvedIdentity | None = resolve_auth):
+async def get_adcp_capabilities(identity: ResolvedIdentity | None = resolve_auth):
     """Get AdCP capabilities (auth-optional discovery skill)."""
     # Parameterless, but still built through the shared builder: the wrapper takes a
     # request, and an empty one is what "no filters" means. Calling with no request at all

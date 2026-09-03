@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from tests.harness.transport import TransportResult
+
 
 class _WireMissing:
     """Type of :data:`WIRE_MISSING` — exists only to give it a readable repr."""
@@ -67,7 +69,12 @@ def _wire_body(ctx: dict) -> dict:
         return result.require_wire()
     wire = ctx.get("wire_response")
     error = ctx.get("error")
-    if wire is None and error is not None and ctx.get("response") is None:
+    # The third conjunct this test used to carry — "and ctx['response'] is None" —
+    # was retired with the ctx["response"] key: it suppressed this raise only so the
+    # deleted IMPL model_dump fallback below could still RETURN a body, and with that
+    # return path gone every wire-less path here raises anyway, so it now chose the
+    # worse of two diagnostics and nothing else.
+    if wire is None and error is not None:
         raise AssertionError(f"expected a success response, got error: {error!r}")
     transport = ctx.get("transport")
     if wire is None:
@@ -242,6 +249,109 @@ def wire_absent(ctx: dict, path: str) -> None:
     assert value is WIRE_MISSING, f"{path!r} unexpectedly present on the wire: {value!r}"
 
 
+def _real_wire_error_envelope(ctx: dict) -> dict | None:
+    """Read ``TransportResult.wire_error_envelope`` — the ONE attribute-access site.
+
+    Every reader of this field, anywhere in ``tests/bdd/steps/``, must go through
+    this module (:func:`error_envelope_or_none`, :func:`wire_error_envelope_or_none`
+    or :func:`wire_error_dict`) rather than hand-rolling
+    ``getattr(result, "wire_error_envelope", None)`` — enforced by
+    ``test_architecture_bdd_wire_discipline.py``'s access-pattern check, which
+    exempts this module because it DEFINES the accessors.
+
+    Wire-only, with no synthesized-envelope disjunction behind it. The envelope a
+    boundary translator WOULD have emitted against a caught exception is a
+    reconstruction, not what the buyer received; the IMPL pseudo-transport that was
+    its only consumer is deleted, and with it the fallback that could not fail.
+    """
+    result = ctx.get("result")
+    return getattr(result, "wire_error_envelope", None) if result is not None else None
+
+
+def error_envelope_or_none(ctx: dict) -> dict | None:
+    """The error envelope for this dispatch, or ``None`` when there is none.
+
+    The ctx-side adapter for the error path — the same relationship
+    :func:`_wire_body` has to the success path. Steps hold a ctx and the envelope
+    lives on the result, so without this every ctx-holding call site re-spells the
+    ``ctx.get("result")`` dance, which is N copies of the decision this module
+    exists to make once.
+
+    Returns ``None`` rather than raising, because every ctx-side caller branches on
+    envelope-presence as control flow: an MCP dispatch can fail with a ``ToolError``
+    that is genuinely not an AdCP envelope, and a step that grades THAT needs to see
+    the absence rather than an assertion failure.
+
+    Same single implementation as :func:`wire_error_envelope_or_none`: the two names
+    diverged only while an IMPL result could carry a synthesized envelope this one
+    would have accepted. That transport is gone, so both mean "the real wire
+    envelope, or nothing", and they share one body rather than two that could drift.
+    """
+    return _real_wire_error_envelope(ctx)
+
+
+def wire_error_envelope_or_none(ctx: dict) -> dict | None:
+    """Return the REAL wire error envelope (REST/A2A/MCP) captured for this dispatch, or ``None``.
+
+    No loud guard — the tolerant counterpart to :func:`wire_error_dict`. Use it
+    where a caller must distinguish "a wire envelope was captured" from "none was"
+    BEFORE delegating to ``TransportResult.assert_wire_error``, which reads
+    ``wire_error_envelope`` specifically and would otherwise raise its own, less
+    informative, diagnosis (``then_error_recovery``'s reason for using this rather
+    than :func:`wire_error_dict`).
+    """
+    return _real_wire_error_envelope(ctx)
+
+
+def wire_error_dict(ctx: dict) -> dict:
+    """Return the full error-path wire envelope as the buyer sees it on the wire.
+
+    The error-path analogue of :func:`wire_dict` — the single guarded accessor for
+    ``TransportResult.wire_error_envelope``, which its own docstring names "the
+    canonical field for error verification" (``tests/CLAUDE.md`` § Error
+    Verification Policy) and whose ``assert_wire_error`` is "the single
+    harness-provided way to verify an error on the wire — step definitions must not
+    hand-roll envelope parsing". Callers that only need to READ a field off the
+    envelope (e.g. a ``context.correlation_id`` echo check) call this; callers
+    verifying the error SHAPE call ``result.assert_wire_error(...)`` — or
+    :func:`assert_wire_rejection` — which is the single shape authority.
+
+    Shares the same loud guard as :func:`wire_dict`, for the same reason: a dispatch
+    that captured no error envelope raises instead of silently asserting nothing.
+    There is no no-wire fallback to a synthesized envelope; that reconstruction
+    could not fail, and the pseudo-transport it served is deleted.
+    """
+    result = _require(ctx, "result", hint="expected an error dispatch")
+    envelope = _real_wire_error_envelope(ctx)
+    assert envelope is not None, (
+        f"no wire error envelope was captured for this dispatch ({result!r}) — the operation "
+        "either succeeded or errored before reaching a transport, so there is nothing the buyer "
+        "received to assert on. Grade the success wire (wire_dict) or fix the dispatch."
+    )
+    return envelope
+
+
+def assert_wire_rejection(ctx: dict, code: str, *, recovery: str, field: str) -> None:
+    """Assert the wire error envelope is *code* / *recovery* and names *field*.
+
+    One implementation for every "the request is rejected with <CODE> naming field
+    <f>" Then step. Each such step keeps its own literal Gherkin text — replacing
+    them with one ``{code}``-parameterized parser would leave two parsers matching
+    the same sentence, resolved by pytest-bdd's scan order, and the shadowed body
+    would silently stop grading (``test_architecture_bdd_no_shadowed_steps``
+    compares text ACROSS modules, so it would not catch it). Thin steps over a
+    shared helper give DRY without the shadow.
+
+    Routes through ``TransportResult.assert_wire_error`` rather than calling
+    ``assert_envelope_shape`` on a hand-fetched envelope: that method forwards to
+    the same shape check and adds two things a direct call drops — the CODE_TABLE
+    emittability check (a code no raise site can put on the wire fails loudly
+    instead of matching nothing) and the no-envelope diagnosis. It is also wire-only,
+    so this oracle can never be satisfied by a harness-side reconstruction.
+    """
+    _require(ctx, "result", hint="no dispatch was recorded").assert_wire_error(code, recovery=recovery, field=field)
+
+
 def _require(ctx: dict, key: str, *, hint: str | None = None) -> object:
     """Return ``ctx[key]``, failing with a diagnostic if it is absent.
 
@@ -260,16 +370,60 @@ def _require(ctx: dict, key: str, *, hint: str | None = None) -> object:
     return val
 
 
-def _require_response(ctx: dict) -> object:
-    """Return ctx["response"], failing with a diagnostic if it is absent.
+def payload_or_none(ctx: dict) -> object | None:
+    """The dispatch's typed payload, or ``None`` when it produced an error.
 
-    Then steps assert on the response produced by a prior When step. Reading
-    ``ctx["response"]`` by subscript raises a bare ``KeyError`` when the
-    operation errored (only ``ctx["error"]`` was set) — giving no hint why.
-    This helper raises an ``AssertionError`` that names the missing response
-    and surfaces any recorded error instead.
+    For steps that BRANCH on which path ran ("success response must not contain
+    X; error response must not contain Y") rather than reading a value. Those
+    steps used ``ctx.get("response")`` as the selector, and they need a selector
+    that still works now the dispatch seams stop writing that copy.
+
+    Returns None both when no dispatch happened and when the dispatch errored —
+    a branch selector does not care which, and the error branch it falls into
+    reports the difference. A step that genuinely REQUIRES a payload calls
+    :func:`require_payload`, which raises instead.
     """
-    return _require(ctx, "response", hint="The operation may have errored instead of returning.")
+    result = ctx.get("result")
+    if not isinstance(result, TransportResult):
+        return ctx.get("self_dispatched_response")
+    return result.payload
+
+
+def require_payload(ctx: dict) -> object:
+    """Return the typed payload of the dispatch that just ran.
+
+    Reads the ``TransportResult`` the dispatch seams stash under
+    ``ctx["result"]``, so the value arrives WITH its provenance rather than as a
+    detached copy. Fails loudly when no dispatch happened, and separately when
+    the dispatch recorded an error — a Then that asks for a payload after an
+    error path is asking the wrong question, and a bare ``KeyError`` would not
+    say so.
+    """
+    result = ctx.get("result")
+    if not isinstance(result, TransportResult):
+        # Second NAMED source: modules whose When still calls production directly
+        # (uc011's _list_accounts_impl) stash under ctx["self_dispatched_response"],
+        # and the GENERIC Then steps are shared with them. Both sources are explicit
+        # keys, which is the point — the removed ctx["response"] was written by
+        # dispatch AND by self-dispatching modules AND (in one case) held a REQUEST,
+        # so a reader could not tell what it had. These two can always be told apart,
+        # and when the pinned modules migrate the branch simply disappears.
+        self_dispatched = ctx.get("self_dispatched_response")
+        if self_dispatched is not None:
+            return self_dispatched
+        failure = ctx.get("error")
+        if failure is not None:
+            raise AssertionError(
+                f"no TransportResult in ctx because the dispatch RAISED: {failure!r} — "
+                "there is no payload; assert on the error instead"
+            )
+        raise AssertionError(
+            "no TransportResult in ctx — the When step did not dispatch through "
+            "dispatch_request/_call_via, so there is no payload to read"
+        )
+    if result.payload is None:
+        raise AssertionError(f"the dispatch produced no payload — it errored instead. Recorded error: {result.error!r}")
+    return result.payload
 
 
 def _require_error(ctx: dict) -> object:
@@ -315,7 +469,7 @@ def assert_media_buy_created(ctx: dict, media_buy_id: str | None = None) -> obje
     env = ctx["env"]
 
     if media_buy_id is None:
-        resp = ctx.get("response")
+        resp = payload_or_none(ctx)
         if resp is not None:
             media_buy_id = _get_response_field(resp, "media_buy_id")
 

@@ -3,22 +3,30 @@
 The e2e_rest known-failures ledger has an exact-set lock
 (``test_e2e_rest_ledger_state.py``), so a still-failing scenario cannot be
 silently added to or dropped from the ledger. But the ledger is only one of
-three routes that turn a failing e2e_rest scenario into a non-blocking xfail:
+four routes that take a failing e2e_rest scenario out of blocking grading:
 
 1. the nodeid ledger (locked);
 2. an ``is_e2e_rest``-gated xfail route in the BDD conftest's
    ``pytest_collection_modifyitems`` (tag/substring conditions);
 3. an env-level ``E2EUnsupportedSetup`` declaration in ``tests/harness/``
-   (translated to xfail by the conftest report hook).
+   (translated to xfail by the conftest report hook);
+4. never parametrizing e2e_rest at all, in ``pytest_generate_tests`` — the
+   quietest of the four, because a transport dropped at collection is exactly
+   as ungraded as an xfail while showing no marker anywhere (#1802).
 
-Routes 2 and 3 had no lock: a scenario relocated there escaped tracking
+Routes 2, 3 and 4 had no lock: a scenario relocated there escaped tracking
 silently. This guard gives them the same exact-set treatment — adding OR
 removing a route fails here, forcing a reviewable pin update in the same
 change (the ledger discipline). There is deliberately no separate
 ``count <= len(pin)`` ratchet: the exact-set comparison already fails in both
 directions, and a ceiling derived from the pin can never fail independently.
 
-Both detectors are exercised by meta-tests below against known-bad synthetic
+Route 4 is pinned four ways, because it can be written four ways: the gate
+condition on the append (detector 3), the hook's call-site argument that
+carries ``Transport.E2E_REST`` (detector 3), every early return or transports
+rebind upstream of it, and the single-transport tag map.
+
+Every detector is exercised by meta-tests below against known-bad synthetic
 sources, so a detector regression cannot silently blind the lock (repo
 precedent: #1498).
 """
@@ -118,6 +126,334 @@ def test_conftest_e2e_rest_xfail_routes_match_pin() -> None:
         "ledger — update EXPECTED_XFAIL_ROUTES in the same change and justify it.\n"
         f"New/changed routes: {sorted(set(added))}\n"
         f"Routes removed or reworded: {sorted(set(removed))}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Detector 3: the parametrize-time E2E_REST gate, and its call sites
+# ---------------------------------------------------------------------------
+#
+# #1802: _NO_E2E_REST_TAGS was a tag-set-gated `if` ANDed onto the condition
+# that appends Transport.E2E_REST inside pytest_generate_tests — a silent,
+# parametrize-time drop neither detector 1 (pytest_collection_modifyitems xfail
+# routes) nor detector 2 (tests/harness/ E2EUnsupportedSetup) could see, because
+# it lives in a different hook and never raises an xfail. #1802 deleted the tag
+# set; the merged conftest keeps that deletion, and
+# tests/unit/test_e2e_rest_ssrf_blocked_scenario_collected.py proves
+# behaviourally that the one scenario it used to drop
+# (T-UC-004-webhook-ssrf-blocked) is collected on e2e_rest again — reachable
+# because the outbound-egress seam's ADCP_TESTING loopback allowance lets the
+# live stack dial the e2e capture receiver. This detector pins the gate so the
+# drop cannot come back silently: a future `and not (marker_names &
+# _SOME_NEW_TAGS)` changes the unparsed condition and fails the pin below.
+#
+# The gate is no longer written inside the hook. `_parametrize_ctx` (extracted
+# so the AdCP arm and the admin arm share ONE append-e2e-when-enabled tail —
+# duplicating it is the R0801 shape the DRY invariant treats as a defect) moved
+# the append into a module-level function that appends a PARAMETER, so an
+# `E2E_REST`-attribute scan anchored to `pytest_generate_tests` finds nothing at
+# all. A detector that returns None there does not fail honestly, it fails
+# BLIND, and the mismatch reads as drift. So the scan is module-wide and keys on
+# the control-flow PROPERTY — an `if` that reads BDD_E2E_ENABLED and appends —
+# rather than on where the append happens to be written; and a second pin covers
+# the hook's call sites, which is where the merged shape lets you write the next
+# drop: `None if <new condition> else Transport.E2E_REST`.
+
+_E2E_ENABLED_FLAG = "BDD_E2E_ENABLED"
+
+
+def _names_e2e_rest(node: ast.AST) -> bool:
+    """Whether *node*'s subtree reaches an ``E2E_REST`` attribute access."""
+    return any(isinstance(sub, ast.Attribute) and sub.attr == "E2E_REST" for sub in ast.walk(node))
+
+
+def find_e2e_rest_parametrize_gates(tree: ast.Module) -> tuple[str, ...]:
+    """Every ``if`` in the module that gates an e2e transport append.
+
+    A gate is an ``if`` whose condition names ``BDD_E2E_ENABLED`` and whose body
+    reaches an ``.append(...)``. The append half is what separates the gate from
+    the xdist-incompatibility check at the top of the conftest, which reads the
+    same env var and raises. Reported in source order; an EMPTY tuple (the
+    append became unconditional, or moved somewhere this scan cannot see) fails
+    the pin below rather than passing vacuously.
+    """
+    gates: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        literals = {n.value for n in ast.walk(node.test) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+        if _E2E_ENABLED_FLAG not in literals:
+            continue
+        appends = any(
+            isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) and sub.func.attr == "append"
+            for sub in ast.walk(node)
+        )
+        if appends:
+            gates.append((node.lineno, ast.unparse(node.test)))
+    return tuple(test for _, test in sorted(gates))
+
+
+# The pinned gate conditions. Update IN THE SAME CHANGE as any edit to them, and
+# say why in the commit — exactly like EXPECTED_XFAIL_ROUTES.
+EXPECTED_E2E_REST_PARAMETRIZE_GATES: tuple[str, ...] = (
+    "e2e_member is not None and os.environ.get('BDD_E2E_ENABLED') == 'true'",
+)
+
+
+def test_e2e_rest_parametrize_gates_match_pin() -> None:
+    """Every BDD_E2E_ENABLED-gated transport append is pinned exactly."""
+    tree = ast.parse(_BDD_CONFTEST.read_text())
+    actual = find_e2e_rest_parametrize_gates(tree)
+    assert actual == EXPECTED_E2E_REST_PARAMETRIZE_GATES, (
+        "The e2e parametrize gate(s) in tests/bdd/conftest.py drifted from the pin.\n"
+        "A scenario must NOT be silently dropped from e2e_rest parametrization by a new "
+        "tag-set ANDed onto this condition — route the exclusion through E2EUnsupportedSetup "
+        "instead (detector 2, below) so it is reviewable, or update "
+        "EXPECTED_E2E_REST_PARAMETRIZE_GATES in the same change and justify it.\n"
+        f"Expected: {EXPECTED_E2E_REST_PARAMETRIZE_GATES!r}\n"
+        f"Actual:   {actual!r}"
+    )
+
+
+def find_e2e_rest_append_expressions(tree: ast.Module) -> tuple[str, ...]:
+    """Every expression in ``pytest_generate_tests`` that decides E2E_REST's fate.
+
+    With the append extracted into a helper, the hook's remaining say over
+    e2e_rest is the ARGUMENT it hands that helper — today
+    ``None if no_rest_uc else Transport.E2E_REST``. That conditional is the
+    natural place to write the next silent drop (``None if skip else …``) and no
+    other detector in this module can see it: it is not an xfail, not a harness
+    declaration, not a gate condition, and not an early return or a rebind.
+
+    Reported as the OUTERMOST expression naming ``E2E_REST``, so whatever
+    condition is attached to it is part of the pinned text. An inline
+    ``transports.append(Transport.E2E_REST)`` is reported the same way, so the
+    pin keeps working if the helper is ever inlined again.
+    """
+    hooks = [
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "pytest_generate_tests"
+    ]
+    found: list[str] = []
+
+    def _visit(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.expr) and _names_e2e_rest(child):
+                found.append(ast.unparse(child))
+            else:
+                _visit(child)
+
+    for hook in hooks:
+        _visit(hook)
+    return tuple(found)
+
+
+# The pinned call sites. Same discipline as the gate pin above.
+EXPECTED_E2E_REST_APPEND_EXPRESSIONS: tuple[str, ...] = (
+    (
+        "_parametrize_ctx(metafunc, transports, ids, None if no_rest_uc else Transport.E2E_REST, "
+        "None if no_rest_uc else 'e2e_rest')"
+    ),
+)
+
+
+def test_e2e_rest_append_expressions_match_the_pin() -> None:
+    """Every expression that hands E2E_REST to (or withholds it from) parametrization is pinned."""
+    tree = ast.parse(_BDD_CONFTEST.read_text())
+    actual = find_e2e_rest_append_expressions(tree)
+    assert actual == EXPECTED_E2E_REST_APPEND_EXPRESSIONS, (
+        "The E2E_REST call site(s) in tests/bdd/conftest.py's pytest_generate_tests drifted "
+        "from the pin.\n"
+        "Withholding e2e_rest by widening the condition on the transport argument is exactly "
+        "as ungraded as an xfail and invisible to every other detector here — route it through "
+        "E2EUnsupportedSetup instead (detector 2, below), or update "
+        "EXPECTED_E2E_REST_APPEND_EXPRESSIONS in the same change and justify it.\n"
+        f"Expected: {EXPECTED_E2E_REST_APPEND_EXPRESSIONS!r}\n"
+        f"Actual:   {actual!r}"
+    )
+
+
+def _appends_e2e_rest(node: ast.If) -> bool:
+    """Whether *node* is the gate that APPENDS ``Transport.E2E_REST``."""
+    for sub in ast.walk(node):
+        if (
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Attribute)
+            and sub.func.attr == "append"
+            and any(isinstance(arg, ast.Attribute) and arg.attr == "E2E_REST" for arg in ast.walk(sub))
+        ):
+            return True
+    return False
+
+
+def find_e2e_rest_exclusion_points(tree: ast.Module) -> tuple[str, ...]:
+    """Every condition in ``pytest_generate_tests`` that can withhold e2e_rest.
+
+    ``find_e2e_rest_parametrize_gate`` above reports only the LAST gate -- the
+    ``if`` whose body appends ``Transport.E2E_REST``. Everything upstream of it
+    is invisible to that detector, and there is plenty: five ``if ...: return``
+    statements drop a scenario before the append is reached, and one
+    ``if no_rest_uc: transports = [...]`` REBINDS the transport list so the
+    append never applies. A new exclusion written in either shape would be a
+    scenario silently un-graded on the live stack, with every existing detector
+    green.
+
+    So this reports the control-flow PROPERTY -- any statement before the append
+    that changes what e2e_rest sees -- rather than one syntactic shape of it:
+
+    * every ``if`` whose body contains a bare ``return``;
+    * every ``if`` whose body rebinds ``transports`` or ``ids``.
+
+    Returned unparsed, in source order, for pinning.
+
+    Residual, stated rather than claimed away: an exclusion expressed a THIRD
+    way -- a helper called from the hook that hands back a narrowed list -- is
+    not caught, because this does not follow calls. Pinning the OUTCOME (the
+    collected set of e2e_rest-parametrized ids) would catch that and is strictly
+    stronger; it needs a full BDD collection under ``BDD_E2E_ENABLED=true``
+    inside a unit test and pins thousands of churning ids, so it belongs to
+    whoever owns the e2e_rest ledger, not here.
+    """
+    hooks = [
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "pytest_generate_tests"
+    ]
+    found: list[tuple[int, str]] = []
+    for hook in hooks:
+        for node in ast.walk(hook):
+            if not isinstance(node, ast.If):
+                continue
+            # Skip ONLY the append gate itself, identified by the call it makes.
+            # Skipping any `if` that MENTIONS E2E_REST would hide the most natural
+            # way to write the next drop --
+            #   if flaky: transports = [t for t in transports if t is not Transport.E2E_REST]
+            # -- which names the constant and rebinds, and would go unreported.
+            if _appends_e2e_rest(node):
+                continue  # the final gate, already pinned above
+            returns = any(isinstance(sub, ast.Return) for sub in ast.walk(node))
+            rebinds = any(
+                isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store) and sub.id in {"transports", "ids"}
+                for sub in ast.walk(node)
+            )
+            if returns or rebinds:
+                found.append((node.lineno, ast.unparse(node.test)))
+    # Sorted by line, because ``ast.walk`` is breadth-first: the ``_IMPL_ONLY``
+    # gate is nested inside a ``for`` and would otherwise sort AFTER a shallower
+    # ``if`` that follows it in the source. A pin whose order depends on nesting
+    # depth reorders itself when someone wraps a condition in a loop, and reads
+    # as drift.
+    return tuple(test for _, test in sorted(found))
+
+
+# The pinned exclusion points. Update IN THE SAME CHANGE as any edit to
+# pytest_generate_tests' control flow, and say why in the commit -- exactly like
+# EXPECTED_XFAIL_ROUTES and EXPECTED_E2E_REST_PARAMETRIZE_GATE.
+EXPECTED_E2E_REST_EXCLUSION_POINTS: tuple[str, ...] = (
+    "'ctx' not in metafunc.fixturenames",
+    "marker_names & _TRANSPORT_SPECIFIC_TAGS",
+    # The UC-010 auth outline dispatches per-row via its own channel column and
+    # has no e2e leg (#1592); it returns before any transport list is built.
+    "marker_names & _CHANNEL_COLUMN_TAGS",
+    "single",
+    "any((t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names))",
+    "any((t.startswith(tag_prefix) for t in marker_names)) and required_tag in marker_names",
+    "no_rest_uc",
+)
+
+
+def test_e2e_rest_exclusion_points_match_the_pin() -> None:
+    """Every path that can withhold e2e_rest from a scenario is pinned."""
+    tree = ast.parse(_BDD_CONFTEST.read_text())
+    actual = find_e2e_rest_exclusion_points(tree)
+    assert actual == EXPECTED_E2E_REST_EXCLUSION_POINTS, (
+        "The set of paths that can withhold e2e_rest from a scenario in "
+        "tests/bdd/conftest.py's pytest_generate_tests drifted from the pin.\n"
+        "A scenario must NOT be silently dropped from live grading by a new early "
+        "return or a new transports rebind -- route the exclusion through "
+        "E2EUnsupportedSetup instead (detector 2, below) so it is reviewable, or "
+        "update EXPECTED_E2E_REST_EXCLUSION_POINTS in the same change and justify it.\n"
+        f"Expected: {EXPECTED_E2E_REST_EXCLUSION_POINTS!r}\n"
+        f"Actual:   {actual!r}"
+    )
+
+
+def test_exclusion_point_detector_sees_a_rebind_with_no_return() -> None:
+    """The detector's reason for existing: a drop that never returns.
+
+    ``if no_rest_uc: transports = [...]`` is live in the tree today and is
+    invisible to both the final-gate detector and to any early-return scan.
+    """
+    source = (
+        "def pytest_generate_tests(metafunc):\n"
+        "    transports = [Transport.A2A]\n"
+        "    if sneaky:\n"
+        "        transports = [Transport.MCP]\n"
+        "    if enabled:\n"
+        "        transports.append(Transport.E2E_REST)\n"
+    )
+    assert find_e2e_rest_exclusion_points(ast.parse(source)) == ("sneaky",)
+
+
+def test_exclusion_point_detector_sees_a_named_e2e_rest_filter() -> None:
+    """A drop that NAMES E2E_REST and rebinds must still be reported.
+
+    The most natural way to write the next exclusion mentions the constant. An
+    earlier form of this detector skipped any ``if`` whose subtree named
+    ``E2E_REST``, to avoid re-reporting the final append gate -- and skipped this
+    with it.
+    """
+    source = (
+        "def pytest_generate_tests(metafunc):\n"
+        "    transports = [Transport.A2A, Transport.E2E_REST]\n"
+        "    if flaky:\n"
+        "        transports = [t for t in transports if t is not Transport.E2E_REST]\n"
+        "    if enabled:\n"
+        "        transports.append(Transport.E2E_REST)\n"
+    )
+    assert find_e2e_rest_exclusion_points(ast.parse(source)) == ("flaky",)
+
+
+def test_exclusion_point_detector_sees_an_early_return() -> None:
+    """The early-return arm, proved synthetically like its rebind sibling."""
+    source = (
+        "def pytest_generate_tests(metafunc):\n"
+        "    transports = [Transport.A2A]\n"
+        "    if bailing:\n"
+        "        return\n"
+        "    if enabled:\n"
+        "        transports.append(Transport.E2E_REST)\n"
+    )
+    assert find_e2e_rest_exclusion_points(ast.parse(source)) == ("bailing",)
+
+
+def test_exclusion_point_detector_ignores_an_unrelated_conditional() -> None:
+    """An ``if`` that neither returns nor rebinds is not an exclusion point."""
+    source = (
+        "def pytest_generate_tests(metafunc):\n"
+        "    transports = [Transport.A2A]\n"
+        "    if noisy:\n"
+        "        print('hello')\n"
+        "    if enabled:\n"
+        "        transports.append(Transport.E2E_REST)\n"
+    )
+    assert find_e2e_rest_exclusion_points(ast.parse(source)) == ()
+
+
+# The pinned membership of the single-transport tag map. A scenario listed here
+# is graded on ONE transport by design; adding an entry moves a scenario off
+# three transports, which is exactly the kind of narrowing that must not be
+# silent. Update IN THE SAME CHANGE and say why in the commit.
+EXPECTED_SINGLE_TRANSPORT_TAGS: dict[str, str] = {"a2a_untyped_ingest": "A2A"}
+
+
+def test_single_transport_tags_match_the_pin() -> None:
+    """_SINGLE_TRANSPORT_TAGS is exactly the pinned map."""
+    from tests.bdd.conftest import _SINGLE_TRANSPORT_TAGS
+
+    assert _SINGLE_TRANSPORT_TAGS == EXPECTED_SINGLE_TRANSPORT_TAGS, (
+        "tests/bdd/conftest.py's _SINGLE_TRANSPORT_TAGS drifted from the pin.\n"
+        "Each entry takes a scenario off three transports and grades it on one. "
+        "That is sometimes right, but never silent.\n"
+        f"Expected: {EXPECTED_SINGLE_TRANSPORT_TAGS!r}\n"
+        f"Actual:   {_SINGLE_TRANSPORT_TAGS!r}"
     )
 
 
@@ -228,6 +564,27 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "tests/harness/_mixins.py",
             "set_adapter_error",
             "adapter fault-injection has no server surface; needs an ADCP_TESTING fault-injection control (#1418)",
+        ),
+        # #1802 replaces the old _NO_E2E_REST_TAGS silent
+        # parametrize-drop (invisible to both detectors in this module) with a
+        # reviewable, pinned declaration. then_webhook_skipped_no_post's other
+        # two assertions (success is False; env.delivery_attempts == 0) are
+        # genuinely wire-observable and now run unconditionally on e2e_rest —
+        # only the retry-schedule discriminator is declared unsupported here.
+        (
+            "tests/harness/_mixins.py",
+            "assert_no_retry_schedule_entered",
+            "the seam's BR-RULE-029 retry-schedule sleep count is process-local "
+            "(env.mock['sleep']), not observable across the Docker HTTP boundary",
+        ),
+        # #1802: get_service() under e2e_rest is a fresh, in-process
+        # WebhookDeliveryService never touched by the live server's actual
+        # delivery — service._circuit_breakers has no wire surface at all.
+        (
+            "tests/harness/_mixins.py",
+            "assert_circuit_breaker_failure_recorded",
+            "get_service() constructs a fresh in-process WebhookDeliveryService under e2e_rest, "
+            "disconnected from the live server's real circuit-breaker state — no wire surface",
         ),
         (
             "tests/harness/creative_formats.py",
@@ -388,3 +745,120 @@ def test_beads_citation_check_does_not_flag_gh_citations_or_ticket_free_reasons(
     sites = find_unsupported_declarations(ast.parse(_SYNTHETIC_HARNESS), "tests/harness/fake.py")
     offenders = [(relpath, scope, reason) for relpath, scope, reason in sites if "salesagent-" in reason]
     assert offenders == []
+
+
+_SYNTHETIC_GENERATE_TESTS_CLEAN = """
+def pytest_generate_tests(metafunc):
+    transports = [Transport.A2A, Transport.MCP, Transport.REST]
+    ids = ["a2a", "mcp", "rest"]
+    if os.environ.get("BDD_E2E_ENABLED") == "true" and not no_rest_uc:
+        transports.append(Transport.E2E_REST)
+        ids.append("e2e_rest")
+    metafunc.parametrize("ctx", transports, ids=ids, indirect=True)
+"""
+
+# The disease this guards against: a silent, tag-set-gated re-introduction of
+# _NO_E2E_REST_TAGS — ANDing a new condition onto the append so a specific
+# scenario is dropped without an xfail marker anywhere.
+_SYNTHETIC_GENERATE_TESTS_SNEAKY_REROUTE = """
+def pytest_generate_tests(metafunc):
+    transports = [Transport.A2A, Transport.MCP, Transport.REST]
+    ids = ["a2a", "mcp", "rest"]
+    if os.environ.get("BDD_E2E_ENABLED") == "true" and not no_rest_uc and not (marker_names & _NEW_QUIET_TAGS):
+        transports.append(Transport.E2E_REST)
+        ids.append("e2e_rest")
+    metafunc.parametrize("ctx", transports, ids=ids, indirect=True)
+"""
+
+# Today's shape: the append lives in a module-level helper and the hook decides
+# by ARGUMENT. Both pins have to keep working across this refactor, because it
+# is the shape the merged tree is actually in.
+_SYNTHETIC_GENERATE_TESTS_HELPER = """
+def _parametrize_ctx(metafunc, base_transports, base_ids, e2e_member, e2e_id):
+    transports = list(base_transports)
+    ids = list(base_ids)
+    if e2e_member is not None and os.environ.get("BDD_E2E_ENABLED") == "true":
+        transports.append(e2e_member)
+        ids.append(e2e_id)
+    metafunc.parametrize("ctx", transports, ids=ids, indirect=True)
+
+
+def pytest_generate_tests(metafunc):
+    transports = [Transport.A2A, Transport.MCP, Transport.REST]
+    ids = ["a2a", "mcp", "rest"]
+    _parametrize_ctx(metafunc, transports, ids, Transport.E2E_REST, "e2e_rest")
+"""
+
+# The same disease written in the helper shape: the drop moves into the ARGUMENT,
+# leaving the gate condition itself untouched.
+_SYNTHETIC_GENERATE_TESTS_SNEAKY_CALL_SITE = """
+def _parametrize_ctx(metafunc, base_transports, base_ids, e2e_member, e2e_id):
+    transports = list(base_transports)
+    ids = list(base_ids)
+    if e2e_member is not None and os.environ.get("BDD_E2E_ENABLED") == "true":
+        transports.append(e2e_member)
+        ids.append(e2e_id)
+    metafunc.parametrize("ctx", transports, ids=ids, indirect=True)
+
+
+def pytest_generate_tests(metafunc):
+    transports = [Transport.A2A, Transport.MCP, Transport.REST]
+    ids = ["a2a", "mcp", "rest"]
+    quiet = marker_names & _NEW_QUIET_TAGS
+    _parametrize_ctx(metafunc, transports, ids, None if quiet else Transport.E2E_REST, "e2e_rest")
+"""
+
+
+def test_gate_detector_matches_the_inline_shape() -> None:
+    """The live gate detector reports the condition of an inline append gate."""
+    gates = find_e2e_rest_parametrize_gates(ast.parse(_SYNTHETIC_GENERATE_TESTS_CLEAN))
+    assert gates == ("os.environ.get('BDD_E2E_ENABLED') == 'true' and (not no_rest_uc)",)
+
+
+def test_gate_detector_catches_sneaky_e2e_rest_reroute() -> None:
+    """A new tag-set ANDed onto the gate changes the detected condition — would fail the pin."""
+    gates = find_e2e_rest_parametrize_gates(ast.parse(_SYNTHETIC_GENERATE_TESTS_SNEAKY_REROUTE))
+    assert gates != EXPECTED_E2E_REST_PARAMETRIZE_GATES
+    assert "_NEW_QUIET_TAGS" in gates[0]
+
+
+def test_gate_detector_sees_a_helper_extracted_append() -> None:
+    """The reason the scan is module-wide: today's gate is not inside the hook.
+
+    A detector anchored to ``pytest_generate_tests`` reports nothing here — not
+    a drift, a blind spot.
+    """
+    gates = find_e2e_rest_parametrize_gates(ast.parse(_SYNTHETIC_GENERATE_TESTS_HELPER))
+    assert gates == ("e2e_member is not None and os.environ.get('BDD_E2E_ENABLED') == 'true'",)
+
+
+def test_gate_detector_ignores_a_non_appending_read_of_the_flag() -> None:
+    """The xdist-incompatibility check reads BDD_E2E_ENABLED and raises; not a gate."""
+    source = (
+        "def pytest_configure(config):\n"
+        "    if os.environ.get('BDD_E2E_ENABLED') == 'true' and numprocesses:\n"
+        "        raise pytest.UsageError('no xdist')\n"
+    )
+    assert find_e2e_rest_parametrize_gates(ast.parse(source)) == ()
+
+
+def test_append_expression_detector_pins_the_call_site_condition() -> None:
+    """The hook's E2E_REST argument is reported outermost, condition included."""
+    expressions = find_e2e_rest_append_expressions(ast.parse(_SYNTHETIC_GENERATE_TESTS_HELPER))
+    assert expressions == ("_parametrize_ctx(metafunc, transports, ids, Transport.E2E_REST, 'e2e_rest')",)
+
+
+def test_append_expression_detector_catches_a_sneaky_call_site_drop() -> None:
+    """A drop written in the ARGUMENT leaves the gate condition untouched.
+
+    This is the shape detector 3's gate pin cannot see, and the reason the call
+    sites are pinned separately.
+    """
+    tree = ast.parse(_SYNTHETIC_GENERATE_TESTS_SNEAKY_CALL_SITE)
+    assert find_e2e_rest_parametrize_gates(tree) == EXPECTED_E2E_REST_PARAMETRIZE_GATES
+    expressions = find_e2e_rest_append_expressions(tree)
+    assert expressions != EXPECTED_E2E_REST_APPEND_EXPRESSIONS
+    assert "_NEW_QUIET_TAGS" not in expressions[0]
+    assert expressions == (
+        "_parametrize_ctx(metafunc, transports, ids, None if quiet else Transport.E2E_REST, 'e2e_rest')",
+    )

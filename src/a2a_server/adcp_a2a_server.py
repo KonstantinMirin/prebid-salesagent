@@ -48,14 +48,12 @@ from a2a.types import (
     UnsupportedOperationError,
 )
 from a2a.utils.errors import A2AError
-from adcp import create_a2a_webhook_payload
 from adcp.types import ContextObject, GeneratedTaskStatus
 from adcp.types.base import AdCPBaseModel
 from google.protobuf import json_format, struct_pb2
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
-from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import PushNotificationConfigUoW
 from src.core.domain_config import get_a2a_server_url
 from src.core.errors.codes import AppErrorCode
@@ -127,8 +125,12 @@ from src.core.validation_helpers import (
 )
 from src.core.version import get_version
 from src.core.webhook_validator import (
-    reject_unsafe_webhook_registration_url,
     webhook_url_for_log,
+)
+from src.core.webhooks.delivery import WebhookTaskContext
+from src.core.webhooks.registration import (
+    ValidatedWebhookRegistration,
+    accept_push_notification_primitives,
 )
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
@@ -158,8 +160,18 @@ def _require_params(params: dict, required: list[str], *, field: str | None = No
 
 
 def _invalid_params_from_ssrf_error(exc: Exception) -> InvalidParamsError:
-    """Wrap a refused-URL rejection as A2A InvalidParamsError with the AdCP ``data`` envelope."""
-    if isinstance(exc, AdCPUrlNotAllowedError):
+    """Wrap a refused registration as A2A InvalidParamsError with the AdCP ``data`` envelope.
+
+    Both typed rejections this seam can see pass through VERBATIM: a refused URL
+    (``AdCPUrlNotAllowedError``) and a refused credential (``AdCPValidationError``
+    naming ``push_notification_config.authentication.credentials``). Narrowing to
+    the URL class alone would send a credential refusal down the else branch and
+    re-label it as a URL problem. Only an untyped exception is manufactured into
+    ``AdCPUrlNotAllowedError``; its buyer-facing suggestion comes from the
+    CODE_TABLE entry for the code, never a per-class override (ADR-010), so no
+    ``suggestion=`` is passed here.
+    """
+    if isinstance(exc, (AdCPUrlNotAllowedError, AdCPValidationError)):
         adcp_err: AdCPSalesAgentError = exc
     else:
         adcp_err = AdCPUrlNotAllowedError(
@@ -171,23 +183,57 @@ def _invalid_params_from_ssrf_error(exc: Exception) -> InvalidParamsError:
     )
 
 
-def _reject_unsafe_a2a_webhook_url(url: str) -> None:
-    """Raise InvalidParamsError when ``url`` fails the registration SSRF gate.
+def _a2a_push_config_auth(config: Any) -> tuple[str | None, str | None]:
+    """Pull ``(scheme, credentials)`` out of an A2A push-config protobuf.
 
-    A2A push-config endpoints (message/send configuration, setTaskPushNotificationConfig)
-    translate SSRF failures to ``InvalidParamsError`` (-32602) while attaching the
-    two-layer AdCP envelope in ``data`` (``VALIDATION_ERROR`` / ``recovery=correctable``
-    + suggestion) — same pattern as the auth rejection on ``on_message_send``.
-    Delegates to ``reject_unsafe_webhook_registration_url`` so recovery/suggestion/field
-    cannot drift from the tool-path gate.
+    Both A2A surfaces that carry a push config -- ``setTaskPushNotificationConfig``
+    and the protocol-level ``message/send`` configuration -- hold the same flat
+    protobuf whose ``authentication`` is an optional submessage with a SINGULAR
+    free-form ``scheme`` string. Read in one place so the two surfaces cannot
+    disagree about which field the credential half lives in.
+    """
+    if not config.HasField("authentication"):
+        return None, None
+    return (config.authentication.scheme or None, config.authentication.credentials or None)
 
-    Catches the dedicated ``AdCPUrlNotAllowedError`` rather than the generic validation
-    error it used to: only a refused URL translates to ``InvalidParamsError`` here, and a
-    class per code makes that catch say so.
+
+def _accept_a2a_push_config(url: str, scheme: str | None, credentials: str | None) -> ValidatedWebhookRegistration:
+    """Accept an A2A push-config registration, or raise ``InvalidParamsError``.
+
+    The ONE A2A translation seam for push-config ingest, shared by BOTH surfaces
+    that carry one: ``setTaskPushNotificationConfig`` and the protocol-level
+    ``message/send`` configuration. Delegates to
+    :func:`~src.core.webhooks.registration.accept_push_notification_primitives`
+    (the A2A ``authentication`` carries a SINGULAR free-form ``scheme`` string,
+    not the tool path's ``schemes`` list) so this transport cannot drift from the
+    tool path on either precondition.
+
+    Why both surfaces must come through here rather than call the constructor
+    directly: ``on_message_send``'s body runs inside a ``try`` whose handlers are
+    ``except A2AError: raise`` / ``except Exception`` -> ``_internal_error_for``.
+    ``AdCPValidationError`` is not an ``A2AError``, so a raw constructor call
+    there would surface a buyer's correctable credential refusal as
+    ``INTERNAL_ERROR``. The translation below preserves the raised error
+    verbatim (see :func:`_invalid_params_from_ssrf_error`'s isinstance branch),
+    which is what keeps a credential refusal naming the credentials field
+    instead of being re-labelled as a URL problem.
+
+    BOTH typed rejections are caught, because the gate now raises two classes:
+    ``reject_unsafe_webhook_registration_url`` refuses the URL with the dedicated
+    ``AdCPUrlNotAllowedError`` (a direct ``AdCPSalesAgentError`` subclass, NOT an
+    ``AdCPValidationError``), while the credential precondition still raises
+    ``AdCPValidationError``. Catching only the latter would let a refused URL
+    escape to ``on_message_send``'s ``except Exception`` and reach the buyer as
+    ``INTERNAL_ERROR`` instead of a correctable -32602.
     """
     try:
-        reject_unsafe_webhook_registration_url(url, field="push_notification_config.url")
-    except AdCPUrlNotAllowedError as e:
+        return accept_push_notification_primitives(
+            url,
+            scheme,
+            credentials,
+            field_prefix="push_notification_config",
+        )
+    except (AdCPValidationError, AdCPUrlNotAllowedError) as e:
         raise _invalid_params_from_ssrf_error(e) from e
 
 
@@ -349,7 +395,9 @@ class AdCPRequestHandler(RequestHandler):
     def __init__(self):
         """Initialize the AdCP A2A request handler."""
         self.tasks: dict[str, Task] = {}  # In-memory task storage
-        self._task_push_configs: dict[str, TaskPushNotificationConfig] = {}
+        # The VALUE, not the raw protobuf: what is stashed here is handed straight
+        # to the sender, so it must carry the gate's receipt.
+        self._task_push_configs: dict[str, ValidatedWebhookRegistration] = {}
         logger.info("AdCP Request Handler initialized for direct function calls")
 
     @staticmethod
@@ -553,7 +601,8 @@ class AdCPRequestHandler(RequestHandler):
         - Final states (completed, failed, canceled): Send full Task object with artifacts
         - Intermediate states (working, input-required, submitted): Send TaskStatusUpdateEvent
 
-        Uses create_a2a_webhook_payload from adcp library to automatically select correct type.
+        ``notify`` selects the payload type from the status: Task for final states,
+        TaskStatusUpdateEvent for intermediate ones.
         """
         try:
             # Check if task has push notification config stored
@@ -563,26 +612,18 @@ class AdCPRequestHandler(RequestHandler):
 
             push_notification_service = get_protocol_webhook_service()
 
-            from uuid import uuid4
-
-            url = webhook_config.url
-            if not url:
+            if not webhook_config.url.strip():
                 logger.info("[red]No push notification URL present; skipping webhook[/red]")
                 return
 
-            auth = webhook_config.authentication if webhook_config.HasField("authentication") else None
-            auth_type = auth.scheme if auth and auth.scheme else None
-            auth_token = auth.credentials if auth and auth.credentials else None
-
-            push_notification_config = DBPushNotificationConfig(
-                id=webhook_config.id or f"pnc_{uuid4().hex[:16]}",
-                tenant_id="",
-                principal_id="",
-                url=url,
-                authentication_type=auth_type,
-                authentication_token=auth_token,
-                is_active=True,
-            )
+            # The stashed VALUE is handed to the sender directly. There is nothing to
+            # fabricate: send_notification reads exactly .url / .authentication_type /
+            # .authentication_token, which is precisely what the value carries. The
+            # detached DBPushNotificationConfig(tenant_id="", principal_id="") that
+            # used to stand in here was a config-shaped object with empty scope ids,
+            # built purely to satisfy a type — i.e. a way to hand a sender a config
+            # that no repository ever receipted.
+            push_notification_config = webhook_config
 
             # Convert status string to GeneratedTaskStatus enum
             try:
@@ -598,25 +639,38 @@ class AdCPRequestHandler(RequestHandler):
             if error and status == "failed":
                 result_data["error"] = error
 
-            # Use create_a2a_webhook_payload to get the correct payload type:
-            # - Task for final states (completed, failed, canceled)
-            # - TaskStatusUpdateEvent for intermediate states (working, input-required, submitted)
-            payload = create_a2a_webhook_payload(
-                task_id=task.id,
-                status=status_enum,
-                context_id=task.context_id or "",
-                result=result_data,
-            )
-
             # Extract skills_requested from protobuf Struct metadata
             meta_dict = json_format.MessageToDict(task.metadata) if task.metadata.ByteSize() > 0 else {}
             skills = list(meta_dict.get("skills_requested", []))
-            metadata = {
-                "task_type": skills[0] if skills else "unknown",
-            }
 
-            sent = await push_notification_service.send_notification(
-                push_notification_config=push_notification_config, payload=payload, metadata=metadata
+            # tenant_id / principal_id are None here, and that is a decision rather
+            # than an omission. This path delivers PROTOCOL task updates, whose
+            # task_type is a skill name; records_delivery_log only fires for
+            # "delivery_report" / "media_buy_delivery", so no webhook_delivery_log
+            # row is expected and the registration this sender holds
+            # (ValidatedWebhookRegistration) carries no scope ids to give it.
+            # Stating them as None is what makes that visible -- the dict this
+            # replaced simply had no such keys (salesagent-pldmk.39).
+            webhook_task = WebhookTaskContext(
+                task_id=task.id,
+                task_type=skills[0] if skills else "unknown",
+                tenant_id=None,
+                principal_id=None,
+                media_buy_id=None,
+                sequence_number=1,
+                notification_type=None,
+            )
+
+            # notify() picks the payload type: Task for final states,
+            # TaskStatusUpdateEvent for intermediate ones. protocol is "a2a"
+            # unconditionally -- this IS the A2A server.
+            sent = await push_notification_service.notify(
+                push_notification_config,
+                task=webhook_task,
+                status=status_enum,
+                result=result_data,
+                protocol="a2a",
+                context_id=task.context_id or "",
             )
             if not sent:
                 logger.warning(
@@ -702,6 +756,12 @@ class AdCPRequestHandler(RequestHandler):
         )
         self.tasks[task_id] = task
 
+        # Bound BEFORE the try because the handler below reads it: identity is
+        # resolved partway through, so any earlier failure — the push-config gate
+        # among them — used to raise UnboundLocalError from the error handler and
+        # replace the real error with a confusing one.
+        identity: ResolvedIdentity | None = None
+
         try:
             # Get authentication token
             auth_token = self._get_auth_token(context)
@@ -731,20 +791,28 @@ class AdCPRequestHandler(RequestHandler):
 
             # SSRF-reject unsafe push URLs after the auth-required gate so callers
             # that need credentials see AUTH_REQUIRED before scheme/blocked-host checks.
+            # ONE branch: stash iff a registration was built. Previously the gate ran
+            # under `config and config.url` while the stash ran under `config` alone,
+            # so a blank-url config was stashed ungated (the reader then early-returned
+            # on it). Observably equivalent, minus the ungated stash.
             if push_notification_config and push_notification_config.url:
-                _reject_unsafe_a2a_webhook_url(push_notification_config.url)
+                registration = _accept_a2a_push_config(
+                    push_notification_config.url,
+                    *_a2a_push_config_auth(push_notification_config),
+                )
                 logger.info(
                     "Protocol-level push notification config provided for task %s: %s",
                     task_id,
                     webhook_url_for_log(push_notification_config.url),
                 )
-            if push_notification_config:
-                self._task_push_configs[task_id] = push_notification_config
+                self._task_push_configs[task_id] = registration
 
             # ── Transport boundary: resolve identity ONCE ──
             # Like REST's _resolve_auth(), identity is resolved here and passed
             # to all downstream handlers. No handler should call resolve_identity().
-            identity: ResolvedIdentity | None = None
+            # Its `= None` initialisation used to live HERE, which is why a failure
+            # in the push-config gate above reached the error handler with the name
+            # unbound; it now sits before the `try` so every arm can read it.
             if auth_token:
                 # A PRESENTED token must always be validated, regardless of
                 # whether the requested skill itself requires auth — absent
@@ -774,7 +842,7 @@ class AdCPRequestHandler(RequestHandler):
                             skill_name,
                             parameters,
                             identity,
-                            push_notification_config=push_notification_config,
+                            push_config_registration=self._task_push_configs.get(task_id),
                         )
                         results.append({"skill": skill_name, "result": result, "success": True})
                     except A2AError:
@@ -1101,7 +1169,11 @@ class AdCPRequestHandler(RequestHandler):
             # Re-raise A2AError as-is (will be caught by JSON-RPC handler)
             raise
         except Exception as e:
-            # Use identity resolved at transport boundary (if available)
+            # Use identity resolved at transport boundary (if available).
+            # identity is initialised to None before the try (below), because it is
+            # bound partway through it: ANY failure before that point — the
+            # push-config gate among them — otherwise raised UnboundLocalError from
+            # the error handler itself and replaced the real error.
             err_tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
             err_principal_id = (identity.principal_id or "unknown") if identity else "unknown"
 
@@ -1273,6 +1345,12 @@ class AdCPRequestHandler(RequestHandler):
                 response_id = config.id
                 response_url = config.url
                 response_validation_token = config.validation_token or ""
+                # Read-BACK, not sender-side auth resolution: this echoes the
+                # buyer's own registration to them. The egress seam has nothing
+                # to offer here — there is no outbound request being
+                # authenticated — so this file is a justified false positive in
+                # test_architecture_no_inline_webhook_auth_resolution's allowlist,
+                # not deferred debt. Deliberately no FIXME.
                 auth_scheme = config.authentication_type
                 auth_credentials = config.authentication_token
 
@@ -1329,30 +1407,30 @@ class AdCPRequestHandler(RequestHandler):
             if not url:
                 raise InvalidParamsError(message="Missing required parameter: url")
 
-            _reject_unsafe_a2a_webhook_url(url)
+            auth_type, auth_token_value = _a2a_push_config_auth(params)
 
-            auth_type = None
-            auth_token_value = None
-            if params.HasField("authentication"):
-                auth_type = params.authentication.scheme or None
-                auth_token_value = params.authentication.credentials or None
+            # Both registration preconditions, BEFORE the try. The except below
+            # funnels every ValueError into _invalid_params_from_ssrf_error, which
+            # manufactures field="push_notification_config.url" plus the https SSRF
+            # wording for a non-AdCP error -- so a credential refusal raised from
+            # inside the repository would reach the buyer as "fix your URL" about a
+            # URL that is fine (salesagent-47n9.20).
+            registration = _accept_a2a_push_config(url, auth_type, auth_token_value)
 
-            try:
-                with PushNotificationConfigUoW(tool_context.tenant_id) as uow:
-                    assert uow.push_notification_configs is not None
-                    _config, created = uow.push_notification_configs.upsert(
-                        config_id=config_id,
-                        principal_id=tool_context.principal_id,
-                        url=url,
-                        authentication_type=auth_type,
-                        authentication_token=auth_token_value,
-                        validation_token=validation_token,
-                        session_id=None,
-                    )
-            except ValueError as e:
-                # Repository SSRF gate (defense in depth) — same enveloped path as
-                # _reject_unsafe_a2a_webhook_url above.
-                raise _invalid_params_from_ssrf_error(e) from e
+            # No ValueError funnel around upsert any more: the repository no longer
+            # re-validates, because the value it now takes IS the receipt that the
+            # gate above ran. The funnel existed only to catch that second gate, and
+            # its own comment (above) documents how it mislabelled what it caught.
+            with PushNotificationConfigUoW(tool_context.tenant_id) as uow:
+                assert uow.push_notification_configs is not None
+                _config, created = uow.push_notification_configs.upsert(
+                    registration,
+                    config_id=config_id,
+                    principal_id=tool_context.principal_id,
+                    validation_token=validation_token,
+                    # This IS the A2A server, so the dialect is not in doubt here.
+                    protocol="a2a",
+                )
 
             logger.info(
                 f"Push notification config {'created' if created else 'updated'}: {config_id} for tenant {tool_context.tenant_id}"
@@ -1564,7 +1642,7 @@ class AdCPRequestHandler(RequestHandler):
         skill_name: str,
         parameters: dict,
         identity: ResolvedIdentity | None,
-        push_notification_config: TaskPushNotificationConfig | None = None,
+        push_config_registration: ValidatedWebhookRegistration | None = None,
     ) -> dict:
         """Handle explicit AdCP skill invocations.
 
@@ -1575,7 +1653,7 @@ class AdCPRequestHandler(RequestHandler):
             skill_name: The AdCP skill name (e.g., "get_products")
             parameters: Dictionary of skill-specific parameters
             identity: Pre-resolved identity from transport boundary
-            push_notification_config: Push notification config from A2A protocol layer
+            push_config_registration: the ALREADY-ACCEPTED protocol-layer push config
 
         Returns:
             Dictionary containing the skill result
@@ -1589,18 +1667,19 @@ class AdCPRequestHandler(RequestHandler):
         # request as sent). Deep copy: downstream steps mutate nested dicts.
         raw_wire_payload = copy.deepcopy(parameters)
 
-        # Inject push_notification_config into parameters for skills that need it
-        # Serialize protobuf to dict at the transport boundary — _impl accepts dict
-        if push_notification_config and skill_name in ("create_media_buy", "sync_creatives"):
-            pnc_dict = json_format.MessageToDict(push_notification_config)
-            # Translate A2A protobuf authentication.scheme (singular) → AdCP schemes (plural list).
-            # A2A's protobuf AuthenticationInfo uses a single `scheme` field; AdCP's
-            # PushNotificationConfig schema uses a `schemes` array.
-            auth = pnc_dict.get("authentication") if isinstance(pnc_dict, dict) else None
-            if isinstance(auth, dict) and "scheme" in auth and "schemes" not in auth:
-                scheme_value = auth.pop("scheme")
-                auth["schemes"] = [scheme_value] if scheme_value else []
-            parameters = {**parameters, "push_notification_config": pnc_dict}
+        # Inject the protocol-layer push config into parameters for skills that need it.
+        #
+        # The TYPED model the seam already accepted, not a dict re-derived from the
+        # protobuf. This used to re-serialize with MessageToDict and re-translate
+        # A2A's singular ``scheme`` into AdCP's ``schemes`` array — a second dialect
+        # for a config ``_accept_a2a_push_config`` had accepted moments earlier, and
+        # the reason gh-#1299's exemption leaked: the dict was re-validated by the
+        # skill's request body, where ``credentials`` minLength 32 applies and
+        # DIVERTED THE CREATE. Passing the model means ``to_push_notification_config``
+        # returns it unchanged (isinstance short-circuit), so the transport-layer
+        # config is validated exactly once, at the transport boundary that owns it.
+        if push_config_registration and skill_name in ("create_media_buy", "sync_creatives"):
+            parameters = {**parameters, "push_notification_config": push_config_registration.config}
         # Normalize deprecated fields before any handler sees the parameters
         from src.core.request_compat import normalize_request_params
 
@@ -1609,11 +1688,23 @@ class AdCPRequestHandler(RequestHandler):
 
         logger.info("Handling explicit skill: %s with parameters: %s", skill_name, list(parameters.keys()))
 
-        # Validate identity for non-discovery skills. No identity / no
-        # principal_id resolved at all -> AUTH_MISSING per v3.1.1
-        # error-code.json. Previously a bare InvalidRequestError with no
-        # error_code/wire-code field at all — same layering violation as
-        # the :282-283/:286-287 sites above.
+        # Validate identity for non-discovery skills. Stay a JSON-RPC
+        # InvalidRequestError (the skill never dispatches, so this is a
+        # transport-channel rejection) but carry the two-layer envelope in
+        # ``data``, which AdCP 3.1.1 names as the binding for a request rejected
+        # before dispatch — docs/building/operating/transport-errors.mdx,
+        # "Transport-Level Errors", and position 4 of its client detection order
+        # (``error.data.adcp_error``). Without it the A2A wire carried a bare
+        # JSON-RPC error and the buyer-facing code and suggestion that REST
+        # returns were simply absent, which the test harness was papering over by
+        # synthesizing an envelope production never sent (salesagent-pldmk.26).
+        #
+        # No identity / no principal_id resolved at all -> AUTH_MISSING per
+        # v3.1.1 error-code.json. The code and its suggestion come from the
+        # CODE_TABLE entry for ``AdCPAuthRequiredError``, never from a per-class
+        # message/suggestion override (ADR-010) — which is why nothing is passed
+        # to the constructor here. Same layering fix as the :282-283/:286-287
+        # sites above, which were bare InvalidRequestErrors with no wire code at all.
         if skill_name not in DISCOVERY_SKILLS and (identity is None or not identity.principal_id):
             raise InvalidRequestError(
                 message="Authentication required for skill invocation",
