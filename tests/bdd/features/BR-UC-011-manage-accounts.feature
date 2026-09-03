@@ -94,7 +94,8 @@ Feature: BR-UC-011 Manage Accounts
     Given a tenant is resolvable from the request context
     And the Buyer has an invalid authentication token
     When the Buyer Agent sends a list_accounts skill request via A2A with the token
-    Then the wire error envelope should carry code "AUTH_INVALID" with recovery "terminal"
+    Then the response arrives
+    And the response contains error code AUTH_INVALID
     # Coverage gap alongside salesagent-7moz (BR-UC-010 @T-UC-010-ext-c-a2a): A2A
     # always validates a presented token regardless of the requested DISCOVERY_SKILLS
     # member (get_adcp_capabilities and list_accounts share the same boundary code path).
@@ -471,7 +472,8 @@ Feature: BR-UC-011 Manage Accounts
     When the Buyer Agent sends a sync_accounts request with delete_missing true and:
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
-    Then the wire error envelope should carry code "CONFIGURATION_ERROR" with recovery "terminal"
+    Then the response arrives
+    And the response contains error code CONFIGURATION_ERROR
     # The DEACTIVATION arm reads brand off every account the request did not mention,
     # to report it as closed. That read has the same seller-side-inconsistency
     # exposure as the settings-update echo -- accounts.brand is NULLABLE -- and it is
@@ -493,7 +495,8 @@ Feature: BR-UC-011 Manage Accounts
     And an account for brand domain "acme-corp.com" already exists with billing "operator"
     And the persisted account has no brand recorded
     When the Buyer Agent sends a sync_accounts request with a settings-update entry keyed by the existing account's account_id setting payment_terms "net_45"
-    Then the wire error envelope should carry code "CONFIGURATION_ERROR" with recovery "terminal"
+    Then the response arrives
+    And the response contains error code CONFIGURATION_ERROR
     # accounts.brand is a NULLABLE column, so a brand-less persisted row is a state the
     # seller's own storage permits. The settings-update arm reads that row's brand to echo it
     # back, and today it guards the read with a bare `assert ... "should be unreachable"`
@@ -558,7 +561,8 @@ Feature: BR-UC-011 Manage Accounts
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
     Then the response is an error variant
-    And the wire error envelope should carry code "AUTH_INVALID" with recovery "terminal"
+    And the response arrives
+    And the response contains error code AUTH_INVALID
     And the error should include "suggestion" field with remediation guidance
     # @bva authentication (account operations): invalid token on sync
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID

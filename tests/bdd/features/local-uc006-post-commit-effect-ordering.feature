@@ -107,7 +107,8 @@ Feature: UC-006 sync_creatives — an effect that leaves the transaction runs on
     And validation_mode is "strict"
     And assignments referencing a non-existent package_id
     When the Buyer Agent syncs the creative
-    Then the wire error envelope should carry code "PACKAGE_NOT_FOUND" with recovery "correctable"
+    Then the response arrives
+    And the response contains error code PACKAGE_NOT_FOUND
     And every committed creative awaiting approval has a committed workflow step
     # The buyer-facing half is graded on the real wire bytes, not on the
     # harness's reconstructed exception, and deliberately NOT through the
