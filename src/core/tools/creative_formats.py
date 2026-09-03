@@ -167,7 +167,21 @@ def build_list_creative_formats_request(
     context: ContextObject | None = None,
 ) -> ListCreativeFormatsRequest:
     """Build the shared list_creative_formats request for transport wrappers."""
-    asset_types_strs = [enum_value(at) for at in asset_types] if asset_types else None
+    # ``is not None``, NOT truthiness. An EMPTY list is a filter the buyer sent, and
+    # the pinned schema declares minItems=1 on asset_types
+    # (adcp 6.6.0 / spec 3.1.1, list-creative-formats-request), so `[]` violates a
+    # schema constraint and MUST come back as INVALID_REQUEST ("Request is malformed,
+    # missing required fields, or violates schema constraints" —
+    # tests/fixtures/adcp_schemas_pinned/enums/error-code.json).
+    #
+    # Truthiness collapsed `[]` into None, i.e. into "no asset_types filter at all", so
+    # the constraint never fired and the buyer got the FULL CATALOG back for a payload
+    # the spec says is invalid. asset_types was the only list filter with this
+    # coercion — every sibling (format_ids, disclosure_positions, output/input_format_ids)
+    # is forwarded as-is and rejects `[]` correctly, which is why only this one silently
+    # succeeded. Found by salesagent-prkv.65: invisible until BDD stopped building the
+    # request in the test process, because the model would have rejected `[]` there.
+    asset_types_strs = [enum_value(at) for at in asset_types] if asset_types is not None else None
     return ListCreativeFormatsRequest(
         format_ids=format_ids,
         output_format_ids=output_format_ids,

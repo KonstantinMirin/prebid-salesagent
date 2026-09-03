@@ -351,18 +351,33 @@ _XFAIL_TAGS: dict[str, str] = {
     # Suggestion parity for list_creative_formats is pinned instead by
     # tests/integration/test_request_validation_suggestion_parity.py.
     "T-UC-005-ext-b": "suggestion field not implemented in error responses",
-    # FIXME(#1660): disclosure validation errors not implemented
-    "T-UC-005-ext-b-disclosure-invalid": "disclosure_positions validation not implemented",
-    "T-UC-005-ext-b-disclosure-empty": "disclosure_positions validation not implemented",
-    "T-UC-005-ext-b-disclosure-dupes": "disclosure_positions validation not implemented",
-    # FIXME(#1660): specific error codes (OUTPUT_FORMAT_IDS_EMPTY etc.)
-    # not produced by production — Pydantic gives generic VALIDATION_ERROR
-    "T-UC-005-ext-b-output-empty": "specific validation error codes not implemented",
-    "T-UC-005-ext-b-output-invalid": "specific validation error codes not implemented",
-    "T-UC-005-ext-b-output-noid": "specific validation error codes not implemented",
-    "T-UC-005-ext-b-input-empty": "specific validation error codes not implemented",
-    "T-UC-005-ext-b-input-invalid": "specific validation error codes not implemented",
-    "T-UC-005-ext-b-input-noid": "specific validation error codes not implemented",
+    # Graduated (salesagent-prkv.65, cassini run 4e57e3338ca3407ab0d78d70f3a20a09):
+    # T-UC-005-ext-b-disclosure-invalid, -disclosure-empty, -output-empty,
+    # -output-invalid, -output-noid, -input-empty, -input-invalid, -input-noid.
+    #
+    # The gap was never in production — it was in the harness, the same finding as
+    # T-UC-002-ext-f above. These scenarios reach production through
+    # when_request.py's filter steps, which built ListCreativeFormatsRequest IN THE
+    # TEST PROCESS; an out-of-enum disclosure position, an empty array or a FormatId
+    # missing a member therefore raised pydantic HERE and never crossed a transport.
+    # The recorded reasons ("validation not implemented", "specific validation error
+    # codes not implemented") described the harness's own exception, not the seller.
+    #
+    # With the payload dispatched raw, production answers correctly and visibly:
+    #   "A2A boundary translating AdCPInvalidRequestError to envelope: INVALID_REQUEST"
+    # which is what the scenarios asked for all along. All eight xpassed strictly.
+    # These scenarios are parametrized on a2a ONLY (verified: one test collected per
+    # scenario), and none appears in tests/bdd/e2e_rest_known_failures.txt, so there is
+    # no sibling-transport or e2e ledger entry to graduate alongside them.
+    #
+    # NOT graduated — T-UC-005-ext-b-disclosure-dupes still xfails, and it is a
+    # SPEC question rather than a production gap: the pinned
+    # list-creative-formats-request declares minItems=1 on disclosure_positions but NO
+    # uniqueItems, so ["prominent","prominent"] violates no schema constraint and
+    # production is right to accept it. The scenario is over-specified; reconciling it
+    # upstream is the fix, not patching production to match.
+    "T-UC-005-ext-b-disclosure-dupes": "scenario demands rejection of duplicate disclosure_positions, "
+    "but the pinned schema declares no uniqueItems — over-specified scenario, pending upstream reconciliation",
     # Graduated: T-UC-002-ext-f. The gap was never in production -- it was in the harness.
     # The step built CreateMediaBuyRequest IN THE TEST PROCESS, so an unknown targeting
     # field raised pydantic's ValidationError there and never crossed a transport; the
