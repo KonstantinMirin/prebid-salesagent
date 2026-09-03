@@ -1080,7 +1080,18 @@ def when_validate_webhook_config(ctx: dict) -> None:
     rejection happens in PRODUCTION, not in test code. A 32-char credential is
     accepted and the create succeeds.
     """
-    _dispatch_create_with_reporting_webhook(ctx, "Bearer", ctx.get("webhook_secret", ""))
+    from tests.bdd.steps.generic.given_media_buy import harness_create_request_kwargs
+
+    secret = ctx.get("webhook_secret", "")
+    kwargs = harness_create_request_kwargs(ctx)
+    kwargs["reporting_webhook"] = {
+        "url": _DECLARED_WEBHOOK_URL,
+        "reporting_frequency": "daily",
+        "authentication": {"schemes": ["Bearer"], "credentials": secret},
+    }
+    # Dispatch the flat body (no typed construction) so a short credential reaches
+    # the production transport boundary instead of being rejected in test code.
+    dispatch_request(ctx, **kwargs)
 
 
 @when(parsers.parse('the webhook scheduler evaluates "{mb_id}"'))
@@ -1215,13 +1226,13 @@ def when_boundary_date_range(ctx: dict, boundary_point: str) -> None:
 @when(parsers.re(r'the webhook is configured with credentials "(?P<partition>[^"]+)"'))
 def when_partition_credentials(ctx: dict, partition: str) -> None:
     """Partition test: validate webhook credentials at the create_media_buy boundary."""
-    _dispatch_create_with_reporting_webhook(ctx, *_credential_label_to_config(partition))
+    _validate_reporting_webhook_credentials(ctx, *_credential_label_to_config(partition))
 
 
 @when(parsers.re(r'the webhook credentials are at boundary "(?P<boundary_point>[^"]+)"'))
 def when_boundary_credentials(ctx: dict, boundary_point: str) -> None:
     """Boundary test: validate webhook credentials at the create_media_buy boundary."""
-    _dispatch_create_with_reporting_webhook(ctx, *_credential_label_to_config(boundary_point))
+    _validate_reporting_webhook_credentials(ctx, *_credential_label_to_config(boundary_point))
 
 
 @when(parsers.re(r'the Buyer Agent requests delivery metrics with resolution "(?P<partition>[^"]+)"'))
@@ -3090,26 +3101,24 @@ def _assert_wire_rejection(ctx: dict, field: str) -> None:
         )
         return
 
-    # NO WIRE ENVELOPE IS NOW A FAILURE, full stop. The single justification for
-    # accepting a client-side pydantic error here was that the reporting-webhook
-    # Authentication rows were graded through CreateMediaBuyRequest PARSING and so
-    # "have no dispatch by construction". They dispatch now
-    # (_dispatch_create_with_reporting_webhook), so nothing reaches this point
-    # legitimately: every When feeding an "invalid" outcome crosses a transport,
-    # and an absent envelope means the payload never got there.
+    # No wire envelope. Exactly ONE outcome is still acceptable: the request never
+    # reached the wire because it FAILED TO BUILD. That is a real, different outcome,
+    # not a lenient fallback -- _validate_reporting_webhook_credentials (:3113) drives
+    # the reporting-webhook Authentication rules through CreateMediaBuyRequest PARSING
+    # on purpose, so those scenarios have no dispatch by construction.
     #
-    # Keeping the branch would preserve the exact vacuum this migration removes —
-    # a scenario that silently stopped dispatching would still pass on the
-    # strength of a test-process exception.
+    # What is NOT accepted any more is the old `isinstance(error, (AdCPSalesAgentError,
+    # ValidationError))`: admitting AdCPSalesAgentError there let a scenario that DID dispatch,
+    # and produced no wire bytes, pass on the strength of a reconstructed exception
+    # .
+    from pydantic import ValidationError as PydanticValidationError
+
     error = ctx.get("error")
-    assert error is None, (
-        f"Invalid {field}: no wire error envelope was captured, but ctx['error'] holds "
-        f"{type(error).__name__}: {error}. A client-side exception is not a rejection — "
-        "the payload must reach the seller and come back as a two-layer AdCP envelope."
-    )
-    raise AssertionError(
-        f"Invalid {field}: expected a wire error envelope from the seller, but the "
-        "dispatch produced neither an envelope nor an error — the operation succeeded."
+    assert error is not None, f"Expected invalid {field} result but operation succeeded"
+    assert isinstance(error, PydanticValidationError), (
+        f"Invalid {field}: no wire error envelope was captured, so the only remaining "
+        f"acceptable outcome is a request that failed to build — got "
+        f"{type(error).__name__}: {error}"
     )
 
 
@@ -3119,13 +3128,13 @@ def _assert_partition_or_boundary(ctx: dict, expected: str, field: str = "unknow
 
     if expected == "valid":
         assert "error" not in ctx, f"Expected valid {field} result but got error: {ctx.get('error')}"
-        # EVERY When feeding this assertion dispatches, so a payload is always
-        # required. The webhook-credentials rows used to be the exception: they
-        # constructed a CreateMediaBuyRequest locally and were graded on whether
-        # construction raised, so this branch returned early on a locally-stashed
-        # request object. They dispatch now, and the early return went with them —
-        # it was an escape hatch that would silently pass any future scenario
-        # which failed to dispatch at all.
+        # Two kinds of When feed this assertion. Most DISPATCH and are graded on
+        # the payload that came back. The webhook-credentials scenarios instead
+        # CONSTRUCT a CreateMediaBuyRequest locally and are graded on whether
+        # construction raised — there is no dispatch and so no payload, and
+        # demanding one would fail them for the wrong reason.
+        if ctx.get("constructed_request") is not None:
+            return
         require_payload(ctx)  # raises if the dispatch produced no payload for this field
         _assert_valid_content(ctx, field)
         return
@@ -3324,37 +3333,76 @@ def _credential_label_to_config(label: str) -> tuple[str, str]:
     return scheme, credentials
 
 
-def _dispatch_create_with_reporting_webhook(ctx: dict, auth_scheme: str, credentials: str) -> None:
-    """Dispatch a create_media_buy whose reporting_webhook carries *auth_scheme* / *credentials*.
+def _validate_reporting_webhook_credentials(ctx: dict, auth_scheme: str, credentials: str) -> None:
+    """Drive webhook credentials through the real create_media_buy request boundary.
 
-    THE one shape both reporting-webhook Whens use — ``when_validate_webhook_config``
-    and the credentials partition/boundary rows — rather than two copies of "build
-    the harness base kwargs, graft a reporting_webhook on, dispatch raw"
-    (CLAUDE.md DRY invariant).
+    The reporting webhook's Authentication (scheme enum + credentials min_length=32,
+    BR-RULE-029) is validated when ``CreateMediaBuyRequest`` is parsed — the same
+    validation production performs at the create_media_buy boundary. A valid config is
+    accepted; an invalid one raises a ``ValidationError`` located on the credentials or
+    scheme. Only credential/scheme errors count as the rejection under test; any other
+    validation error means the test's base request is wrong (fail loudly).
 
-    The payload goes out as a RAW flat bag so the SELLER applies BR-RULE-029
-    (``Authentication.schemes`` must be in the pinned enum; ``credentials``
-    MinLen=32) and the buyer receives a real wire envelope.
+    FIXME(#2109): this grades a Pydantic constructor in the test process, not
+    production — nothing is dispatched, so the a2a/mcp/rest axis carries no
+    information for the 14 auth-scheme and credential rows that route here.
 
-    This replaces a helper that graded ``CreateMediaBuyRequest.__init__`` in the
-    test process and carried its own ``FIXME(#2109)`` saying so: "this grades a
-    Pydantic constructor in the test process, not production — nothing is
-    dispatched, so the a2a/mcp/rest axis carries no information for the 14
-    auth-scheme and credential rows that route here". Those rows now dispatch, so
-    the transport axis carries information for the first time, and the two escape
-    hatches the old shape needed (a locally-stashed constructed request, and the
-    "failed to build" pydantic branch in the invalid assertion) are both gone.
+    WHY THE OBVIOUS FIX DOES NOT WORK, measured under salesagent-prkv.65 so the
+    next person does not spend the attempt again: converting this to
+    ``harness_create_request_kwargs(ctx)`` + a raw ``dispatch_request`` — the
+    template that fixed every other site in that ticket, and which
+    ``when_validate_webhook_config`` above already uses successfully — turns all
+    42 of these tests (14 rows x 3 transports) RED, valid rows included. The two
+    scenario outlines are routed to ``DeliveryPollEnv``, whose verb is
+    ``get_media_buy_delivery``; a create_media_buy-shaped kwargs bag dispatched
+    there comes back INVALID_REQUEST no matter what the credentials say.
+
+    So this is NOT a step-definition migration. It needs the
+    ``T-UC-004-partition-credentials`` / ``T-UC-004-boundary-credentials`` rows
+    routed to a create-capable env (an ENV_ROUTES change plus product/pricing
+    seeding), or the rows re-homed next to the ``T-UC-004-webhook-creds-*``
+    scenarios, which already dispatch a real create. That is a scenario-routing
+    decision, not a harness one.
+
+    Note the graduation note in conftest.py for these two tags says they pass "on
+    all transports" — they do, but only because this constructor check is
+    transport-independent. That is the gap #2109 names, not evidence of coverage.
     """
-    from tests.bdd.steps.generic.given_media_buy import harness_create_request_kwargs
+    from datetime import UTC, datetime
 
-    ctx.pop("error", None)
-    kwargs = harness_create_request_kwargs(ctx)
-    kwargs["reporting_webhook"] = {
-        "url": _DECLARED_WEBHOOK_URL,
-        "reporting_frequency": "daily",
+    from pydantic import ValidationError
+
+    from src.core.schemas import CreateMediaBuyRequest
+
+    reporting_webhook = {
+        "url": "https://buyer.example.com/reporting",
         "authentication": {"schemes": [auth_scheme], "credentials": credentials},
+        "reporting_frequency": "daily",
     }
-    dispatch_request(ctx, **kwargs)
+    ctx.pop("error", None)
+    try:
+        # NOT ctx["response"]: this is the constructed REQUEST, not a response.
+        # It shared the key with dispatch responses, so a Then could read a
+        # request believing it had a response — the ambiguity lane gra7.5 removes.
+        ctx["constructed_request"] = CreateMediaBuyRequest(
+            brand={"domain": "buyer.example.com"},
+            start_time=datetime(2025, 1, 1, tzinfo=UTC),
+            end_time=datetime(2025, 2, 1, tzinfo=UTC),
+            reporting_webhook=reporting_webhook,
+            # Required field — a valid key keeps this step's ValidationError
+            # assertions scoped to the webhook credentials under test.
+            idempotency_key="bdd-webhook-cred-key-0001",
+        )
+    except ValidationError as exc:
+        offending = {".".join(str(p) for p in err["loc"]) for err in exc.errors()}
+        credential_locs = {
+            loc for loc in offending if "authentication.credentials" in loc or "authentication.schemes" in loc
+        }
+        assert credential_locs, (
+            "Expected a credential/scheme validation error from the create_media_buy "
+            f"boundary, but the base request failed elsewhere: {sorted(offending)}"
+        )
+        ctx["error"] = exc
 
 
 # The account values the UC-004 delivery_account/boundary scenarios assert are
