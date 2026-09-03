@@ -45,8 +45,15 @@ from pathlib import Path
 from typing import Any
 
 # Import time is the earliest point this plugin can observe. Everything before it
-# (interpreter boot, pytest's own bootstrap) is invisible and is reported
-# separately as the gap against the process's own start time where available.
+# -- interpreter boot, pytest's own bootstrap, and every plugin imported ahead of
+# the rootdir conftest -- is invisible to every number below, including
+# `worker_wall_s`, which starts here rather than at process start.
+#
+# So a reader comparing `worker_wall_s` against the suite's wall clock must not
+# read the remainder as scheduling idle: it also holds the startup this module
+# cannot see. Measuring it would need psutil (not a dependency) or /proc (Linux
+# only, so absent on a developer's Mac and present on the box) -- a number that
+# exists on one machine and not the other is worse than a stated gap.
 _T_IMPORT = time.time()
 
 _OUT_DIR = os.environ.get("PYTEST_WORKER_PROFILE")
