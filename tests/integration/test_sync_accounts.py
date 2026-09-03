@@ -10,6 +10,7 @@ BR-RULE-061 (delete_missing), BR-RULE-062 (dry_run)
 import pytest
 
 from src.core.schemas.account import SyncAccountsRequest
+from tests.factories.request import fresh_idempotency_key
 from tests.harness import Transport
 from tests.harness.account_sync import AccountSyncEnv
 
@@ -37,6 +38,7 @@ class TestSyncAccountsCreate:
             env.setup_default_data()
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -70,6 +72,7 @@ class TestSyncAccountsCreate:
             env.setup_default_data()
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -98,6 +101,7 @@ class TestSyncAccountsCreate:
             env.setup_default_data()
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -128,6 +132,7 @@ class TestSyncAccountsUpdate:
 
             # Create account first
             req1 = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -140,6 +145,7 @@ class TestSyncAccountsUpdate:
 
             # Sync again with updated billing
             req2 = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -160,6 +166,7 @@ class TestSyncAccountsUpdate:
             env.setup_default_data()
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -188,6 +195,7 @@ class TestSyncAccountsAuth:
             env.setup_default_data()
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -210,6 +218,7 @@ class TestSyncAccountsDeleteMissing:
 
             # Create two accounts
             req1 = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -227,6 +236,7 @@ class TestSyncAccountsDeleteMissing:
 
             # Sync with only one account + delete_missing=True
             req2 = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -263,6 +273,7 @@ class TestSyncAccountsDeleteMissing:
 
             created = await env.call_impl_async(
                 req=SyncAccountsRequest(
+                    idempotency_key=fresh_idempotency_key(),
                     accounts=[
                         {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                         {"brand": {"domain": "beta.com"}, "operator": "example.com", "billing": "operator"},
@@ -273,6 +284,7 @@ class TestSyncAccountsDeleteMissing:
 
             response = await env.call_impl_async(
                 req=SyncAccountsRequest(
+                    idempotency_key=fresh_idempotency_key(),
                     accounts=[{"account": {"account_id": target_id}, "payment_terms": "net_45"}],
                     delete_missing=True,
                 )
@@ -303,6 +315,7 @@ class TestSyncAccountsDeleteMissing:
 
             created = await env.call_impl_async(
                 req=SyncAccountsRequest(
+                    idempotency_key=fresh_idempotency_key(),
                     accounts=[{"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"}],
                 )
             )
@@ -310,6 +323,7 @@ class TestSyncAccountsDeleteMissing:
 
             response = await env.call_impl_async(
                 req=SyncAccountsRequest(
+                    idempotency_key=fresh_idempotency_key(),
                     accounts=[{"account": {"account_id": target_id}, "sandbox": True}],
                     delete_missing=True,
                 )
@@ -332,6 +346,7 @@ class TestSyncAccountsDryRun:
             env.setup_default_data()
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -356,6 +371,7 @@ class TestSyncAccountsDryRun:
             env.setup_default_data()
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {
                         "brand": {"domain": "dryrun.com"},
@@ -390,10 +406,18 @@ class TestSyncAccountsDryRun:
         async def run(tenant_id: str, principal_id: str, *, dry_run: bool):
             with AccountSyncEnv(tenant_id=tenant_id, principal_id=principal_id) as env:
                 env.setup_default_data()
-                created = await env.call_impl_async(req=SyncAccountsRequest(accounts=[dict(provision)]))
+                created = await env.call_impl_async(
+                    req=SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=[dict(provision)])
+                )
                 account_id = created.accounts[0].account_id
                 update_entry = {"account": {"account_id": account_id}, "payment_terms": "net_45"}
-                update_req = SyncAccountsRequest(accounts=[update_entry], **({"dry_run": True} if dry_run else {}))
+                update_req = SyncAccountsRequest(
+                    idempotency_key=fresh_idempotency_key(),
+                    accounts=[update_entry],
+                    # The unpacked dict is a literal holding at most dry_run, so an explicit
+                    # idempotency_key beside it cannot collide.
+                    **({"dry_run": True} if dry_run else {}),
+                )
                 resp = await env.call_impl_async(req=update_req)
             return account_id, resp
 
@@ -436,6 +460,7 @@ class TestSyncAccountsDryRun:
             env.set_approval_mode("credit_review")
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                 ],
@@ -472,13 +497,17 @@ class TestSyncAccountsDryRun:
         with AccountSyncEnv(tenant_id="sync_dup_dry", principal_id="agent_dup_dry") as env:
             env.setup_default_data()
             preview = await env.call_impl_async(
-                req=SyncAccountsRequest(accounts=[dict(entry), dict(entry)], dry_run=True)
+                req=SyncAccountsRequest(
+                    idempotency_key=fresh_idempotency_key(), accounts=[dict(entry), dict(entry)], dry_run=True
+                )
             )
 
         # The live run is the oracle, not a hand-written expectation.
         with AccountSyncEnv(tenant_id="sync_dup_live", principal_id="agent_dup_live") as env:
             env.setup_default_data()
-            live = await env.call_impl_async(req=SyncAccountsRequest(accounts=[dict(entry), dict(entry)]))
+            live = await env.call_impl_async(
+                req=SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=[dict(entry), dict(entry)])
+            )
 
         assert [_action_value(a.action) for a in live.accounts] == ["created", "unchanged"], (
             "precondition: the live path must resolve the second entry against the first"
@@ -511,12 +540,16 @@ class TestSyncAccountsDryRun:
         with AccountSyncEnv(tenant_id="sync_dup_diff_dry", principal_id="agent_ddd") as env:
             env.setup_default_data()
             preview = await env.call_impl_async(
-                req=SyncAccountsRequest(accounts=[dict(first), dict(second)], dry_run=True)
+                req=SyncAccountsRequest(
+                    idempotency_key=fresh_idempotency_key(), accounts=[dict(first), dict(second)], dry_run=True
+                )
             )
 
         with AccountSyncEnv(tenant_id="sync_dup_diff_live", principal_id="agent_ddl") as env:
             env.setup_default_data()
-            live = await env.call_impl_async(req=SyncAccountsRequest(accounts=[dict(first), dict(second)]))
+            live = await env.call_impl_async(
+                req=SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=[dict(first), dict(second)])
+            )
 
         assert [_action_value(a.action) for a in live.accounts] == ["created", "updated"], (
             "precondition: the live path must apply the second entry's change"
@@ -545,11 +578,15 @@ class TestSyncAccountsDryRun:
 
         with AccountSyncEnv(tenant_id="sync_trip_dry", principal_id="agent_td") as env:
             env.setup_default_data()
-            preview = await env.call_impl_async(req=SyncAccountsRequest(accounts=entries, dry_run=True))
+            preview = await env.call_impl_async(
+                req=SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=entries, dry_run=True)
+            )
 
         with AccountSyncEnv(tenant_id="sync_trip_live", principal_id="agent_tl") as env:
             env.setup_default_data()
-            live = await env.call_impl_async(req=SyncAccountsRequest(accounts=entries))
+            live = await env.call_impl_async(
+                req=SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=entries)
+            )
 
         assert [_action_value(a.action) for a in live.accounts] == ["created", "updated", "unchanged"], (
             "precondition: the third entry matches what the second applied, so it is unchanged"
@@ -584,11 +621,15 @@ class TestSyncAccountsDryRun:
 
         with AccountSyncEnv(tenant_id="sync_bid_dry", principal_id="agent_bd") as env:
             env.setup_default_data()
-            preview = await env.call_impl_async(req=SyncAccountsRequest(accounts=entries, dry_run=True))
+            preview = await env.call_impl_async(
+                req=SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=entries, dry_run=True)
+            )
 
         with AccountSyncEnv(tenant_id="sync_bid_live", principal_id="agent_bl") as env:
             env.setup_default_data()
-            live = await env.call_impl_async(req=SyncAccountsRequest(accounts=entries))
+            live = await env.call_impl_async(
+                req=SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=entries)
+            )
 
         assert [_action_value(a.action) for a in live.accounts] == ["created", "created"]
         assert live.accounts[0].account_id != live.accounts[1].account_id
@@ -609,7 +650,11 @@ class TestSyncAccountsDryRun:
 
         with AccountSyncEnv(tenant_id="sync_dup_nodb", principal_id="agent_dnd") as env:
             env.setup_default_data()
-            await env.call_impl_async(req=SyncAccountsRequest(accounts=[dict(entry), dict(entry)], dry_run=True))
+            await env.call_impl_async(
+                req=SyncAccountsRequest(
+                    idempotency_key=fresh_idempotency_key(), accounts=[dict(entry), dict(entry)], dry_run=True
+                )
+            )
 
             with AccountUoW("sync_dup_nodb") as uow:
                 assert uow.accounts is not None
@@ -632,6 +677,7 @@ class TestSyncAccountsBillingPolicy:
             env.setup_default_data()
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -661,6 +707,7 @@ class TestSyncAccountsBillingPolicy:
             env.setup_default_data()
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {
                         "brand": {"domain": "good.com"},
@@ -696,6 +743,7 @@ class TestSyncAccountsApproval:
             env.setup_default_data()
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {
                         "brand": {"domain": "acme.com"},
@@ -766,6 +814,7 @@ class TestSyncAccountsBillingPolicyTransport:
             env.set_billing_policy(["agent"])
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                 ],
@@ -793,6 +842,7 @@ class TestSyncAccountsBillingPolicyTransport:
             env.set_billing_policy(["agent"])
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                 ],
@@ -822,6 +872,7 @@ class TestSyncAccountsBillingPolicyTransport:
             env.setup_default_data()
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                     {"brand": {"domain": "beta.com"}, "operator": "example.com", "billing": "agent"},
@@ -851,6 +902,7 @@ class TestSyncAccountsApprovalTransport:
             env.set_approval_mode("credit_review")
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                 ],
@@ -876,6 +928,7 @@ class TestSyncAccountsApprovalTransport:
             env.set_approval_mode("legal_review")
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                 ],
@@ -900,6 +953,7 @@ class TestSyncAccountsApprovalTransport:
             env.setup_default_data()
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {"brand": {"domain": "acme.com"}, "operator": "example.com", "billing": "operator"},
                 ],
@@ -944,6 +998,7 @@ class TestSyncAccountsBrandlessEntryRejected:
 
             # Accounts3 arm: omits brand entirely → parses with brand=None.
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[{"account": {"account_id": "x"}, "operator": "example.com"}],
             )
             result = env.call_via(transport, req=req)
@@ -985,6 +1040,7 @@ class TestSyncAccountsBrandIdRoundTrip:
             env.setup_default_data()
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {
                         "brand": {"domain": "acme.com", "brand_id": "brand_one"},
@@ -1039,6 +1095,7 @@ class TestSyncAccountsBrandIdRoundTrip:
             brand = {"domain": "acme.com", "brand_id": "brand_one"}
             created = await env.call_impl_async(
                 req=SyncAccountsRequest(
+                    idempotency_key=fresh_idempotency_key(),
                     accounts=[{"brand": brand, "operator": "example.com", "billing": "operator"}],
                 )
             )
@@ -1046,6 +1103,7 @@ class TestSyncAccountsBrandIdRoundTrip:
 
             updated = await env.call_impl_async(
                 req=SyncAccountsRequest(
+                    idempotency_key=fresh_idempotency_key(),
                     accounts=[
                         {
                             "account": {"brand": brand, "operator": "example.com"},
@@ -1095,7 +1153,9 @@ class TestSyncAccountsBrandIdRoundTrip:
                 ],
             }
 
-            first = await env.call_impl_async(req=SyncAccountsRequest(accounts=[entry]))
+            first = await env.call_impl_async(
+                req=SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=[entry])
+            )
             assert _action_value(first.accounts[0].action) == "created", (
                 f"first sync must provision and prove the subscriber: {first.accounts[0]!r}"
             )
@@ -1103,7 +1163,9 @@ class TestSyncAccountsBrandIdRoundTrip:
             # From here on, any NEW proof-of-control attempt fails.
             env.set_notification_proof_result(succeeds=False)
 
-            second = await env.call_impl_async(req=SyncAccountsRequest(accounts=[entry]))
+            second = await env.call_impl_async(
+                req=SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=[entry])
+            )
 
         assert len(second.accounts) == 1
         result = second.accounts[0]
@@ -1128,6 +1190,7 @@ class TestSyncAccountsBrandIdRoundTrip:
             env.setup_default_data()
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {
                         "brand": {"domain": "acme.com", "brand_id": "brand_one"},
@@ -1186,7 +1249,12 @@ async def _sync_wire(slug: str, *, dry_run: bool, seed: list | tuple = (), **req
     with AccountSyncEnv(tenant_id=tenant_id, principal_id=principal_id) as env:
         env.setup_default_data()
         if seed:
-            await env.call_impl_async(req=SyncAccountsRequest(accounts=list(seed)))
+            await env.call_impl_async(
+                req=SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=list(seed))
+            )
+        # setdefault, not an explicit kwarg: req_kwargs is the caller's catch-all and may
+        # already carry a key, which an explicit kwarg beside it would turn into a TypeError.
+        req_kwargs.setdefault("idempotency_key", fresh_idempotency_key())
         response = await env.call_impl_async(req=SyncAccountsRequest(dry_run=dry_run, **req_kwargs))
     return _canonical(response.accounts)
 
@@ -1277,9 +1345,18 @@ class TestDryRunPreviewMatchesLiveRun:
 
         with AccountSyncEnv(tenant_id="dro_dmp", principal_id="ag_dro_dmp") as env:
             env.setup_default_data()
-            await env.call_impl_async(req=SyncAccountsRequest(accounts=[_entry("acme.com"), _entry("beta.com")]))
             await env.call_impl_async(
-                req=SyncAccountsRequest(accounts=[_entry("acme.com")], delete_missing=True, dry_run=True)
+                req=SyncAccountsRequest(
+                    idempotency_key=fresh_idempotency_key(), accounts=[_entry("acme.com"), _entry("beta.com")]
+                )
+            )
+            await env.call_impl_async(
+                req=SyncAccountsRequest(
+                    idempotency_key=fresh_idempotency_key(),
+                    accounts=[_entry("acme.com")],
+                    delete_missing=True,
+                    dry_run=True,
+                )
             )
 
         with AccountUoW("dro_dmp") as uow:
@@ -1354,11 +1431,19 @@ class TestDryRunPreviewMatchesLiveRun:
         """
         with AccountSyncEnv(tenant_id="dro_upn", principal_id="ag_dro_upn") as env:
             env.setup_default_data()
-            await env.call_impl_async(req=SyncAccountsRequest(accounts=[_entry("acme.com", billing="operator")]))
+            await env.call_impl_async(
+                req=SyncAccountsRequest(
+                    idempotency_key=fresh_idempotency_key(), accounts=[_entry("acme.com", billing="operator")]
+                )
+            )
             before = _persisted_applied_state("dro_upn")
 
             await env.call_impl_async(
-                req=SyncAccountsRequest(accounts=[_entry("acme.com", billing="advertiser")], dry_run=True)
+                req=SyncAccountsRequest(
+                    idempotency_key=fresh_idempotency_key(),
+                    accounts=[_entry("acme.com", billing="advertiser")],
+                    dry_run=True,
+                )
             )
             after = _persisted_applied_state("dro_upn")
 

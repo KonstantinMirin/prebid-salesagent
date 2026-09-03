@@ -77,7 +77,7 @@ class _Omit:
 OMIT = _Omit()
 
 
-def _idempotency_key() -> str:
+def fresh_idempotency_key() -> str:
     """A fresh key matching the pin's ``^[A-Za-z0-9_.:-]{16,255}$``.
 
     Sixteen characters is a real floor: hand-written keys like ``"test-key-1"``
@@ -98,7 +98,7 @@ def _campaign_window() -> tuple[datetime, datetime]:
     "start_time must be in the future"; but resolved ONCE, because two baselines
     built a few microseconds apart would otherwise differ in their campaign
     window, and "perturb one field" has to mean one. Contrast
-    ``_idempotency_key``, which is deliberately fresh per call — a reused key
+    ``fresh_idempotency_key``, which is deliberately fresh per call — a reused key
     replays. Lazy rather than module-level so importing the factories does not
     read the clock.
     """
@@ -152,7 +152,7 @@ class CreateMediaBuyRequestFactory(_RequestFactory):
     class Meta:
         model = CreateMediaBuyRequest
 
-    idempotency_key = factory.LazyFunction(_idempotency_key)
+    idempotency_key = factory.LazyFunction(fresh_idempotency_key)
     account = factory.LazyFunction(lambda: dict(SAMPLE_ACCOUNT))
     brand = factory.LazyFunction(lambda: {"domain": "testbrand.com"})
     start_time = factory.LazyFunction(lambda: _campaign_window()[0])
@@ -174,7 +174,7 @@ class SyncCreativesRequestFactory(_RequestFactory):
     class Meta:
         model = SyncCreativesRequest
 
-    idempotency_key = factory.LazyFunction(_idempotency_key)
+    idempotency_key = factory.LazyFunction(fresh_idempotency_key)
     account = factory.LazyFunction(lambda: dict(SAMPLE_ACCOUNT))
     creatives = factory.LazyFunction(
         lambda: [
@@ -201,7 +201,7 @@ class SyncAccountsRequestFactory(_RequestFactory):
     class Meta:
         model = SyncAccountsRequest
 
-    idempotency_key = factory.LazyFunction(_idempotency_key)
+    idempotency_key = factory.LazyFunction(fresh_idempotency_key)
     accounts = factory.LazyFunction(
         lambda: [
             {

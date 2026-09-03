@@ -133,12 +133,16 @@ class SyncAccountsRequest(LibrarySyncAccountsRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # sync-accounts-request.json 3.1.1 lists idempotency_key in /required.  Override as
-    # optional: every existing keyless caller would otherwise break, and the field is inert
-    # until sync_accounts consumes it through the idempotency-attempt machinery.  Tightening
-    # to required belongs with that work, not here.  What is NOT optional is the shape --
-    # when a buyer does supply a key, it must satisfy the spec constraint on every transport.
-    idempotency_key: str | None = None  # type: ignore[assignment]
+    # idempotency_key is INHERITED as required. The optional override that used to sit here
+    # argued the field was "inert until sync_accounts consumes it through the
+    # idempotency-attempt machinery", so tightening belonged "with that work, not here" --
+    # and sync_accounts still does not consume it (only media_buy_create and creatives/_sync
+    # reach idempotency_replay). That is the whole point: whether WE act on a field is not
+    # what decides whether the buyer must send it. sync-accounts-request.json 3.1.1 lists it
+    # in /required, so a request without one is not a valid request, and a model that accepts
+    # it accepts something the spec does not. Deleted rather than rewritten, following
+    # prkv.28 (update_media_buy) and prkv.68 (create_media_buy's account): if our model does
+    # not require what the pin requires, the model is wrong.
 
     @model_validator(mode="after")
     def _check_idempotency_key(self):

@@ -461,14 +461,13 @@ class TestSchemaInheritance:
             ("GetProductsRequest", "buying_mode"),
             ("UpdateMediaBuyRequest", "end_time"),  # datetime|None (library uses AwareDatetime)
             ("UpdateMediaBuyRequest", "start_time"),  # datetime|Literal["asap"]|None (wider type)
-            # AdCP 3.1.1 field overrides — the library made these required and these two are
-            # still relaxed. The rollout this comment used to describe ("required-key
-            # enforcement rolls out create_media_buy-first") is finished for the media-buy
-            # and creative tools: create_media_buy, update_media_buy and sync_creatives all
-            # inherit BOTH account and idempotency_key as required now, so their rows are
-            # gone. SyncAccountsRequest is the remaining tool.
+            # AdCP 3.1.1 field overrides. The required-key rollout is FINISHED: every tool
+            # the library made idempotency_key/account required on now inherits them --
+            # create_media_buy, update_media_buy, sync_creatives and, as of prkv.86,
+            # sync_accounts. No row here relaxes a spec-required field any more, and none
+            # may be added: "our model does not require what the pin requires" is a defect
+            # with three precedents, not an allowlistable exception.
             ("Product", "reporting_capabilities"),  # optional override (not all products have it)
-            ("SyncAccountsRequest", "idempotency_key"),  # optional override (required-key fast-follow)
             # Pattern #4: ListAccountsResponse.accounts uses local Account subclass
             ("ListAccountsResponse", "accounts"),
             # Pattern #4: the get_media_buys item chain. ALL THREE narrowings below are

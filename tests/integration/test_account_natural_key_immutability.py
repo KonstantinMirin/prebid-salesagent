@@ -31,6 +31,7 @@ import pytest
 
 from src.core.database.repositories.account import AccountRepository
 from src.core.schemas.account import SyncAccountsRequest
+from tests.factories.request import fresh_idempotency_key
 from tests.harness.account_sync import AccountSyncEnv
 from tests.harness.admin_accounts import AdminAccountEnv
 
@@ -45,7 +46,10 @@ def _action(result) -> str:
 
 def _provision(env, *, domain: str, operator: str) -> str:
     """Provision one account through the real sync path; return its account_id."""
-    req = SyncAccountsRequest(accounts=[{"brand": {"domain": domain}, "operator": operator, "billing": "operator"}])
+    req = SyncAccountsRequest(
+        idempotency_key=fresh_idempotency_key(),
+        accounts=[{"brand": {"domain": domain}, "operator": operator, "billing": "operator"}],
+    )
     response = env.call_impl(req=req)
     result = response.accounts[0]
     assert _action(result) == "created", f"setup precondition: expected a fresh create, got {_action(result)!r}"
@@ -54,7 +58,10 @@ def _provision(env, *, domain: str, operator: str) -> str:
 
 def _resync(env, *, domain: str, operator: str):
     """Re-send the SAME natural key a buyer originally provisioned with."""
-    req = SyncAccountsRequest(accounts=[{"brand": {"domain": domain}, "operator": operator, "billing": "operator"}])
+    req = SyncAccountsRequest(
+        idempotency_key=fresh_idempotency_key(),
+        accounts=[{"brand": {"domain": domain}, "operator": operator, "billing": "operator"}],
+    )
     return env.call_impl(req=req).accounts[0]
 
 

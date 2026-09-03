@@ -46,6 +46,7 @@ import pytest
 
 from src.core.database.repositories.account import AccountRepository, NaturalKey
 from src.core.schemas.account import SyncAccountsRequest
+from tests.factories.request import fresh_idempotency_key
 from tests.harness.account_sync import AccountSyncEnv
 from tests.harness.admin_accounts import AdminAccountEnv
 
@@ -63,7 +64,10 @@ def _action(result) -> str:
 
 def _provision(env, *, domain: str = _DOMAIN, operator: str = _OPERATOR) -> str:
     """Provision one account through the real sync path; return its account_id."""
-    req = SyncAccountsRequest(accounts=[{"brand": {"domain": domain}, "operator": operator, "billing": "operator"}])
+    req = SyncAccountsRequest(
+        idempotency_key=fresh_idempotency_key(),
+        accounts=[{"brand": {"domain": domain}, "operator": operator, "billing": "operator"}],
+    )
     result = env.call_impl(req=req).accounts[0]
     assert _action(result) == "created", f"setup precondition: expected a fresh create, got {_action(result)!r}"
     return result.account_id
@@ -146,7 +150,10 @@ class TestAdminCreateCannotDuplicateANaturalKey:
             # False: support is opted into, never assumed from an unset column).
             env.configure_tenant_field("account_sandbox", True)
             req = SyncAccountsRequest(
-                accounts=[{"brand": {"domain": _DOMAIN}, "operator": _OPERATOR, "billing": "operator", "sandbox": True}]
+                idempotency_key=fresh_idempotency_key(),
+                accounts=[
+                    {"brand": {"domain": _DOMAIN}, "operator": _OPERATOR, "billing": "operator", "sandbox": True}
+                ],
             )
             result = env.call_impl(req=req).accounts[0]
             assert _action(result) == "created", f"setup precondition: got {_action(result)!r}"

@@ -34,6 +34,7 @@ from tests.bdd.steps._outcome_helpers import (
 from tests.bdd.steps.generic._dispatch import dispatch_request, dispatch_via_client
 from tests.bdd.steps.generic.then_error import _wire_code
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
+from tests.factories.request import fresh_idempotency_key
 
 # ═══════════════════════════════════════════════════════════════════════
 # Helpers
@@ -243,7 +244,7 @@ def _sync_pre_create(ctx: dict, brand_domain: str, operator: str, billing: str, 
 
     entry: dict[str, Any] = {"brand": {"domain": brand_domain}, "operator": operator, "billing": billing}
     entry.update(extra)
-    req = SyncAccountsRequest(accounts=[entry])
+    req = SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=[entry])
     dispatch_request(ctx, req=req)
     error = ctx.get("error")
     assert error is None, f"Given: pre-create sync for {brand_domain!r} failed: {error!r}"
@@ -1288,6 +1289,7 @@ def when_sync_with_governance_agents(ctx: dict, domain: str) -> None:
     governance_agents = [_make_governance_agent(url="https://governance.example.com/check")]
     try:
         req = SyncAccountsRequest(
+            idempotency_key=fresh_idempotency_key(),
             accounts=[
                 {
                     "brand": {"domain": domain},
@@ -1377,6 +1379,7 @@ def _dispatch_settings_update_payment_terms(
         kwargs["dry_run"] = dry_run
     if delete_missing is not None:
         kwargs["delete_missing"] = delete_missing
+    kwargs.setdefault("idempotency_key", fresh_idempotency_key())
     try:
         req = SyncAccountsRequest(**kwargs)
         dispatch_request(ctx, req=req)
@@ -1632,7 +1635,7 @@ def _retry_sync_with_billing(ctx: dict, billing: str) -> None:
     assert prior, "No prior sync_accounts request captured — a table When must run before the retry"
     retried = [{**entry, "billing": billing} for entry in prior]
     try:
-        req = SyncAccountsRequest(accounts=retried)
+        req = SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=retried)
         dispatch_request(ctx, req=req)
     except Exception as exc:  # noqa: BLE001 — capture for the error-path Thens
         ctx["error"] = exc
@@ -2551,6 +2554,7 @@ def _given_agent_synced(ctx: dict, agent_name: str, domain: str) -> None:
     _setup_tenant_and_principal(ctx)
     identity = _make_identity_for_agent(ctx, agent_name)
     req = SyncAccountsRequest(
+        idempotency_key=fresh_idempotency_key(),
         accounts=[{"brand": {"domain": domain}, "operator": domain, "billing": "operator"}],
     )
     dispatch_request(ctx, req=req, identity=identity)
@@ -2593,6 +2597,7 @@ def when_sync_with_dry_run(ctx: dict, value: str, datatable: Any) -> None:
 
     try:
         req = SyncAccountsRequest(
+            idempotency_key=fresh_idempotency_key(),
             accounts=accounts,
             dry_run=value.lower() == "true",
         )
@@ -2613,6 +2618,7 @@ def when_sync_with_delete_missing(ctx: dict, value: str, datatable: Any) -> None
     ctx["sync_request_domains"] = {a["brand"]["domain"] for a in accounts if a.get("brand", {}).get("domain")}
     try:
         req = SyncAccountsRequest(
+            idempotency_key=fresh_idempotency_key(),
             accounts=accounts,
             delete_missing=value.lower() == "true",
         )
@@ -2632,7 +2638,7 @@ def when_sync_without_delete_missing(ctx: dict, datatable: Any) -> None:
 
     ctx["sync_request_domains"] = {a["brand"]["domain"] for a in accounts if a.get("brand", {}).get("domain")}
     try:
-        req = SyncAccountsRequest(accounts=accounts)
+        req = SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=accounts)
         dispatch_request(ctx, req=req)
     except Exception as exc:
         ctx["error"] = exc
@@ -2651,6 +2657,7 @@ def when_agent_a_sync_delete_missing(ctx: dict, datatable: Any) -> None:
 
     try:
         req = SyncAccountsRequest(
+            idempotency_key=fresh_idempotency_key(),
             accounts=accounts,
             delete_missing=True,
         )
@@ -2994,6 +3001,7 @@ def when_request_with_context(ctx: dict, operation: str, ctx_json: str) -> None:
 
         # Provide a minimal valid account for sync context echo tests
         req = SyncAccountsRequest(
+            idempotency_key=fresh_idempotency_key(),
             accounts=[{"brand": {"domain": "ctx-test.com"}, "operator": "ctx-test.com", "billing": "operator"}],
             context=context_obj,
         )
@@ -3076,7 +3084,7 @@ def when_sync_n_accounts(ctx: dict, count: int) -> None:
     ctx["submitted_account_count"] = count
 
     try:
-        req = SyncAccountsRequest(accounts=accounts)
+        req = SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=accounts)
         dispatch_request(ctx, req=req)
     except (ValidationError, Exception) as exc:
         ctx["error"] = exc
@@ -3378,7 +3386,7 @@ def when_sync_sandbox_shape(ctx: dict, key: str, request_item: str) -> None:
     # "omitted": leave sandbox out of the entry entirely
 
     try:
-        req = SyncAccountsRequest(accounts=[entry])
+        req = SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=[entry])
         dispatch_request(ctx, req=req)
     except Exception as exc:
         ctx["error"] = exc
@@ -3516,7 +3524,7 @@ def _dispatch_sync_notification(ctx: dict, domain: str, notification_configs: li
         "notification_configs": notification_configs,
     }
     try:
-        req = SyncAccountsRequest(accounts=[entry])
+        req = SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=[entry])
         dispatch_request(ctx, req=req)
     except Exception as exc:
         ctx["error"] = exc
@@ -4031,7 +4039,7 @@ def when_sync_no_principal(ctx: dict, datatable: Any) -> None:
     headers = datatable[0]
     rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
     accounts = _parse_sync_table(rows)
-    req = SyncAccountsRequest(accounts=accounts)
+    req = SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=accounts)
     dispatch_request(ctx, req=req, identity=broken_identity)
 
 
@@ -4081,6 +4089,7 @@ def when_resync_identical_governance(ctx: dict, domain: str) -> None:
 
     gov = ctx["governance_agents_fixture"]
     req = SyncAccountsRequest(
+        idempotency_key=fresh_idempotency_key(),
         accounts=[{"brand": {"domain": domain}, "operator": domain, "billing": "operator", "governance_agents": gov}],
     )
     dispatch_request(ctx, req=req)
@@ -4092,6 +4101,7 @@ def when_sync_different_governance(ctx: dict, domain: str) -> None:
     from src.core.schemas.account import SyncAccountsRequest
 
     req = SyncAccountsRequest(
+        idempotency_key=fresh_idempotency_key(),
         accounts=[
             {
                 "brand": {"domain": domain},
@@ -4119,6 +4129,7 @@ def when_resync_identical_all_fields(ctx: dict, domain: str) -> None:
 
     gov = ctx["governance_agents_fixture"]
     req = SyncAccountsRequest(
+        idempotency_key=fresh_idempotency_key(),
         accounts=[
             {
                 "brand": {"domain": domain},
@@ -4156,7 +4167,9 @@ def when_sync_dryrun_and_delete_missing(ctx: dict, datatable: Any) -> None:
     headers = datatable[0]
     rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
     accounts = _parse_sync_table(rows)
-    req = SyncAccountsRequest(accounts=accounts, dry_run=True, delete_missing=True)
+    req = SyncAccountsRequest(
+        idempotency_key=fresh_idempotency_key(), accounts=accounts, dry_run=True, delete_missing=True
+    )
     dispatch_request(ctx, req=req)
 
 
@@ -4169,7 +4182,7 @@ def when_named_agent_sync_delete_missing(ctx: dict, name: str, datatable: Any) -
     headers = datatable[0]
     rows = [dict(zip(headers, row, strict=True)) for row in datatable[1:]]
     accounts = _parse_sync_table(rows)
-    req = SyncAccountsRequest(accounts=accounts, delete_missing=True)
+    req = SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=accounts, delete_missing=True)
     dispatch_request(ctx, req=req, identity=identity)
 
 
@@ -4325,7 +4338,10 @@ def when_sync_brandless_entry(ctx: dict) -> None:
     """
     from src.core.schemas.account import SyncAccountsRequest
 
-    req = SyncAccountsRequest(accounts=[{"account": {"account_id": "ref-001"}, "operator": "example.com"}])
+    req = SyncAccountsRequest(
+        idempotency_key=fresh_idempotency_key(),
+        accounts=[{"account": {"account_id": "ref-001"}, "operator": "example.com"}],
+    )
     dispatch_request(ctx, req=req)
 
 
@@ -4412,7 +4428,7 @@ def _dispatch_entry(ctx: dict, entry: dict[str, Any]) -> None:
     from src.core.schemas.account import SyncAccountsRequest
 
     try:
-        dispatch_request(ctx, req=SyncAccountsRequest(accounts=[entry]))
+        dispatch_request(ctx, req=SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=[entry]))
     except Exception as exc:
         ctx["error"] = exc
 

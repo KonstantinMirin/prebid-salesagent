@@ -37,6 +37,7 @@ from src.core.database.repositories.account import AccountRepository
 from src.core.database.repositories.uow import AccountUoW
 from src.core.schemas.account import SyncAccountsRequest
 from tests.factories.account import AccountFactory
+from tests.factories.request import fresh_idempotency_key
 from tests.harness.account_sync import AccountSyncEnv
 from tests.harness.admin_accounts import AdminAccountEnv
 
@@ -238,6 +239,7 @@ class TestSyncAccountsLosingTheRace:
             env._commit_factory_data()
 
             req = SyncAccountsRequest(
+                idempotency_key=fresh_idempotency_key(),
                 accounts=[
                     {"brand": {"domain": _DOMAIN}, "operator": _OPERATOR, "billing": "operator"},
                     {"brand": {"domain": "beta.com"}, "operator": _OPERATOR, "billing": "agent"},
