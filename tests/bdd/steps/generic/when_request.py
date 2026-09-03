@@ -10,12 +10,12 @@ Steps store results in ctx:
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 from pytest_bdd import given, parsers, when
 
 from src.core.schemas import FormatId, ListCreativeFormatsRequest
-from tests.bdd.steps.generic._dispatch import _populate_ctx_from_result
+from tests.bdd.steps.generic._dispatch import WireCtx, _populate_ctx_from_result, dispatch_request
 from tests.harness.transport import Transport
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -77,14 +77,52 @@ def _call_via(
     # with it: hand-stashing an exception is the antipattern the project's BDD
     # rules forbid, and call_via already returns transport failures as a
     # TransportResult carrying the real wire envelope.
-    _populate_ctx_from_result(ctx, env.call_via(t, **kwargs))
+    _populate_ctx_from_result(cast("WireCtx", ctx), env.call_via(t, **kwargs))
 
 
-def _build_req(**kwargs: Any) -> ListCreativeFormatsRequest | None:
-    """Build a ListCreativeFormatsRequest, returning None if no filters."""
-    if not kwargs:
-        return None
-    return ListCreativeFormatsRequest(**kwargs)
+def _call_raw(ctx: dict, **payload: Any) -> None:
+    """Dispatch the LITERAL payload — no ``ListCreativeFormatsRequest`` in the way.
+
+    THE NEGATIVE-PATH DISPATCH. Use this whenever the scenario expects the
+    request to be REJECTED, so the SELLER performs the validation and the buyer
+    receives a real wire envelope.
+
+    Why this exists next to :func:`_call`, which is still correct for the
+    positive path — the two are not redundant:
+
+    ``_call`` builds the typed request in the TEST PROCESS. For a payload the
+    model accepts that is harmless. For a payload the model REJECTS it is fatal
+    to the test's meaning: pydantic raises here, the old ``except Exception:
+    ctx["error"] = exc`` stashed a client-side exception, and production was
+    never executed. The scenario then proved something about the MODEL and
+    nothing about the SERVER — so transport framing, boundary translation and
+    *which code each transport actually emits* were all ungraded, which is the
+    class of defect that produced #1858's four accidental finds
+    (salesagent-prkv.9/.35/.37/.49). prkv.33 measured the blast radius: all 86
+    UC-005 instances recorded ``dispatched=False``.
+
+    WHY ``dispatch_request`` AND NOT ``dispatch_via_client``. Both are raw-payload
+    seams, but the client one would MASK the outcome this migration exists to
+    expose. ``AdCPTestClient``'s UNWRAP parses a success wire into
+    ``spec_response_model("list_creative_formats")`` — the PINNED response — and
+    this env's real format-registry wire does not satisfy it (measured: 2520
+    errors, e.g. ``formats.N.assets.M.max_count`` required by the pinned Assets
+    variants but absent from ours). ``CreativeFormatsEnv`` carries a documented
+    JUSTIFIED OVERRIDE of ``deliver_mcp``/``deliver_a2a`` for exactly that reason
+    and parses with the LOCAL subclass instead.
+
+    That gap is a schema-conformance issue graded elsewhere, not a dispatch
+    defect — but it decides the seam here: if a payload the scenario expects to be
+    REJECTED is in fact ACCEPTED (a graduation, which prkv.33 predicts for roughly
+    two thirds of these rows), the client seam would fail to parse the success and
+    report a confusing envelope error, hiding the graduation behind a fake
+    failure. ``env.call_via`` keeps the env's parser, so an unexpected success
+    reads as a plain success and the graduation is legible.
+
+    The positive branches stay on ``_call``/``_call_via`` for the ordinary reason
+    that they already work; nothing about them needed changing.
+    """
+    dispatch_request(ctx, **payload)
 
 
 # ── A2A transport ────────────────────────────────────────────────────
@@ -154,11 +192,8 @@ def when_request_unfiltered(ctx: dict) -> None:
 
 @when("the Buyer Agent sends a list_creative_formats request with invalid dimension filters")
 def when_send_request_invalid_dimensions(ctx: dict) -> None:
-    try:
-        req = ListCreativeFormatsRequest(min_width=-1)
-        _call(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    # min_width=-1 violates the schema's Ge(0) — the SELLER must say so.
+    _call_raw(ctx, min_width=-1)
 
 
 # ── Filter: type + asset_types combined ──────────────────────────────
@@ -169,11 +204,7 @@ def when_request_type_and_asset(ctx: dict, fmt_type: str, asset_types: str) -> N
     # type filter was removed from ListCreativeFormatsRequest in adcp 3.12;
     # only asset_types filter is applied
     parsed_assets = json.loads(asset_types)
-    try:
-        req = ListCreativeFormatsRequest(asset_types=parsed_assets)
-        _call(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    _call_raw(ctx, asset_types=parsed_assets)
 
 
 # ── Filter: asset_types + name_search combined ──────────────────────
@@ -182,11 +213,7 @@ def when_request_type_and_asset(ctx: dict, fmt_type: str, asset_types: str) -> N
 @when(parsers.parse('the Buyer Agent requests formats with asset_types {asset_types} and name_search "{name_search}"'))
 def when_request_asset_types_and_name_search(ctx: dict, asset_types: str, name_search: str) -> None:
     parsed_assets = json.loads(asset_types)
-    try:
-        req = ListCreativeFormatsRequest(asset_types=parsed_assets, name_search=name_search)
-        _call(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    _call_raw(ctx, asset_types=parsed_assets, name_search=name_search)
 
 
 # ── Filter: type only ────────────────────────────────────────────────
@@ -205,12 +232,9 @@ def when_request_type_filter(ctx: dict, fmt_type: str) -> None:
 @when(parsers.parse("the Buyer Agent requests formats with format_ids filter {filter_value}"))
 def when_request_format_ids(ctx: dict, filter_value: str) -> None:
     parsed = json.loads(filter_value)
-    try:
-        format_ids = [FormatId(agent_url=DEFAULT_AGENT_URL, id=fid) for fid in parsed]
-        req = ListCreativeFormatsRequest(format_ids=format_ids)
-        _call(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    # Plain dicts, not FormatId: a bad id must be rejected by the seller, and
+    # constructing FormatId here would reject it in the test process instead.
+    _call_raw(ctx, format_ids=[{"agent_url": DEFAULT_AGENT_URL, "id": fid} for fid in parsed])
 
 
 # ── Filter: asset_types ─────────────────────────────────────────────
@@ -219,11 +243,7 @@ def when_request_format_ids(ctx: dict, filter_value: str) -> None:
 @when(parsers.parse("the Buyer Agent requests formats with asset_types filter {filter_value}"))
 def when_request_asset_types(ctx: dict, filter_value: str) -> None:
     parsed = json.loads(filter_value)
-    try:
-        req = ListCreativeFormatsRequest(asset_types=parsed)
-        _call(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    _call_raw(ctx, asset_types=parsed)
 
 
 # ── Filter: min_width / max_width ────────────────────────────────────
@@ -261,11 +281,7 @@ def when_request_name_search(ctx: dict, search: str) -> None:
 @when(parsers.parse("the Buyer Agent requests formats with disclosure_positions filter {filter_value}"))
 def when_request_disclosure_positions(ctx: dict, filter_value: str) -> None:
     parsed = json.loads(filter_value)
-    try:
-        req = ListCreativeFormatsRequest(disclosure_positions=parsed)
-        _call(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    _call_raw(ctx, disclosure_positions=parsed)
 
 
 # ── Filter: output_format_ids ────────────────────────────────────────
@@ -273,13 +289,9 @@ def when_request_disclosure_positions(ctx: dict, filter_value: str) -> None:
 
 @when(parsers.parse("the Buyer Agent requests formats with output_format_ids filter {filter_value}"))
 def when_request_output_format_ids(ctx: dict, filter_value: str) -> None:
-    parsed = json.loads(filter_value)
-    try:
-        fmt_ids = [FormatId(agent_url=fid["agent_url"], id=fid["id"]) for fid in parsed] if parsed else []
-        req = ListCreativeFormatsRequest(output_format_ids=fmt_ids if fmt_ids else [])
-        _call(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    # Forwarded verbatim — a row whose entries lack agent_url/id is exactly the
+    # malformed payload the seller is supposed to reject.
+    _call_raw(ctx, output_format_ids=json.loads(filter_value) or [])
 
 
 # ── Filter: input_format_ids ────────────────────────────────────────
@@ -287,13 +299,7 @@ def when_request_output_format_ids(ctx: dict, filter_value: str) -> None:
 
 @when(parsers.parse("the Buyer Agent requests formats with input_format_ids filter {filter_value}"))
 def when_request_input_format_ids(ctx: dict, filter_value: str) -> None:
-    parsed = json.loads(filter_value)
-    try:
-        fmt_ids = [FormatId(agent_url=fid["agent_url"], id=fid["id"]) for fid in parsed] if parsed else []
-        req = ListCreativeFormatsRequest(input_format_ids=fmt_ids if fmt_ids else [])
-        _call(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    _call_raw(ctx, input_format_ids=json.loads(filter_value) or [])
 
 
 # ── Partition dispatch steps ──────────────────────────────────────────
@@ -326,11 +332,7 @@ def _partition_format_ids(ctx: dict, partition: str) -> None:
         req = ListCreativeFormatsRequest(format_ids=no_match)
         _call(ctx, req=req)
     else:
-        try:
-            req = ListCreativeFormatsRequest(format_ids=[FormatId(agent_url=DEFAULT_AGENT_URL, id=partition)])
-            _call(ctx, req=req)
-        except Exception as exc:
-            ctx["error"] = exc
+        _call_raw(ctx, format_ids=[{"agent_url": DEFAULT_AGENT_URL, "id": partition}])
 
 
 def _partition_asset_types(ctx: dict, partition: str) -> None:
@@ -344,10 +346,7 @@ def _partition_asset_types(ctx: dict, partition: str) -> None:
     elif partition == "no_matching_formats":
         _call(ctx, req=ListCreativeFormatsRequest(asset_types=["webhook"]))
     else:
-        try:
-            _call(ctx, req=ListCreativeFormatsRequest(asset_types=[partition]))
-        except Exception as exc:
-            ctx["error"] = exc
+        _call_raw(ctx, asset_types=[partition])
 
 
 def _partition_dimension(ctx: dict, partition: str) -> None:
@@ -365,10 +364,13 @@ def _partition_dimension(ctx: dict, partition: str) -> None:
     elif partition == "no_dimension_info":
         _call(ctx, req=ListCreativeFormatsRequest(min_width=1))
     else:
+        # int(partition) may itself raise for a non-numeric label; forward the raw
+        # string in that case so the seller grades the type, not the test process.
         try:
-            _call(ctx, req=ListCreativeFormatsRequest(min_width=int(partition)))
-        except Exception as exc:
-            ctx["error"] = exc
+            min_width: object = int(partition)
+        except ValueError:
+            min_width = partition
+        _call_raw(ctx, min_width=min_width)
 
 
 def _partition_responsive(ctx: dict, partition: str) -> None:
@@ -380,10 +382,10 @@ def _partition_responsive(ctx: dict, partition: str) -> None:
     elif partition == "responsive_false":
         _call(ctx, req=ListCreativeFormatsRequest(is_responsive=False))
     else:
-        try:
-            _call(ctx, req=ListCreativeFormatsRequest(is_responsive=partition.lower() == "true"))
-        except Exception as exc:
-            ctx["error"] = exc
+        # Forward the label VERBATIM. `partition.lower() == "true"` coerced every
+        # unrecognized label to a valid `False`, so an invalid row dispatched a
+        # perfectly good request and could never be rejected.
+        _call_raw(ctx, is_responsive=partition)
 
 
 def _partition_name_search(ctx: dict, partition: str) -> None:
@@ -413,10 +415,7 @@ def _partition_wcag(ctx: dict, partition: str) -> None:
     elif partition in wcag_map:
         _call(ctx, req=ListCreativeFormatsRequest(wcag_level=wcag_map[partition]))
     else:
-        try:
-            _call(ctx, req=ListCreativeFormatsRequest(wcag_level=partition))
-        except Exception as exc:
-            ctx["error"] = exc
+        _call_raw(ctx, wcag_level=partition)
 
 
 def _partition_disclosure(ctx: dict, partition: str) -> None:
@@ -455,120 +454,62 @@ def _partition_disclosure(ctx: dict, partition: str) -> None:
         # support, so a working filter would yield zero matches.
         _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=["subtitle"]))
     elif partition == "empty_array":
-        try:
-            _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=[]))
-        except Exception as exc:
-            ctx["error"] = exc
+        _call_raw(ctx, disclosure_positions=[])
     elif partition == "duplicate_positions":
-        try:
-            _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=["prominent", "prominent"]))
-        except Exception as exc:
-            ctx["error"] = exc
+        _call_raw(ctx, disclosure_positions=["prominent", "prominent"])
     else:
-        try:
-            _call(ctx, req=ListCreativeFormatsRequest(disclosure_positions=[partition]))
-        except Exception as exc:
-            ctx["error"] = exc
+        _call_raw(ctx, disclosure_positions=[partition])
+
+
+def _partition_format_id_list(ctx: dict, partition: str, direction: str) -> None:
+    """Shared body for the output_format_ids and input_format_ids partitions.
+
+    The two handlers were identical apart from the field name and the
+    ``format_without_<direction>_ids`` label, so they are ONE function with a
+    parameter rather than two copies (CLAUDE.md DRY invariant): a fix applied to
+    one copy would otherwise have to be remembered in the other, and the four
+    negative branches below are exactly where that memory would fail.
+
+    *direction* is ``"output"`` or ``"input"``; the AdCP field, the seeded-ids
+    ctx key and the "no ids declared" partition label are all derived from it.
+    """
+    field = f"{direction}_format_ids"
+    known = ctx.get(f"known_{field}", [])
+
+    # ── Positive branches: typed request via _call (see _call_raw's docstring
+    # for why this module deliberately uses both dispatch paths).
+    if partition == "omitted":
+        _call(ctx)
+    elif partition in ("single_format_id", f"format_without_{direction}_ids"):
+        _call(ctx, req=ListCreativeFormatsRequest(**{field: known[:1]}))
+    elif partition == "multiple_ids_any_match":
+        extra = FormatId(agent_url=DEFAULT_AGENT_URL, id="nonexistent")
+        _call(ctx, req=ListCreativeFormatsRequest(**{field: known[:1] + [extra]}))
+    elif partition == "no_matching_formats":
+        no_match = [FormatId(agent_url=DEFAULT_AGENT_URL, id="nonexistent")]
+        _call(ctx, req=ListCreativeFormatsRequest(**{field: no_match}))
+
+    # ── Negative branches: the payload goes out RAW so the seller rejects it and
+    # the buyer receives a real envelope. Each dict below is deliberately NOT a
+    # FormatId — constructing one would raise here and production would never run.
+    elif partition == "empty_array":
+        _call_raw(ctx, **{field: []})
+    elif partition == "invalid_format_id_missing_agent_url":
+        _call_raw(ctx, **{field: [{"id": "some-id"}]})
+    elif partition == "invalid_format_id_missing_id":
+        _call_raw(ctx, **{field: [{"agent_url": DEFAULT_AGENT_URL}]})
+    else:
+        _call_raw(ctx, **{field: [{"agent_url": DEFAULT_AGENT_URL, "id": partition}]})
 
 
 def _partition_output_format_ids(ctx: dict, partition: str) -> None:
     """Map output_format_ids partition label to filter and call harness."""
-    known = ctx.get("known_output_format_ids", [])
-    if partition == "omitted":
-        _call(ctx)
-    elif partition == "single_format_id":
-        _call(ctx, req=ListCreativeFormatsRequest(output_format_ids=known[:1]))
-    elif partition == "multiple_ids_any_match":
-        extra = FormatId(agent_url=DEFAULT_AGENT_URL, id="nonexistent")
-        _call(ctx, req=ListCreativeFormatsRequest(output_format_ids=known[:1] + [extra]))
-    elif partition == "no_matching_formats":
-        no_match = [FormatId(agent_url=DEFAULT_AGENT_URL, id="nonexistent")]
-        _call(ctx, req=ListCreativeFormatsRequest(output_format_ids=no_match))
-    elif partition == "format_without_output_ids":
-        _call(ctx, req=ListCreativeFormatsRequest(output_format_ids=known[:1]))
-    elif partition == "empty_array":
-        try:
-            _call(ctx, req=ListCreativeFormatsRequest(output_format_ids=[]))
-        except Exception as exc:
-            ctx["error"] = exc
-    elif partition == "invalid_format_id_missing_agent_url":
-        try:
-            _call(
-                ctx,
-                req=ListCreativeFormatsRequest(
-                    output_format_ids=[FormatId(id="some-id")]  # type: ignore[call-arg]
-                ),
-            )
-        except Exception as exc:
-            ctx["error"] = exc
-    elif partition == "invalid_format_id_missing_id":
-        try:
-            _call(
-                ctx,
-                req=ListCreativeFormatsRequest(
-                    output_format_ids=[FormatId(agent_url=DEFAULT_AGENT_URL)]  # type: ignore[call-arg]
-                ),
-            )
-        except Exception as exc:
-            ctx["error"] = exc
-    else:
-        try:
-            _call(
-                ctx,
-                req=ListCreativeFormatsRequest(output_format_ids=[FormatId(agent_url=DEFAULT_AGENT_URL, id=partition)]),
-            )
-        except Exception as exc:
-            ctx["error"] = exc
+    _partition_format_id_list(ctx, partition, "output")
 
 
 def _partition_input_format_ids(ctx: dict, partition: str) -> None:
     """Map input_format_ids partition label to filter and call harness."""
-    known = ctx.get("known_input_format_ids", [])
-    if partition == "omitted":
-        _call(ctx)
-    elif partition == "single_format_id":
-        _call(ctx, req=ListCreativeFormatsRequest(input_format_ids=known[:1]))
-    elif partition == "multiple_ids_any_match":
-        extra = FormatId(agent_url=DEFAULT_AGENT_URL, id="nonexistent")
-        _call(ctx, req=ListCreativeFormatsRequest(input_format_ids=known[:1] + [extra]))
-    elif partition == "no_matching_formats":
-        no_match = [FormatId(agent_url=DEFAULT_AGENT_URL, id="nonexistent")]
-        _call(ctx, req=ListCreativeFormatsRequest(input_format_ids=no_match))
-    elif partition == "format_without_input_ids":
-        _call(ctx, req=ListCreativeFormatsRequest(input_format_ids=known[:1]))
-    elif partition == "empty_array":
-        try:
-            _call(ctx, req=ListCreativeFormatsRequest(input_format_ids=[]))
-        except Exception as exc:
-            ctx["error"] = exc
-    elif partition == "invalid_format_id_missing_agent_url":
-        try:
-            _call(
-                ctx,
-                req=ListCreativeFormatsRequest(
-                    input_format_ids=[FormatId(id="some-id")]  # type: ignore[call-arg]
-                ),
-            )
-        except Exception as exc:
-            ctx["error"] = exc
-    elif partition == "invalid_format_id_missing_id":
-        try:
-            _call(
-                ctx,
-                req=ListCreativeFormatsRequest(
-                    input_format_ids=[FormatId(agent_url=DEFAULT_AGENT_URL)]  # type: ignore[call-arg]
-                ),
-            )
-        except Exception as exc:
-            ctx["error"] = exc
-    else:
-        try:
-            _call(
-                ctx,
-                req=ListCreativeFormatsRequest(input_format_ids=[FormatId(agent_url=DEFAULT_AGENT_URL, id=partition)]),
-            )
-        except Exception as exc:
-            ctx["error"] = exc
+    _partition_format_id_list(ctx, partition, "input")
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats with type filter "{partition}"'))
@@ -783,22 +724,16 @@ def _partition_agent_asset_types(ctx: dict, partition: str) -> None:
     if partition in ("not_provided", "omitted"):
         _call(ctx)
     elif partition == "unknown_value":
-        # Unknown asset type should be rejected by validation
-        try:
-            _call(ctx, req=ListCreativeFormatsRequest(asset_types=[partition]))
-        except Exception as exc:
-            ctx["error"] = exc
+        # Rejected by the SELLER's validation, not by the model in this process.
+        _call_raw(ctx, asset_types=[partition])
     elif partition == "empty_array":
-        try:
-            _call(ctx, req=ListCreativeFormatsRequest(asset_types=[]))
-        except Exception as exc:
-            ctx["error"] = exc
+        _call_raw(ctx, asset_types=[])
     else:
-        # Valid asset types: image, video, audio, text, html, javascript, url
-        try:
-            _call(ctx, req=ListCreativeFormatsRequest(asset_types=[partition]))
-        except Exception as exc:
-            ctx["error"] = exc
+        # Valid asset types: image, video, audio, text, html, javascript, url.
+        # Still dispatched raw: this arm also receives the rows the Examples table
+        # marks invalid (e.g. "vast", valid in the media-buy variant but not for a
+        # creative agent), so the model must not get to pre-judge them.
+        _call_raw(ctx, asset_types=[partition])
 
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats with type "{partition}"'))

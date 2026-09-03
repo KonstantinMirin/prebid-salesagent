@@ -30,13 +30,58 @@ from tests.bdd.steps._outcome_helpers import (
     wire_error_envelope_or_none,
     wire_field,
 )
-from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._dispatch import dispatch_request, dispatch_via_client
 from tests.bdd.steps.generic.then_error import _wire_code
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
 # ═══════════════════════════════════════════════════════════════════════
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════
+
+
+def _sync_raw(ctx: dict, **payload: Any) -> None:
+    """Dispatch a LITERAL sync_accounts payload — no ``SyncAccountsRequest`` first.
+
+    THE NEGATIVE-PATH DISPATCH for the sync verb. Every caller expects the SELLER
+    to reject the payload, so building the request model here would be fatal to
+    the test's meaning: pydantic raises in the test process, the old ``except
+    Exception: ctx["error"] = exc`` stashed a client-side exception, and
+    production was never executed. Several of those step docstrings said so
+    outright ("triggers Pydantic validation"). The scenario then graded the MODEL
+    and said nothing about the SERVER — so nothing checked that the transports
+    AGREE on a code.
+
+    Goes through ``env.call_via`` (a raw kwargs bag IS a raw dispatch — see
+    ``AccountSyncEnv.build_rest_body``'s explicit flat path) rather than
+    ``dispatch_via_client``, because ``sync_accounts`` has NO pinned response
+    model: the client seam resolves success through ``spec_response_model(tool)``
+    and would hand back ``payload=None`` with ``is_success`` False, whereas the
+    env's ``response_parser()`` hook types each verb correctly. That matters here
+    precisely BECAUSE some of these rows are expected to graduate — if production
+    accepts a payload the scenario thought invalid, this path reports a plain
+    success instead of an unparseable one, so the graduation is legible rather
+    than disguised as a failure.
+    """
+    dispatch_request(ctx, **payload)
+
+
+def _list_raw(ctx: dict, **payload: Any) -> None:
+    """Dispatch a LITERAL list_accounts payload, NAMING the tool explicitly.
+
+    Same rationale as :func:`_sync_raw` for why the payload must not go through
+    ``ListAccountsRequest`` — but this verb CANNOT use ``env.call_via`` with a raw
+    bag, and that is a genuine constraint rather than a preference:
+    ``AccountListDispatchMixin.is_list_request`` selects the verb with
+    ``isinstance(kwargs.get("req"), ListAccountsRequest)``. With no typed ``req``
+    the discriminator returns False and a raw list payload would be MISROUTED to
+    ``sync_accounts``. The client seam takes the tool name directly, so it is the
+    only raw path that can address this verb.
+
+    Safe on the success side too: ``list_accounts`` HAS a pinned response model
+    (``ListAccountsResponse``), of which the local schema is a subclass, so an
+    unexpected acceptance still parses and reads as a graduation.
+    """
+    dispatch_via_client(ctx, "list_accounts", payload)
 
 
 def _setup_tenant_and_principal(ctx: dict) -> tuple[Any, Any]:
@@ -472,13 +517,7 @@ def when_list_accounts_unfiltered(ctx: dict) -> None:
 @when(parsers.parse('the Buyer Agent sends a list_accounts request with status filter "{status}"'))
 def when_list_accounts_status_filter(ctx: dict, status: str) -> None:
     """Send list_accounts with a status filter."""
-    from src.core.schemas.account import ListAccountsRequest
-
-    try:
-        req = ListAccountsRequest(status=status)
-        dispatch_request(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    _list_raw(ctx, status=status)
 
 
 @when("the Buyer Agent sends a list_accounts request without an authentication token")
@@ -497,15 +536,9 @@ def when_list_accounts_a2a_invalid_token(ctx: dict) -> None:
 @when(parsers.parse("the Buyer Agent sends a list_accounts request with max_results {value:d}"))
 def when_list_accounts_paginated(ctx: dict, value: int) -> None:
     """Send list_accounts with max_results pagination."""
-    from adcp.types import PaginationRequest
-
-    from src.core.schemas.account import ListAccountsRequest
-
-    try:
-        req = ListAccountsRequest(pagination=PaginationRequest(max_results=value))
-        dispatch_request(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    # BR-UC-011 Examples grade max_results 0 and 101 as "validation error", so the
+    # out-of-range rows must reach the seller rather than PaginationRequest.
+    _list_raw(ctx, pagination={"max_results": value})
 
 
 @when("the Buyer Agent sends a list_accounts request with the returned cursor")
@@ -529,15 +562,7 @@ def when_list_accounts_with_cursor(ctx: dict) -> None:
 @when(parsers.parse('the Buyer Agent sends a list_accounts request with cursor "{cursor}"'))
 def when_list_accounts_with_explicit_cursor(ctx: dict, cursor: str) -> None:
     """Send list_accounts with a specific cursor string (e.g. malformed base64)."""
-    from adcp.types import PaginationRequest
-
-    from src.core.schemas.account import ListAccountsRequest
-
-    try:
-        req = ListAccountsRequest(pagination=PaginationRequest(cursor=cursor))
-        dispatch_request(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    _list_raw(ctx, pagination={"cursor": cursor})
 
 
 @when(parsers.parse("the Buyer Agent sends a list_accounts request with sandbox equals {value}"))
@@ -1066,20 +1091,21 @@ def when_list_with_idempotency_envelope(ctx: dict, idem: str, ctx_json: str) -> 
     """
     from adcp.types import ContextObject
 
-    from src.core.schemas.account import ListAccountsRequest
-
     context_data = _parse_inline_context(ctx_json)
     ctx["sent_context"] = context_data
-    context_obj = ContextObject.model_validate(context_data)
-    try:
-        req = ListAccountsRequest(
-            idempotency_key=idem,  # type: ignore[call-arg]
-            ext={"probe": "read-tool-idempotency"},
-            context=context_obj,
-        )
-        dispatch_request(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    # Validated only to fail the TEST loudly on a malformed inline table; the
+    # dict below, not this object, is what crosses the wire.
+    ContextObject.model_validate(context_data)
+    # Dispatched RAW because the duty under test is the SERVER's TOLERANCE of an
+    # unlisted field. Building ListAccountsRequest here made dev/CI's
+    # extra="forbid" reject it in the test process, so the step recorded a
+    # client-side error and never once asked whether production tolerates it.
+    _list_raw(
+        ctx,
+        idempotency_key=idem,
+        ext={"probe": "read-tool-idempotency"},
+        context=context_data,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1329,14 +1355,9 @@ def when_sync_settings_update_unknown_account(ctx: dict, account_id: str) -> Non
     ("the seller MUST NOT create a new account — entries that would otherwise
     trigger provisioning are rejected with UNSUPPORTED_PROVISIONING").
     """
-    from src.core.schemas.account import SyncAccountsRequest
 
     _setup_tenant_and_principal(ctx)
-    try:
-        req = SyncAccountsRequest(accounts=[{"account": {"account_id": account_id}}])
-        dispatch_request(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    _sync_raw(ctx, accounts=[{"account": {"account_id": account_id}}])
 
 
 @when(
@@ -1352,23 +1373,19 @@ def when_sync_both_account_and_trio(ctx: dict) -> None:
 
     Spec: account/sync-accounts-request.json#/properties/accounts/items/oneOf.
     """
-    from src.core.schemas.account import SyncAccountsRequest
 
     _setup_tenant_and_principal(ctx)
-    try:
-        req = SyncAccountsRequest(
-            accounts=[
-                {
-                    "account": {"account_id": "acc_target_ref"},
-                    "brand": {"domain": "acme-corp.com"},
-                    "operator": "acme-corp.com",
-                    "billing": "operator",
-                }
-            ]
-        )
-        dispatch_request(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    _sync_raw(
+        ctx,
+        accounts=[
+            {
+                "account": {"account_id": "acc_target_ref"},
+                "brand": {"domain": "acme-corp.com"},
+                "operator": "acme-corp.com",
+                "billing": "operator",
+            }
+        ],
+    )
 
 
 @then(parsers.parse('the account payment_terms is "{pt}"'))
@@ -2964,69 +2981,34 @@ def when_request_with_context(ctx: dict, operation: str, ctx_json: str) -> None:
 @when("the Buyer Agent sends a sync_accounts request with an empty accounts array")
 def when_sync_empty_accounts(ctx: dict) -> None:
     """Send sync_accounts with an empty accounts array."""
-    from src.core.schemas.account import SyncAccountsRequest
 
-    try:
-        req = SyncAccountsRequest(accounts=[])
-        dispatch_request(ctx, req=req)
-    except Exception as exc:
-        ctx["error"] = exc
+    _sync_raw(ctx, accounts=[])
 
 
 @when("the Buyer Agent sends a sync_accounts request with an account that has no brand domain field")
 def when_sync_no_brand_domain(ctx: dict) -> None:
     """Send sync with account missing brand.domain — triggers Pydantic validation."""
-    from pydantic import ValidationError
 
-    from src.core.schemas.account import SyncAccountsRequest
-
-    try:
-        req = SyncAccountsRequest(
-            accounts=[{"operator": "test.com", "billing": "operator"}],
-        )
-        dispatch_request(ctx, req=req)
-    except (ValidationError, Exception) as exc:
-        ctx["error"] = exc
+    _sync_raw(ctx, accounts=[{"operator": "test.com", "billing": "operator"}])
 
 
 @when("the Buyer Agent sends a sync_accounts request with an account that has no operator field")
 def when_sync_no_operator(ctx: dict) -> None:
     """Send sync with account missing operator — triggers Pydantic validation."""
-    from pydantic import ValidationError
 
-    from src.core.schemas.account import SyncAccountsRequest
-
-    try:
-        req = SyncAccountsRequest(
-            accounts=[{"brand": {"domain": "test.com"}, "billing": "operator"}],
-        )
-        dispatch_request(ctx, req=req)
-    except (ValidationError, Exception) as exc:
-        ctx["error"] = exc
+    _sync_raw(ctx, accounts=[{"brand": {"domain": "test.com"}, "billing": "operator"}])
 
 
 @when("the Buyer Agent sends a sync_accounts request with an account that has no billing field")
 def when_sync_no_billing(ctx: dict) -> None:
     """Send sync with account missing billing — triggers Pydantic validation."""
-    from pydantic import ValidationError
 
-    from src.core.schemas.account import SyncAccountsRequest
-
-    try:
-        req = SyncAccountsRequest(
-            accounts=[{"brand": {"domain": "test.com"}, "operator": "test.com"}],
-        )
-        dispatch_request(ctx, req=req)
-    except (ValidationError, Exception) as exc:
-        ctx["error"] = exc
+    _sync_raw(ctx, accounts=[{"brand": {"domain": "test.com"}, "operator": "test.com"}])
 
 
 @when(parsers.parse('the Buyer Agent sends a sync_accounts request with {field} set to "{value}"'))
 def when_sync_invalid_field(ctx: dict, field: str, value: str) -> None:
     """Send sync with an invalid field value for validation testing."""
-    from pydantic import ValidationError
-
-    from src.core.schemas.account import SyncAccountsRequest
 
     # Build account entry with the invalid field
     entry: dict[str, Any] = {
@@ -3044,11 +3026,7 @@ def when_sync_invalid_field(ctx: dict, field: str, value: str) -> None:
     else:
         entry[field] = value
 
-    try:
-        req = SyncAccountsRequest(accounts=[entry])
-        dispatch_request(ctx, req=req)
-    except (ValidationError, Exception) as exc:
-        ctx["error"] = exc
+    _sync_raw(ctx, accounts=[entry])
 
 
 @when(parsers.parse("the Buyer Agent sends a sync_accounts request with {count:d} accounts"))
