@@ -373,8 +373,10 @@ class TestAdvertisedTypesAreAccepted:
 class TestARequiredFieldCannotGoUnannounced:
     """A tool may not announce a DTO whose REQUIRED fields it does not declare.
 
-    Such a tool is not merely under-specified, it is unusable: the wrapper never receives the
-    field, so the builder cannot populate it and EVERY call raises ValidationError. The
+    Such a tool is not merely under-specified, it is unusable: the BUILDER has no parameter
+    for the field, so nothing can populate it and EVERY call raises ValidationError. The
+    subject is the builder because the builder is the field source -- a wrapper declaring
+    fewer parameters is the intended direction, not a defect. The
     failure is loud but late -- it lands on a buyer's request, at call time, for a defect that
     is one line at author time.
 
@@ -481,9 +483,19 @@ def _build_fixture_request(media_buy_id: str = "", note: str | None = None) -> _
     return _FixtureNeedsAnId(media_buy_id=media_buy_id, note=note)
 
 
+def _build_forgetful_fixture_request(note: str | None = None) -> _FixtureNeedsAnId:
+    """A BUILDER that omits the required field -- nothing can ever populate media_buy_id."""
+    return _FixtureNeedsAnId(media_buy_id="", note=note)
+
+
 def _fixture_wrapper_that_forgot_it(note: str | None = None):
-    """Declares the optional field but not the required one."""
-    return _build_fixture_request(note=note)
+    """Calls a builder that omits the required field.
+
+    The SUBJECT of this refusal is the BUILDER, not the wrapper: the announced shape is
+    derived from the builder's parameters, so a wrapper declaring fewer of them is normal
+    (wrappers are moving to **kwargs) while a BUILDER missing a required field is fatal.
+    """
+    return _build_forgetful_fixture_request(note=note)
 
 
 def _fixture_wrapper_that_declares_it(media_buy_id: str = "", note: str | None = None):
