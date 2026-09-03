@@ -54,7 +54,7 @@ from src.core.tools.creatives import listing as creatives_listing_module
 from src.core.tools.creatives import sync_wrappers as creatives_sync_module
 from src.core.validation_helpers import adcp_validation_boundary
 from src.core.version_compat import apply_version_compat
-from src.routes._derived_body import DerivedBodyEnvelope, derived_body_model, derived_payload
+from src.routes._derived_body import DerivedBodyEnvelope, derived_body_model_for, derived_payload
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 # envelope removes the guess: absent means absent on every transport.
 if TYPE_CHECKING:
     # TYPE-CHECKER ONLY. The runtime class is the derivation in the else branch; this says
-    # what it reads as, because derived_body_model returns a VARIABLE holding a class and a
+    # what it reads as, because derived_body_model_for returns a VARIABLE holding a class and a
     # variable cannot annotate a route parameter. Not a second field-set definition: nothing
     # here exists at runtime, and test_architecture_rest_body_completeness.py still grades the
     # real class via __derived_from_dto__. Imprecision is deliberate and one-way -- a derived
@@ -95,9 +95,7 @@ if TYPE_CHECKING:
     class GetProductsBody(DerivedBodyEnvelope, GetProductsRequestDTO): ...
 
 else:
-    GetProductsBody = derived_body_model(
-        "GetProductsBody", GetProductsRequestDTO, products_module.create_get_products_request
-    )
+    GetProductsBody = derived_body_model_for(products_module.get_products)
 
 
 if TYPE_CHECKING:
@@ -117,12 +115,7 @@ else:
     #   create_media_buy_raw declares ``str``. That is the WRAPPER having drifted from the
     #   DTO, not a reason for the body to hide the DTO's types; deriving makes the drift
     #   visible instead of preserving it.
-    CreateMediaBuyBody = derived_body_model(
-        "CreateMediaBuyBody",
-        CreateMediaBuyRequestDTO,
-        # The BUILDER -- the raw wrapper takes the built request now.
-        media_buy_create_module._build_create_media_buy_request,
-    )
+    CreateMediaBuyBody = derived_body_model_for(media_buy_create_module.create_media_buy)
 
 if TYPE_CHECKING:
     # TYPE-CHECKER ONLY; the runtime class is the derivation in the else branch.
@@ -140,11 +133,8 @@ else:
     # ``media_buy_id`` is the URL PATH segment. Deriving it would make a REST caller send
     # the same value twice, and since requiredness is preserved it would turn a spec-legal
     # request that puts the id only in the path into an INVALID_REQUEST.
-    UpdateMediaBuyBody = derived_body_model(
-        "UpdateMediaBuyBody",
-        UpdateMediaBuyRequestDTO,
-        # The BUILDER -- the raw wrapper takes the built request now.
-        media_buy_update_module._build_update_request,
+    UpdateMediaBuyBody = derived_body_model_for(
+        media_buy_update_module.update_media_buy,
         extra_fields={
             "flight_start_date": (str | None, None),
             "flight_end_date": (str | None, None),
@@ -165,12 +155,7 @@ else:
     # every transport at once. Keeping the body permissive worked around a divergence
     # instead of removing it, and a permissive REST body is exactly how a required field
     # goes unenforced on one transport.
-    GetMediaBuyDeliveryBody = derived_body_model(
-        "GetMediaBuyDeliveryBody",
-        GetMediaBuyDeliveryRequestDTO,
-        # The BUILDER -- the raw wrapper takes the built request now.
-        media_buy_delivery_module._build_get_media_buy_delivery_request,
-    )
+    GetMediaBuyDeliveryBody = derived_body_model_for(media_buy_delivery_module.get_media_buy_delivery)
 
 
 if TYPE_CHECKING:
@@ -187,11 +172,7 @@ else:
     # AdCPInvalidRequestError, so the boundary answers INVALID_REQUEST too, and
     # src/app.py no longer special-cases which FastAPI rejections get which code. The
     # transports agree, so the body can carry the DTO's own types instead of hiding them.
-    GetMediaBuysBody = derived_body_model(
-        "GetMediaBuysBody",
-        GetMediaBuysRequestDTO,
-        media_buy_list_module._build_get_media_buys_request,
-    )
+    GetMediaBuysBody = derived_body_model_for(media_buy_list_module.get_media_buys)
 
 
 # DERIVED, like ListCreativesBody below. Hand-written, this class declared
@@ -203,7 +184,7 @@ else:
 # the divergence deriving both from one artifact exists to make unrepresentable.
 if TYPE_CHECKING:
     # TYPE-CHECKER ONLY. The runtime class is the derivation in the else branch; this says
-    # what it reads as, because derived_body_model returns a VARIABLE holding a class and a
+    # what it reads as, because derived_body_model_for returns a VARIABLE holding a class and a
     # variable cannot annotate a route parameter. Not a second field-set definition: nothing
     # here exists at runtime, and test_architecture_rest_body_completeness.py still grades the
     # real class via __derived_from_dto__. Imprecision is deliberate and one-way -- a derived
@@ -213,12 +194,7 @@ if TYPE_CHECKING:
     class SyncCreativesBody(DerivedBodyEnvelope, LocalSyncCreativesRequest): ...
 
 else:
-    SyncCreativesBody = derived_body_model(
-        # The BUILDER -- the raw wrapper takes the built request now.
-        "SyncCreativesBody",
-        LocalSyncCreativesRequest,
-        creatives_sync_module.build_sync_creatives_request,
-    )
+    SyncCreativesBody = derived_body_model_for(creatives_sync_module.sync_creatives)
 
 
 # DERIVED, not hand-written: DTO fields INTERSECT list_creatives_raw's parameters, plus the
@@ -230,7 +206,7 @@ else:
 # inherits it.
 if TYPE_CHECKING:
     # TYPE-CHECKER ONLY. The runtime class is the derivation in the else branch; this says
-    # what it reads as, because derived_body_model returns a VARIABLE holding a class and a
+    # what it reads as, because derived_body_model_for returns a VARIABLE holding a class and a
     # variable cannot annotate a route parameter. Not a second field-set definition: nothing
     # here exists at runtime, and test_architecture_rest_body_completeness.py still grades the
     # real class via __derived_from_dto__. Imprecision is deliberate and one-way -- a derived
@@ -240,21 +216,17 @@ if TYPE_CHECKING:
     class ListCreativesBody(DerivedBodyEnvelope, ListCreativesRequestDTO): ...
 
 else:
-    ListCreativesBody = derived_body_model(
-        "ListCreativesBody",
-        ListCreativesRequestDTO,
-        # The BUILDER -- the raw wrapper takes the built request now.
-        creatives_listing_module._build_list_creatives_request,
-    )
+    ListCreativesBody = derived_body_model_for(creatives_listing_module.list_creatives)
 
 
-# DERIVED against the shared BUILDER, not the ``req=``-taking raw wrapper: the wrapper's only
-# request parameter is the already-built model, so intersecting with it would yield the empty
-# set. The builder is the seam every transport constructs through, so it is what defines the
-# body's field set.
+# DERIVED from the TOOL: ``request_seam_for`` reads the builder out of the wrapper's bytecode
+# and the DTO out of that builder's return annotation. Which of the two wrappers to intersect
+# with is no longer a per-route decision -- it was, and every site had to be corrected by hand
+# when the ``req=``-taking raw wrapper stopped carrying flat parameters and intersecting with
+# IT started yielding the empty set.
 if TYPE_CHECKING:
     # TYPE-CHECKER ONLY. The runtime class is the derivation in the else branch; this says
-    # what it reads as, because derived_body_model returns a VARIABLE holding a class and a
+    # what it reads as, because derived_body_model_for returns a VARIABLE holding a class and a
     # variable cannot annotate a route parameter. Not a second field-set definition: nothing
     # here exists at runtime, and test_architecture_rest_body_completeness.py still grades the
     # real class via __derived_from_dto__. Imprecision is deliberate and one-way -- a derived
@@ -264,21 +236,16 @@ if TYPE_CHECKING:
     class UpdatePerformanceIndexBody(DerivedBodyEnvelope, UpdatePerformanceIndexRequestDTO): ...
 
 else:
-    UpdatePerformanceIndexBody = derived_body_model(
-        "UpdatePerformanceIndexBody",
-        UpdatePerformanceIndexRequestDTO,
-        performance_module._build_update_performance_index_request,
-    )
+    UpdatePerformanceIndexBody = derived_body_model_for(performance_module.update_performance_index)
 
 
-# DERIVED against the shared BUILDER, not the ``req=``-taking raw wrapper: the wrapper's
-# only parameter is the already-built request, so intersecting with it would yield the empty
-# set. ``build_list_creative_formats_request`` is the seam A2A already selects against
-# (_handle_list_creative_formats_skill), so REST and A2A now compute their field sets from
-# the same two artifacts.
+# DERIVED from the TOOL, like UpdatePerformanceIndexBody above.
+# ``build_list_creative_formats_request`` is the seam A2A selects against
+# (_handle_list_creative_formats_skill), and both transports now reach it by naming the tool
+# rather than by naming the builder, so they cannot pick different ones.
 if TYPE_CHECKING:
     # TYPE-CHECKER ONLY. The runtime class is the derivation in the else branch; this says
-    # what it reads as, because derived_body_model returns a VARIABLE holding a class and a
+    # what it reads as, because derived_body_model_for returns a VARIABLE holding a class and a
     # variable cannot annotate a route parameter. Not a second field-set definition: nothing
     # here exists at runtime, and test_architecture_rest_body_completeness.py still grades the
     # real class via __derived_from_dto__. Imprecision is deliberate and one-way -- a derived
@@ -288,11 +255,7 @@ if TYPE_CHECKING:
     class ListCreativeFormatsBody(DerivedBodyEnvelope, ListCreativeFormatsRequestDTO): ...
 
 else:
-    ListCreativeFormatsBody = derived_body_model(
-        "ListCreativeFormatsBody",
-        ListCreativeFormatsRequestDTO,
-        creative_formats_module.build_list_creative_formats_request,
-    )
+    ListCreativeFormatsBody = derived_body_model_for(creative_formats_module.list_creative_formats)
 
 
 # DERIVED against the builder, same as ListCreativeFormatsBody above. The builder was added
@@ -301,7 +264,7 @@ else:
 # this work exists to delete.
 if TYPE_CHECKING:
     # TYPE-CHECKER ONLY. The runtime class is the derivation in the else branch; this says
-    # what it reads as, because derived_body_model returns a VARIABLE holding a class and a
+    # what it reads as, because derived_body_model_for returns a VARIABLE holding a class and a
     # variable cannot annotate a route parameter. Not a second field-set definition: nothing
     # here exists at runtime, and test_architecture_rest_body_completeness.py still grades the
     # real class via __derived_from_dto__. Imprecision is deliberate and one-way -- a derived
@@ -311,11 +274,7 @@ if TYPE_CHECKING:
     class ListAuthorizedPropertiesBody(DerivedBodyEnvelope, ListAuthorizedPropertiesRequestDTO): ...
 
 else:
-    ListAuthorizedPropertiesBody = derived_body_model(
-        "ListAuthorizedPropertiesBody",
-        ListAuthorizedPropertiesRequestDTO,
-        properties_module.build_list_authorized_properties_request,
-    )
+    ListAuthorizedPropertiesBody = derived_body_model_for(properties_module.list_authorized_properties)
 
 
 # DERIVED: ListAccountsRequest fields INTERSECT build_list_accounts_request's kwargs. The
@@ -324,7 +283,7 @@ else:
 # string here but not by major version.
 if TYPE_CHECKING:
     # TYPE-CHECKER ONLY. The runtime class is the derivation in the else branch; this says
-    # what it reads as, because derived_body_model returns a VARIABLE holding a class and a
+    # what it reads as, because derived_body_model_for returns a VARIABLE holding a class and a
     # variable cannot annotate a route parameter. Not a second field-set definition: nothing
     # here exists at runtime, and test_architecture_rest_body_completeness.py still grades the
     # real class via __derived_from_dto__. Imprecision is deliberate and one-way -- a derived
@@ -334,15 +293,13 @@ if TYPE_CHECKING:
     class ListAccountsBody(DerivedBodyEnvelope, ListAccountsRequestDTO): ...
 
 else:
-    ListAccountsBody = derived_body_model(
-        "ListAccountsBody", ListAccountsRequestDTO, accounts_module.build_list_accounts_request
-    )
+    ListAccountsBody = derived_body_model_for(accounts_module.list_accounts)
 
 
 # DERIVED: SyncAccountsRequest fields INTERSECT build_sync_accounts_request's kwargs.
 if TYPE_CHECKING:
     # TYPE-CHECKER ONLY. The runtime class is the derivation in the else branch; this says
-    # what it reads as, because derived_body_model returns a VARIABLE holding a class and a
+    # what it reads as, because derived_body_model_for returns a VARIABLE holding a class and a
     # variable cannot annotate a route parameter. Not a second field-set definition: nothing
     # here exists at runtime, and test_architecture_rest_body_completeness.py still grades the
     # real class via __derived_from_dto__. Imprecision is deliberate and one-way -- a derived
@@ -352,9 +309,7 @@ if TYPE_CHECKING:
     class SyncAccountsBody(DerivedBodyEnvelope, SyncAccountsRequestDTO): ...
 
 else:
-    SyncAccountsBody = derived_body_model(
-        "SyncAccountsBody", SyncAccountsRequestDTO, accounts_module.build_sync_accounts_request
-    )
+    SyncAccountsBody = derived_body_model_for(accounts_module.sync_accounts)
 
 
 if TYPE_CHECKING:
@@ -371,13 +326,7 @@ else:
     # those to INVALID_REQUEST -- which is exactly what BR-UC-018's pagination rows already
     # demand for an out-of-enum sort.direction. Keeping this body permissive preserved the
     # disagreement rather than resolving it.
-    GetAdcpCapabilitiesBody = derived_body_model(
-        "GetAdcpCapabilitiesBody",
-        GetAdcpCapabilitiesRequestDTO,
-        # The BUILDER, not the raw wrapper: the wrapper takes the built request now, so
-        # intersecting the DTO with its signature would announce an empty body.
-        capabilities_module.build_get_adcp_capabilities_request,
-    )
+    GetAdcpCapabilitiesBody = derived_body_model_for(capabilities_module.get_adcp_capabilities)
 
 # ---------------------------------------------------------------------------
 # Discovery endpoints (auth-optional)

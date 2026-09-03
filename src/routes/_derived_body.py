@@ -30,6 +30,7 @@ from pydantic import BaseModel, create_model
 
 from src.core.schema_helpers import accepted_kwargs, select_request_fields
 from src.core.schemas._base import SalesAgentBaseModel
+from src.core.tools._announced_shape import request_seam_for
 
 #: Carried so the route can negotiate, never forwarded as request data.
 _ENVELOPE_FIELDS: dict[str, tuple[Any, Any]] = {"adcp_version": (str | None, None)}
@@ -96,6 +97,11 @@ def derived_body_model(
 
     ``extra_fields`` is for values the ROUTE needs that are not request data -- keep it
     empty unless a route genuinely reads something the DTO does not describe.
+
+    ROUTES DO NOT CALL THIS. They call ``derived_body_model_for``, which reads the pair off
+    the tool; passing a hand-written ``(dto, impl)`` is what that exists to remove. The
+    explicit form remains because a TEST fixture has a model and a callee but no registered
+    tool to read them from.
     """
     # ONE definition of "what the impl accepts", shared with the forwarding seam and the MCP
     # derivation, rather than a third independent signature read. It also gets the two cases a
@@ -146,6 +152,36 @@ def derived_body_model(
         path_fields=frozenset(path_fields),
     )
     return model
+
+
+def derived_body_model_for(
+    tool: Callable[..., Any],
+    *,
+    extra_fields: dict[str, tuple[Any, Any]] | None = None,
+    path_fields: frozenset[str] = frozenset(),
+) -> type[BaseModel]:
+    """The REST body for ``tool``, with the DTO and the builder READ OFF THE TOOL.
+
+    The route names the TOOL and nothing else. Every ``*Body`` used to name its DTO and its
+    builder by hand -- thirteen routes each writing out a pair that ``request_seam_for``
+    already answers -- and a hand-written pair is a place to name a different model or a
+    different builder than the tool uses. That is not hypothetical: the pair moved once
+    already, when the raw wrappers stopped taking flat parameters and started taking the
+    built request, and every call site had to be edited to say "the BUILDER, not the raw
+    wrapper". Read from the tool, there is nothing left at the call site to be wrong.
+
+    The CLASS NAME is derived too, for the same reason: it is the tool's name in Pascal case
+    plus ``Body``, so a renamed tool cannot leave a body advertising the old operation's name
+    in the OpenAPI schema.
+
+    ``extra_fields`` and ``path_fields`` stay explicit. They are the two things the tool does
+    NOT know -- a value this ROUTE needs that is not request data, and which field this
+    ROUTE carries in the URL -- so they are properties of the route, not of the tool, and
+    ``derived_body_model`` already grades them as declared departures.
+    """
+    dto, builder = request_seam_for(tool)
+    name = "".join(part.title() for part in tool.__name__.split("_")) + "Body"
+    return derived_body_model(name, dto, builder, extra_fields=extra_fields, path_fields=path_fields)
 
 
 def derived_payload(body: BaseModel) -> dict[str, Any]:

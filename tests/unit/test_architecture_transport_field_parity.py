@@ -17,9 +17,10 @@ cannot hold by construction on every transport -- it has to be pinned.
 
 Compliant shapes, per transport:
   MCP  -- the wrapper's parameter names
-  A2A  -- either ``select_request_fields(Model, parameters)`` / ``model_validate`` /
-          ``{**parameters}`` (wholesale consumption, which cannot drift), or an
-          enumeration that names every field the other transports carry
+  A2A  -- either ``select_request_fields_for(tool, parameters)`` / ``select_request_fields(
+          Model, parameters, accepted)`` / ``model_validate`` / ``{**parameters}``
+          (wholesale consumption, which cannot drift), or an enumeration that names every
+          field the other transports carry
   REST -- the ``*Body`` model's declared fields
 
 ALLOWLIST is shrink-only. Every entry cites a GitHub issue.
@@ -50,6 +51,12 @@ _VERSION_ENVELOPE = frozenset({"adcp_version", "adcp_major_version"})
 #: Names that mean "this handler consumes the whole parameter bag" -- immune by construction.
 WHOLESALE_MARKERS = (
     "select_request_fields",
+    # The tool-keyed twin: ``select_request_fields_for(tool, bag)`` is the SAME selection
+    # with the (DTO, builder) pair read off the tool instead of written out at the call
+    # site, so it consumes the bag exactly as wholesale. Listed for the same reason as the
+    # others -- a handler using it would otherwise read as a NON-wholesale surface with an
+    # EMPTY named-key set, and every model field would report as "missing" on A2A.
+    "select_request_fields_for",
     # The signature-keyed twin, for builders whose kwargs are NOT the model's fields.
     # It must be listed here for the same reason as select_request_fields: a handler
     # using it consumes the bag wholesale and cannot lag a field. Omitting it would
@@ -107,7 +114,9 @@ def _mcp_tool_params() -> dict[str, set[str]]:
 
 
 #: Callables whose presence means "this handler consumes the parameter bag wholesale".
-_WHOLESALE_CALLS = frozenset({"select_request_fields", "select_builder_kwargs", "model_validate"})
+_WHOLESALE_CALLS = frozenset(
+    {"select_request_fields", "select_request_fields_for", "select_builder_kwargs", "model_validate"}
+)
 
 #: Names that, splatted as ``**name``, mean the same thing.
 _WHOLESALE_SPLATS = frozenset({"parameters", "params"})

@@ -56,11 +56,13 @@ import inspect
 import re
 import sys
 import typing
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Annotated, Any
 
 from pydantic import BaseModel
 from pydantic import Field as PydanticField
+
+from src.core.schema_helpers import accepted_kwargs, select_request_fields
 
 
 def _is_injected(parameter: inspect.Parameter) -> bool:
@@ -145,6 +147,50 @@ def request_model_for(fn: Callable[..., Any]) -> type[BaseModel] | None:
         return None
     model = hints.get("return")
     return model if isinstance(model, type) and issubclass(model, BaseModel) else None
+
+
+def request_seam_for(fn: Callable[..., Any]) -> tuple[type[BaseModel], Callable[..., Any]]:
+    """The ``(DTO, builder)`` pair ``fn`` constructs its request through. Refuses when it has none.
+
+    This is the ONE lookup, and it exists so that a transport names the TOOL and nothing
+    else. Before it, MCP derived the pair here while REST and A2A wrote both halves out by
+    hand at every site -- ``derived_body_model("ListAccountsBody", ListAccountsRequest,
+    build_list_accounts_request)`` and ``select_request_fields(ListAccountsRequest, params,
+    accepted_kwargs(build_list_accounts_request))``. Two hand-written names per transport per
+    tool is two places to name a DIFFERENT model or a DIFFERENT builder than the tool
+    actually uses, and the disagreement is silent: the transport goes on accepting a field
+    set nothing else accepts.
+
+    Refusing rather than returning ``None``: a caller that cannot resolve the seam has no
+    correct fallback -- selecting against "no DTO" forwards nothing and derives an empty body
+    -- so the failure must arrive at the derivation, not as a tool that quietly accepts
+    nothing. This mirrors ``_register_tool``, which refuses a tool whose DTO cannot be
+    resolved instead of registering a hand-written shape.
+    """
+    builder = builder_for(fn)
+    model = request_model_for(fn)
+    if builder is None or model is None:
+        raise RuntimeError(
+            f"{getattr(fn, '__name__', fn)!r} has no request seam: a tool's DTO and builder "
+            f"are read from the build_*_request it calls, and this one resolves "
+            f"{'no builder' if builder is None else 'no DTO from its builder'}. Every "
+            f"transport derives its accepted field set from that pair, so without it there "
+            f"is nothing to derive from. Give the tool a build_*_request builder whose "
+            f"return annotation is its request model."
+        )
+    return model, builder
+
+
+def select_request_fields_for(fn: Callable[..., Any], source: BaseModel | Mapping[str, Any]) -> dict[str, Any]:
+    """``select_request_fields`` with the DTO and the accepted set READ OFF THE TOOL.
+
+    The selection RULE is unchanged -- it still lives in ``schema_helpers`` and is still
+    "DTO fields INTERSECT the builder's parameters". What changes is that the caller no
+    longer states which DTO and which builder that is: a skill handler names its tool, and
+    the pair comes from the same lookup MCP registers with.
+    """
+    model, builder = request_seam_for(fn)
+    return select_request_fields(model, source, accepted_kwargs(builder))
 
 
 #: Contributed by version-envelope.json to every SDK request model. An ancestor that carries

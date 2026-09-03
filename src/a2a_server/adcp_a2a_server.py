@@ -70,7 +70,6 @@ from src.core.exceptions import (
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schema_helpers import (
-    accepted_kwargs,
     coerce_creative_filters,
     select_request_fields,
     to_account_reference,
@@ -117,8 +116,10 @@ from src.core.tools import (
 from src.core.tools import (
     update_performance_index_raw as core_update_performance_index_tool,
 )
+from src.core.tools._announced_shape import select_request_fields_for
 from src.core.tools.media_buy_delivery import (
     _build_get_media_buy_delivery_request,
+    get_media_buy_delivery,
 )
 from src.core.validation_helpers import (
     adcp_validation_boundary,
@@ -137,12 +138,11 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 logger = logging.getLogger(__name__)
 
 
-#: These two handlers used to select against kwarg sets captured AT IMPORT, because a
-#: call-time signature read saw the Mock the tests patch in -- (*args, **kwargs), read as an
-#: empty NAME LIST -- and silently dropped every field the buyer sent. accepted_kwargs now
-#: reads that same signature as "accepts anything", so the timing no longer matters and the
-#: two handlers use the same call-time spelling as every other site.
-from src.core.schemas import ListCreativesRequest, UpdateMediaBuyRequest  # noqa: E402
+#: The ONE request model this file still names, for the ONE selection that is deliberately
+#: NOT narrowed to a builder: _handle_update_media_buy_skill validates the whole bag against
+#: the DTO before building. Every narrowed selection reads its model off the tool
+#: (``select_request_fields_for``) and names nothing.
+from src.core.schemas import UpdateMediaBuyRequest  # noqa: E402
 
 
 def _require_params(params: dict, required: list[str], *, field: str | None = None) -> None:
@@ -1789,20 +1789,16 @@ class AdCPRequestHandler(RequestHandler):
         NOTE: Authentication is OPTIONAL for this endpoint. Access depends on tenant's
         brand_manifest_policy setting (public/require_brand/require_auth).
         """
-        from src.core.schemas.product import GetProductsRequest
-
         # Builds through the SHARED builder and hands the wrapper the built request -- the
-        # same two steps REST and MCP take. Selected off the BUILDER's signature, so the
-        # set this transport forwards is "GetProductsRequest fields INTERSECT the builder's
-        # parameters" -- the same set MCP advertises. A hand-listed forward is the shape
-        # that silently drops every field added later, and this one already named five of
-        # the twenty-one fields the DTO declares.
-        from src.core.tools.products import create_get_products_request
+        # same two steps REST and MCP take. Selected off the TOOL, so the set this transport
+        # forwards is "the DTO's fields INTERSECT the builder's parameters" -- the same set
+        # MCP advertises, read from the same lookup. A hand-listed forward is the shape that
+        # silently drops every field added later, and this one already named five of the
+        # twenty-one fields the DTO declares.
+        from src.core.tools.products import create_get_products_request, get_products
 
         with adcp_validation_boundary(context="get_products request"):
-            req = create_get_products_request(
-                **select_request_fields(GetProductsRequest, parameters, accepted_kwargs(create_get_products_request))
-            )
+            req = create_get_products_request(**select_request_fields_for(get_products, parameters))
         response = await core_get_products_tool(req=req, identity=identity)
 
         # Apply v2 compat for pre-3.0 clients at the boundary
@@ -1891,18 +1887,16 @@ class AdCPRequestHandler(RequestHandler):
         # Per AdCP 3.1.1 (media-buy/package-update.json) targeting_overlay and budgets live on each
         # PackageRequest; only request-level spec fields are forwarded here.
         #
-        # Selected off the BUILDER's signature rather than hand-listed (it named
-        # create_media_buy_raw until the wrappers moved to taking the built request, whose
-        # signature would now select nothing). The
-        # ten-name list this replaces dropped `ext` and `paused` — both declared by
+        # Selected off the TOOL rather than hand-listed. It named create_media_buy_raw until
+        # the wrappers moved to taking the built request, whose signature would now select
+        # nothing -- and it then named the builder, which is a second place to name the wrong
+        # one. The ten-name list before that dropped `ext` and `paused` — both declared by
         # CreateMediaBuyRequest AND accepted by the builder, so both were honoured on MCP and
         # silently discarded on A2A. That is the same defect class as the missing
         # idempotency_key on update_media_buy; the cure is to stop enumerating.
-        from src.core.tools.media_buy_create import _build_create_media_buy_request
+        from src.core.tools.media_buy_create import _build_create_media_buy_request, create_media_buy
 
-        selected = select_request_fields(
-            CreateMediaBuyRequest, params, accepted_kwargs(_build_create_media_buy_request)
-        )
+        selected = select_request_fields_for(create_media_buy, params)
         # Wrap for boundary-pattern consistency with delivery/sync_creatives. A crash is
         # structurally impossible here (create_media_buy_raw re-coerces via
         # CreateMediaBuyRequest), and to_account_reference is idempotent on an already
@@ -1957,7 +1951,6 @@ class AdCPRequestHandler(RequestHandler):
         # asset with no error. Dumping keeps the rewrite and
         # leaves the request identical to the one MCP and REST build.
         from src.core.format_cache import upgrade_legacy_format_id
-        from src.core.schemas import SyncCreativesRequest
 
         with adcp_validation_boundary(context="sync_creatives request"):
             creatives = [
@@ -1973,21 +1966,19 @@ class AdCPRequestHandler(RequestHandler):
         # Call core function with spec-compliant parameters (AdCP 2.5: full upsert
         # semantics, patch parameter removed).
         #
-        # Selected off the BUILDER's signature rather than hand-listed (it named
-        # sync_creatives_raw until the wrappers moved to taking the built request): the set
-        # forwarded is "SyncCreativesRequest fields INTERSECT the callee's parameters", the
-        # same set MCP advertises, so a field added to the DTO and the builder cannot reach
-        # one transport and not another (which is how idempotency_key -- AdCP 3.1.1
-        # /required -- was lost here until it was hand-added back).
+        # Selected off the TOOL rather than hand-listed (it named sync_creatives_raw until
+        # the wrappers moved to taking the built request): the set forwarded is "the DTO's
+        # fields INTERSECT the builder's parameters", the same set MCP advertises and read
+        # from the same lookup, so a field added to the DTO and the builder cannot reach one
+        # transport and not another (which is how idempotency_key -- AdCP 3.1.1 /required --
+        # was lost here until it was hand-added back).
         #
         # Three fields are set AFTER selection because they need boundary coercion the raw
         # bag cannot carry: `creatives` (legacy format_id upgraded above), `context` (typed
         # ContextObject) and `account` (typed AccountReference).
-        from src.core.tools.creatives.sync_wrappers import build_sync_creatives_request
+        from src.core.tools.creatives.sync_wrappers import build_sync_creatives_request, sync_creatives
 
-        selected = select_request_fields(
-            SyncCreativesRequest, parameters, accepted_kwargs(build_sync_creatives_request)
-        )
+        selected = select_request_fields_for(sync_creatives, parameters)
         selected["creatives"] = creatives
         selected["context"] = context
         selected["account"] = to_account_reference(parameters.get("account"))
@@ -2009,19 +2000,17 @@ class AdCPRequestHandler(RequestHandler):
         filters = coerce_creative_filters(parameters.get("filters"))
 
         # Call core function with optional parameters (fixing original validation bug)
-        # Selected off the BUILDER's signature rather than hand-listed. The 20-name list this
-        # replaces is the shape that silently drops every field added later, which is how an
-        # A2A buyer's media_buy_ids came to be ignored (a recorded gap row 11). It named
-        # list_creatives_raw when it was written; the wrapper takes the built request now, so
-        # intersecting with IT would select nothing -- the builder is the seam every transport
-        # constructs through, and REST's ListCreativesBody is derived against the same one.
+        # Selected off the TOOL rather than hand-listed. The 20-name list this replaces is the
+        # shape that silently drops every field added later, which is how an A2A buyer's
+        # media_buy_ids came to be ignored (a recorded gap row 11). It named list_creatives_raw
+        # when it was written; the wrapper takes the built request now, so intersecting with IT
+        # would select nothing -- which is exactly the choice no site should be making, and
+        # REST's ListCreativesBody now reads the same seam off the same tool.
         # `filters` is set explicitly AFTER selection because it needs typed coercion
         # (invalid filters must raise AdCPValidationError, not reach the impl as a dict).
-        from src.core.tools.creatives.listing import _build_list_creatives_request
+        from src.core.tools.creatives.listing import _build_list_creatives_request, list_creatives
 
-        selected = select_request_fields(
-            ListCreativesRequest, parameters, accepted_kwargs(_build_list_creatives_request)
-        )
+        selected = select_request_fields_for(list_creatives, parameters)
         selected["filters"] = filters
         with adcp_validation_boundary(context="list_creatives request"):
             req = _build_list_creatives_request(**selected)
@@ -2038,10 +2027,9 @@ class AdCPRequestHandler(RequestHandler):
         # Identity already resolved at transport boundary (on_message_send)
 
         # Import and call the core implementation
-        from adcp.types import GetAdcpCapabilitiesRequest
-
         from src.core.tools.capabilities import (
             build_get_adcp_capabilities_request,
+            get_adcp_capabilities,
             get_adcp_capabilities_raw,
         )
 
@@ -2055,9 +2043,7 @@ class AdCPRequestHandler(RequestHandler):
         # advisory. Selecting alone would silently disable that negotiation.
         with adcp_validation_boundary(context="get_adcp_capabilities request"):
             req = build_get_adcp_capabilities_request(
-                **select_request_fields(
-                    GetAdcpCapabilitiesRequest, parameters, accepted_kwargs(build_get_adcp_capabilities_request)
-                ),
+                **select_request_fields_for(get_adcp_capabilities, parameters),
                 adcp_version=parameters.get("adcp_version"),
                 adcp_major_version=parameters.get("adcp_major_version"),
             )
@@ -2073,22 +2059,15 @@ class AdCPRequestHandler(RequestHandler):
         # Identity already resolved at transport boundary (on_message_send)
 
         # Build request from parameters (all optional).
-        from src.core.schemas import ListCreativeFormatsRequest
-        from src.core.tools.creative_formats import build_list_creative_formats_request
+        from src.core.tools.creative_formats import build_list_creative_formats_request, list_creative_formats
 
         # Same context string as the REST route's boundary so buyer-invalid
         # input produces a byte-identical envelope on every transport (klkg).
-        # Selected off the request model rather than hand-listed: the 13-name list this
+        # Selected off the TOOL rather than hand-listed: the 13-name list this
         # replaces already dropped ext, pagination, property_id and publisher_domain,
         # all of which ListCreativeFormatsRequest declares (a recorded gap Lane D).
         with adcp_validation_boundary(context="list_creative_formats request"):
-            req = build_list_creative_formats_request(
-                **select_request_fields(
-                    ListCreativeFormatsRequest,
-                    parameters,
-                    accepted_kwargs(build_list_creative_formats_request),
-                )
-            )
+            req = build_list_creative_formats_request(**select_request_fields_for(list_creative_formats, parameters))
 
         # Call core function with identity
         response = core_list_creative_formats_tool(req=req, identity=identity)
@@ -2101,14 +2080,11 @@ class AdCPRequestHandler(RequestHandler):
         Authentication is OPTIONAL per BR-RULE-055 — unauthenticated calls
         return an empty account list.
         """
-        from src.core.schemas.account import ListAccountsRequest
-        from src.core.tools.accounts import build_list_accounts_request
+        from src.core.tools.accounts import build_list_accounts_request, list_accounts
 
         # Same context string as the REST route's boundary (klkg parity).
         with adcp_validation_boundary(context="list_accounts request"):
-            request = build_list_accounts_request(
-                **select_request_fields(ListAccountsRequest, parameters, accepted_kwargs(build_list_accounts_request))
-            )
+            request = build_list_accounts_request(**select_request_fields_for(list_accounts, parameters))
         return core_list_accounts_tool(req=request, identity=identity)
 
     async def _handle_sync_accounts_skill(self, parameters: dict, identity: ResolvedIdentity | None) -> Any:
@@ -2116,14 +2092,11 @@ class AdCPRequestHandler(RequestHandler):
 
         Authentication is REQUIRED per BR-RULE-055.
         """
-        from src.core.schemas.account import SyncAccountsRequest
-        from src.core.tools.accounts import build_sync_accounts_request
+        from src.core.tools.accounts import build_sync_accounts_request, sync_accounts
 
         # Same context string as the REST route's boundary (klkg parity).
         with adcp_validation_boundary(context="sync_accounts request"):
-            request = build_sync_accounts_request(
-                **select_request_fields(SyncAccountsRequest, parameters, accepted_kwargs(build_sync_accounts_request))
-            )
+            request = build_sync_accounts_request(**select_request_fields_for(sync_accounts, parameters))
         return await core_sync_accounts_tool(req=request, identity=identity)
 
     async def _handle_list_authorized_properties_skill(
@@ -2200,16 +2173,16 @@ class AdCPRequestHandler(RequestHandler):
         with adcp_validation_boundary():
             req = UpdateMediaBuyRequest.model_validate(validation_bag)
 
-        # Selected off the BUILDER's signature rather than hand-listed. The
+        # Selected off the TOOL rather than hand-listed. The
         # eight-name list this replaces silently dropped currency, daily_budget, ext,
         # flight_start_date, flight_end_date, idempotency_key and pacing -- all accepted on
         # MCP and REST. idempotency_key is the costly one: AdCP 3.1.1 puts it in
         # update-media-buy-request.json /required, so a spec-conformant A2A buyer's
         # at-most-once key was being discarded, the same defect class as .
         # media_buy_id comes from the validated model; the rest of the bag is selected.
-        from src.core.tools.media_buy_update import _build_update_request
+        from src.core.tools.media_buy_update import _build_update_request, update_media_buy
 
-        selected = select_request_fields(UpdateMediaBuyRequest, params, accepted_kwargs(_build_update_request))
+        selected = select_request_fields_for(update_media_buy, params)
         selected["media_buy_id"] = req.media_buy_id or ""
         with adcp_validation_boundary(context="update_media_buy request"):
             built = _build_update_request(**selected)
@@ -2225,13 +2198,11 @@ class AdCPRequestHandler(RequestHandler):
         field, and popping it out here was how this transport came to carry it separately.
         """
         from src.core.schemas import GetMediaBuysRequest
-        from src.core.tools.media_buy_list import _build_get_media_buys_request
+        from src.core.tools.media_buy_list import _build_get_media_buys_request, get_media_buys
 
         with adcp_validation_boundary(context="get_media_buys request"):
             GetMediaBuysRequest.model_validate(parameters)
-            req = _build_get_media_buys_request(
-                **select_request_fields(GetMediaBuysRequest, parameters, accepted_kwargs(_build_get_media_buys_request))
-            )
+            req = _build_get_media_buys_request(**select_request_fields_for(get_media_buys, parameters))
         return core_get_media_buys_tool(req=req, identity=identity)
 
     async def _handle_get_media_buy_delivery_skill(self, parameters: dict, identity: ResolvedIdentity) -> dict:
@@ -2257,7 +2228,7 @@ class AdCPRequestHandler(RequestHandler):
             params["media_buy_ids"] = [params.pop("media_buy_id")]
 
         # Builds through the SHARED builder and hands the wrapper the built request -- the
-        # same two steps REST and MCP take. Selection is against the BUILDER's signature:
+        # same two steps REST and MCP take. Selection is against the TOOL's own seam:
         # the nine-name list this replaces once dropped reporting_dimensions,
         # attribution_window, include_package_daily_breakdown and account, silently
         # discarding the buyer's requested attribution window (gh-#1299 follow-up).
@@ -2266,9 +2237,7 @@ class AdCPRequestHandler(RequestHandler):
         # (status_filter str→MediaBuyStatus, dates, the dimension/window objects).
         with adcp_validation_boundary():
             req = GetMediaBuyDeliveryRequest.model_validate(params)
-            selected = select_request_fields(
-                GetMediaBuyDeliveryRequest, params, accepted_kwargs(_build_get_media_buy_delivery_request)
-            )
+            selected = select_request_fields_for(get_media_buy_delivery, params)
             # account is a typed AccountReference on GetMediaBuyDeliveryRequest (adcp SDK
             # 5.7); forward the VALIDATED model field rather than the raw dict, because it
             # reaches enrich_identity_with_account uncoerced (#1438).
@@ -2282,12 +2251,12 @@ class AdCPRequestHandler(RequestHandler):
         """Handle explicit update_performance_index skill invocation.
 
         Builds through the SHARED builder and hands the wrapper the built request -- the same
-        two steps REST and MCP take. The wire values are selected against the BUILDER's
-        signature, so the field set this transport accepts is the builder's, not a list
-        repeated here that drifts the moment the spec adds a field.
+        two steps REST and MCP take. The wire values are selected against the TOOL's own seam,
+        so the field set this transport accepts is the builder's, not a list repeated here
+        that drifts the moment the spec adds a field.
         """
         from src.core.schemas import UpdatePerformanceIndexRequest
-        from src.core.tools.performance import _build_update_performance_index_request
+        from src.core.tools.performance import _build_update_performance_index_request, update_performance_index
 
         with adcp_validation_boundary(context="update_performance_index request"):
             # Validated FIRST, for its rejection: the builder takes its required fields
@@ -2296,11 +2265,7 @@ class AdCPRequestHandler(RequestHandler):
             # builder is the seam.
             UpdatePerformanceIndexRequest.model_validate(parameters)
             req = _build_update_performance_index_request(
-                **select_request_fields(
-                    UpdatePerformanceIndexRequest,
-                    parameters,
-                    accepted_kwargs(_build_update_performance_index_request),
-                )
+                **select_request_fields_for(update_performance_index, parameters)
             )
         return core_update_performance_index_tool(req=req, identity=identity)
 
