@@ -2178,7 +2178,6 @@ def _resolve_idempotency_race_or_raise(
 
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
-    config_id: str | None = None,
     identity: ResolvedIdentity | None = None,
     context_id: str | None = None,
     raw_wire_payload: dict[str, Any] | None = None,
@@ -2345,14 +2344,16 @@ async def _create_media_buy_impl(
             # is refused at the wrapper, correctably, naming push_notification_config.url.
             # Log scheme+host+path only — never credentials / full auth blob.
             logger.info(
-                "[MCP/A2A] Registering push notification config id=%s url=%s",
-                config_id,
+                "[MCP/A2A] Registering push notification config url=%s",
                 webhook_url_for_log(registration.url),
             )
-            # The row the buyer named, or a fresh one. The fallback lives HERE and
-            # only here — wrappers pass through the id they saw (or None) rather
-            # than each minting their own.
-            row_id = config_id or f"pnc_{uuid.uuid4().hex[:16]}"
+            # ALWAYS a fresh row id. core/push-notification-config.json declares no ``id``
+            # property, so a buyer cannot name a row and nothing here reads one. An earlier
+            # version dug the id out of the raw wire payload to keep an A2A re-registration
+            # upserting -- that is processing a field the schema does not define, which is
+            # exactly the habit this seam exists to stop. If naming a stored row turns out
+            # to be needed, it needs a spec field first.
+            row_id = f"pnc_{uuid.uuid4().hex[:16]}"
 
             with PushNotificationConfigUoW(tenant["tenant_id"]) as pnc_uow:
                 assert pnc_uow.push_notification_configs is not None
@@ -2368,7 +2369,7 @@ async def _create_media_buy_impl(
                 logger.info(
                     "[MCP/A2A] Push notification config %s: %s",
                     "created" if created else "updated",
-                    config_id,
+                    row_id,
                 )
 
     try:
@@ -4679,14 +4680,13 @@ async def create_media_buy(
 
     identity = enrich_identity_with_account(identity, req.account)
 
-    # The typed model goes through untouched. config_id is None because the AdCP
+    # The typed model goes through untouched.
     # model carries no id: an MCP registration has never been able to name a row,
     # and this preserves that rather than changing it. Passed EXPLICITLY because
     # test_architecture_boundary_completeness requires every wrapper to forward
     # every _impl parameter.
     result = await _create_media_buy_impl(
         req=req,
-        config_id=None,
         identity=identity,
         context_id=_ctx_id,
         raw_wire_payload=raw_wire_payload,
@@ -4741,13 +4741,6 @@ async def create_media_buy_raw(
     # id silently. Left unread, every A2A re-registration would stop upserting and
     # insert a fresh row instead. `id` names the ROW, not the registration — the
     # same reason validation_token is a kwarg rather than a value field.
-    # Read off the RAW WIRE PAYLOAD, not off req.push_notification_config: the typed
-    # PushNotificationConfig has no ``id`` field and is extra="ignore", so by the time the
-    # builder has validated it a buyer-supplied id is gone. ``id`` names the stored ROW, not
-    # the registration -- without it every A2A re-registration would insert a fresh row
-    # instead of upserting.
-    _pnc_wire = (raw_wire_payload or {}).get("push_notification_config")
-    config_id = _pnc_wire.get("id") if isinstance(_pnc_wire, dict) else None
 
     # Coerce here rather than forwarding a raw dict: this is the untyped seam. The
     # A2A skill hands us the buyer's dict straight off the wire, so without this
@@ -4755,7 +4748,6 @@ async def create_media_buy_raw(
     # forbids reaches _impl unchallenged.
     return await _create_media_buy_impl(
         req=req,
-        config_id=config_id,
         identity=identity,
         context_id=_ctx_id,
         raw_wire_payload=raw_wire_payload,
