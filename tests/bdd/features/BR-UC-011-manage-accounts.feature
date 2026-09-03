@@ -1312,8 +1312,24 @@ Feature: BR-UC-011 Manage Accounts
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain  | operator      | billing       | sandbox |
     | acme-corp.com | acme-corp.com | unsupported   | true    |
-    Then the response should indicate a validation error
-    And the error should be a real validation error, not simulated
+    # BR-RULE-209 INV-1 ("inputs validated same as production") graded DIRECTLY.
+    # This asserted a pydantic.ValidationError OBJECT existed, which was a PROXY for
+    # "validation really ran" -- and the proxy stopped being satisfiable once the
+    # payload actually reached the seller and was rejected at its schema boundary,
+    # even though INV-1 became MORE true. An issues[] entry carrying the JSON-Schema
+    # keyword that failed plus a pointer at the offending member IS production's
+    # validation output, and is stricter than the type check: a simulated or
+    # hand-wrapped error carries no such structure, whereas any ValidationError --
+    # including one synthesised in the test process -- satisfied an isinstance check.
+    # An out-of-enum billing value is a schema violation, hence INVALID_REQUEST
+    # ("violates schema constraints") rather than VALIDATION_ERROR ("business rules
+    # BEYOND schema validation").
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json
+    #   pointer=/INVALID_REQUEST
+    # BR-RULE-209 INV-1: BR-UC-001-discover-available-inventory.feature:1420
+    Then the response arrives
+    And the response contains error code INVALID_REQUEST
+    And the response error issues include keyword enum for field billing
     And the error should include a suggestion for how to fix the issue
     # BR-RULE-209 INV-1: sandbox inputs validated same as production
     # BR-RULE-209 INV-7: sandbox validation errors are real

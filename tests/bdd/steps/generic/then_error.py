@@ -353,6 +353,59 @@ def then_response_error_field(ctx: dict, field: str) -> None:
 # so naming it in the scenario restated what the code already determines.
 
 
+@then(parsers.re(r"the response error issues include keyword (?P<keyword>\w+) for field (?P<field>[\w.\[\]]+)$"))
+def then_response_error_issue(ctx: dict, keyword: str, field: str) -> None:
+    """The rejection carries a STRUCTURED schema issue: *keyword* against *field*.
+
+    The fourth primitive, and like the other three it grades exactly one property:
+    that the seller's rejection came out of real schema validation and says which
+    rule the value broke.
+
+    WHY THIS IS THE DIRECT GRADING OF BR-RULE-209 INV-1, not a concession to it.
+    INV-1 (BR-UC-001-discover-available-inventory.feature:1420) reads "inputs
+    validated same as production" -- it says nothing about an exception object.
+    The assertion this replaces required a ``pydantic.ValidationError`` INSTANCE,
+    which was a PROXY: "an exception of the right class was constructed" standing
+    in for "validation really ran". The proxy stopped being satisfiable once the
+    rejection moved to the transport boundary, even though the property itself
+    became MORE true -- the payload is now rejected by production's own schema
+    boundary rather than by a model built in the test process
+    (salesagent-prkv.65).
+
+    An ``issues[]`` entry carrying the JSON-Schema ``keyword`` that failed and a
+    ``pointer`` at the offending member IS production's validation output. It is
+    also STRICTER than the type check it replaces: a sandbox-simulated or
+    hand-wrapped error would not carry that structure, whereas any
+    ``ValidationError`` -- including one synthesised in the test process --
+    satisfied an isinstance check.
+
+    *field* is matched against the issue POINTER by trailing segment, so
+    ``billing`` matches ``/accounts/0/Accounts/billing`` without the scenario
+    having to spell out pydantic's union-arm naming.
+    """
+    from tests.helpers.envelope_assertions import locate_envelope_error
+
+    envelope = wire_error_dict(ctx)
+    error = locate_envelope_error(envelope)
+    assert error is not None, f"Response carries no payload-layer error object: {envelope!r}"
+    issues = error.get("issues") or []
+    assert issues, (
+        f"Response carries no issues[], so it does not say WHICH schema rule the value broke "
+        f"-- there is no evidence real validation ran. Error object: {error!r}"
+    )
+    want = [c for c in field.split(".") if c]
+    for issue in issues:
+        if issue.get("keyword") != keyword:
+            continue
+        have = [c for c in str(issue.get("pointer", "")).replace("/", ".").split(".") if c]
+        if len(have) >= len(want) and have[len(have) - len(want) :] == want:
+            return
+    raise AssertionError(
+        f"No issue with keyword {keyword!r} pointing at {field!r}. Issues carried: "
+        f"{[(i.get('keyword'), i.get('pointer')) for i in issues]}"
+    )
+
+
 @then("the operation should fail")
 def then_operation_fails(ctx: dict) -> None:
     """Assert the operation resulted in an error.
