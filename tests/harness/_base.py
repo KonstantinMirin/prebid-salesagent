@@ -1572,14 +1572,12 @@ class IntegrationEnv(BaseTestEnv):
         if principal is None:
             principal = PrincipalFactory(tenant=tenant, principal_id=self._principal_id)
 
-        # An account comes with the tenant now. AdCP 3.1.1 makes ``account`` REQUIRED on
-        # create_media_buy, update_media_buy and sync_creatives alike, and the transport
-        # boundary RESOLVES the reference, so a tenant with no account cannot serve a valid
-        # request at all -- every scenario would answer ACCOUNT_NOT_FOUND before reaching
-        # what it grades. Seeded with the id the whole suite names (DEFAULT_TEST_ACCOUNT_ID),
-        # which is what makes a literal ``{"account_id": "acct_test"}`` in a test resolve
-        # instead of merely parse.
-        self._seed_default_account(tenant, self._principal_id)
+        # NO account is seeded here, deliberately. Seeding one for every tenant made
+        # UC-011's account-LISTING scenarios wrong -- "0 accounts visible" saw one -- which
+        # is the cost of a default that is invisible at the call site. The tools that
+        # REQUIRE an account seed it where they build the request instead: see
+        # MediaBuyCreateEnv._ensure_required_request_fields / _seed_named_account, the BDD
+        # request defaults, and MediaBuyFactory.
         return tenant, principal
 
     def setup_default_account(self, principal_id: str | None = None) -> Any:

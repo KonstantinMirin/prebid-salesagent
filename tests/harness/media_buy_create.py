@@ -21,6 +21,7 @@ from src.core.schemas._base import (
     CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
 )
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
 from tests.harness._base import IntegrationEnv, json_safe
 from tests.harness.egress import EgressHatchMixin
 from tests.harness.transport import DeliverResult
@@ -363,6 +364,20 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             kwargs["account"] = {"account_id": self._default_account_id()}
         return kwargs
 
+    def _seed_named_account(self, req: Any) -> None:
+        """Seed the account a caller-BUILT request names, when it is the suite's default.
+
+        A test that hands ``req=`` built its request outside this env, so
+        ``_ensure_required_request_fields`` never ran and nothing created the row the
+        transport boundary is about to resolve. Only DEFAULT_TEST_ACCOUNT_ID is seeded: a
+        test naming its own account is describing a specific account state (missing,
+        suspended, foreign) and manufacturing a row for it would erase the case.
+        """
+        account = getattr(req, "account", None)
+        root = getattr(account, "root", None) if account is not None else None
+        if getattr(root, "account_id", None) == DEFAULT_TEST_ACCOUNT_ID:
+            self.setup_default_account()
+
     def _default_account_id(self) -> str:
         """The seeded account's id, or a literal when there is no DB bound.
 
@@ -386,6 +401,8 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         req = kwargs.pop("req", None)
         if req is None:
             req = CreateMediaBuyRequest(**self._ensure_required_request_fields(kwargs))
+        else:
+            self._seed_named_account(req)
 
         identity = enrich_identity_with_account(identity, req.account)
         return asyncio.run(_create_media_buy_impl(req=req, identity=identity))
@@ -398,6 +415,8 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         ``creative_ids`` (stripped by ``exclude=True`` on model_dump).
         """
         req = kwargs.pop("req", None)
+        if req is not None:
+            self._seed_named_account(req)
         if req is None:
             # NOT json_safe'd: the MCP/A2A wrappers take TYPED parameters, so a raw bag
             # goes to them as-is. Only the REST body needs JSON, and build_rest_body
@@ -443,6 +462,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         kwargs.pop("identity", None)
         req = kwargs.pop("req", None)
         if req is not None:
+            self._seed_named_account(req)
             body = req.model_dump(mode="json", exclude_none=True)
             # Preserve creative_ids — exclude=True strips them from model_dump
             _restore_creative_ids(req, body)
