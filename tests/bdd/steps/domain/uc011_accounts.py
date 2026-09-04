@@ -63,7 +63,22 @@ def _sync_raw(ctx: dict, **payload: Any) -> None:
     accepts a payload the scenario thought invalid, this path reports a plain
     success instead of an unparseable one, so the graduation is legible rather
     than disguised as a failure.
+
+    A CONFORMANT ``idempotency_key`` is defaulted in, because
+    sync-accounts-request.json 3.1.1 lists it in ``/required`` and a buyer sends
+    one on every request. Without it, a scenario grading an invalid ``operator``
+    is rejected for the MISSING KEY first and the seller blames the wrong field —
+    the scenario then reports a real disagreement about a field it never got to
+    test. Every negative row here targets some OTHER field, so the key is
+    setup, not subject.
+
+    ``setdefault``, so a scenario that names its own key still grades that key:
+    the malformed-key rows (T-UC-011-sync-idempotency-malformed) pass 15-character
+    and bad-charset values through and must keep reaching the boundary with them.
+    A scenario meaning to send NO key would say so by passing one explicitly here;
+    none does today, which is why defaulting makes nothing vacuous.
     """
+    payload.setdefault("idempotency_key", fresh_idempotency_key())
     dispatch_request(ctx, **payload)
 
 
@@ -1619,11 +1634,17 @@ def _retry_sync_with_billing(ctx: dict, billing: str) -> None:
     swaps every entry's ``billing`` to ``billing``, and re-dispatches. A recovery
     retry is a NEW request against the SAME natural key — not a replay. The prior
     (rejected) leg was never persisted (``_check_billing_policy`` ``continue``s
-    without creating the account), so the natural key is fresh and no
-    idempotency_key is needed to avoid an IDEMPOTENCY_CONFLICT — production does
-    not carry idempotency_key on the sync_accounts wire (the REST request model
-    rejects it as an extra input; #1592), so a keyless re-dispatch IS the fresh
-    request the recovery contract calls for.
+    without creating the account), so the natural key is fresh and there is no
+    IDEMPOTENCY_CONFLICT to avoid.
+
+    The key is FRESH, not absent. This used to send a keyless request and call
+    that "the fresh request the recovery contract calls for", on the grounds that
+    "production does not carry idempotency_key on the sync_accounts wire (the REST
+    request model rejects it as an extra input; #1592)". That was already wrong —
+    SyncAccountsBody derives from the DTO and declares the field — and it is now
+    unreachable besides: sync-accounts-request.json 3.1.1 lists idempotency_key in
+    /required, so a keyless retry is refused at the boundary and never reaches the
+    recovery it grades.
 
     Spec: enums/error-code.json#/enumMetadata/BILLING_NOT_SUPPORTED (recovery
     contract: "resubmit with a supported value"); compliance/3.1.1/universal/

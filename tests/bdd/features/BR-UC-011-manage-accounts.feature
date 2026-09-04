@@ -617,9 +617,11 @@ Feature: BR-UC-011 Manage Accounts
     # wired and passes on a2a/mcp/rest — the rejected first leg is not persisted
     # (_check_billing_policy continues), so the keyless re-dispatch provisions a fresh account.
     # Recovery: pick a value from supported_billing and retry — a NEW request (the rejected
-    # leg left no natural-key row, so no IDEMPOTENCY_CONFLICT). NOTE: production does not carry
-    # idempotency_key on the sync_accounts wire (REST request model rejects it as extra), so the
-    # "fresh idempotency_key" is realized as a fresh keyless request.
+    # leg left no natural-key row, so no IDEMPOTENCY_CONFLICT). The retry carries a genuinely
+    # fresh key: sync-accounts-request.json 3.1.1 lists idempotency_key in /required, so the
+    # keyless re-dispatch this note used to describe would be refused at the boundary before
+    # reaching the recovery. (It also claimed REST rejects the field as extra; SyncAccountsBody
+    # derives from the DTO and declares it, so that was never true.)
     # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/billing-gate-dispatch.yaml pointer=phases/per_agent_gate_recover (recover-leg mechanics; capability-gate recovery narrative in the storyboard header)
 
   @T-UC-011-billing-agent-gate-reject @sync @billing @per-agent-gate @error @partition
