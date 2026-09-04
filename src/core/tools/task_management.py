@@ -14,8 +14,12 @@ from typing import Any
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import ExtensionObject, PaginationRequest
 from adcp.types import ListTasksRequest as LibraryListTasksRequest
+from adcp.types.generated_poc.core.async_response_data import AdcpAsyncResponseData
+from adcp.types.generated_poc.core.pagination_response import PaginationResponse
+from adcp.types.generated_poc.protocol.get_task_status_response import HistoryItem
 from adcp.types.generated_poc.protocol.list_tasks_request import Filters as ListTasksFilters
 from adcp.types.generated_poc.protocol.list_tasks_request import Sort as ListTasksSort
+from adcp.types.generated_poc.protocol.list_tasks_response import QuerySummary
 from fastmcp.server.context import Context
 
 from src.core.audit_logger import get_audit_logger
@@ -27,7 +31,15 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas import CompleteTaskRequestLocal, ContextObject, GetTaskRequest, enum_value
+from src.core.schemas import (
+    CompleteTaskRequestLocal,
+    ContextObject,
+    GetTaskRequest,
+    GetTaskResponse,
+    ListTasksResponse,
+    TaskSummary,
+    enum_value,
+)
 from src.core.tools._request_defaults import omit_unset
 
 logger = logging.getLogger(__name__)
@@ -54,6 +66,158 @@ _SPEC_STATUS_TO_WORKFLOW_STATUS: dict[str, str | None] = {
     "rejected": None,
     "auth-required": None,
 }
+
+
+#: The AdCP task a workflow step SERVICES, keyed by ``WorkflowStep.tool_name``.
+#:
+#: GROUNDED, not chosen. ``task_type`` is the buyer's TASK NAME, not our unit of work:
+#:   * building/by-layer/L0/mcp-guide.mdx:459 @ 3.1.0 -- "`task_type` -- Task name (e.g.,
+#:     `create_media_buy`, `sync_creatives`) for routing to per-task handlers";
+#:   * protocol/calling-an-agent.mdx:95-99 -- the normative tasks/get response carries
+#:     `task_type: "create_media_buy"` beside `protocol: "media-buy"`;
+#:   * dist/compliance/3.1.1/domains/media-buy/scenarios/get_products_async.yaml GRADES it
+#:     twice -- `tasks[0].task_type == "get_products"` ("Task type identifies get_products")
+#:     on list_products_task, and `task_type == "get_products"` + `protocol == "media-buy"`
+#:     on get_products_task_status_completed -- and FILTERS on `filters.task_type`, so an
+#:     internal label would break the input side too, not merely misreport.
+#:
+#: This is why the fix was never the rename it was filed as. The response emitted
+#: ``"type": step.step_type`` -- "tool_call", "approval", "media_buy_creation" -- and NONE of
+#: our step_type values is a member of enums/task-type.json. Renaming the key would have
+#: shipped `"task_type": "tool_call"`: still non-conformant, and now falsely claiming to BE
+#: the spec field.
+_TASK_TYPE_BY_TOOL: dict[str, str] = {
+    "create_media_buy": "create_media_buy",
+    "update_media_buy": "update_media_buy",
+    "sync_creatives": "sync_creatives",
+}
+
+#: ``task_type -> AdCP protocol/domain``. DERIVED FROM THE PIN, not chosen: every member of
+#: enums/task-type.json carries an ``enumDescriptions`` entry that opens with its domain
+#: ("Media-buy domain: Sync creative assets ..."), and
+#: ``test_task_domain_map_matches_the_pinned_enum_descriptions`` grades this map against that
+#: block, the same way the recovery oracle grades CODE_TABLE against error-code.json's
+#: enumMetadata. Written out here rather than parsed at run time because production has no
+#: pinned-schema reader and must not grow one (no import-time filesystem I/O).
+#:
+#: Note sync_creatives is MEDIA-BUY domain, not creative -- which is exactly why this is
+#: graded against the pin instead of inferred from the name.
+_DOMAIN_BY_TASK_TYPE: dict[str, str] = {
+    "create_media_buy": "media-buy",
+    "update_media_buy": "media-buy",
+    "sync_creatives": "media-buy",
+}
+
+#: The inverse of :data:`_SPEC_STATUS_TO_WORKFLOW_STATUS`. A response must speak the SPEC
+#: vocabulary (TaskStatus) just as the filter accepts it.
+_WORKFLOW_STATUS_TO_SPEC_STATUS: dict[str, str] = {
+    "pending": "submitted",
+    "in_progress": "working",
+    "requires_approval": "input-required",
+    "completed": "completed",
+    "failed": "failed",
+}
+
+
+def _spec_task_type(step: Any) -> str:
+    """The pinned ``task_type`` for *step*, or raise.
+
+    FAILS LOUDLY on a step this seller cannot classify, and that is the point rather than an
+    oversight. ``task_type`` is REQUIRED on both response shapes, so there is no "omit it";
+    the two alternatives are both worse:
+
+      * FABRICATE. src/core/webhook_validator.py already does this on the webhook path --
+        ``validate_webhook_task_type`` substitutes "update_media_buy" for any label that is
+        not a TaskType member, so a GAM order approval leaves this seller as an
+        update_media_buy task the buyer does not have. That was chosen to keep a PAYLOAD
+        parseable; the same trick on a task read corrupts the ANSWER a buyer acts on. Filed
+        separately; deliberately not reused here.
+      * OMIT the row, the way media_buy_list's ``_persisted_revision`` drops a media buy
+        whose required revision is unpublishable. Defensible for a list, but get_task is a
+        single-task read where omission means answering "no such task" about one that exists.
+
+    So an unmappable step raises, visibly and attributably, naming the step and its
+    tool_name. Adapter and approval steps (activate_gam_order, creative_approval, ...) have
+    no member of enums/task-type.json, which is real: the pin's task IS the buyer's
+    operation, and those steps are our implementation of one rather than tasks in their own
+    right. The narrowing that would remove the whole residue -- exposing only steps that
+    service a buyer operation -- is filed as its own bead and deliberately not folded in.
+    """
+    tool_name = getattr(step, "tool_name", None)
+    task_type = _TASK_TYPE_BY_TOOL.get(tool_name or "")
+    if task_type is None:
+        raise AdCPValidationError(
+            details=ValidationDetails(
+                field="task_type",
+                rejected_value=repr(tool_name),
+                accepted_values=sorted(_TASK_TYPE_BY_TOOL),
+            ),
+            internal_detail=(
+                f"workflow step {getattr(step, 'step_id', '?')!r} has tool_name {tool_name!r}, which is "
+                f"not an AdCP task this seller can name. enums/task-type.json requires one, and "
+                f"neither fabricating nor omitting it is honest -- see _spec_task_type."
+            ),
+        )
+    return task_type
+
+
+def _spec_task_status(step: Any) -> str:
+    """The pinned ``status`` for *step*. Unknown workflow statuses map to the enum's own
+    ``unknown`` member rather than raising: TaskStatus DEFINES that member for exactly this,
+    and a status we cannot name is not a reason to refuse the whole read."""
+    return _WORKFLOW_STATUS_TO_SPEC_STATUS.get(getattr(step, "status", "") or "", "unknown")
+
+
+def _task_timestamps(step: Any) -> tuple[Any, Any, Any]:
+    """``(created_at, updated_at, completed_at)`` for a step.
+
+    ``updated_at`` is REQUIRED and non-nullable on both shapes and the response used to emit
+    ``None``, which is schema-invalid. WorkflowStep has no updated_at column, so the last
+    instant we actually recorded is used: ``completed_at`` when the step finished, else
+    ``created_at``. Named here rather than inlined twice so the approximation is stated once
+    and both responses share it.
+    """
+    created_at = step.created_at
+    completed_at = getattr(step, "completed_at", None)
+    return created_at, completed_at or created_at, completed_at
+
+
+def _request_summary(request_data: Any) -> dict[str, Any] | None:
+    """The non-spec ``summary`` highlights, or None. Extracted so the item build reads as one
+    expression instead of three conditional mutations of a dict."""
+    if not isinstance(request_data, dict) or not request_data:
+        return None
+    nested = request_data.get("request") or {}
+    return {
+        "operation": request_data.get("operation"),
+        "media_buy_id": request_data.get("media_buy_id"),
+        "po_number": nested.get("po_number") if isinstance(nested, dict) else None,
+    }
+
+
+def _list_tasks_response(tasks: list[TaskSummary], *, total: int | None, limit: int, offset: int) -> ListTasksResponse:
+    """Wrap a page in the pinned envelope.
+
+    The three envelope fields the response used to omit entirely, in one place so both exits
+    (the no-such-status short circuit and the normal page) build the same shape:
+      * ``query_summary`` -- total_matching/returned, which the storyboard grades directly
+        (get_products_async.yaml, list_products_task: total_matching 1, returned 1);
+      * ``pagination`` -- has_more is the pinned-required member; total_count carries what
+        the old ``total`` did;
+      * ``status`` -- composed onto every response by core/protocol-envelope.json. A
+        synchronous read is "completed".
+    ``offset``/``limit``/``has_more`` used to be top-level non-spec fields; they live inside
+    pagination now, where the pin puts them.
+    """
+    return ListTasksResponse(
+        status="completed",
+        tasks=tasks,
+        query_summary=QuerySummary(total_matching=total, returned=len(tasks)),
+        pagination=PaginationResponse(
+            has_more=(offset + limit < total) if total is not None else False,
+            total_count=total,
+        ),
+    )
 
 
 def _build_list_tasks_request(
@@ -92,7 +256,7 @@ async def list_tasks(
     context: ContextObject | None = None,
     ctx: Context | None = None,
     identity: ResolvedIdentity | None = None,
-) -> dict[str, Any]:
+) -> ListTasksResponse:
     """List workflow tasks (AdCP 3.1.1 list-tasks-request.json).
 
     REBASED onto the SDK vocabulary. This tool used to take object_id, object_type,
@@ -147,7 +311,7 @@ async def list_tasks(
         # A spec status this seller has no workflow equivalent for. Answering with an
         # unfiltered listing would be worse than answering with none: the buyer asked to
         # narrow and would get everything.
-        return {"tasks": [], "total": 0, "limit": 0, "offset": 0}
+        return _list_tasks_response([], total=0, limit=0, offset=0)
     object_type = None
     object_id = None
     limit = req.pagination.max_results if req.pagination and req.pagination.max_results else 20
@@ -194,46 +358,30 @@ async def list_tasks(
         for task in tasks:
             mappings = all_mappings.get(task.step_id, [])
 
-            formatted_task = {
-                "task_id": task.step_id,
-                "status": task.status,
-                "type": task.step_type,
-                "tool_name": task.tool_name,
-                "owner": task.owner,
-                "created_at": (
-                    task.created_at.isoformat() if hasattr(task.created_at, "isoformat") else str(task.created_at)
-                ),
-                "updated_at": None,
-                "context_id": task.context_id,
-                "associated_objects": [
-                    {"type": m.object_type, "id": m.object_id, "action": m.action} for m in mappings
-                ],
-            }
+            task_type = _spec_task_type(task)
+            created_at, updated_at, completed_at = _task_timestamps(task)
 
-            if task.status == "failed" and task.error_message:
-                formatted_task["error_message"] = task.error_message
+            formatted_tasks.append(
+                TaskSummary(
+                    task_id=task.step_id,
+                    task_type=task_type,
+                    domain=_DOMAIN_BY_TASK_TYPE[task_type],
+                    status=_spec_task_status(task),
+                    created_at=created_at,
+                    updated_at=updated_at,
+                    completed_at=completed_at,
+                    context_id=task.context_id,
+                    tool_name=task.tool_name,
+                    owner=task.owner,
+                    associated_objects=[
+                        {"type": m.object_type, "id": m.object_id, "action": m.action} for m in mappings
+                    ],
+                    error_message=(task.error_message if task.status == "failed" else None),
+                    summary=_request_summary(task.request_data),
+                )
+            )
 
-            if task.request_data:
-                if isinstance(task.request_data, dict):
-                    formatted_task["summary"] = {  # type: ignore[assignment]
-                        "operation": task.request_data.get("operation"),
-                        "media_buy_id": task.request_data.get("media_buy_id"),
-                        "po_number": (
-                            task.request_data.get("request", {}).get("po_number")
-                            if task.request_data.get("request")
-                            else None
-                        ),
-                    }
-
-            formatted_tasks.append(formatted_task)
-
-        return {
-            "tasks": formatted_tasks,
-            "total": total,
-            "offset": offset,
-            "limit": limit,
-            "has_more": offset + limit < total if total is not None else False,
-        }
+        return _list_tasks_response(formatted_tasks, total=total, limit=limit, offset=offset)
 
 
 def build_get_task_request(
@@ -301,7 +449,7 @@ async def get_task(
     include_history: bool | None = None,
     include_result: bool | None = None,
     ext: ExtensionObject | None = None,
-) -> dict[str, Any]:
+) -> GetTaskResponse:
     """Get detailed information about a specific task.
 
     Args:
@@ -345,20 +493,26 @@ async def get_task(
 
         mappings = uow.workflows.get_mappings_for_step(task_id)
 
-        task_detail = {
-            "task_id": task.step_id,
-            "context_id": task.context_id,
-            "status": task.status,
-            "type": task.step_type,
-            "tool_name": task.tool_name,
-            "owner": task.owner,
-            "created_at": (
-                task.created_at.isoformat() if hasattr(task.created_at, "isoformat") else str(task.created_at)
-            ),
-            "updated_at": None,
-            "request_data": task.request_data,
-            "error_message": task.error_message,
-            "associated_objects": [
+        task_type = _spec_task_type(task)
+        created_at, updated_at, completed_at = _task_timestamps(task)
+
+        # ``protocol`` and ``domain`` are ONE axis under two names -- get-task-status-response
+        # spells it protocol (AdcpProtocol, 7 members), list-tasks-response tasks[] spells it
+        # domain (Domain, 3) -- so both read the same map rather than each deriving its own.
+        task_detail = GetTaskResponse(
+            task_id=task.step_id,
+            task_type=task_type,
+            protocol=_DOMAIN_BY_TASK_TYPE[task_type],
+            status=_spec_task_status(task),
+            created_at=created_at,
+            updated_at=updated_at,
+            completed_at=completed_at,
+            context_id=task.context_id,
+            tool_name=task.tool_name,
+            owner=task.owner,
+            request_data=task.request_data,
+            error_message=task.error_message,
+            associated_objects=[
                 {
                     "type": m.object_type,
                     "id": m.object_id,
@@ -369,7 +523,7 @@ async def get_task(
                 }
                 for m in mappings
             ],
-        }
+        )
 
         # The terminal payload is CONDITIONAL. get-task-status-request.json defaults
         # include_result to false "for lightweight status-only polls", and the response
@@ -383,7 +537,12 @@ async def get_task(
         # failed task's detail rides error_message, per "For failed tasks, read the existing
         # error field instead" (task-lifecycle.mdx).
         if req.include_result and task.status == "completed":
-            task_detail["result"] = task.response_data
+            # VALIDATED, not cast. The pin types ``result`` as core/async-response-data.json --
+            # a union of the concrete AdCP task results -- while ``response_data`` is whatever
+            # this seller stored. model_validate raises on a payload that is not one of them
+            # rather than shipping an arbitrary dict under a spec field name, which is the same
+            # fail-loudly posture _spec_task_type takes.
+            task_detail.result = AdcpAsyncResponseData.model_validate(task.response_data)
 
         # UNGRADED by any storyboard in the 3.1.1 tree, so this is the response schema's
         # item shape and nothing invented on top of it: {timestamp, type, data}, all three
@@ -392,7 +551,7 @@ async def get_task(
         # instants each happened at. An exchange that has not happened is OMITTED; padding
         # the array with a null-timestamped entry would describe one that never occurred.
         if req.include_history:
-            task_detail["history"] = _task_history(task)
+            task_detail.history = [HistoryItem(**entry) for entry in _task_history(task)]
 
         return task_detail
 

@@ -108,8 +108,9 @@ async def test_list_tasks_authenticated_proceeds_past_auth_check(
 
     result = await list_tasks(identity=_identity_with_principal())
 
-    assert result["tasks"] == []
-    assert result["total"] == 0
+    assert result.tasks == []
+    # The count moved inside query_summary, where list-tasks-response.json declares it.
+    assert result.query_summary.total_matching == 0
 
 
 @pytest.mark.asyncio

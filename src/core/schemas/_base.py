@@ -47,6 +47,8 @@ from adcp.types import Format as LibraryFormat
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import GetMediaBuysRequest as LibraryGetMediaBuysRequest
 from adcp.types import GetMediaBuysResponse as LibraryGetMediaBuysResponse
+from adcp.types import GetTaskStatusResponse as LibraryGetTaskStatusResponse
+from adcp.types import ListTasksResponse as LibraryListTasksResponse
 from adcp.types import PackageRequest as LibraryPackageRequest
 
 # Import types from stable API (per adcp 2.9.0+ - all types now in stable)
@@ -99,6 +101,7 @@ from adcp.types.generated_poc.media_buy.get_media_buys_response import (
 from adcp.types.generated_poc.media_buy.get_media_buys_response import (
     Snapshot as LibraryGetMediaBuysSnapshot,
 )
+from adcp.types.generated_poc.protocol.list_tasks_response import Task as LibraryTaskSummary
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.errors.codes import CODE_TABLE, ErrorCodeT
@@ -3390,6 +3393,81 @@ class GetTaskRequest(SalesAgentBaseModel):
         ),
     )
     ext: ExtensionObject | None = Field(default=None, description="Extension slot (core/ext.json)")
+
+
+class TaskSummary(LibraryTaskSummary):
+    """One row of ``list_tasks``, extending the pinned ``tasks[]`` item.
+
+    The pinned item and ``get-task-status-response.json`` share a byte-identical seven-field
+    core -- task_id, task_type, status, created_at, updated_at, completed_at, has_webhook --
+    and differ only in ``domain`` vs ``protocol``, which are the same axis under two names
+    (``Domain`` is media-buy/signals/creative; ``AdcpProtocol`` adds four more). So the two
+    responses below are built from one derivation, not two.
+
+    The extra fields are this seller's own and the pin permits them
+    (``additionalProperties: true`` on both response schemas). They are DECLARED rather than
+    passed through as extras so the shape a buyer receives is written down somewhere.
+    """
+
+    context_id: str | None = Field(default=None, description="Workflow context this task belongs to")
+    tool_name: str | None = Field(default=None, description="Non-spec: the seller-side tool the step invokes")
+    owner: str | None = Field(default=None, description="Non-spec: principal | publisher | system")
+    associated_objects: list[dict[str, Any]] = Field(
+        default_factory=list, description="Non-spec: objects this task acts on"
+    )
+    error_message: str | None = Field(default=None, description="Non-spec: failure detail when the task failed")
+    summary: dict[str, Any] | None = Field(default=None, description="Non-spec: request highlights")
+
+
+class ListTasksResponse(LibraryListTasksResponse):
+    """Extends the pinned ListTasksResponse.
+
+    Was a raw dict ``{tasks, total, offset, limit, has_more}`` -- six violations of
+    protocol/list-tasks-response.json (GH #2201): query_summary, pagination and status absent
+    at the envelope; task_type and domain absent per item; and ``type`` emitted where the pin
+    says ``task_type``, carrying ``WorkflowStep.step_type`` ("tool_call", "approval"), which
+    is not a member of enums/task-type.json at all.
+
+    Nothing graded it, because the response coverage gate enumerated MODELS and a tool
+    returning a dict has none. The tool-keyed gate added alongside this is what makes the
+    absence visible.
+    """
+
+    #: NOT redeclared as ``list[TaskSummary]``. The parent already types this
+    #: ``list[Task]`` and ``TaskSummary`` extends ``Task``, so narrowing it would be an
+    #: invariance error for no gain: what reaches the wire is decided by the OBJECTS the
+    #: tool builds and by ``model_dump`` below, not by the annotation.
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        """Serialize nested tasks explicitly (CLAUDE.md pattern #4).
+
+        Load-bearing rather than ceremonial here: ``TaskSummary`` carries six non-spec
+        fields the parent's ``Task`` does not declare, and ``super().model_dump()`` walks
+        the DECLARED type, so without this the extras vanish from the wire silently.
+        """
+        result = super().model_dump(**kwargs)
+        if self.tasks:
+            result["tasks"] = [task.model_dump(**kwargs) for task in self.tasks]
+        return result
+
+
+class GetTaskResponse(LibraryGetTaskStatusResponse):
+    """Extends the pinned GetTaskStatusResponse (the spec names the task ``get-task-status``).
+
+    Was a raw dict (GH #2202): ``protocol`` and ``task_type`` absent, and ``type`` emitted in
+    task_type's place carrying ``step_type``. Same root cause and same fix as
+    :class:`ListTasksResponse` -- see that docstring; the two share their derivation.
+
+    The extras mirror :class:`TaskSummary`'s, plus the two only a single-task read returns.
+    """
+
+    context_id: str | None = Field(default=None, description="Workflow context this task belongs to")
+    tool_name: str | None = Field(default=None, description="Non-spec: the seller-side tool the step invokes")
+    owner: str | None = Field(default=None, description="Non-spec: principal | publisher | system")
+    associated_objects: list[dict[str, Any]] = Field(
+        default_factory=list, description="Non-spec: objects this task acts on"
+    )
+    error_message: str | None = Field(default=None, description="Non-spec: failure detail when the task failed")
+    request_data: dict[str, Any] | None = Field(default=None, description="Non-spec: the request that opened the task")
 
 
 class GetMediaBuysRequest(LibraryGetMediaBuysRequest):

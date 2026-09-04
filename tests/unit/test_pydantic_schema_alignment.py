@@ -1104,6 +1104,29 @@ _RESPONSE_OVERRIDES: dict[str, _RowOverride] = {
             "creatives": [],
         }
     ),
+    "get_task": _RowOverride(
+        # Newly derived once get_task stopped returning a raw dict. The generic synthesizer
+        # has no rule for a bare `format: date-time` string whose name carries neither
+        # "date" nor "time" (created_at, updated_at), so both are supplied here.
+        sample={
+            "task_id": "task_1",
+            "task_type": "create_media_buy",
+            "protocol": "media-buy",
+            "status": "completed",
+            "created_at": "2026-03-15T12:00:00Z",
+            "updated_at": "2026-03-15T12:00:00Z",
+        },
+    ),
+    "list_tasks": _RowOverride(
+        # Same synthesizer gap one level down (tasks[] items carry created_at/updated_at),
+        # plus query_summary and pagination, which are objects rather than scalars.
+        sample={
+            "status": "completed",
+            "tasks": [],
+            "query_summary": {"total_matching": 0, "returned": 0},
+            "pagination": {"has_more": False},
+        },
+    ),
     "get_adcp_capabilities": _RowOverride(
         # Newly graded by the derivation (it had no hand-written row). Two required
         # fields the generic synthesizer cannot derive: ``supported_protocols`` carries
@@ -1383,36 +1406,30 @@ def _synthesize_sample(arm: dict[str, Any], schema_ref: str, model: type | None 
 #:
 #: ``test_known_response_gaps_are_still_real`` re-measures every row on every run, so a
 #: row cannot outlive its defect the way a written rationale can.
-#: ONE ROOT CAUSE, not two field lists. Both tools build raw dicts in
-#: src/core/tools/task_management.py, and the two pinned shapes share a byte-identical
-#: seven-property core -- task_id, task_type, status, created_at, updated_at,
-#: completed_at, has_webhook -- with every shared property's subschema equal. The
-#: required sets differ in exactly one member (tasks[] wants ``domain``, get_task wants
-#: ``protocol``), and those two are the same axis under two names: ``domain`` is an
-#: inline enum of media-buy/signals/creative, ``protocol`` is a $ref to
-#: enums/adcp-protocol.json, kebab-case, same values. So the fix for either is the same
-#: shape -- give the response a model built on that shared core -- and only
-#: list_tasks' envelope (query_summary/pagination/status) is genuinely list-specific.
-_UNGRADED_RESPONSES: dict[str, str] = {
-    "list_tasks": (
-        "FIXME(#2201): the wire is {tasks, total, offset, limit, has_more} -- absent are "
-        "top-level query_summary/pagination/status and, per tasks[] item, task_type/domain; "
-        "`type` is emitted where the pin says `task_type`"
-    ),
-    "get_task": (
-        "FIXME(#2202): the same raw-dict root cause one function away -- protocol and "
-        "task_type are absent and `type` is emitted where the pin says `task_type` "
-        "(salesagent-prkv.89 carries the spec citation and the storyboard step)"
-    ),
-}
+#: Registered tools whose RESPONSE the pinned tree grades but production cannot satisfy.
+#: SHRINK-ONLY, each row naming its issue.
+#:
+#: EMPTY. Both original entries -- list_tasks (GH #2201) and get_task (GH #2202) -- were
+#: removed when the two tools stopped returning raw dicts and started returning models
+#: extending the pinned ListTasksResponse / GetTaskStatusResponse, which the derivation now
+#: grades like every other tool's. Kept as an empty dict rather than deleted because the two
+#: guards below are what make a future row honest, and a set that does not exist cannot be
+#: shrink-only.
+_UNGRADED_RESPONSES: dict[str, str] = {}
 
 
 def _response_outcome_models(tool_name: str) -> list[type[BaseModel]]:
     """Every model a tool's ``_impl`` can put on the wire.
 
-    ``_{tool}_impl`` is the naming convention the whole tools package follows, and a tool
-    whose impl cannot be found this way resolves NO models -- which surfaces as a coverage
-    failure rather than as silence, the property this derivation exists for.
+    ``_{tool}_impl`` is the naming convention the whole tools package follows, and the TOOL
+    FUNCTION ITSELF is the fallback for the three that have no ``_impl`` (get_task,
+    list_tasks, complete_task -- they predate the wrapper/_impl split). A tool whose response
+    cannot be resolved either way resolves NO models, which surfaces as a coverage failure
+    rather than as silence: the property this derivation exists for.
+
+    Reading the tool function is not a concession, it is the more direct question. What the
+    grading cares about is what the TOOL returns; ``_impl`` was only ever a convenient place
+    to read it from.
 
     ``TaskResultEnvelope`` returns are unwrapped to the union inside ``response``: the
     envelope declares three fields of its own and none of them is the buyer-facing shape,
@@ -1428,8 +1445,8 @@ def _response_outcome_models(tool_name: str) -> list[type[BaseModel]]:
             imported = importlib.import_module(module.name)
         except Exception:  # pragma: no cover - an unimportable tool module fails elsewhere
             continue
-        impl = getattr(imported, f"_{tool_name}_impl", None)
-        if impl is None:
+        impl = getattr(imported, f"_{tool_name}_impl", None) or getattr(imported, tool_name, None)
+        if impl is None or not callable(impl):
             continue
         try:
             returned = typing.get_type_hints(impl).get("return")

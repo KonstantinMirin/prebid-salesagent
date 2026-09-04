@@ -48,6 +48,10 @@ class TestListTasksTool:
         step.tool_name = "create_media_buy"
         step.owner = "publisher"
         step.created_at = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
+        # Set explicitly because production READS it: updated_at falls back to created_at
+        # when the step is unfinished. An unset Mock attribute returns a Mock, which pydantic
+        # rejects -- and the MOCK is what has to be right, never a widened production type.
+        step.completed_at = None
         step.request_data = {"budget": 5000}
         step.response_data = None
         step.error_message = None
@@ -84,9 +88,12 @@ class TestListTasksTool:
         with patch("src.core.tools.task_management.WorkflowUoW", return_value=mock_uow):
             result = await list_tasks_fn(identity=identity)
 
-        assert "tasks" in result
-        assert "total" in result
-        assert result["total"] == 1
+        assert result.tasks != []
+        # ATTRIBUTE access, not subscripting: list_tasks returns the pinned
+        # ListTasksResponse now, and the tenant-wide count lives where the pin puts it
+        # (query_summary.total_matching / pagination.total_count), not at the envelope root.
+        assert result.query_summary.total_matching == 1
+        assert result.query_summary.returned == 1
 
     async def test_list_tasks_filters_by_status(
         self, mock_uow, mock_workflow_repo, sample_tenant, sample_workflow_step
@@ -106,7 +113,7 @@ class TestListTasksTool:
             # "requires_approval". The tool translates; the buyer never sends our word.
             result = await list_tasks_fn(filters=ListTasksFilters(status="input-required"), identity=identity)
 
-        assert "tasks" in result
+        assert result.tasks is not None
         mock_workflow_repo.count_by_tenant.assert_called_once_with(
             status="requires_approval",
             object_type=None,
@@ -147,6 +154,10 @@ class TestGetTaskTool:
         step.tool_name = "create_media_buy"
         step.owner = "publisher"
         step.created_at = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
+        # Set explicitly because production READS it: updated_at falls back to created_at
+        # when the step is unfinished. An unset Mock attribute returns a Mock, which pydantic
+        # rejects -- and the MOCK is what has to be right, never a widened production type.
+        step.completed_at = None
         step.request_data = {"budget": 5000}
         step.response_data = None
         step.error_message = None
@@ -185,8 +196,12 @@ class TestGetTaskTool:
         with patch("src.core.tools.task_management.WorkflowUoW", return_value=mock_uow):
             result = await get_task_fn(task_id="step_123", identity=identity)
 
-        assert result["task_id"] == "step_123"
-        assert result["status"] == "requires_approval"
+        assert result.task_id == "step_123"
+        # The SPEC vocabulary, not ours. requires_approval is this repo's workflow status;
+        # enums/task-status.json spells the same state "input-required".
+        assert result.status.value == "input-required"
+        assert result.task_type.value == "create_media_buy"
+        assert result.protocol.value == "media-buy"
 
     async def test_get_task_not_found_raises_error(self, mock_uow, mock_workflow_repo, sample_tenant):
         """Test that get_task raises ToolError when task not found.
@@ -254,6 +269,10 @@ class TestGetTaskSpecFlags:
         step.tool_name = "create_media_buy"
         step.owner = "principal"
         step.created_at = datetime(2026, 3, 1, 9, 0, 0, tzinfo=UTC)
+        # Set explicitly because production READS it: updated_at falls back to created_at
+        # when the step is unfinished. An unset Mock attribute returns a Mock, which pydantic
+        # rejects -- and the MOCK is what has to be right, never a widened production type.
+        step.completed_at = None
         step.completed_at = datetime(2026, 3, 1, 9, 5, 0, tzinfo=UTC)
         step.request_data = {"packages": [{"product_id": "prod_1"}]}
         step.response_data = {"media_buy_id": "mb_1", "packages": []}
@@ -291,8 +310,8 @@ class TestGetTaskSpecFlags:
 
         result = await self._call(mock_uow, self._identity(), task_id="step_done")
 
-        assert result["status"] == "completed"
-        assert "result" not in result
+        assert result.status.value == "completed"
+        assert result.result is None
 
     async def test_result_present_when_requested_and_completed(self, mock_uow, mock_workflow_repo, completed_step):
         """include_result=true on a completed task returns the terminal payload as `result`."""
@@ -301,7 +320,10 @@ class TestGetTaskSpecFlags:
 
         result = await self._call(mock_uow, self._identity(), task_id="step_done", include_result=True)
 
-        assert result["result"] == {"media_buy_id": "mb_1", "packages": []}
+        # Validated into the pinned async-result union, so the concrete member carries its own
+        # envelope defaults; what this asserts is that the STORED payload survived into it.
+        assert result.result.root.media_buy_id == "mb_1"
+        assert result.result.root.packages == []
 
     async def test_result_withheld_while_not_completed(self, mock_uow, mock_workflow_repo, completed_step):
         """Asking for the result of an unfinished task returns none — "when status is completed".
@@ -315,7 +337,7 @@ class TestGetTaskSpecFlags:
 
         result = await self._call(mock_uow, self._identity(), task_id="step_done", include_result=True)
 
-        assert "result" not in result
+        assert result.result is None
 
     async def test_history_absent_by_default(self, mock_uow, mock_workflow_repo, completed_step):
         mock_workflow_repo.get_by_step_id_or_raise.return_value = completed_step
@@ -323,7 +345,7 @@ class TestGetTaskSpecFlags:
 
         result = await self._call(mock_uow, self._identity(), task_id="step_done")
 
-        assert "history" not in result
+        assert result.history is None
 
     async def test_history_carries_the_request_and_response_exchanges(
         self, mock_uow, mock_workflow_repo, completed_step
@@ -339,14 +361,14 @@ class TestGetTaskSpecFlags:
 
         result = await self._call(mock_uow, self._identity(), task_id="step_done", include_history=True)
 
-        assert result["history"] == [
+        assert [entry.model_dump(mode="json") for entry in result.history] == [
             {
-                "timestamp": "2026-03-01T09:00:00+00:00",
+                "timestamp": "2026-03-01T09:00:00Z",
                 "type": "request",
                 "data": {"packages": [{"product_id": "prod_1"}]},
             },
             {
-                "timestamp": "2026-03-01T09:05:00+00:00",
+                "timestamp": "2026-03-01T09:05:00Z",
                 "type": "response",
                 "data": {"media_buy_id": "mb_1", "packages": []},
             },
@@ -367,7 +389,7 @@ class TestGetTaskSpecFlags:
 
         result = await self._call(mock_uow, self._identity(), task_id="step_done", include_history=True)
 
-        assert [entry["type"] for entry in result["history"]] == ["request"]
+        assert [entry.type.value for entry in result.history] == ["request"]
 
 
 class TestCompleteTaskTool:
@@ -400,6 +422,10 @@ class TestCompleteTaskTool:
         step.tool_name = "create_media_buy"
         step.owner = "publisher"
         step.created_at = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
+        # Set explicitly because production READS it: updated_at falls back to created_at
+        # when the step is unfinished. An unset Mock attribute returns a Mock, which pydantic
+        # rejects -- and the MOCK is what has to be right, never a widened production type.
+        step.completed_at = None
         step.completed_at = None
         step.request_data = {"budget": 5000}
         step.response_data = None
