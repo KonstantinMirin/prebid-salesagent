@@ -452,35 +452,25 @@ async def create_media_buy(
     Per AdCP 3.1.1 (media-buy/package-request.json) per-package fields (budget, product_id,
     targeting_overlay, creatives, pacing, daily_budget) live inside packages[].
     """
-    # Coerce wire dicts to the SDK types the raw wrapper declares. A malformed object
-    # raises, and the TRANSPORT boundary -- @app.exception_handler(ValueError) in src/app.py,
-    # which a pydantic ValidationError reaches because it IS a ValueError -- turns it into
-    # the two-layer envelope with field and issues. The string/dict brand shorthand
-    # (#1324/#1537) is coerced here too and lands the same way.
-    account_ref = to_account_reference(body.account)
-    brand_ref = to_brand_reference(body.brand)
-    reporting_webhook = to_reporting_webhook(body.reporting_webhook)
-    push_notification_config = to_push_notification_config(body.push_notification_config)
-    context = to_context_object(body.context)
-
-    # Built through the SHARED builder, then handed over -- the same two steps A2A and
-    # MCP take. Unwrapped: a buyer-invalid payload raises here and the transport boundary
-    # names the error from the exception class.
+    # The SET is derived, the CONVERSIONS are declared per field. Naming the forwarded
+    # fields here as well is what let get_media_buy_delivery drop two of its own;
+    # packages stay wire dicts either way, which is what preserves
+    # full-request error field paths. A malformed object raises and the TRANSPORT boundary
+    # -- @app.exception_handler(ValueError) in src/app.py, which a pydantic
+    # ValidationError reaches because it IS a ValueError -- turns it into the two-layer
+    # envelope with field and issues. The string/dict brand shorthand (#1324/#1537) is one
+    # of the conversions below and lands the same way.
     req = media_buy_create_module._build_create_media_buy_request(
-        brand=brand_ref,
-        # packages stay wire dicts: CreateMediaBuyRequest validates them as the
-        # request's packages[] field, preserving full-request error field paths.
-        packages=body.packages,
-        start_time=body.start_time,
-        end_time=body.end_time,
-        po_number=body.po_number,
-        account=account_ref,
-        reporting_webhook=reporting_webhook,
-        context=context,
-        ext=body.ext,
-        idempotency_key=body.idempotency_key,
-        paused=body.paused,
-        push_notification_config=push_notification_config,
+        **derived_payload(
+            body,
+            coerce={
+                "account": to_account_reference,
+                "brand": to_brand_reference,
+                "reporting_webhook": to_reporting_webhook,
+                "push_notification_config": to_push_notification_config,
+                "context": to_context_object,
+            },
+        )
     )
     response = await media_buy_create_module.create_media_buy_raw(
         req=req,
@@ -493,33 +483,29 @@ async def create_media_buy(
 @router.put("/media-buys/{media_buy_id}")
 async def update_media_buy(media_buy_id: str, body: UpdateMediaBuyBody, identity: ResolvedIdentity = require_auth):
     """Update an existing media buy (auth required)."""
-    # Coerced before the builder, so a malformed object raises here; the transport
-    # boundary gives it the same envelope it would get from anywhere else in this route.
-    push_notification_config = to_push_notification_config(body.push_notification_config)
-    context = to_context_object(body.context)
-    reporting_webhook = to_reporting_webhook(body.reporting_webhook)
-    # Built through the SHARED builder, then handed over -- the same two steps A2A and
-    # MCP take. media_buy_id comes from the PATH, not the body.
+    # The forwarded SET is derived; only the conversions and the body's two DECLARED
+    # departures are named. A malformed object raises in a converter and the transport
+    # boundary gives it the same envelope it would get anywhere else in this route.
+    # packages stay wire dicts, which preserves full-request error field paths.
+    #
+    # The two departures are exactly what UpdateMediaBuyBody records at derivation time:
+    # media_buy_id is a PATH field (absent from the body, so the selector cannot produce
+    # it), and flight_start_date/flight_end_date are extra_fields -- retired flat aliases
+    # the builder folds onto start_time/end_time, which are not UpdateMediaBuyRequest
+    # fields and so are invisible to a DTO-keyed selection.
     req = media_buy_update_module._build_update_request(
         media_buy_id=media_buy_id,
-        # Through the same converter the sync route uses, rather than handing the builder a
-        # raw dict where it declares AccountReference. The converter is also where a
-        # malformed account object is rejected with the message every other route gives it.
-        account=to_account_reference(body.account),
-        paused=body.paused,
         flight_start_date=body.flight_start_date,
         flight_end_date=body.flight_end_date,
-        start_time=body.start_time,
-        end_time=body.end_time,
-        # packages stay wire dicts: UpdateMediaBuyRequest validates them as the
-        # request's packages[] field, preserving full-request error field paths.
-        packages=body.packages,
-        push_notification_config=push_notification_config,
-        context=context,
-        reporting_webhook=reporting_webhook,
-        ext=body.ext,
-        idempotency_key=body.idempotency_key,
-        revision=body.revision,
+        **derived_payload(
+            body,
+            coerce={
+                "account": to_account_reference,
+                "push_notification_config": to_push_notification_config,
+                "context": to_context_object,
+                "reporting_webhook": to_reporting_webhook,
+            },
+        ),
     )
     response = media_buy_update_module.update_media_buy_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
@@ -531,17 +517,19 @@ async def get_media_buy_delivery(body: GetMediaBuyDeliveryBody, identity: Resolv
     # Builds through the shared builder and hands the request over. The account
     # enrichment this route used to perform inline now happens once, inside
     # get_media_buy_delivery_raw, off req.account.
-    account_ref = to_account_reference(body.account) if body.account is not None else None
+    #
+    # THE SET IS DERIVED. This route used to name nine fields on their way to the builder
+    # while its body declared eleven, so ``include_window_breakdown`` and
+    # ``time_granularity`` -- both defined by 3.1/media-buy/get-media-buy-delivery-request.json,
+    # both bound by FastAPI, both advertised in the OpenAPI schema, and both carried by MCP
+    # and A2A -- were read off the wire and thrown away. A buyer sent a documented field and
+    # observed nothing. Deriving the set is what makes that unwritable rather than merely
+    # fixed.
     req = media_buy_delivery_module._build_get_media_buy_delivery_request(
-        media_buy_ids=body.media_buy_ids,
-        status_filter=body.status_filter,
-        start_date=body.start_date,
-        end_date=body.end_date,
-        reporting_dimensions=body.reporting_dimensions,
-        attribution_window=body.attribution_window,
-        include_package_daily_breakdown=body.include_package_daily_breakdown,
-        account=account_ref,
-        context=to_context_object(body.context),
+        **derived_payload(
+            body,
+            coerce={"account": to_account_reference, "context": to_context_object},
+        )
     )
     response = media_buy_delivery_module.get_media_buy_delivery_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
@@ -570,18 +558,26 @@ async def get_media_buys(body: GetMediaBuysBody, identity: ResolvedIdentity = re
     # identically. Both wrong shapes were caught by
     # test_account_filter_not_supported[rest] the moment REST parametrization
     # came back, which is the coverage this route exists to restore.
-    account_ref = None
-    if body.account is not None:
-        account_ref = to_account_reference(body.account)
-
+    #
     # Built through the SHARED builder, then handed over as the request -- the same two
-    # steps a2a and mcp take, instead of this route re-listing the DTO's fields.
+    # steps a2a and mcp take, with the forwarded SET derived rather than re-listed.
+    #
+    # The dropped ``bool(body.include_snapshot)`` moves an omitted include_snapshot from
+    # False to None on this route, and that is deliberate rather than overlooked. It is
+    # unobservable -- ``_get_media_buys_impl`` reads the field for truthiness only
+    # (``if req.include_snapshot``) -- and it puts REST on the same value A2A has always
+    # produced, because the selector omits an unsent field there too. The bool() was a
+    # REST-only normalisation of a None that ``_build_get_media_buys_request`` creates
+    # itself: it forwards ``include_snapshot=None`` explicitly instead of omitting it, so
+    # the DTO's own ``False`` default never applies. Its sibling
+    # ``_build_get_media_buy_delivery_request`` drops None keys for exactly this reason and
+    # says so in its body. Normalising one transport's copy of that hid it; the builder is
+    # where it wants fixing.
     req = media_buy_list_module._build_get_media_buys_request(
-        body.media_buy_ids,
-        body.status_filter,
-        account_ref,
-        to_context_object(body.context),
-        bool(body.include_snapshot),
+        **derived_payload(
+            body,
+            coerce={"account": to_account_reference, "context": to_context_object},
+        )
     )
     response = media_buy_list_module.get_media_buys_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
@@ -590,37 +586,21 @@ async def get_media_buys(body: GetMediaBuysBody, identity: ResolvedIdentity = re
 @router.post("/creatives/sync")
 async def sync_creatives(body: SyncCreativesBody, identity: ResolvedIdentity = require_auth):
     """Sync creatives (auth required)."""
-    # Coerce the raw account dict into an AccountReference so sync_creatives_raw
-    # resolves it at the transport boundary (mirror create_media_buy / the sibling
-    # handlers above — #1417).
-    account_ref = to_account_reference(body.account)
-    push_notification_config = to_push_notification_config(body.push_notification_config)
-    context = to_context_object(body.context)
-
     # Built through the SHARED builder, then handed over -- the same two steps A2A and
-    # MCP take. account rides ON the request, and the wrapper enriches identity off
-    # req.account. Unwrapped: a buyer-invalid payload raises and the transport boundary
-    # names the error from the exception class.
+    # MCP take. The forwarded SET is derived; only the conversions are named. account rides
+    # ON the request and the wrapper enriches identity off req.account (#1417); creatives
+    # stay wire dicts, which is what preserves the per-creative partial-success results.
+    # Unwrapped: a buyer-invalid payload raises and the transport boundary names the error
+    # from the exception class.
     req = creatives_sync_module.build_sync_creatives_request(
-        # creatives stay wire dicts: _sync_creatives_impl validates each entry
-        # individually (partial-success semantics with per-creative results).
-        creatives=body.creatives,
-        assignments=body.assignments,
-        creative_ids=body.creative_ids,
-        delete_missing=body.delete_missing,
-        dry_run=body.dry_run,
-        validation_mode=body.validation_mode,
-        push_notification_config=push_notification_config,
-        context=context,
-        account=account_ref,
-        # The buyer's key was NOT forwarded here. SyncCreativesBody carries it and
-        # sync-creatives-request.json lists it in /required, but the route omitted it from
-        # this call, so a REST buyer's key was discarded before anything looked at it --
-        # while mcp and a2a both forward it. What that costs today is the shape check:
-        # _sync_creatives_impl runs validate_idempotency_key_shape, so a malformed key was
-        # rejected on mcp and a2a and silently accepted on REST. It does NOT yet buy replay:
-        # sync_creatives, unlike create_media_buy, does not implement one.
-        idempotency_key=body.idempotency_key,
+        **derived_payload(
+            body,
+            coerce={
+                "account": to_account_reference,
+                "push_notification_config": to_push_notification_config,
+                "context": to_context_object,
+            },
+        )
     )
     response = creatives_sync_module.sync_creatives_raw(req=req, identity=identity)
     return response.model_dump(mode="json")
@@ -652,11 +632,9 @@ async def list_creatives(body: ListCreativesBody, identity: ResolvedIdentity = r
 async def update_performance_index(body: UpdatePerformanceIndexBody, identity: ResolvedIdentity = require_auth):
     """Update performance index for a media buy (auth required)."""
     # Built through the SHARED builder, exactly as a2a and mcp do, then handed over as the
-    # request. The route no longer re-lists the DTO's fields on the way in.
+    # request, with the forwarded SET derived rather than re-listed.
     req = performance_module._build_update_performance_index_request(
-        body.media_buy_id,
-        body.performance_data,
-        to_context_object(body.context),
+        **derived_payload(body, coerce={"context": to_context_object})
     )
     response = performance_module.update_performance_index_raw(
         req=req,
