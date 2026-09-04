@@ -227,10 +227,24 @@ def _record_dormancy(item: pytest.Item, report: pytest.TestReport) -> bool:
 
     item.user_properties.append(("dormant_scenario", f"{tag} :: {step_key}"))
     if (tag, step_key) in _dormant_baseline():
+        # KEEP THE "Step definition not found:" PREFIX. It is not decoration: three
+        # other instruments classify this event by matching it, and
+        # ``scenario_liveness._classify_reason`` buckets anything that does not start
+        # with it as "ledgered", which then sets ``harness_wired=True`` on a scenario
+        # that binds no steps at all -- an instrument overstating its own coverage,
+        # which is the exact fault
+        # ``test_provenance_tag_is_a_recorded_field_not_a_collection_filter`` exists to
+        # catch. Rewording this line without the prefix silently flipped two dormant
+        # UC-006 scenarios to "wired"; the detail is appended AFTER the prefix so the
+        # reason can stay honest without being the machine-readable channel.
+        #
+        # It is no longer the ONLY channel either -- the user_property above and
+        # scenario_liveness's typed classification both carry it now, so losing this
+        # prefix costs a worse message rather than a wrong measurement.
         report.wasxfail = (
-            f"DORMANT (test-wiring): no step definition for {step_key!r} in {tag}, so this "
-            f"scenario grades nothing. Recorded in tests/bdd/dormant_scenarios.txt; closing "
-            f"the hole is salesagent-8j5nf. Not a graded seller behaviour."
+            f"Step definition not found: DORMANT (test-wiring) — no step definition for "
+            f"{step_key!r} in {tag}, so this scenario grades nothing. Recorded in "
+            f"tests/bdd/dormant_scenarios.txt; closing the hole is salesagent-8j5nf."
         )
         return True
     report.outcome = "failed"

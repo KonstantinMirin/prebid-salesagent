@@ -344,6 +344,12 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
         "tests/harness/test_outcome_helpers_wire_contract.py": (
             "fabricates error-envelope results to grade the _outcome_helpers wire readers against known envelope shapes"
         ),
+        "tests/unit/test_generic_then_devacuum.py": (
+            "fabricates a wire rejection (has_wire=True — the envelope did come back) to grade that the "
+            "partition/boundary Then steps require it, and REJECT the client-side pydantic error that a "
+            "test-process request build leaves behind; that error is the whole subject, so a real dispatch "
+            "cannot produce the input"
+        ),
         "tests/harness/test_wire_bytes_required.py": (
             "fabricates results with and without a captured envelope to grade that the wire-bytes guard "
             "refuses to assert on a reconstruction"

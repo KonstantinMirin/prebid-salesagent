@@ -202,6 +202,22 @@ def _classify_reason(reason: str | None) -> str:
     return "ledgered"
 
 
+def _classify_exception(excinfo: Any) -> str | None:
+    """The category implied by the EXCEPTION, or None when there is nothing typed to read.
+
+    ``StepDefinitionNotFoundError`` and ``NotImplementedError`` are the two
+    auto-xfail causes conftest converts, and the exception class says so without
+    anyone having to preserve a sentence. Returning None (rather than guessing)
+    keeps marker-based and explicit ``pytest.xfail()`` reasons on the prose path,
+    where the reason genuinely is the only signal.
+    """
+    if excinfo is None:
+        return None
+    if excinfo.errisinstance(StepDefinitionNotFoundError) or excinfo.errisinstance(NotImplementedError):
+        return "no_steps_bound"
+    return None
+
+
 def _transport_name(item: pytest.Item) -> str:
     """Best-effort transport label from the parametrized nodeid, e.g. ``mcp``."""
     nodeid = item.nodeid
@@ -276,7 +292,21 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo) -> Any:
         elif call.excinfo.errisinstance(NotImplementedError):
             reason = f"Not implemented: {call.excinfo.value}"
 
-    category = _classify_reason(reason)
+    # CLASSIFY ON THE TYPED CAUSE, fall back to prose only when there is no exception
+    # to read (marker-based and explicit ``pytest.xfail()``). The reason string stays
+    # whatever conftest wrote, because it is the HUMAN channel; it is no longer the
+    # machine one.
+    #
+    # This module used to derive the category from that prose whenever conftest had
+    # already set ``wasxfail`` -- which made a REWORDING of conftest's message able to
+    # silently reclassify a scenario. It did: a dormancy message that stopped starting
+    # with "Step definition not found:" fell through to "ledgered", and "ledgered"
+    # sets ``harness_wired=True``, so two genuinely unbound UC-006 scenarios were
+    # reported as harness-wired. Anchoring the prefix match protected against
+    # over-matching but not against UNDER-matching, and under-matching is the
+    # direction that inflates measured coverage.
+    typed = _classify_exception(call.excinfo)
+    category = typed if typed is not None else _classify_reason(reason)
     outcome_name = "passed" if report.passed else ("xfailed" if reason is not None else "failed")
     record.record_observation(
         Observation(
