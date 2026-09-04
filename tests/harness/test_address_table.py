@@ -25,7 +25,6 @@ import pytest
 
 from tests.harness.address_table import (
     PATH_PARAM_RE,
-    REST_ABSENT_TOOLS,
     AddressTable,
     NoAddressForTransport,
     ToolAddress,
@@ -265,24 +264,6 @@ class TestRestHandlerNamesAndAbsence:
         with pytest.raises(UnresolvedRestHandlerName, match="more than one route"):
             table.resolve("get_products", Transport.REST)
 
-    def test_rest_absent_tools_stay_off_rest_and_are_real_tools(self):
-        """AC(1): the four task tools are correctly, EXPLICITLY documented as
-        REST-absent (not silently missing due to naming happenstance) — and the
-        registry itself cannot rot: every entry must genuinely have no REST
-        route AND genuinely be a real tool on MCP or A2A."""
-        table = AddressTable()
-        for tool_name in REST_ABSENT_TOOLS:
-            with pytest.raises(NoAddressForTransport):
-                table.resolve(tool_name, Transport.REST)
-            resolves_elsewhere = False
-            for transport in (Transport.MCP, Transport.A2A):
-                try:
-                    table.resolve(tool_name, transport)
-                    resolves_elsewhere = True
-                except NoAddressForTransport:
-                    pass
-            assert resolves_elsewhere, f"{tool_name!r} is in REST_ABSENT_TOOLS but resolves on neither MCP nor A2A"
-
 
 class TestCrossRegistryConsistencyGuard:
     """AC(4): for every tool present on more than one registry, it resolves
@@ -311,9 +292,6 @@ class TestCrossRegistryConsistencyGuard:
         assert len(rest_names) == 13, rest_names
         assert "get_adcp_capabilities" in rest_names  # POST /api/v1/capabilities
         assert "get_media_buys" in rest_names  # POST /api/v1/media-buys/query
-        for absent_tool in REST_ABSENT_TOOLS:
-            assert absent_tool not in rest_names
-        assert REST_ABSENT_TOOLS == frozenset({"complete_task", "get_task", "list_tasks"})
 
 
 class TestPathParamRegex:

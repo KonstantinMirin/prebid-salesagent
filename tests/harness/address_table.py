@@ -14,7 +14,7 @@ the handler name is the tool identity and nothing translates between them. A
 handler name that is not a known tool name raises
 :class:`UnresolvedRestHandlerName` at table-build time — it is NEVER silently
 registered under the wrong name. Tools with no REST route at all are recorded in
-:data:`REST_ABSENT_TOOLS`, validated against live registration by tests (see
+validated against live registration by tests (see
 ``tests/harness/test_address_table.py::TestRestHandlerNamesAndAbsence``). The
 design this implements is stated in ``tests/harness/client.py``'s module
 docstring.
@@ -31,7 +31,7 @@ Usage::
     try:
         ADDRESS_TABLE.resolve("list_tasks", Transport.REST)
     except NoAddressForTransport:
-        ...  # expected: list_tasks is MCP-only (see REST_ABSENT_TOOLS)
+        ...  # expected: list_tasks has no REST route
 """
 
 from __future__ import annotations
@@ -49,21 +49,6 @@ from tests.harness.transport import Transport
 # (tests/harness/client.py) — see design doc §4 "path_template handling".
 PATH_PARAM_RE = re.compile(r"\{(\w+)\}")
 
-# AdCP tool names known to have NO REST route at all. Documents the absence as a
-# KNOWN, intentional fact so the cross-registry consistency guard
-# (TestRestHandlerNamesAndAbsence) treats it as expected rather than an
-# accident of naming drift. Validated bidirectionally by
-# test_rest_absent_tools_stay_off_rest_and_are_real_tools: every entry here
-# must (a) NOT resolve on REST — else it's stale and should shrink — and (b)
-# resolve on MCP or A2A — else it's a typo, not a real tool.
-REST_ABSENT_TOOLS: frozenset[str] = frozenset(
-    {
-        "complete_task",
-        "get_task",
-        "list_tasks",
-    }
-)
-
 
 class NoAddressForTransport(LookupError):
     """Tool has no registered address on the requested transport.
@@ -71,11 +56,10 @@ class NoAddressForTransport(LookupError):
     This is EXPECTED, not a bug — not every tool exists on every transport.
     Callers that hit this for a real scenario should treat it as "this
     scenario is scoped to fewer transports than the default", not paper over
-    it with a broader except. The live A2A-only / REST-absent tool sets drift
-    over time — read them from :meth:`AddressTable.all_tools` /
-    :data:`REST_ABSENT_TOOLS` rather than trusting a hand-copied example list
-    here (a hand-copied list is exactly the disease this module exists to
-    stop reintroducing).
+    it with a broader except. Which tools resolve on which transport drifts
+    over time — read it from :meth:`AddressTable.all_tools` rather than
+    trusting a hand-copied example list here (a hand-copied list is exactly
+    the disease this module exists to stop reintroducing).
     """
 
 
