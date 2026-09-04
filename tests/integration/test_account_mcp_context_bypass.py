@@ -132,6 +132,7 @@ class TestMCPContextDirectCalls:
         Exercises lines 689-694 in accounts.py.
         """
         from src.core.tools.accounts import sync_accounts
+        from tests.factories.request import fresh_idempotency_key
 
         with AccountSyncEnv(tenant_id="mcp_sync_ctx_t1", principal_id="mcp_sync_ctx_agent") as env:
             env.setup_default_data()
@@ -147,6 +148,10 @@ class TestMCPContextDirectCalls:
             tool_result = asyncio.run(
                 sync_accounts(
                     accounts=[{"brand": {"domain": "ctx-sync.com"}, "operator": "ctx-sync.com", "billing": "operator"}],
+                    # Required by sync-accounts-request.json 3.1.1 (prkv.86). This scenario
+                    # grades the context ECHO on a SUCCESSFUL sync, so the request has to be
+                    # one the boundary accepts — a refusal never reaches the echo.
+                    idempotency_key=fresh_idempotency_key(),
                     ctx=mock_ctx,
                     context=context_obj,
                 )

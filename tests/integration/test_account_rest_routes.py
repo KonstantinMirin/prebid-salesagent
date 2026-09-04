@@ -50,6 +50,7 @@ class TestSyncAccountsRestRoute:
 
     def test_sync_accounts_creates_account(self, integration_db):
         """POST sync via REST creates account same as IMPL."""
+        from tests.factories.request import fresh_idempotency_key
         from tests.harness.account_sync import AccountSyncEnv
 
         with AccountSyncEnv() as env:
@@ -65,7 +66,12 @@ class TestSyncAccountsRestRoute:
                             "operator": "rest-test.com",
                             "billing": "operator",
                         }
-                    ]
+                    ],
+                    # Required by sync-accounts-request.json 3.1.1 (prkv.86). This asserts a
+                    # 200 that CREATES the account, so the body must be one REST accepts;
+                    # without the key the route correctly answers 400 INVALID_REQUEST and the
+                    # creation this test exists to grade never happens.
+                    "idempotency_key": fresh_idempotency_key(),
                 },
             )
             assert rest_response.status_code == 200, (
