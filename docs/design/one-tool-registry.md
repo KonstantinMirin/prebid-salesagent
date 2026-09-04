@@ -386,9 +386,8 @@ having:
 
 > the set of fields an implementation honours is smaller than the set its DTO declares.
 
-**68 fields**, listed per tool in the measurement. This design does not fix that,
-and — done as step 5 prescribes — does not change a single one of them on the day
-it lands. It converts them from invisible to declared.
+**68 fields**, listed per tool in the measurement. This design does not fix that.
+It converts them from invisible to declared.
 It makes it **visible in one place** — the `@omit` list on each DTO — where today it
 is invisible, spread across sixteen builder signatures, and reproduced three
 times per tool.
@@ -524,15 +523,21 @@ Each step leaves the tree green and is independently revertible.
    swapping the builder first makes the full DTO the accepted shape, widening
    acceptance to fields nothing implements — accept-and-ignore on up to 16 fields
    for one tool. Narrowing first does nothing, because the builder is still
-   selecting. Done together, the accepted set is unchanged on the day of the
-   change: the builder's hand-written subset is replaced by the same subset,
-   declared on the DTO.
+   selecting. Done together, the builder's hand-written subset is replaced by
+   the same subset declared on the DTO — which is why the order is what it is.
 
-   That is what makes this step *safe* rather than merely staged — it is a
-   refactor with no wire change, and every subsequent field is added by
-   **shortening an `@omit` list**, deliberately, with its own blast radius
-   measured over **payload producers, not constructions of the class**. A
-   type-name grep found 76 of 89 sites when that was measured.
+   **That ordering is not a promise that the wire does not move, and proving it
+   did not is NOT the gate.** The two subsets are hand-written and derived
+   respectively, so they can differ; discovering exactly where, across four
+   transports and sixteen tools, is unbounded work that does not advance the
+   architecture. The gate for each tool is structural: the builder is gone, the
+   DTO declares the shape, the `_impl` is typed to it. Differences a buyer can
+   observe are expected, recorded in the ledger, and reconciled afterwards.
+
+   After this, every field is added by **shortening an `@omit` list**,
+   deliberately, with its blast radius measured over **payload producers, not
+   constructions of the class**. A type-name grep found 76 of 89 sites when that
+   was measured.
 
 6. **Generate MCP registration from the registry**, deleting the 16
    `_register_tool` calls.
@@ -541,8 +546,8 @@ Each step leaves the tree green and is independently revertible.
 8. **Generate REST routes**, deleting the decorators and body-model assignments.
 
 Steps 6–8 are where "declared once" becomes true. Step 5 is the only one that
-touches what a buyer can send — and, done as one change per tool, it does not
-change it at all.
+touches what a buyer can send, and doing it one tool at a time keeps each
+change's fallout attributable to one tool rather than to the migration.
 
 ## Why this needs no guards
 
