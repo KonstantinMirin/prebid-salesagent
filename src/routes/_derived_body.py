@@ -23,7 +23,7 @@ from payload, which the hand-written classes did not.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, cast
 
 from pydantic import BaseModel, create_model
@@ -184,7 +184,7 @@ def derived_body_model_for(
     return derived_body_model(name, dto, builder, extra_fields=extra_fields, path_fields=path_fields)
 
 
-def derived_payload(body: BaseModel) -> dict[str, Any]:
+def derived_payload(body: BaseModel, *, coerce: Mapping[str, Callable[[Any], Any]] | None = None) -> dict[str, Any]:
     """The request data ``body`` carries, selected by the derivation the body RECORDS.
 
     A derived body ALREADY is ``DTO fields INTERSECT impl parameters``, so a route that
@@ -199,6 +199,22 @@ def derived_payload(body: BaseModel) -> dict[str, Any]:
     The pair is read from ``__derived_from_dto__``, which ``derived_body_model`` stamped at
     derivation time, so selection and declaration cannot disagree -- there is nothing left
     at the call site to disagree with.
+
+    ``coerce`` maps a field name to the ``to_*`` converter that field needs, and exists so
+    that a route needing conversions does not have to hand-list the FORWARDED SET to get
+    them. Six routes did exactly that -- naming each field on its way to the builder
+    because two or three of them wanted ``to_account_reference`` or ``to_context_object``
+    -- and ``get_media_buy_delivery`` is what that costs: it named nine of the eleven
+    fields its body declares and silently dropped ``include_window_breakdown`` and
+    ``time_granularity``, which FastAPI accepted and the OpenAPI schema advertised.
+    Separating the two concerns is the fix: the SET is derived, the
+    CONVERSION is declared per field, and a field added to the DTO tomorrow is forwarded
+    without anyone editing the route.
+
+    A converter runs only for a key the selection actually produced. ``select_request_fields``
+    has already dropped ``None`` values so the model's own defaults apply, and calling a
+    ``to_*`` helper on an absent field would put an explicit ``None`` back -- reviving the
+    defaulting bug ``_build_get_media_buy_delivery_request`` documents in its own body.
     """
     derivation = getattr(type(body), "__derived_from_dto__", None)
     if derivation is None:
@@ -208,7 +224,11 @@ def derived_payload(body: BaseModel) -> dict[str, Any]:
             f"with the (DTO, callee) pair it is maintained against."
         )
     dto, impl = derivation
-    return select_request_fields(dto, body, accepted_kwargs(impl))
+    payload = select_request_fields(dto, body, accepted_kwargs(impl))
+    for name, converter in (coerce or {}).items():
+        if name in payload:
+            payload[name] = converter(payload[name])
+    return payload
 
 
 def _is_optional(annotation: Any) -> bool:
