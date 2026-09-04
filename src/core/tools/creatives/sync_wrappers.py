@@ -111,10 +111,14 @@ async def sync_creatives(
     ],
     assignments: list[Assignment] | None = None,
     creative_ids: list[str] | None = None,
+    # ``= None`` states NOTHING: the advertised default comes from the DTO field
+    # (derived_signature), and an omitted value reaches the builder as None, which
+    # omit_unset drops so the model's own default applies. Restating the DTO's value
+    # here made it two declarations of one fact.
     delete_missing: Annotated[
-        bool, Field(description="Delete creatives not in the sync payload (use with caution)")
-    ] = False,
-    dry_run: Annotated[bool, Field(description="Preview changes without applying them")] = False,
+        bool | None, Field(description="Delete creatives not in the sync payload (use with caution)")
+    ] = None,
+    dry_run: Annotated[bool | None, Field(description="Preview changes without applying them")] = None,
     validation_mode: ValidationMode | None = None,
     push_notification_config: PushNotificationConfig | None = None,
     context: ContextObject | None = None,  # Application level context per adcp spec

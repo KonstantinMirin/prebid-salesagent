@@ -448,9 +448,13 @@ def _build_get_media_buys_request(
 async def get_media_buys(
     media_buy_ids: list[str] | None = None,
     status_filter: MediaBuyStatus | list[MediaBuyStatus] | None = None,
+    # ``= None`` states NOTHING: the advertised default comes from the DTO field
+    # (derived_signature), and an omitted value reaches the builder as None, which
+    # omit_unset drops so the model's own default applies. Restating the DTO's value
+    # here made it two declarations of one fact.
     include_snapshot: Annotated[
-        bool, Field(description="When true, include near-real-time delivery stats per package")
-    ] = False,
+        bool | None, Field(description="When true, include near-real-time delivery stats per package")
+    ] = None,
     account: LibraryAccountReference | None = None,
     context: ContextObject | None = None,
     ctx: Context | ToolContext | None = None,

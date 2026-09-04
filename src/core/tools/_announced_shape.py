@@ -331,8 +331,46 @@ def derived_signature(fn: Callable[..., Any], model: type[BaseModel]) -> inspect
         annotation: Any = field.annotation
         if description:
             annotation = Annotated[annotation, PydanticField(description=description)]
-        parameters.append(parameter.replace(annotation=annotation))
+        parameters.append(parameter.replace(annotation=annotation, default=_advertised_default(parameter, field)))
     return signature.replace(parameters=parameters)
+
+
+def _advertised_default(parameter: inspect.Parameter, field: Any) -> Any:
+    """The default to ADVERTISE: the DTO's, wherever the DTO declares one.
+
+    The same rule as the annotation two lines up, and for the same reason. FastMCP builds
+    the published ``inputSchema`` from this signature, so whatever sits here is what a buyer
+    reads as the field's default before they send anything -- and taking the TYPE from the
+    DTO while leaving the DEFAULT as the wrapper happened to write it made the two halves of
+    one field come from two places.
+
+    They disagreed. Seven parameters advertised ``"default": null`` for fields their pinned
+    schema declares with a real value (``sync_accounts.delete_missing`` / ``dry_run``,
+    ``sync_creatives.validation_mode``, ``create_media_buy.paused``,
+    ``get_media_buy_delivery.include_package_daily_breakdown`` /
+    ``include_window_breakdown``, ``list_tasks.include_history``) -- so production behaved
+    like the spec while the advertised contract said otherwise. Six MORE wrappers happened
+    to restate the DTO's value correctly, which is the same defect in its harmless state:
+    two declarations of one fact, one refactor away from disagreeing. Deriving here retires
+    all thirteen, and the six restatements are deleted with it.
+
+    A REQUIRED field has no default to take, and a wrapper cannot invent one: it keeps
+    whatever it declared, which for a required DTO field is nothing (the missing-required
+    refusal in ``apply_dto_announced_shape`` already forbids the alternative).
+
+    A field whose DTO default is ``None`` also keeps the wrapper's, and that limit is
+    deliberate rather than an oversight. ``None`` is the model declaring UNSET, not
+    declaring a value -- there is nothing for the announcement to own, and the pinned
+    schemas agree (``get-products-request.json`` gives ``brief`` no ``default`` at all).
+    Deriving there would have REPLACED two live advertised defaults with null:
+    ``get_products.brief`` (``""``) and ``complete_task.status`` (``"completed"``). Those
+    two are a wrapper supplying a value its model does not describe, which is a real
+    question and a different one; this rule cannot settle it, so it does not touch it.
+    """
+    if field.is_required():
+        return parameter.default
+    declared = field.default_factory() if field.default_factory is not None else field.default
+    return parameter.default if declared is None else declared
 
 
 def _refuse_fields_the_spec_does_not_define(

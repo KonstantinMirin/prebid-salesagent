@@ -614,9 +614,13 @@ async def list_creatives(
     # inputSchema, so a False here told every MCP buyer the spec's default was the opposite
     # of what it is. It cannot be None: a None publishes as "default": null, which is a
     # different way of not matching the pin.
+    # ``= None`` states NOTHING: the advertised default comes from the DTO field
+    # (derived_signature), and an omitted value reaches the builder as None, which
+    # omit_unset drops so the model's own default applies. Restating the DTO's value
+    # here made it two declarations of one fact.
     include_assignments: Annotated[
-        bool, PydanticField(description="Include package assignment details for each creative")
-    ] = True,
+        bool | None, PydanticField(description="Include package assignment details for each creative")
+    ] = None,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
 ):

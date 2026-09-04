@@ -28,6 +28,7 @@ from src.core.exceptions import (
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CompleteTaskRequestLocal, ContextObject, GetTaskRequest, enum_value
+from src.core.tools._request_defaults import omit_unset
 
 logger = logging.getLogger(__name__)
 
@@ -239,8 +240,11 @@ def build_get_task_request(
     task_id: str,
     context: Any = None,
     account: LibraryAccountReference | None = None,
-    include_history: bool = False,
-    include_result: bool = False,
+    # ``= None`` states NOTHING. GetTaskRequest declares False for both, and restating it
+    # here made one fact two declarations; omit_unset below lets the model's own value
+    # apply for a field the buyer did not send.
+    include_history: bool | None = None,
+    include_result: bool | None = None,
     ext: ExtensionObject | None = None,
 ) -> GetTaskRequest:
     """Build the request get_task accepts.
@@ -259,11 +263,13 @@ def build_get_task_request(
     """
     return GetTaskRequest(
         task_id=task_id,
-        context=context,
-        account=account,
-        include_history=include_history,
-        include_result=include_result,
-        ext=ext,
+        **omit_unset(
+            context=context,
+            account=account,
+            include_history=include_history,
+            include_result=include_result,
+            ext=ext,
+        ),
     )
 
 
@@ -289,8 +295,11 @@ async def get_task(
     context: Context | None = None,
     identity: ResolvedIdentity | None = None,
     account: LibraryAccountReference | None = None,
-    include_history: bool = False,
-    include_result: bool = False,
+    # ``= None`` states NOTHING: the advertised default comes from the DTO field
+    # (derived_signature), and an omitted value reaches the builder as None, which
+    # omit_unset drops so the model's own default applies.
+    include_history: bool | None = None,
+    include_result: bool | None = None,
     ext: ExtensionObject | None = None,
 ) -> dict[str, Any]:
     """Get detailed information about a specific task.
