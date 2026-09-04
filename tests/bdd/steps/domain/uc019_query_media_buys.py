@@ -2219,44 +2219,6 @@ def then_no_sandbox_field(ctx: dict) -> None:
     )
 
 
-@then("the response should indicate a validation error")
-def then_validation_error(ctx: dict) -> None:
-    """Assert response indicates a validation error — wire-first.
-
-    On a wire transport the buyer-facing code must be exactly VALIDATION_ERROR
-    (the pinned error-code enum's canonical request-validation code). No-wire
-    fallback: either a raised exception with validation-related keywords, or
-    response.errors containing validation-related content.
-    """
-    wire_code = _wire_code(ctx)
-    if wire_code is not None:
-        assert wire_code == "VALIDATION_ERROR", f"Expected wire code VALIDATION_ERROR, got {wire_code!r}"
-        return
-
-    error = ctx.get("error")
-    if error:
-        # Verify it's actually a validation error, not just any error
-        msg = str(error).lower()
-        assert any(kw in msg for kw in ("validation", "invalid", "required", "type", "field")), (
-            f"Expected a validation error, but error doesn't indicate validation: {error}"
-        )
-        return
-    resp = payload_or_none(ctx)
-    if resp:
-        errors = getattr(resp, "errors", None)
-        if errors:
-            # Verify at least one error relates to validation
-            error_strs = [str(e).lower() for e in errors]
-            has_validation_keyword = any(
-                any(kw in s for kw in ("validation", "invalid", "required", "type", "field")) for s in error_strs
-            )
-            assert has_validation_keyword, f"Response has errors but none indicate validation: {errors}"
-            return
-    raise AssertionError(
-        "Expected validation error: neither error raised nor response.errors contains validation content"
-    )
-
-
 @then("the error should be a real validation error, not simulated")
 def then_real_validation_error(ctx: dict) -> None:
     """Assert error is a real validation error (not simulated sandbox response).

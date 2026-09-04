@@ -464,12 +464,19 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" owned by "buyer-001"
     And the ad server adapter is unavailable
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
-    Then the operation should fail
-    And the error code should be "SERVICE_UNAVAILABLE"
+    Then the response arrives
+    And the response errors include code "SERVICE_UNAVAILABLE" for media buy "mb-001"
+    # NOT an envelope rejection, and the scenario used to say it was. An unreachable ad
+    # server is a "reporting platform issue", which get-media-buy-delivery-response.json
+    # puts in the response's own errors[] -- the call still answers for every OTHER buy,
+    # so it completes. "the operation should fail" only ever passed here because it
+    # promoted this errors[0] into ctx["error"] and the code assertion then read the
+    # promotion instead of the wire; requiring a wire envelope fails outright.
     # What AdCPAdapterError actually emits. "adapter_error" was the internal class
     # taxonomy leaking into a scenario as if it were a wire code. The
     # message-contains assertion is gone: the sentence is a function of the code.
     And the error should include "suggestion" field
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/media-buy/get-media-buy-delivery-response.json pointer=/properties/errors
     # POST-F1: System state unchanged
     # POST-F2: Error explains adapter failure
     # POST-F3: Suggestion to retry

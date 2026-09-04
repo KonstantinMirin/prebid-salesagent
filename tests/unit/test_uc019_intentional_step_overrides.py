@@ -25,9 +25,20 @@ _REPO = Path(__file__).resolve().parents[2]
 _UC019_STEPS = _REPO / "tests" / "bdd" / "steps" / "domain" / "uc019_query_media_buys.py"
 _GENERIC_STEPS = _REPO / "tests" / "bdd" / "steps" / "generic"
 
-# Verified at the commit that pinned them: UC-019 answers these eight sentences
-# itself because its responses carry sandbox/validation shapes the generic steps
-# do not model.
+# Verified at the commit that pinned them: UC-019 answers these sentences itself
+# because its responses carry sandbox/validation shapes the generic steps do not
+# model.
+#
+# "the response should indicate a validation error" was the eighth and is GONE.
+# BR-UC-019's feature does not contain that sentence -- 19 uses across 11 OTHER
+# features, none in this one -- so the override answered a question UC-019 never
+# asks, and an instrumented run proved it: raising inside it left the module green
+# at 267 passed. It was not merely unused, it was a TRAP. The generic step requires
+# the code to equal VALIDATION_ERROR; this one accepted any error whose text
+# contained "validation", "invalid", "required", "type" or "field" -- and "type"
+# and "field" appear in almost any message. The day someone added that sentence to
+# BR-UC-019 they would have silently got the weaker grader. Removing it means they
+# get the strict one.
 INTENTIONAL_OVERRIDES = frozenset(
     {
         "the error should be a real validation error, not simulated",
@@ -36,7 +47,6 @@ INTENTIONAL_OVERRIDES = frozenset(
         "the request targets a production account",
         "the request targets a sandbox account",
         "the response should include sandbox equals true",
-        "the response should indicate a validation error",
         "the response should not include a sandbox field",
     }
 )

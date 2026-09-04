@@ -1583,6 +1583,52 @@ def then_no_error_for_mb(ctx: dict, mb_id: str) -> None:
                 assert not per_delivery_errors, f"Delivery '{mb_id}' has errors: {per_delivery_errors}"
 
 
+@then(parsers.re(r'the response errors include code "(?P<code>[^"]+)" for media buy "(?P<mb_id>[^"]+)"$'))
+def then_response_errors_include_for_mb(ctx: dict, code: str, mb_id: str) -> None:
+    """A TASK-LEVEL error in a SUCCESSFUL delivery response names *code* for *mb_id*.
+
+    The delivery verb reports a per-buy failure INSIDE a completed response rather than
+    refusing the call: get-media-buy-delivery-response.json declares ``errors[]`` as
+    "Task-specific errors and warnings (e.g., missing delivery data, reporting platform
+    issues)", and an unavailable ad server is a reporting platform issue. A request for
+    five buys where one platform is down still answers for the other four.
+
+    So this is NOT ``the response contains error code`` with a different spelling. That
+    primitive grades the ENVELOPE — ``adcp_error`` — and a response like this one
+    deliberately has none. Asserting envelope failure here is what the scenario used to
+    do, and it only ever passed because ``the operation should fail`` promoted this very
+    object into ``ctx["error"]`` and ``the error code should be`` then read it back off
+    the reconstruction rather than off the wire.
+
+    The item is identified by ``details.media_buy_id``, which is where the delivery verb
+    puts it -- the buy has no entry in ``media_buy_deliveries`` at all when its platform
+    is unreachable, so a per-delivery lookup (``the response should not include an error
+    for``) would find nothing and pass vacuously.
+
+    Sets ``ctx["error"]`` to the MATCHED error so the per-error Thens that follow grade
+    that object. That is the same promotion ``then_operation_fails`` performs, made
+    explicit and narrowed to the error this step actually found.
+    """
+    resp = payload_or_none(ctx)
+    assert resp is not None, (
+        f"No response payload to read errors[] from -- the dispatch produced nothing. ctx: {list(ctx)}"
+    )
+    errors = list(getattr(resp, "errors", None) or [])
+    assert errors, (
+        f"Response carries an EMPTY errors[], so it reports no task-level failure at all. "
+        f"Expected {code!r} for media buy {mb_id!r}."
+    )
+    for err in errors:
+        details = getattr(err, "details", None) or {}
+        if getattr(err, "code", None) == code and details.get("media_buy_id") == mb_id:
+            ctx["error"] = err
+            return
+    raise AssertionError(
+        f"No errors[] entry with code {code!r} for media buy {mb_id!r}. Carried: "
+        f"{[(getattr(e, 'code', None), (getattr(e, 'details', None) or {}).get('media_buy_id')) for e in errors]}"
+    )
+
+
 @then(parsers.parse('no error should be returned for "{mb_id}"'))
 def then_no_error_for_mb_alt(ctx: dict, mb_id: str) -> None:
     """Assert no error for a specific media buy (alt phrasing)."""
