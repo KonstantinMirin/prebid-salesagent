@@ -131,13 +131,12 @@ class TestClientRestWrapPathParamPeeling:
 
 
 class TestRestRequestKwargsBodilessVerbs:
-    """get_adcp_capabilities becoming REST-resolvable
-    (GET /api/v1/capabilities, resolved via the route's declared
-    operation_id — formerly via address_table.py's REST_TOOL_ALIASES)
-    exposed that ``_deliver_rest``/``_deliver_e2e_rest`` sent ``json=`` for
-    EVERY verb — a TypeError for GET, since neither starlette
-    TestClient.get nor httpx.Client.get accept a ``json`` kwarg. Pins the
-    fix at the shared kwargs-building helper, not just end to end."""
+    """A REST-resolvable GET (``/api/v1/capabilities``, before that route was
+    reduced to its POST) exposed that ``_deliver_rest``/``_deliver_e2e_rest``
+    sent ``json=`` for EVERY verb — a TypeError for GET, since neither
+    starlette TestClient.get nor httpx.Client.get accept a ``json`` kwarg.
+    No env dispatches a bodiless verb today, so this is where the rule is
+    graded: at the shared kwargs-building helper, not end to end."""
 
     def test_get_omits_json_body(self):
         from tests.harness.client import _rest_request_kwargs
@@ -171,10 +170,12 @@ class TestRestRequestKwargsBodilessVerbs:
 
 class TestClientRestDispatchNoDb:
     """In-process Transport.REST dispatch through the generic client for a
-    GET-verb tool. get_rest_client() requires IntegrationEnv (real DB) for a
+    GET-verb address. get_rest_client() requires IntegrationEnv (real DB) for a
     genuine end-to-end call, so this proves the narrower, decisive thing at
     unit level without one: DELIVER builds the right call shape (no ``json=``
-    for GET) and does not raise TypeError before ever reaching the network."""
+    for GET) and does not raise TypeError before ever reaching the network.
+    The address is synthetic — no production route answers a GET — because what
+    is graded is ``_deliver_rest``'s verb handling, not any tool's address."""
 
     def test_get_dispatch_does_not_pass_json_kwarg(self):
         from tests.harness.client import _deliver_rest
@@ -193,15 +194,13 @@ class TestClientRestDispatchNoDb:
             def identity_for(self, transport: Transport) -> Any:
                 return None
 
-        address = ToolAddress(
-            Transport.REST, name="get_adcp_capabilities", path_template="/api/v1/capabilities", method="get"
-        )
+        address = ToolAddress(Transport.REST, name="fake_get_tool", path_template="/api/v1/fake-get", method="get")
 
         with _UnitEnv() as env:
-            result = _deliver_rest(env, address, {"url": "/api/v1/capabilities", "body": {}}, identity=None)
+            result = _deliver_rest(env, address, {"url": "/api/v1/fake-get", "body": {}}, identity=None)
 
         assert result == "fake-response"
-        assert calls == [{"url": "/api/v1/capabilities"}]  # no `json` key — the TypeError this test guards against
+        assert calls == [{"url": "/api/v1/fake-get"}]  # no `json` key — the TypeError this test guards against
 
 
 class TestUnwrapRestResponse:

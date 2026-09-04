@@ -270,17 +270,14 @@ class TestRestAliasesAndAbsence:
             with pytest.raises(UnresolvedRestHandlerName):
                 table.resolve("get_products", Transport.REST)
 
-    def test_get_adcp_capabilities_resolves_on_rest_across_both_verbs(self):
+    def test_get_adcp_capabilities_resolves_on_rest_through_its_alias(self):
         """AC(1): get_adcp_capabilities genuinely resolves on REST — against the
         REAL production registries, not a synthetic app.
 
-        ``/api/v1/capabilities`` answers on BOTH verbs: GET (handler named after
-        the tool) and POST (handler ``post_capabilities``, aliased — it carries
-        the request body protocols filtering and context echo need). FastAPI
-        registers those as two route objects, and ``_index_rest`` folds them into
-        the tool's ONE address by re-running ``_pick_rest_method`` over the union
-        of their verbs — so the address is ``post`` (the body-carrying shape the
-        module prefers) by rule, not by whichever decorator is declared last."""
+        ``/api/v1/capabilities`` is one POST route whose handler is named
+        ``post_capabilities``, so the address exists ONLY because the alias maps
+        that handler back to the tool. Nothing else in the table would produce
+        it, which is what makes this the decisive check on the alias."""
         table = AddressTable()
         address = table.resolve("get_adcp_capabilities", Transport.REST)
         assert address.name == "get_adcp_capabilities"
@@ -323,12 +320,12 @@ class TestRestAliasesAndAbsence:
         alias requires a deliberate edit to this test, not a silent map growth.
 
         ONE entry. Every /api/v1 handler is named after the AdCP tool it
-        implements, so the handler name is the tool identity — except where one
-        tool answers on two verbs at one path: ``POST /api/v1/capabilities``
-        cannot reuse the GET handler's function name, so its handler is
-        ``post_capabilities`` and the alias restores the tool identity the name
-        cannot carry. AdCP does not define REST -- this project does -- so the
-        tool name stays canonical across every transport."""
+        implements, so the handler name is the tool identity — except
+        ``POST /api/v1/capabilities``, whose handler is ``post_capabilities``
+        (a name left over from when the path also answered a parameterless GET),
+        and the alias restores the tool identity the name does not carry. AdCP
+        does not define REST -- this project does -- so the tool name stays
+        canonical across every transport."""
         assert REST_TOOL_ALIASES == {"post_capabilities": "get_adcp_capabilities"}
 
     def test_rest_tool_aliases_source_and_target_stay_live(self):
@@ -424,7 +421,7 @@ class TestCrossRegistryConsistencyGuard:
         table = AddressTable()
         rest_names = table.all_tools(Transport.REST)
         assert len(rest_names) == 13, rest_names
-        assert "get_adcp_capabilities" in rest_names  # GET handler is named after its tool
+        assert "get_adcp_capabilities" in rest_names  # resolved from post_capabilities via the alias
         assert "post_capabilities" not in rest_names  # raw handler name, not a tool identity
         assert "get_media_buys" in rest_names  # POST /api/v1/media-buys/query
         for absent_tool in REST_ABSENT_TOOLS:

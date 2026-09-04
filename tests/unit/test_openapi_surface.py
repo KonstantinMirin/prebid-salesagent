@@ -46,7 +46,7 @@ class TestOpenAPIAvailability:
 
 EXPECTED_ENDPOINTS = [
     ("post", "/api/v1/products"),
-    ("get", "/api/v1/capabilities"),
+    ("post", "/api/v1/capabilities"),
     ("post", "/api/v1/creative-formats"),
     ("post", "/api/v1/authorized-properties"),
     ("post", "/api/v1/media-buys"),

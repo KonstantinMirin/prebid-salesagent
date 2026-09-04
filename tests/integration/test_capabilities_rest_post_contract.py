@@ -6,8 +6,9 @@ filtered sections) is derived directly from the typed
 ``GetAdcpCapabilitiesRequest`` the caller sent, and REST carries that same
 request shape via a real request body (owner decision 2026-07-24: a NEW
 ``POST /api/v1/capabilities`` route with a ``GetCapabilitiesBody`` JSON
-body, matching the codebase's RPC-over-REST convention -- the existing
-parameterless ``GET /api/v1/capabilities`` stays unchanged).
+body, matching the codebase's RPC-over-REST convention). It is now the
+tool's ONLY REST route: the parameterless GET was a second shape for the
+same tool and was deleted (salesagent-prkv.106.4).
 
 These tests exercise the REAL REST transport end to end (real Postgres via
 ``CapabilitiesEnv``/``IntegrationEnv``, real FastAPI ``TestClient``, real

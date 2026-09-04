@@ -80,8 +80,10 @@ def route_functions(tree: ast.AST) -> list[ast.FunctionDef | ast.AsyncFunctionDe
 def _body_annotation(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str | None:
     """The annotation of the route's ``body`` parameter, or None for a bodiless route.
 
-    A route with no body (the parameterless ``GET /capabilities``) declares no fields, so
-    it can neither declare-and-drop nor be converted. It carries no obligation here.
+    A route with no body declares no fields, so it can neither declare-and-drop nor be
+    converted. It carries no obligation here. No such route exists in ``api_v1.py`` today
+    — every route takes a body — but the indexer grades what is routed, not what is
+    expected, so it must answer for one that appears.
     """
     for arg in node.args.args:
         if arg.arg == "body" and arg.annotation is not None:

@@ -58,7 +58,7 @@ from src.core.exceptions import (
     build_two_layer_error_envelope,
 )
 
-# The REST driver is IMPORTED, not re-declared: ``GET /api/v1/capabilities`` is
+# The REST driver is IMPORTED, not re-declared: ``POST /api/v1/capabilities`` is
 # the thinnest route in the app and one helper already drives it with the tool
 # patched and the identity dependency overridden. A second copy here would be
 # the same logical operation with the variables renamed.

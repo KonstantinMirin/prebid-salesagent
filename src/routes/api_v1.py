@@ -348,25 +348,14 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
     return apply_version_compat("get_products", result, body.adcp_version)
 
 
-@router.get("/capabilities")
-async def get_adcp_capabilities(identity: ResolvedIdentity | None = resolve_auth):
-    """Get AdCP capabilities (auth-optional discovery skill)."""
-    # Parameterless, but still built through the shared builder: the wrapper takes a
-    # request, and an empty one is what "no filters" means. Calling with no request at all
-    # is the shape that made this route the odd one out.
-    req = capabilities_module.build_get_adcp_capabilities_request()
-    response = await capabilities_module.get_adcp_capabilities_raw(req=req, identity=identity)
-    return response.model_dump(mode="json")
-
-
 @router.post("/capabilities")
 async def post_capabilities(body: GetAdcpCapabilitiesBody, identity: ResolvedIdentity | None = resolve_auth):
-    """Get AdCP capabilities with request parameters (auth-optional discovery skill).
+    """Get AdCP capabilities (auth-optional discovery skill).
 
-    Additive alongside the parameterless GET route above (owner decision
-    2026-07-24): protocols filtering and context echo need a real request
-    body, which a bare GET cannot carry — matches the POST+JSON-body
-    convention every other route in this file follows.
+    The tool's one REST shape. Protocols filtering, context echo and the
+    version envelope all need a real request body, which a bare GET cannot
+    carry — so this route follows the POST+JSON-body convention every other
+    route in this file follows, and a call with no filters sends ``{}``.
     """
 
     # Through the shared builder, selected off "DTO fields INTERSECT builder kwargs" --
