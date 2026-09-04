@@ -398,57 +398,98 @@ implementation reads. Deciding what to do about each field — implement, or
 announce it as unsupported — is the next piece of work and needs the spec, not
 this document.
 
-## The conformance statement is derived, not authored
+## One divergence table, both directions
 
-Standards practice for implementing a subset of a protocol is a **PICS** — a
-Protocol Implementation Conformance Statement, *"a structured document which
-asserts which specific requirements are met by a given implementation"*. The
-`@omit` lists are exactly that, and the statement should be **computed** from
-them rather than maintained beside them:
+Divergence from the spec has two directions, and today they are declared in two
+places:
+
+| | meaning | today |
+|---|---|---|
+| omitted | the spec declares it; we do not implement it | the `@omit` list |
+| added | the spec does not declare it; we carry it anyway | `_NON_SCHEMA_FIELDS` |
+
+`_NON_SCHEMA_FIELDS` is a `ClassVar[dict[str, str]]` on the DTO mapping a field
+to the reason it is carried. Two entries exist. One —
+`ListAccountsRequest.idempotency_key` — already says *"Remove with the builder"*,
+which is step 5 of this migration. The other,
+`GetMediaBuysRequest.account_id`, is a genuine additive divergence: a legacy
+filter predating the spec's `account`, which live code still refuses.
+
+**These are one statement, so they get one place.** Splitting them means two
+things to keep in step, which is what this design exists to stop doing.
 
 ```python
-def conformance_gap(dto) -> frozenset[str]:
-    return library_declared_fields(dto) - set(dto.model_fields)
+# src/core/schemas/conformance.py  — pure data, imports nothing
+
+DIVERGENCE: Mapping[str, Divergence] = {
+    "GetProductsRequest": Divergence(
+        omitted={"catalog": "not implemented", "fields": "not implemented", ...},
+        added={},
+    ),
+    "GetMediaBuysRequest": Divergence(
+        omitted={...},
+        added={"account_id": "legacy filter predating the spec's `account`; "
+                             "media_buy_list.py refuses a request that sets it"},
+    ),
+}
 ```
 
-Both halves exist in `_announced_shape.py` today. There is still exactly one
-place specifying the fields — the SDK model minus the omit list — and the PICS is
-output. It is what the alignment tests grade against, and it is publishable to
-buyers if we choose.
+`@omit` takes no field names. It reads this table:
 
-## Two guards this design requires
+```python
+@omit_declared          # looks itself up in DIVERGENCE by class name
+class GetProductsRequest(LibraryGetProductsRequest): ...
+```
 
-Not decoration. This narrows a spec type inside the type system, which peer
-ecosystems do not do — they untype (Stripe), prune at the boundary (Kubernetes
-CRDs), or declare the subset out-of-band (PICS). The scaffolding is what makes
-the novelty safe.
+so there is no list at the class that can drift from the list in the table —
+there is only the table. The announced-shape check reads the `added` half from
+the same rows, and `_NON_SCHEMA_FIELDS` goes away.
 
-**1. The rebuild footgun becomes a test, not a paragraph.** For every registered
-DTO, assert `set(model_fields) == set(model_json_schema()["properties"])` modulo
-`_NON_SCHEMA_FIELDS`, and that each omitted field actually rejects under
-`extra="forbid"`. Forgetting `model_rebuild` then fails loudly instead of leaving
-a class that looks narrowed and is not.
+The table is a leaf module holding only strings, so nothing it declares can
+create an import cycle with the schemas that consult it.
 
-**2. No `Library*Request` annotation outside `src/core/schemas/`.** This is what
-keeps the LSP victim set empty by construction rather than by luck.
+**This table is the conformance statement.** Standards practice for implementing
+a subset of a protocol is a PICS — *"a structured document which asserts which
+specific requirements are met by a given implementation"*. That is what this is,
+in the repo, machine-readable, and publishable to buyers if we choose.
 
-## The alignment suite grades the opposite invariant
+## The alignment tests are deleted, not renegotiated
 
-`tests/unit/test_pydantic_schema_alignment.py` asserts the reverse of what this
-design introduces:
+`tests/unit/test_pydantic_schema_alignment.py` — and any other unit test grading
+schema-against-model, model-against-implementation, or request-against-schema
+alignment — is **deleted**. This design leaves nowhere for them to stand.
+
+They exist because the DTO and the pinned schema were two artifacts that could
+disagree, so something had to compare them. Under this design the DTO **is** the
+pinned model, minus a declared list. There is nothing to compare: the suite would
+be asserting that Python inheritance works.
+
+Concretely, its two central assertions become tautologies or contradictions:
 
 > *"Every property the pinned schema declares is a field on the model. Extra
-> model fields are fine (internal use); a MISSING schema field is not."*
+> model fields are fine; a MISSING schema field is not."*
 > — `test_no_model_is_missing_a_field_its_schema_declares`
 
-and `test_no_model_rejects_a_field_its_pinned_schema_declares` beside it. **Any
-narrowed DTO fails both, by construction.** Those tests exist because missing
-fields were defects; this design redefines some of them as declared gaps.
+Every narrowed DTO fails that by construction, and it cannot be repaired — the
+design's whole point is that some schema fields are deliberately absent. Its
+sibling `test_no_model_rejects_a_field_its_pinned_schema_declares` is the same
+assertion from the other side.
 
-They must be renegotiated to: *every pinned-schema field is either declared on
-the DTO or named in its omit list; nothing else may be absent.* That is the PICS
-made executable, and it is real migration work — it belongs in the step list
-below rather than being discovered during step 3.
+**One check survives, and it is about the table rather than the models:** every
+name in `DIVERGENCE` must exist in the spec model it names. `@omit("catalgo")`
+omits nothing and leaves the field announced; an `added` row for a field the spec
+has since defined is a row that should have been deleted on the SDK bump. That is
+a few lines against the table, not a suite against the models — and it is the only
+thing an SDK bump can silently invalidate.
+
+Everything the deleted suite was protecting is now structural:
+
+| the old suite checked | now |
+|---|---|
+| model declares every schema field | inherited; minus the table |
+| model rejects nothing the schema declares | the narrowed class is the accepted shape |
+| model has no field the schema lacks | the `added` half of the table |
+| advertised shape matches the model | MCP announces the model itself |
 
 ## Migration order
 
