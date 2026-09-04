@@ -208,26 +208,47 @@ class WorkflowRepository:
         """
         return append_step_comment(self._session, step_id, user=user, text=text, tenant_id=self._tenant_id)
 
-    def get_by_step_id(self, step_id: str) -> WorkflowStep | None:
-        """Get a workflow step by its ID within the tenant."""
-        return self._session.scalars(
-            select(WorkflowStep)
-            .join(DBContext)
-            .where(
-                WorkflowStep.step_id == step_id,
-                DBContext.tenant_id == self._tenant_id,
-            )
-        ).first()
+    def get_by_step_id(self, step_id: str, principal_id: str | None = None) -> WorkflowStep | None:
+        """Get a workflow step by its ID within the tenant, optionally within a principal.
 
-    def get_by_step_id_or_raise(self, step_id: str) -> WorkflowStep:
+        ``principal_id`` narrows the lookup to the tasks that principal owns. It is OPTIONAL
+        rather than required because the two internal callers must NOT be narrowed: the
+        ``get_step_by_id`` alias serves admin/service callers acting as the publisher, and
+        ``update_step_status`` is the system completing a task it does not own. Defaulting to
+        None leaves both exactly as they were.
+
+        The BUYER-facing path passes it, and must:
+        protocol/get-task-status-request.json (AdCP 3.1.1) says "Sellers MUST return
+        REFERENCE_NOT_FOUND for a task_id that exists only under a different account or
+        principal", and the get_products_async storyboard grades it
+        (step get_products_task_status_wrong_account, "Sellers MUST NOT reveal whether the
+        task exists under another account or principal"). Tenant scoping alone let any
+        authenticated principal read another principal's task in the same tenant, including
+        its request_data and response_data (salesagent-prkv.85).
+        """
+        conditions = [
+            WorkflowStep.step_id == step_id,
+            DBContext.tenant_id == self._tenant_id,
+        ]
+        if principal_id is not None:
+            conditions.append(DBContext.principal_id == principal_id)
+        return self._session.scalars(select(WorkflowStep).join(DBContext).where(*conditions)).first()
+
+    def get_by_step_id_or_raise(self, step_id: str, principal_id: str | None = None) -> WorkflowStep:
         """Get a workflow step by ID or raise ``AdCPTaskNotFoundError``.
 
         Collapses the task fetch-and-raise guard shared by get_task/complete_task.
         No ``context`` parameter by design: those tools carry the FastMCP transport
         ``Context``, not an AdCP ``ContextObject``, so the task not-found envelope
         stays context-less rather than echoing a transport object into a repository.
+
+        ``principal_id`` narrows the lookup (see :meth:`get_by_step_id`). The error it
+        raises is already the one the spec asks for -- AdCPTaskNotFoundError emits
+        REFERENCE_NOT_FOUND -- and it is identical whether the task is absent or owned by
+        someone else, which is what "MUST NOT reveal whether the task exists under another
+        account or principal" requires.
         """
-        step = self.get_by_step_id(step_id)
+        step = self.get_by_step_id(step_id, principal_id=principal_id)
         if step is None:
             from src.core.exceptions import AdCPTaskNotFoundError
 

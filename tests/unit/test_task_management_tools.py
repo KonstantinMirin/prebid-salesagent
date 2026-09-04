@@ -205,6 +205,168 @@ class TestGetTaskTool:
                 await get_task_fn(task_id="nonexistent", identity=identity)
 
 
+class TestGetTaskSpecFlags:
+    """get_task honours the four fields protocol/get-task-status-request.json declares.
+
+    Grounded at the PIN (AdCP 3.1.1 via adcp 6.6.0):
+      * ``include_result`` is GRADED — domains/media-buy/scenarios/get_products_async.yaml,
+        step ``get_products_task_status_completed``, which polls with include_result: true
+        and asserts ``result.*``. The request schema says the payload is "Present when
+        status is 'completed' and include_result was true in the request; absent otherwise",
+        and task-lifecycle.mdx says "Send include_result: true to receive the terminal task
+        payload ... once the task reaches status: completed".
+      * ``include_history`` is UNGRADED — zero occurrences in the whole 3.1.1 compliance
+        tree and zero in the prose. It exists only in the request schema and as the
+        response's ``history`` array, whose items are {timestamp, type, data}. Nothing
+        grades it, so what it must do is exactly what the response schema's item shape says
+        and no more. It is implemented rather than refused because the material is real:
+        a workflow step records the request that opened it and the response that closed it.
+      * ``ext`` is shape only.
+      * ``account`` is graded and behavioural; its own class covers it.
+
+    These are behaviour tests, not declaration tests. The declaration is graded by
+    test_pydantic_schema_alignment.py; declaring a flag without honouring it is the
+    accept-and-ignore this class exists to prevent.
+    """
+
+    @pytest.fixture
+    def mock_workflow_repo(self):
+        return MagicMock()
+
+    @pytest.fixture
+    def mock_uow(self, mock_workflow_repo):
+        uow = MagicMock()
+        uow.__enter__ = Mock(return_value=uow)
+        uow.__exit__ = Mock(return_value=None)
+        uow.workflows = mock_workflow_repo
+        return uow
+
+    @pytest.fixture
+    def completed_step(self):
+        step = Mock(spec=WorkflowStep)
+        step.step_id = "step_done"
+        step.context_id = "ctx_done"
+        step.status = "completed"
+        step.step_type = "tool_call"
+        step.tool_name = "create_media_buy"
+        step.owner = "principal"
+        step.created_at = datetime(2026, 3, 1, 9, 0, 0, tzinfo=UTC)
+        step.completed_at = datetime(2026, 3, 1, 9, 5, 0, tzinfo=UTC)
+        step.request_data = {"packages": [{"product_id": "prod_1"}]}
+        step.response_data = {"media_buy_id": "mb_1", "packages": []}
+        step.error_message = None
+        step.comments = []
+        step.transaction_details = None
+        return step
+
+    async def _call(self, mock_uow, identity, **kwargs):
+        from src.core.main import mcp
+
+        tool = await mcp.get_tool("get_task")
+        with patch("src.core.tools.task_management.WorkflowUoW", return_value=mock_uow):
+            return await tool.fn(identity=identity, **kwargs)
+
+    def _identity(self):
+        from tests.factories.principal import PrincipalFactory
+
+        return PrincipalFactory.make_identity(
+            principal_id="principal_123",
+            tenant_id="test_tenant",
+            tenant={"tenant_id": "test_tenant", "name": "Test Tenant"},
+            protocol="mcp",
+        )
+
+    async def test_result_absent_by_default(self, mock_uow, mock_workflow_repo, completed_step):
+        """A status-only poll carries no terminal payload, which is what the default buys.
+
+        The pin defaults include_result to false "for lightweight status-only polls". Before
+        this, the terminal payload rode on EVERY get_task response, so the flag had nothing
+        to switch and a status poll shipped the whole result.
+        """
+        mock_workflow_repo.get_by_step_id_or_raise.return_value = completed_step
+        mock_workflow_repo.get_mappings_for_step.return_value = []
+
+        result = await self._call(mock_uow, self._identity(), task_id="step_done")
+
+        assert result["status"] == "completed"
+        assert "result" not in result
+
+    async def test_result_present_when_requested_and_completed(self, mock_uow, mock_workflow_repo, completed_step):
+        """include_result=true on a completed task returns the terminal payload as `result`."""
+        mock_workflow_repo.get_by_step_id_or_raise.return_value = completed_step
+        mock_workflow_repo.get_mappings_for_step.return_value = []
+
+        result = await self._call(mock_uow, self._identity(), task_id="step_done", include_result=True)
+
+        assert result["result"] == {"media_buy_id": "mb_1", "packages": []}
+
+    async def test_result_withheld_while_not_completed(self, mock_uow, mock_workflow_repo, completed_step):
+        """Asking for the result of an unfinished task returns none — "when status is completed".
+
+        Not an error: the buyer is polling precisely because they do not know yet. The
+        payload simply is not owed until the task reaches completed.
+        """
+        completed_step.status = "requires_approval"
+        mock_workflow_repo.get_by_step_id_or_raise.return_value = completed_step
+        mock_workflow_repo.get_mappings_for_step.return_value = []
+
+        result = await self._call(mock_uow, self._identity(), task_id="step_done", include_result=True)
+
+        assert "result" not in result
+
+    async def test_history_absent_by_default(self, mock_uow, mock_workflow_repo, completed_step):
+        mock_workflow_repo.get_by_step_id_or_raise.return_value = completed_step
+        mock_workflow_repo.get_mappings_for_step.return_value = []
+
+        result = await self._call(mock_uow, self._identity(), task_id="step_done")
+
+        assert "history" not in result
+
+    async def test_history_carries_the_request_and_response_exchanges(
+        self, mock_uow, mock_workflow_repo, completed_step
+    ):
+        """include_history=true returns the exchanges in the response schema's item shape.
+
+        {timestamp, type: request|response, data} per get-task-status-response.json. The
+        request entry is stamped with the step's created_at and the response entry with its
+        completed_at, because those ARE when each exchange happened.
+        """
+        mock_workflow_repo.get_by_step_id_or_raise.return_value = completed_step
+        mock_workflow_repo.get_mappings_for_step.return_value = []
+
+        result = await self._call(mock_uow, self._identity(), task_id="step_done", include_history=True)
+
+        assert result["history"] == [
+            {
+                "timestamp": "2026-03-01T09:00:00+00:00",
+                "type": "request",
+                "data": {"packages": [{"product_id": "prod_1"}]},
+            },
+            {
+                "timestamp": "2026-03-01T09:05:00+00:00",
+                "type": "response",
+                "data": {"media_buy_id": "mb_1", "packages": []},
+            },
+        ]
+
+    async def test_history_omits_an_exchange_that_has_not_happened(self, mock_uow, mock_workflow_repo, completed_step):
+        """A task still awaiting approval has a request and no response yet.
+
+        Emitting a response entry with a null timestamp would satisfy the array while
+        describing an exchange that never occurred; the item's own schema makes timestamp,
+        type and data all required.
+        """
+        completed_step.status = "requires_approval"
+        completed_step.completed_at = None
+        completed_step.response_data = None
+        mock_workflow_repo.get_by_step_id_or_raise.return_value = completed_step
+        mock_workflow_repo.get_mappings_for_step.return_value = []
+
+        result = await self._call(mock_uow, self._identity(), task_id="step_done", include_history=True)
+
+        assert [entry["type"] for entry in result["history"]] == ["request"]
+
+
 class TestCompleteTaskTool:
     """Test the complete_task MCP tool actually works."""
 

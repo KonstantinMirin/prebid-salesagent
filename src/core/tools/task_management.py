@@ -12,8 +12,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from adcp.types import AccountReference as LibraryAccountReference
+from adcp.types import ExtensionObject, PaginationRequest
 from adcp.types import ListTasksRequest as LibraryListTasksRequest
-from adcp.types import PaginationRequest
 from adcp.types.generated_poc.protocol.list_tasks_request import Filters as ListTasksFilters
 from adcp.types.generated_poc.protocol.list_tasks_request import Sort as ListTasksSort
 from fastmcp.server.context import Context
@@ -224,17 +224,36 @@ async def list_tasks(
         }
 
 
-def build_get_task_request(task_id: str, context: Any = None) -> GetTaskRequest:
+def build_get_task_request(
+    task_id: str,
+    context: Any = None,
+    account: LibraryAccountReference | None = None,
+    include_history: bool = False,
+    include_result: bool = False,
+    ext: ExtensionObject | None = None,
+) -> GetTaskRequest:
     """Build the request get_task accepts.
 
-    get_task is a LOCAL tool -- it appears in neither the pinned 3.1 schema tree nor
-    adcp.server.mcp_tools.ADCP_TOOL_DEFINITIONS -- so a local DTO is its final shape, not a
-    placeholder waiting for an SDK type. What the builder buys is that the tool follows the
-    same wrapper -> builder -> DTO -> impl template as every other tool, which is what lets
-    _register_tool resolve its model without the explicit `dto=` escape hatch
-    (salesagent-prkv.29).
+    The DTO is local because the pinned SDK ships no GetTaskRequest, but the TOOL is not
+    local: protocol/get-task-status-request.json defines it, and GetTaskRequest declares
+    that ref. This docstring used to say get_task "appears in neither the pinned 3.1 schema
+    tree nor ADCP_TOOL_DEFINITIONS" -- half right, and the wrong half is why four of its
+    six spec fields went missing (salesagent-prkv.85). The spec names the task
+    get-task-status while the tool is get_task, which is the only reason the schema path
+    cannot be derived from the SDK module name the way the other twelve are.
+
+    What the builder buys is that the tool follows the same wrapper -> builder -> DTO ->
+    impl template as every other tool, which is what lets _register_tool resolve its model
+    without the explicit `dto=` escape hatch (salesagent-prkv.29).
     """
-    return GetTaskRequest(task_id=task_id, context=context)
+    return GetTaskRequest(
+        task_id=task_id,
+        context=context,
+        account=account,
+        include_history=include_history,
+        include_result=include_result,
+        ext=ext,
+    )
 
 
 def build_complete_task_request(
@@ -255,7 +274,13 @@ def build_complete_task_request(
 
 
 async def get_task(
-    task_id: str, context: Context | None = None, identity: ResolvedIdentity | None = None
+    task_id: str,
+    context: Context | None = None,
+    identity: ResolvedIdentity | None = None,
+    account: LibraryAccountReference | None = None,
+    include_history: bool = False,
+    include_result: bool = False,
+    ext: ExtensionObject | None = None,
 ) -> dict[str, Any]:
     """Get detailed information about a specific task.
 
@@ -263,6 +288,10 @@ async def get_task(
         task_id: The unique task/workflow step ID
         context: MCP context (automatically provided)
         identity: Pre-resolved identity (preferred over context)
+        account: Account scope for the lookup (see the request DTO)
+        include_history: Return this task's request/response exchanges
+        include_result: Return the terminal payload when the task is completed
+        ext: Extension slot (core/ext.json)
 
     Returns:
         Dict containing complete task details
@@ -270,16 +299,29 @@ async def get_task(
     if identity is None and context is not None:
         identity = await context.get_state("identity")
 
-    req = build_get_task_request(task_id=task_id, context=context if not isinstance(context, Context) else None)
+    req = build_get_task_request(
+        task_id=task_id,
+        context=context if not isinstance(context, Context) else None,
+        account=account,
+        include_history=include_history,
+        include_result=include_result,
+        ext=ext,
+    )
 
     identity = require_identity(identity)
     tenant = require_tenant(identity)
-    require_principal_id(identity)  # F-03: an authenticated (non-anonymous) principal is required
+    principal_id = require_principal_id(identity)  # F-03: an authenticated (non-anonymous) principal is required
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
 
-        task = uow.workflows.get_by_step_id_or_raise(req.task_id)
+        # SCOPED TO THE CALLER'S PRINCIPAL, which is what req.account's obligation amounts
+        # to here: "Sellers MUST return REFERENCE_NOT_FOUND for a task_id that exists only
+        # under a different account or principal" (get-task-status-request.json @ 3.1.1).
+        # The lookup was tenant-scoped only, so any authenticated principal could read
+        # another's task by id -- request_data and response_data included. The raised error
+        # is identical to the absent case, so it does not reveal that the task exists.
+        task = uow.workflows.get_by_step_id_or_raise(req.task_id, principal_id=principal_id)
 
         mappings = uow.workflows.get_mappings_for_step(task_id)
 
@@ -295,7 +337,6 @@ async def get_task(
             ),
             "updated_at": None,
             "request_data": task.request_data,
-            "response_data": task.response_data,
             "error_message": task.error_message,
             "associated_objects": [
                 {
@@ -310,7 +351,54 @@ async def get_task(
             ],
         }
 
+        # The terminal payload is CONDITIONAL. get-task-status-request.json defaults
+        # include_result to false "for lightweight status-only polls", and the response
+        # schema says result is "Present when status is 'completed' and include_result was
+        # true in the request; absent otherwise". This used to ship the payload on every
+        # response under the non-spec name ``response_data``, so a status poll carried the
+        # whole result and the flag had nothing left to switch.
+        #
+        # Withheld on an unfinished task rather than refused: the buyer is polling precisely
+        # because they do not know yet, and the payload is not owed until completed. A
+        # failed task's detail rides error_message, per "For failed tasks, read the existing
+        # error field instead" (task-lifecycle.mdx).
+        if req.include_result and task.status == "completed":
+            task_detail["result"] = task.response_data
+
+        # UNGRADED by any storyboard in the 3.1.1 tree, so this is the response schema's
+        # item shape and nothing invented on top of it: {timestamp, type, data}, all three
+        # required. Implemented rather than refused because the material is real -- a step
+        # records the request that opened it and the response that closed it, with the
+        # instants each happened at. An exchange that has not happened is OMITTED; padding
+        # the array with a null-timestamped entry would describe one that never occurred.
+        if req.include_history:
+            task_detail["history"] = _task_history(task)
+
         return task_detail
+
+
+def _task_history(task: Any) -> list[dict[str, Any]]:
+    """The task's exchanges, in the shape get-task-status-response.json gives history items.
+
+    Two at most today, because a workflow step records one request and one response. The
+    list form is the spec's, not a guess at a future shape: if a step ever accumulates more
+    exchanges they append here without any caller changing.
+    """
+
+    def _stamp(value: Any) -> str | None:
+        if value is None:
+            return None
+        return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+    exchanges = (
+        ("request", _stamp(task.created_at), task.request_data),
+        ("response", _stamp(getattr(task, "completed_at", None)), task.response_data),
+    )
+    return [
+        {"timestamp": timestamp, "type": kind, "data": data}
+        for kind, timestamp, data in exchanges
+        if timestamp is not None and data is not None
+    ]
 
 
 async def complete_task(

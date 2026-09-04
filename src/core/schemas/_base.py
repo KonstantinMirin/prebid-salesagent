@@ -22,8 +22,8 @@ if TYPE_CHECKING:
     from src.core.schemas.creative import Creative
 
 from adcp import Error as _LibraryError
-from adcp.types import BrandReference as LibraryBrandReference
 from adcp.types import (
+    AccountReference,
     ContextObject,
     # DeliveryStatus / MediaBuyStatus are no longer referenced by a declaration in
     # this module — Snapshot and GetMediaBuysMediaBuy inherit them from their library
@@ -32,10 +32,12 @@ from adcp.types import (
     # caller. Unit tests do not catch that; a collection ImportError in the
     # integration suite is how it surfaced.
     DeliveryStatus,  # noqa: F401 — re-exported via src.core.schemas
+    ExtensionObject,
     MediaBuyStatus,  # noqa: F401 — re-exported via src.core.schemas
     PriceGuidance,  # Replaces local PriceGuidance class
     PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
 )
+from adcp.types import BrandReference as LibraryBrandReference
 from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
 
 # Import main request/response types from stable API
@@ -3355,6 +3357,39 @@ class GetTaskRequest(SalesAgentBaseModel):
 
     task_id: str = Field(..., description="The task to retrieve")
     context: ContextObject | None = Field(default=None, description="Application-level context")
+
+    # The remaining four fields protocol/get-task-status-request.json declares. They were
+    # absent, so a buyer sending any of them had it dropped -- and the gap survived because
+    # get_task sat in the table that graded EXTRA fields and outside the one that grades
+    # MISSING ones (salesagent-prkv.85).
+    #
+    # DECLARED ONLY BECAUSE THEY ARE HONOURED. Two of them are behaviour, not shape, and
+    # declaring a behavioural flag without implementing it is accept-and-ignore: the buyer
+    # asks, gets a 200, and receives nothing. Where each is honoured:
+    #   account         -> get_task scopes the lookup to the caller's principal and answers
+    #                      REFERENCE_NOT_FOUND otherwise
+    #   include_result  -> the terminal payload is returned only when true AND completed
+    #   include_history -> the task's request/response exchanges, per the response schema's
+    #                      history item shape
+    account: AccountReference | None = Field(
+        default=None,
+        description=(
+            "Account scope for the task lookup. A task_id belonging to another account or "
+            "principal answers REFERENCE_NOT_FOUND, which does not reveal that it exists."
+        ),
+    )
+    include_history: bool = Field(
+        default=False,
+        description="Include this task's request/response exchanges (may increase response size)",
+    )
+    include_result: bool = Field(
+        default=False,
+        description=(
+            "Include the task's result payload when status is completed. False by default so "
+            "a status-only poll stays lightweight."
+        ),
+    )
+    ext: ExtensionObject | None = Field(default=None, description="Extension slot (core/ext.json)")
 
 
 class GetMediaBuysRequest(LibraryGetMediaBuysRequest):
