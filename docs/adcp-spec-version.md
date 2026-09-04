@@ -117,7 +117,7 @@ subset). That tree moves automatically with the `pyproject.toml` SDK pin —
 there is exactly one upstream pin for schema *structure* (request/response
 shapes, `$ref` graphs, `required`/`properties`), and the CI guard above
 (`tests/unit/test_adcp_spec_version.py`) keeps it honest. Consumers:
-`tests/unit/test_pydantic_schema_alignment.py`, `tests/helpers/adcp_schema_validator.py`,
+`tests/unit/test_request_factory_schema_conformance.py`, `tests/helpers/adcp_schema_validator.py`,
 and the schema-validating integration tests (`tests/integration/test_get_products_placement_schema.py`
 and friends). The plain tree is deliberately used over `bundled/`: `bundled/`
 only physically ships 8 of the SDK's 16 top-level categories (no `account/`,

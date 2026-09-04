@@ -22,31 +22,27 @@ So the rule is:
   schema is ``protocol/get-task-status-request.json``, which no derivation from either
   name produces.
 
-WHAT MUST NOT BE LOST, and is not
----------------------------------
+COVERAGE, and the half of it that is currently missing
+------------------------------------------------------
 The old table was keyed by TOOL, not by model, and its docstring defended that: "a
 request DTO that quietly stops being graded is the failure this pairing exists to
-prevent, and a model-keyed map cannot notice a tool it was never given." That property
-is the requirement, and the table was only one way to meet it. It is met here MORE
-strongly, because membership is no longer a key set anyone can decline to add to:
-callers parametrize over :func:`graded_request_schemas`, whose tool set comes from the
-LIVE MCP registry, and
-``TestNoNonSpecFieldsAreAdvertised::test_every_registered_tool_is_graded_or_provably_has_no_spec_schema``
-requires every registered tool that resolves NO ref to PROVE the pinned tree holds no
-request schema for it — see :func:`pinned_request_schema_candidates`.
+prevent, and a model-keyed map cannot notice a tool it was never given." Half of that
+still holds here and is stronger than a table: membership is not a key set anyone can
+decline to add to, because callers parametrize over :func:`graded_request_schemas`,
+whose tool set comes from the LIVE MCP registry.
 
-That proof also got stronger. The version this replaces probed exactly one candidate
-filename, ``<tool-name>-request.json``; ``get_task``'s schema is
-``get-task-status-request.json``, so had its binding ever been dropped the probe would
-have found nothing and reported the tool as legitimately ungraded. The candidate search
-here is token-subset, so it finds that file and fails.
+The other half is GONE. A tool that resolves NO ref is simply absent from that dict,
+and the test that made such a tool prove the pinned tree holds no request schema for it
+lived in the alignment suite, deleted whole (docs/design/one-tool-registry.md). Nothing
+replaces it here: a tool whose binding is dropped now falls out of the grading silently.
+Its helper — a token-subset candidate search that found ``get-task-status-request.json``
+for ``get_task``, where an exact-filename probe would have reported "no schema exists" —
+was deleted with it.
 """
 
 from __future__ import annotations
 
 from pydantic import BaseModel
-
-from tests.helpers import pinned_schema
 
 #: The package every generated SDK request/response type lives under, one module per
 #: pinned schema file. ``adcp.types.generated_poc.media_buy.create_media_buy_request``
@@ -95,9 +91,9 @@ def graded_request_schemas() -> dict[str, tuple[str, type[BaseModel]]]:
     """``tool -> (schema ref, request DTO)`` for every registered tool that resolves one.
 
     The tool set is the LIVE MCP registry, so a tool cannot sit outside the grading by
-    being left out of something. A tool that resolves no ref is absent here and is
-    graded instead by the coverage test, which makes it prove the spec defines no
-    request schema for it.
+    being left out of something. A tool that resolves no ref is absent here, and nothing
+    currently makes it prove the spec defines no request schema for it — see the module
+    docstring.
     """
     from tests.helpers.registered_tools import registered_request_dtos
 
@@ -107,25 +103,3 @@ def graded_request_schemas() -> dict[str, tuple[str, type[BaseModel]]]:
         if ref is not None:
             graded[tool_name] = (ref, model)
     return graded
-
-
-def pinned_request_schema_candidates(tool_name: str) -> dict[str, str]:
-    """``ref -> reason`` for every pinned request schema that plausibly belongs to *tool_name*.
-
-    The negative proof behind "this tool genuinely has no pinned request schema". A
-    schema qualifies when its file stem's words are a SUPERSET of the tool name's --
-    ``get-task-status`` for ``get_task`` -- which is what catches a schema whose name
-    carries extra words the tool name does not. An exact-filename probe does not:
-    ``get_task`` -> ``get-task-request.json`` resolves nothing, and reporting that as
-    "no schema exists" is how a tool goes silently ungraded.
-
-    ``bundled/`` is skipped: it is a physical mirror of the plain tree (see
-    ``tests.helpers.pinned_schema``), so including it reports every hit twice.
-    """
-    wanted = set(tool_name.split("_"))
-    root = pinned_schema.schema_root()
-    return {
-        f"{path.parent.name}/{path.name}": f"stem {path.stem!r} covers {sorted(wanted)}"
-        for path in sorted(root.rglob("*-request.json"))
-        if "bundled" not in path.relative_to(root).parts and wanted <= set(path.stem.split("-"))
-    }

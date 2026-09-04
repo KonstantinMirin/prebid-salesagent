@@ -242,9 +242,11 @@ class TestGetTaskSpecFlags:
       * ``ext`` is shape only.
       * ``account`` is graded and behavioural; its own class covers it.
 
-    These are behaviour tests, not declaration tests. The declaration is graded by
-    test_pydantic_schema_alignment.py; declaring a flag without honouring it is the
-    accept-and-ignore this class exists to prevent.
+    These are behaviour tests, not declaration tests, and there is deliberately no
+    declaration test to point at: the DTO is the SDK's model minus a declared omission, so
+    what it declares is inherited rather than compared (docs/design/one-tool-registry.md).
+    Declaring a flag without honouring it is the accept-and-ignore this class exists to
+    prevent, and only a behaviour test can see it.
     """
 
     @pytest.fixture

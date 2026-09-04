@@ -160,10 +160,12 @@ class Product(LibraryProduct):
 - Only redeclare parent fields when needed for nested serialization (Pattern #4)
 - Mark internal-only fields with `exclude=True`
 - Run `pytest tests/unit/test_adcp_contract.py` before commit
-- **Enforced by:** `tests/unit/test_pydantic_schema_alignment.py` — declared fields and
-  model_dump survival graded against the PINNED SCHEMA — and by
-  `tests/unit/test_architecture_schema_inheritance.py`, which grades redeclarations
-  against the library parent.
+- **Enforced by:** `tests/unit/test_architecture_schema_inheritance.py`, which grades
+  redeclarations against the library parent. There is deliberately no suite comparing a
+  model's field set to the pinned schema: the DTO IS the pinned model minus a declared
+  omission (`src/core/schemas/conformance.py`), so what it declares is inherited and a
+  comparison would assert that Python inheritance works. See
+  [docs/design/one-tool-registry.md](docs/design/one-tool-registry.md).
 - The inheritance guard was once deleted on the ground that such a guard "has to
   enumerate how this repo spells its imports — every spelling it does not know is a
   silent hole." The premise was true of the old implementation and is no longer true of

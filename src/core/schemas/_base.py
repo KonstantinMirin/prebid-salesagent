@@ -3351,11 +3351,12 @@ class GetTaskRequest(SalesAgentBaseModel):
     #: Every other request DTO reaches an ``adcp`` generated type whose module path names
     #: its schema file (``create_media_buy_request`` -> ``media-buy/create-media-buy-request.json``);
     #: this one has no SDK ancestry to read, and the spec calls the task ``get-task-status``
-    #: while the tool is ``get_task``, so neither name produces the ref. Deleting this line
-    #: does not quietly ungrade the tool: the coverage test in
-    #: ``tests/unit/test_pydantic_schema_alignment.py`` searches the pinned tree for a
-    #: request schema whose name COVERS the tool's, finds ``get-task-status-request.json``,
-    #: and fails. Drop it when the SDK ships the type and this model inherits it.
+    #: while the tool is ``get_task``, so neither name produces the ref. It is read by
+    #: ``tests/helpers/request_schemas.graded_request_schemas``, which has no other way to
+    #: reach this tool's schema -- deleting the line drops the tool out of that grading
+    #: silently. (The coverage test that used to notice lived in the alignment suite and was
+    #: deleted with it; see docs/design/one-tool-registry.md.) Drop it when the SDK ships the
+    #: type and this model inherits it.
     _PINNED_SCHEMA_REF: ClassVar[str] = "protocol/get-task-status-request.json"
 
     task_id: str = Field(..., description="The task to retrieve")
@@ -3497,11 +3498,11 @@ class GetMediaBuysRequest(LibraryGetMediaBuysRequest):
     # silently opted this model out of that -- an unknown field was accepted everywhere.
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # A DECLARED departure from the spec's field set, read by
-    # src.core.tools._announced_shape. No wrapper declares an ``account_id`` parameter today,
-    # so it is not advertised -- but "not advertised yet" is one wrapper parameter away from
-    # "published to buyers as though the spec defined it", which is the whole defect this
-    # marker exists to stop. Declaring it now states the departure where the field is.
+    # A departure from the spec's field set, and declaring it here IS the statement of that:
+    # media-buy/get-media-buys-request.json (AdCP 3.1.1) defines no account_id, the spec field
+    # is `account`, and the added set is derived as
+    # ``set(model_fields) - library_declared_fields(cls)`` rather than listed a second time
+    # (docs/design/one-tool-registry.md).
     #
     # It does NOT filter, despite the class docstring above calling it a filter. Its one
     # reader is media_buy_list.py's guard, which REFUSES the request when it is set
@@ -3510,14 +3511,6 @@ class GetMediaBuysRequest(LibraryGetMediaBuysRequest):
     # is unreachable from the wire and is exercised only by tests that construct the DTO
     # in-process. Whether to keep giving a typed refusal to a caller who spells `account_id`
     # is a compatibility question, not a spec one.
-    _NON_SCHEMA_FIELDS: ClassVar[dict[str, str]] = {
-        "account_id": (
-            "media-buy/get-media-buys-request.json (AdCP 3.1.1) defines no account_id; the "
-            "spec field is `account`. Retained only because media_buy_list.py refuses a "
-            "request that sets it, and that refusal is graded by tests."
-        )
-    }
-
     account_id: str | None = Field(default=None, description="Account to filter to (legacy, prefer account)")
 
 
