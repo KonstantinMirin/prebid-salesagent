@@ -393,10 +393,10 @@ It makes it **visible in one place** — the `@omit` list on each DTO — where 
 is invisible, spread across sixteen builder signatures, and reproduced three
 times per tool.
 
-Populating `unimplemented` is mechanical: it is `DTO.model_fields` minus what the
-implementation reads. Deciding what to do about each field — implement, or
-announce it as unsupported — is the next piece of work and needs the spec, not
-this document.
+Populating each `@omit` list is mechanical: it is the spec model's fields minus
+what the implementation reads. Deciding what to do about each field — implement
+it, or keep announcing it as unsupported — is the next piece of work and needs
+the spec, not this document.
 
 ## One divergence table, one column
 
@@ -514,9 +514,10 @@ Each step leaves the tree green and is independently revertible.
    buyer-visible change — they are `exclude=True` today, so no transport accepts
    them already. This must precede step 5, because after it the DTO is the
    accepted shape without qualification.
-4. **Renegotiate the alignment suite** to grade *declared or omitted* rather than
-   *declared*, and add the two guards. This comes BEFORE any narrowing, because
-   the first `@omit` fails the current suite immediately.
+4. **Delete the alignment suite and `_NON_SCHEMA_FIELDS`.** This comes BEFORE any
+   narrowing, because the first `@omit` fails the current suite immediately. No
+   guards replace it — the decorator refuses a wrong table at import, and the
+   added half is derived rather than declared.
 5. **Narrow the DTO and swap its builder, in one change, per tool.**
 
    These two cannot be separated, and the order matters in both directions:
