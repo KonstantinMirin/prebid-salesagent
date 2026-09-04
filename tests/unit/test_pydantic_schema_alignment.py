@@ -1383,6 +1383,16 @@ def _synthesize_sample(arm: dict[str, Any], schema_ref: str, model: type | None 
 #:
 #: ``test_known_response_gaps_are_still_real`` re-measures every row on every run, so a
 #: row cannot outlive its defect the way a written rationale can.
+#: ONE ROOT CAUSE, not two field lists. Both tools build raw dicts in
+#: src/core/tools/task_management.py, and the two pinned shapes share a byte-identical
+#: seven-property core -- task_id, task_type, status, created_at, updated_at,
+#: completed_at, has_webhook -- with every shared property's subschema equal. The
+#: required sets differ in exactly one member (tasks[] wants ``domain``, get_task wants
+#: ``protocol``), and those two are the same axis under two names: ``domain`` is an
+#: inline enum of media-buy/signals/creative, ``protocol`` is a $ref to
+#: enums/adcp-protocol.json, kebab-case, same values. So the fix for either is the same
+#: shape -- give the response a model built on that shared core -- and only
+#: list_tasks' envelope (query_summary/pagination/status) is genuinely list-specific.
 _UNGRADED_RESPONSES: dict[str, str] = {
     "list_tasks": (
         "FIXME(#2201): the wire is {tasks, total, offset, limit, has_more} -- absent are "
@@ -1390,9 +1400,9 @@ _UNGRADED_RESPONSES: dict[str, str] = {
         "`type` is emitted where the pin says `task_type`"
     ),
     "get_task": (
-        "FIXME(#2201): sibling half of the same module -- protocol and task_type are absent "
-        "and `type` is emitted where the pin says `task_type` (salesagent-prkv.89 carries the "
-        "spec citation and the storyboard step)"
+        "FIXME(#2202): the same raw-dict root cause one function away -- protocol and "
+        "task_type are absent and `type` is emitted where the pin says `task_type` "
+        "(salesagent-prkv.89 carries the spec citation and the storyboard step)"
     ),
 }
 
