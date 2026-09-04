@@ -16,6 +16,7 @@ all spec-compliant requests.
 import importlib
 import inspect
 import pkgutil
+import typing
 from collections.abc import Iterator
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
@@ -29,21 +30,15 @@ from src.core.exceptions import AdCPInvalidRequestError
 from src.core.schemas import (
     CreateMediaBuyRequest,
     CreateMediaBuySuccess,
-    GetMediaBuysResponse,
     GetProductsRequest,
-    GetProductsResponse,
     GetSignalsResponse,
-    ListAccountsResponse,
-    ListCreativesResponse,
     Product,
     Signal,
     SyncAccountsResponse,
-    SyncCreativesResponse,
     SyncResponseAccount,
     UpdateMediaBuySuccess,
 )
-from src.core.schemas.creative import ListCreativeFormatsResponse
-from src.core.schemas.delivery import GetCreativeDeliveryResponse, GetMediaBuyDeliveryResponse
+from src.core.schemas.delivery import GetCreativeDeliveryResponse
 from tests.helpers import pinned_schema
 from tests.helpers.adcp_factories import create_test_cpm_pricing_option, create_test_publisher_properties_by_tag
 from tests.helpers.registered_tools import registered_tool_shapes
@@ -1030,7 +1025,10 @@ class ResponseAlignment:
     """Maps a local success model to its pinned response (sub-)schema."""
 
     schema_ref: str
-    selector: str  # a property that identifies the success oneOf variant
+    #: A property identifying the success oneOf variant. ``None`` selects the arm by
+    #: ``_success_shape``'s own rule, which is what every derived row uses; the
+    #: supplemental per-item rows below name theirs.
+    selector: str | None
     item_key: str | None  # if set, the per-element schema is variant.properties[item_key].items
     model: type
     declared_fields: frozenset[str] = frozenset()  # fields that MUST be declared on the model
@@ -1045,79 +1043,99 @@ class _RegistryRow:
     reads its required[]/properties so a required field added to the spec is
     enforced automatically. ``sample_override`` supplies valid kwargs only where
     a complex required field (e.g. packages, reporting_period, pagination) cannot
-    be synthesized generically — it never weakens or skips a required field.
-    ``declared_fields_override`` ADDS to the F4 declared-field check — the pinned
-    required set is always included — so a row can also pin specific OPTIONAL fields
+    be synthesized generically -- it never weakens or skips a required field.
+    ``declared_fields_override`` ADDS to the F4 declared-field check -- the pinned
+    required set is always included -- so a row can also pin specific OPTIONAL fields
     production emits (e.g. CreateMediaBuySuccess valid_actions/context) without
     quietly dropping the required ones.
+
+    ``selector`` is no longer carried: it named the property identifying the success
+    ``oneOf`` arm, and every one of the twelve hand-written values was reproducible by
+    ``_success_shape``'s no-selector rule -- verified arm-for-arm, byte-identical JSON,
+    across the whole registry. A hand-written copy of a derivable fact is a place for
+    the two to disagree, so the rows stopped carrying one. ``ResponseAlignment`` keeps
+    the field for the supplemental per-item rows, which name it explicitly.
     """
 
     schema_ref: str
-    selector: str  # property unique to the success arm (picks the oneOf member)
     model: type
     sample_override: dict[str, Any] | None = None
     declared_fields_override: frozenset[str] | None = None
 
 
-# Every AdCP-grounded response model the seller implements (extends a Library*
-# base, maps to a pinned *-response.json). Operations the seller does NOT
-# implement (brand-rights, collections, content-standards, governance-plans,
-# sponsored-intelligence, comply-test-controller, tmp/*) have no local model and
-# are deliberately absent. SalesAgentBaseModel-only response models (internal /
-# human_tasks-deprecated: CheckCreativeStatusResponse, CreateCreativeResponse,
-# AddCreativeAssetsResponse, GetCreativesResponse, GetPendingCreativesResponse,
-# ApproveCreativeResponse, AssignCreativeResponse, UpdatePerformanceIndexResponse,
-# CheckMediaBuyStatusResponse, *HumanTask*, *Task*, GetTargetingCapabilities,
-# CheckAXERequirements, SimulationControl, ListAuthorizedProperties,
-# GetAllMediaBuyDelivery, Adapter*) are not spec-grounded
-# success arms and are excluded.
-_RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
-    _RegistryRow(
-        schema_ref="media-buy/get-products-response.json",
-        selector="products",
-        model=GetProductsResponse,
-    ),
-    _RegistryRow(
-        schema_ref="media-buy/create-media-buy-response.json",
-        selector="media_buy_id",
-        model=CreateMediaBuySuccess,
+@dataclass(frozen=True)
+class _RowOverride:
+    """The two per-row knobs, keyed by TOOL rather than restated beside a hand-written row."""
+
+    sample: dict[str, Any] | None = None
+    declared_fields: frozenset[str] | None = None
+
+
+#: Per-tool overrides for the DERIVED rows. A tool appears here only when the generic
+#: synthesizer cannot build a valid instance of a required field, or when production
+#: emits an optional field worth pinning. It never weakens a required field.
+_RESPONSE_OVERRIDES: dict[str, _RowOverride] = {
+    "create_media_buy": _RowOverride(
         # packages requires the local package shape; synthesize is not reliable.
         # confirmed_at/revision carry NO model default any more (they are columns the
         # repository owns), so the sample has to supply them like any other
         # schema-required field the model will not fill in for itself.
-        sample_override={
+        sample={
             "media_buy_id": "mb_1",
             "packages": [{"package_id": "pkg_1", "paused": False}],
             "confirmed_at": "2026-03-15T12:00:00Z",
             "revision": 1,
         },
         # Forward-compat fields production emits that must be explicitly declared (F4, PR #1388).
-        declared_fields_override=frozenset({"valid_actions", "context"}),
+        declared_fields=frozenset({"valid_actions", "context"}),
     ),
-    _RegistryRow(
-        schema_ref="media-buy/update-media-buy-response.json",
-        selector="media_buy_id",
-        model=UpdateMediaBuySuccess,
-    ),
-    _RegistryRow(
-        schema_ref="media-buy/get-media-buys-response.json",
-        selector="media_buys",
-        model=GetMediaBuysResponse,
-    ),
-    _RegistryRow(
-        schema_ref="media-buy/get-media-buy-delivery-response.json",
-        selector="media_buy_deliveries",
-        model=GetMediaBuyDeliveryResponse,
-        sample_override={
+    "get_media_buy_delivery": _RowOverride(
+        sample={
             "reporting_period": {"start": "2025-02-01T00:00:00Z", "end": "2025-02-02T00:00:00Z"},
             "currency": "USD",
             "aggregated_totals": {"impressions": 0.0, "spend": 0.0, "media_buy_count": 0},
             "media_buy_deliveries": [],
-        },
+        }
     ),
+    "list_creatives": _RowOverride(
+        sample={
+            "query_summary": {"total_matching": 0, "returned": 0},
+            "pagination": {"has_more": False},
+            "creatives": [],
+        }
+    ),
+    "get_adcp_capabilities": _RowOverride(
+        # Newly graded by the derivation (it had no hand-written row). Two required
+        # fields the generic synthesizer cannot derive: ``supported_protocols`` carries
+        # ``minItems: 1``, so the "required array -> []" rule is not a spec-valid
+        # instance here (the boundary
+        # ``test_top_level_required_array_keeps_the_minimal_list_rule`` pins), and
+        # ``adcp.idempotency`` is a nested oneOf object the string-by-field-name
+        # heuristic turns into a string. Neither is a production defect.
+        sample={
+            "status": "completed",
+            "adcp": {
+                "major_versions": [3],
+                "idempotency": {"supported": True, "replay_ttl_seconds": 86400},
+            },
+            "supported_protocols": ["media_buy"],
+        }
+    ),
+}
+
+
+#: Rows whose MODEL is spec-grounded but whose tool is NOT registered on the MCP
+#: server, so the live-registry derivation cannot reach them. Both were graded before
+#: the derivation landed and stay graded: dropping them would be a silent loss of
+#: coverage, which is the failure this whole file exists to prevent.
+#:
+#: This list is the measured drift, not a design: the hand-written registry had rows
+#: for two tools that are not registered AND no rows for three that are, so it had
+#: drifted in BOTH directions at once. Derivation fixes one direction; this fixes the
+#: other by naming it.
+_UNREGISTERED_RESPONSE_ROWS: list[_RegistryRow] = [
     _RegistryRow(
         schema_ref="creative/get-creative-delivery-response.json",
-        selector="creatives",
         model=GetCreativeDeliveryResponse,
         sample_override={
             "reporting_period": {"start": "2025-02-01T00:00:00Z", "end": "2025-02-02T00:00:00Z"},
@@ -1125,41 +1143,7 @@ _RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = [
             "creatives": [],
         },
     ),
-    _RegistryRow(
-        schema_ref="account/list-accounts-response.json",
-        selector="accounts",
-        model=ListAccountsResponse,
-    ),
-    _RegistryRow(
-        schema_ref="account/sync-accounts-response.json",
-        selector="accounts",
-        model=SyncAccountsResponse,
-    ),
-    _RegistryRow(
-        schema_ref="creative/sync-creatives-response.json",
-        selector="creatives",
-        model=SyncCreativesResponse,
-    ),
-    _RegistryRow(
-        schema_ref="creative/list-creatives-response.json",
-        selector="creatives",
-        model=ListCreativesResponse,
-        sample_override={
-            "query_summary": {"total_matching": 0, "returned": 0},
-            "pagination": {"has_more": False},
-            "creatives": [],
-        },
-    ),
-    _RegistryRow(
-        schema_ref="creative/list-creative-formats-response.json",
-        selector="formats",
-        model=ListCreativeFormatsResponse,
-    ),
-    _RegistryRow(
-        schema_ref="signals/get-signals-response.json",
-        selector="signals",
-        model=GetSignalsResponse,
-    ),
+    _RegistryRow(schema_ref="signals/get-signals-response.json", model=GetSignalsResponse),
 ]
 
 
@@ -1391,6 +1375,138 @@ def _synthesize_sample(arm: dict[str, Any], schema_ref: str, model: type | None 
     return sample
 
 
+#: Registered tools whose RESPONSE the pinned tree grades but production cannot satisfy,
+#: as ``tool -> issue + what is absent``. SHRINK-ONLY: a row leaves when the response is
+#: fixed, and nothing may be added without an issue naming the gap. This is the same
+#: bargain as the deliver_* allowlist -- the gap stays ATTRIBUTABLE instead of hidden by
+#: leaving the tool out of the grading, which is exactly how these two went unnoticed.
+#:
+#: ``test_known_response_gaps_are_still_real`` re-measures every row on every run, so a
+#: row cannot outlive its defect the way a written rationale can.
+_UNGRADED_RESPONSES: dict[str, str] = {
+    "list_tasks": (
+        "FIXME(#2201): the wire is {tasks, total, offset, limit, has_more} -- absent are "
+        "top-level query_summary/pagination/status and, per tasks[] item, task_type/domain; "
+        "`type` is emitted where the pin says `task_type`"
+    ),
+    "get_task": (
+        "FIXME(#2201): sibling half of the same module -- protocol and task_type are absent "
+        "and `type` is emitted where the pin says `task_type` (salesagent-prkv.89 carries the "
+        "spec citation and the storyboard step)"
+    ),
+}
+
+
+def _response_outcome_models(tool_name: str) -> list[type[BaseModel]]:
+    """Every model a tool's ``_impl`` can put on the wire.
+
+    ``_{tool}_impl`` is the naming convention the whole tools package follows, and a tool
+    whose impl cannot be found this way resolves NO models -- which surfaces as a coverage
+    failure rather than as silence, the property this derivation exists for.
+
+    ``TaskResultEnvelope`` returns are unwrapped to the union inside ``response``: the
+    envelope declares three fields of its own and none of them is the buyer-facing shape,
+    so grading the envelope would grade nothing.
+    """
+    import importlib
+    import pkgutil
+
+    import src.core.tools as tools_pkg
+
+    for module in pkgutil.walk_packages(tools_pkg.__path__, tools_pkg.__name__ + "."):
+        try:
+            imported = importlib.import_module(module.name)
+        except Exception:  # pragma: no cover - an unimportable tool module fails elsewhere
+            continue
+        impl = getattr(imported, f"_{tool_name}_impl", None)
+        if impl is None:
+            continue
+        try:
+            returned = typing.get_type_hints(impl).get("return")
+        except Exception:  # pragma: no cover - unresolvable annotation
+            return []
+        if not (isinstance(returned, type) and issubclass(returned, BaseModel)):
+            return []
+        if "TaskResultEnvelope" not in {base.__name__ for base in returned.__mro__}:
+            return [returned]
+        inner = returned.model_fields.get("response")
+        if inner is None:
+            return [returned]
+        arms = typing.get_args(inner.annotation) or (inner.annotation,)
+        return [arm for arm in arms if isinstance(arm, type) and issubclass(arm, BaseModel)]
+    return []
+
+
+def pinned_response_ref(model: type[BaseModel]) -> str | None:
+    """The pinned response schema *model* implements, or None when it implements none.
+
+    The response mirror of ``tests.helpers.request_schemas.pinned_request_schema_ref``,
+    and deliberately the same mechanism: ``sdk_grounding`` walks the live MRO for a
+    field-carrying ``adcp`` ancestor, and that ancestor's generated-module path NAMES its
+    schema file. So a response model grounded in the SDK vocabulary already says which
+    schema it implements, in the one place that cannot drift from it.
+
+    It does NOT consult ``_PINNED_SCHEMA_REF``, which the request side checks first. On
+    response models that attribute means something different -- ``GetMediaBuysMediaBuy``
+    declares ``...get-media-buys-response.json#/properties/media_buys/items``, an ITEM
+    subschema pointer used for always-include serialization -- so honouring it here would
+    resolve an envelope row to an item schema.
+    """
+    from src.core.tools._announced_shape import sdk_grounding
+
+    grounding = sdk_grounding(model)
+    if grounding is None:
+        return None
+    # Private on purpose: this is the one derivation of "generated module -> schema file"
+    # and the request side owns it. Re-spelling it here would be a second copy of a rule
+    # that must not have two.
+    from tests.helpers.request_schemas import _ref_from_generated_module
+
+    return _ref_from_generated_module(grounding.__module__)
+
+
+def _derive_response_rows() -> list[_RegistryRow]:
+    """``_RegistryRow`` per REGISTERED tool whose response resolves a pinned schema.
+
+    Membership comes from the LIVE MCP registry, the same source the request side reads,
+    rather than from a hand-written list. The list it replaces had drifted in both
+    directions at once: no row for three registered tools (get_adcp_capabilities,
+    get_task, list_tasks) and rows for two that are not registered at all. A key set that
+    can be wrong in both directions is not a membership rule.
+
+    The success MODEL is picked, not named: of the outcome arms a tool can return, the one
+    declaring every field the pinned success arm requires. Exactly one arm satisfies that
+    on every registered tool -- an ambiguous or empty pick raises rather than guessing,
+    because a silently-skipped tool is the failure being removed here.
+    """
+    rows: list[_RegistryRow] = []
+    for tool_name in sorted(registered_tool_shapes()):
+        models = _response_outcome_models(tool_name)
+        refs = {ref for ref in (pinned_response_ref(model) for model in models) if ref is not None}
+        if not refs:
+            continue
+        if len(refs) > 1:
+            raise AssertionError(f"{tool_name}'s outcome models name different pinned schemas: {sorted(refs)}")
+        ref = refs.pop()
+        required = set(_success_shape(load_json_schema(ref)).get("required", []))
+        candidates = [model for model in models if required <= set(model.model_fields)]
+        if len(candidates) != 1:
+            raise AssertionError(
+                f"{tool_name}: {len(candidates)} of {[m.__name__ for m in models]} declare the pinned "
+                f"success arm's required fields {sorted(required)}; expected exactly one"
+            )
+        override = _RESPONSE_OVERRIDES.get(tool_name, _RowOverride())
+        rows.append(
+            _RegistryRow(
+                schema_ref=ref,
+                model=candidates[0],
+                sample_override=override.sample,
+                declared_fields_override=override.declared_fields,
+            )
+        )
+    return rows
+
+
 def _build_alignments_from_pinned(registry: list[_RegistryRow]) -> list[ResponseAlignment]:
     """Derive an envelope-level ResponseAlignment per registered model from the
     pinned success arm — machine-complete, so a new spec-required field on any
@@ -1418,7 +1534,7 @@ def _build_alignments_from_pinned(registry: list[_RegistryRow]) -> list[Response
         alignments.append(
             ResponseAlignment(
                 schema_ref=row.schema_ref,
-                selector=row.selector,
+                selector=None,
                 item_key=None,
                 model=row.model,
                 declared_fields=declared,
@@ -1480,6 +1596,10 @@ _SUPPLEMENTAL_ALIGNMENTS: list[ResponseAlignment] = [
     ),
 ]
 
+
+#: Derived from the live registry, plus the two spec-grounded models whose tool is not
+#: registered. Built at import because parametrize needs it there.
+_RESPONSE_MODEL_REGISTRY: list[_RegistryRow] = _derive_response_rows() + _UNREGISTERED_RESPONSE_ROWS
 
 RESPONSE_ALIGNMENTS = _build_alignments_from_pinned(_RESPONSE_MODEL_REGISTRY) + _SUPPLEMENTAL_ALIGNMENTS
 
@@ -1765,29 +1885,38 @@ class TestSampleSynthesisFailsLoud:
         ``_synthesize_sample`` short-circuits every required array to ``[]`` before
         ``generate_example_value`` is reached. That is a RULE the docstring already
         declares ("Array required fields -> empty list (valid + minimal)"), not the
-        absence of one: every required array across the registry has no ``minItems``,
-        so ``[]`` is a spec-VALID derived instance of the field, and element shapes are
-        graded by separate ``item_key`` rows rather than by this envelope sample.
+        absence of one: a required array with no ``minItems`` has ``[]`` as a spec-VALID
+        derived instance, and element shapes are graded by separate ``item_key`` rows
+        rather than by this envelope sample.
 
         The distinction this pins is the whole line strict draws: a DERIVED minimal
         value for a shape that was read is fine; an INVENTED value for an element shape
         the generator could not read (the array exits in ``_NO_RULE_EXITS``) is not.
-        Recorded as a decision so the short-circuit is never mistaken for an oversight —
-        and if a future pin adds ``minItems`` to any required array, ``[]`` stops being
-        spec-valid and this test is the thing that says so.
+
+        SCOPED TO THE ROWS THAT ACTUALLY SYNTHESIZE. This used to assert that no required
+        array ANYWHERE in the registry carries ``minItems`` -- true of the twelve
+        hand-written rows, and false the moment membership was derived from the live
+        registry, because ``get_adcp_capabilities`` requires a non-empty
+        ``supported_protocols`` and had no row. That is a claim about the whole pinned
+        tree, which this test was never positioned to make; the condition the
+        short-circuit actually needs is that no array it SYNTHESIZES carries ``minItems``.
+        A row supplying ``sample_override`` never reaches the short-circuit, and its value
+        is graded by ``test_required_fields_enforced`` constructing the model from it.
         """
         for row in _RESPONSE_MODEL_REGISTRY:
+            if row.sample_override is not None:
+                continue
             arm = _success_shape(load_json_schema(row.schema_ref))
             props = arm.get("properties", {})
             for fname in sorted(set(arm.get("required", [])) - _VERSION_FIELDS):
                 if props.get(fname, {}).get("type") != "array":
                     continue
                 assert "minItems" not in props[fname], (
-                    f"{row.schema_ref} now requires a non-empty {fname!r}; the empty-list rule is no "
-                    f"longer a spec-valid derived instance and _synthesize_sample must stop using it"
+                    f"{row.schema_ref} now requires a non-empty {fname!r} and synthesizes its own "
+                    f"sample; the empty-list rule is no longer a spec-valid derived instance, so "
+                    f"_synthesize_sample must stop using it (or the row needs a sample_override)"
                 )
-                if row.sample_override is None:
-                    assert _synthesize_sample(arm, row.schema_ref, row.model)[fname] == []
+                assert _synthesize_sample(arm, row.schema_ref, row.model)[fname] == []
 
 
 class TestResponseModelAlignment:
@@ -2335,6 +2464,110 @@ class TestNoNonSpecFieldsAreAdvertised:
             f"graded against nothing. Ground the DTO in the adcp type for that schema, or "
             f"declare _PINNED_SCHEMA_REF on it naming the schema it implements."
         )
+
+
+def pinned_response_schema_candidates(tool_name: str) -> dict[str, str]:
+    """``ref -> reason`` for every pinned RESPONSE schema that plausibly belongs to *tool_name*.
+
+    The negative proof behind "this tool genuinely has no pinned response schema", and the
+    same token-subset rule its request-side sibling
+    (``tests.helpers.request_schemas.pinned_request_schema_candidates``) uses and for the
+    same reason: an exact-filename probe reports ``get_task`` -> no schema, because the
+    file is ``get-task-status-response.json``, and reporting that as "nothing to grade" is
+    precisely how a tool goes silently ungraded.
+
+    DRY DEBT, stated rather than hidden: this differs from the request-side helper only in
+    the glob and the wording, so the two should be ONE function taking the suffix. It is
+    written here because ``tests/helpers/`` belongs to another lane in the change this
+    landed in; fold them together when that lane is free.
+    """
+    wanted = set(tool_name.split("_"))
+    root = pinned_schema.schema_root()
+    return {
+        f"{path.parent.name}/{path.name}": f"stem {path.stem!r} covers {sorted(wanted)}"
+        for path in sorted(root.rglob("*-response.json"))
+        if "bundled" not in path.relative_to(root).parts and wanted <= set(path.stem.split("-"))
+    }
+
+
+class TestEveryRegisteredToolsResponseIsGraded:
+    """Membership on the RESPONSE side, keyed by TOOL rather than by model.
+
+    The sibling gate ``TestResponseAlignmentCoverage`` enumerates MODELS, so a tool that
+    returns a raw dict is invisible to it -- there is no model to enumerate. That is not a
+    weaker version of this gate, it is a different question, and neither subsumes the
+    other: one asks "is every grounded model graded", this asks "is every registered
+    tool's response graded". ``list_tasks`` and ``get_task`` build dicts in
+    ``src/core/tools/task_management.py`` and passed the model gate by being absent from
+    its universe.
+
+    WHAT THIS AXIS CANNOT SEE. It grades DECLARATION -- can production carry the field at
+    all -- not EMISSION, whether the field survives onto the wire. A model that declares a
+    pinned-required field and a serializer that drops it passes everything here. That is a
+    live bug class (prebid/salesagent#1928, #2012 are both filed as it) and it needs a wire
+    dispatch per tool, which this suite's method cannot supply: everything here is static
+    and offline by construction. Do not "extend" this class to cover it.
+    """
+
+    def test_every_registered_tool_is_graded_or_provably_has_no_response_schema(self):
+        """A registered tool is derived, a named known gap, or has no pinned response schema."""
+        derived = {row.schema_ref for row in _derive_response_rows()}
+        ungraded = []
+        for tool_name in sorted(registered_tool_shapes()):
+            refs = {ref for ref in (pinned_response_ref(m) for m in _response_outcome_models(tool_name)) if ref}
+            if refs & derived:
+                continue
+            if tool_name in _UNGRADED_RESPONSES:
+                continue
+            if candidates := pinned_response_schema_candidates(tool_name):
+                ungraded.append((tool_name, sorted(candidates)))
+        assert not ungraded, (
+            f"{ungraded} resolve no graded pinned response schema, but the pinned tree holds one "
+            f"whose name covers each -- so what they put on the wire is graded by nothing. Ground "
+            f"the tool's response in the adcp type for that schema, or add it to "
+            f"_UNGRADED_RESPONSES with the issue that tracks the gap."
+        )
+
+    def test_known_response_gaps_are_still_real(self):
+        """Every ``_UNGRADED_RESPONSES`` row must still describe a live gap.
+
+        THE HALF THAT MAKES A KNOWN-GAP SET DIFFERENT FROM AN EXCUSE. A row asserts two
+        things -- the pinned tree defines a response schema for this tool, and production
+        has no spec-grounded model that could be graded against it -- and both are
+        re-measured here on every run. Give ``list_tasks`` a real response model and this
+        fails by name, so the row cannot outlive its defect.
+
+        That failure mode is not hypothetical. A ``deliver_mcp`` allowlist row for exactly
+        this ``list_tasks`` gap was deleted under the note "that gap is now fixed in
+        production"; it was not fixed, nothing re-measured it, and the deletion was
+        recorded as a ratchet shrink.
+        """
+        for tool_name, reason in sorted(_UNGRADED_RESPONSES.items()):
+            assert "#" in reason, f"{tool_name}'s known-gap row names no issue: {reason!r}"
+            assert pinned_response_schema_candidates(tool_name), (
+                f"{tool_name} is listed as an ungraded response, but the pinned tree defines no "
+                f"response schema whose name covers it -- there is no gap here to track. Delete the row."
+            )
+            grounded = [m.__name__ for m in _response_outcome_models(tool_name) if pinned_response_ref(m)]
+            assert not grounded, (
+                f"{tool_name} now returns spec-grounded {grounded}, so the derivation grades it and "
+                f"its _UNGRADED_RESPONSES row is stale. Delete the row ({reason})."
+            )
+
+    def test_the_gap_set_is_not_a_way_to_opt_out(self):
+        """Anti-vacuity: only tools the derivation genuinely cannot reach may be listed.
+
+        Without this, the coverage gate above is satisfiable by adding any inconvenient
+        tool to ``_UNGRADED_RESPONSES``. A tool the derivation DOES reach is graded, so
+        listing it is either a mistake or an opt-out; both are failures.
+        """
+        derived_tools = {
+            tool_name
+            for tool_name in registered_tool_shapes()
+            if any(pinned_response_ref(m) for m in _response_outcome_models(tool_name))
+        }
+        overlap = sorted(derived_tools & set(_UNGRADED_RESPONSES))
+        assert not overlap, f"{overlap} are graded by the derivation and must not be in _UNGRADED_RESPONSES"
 
 
 if __name__ == "__main__":
