@@ -103,14 +103,14 @@ _KNOWN_DELIVER_OVERRIDES: set[tuple[str, str, str]] = {
     # the setup above, not because of a bypass that no longer exists; an allowlist
     # whose recorded reasons drift false cannot be audited.)
     ("tests/harness/creative_sync.py", "CreativeSyncEnv", "deliver_a2a"),
-    # Uses the legacy _run_mcp_wrapper mechanism (mock Context -> async wrapper),
-    # not _run_mcp_client, and observes no structured_content wire.
-    ("tests/harness/media_buy_list.py", "MediaBuyListEnv", "deliver_mcp"),
-    # FIXME(#1928): get_media_buys' wire omits the pinned-required confirmed_at +
-    # revision on every media_buys item, so the core's pinned parse fails. This
-    # entry is removed — not re-justified — when #1928 lands; the override exists
-    # only to keep the gap attributable instead of hidden by loosening the core.
-    ("tests/harness/media_buy_list.py", "MediaBuyListEnv", "deliver_a2a"),
+    # `MediaBuyListEnv`'s deliver_mcp and deliver_a2a were removed here. Their two
+    # recorded reasons were a stale one ("uses the legacy _run_mcp_wrapper", untrue since
+    # GH #1900) and FIXME(#1928) ("the wire omits the pinned-required confirmed_at +
+    # revision on every media_buys item"). The second was measured on the wire rather than
+    # taken on the model: MCP and A2A, seller-confirmed and never-confirmed, all four carry
+    # both fields and parse clean against the pinned GetMediaBuysResponse. The env
+    # delegates and both entries are gone — the allowlist shrank by two, and this time the
+    # claim behind it was checked.
     # FIXME(#2012): by_package entries omit the pinned-required
     # pricing_model/rate/currency, so the core's pinned parse fails on every
     # delivery response. Both entries are removed when #2012 lands.

@@ -218,7 +218,21 @@ class MediaBuyListEnv(MediaBuyListDispatchMixin, IntegrationEnv):
     No patches — list is read-only, no external service calls.
     """
 
-    # Dispatch declaration: the base owns call_mcp/call_a2a.
+    # Dispatch declaration: the base owns call_mcp/call_a2a, and this env DELEGATES to
+    # the client core -- it declares the tool/skill instead of overriding deliver_*.
+    #
+    # It carried a deliver_mcp AND a deliver_a2a override until #1928 was measured on the
+    # wire. Both were justified by "production emits neither confirmed_at nor revision on
+    # every media_buys item, so the core's pinned parse fails". Four dispatches -- MCP and
+    # A2A, a seller-confirmed row and a never-confirmed one -- carry BOTH fields and parse
+    # clean against the pinned GetMediaBuysResponse; the never-confirmed row carries
+    # `confirmed_at: null`, which the pin declares as type ["string","null"]. The reason
+    # was stale, so the overrides and their two _KNOWN_DELIVER_OVERRIDES rows are gone.
+    #
+    # RESPONSE_MODEL stays: the core dispatches, and _deliver_via_client re-parses with
+    # this env's own parser, so callers still receive the LOCAL GetMediaBuysResponse.
+    MCP_TOOL = "get_media_buys"
+    A2A_SKILL = "get_media_buys"
     RESPONSE_MODEL = GetMediaBuysResponse
 
     EXTERNAL_PATCHES: dict[str, str] = {}
@@ -239,38 +253,6 @@ class MediaBuyListEnv(MediaBuyListDispatchMixin, IntegrationEnv):
 
     def call_impl(self, **kwargs: Any) -> GetMediaBuysResponse:
         return self._call_list_impl(**kwargs)
-
-    def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
-        """Dispatch get_media_buys through the real A2A handler pipeline.
-
-        FIXME(#1928): JUSTIFIED OVERRIDE — does NOT declare A2A_SKILL, so it does
-        not take the base's client-core delegation. The core's UNWRAP parses into
-        the PINNED GetMediaBuysResponse, whose media_buys items REQUIRE
-        `confirmed_at` and `revision` (get-media-buys-response.json); production
-        emits neither, so every response fails that parse. Parsing here with the
-        LOCAL model keeps this env working while the gap stays attributable — a
-        production schema defect, not a dispatch defect, and deliberately not
-        hidden by loosening the core's parse. Delete this override and its
-        `_KNOWN_DELIVER_OVERRIDES` entry when #1928 lands.
-        """
-        return self._deliver_list_a2a(**kwargs)
-
-    def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
-        """Dispatch get_media_buys through the real FastMCP ``Client`` pipeline.
-
-        FIXME(#1928): JUSTIFIED OVERRIDE, and for the SAME reason as
-        :meth:`deliver_a2a` — not the stale one ("uses the legacy
-        ``_run_mcp_wrapper``"), which stopped being true when GH #1900 moved this
-        dispatch onto ``_run_mcp_client``. Declaring MCP_TOOL would route through
-        the client core, whose UNWRAP parses into the PINNED
-        GetMediaBuysResponse; production omits the required `confirmed_at` and
-        `revision` on every media_buys item, so that parse fails. Dispatching
-        here parses with the LOCAL model while still going through the real
-        FastMCP pipeline, so ``wire_response`` carries the true
-        ``structured_content`` — which is what lets the envelope `status`
-        assertions (#1941) grade the actual MCP bytes.
-        """
-        return self._deliver_list_mcp(**kwargs)
 
     # ---- REST shaping hooks -------------------------------------------------
     # Bound to the public names on THIS class only; the bodies live on the mixin
