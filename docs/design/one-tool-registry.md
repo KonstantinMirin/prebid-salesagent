@@ -361,7 +361,9 @@ having:
 
 > the set of fields an implementation honours is smaller than the set its DTO declares.
 
-**68 fields**, listed per tool in the measurement. This design does not fix that.
+**68 fields**, listed per tool in the measurement. This design does not fix that,
+and — done as step 5 prescribes — does not change a single one of them on the day
+it lands. It converts them from invisible to declared.
 It makes it **visible in one place** — the `@omit` list on each DTO — where today it
 is invisible, spread across sixteen builder signatures, and reproduced three
 times per tool.
@@ -431,28 +433,38 @@ Each step leaves the tree green and is independently revertible.
    current three declarations. No behaviour change; the assertion is the proof
    the rows are right.
 2. **Delete `GET /capabilities`.**
-2b. **Move internal fields to extended models.** Four fields, three DTOs. No
+3. **Move internal fields to extended models.** Four fields, three DTOs. No
    buyer-visible change — they are `exclude=True` today, so no transport accepts
-   them already. This must precede step 3, because after it the DTO is the
+   them already. This must precede step 5, because after it the DTO is the
    accepted shape without qualification.
-3. **Replace the sixteen builders with `build_request`**, one tool at a time.
-   Per tool, the accepted set grows from the builder's subset to the DTO's full
-   set — this is a wire change and each tool needs its blast radius measured the
-   way `prkv.68` and `prkv.86` were: **count over payload producers, not over
-   constructions of the class**. A type-name grep found 76 of 89 sites there.
-4. **Generate MCP registration from the registry**, deleting the 16
-   `_register_tool` calls.
-5. **Generate the A2A card and dispatch**, deleting the `AgentSkill` literals and
-   the `skill_handlers` dict.
-6. **Generate REST routes**, deleting the decorators and body-model assignments.
-7. **Narrow each DTO** with `@omit`, from the measurement, per tool.
-8. **Renegotiate the alignment suite** to grade "declared or omitted" rather than
-   "declared", and add the two guards above. This cannot follow step 7 — a
-   narrowed DTO fails the current suite immediately, so the renegotiation lands
-   with the first `@omit`.
+4. **Renegotiate the alignment suite** to grade *declared or omitted* rather than
+   *declared*, and add the two guards. This comes BEFORE any narrowing, because
+   the first `@omit` fails the current suite immediately.
+5. **Narrow the DTO and swap its builder, in one change, per tool.**
 
-Steps 4–6 are where "declared once" becomes true. Step 3 is where the 68 fields
-start reaching implementations, and is the only step with buyer-visible risk.
+   These two cannot be separated, and the order matters in both directions:
+   swapping the builder first makes the full DTO the accepted shape, widening
+   acceptance to fields nothing implements — accept-and-ignore on up to 16 fields
+   for one tool. Narrowing first does nothing, because the builder is still
+   selecting. Done together, the accepted set is unchanged on the day of the
+   change: the builder's hand-written subset is replaced by the same subset,
+   declared on the DTO.
+
+   That is what makes this step *safe* rather than merely staged — it is a
+   refactor with no wire change, and every subsequent field is added by
+   **shortening an `@omit` list**, deliberately, with its own blast radius
+   measured over **payload producers, not constructions of the class**. A
+   type-name grep found 76 of 89 sites when that was measured.
+
+6. **Generate MCP registration from the registry**, deleting the 16
+   `_register_tool` calls.
+7. **Generate the A2A card and dispatch**, deleting the `AgentSkill` literals and
+   the `skill_handlers` dict.
+8. **Generate REST routes**, deleting the decorators and body-model assignments.
+
+Steps 6–8 are where "declared once" becomes true. Step 5 is the only one that
+touches what a buyer can send — and, done as one change per tool, it does not
+change it at all.
 
 ## Why this needs no guards
 
