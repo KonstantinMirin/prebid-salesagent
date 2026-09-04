@@ -459,22 +459,35 @@ def omit_declared(omitted, added=()):
         if stale:
             raise ValueError(f"{cls.__name__}: cannot omit {sorted(stale)} — "
                              "the spec model does not declare them")
-        already = {f for f in added if f in cls.model_fields}
-        if already:
-            raise ValueError(f"{cls.__name__}: {sorted(already)} is declared by the "
+        spec = library_declared_fields(cls)      # fields from the adcp ancestry
+        caught_up = {f for f in added if f in spec}
+        if caught_up:
+            raise ValueError(f"{cls.__name__}: {sorted(caught_up)} is declared by the "
                              "spec now — delete the 'added' row")
+        undeclared = {f for f in added if f not in cls.model_fields}
+        if undeclared:
+            raise ValueError(f"{cls.__name__}: {sorted(undeclared)} is listed as added "
+                             "but this model does not declare it")
         cls.model_rebuild(force=True)
         return cls
     return deco
 ```
 
-Both directions, both at decoration time, both fatal:
+**The `added` check must ask the SPEC ANCESTRY, not the class.** An added field is
+one *we* declare on the subclass, so it is always in `cls.model_fields` — a check
+against the class would raise on every correct table.
+`library_declared_fields()` exists for this and is the same function the
+announced-shape gate uses: *"every field name declared by an `adcp` class in the
+model's ancestry"*. Verified against the live case — `account_id` is on our model
+and absent from the spec's twelve, which is exactly what makes the row real.
+
+Three failures, all at decoration time, all fatal:
 
 | | raises |
 |---|---|
-| `omit("catalgo")` — typo | `cannot omit ['catalgo'] — the spec model does not declare them` |
-| a field the SDK bump removed | same |
+| `omit("catalgo")` — typo, or a field an SDK bump removed | `cannot omit [...] — the spec model does not declare them` |
 | an `added` row the spec has since defined | `is declared by the spec now — delete the 'added' row` |
+| an `added` row naming a field we never declared | `is listed as added but this model does not declare it` |
 
 The application does not start with a wrong table. That is strictly better than a
 test asserting the same property, because a test permits the incorrect
