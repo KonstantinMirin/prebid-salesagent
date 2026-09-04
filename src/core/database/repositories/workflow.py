@@ -263,6 +263,7 @@ class WorkflowRepository:
         object_id: str | None = None,
         offset: int = 0,
         limit: int = 20,
+        principal_id: str | None = None,
     ) -> list[WorkflowStep]:
         """List workflow steps for the tenant, with optional filters.
 
@@ -272,6 +273,9 @@ class WorkflowRepository:
             object_id: Filter by specific object ID (requires object_type).
             offset: Number of steps to skip.
             limit: Maximum number of steps to return.
+            principal_id: Narrow to one principal's tasks. The BUYER-facing caller
+                (list_tasks) passes it; the publisher-facing admin views do not, which is
+                why it is optional. See :meth:`get_by_step_id` for the obligation.
         """
         stmt = (
             select(WorkflowStep)
@@ -280,6 +284,9 @@ class WorkflowRepository:
                 DBContext.tenant_id == self._tenant_id,
             )
         )
+
+        if principal_id is not None:
+            stmt = stmt.where(DBContext.principal_id == principal_id)
 
         if status:
             stmt = stmt.where(WorkflowStep.status == status)
@@ -303,10 +310,14 @@ class WorkflowRepository:
         status: str | None = None,
         object_type: str | None = None,
         object_id: str | None = None,
+        principal_id: str | None = None,
     ) -> int:
         """Count workflow steps matching the given filters.
 
-        Uses the same filter logic as list_by_tenant but returns only the count.
+        Uses the same filter logic as list_by_tenant but returns only the count. The two
+        MUST be narrowed together: a count over the tenant beside a page scoped to one
+        principal reports how many tasks the OTHER principals have, which is the same
+        disclosure by arithmetic.
         """
         stmt = (
             select(WorkflowStep)
@@ -315,6 +326,9 @@ class WorkflowRepository:
                 DBContext.tenant_id == self._tenant_id,
             )
         )
+
+        if principal_id is not None:
+            stmt = stmt.where(DBContext.principal_id == principal_id)
 
         if status:
             stmt = stmt.where(WorkflowStep.status == status)

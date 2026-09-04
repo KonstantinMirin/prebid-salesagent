@@ -156,15 +156,25 @@ async def list_tasks(
     # every other tool -- available here now that this tool builds a request.
     identity = require_identity(identity, context=req.context)
     tenant = require_tenant(identity, context=req.context)
-    require_principal_id(identity, context=req.context)  # F-03: an authenticated principal is required
+    principal_id = require_principal_id(identity, context=req.context)  # F-03: authenticated principal required
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
 
+        # SCOPED TO THE CALLER'S PRINCIPAL. This listed the whole TENANT, so every buyer
+        # saw every other buyer's tasks -- a wider version of the same defect get_task had
+        # (salesagent-prkv.88). The pin grades it: get_products_async.yaml step
+        # `list_products_task_wrong_account` lists the same task_id under a different
+        # account and requires total_matching 0, "Sellers MUST scope task reconciliation to
+        # the authenticated account + principal pair".
+        #
+        # Count and page are narrowed TOGETHER on purpose -- a tenant-wide count beside a
+        # principal-scoped page discloses how many tasks the others hold.
         total = uow.workflows.count_by_tenant(
             status=status,
             object_type=object_type,
             object_id=object_id,
+            principal_id=principal_id,
         )
 
         tasks = uow.workflows.list_by_tenant(
@@ -173,6 +183,7 @@ async def list_tasks(
             object_id=object_id,
             offset=offset,
             limit=limit,
+            principal_id=principal_id,
         )
 
         step_ids = [task.step_id for task in tasks]
@@ -446,7 +457,9 @@ async def complete_task(
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
 
-        task = uow.workflows.get_by_step_id_or_raise(task_id)
+        # SCOPED, like the read. The same unscoped lookup made this a cross-principal
+        # WRITE: principal A could complete principal B's task (salesagent-prkv.88).
+        task = uow.workflows.get_by_step_id_or_raise(task_id, principal_id=principal_id)
 
         if task.status not in ["pending", "in_progress", "requires_approval"]:
             # `resource_id` is conflict.json's own name; `task_id` was a local synonym.
