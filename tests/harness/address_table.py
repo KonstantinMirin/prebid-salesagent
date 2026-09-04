@@ -66,16 +66,14 @@ PATH_PARAM_RE = re.compile(r"\{(\w+)\}")
 # an entry requires a deliberate, reviewed edit to that test too.
 #
 # It reached empty once — every /api/v1 handler was named after the AdCP tool it
-# implements — and has ONE entry again. ``/api/v1/capabilities`` answers on both
-# verbs (src/routes/api_v1.py: GET at ``get_adcp_capabilities``, POST at
-# ``post_capabilities``), because protocols filtering and context echo need a
-# request body a bare GET cannot carry. FastAPI registers those as two route
-# objects, and the second handler cannot repeat the first's function name, so the
-# verb is the only thing left to name it by. Both call
-# ``capabilities_module.get_adcp_capabilities_raw`` — one tool, two verbs, not a
-# second tool. AdCP does not define REST -- this project does -- so the tool name
-# stays canonical across every transport; a handler diverging from it for any
-# reason OTHER than a same-path verb sibling is a defect, not a naming choice.
+# implements — and has ONE entry. ``/api/v1/capabilities`` is served by a single
+# POST route whose handler is ``post_capabilities`` (src/routes/api_v1.py); the
+# name is left over from when the path also answered a parameterless GET named
+# after the tool, and the alias restores the tool identity the handler name does
+# not carry. AdCP does not define REST -- this project does -- so the tool name
+# stays canonical across every transport; a handler diverging from it is a defect,
+# not a naming choice, and the durable fix here is an ``operation_id`` on the
+# route (which ``_index_rest`` prefers), not a second alias.
 REST_TOOL_ALIASES: dict[str, str] = {
     "post_capabilities": "get_adcp_capabilities",
 }
@@ -228,12 +226,13 @@ class AddressTable:
     def _pick_rest_method(methods: set[str]) -> str:
         """Deterministic verb choice for a multi-verb route: prefer POST (the
         AdCP body-carrying shape), else the alphabetically-first remaining
-        verb — never ``next(iter(...))`` on an unordered set. No SINGLE route
-        object in ``src/routes/api_v1.py`` declares more than one non-HEAD verb,
-        so the POST-preference branch is reached two ways: a synthetic
-        multi-verb route (``TestRestVerbDeterminism``), and — in production —
-        ``_index_rest`` folding two same-path route objects together, which is
-        how ``/api/v1/capabilities`` (GET + POST) resolves to ``post``.
+        verb — never ``next(iter(...))`` on an unordered set. No route in
+        ``src/routes/api_v1.py`` declares more than one non-HEAD verb, and no two
+        of them share a path, so today the choice is only ever made over a
+        single-verb set; the POST-preference branch is graded on a synthetic
+        multi-verb route (``TestRestVerbDeterminism``) and on ``_index_rest``
+        folding two same-path route objects together, so it keeps answering the
+        day a path answers on two verbs again.
         """
         candidates = methods - {"HEAD"}
         if "POST" in candidates:

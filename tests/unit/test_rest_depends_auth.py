@@ -77,11 +77,6 @@ class TestRouteSignaturesUseDependsForIdentity:
         assert param is not None, "get_products should have an 'identity' parameter"
         assert isinstance(param.default, Depends), "identity should use Depends"
 
-    def test_get_capabilities_has_identity_param(self):
-        param = self._get_identity_param("get_adcp_capabilities")
-        assert param is not None, "get_adcp_capabilities should have an 'identity' parameter"
-        assert isinstance(param.default, Depends), "identity should use Depends"
-
     def test_list_creative_formats_has_identity_param(self):
         param = self._get_identity_param("list_creative_formats")
         assert param is not None, "list_creative_formats should have an 'identity' parameter"
@@ -128,7 +123,6 @@ class TestRouteSignaturesUseDependsForIdentity:
 
         route_names = [
             "get_products",
-            "get_adcp_capabilities",
             "list_creative_formats",
             "list_authorized_properties",
             "create_media_buy",

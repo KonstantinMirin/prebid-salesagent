@@ -1153,8 +1153,7 @@ class BaseTestEnv:
         5. Return raw httpx.Response
 
         Envs whose route is not a body-carrying POST override this method and
-        reuse ``_pop_rest_identity`` / ``_configure_rest_auth`` (e.g.
-        ``CapabilitiesEnv`` GETs).
+        reuse ``_pop_rest_identity`` / ``_configure_rest_auth``.
         """
         client, identity = self._prepare_rest_request(kwargs)
         body = self.build_rest_body(**kwargs)

@@ -57,8 +57,9 @@ class TestRestBoundaryAuditObservability:
             side_effect=raised,
         ):
             client = TestClient(app, raise_server_exceptions=False)
-            response = client.get(
+            response = client.post(
                 "/api/v1/capabilities",
+                json={},
                 headers={"x-adcp-auth": sample_principal["access_token"]},
             )
 

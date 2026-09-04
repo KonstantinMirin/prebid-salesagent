@@ -84,7 +84,7 @@ from tests.helpers import assert_envelope_shape
 
 
 def _capabilities_response(side_effect: Exception):
-    """Drive ``GET /api/v1/capabilities`` with ``side_effect`` raised inside the tool.
+    """Drive ``POST /api/v1/capabilities`` with ``side_effect`` raised inside the tool.
 
     The single patch site for every REST case below. The route is the thinnest
     endpoint in the app — one call, one ``model_dump`` — so what it grades is the
@@ -103,7 +103,7 @@ def _capabilities_response(side_effect: Exception):
     try:
         with patch("src.core.tools.capabilities.get_adcp_capabilities_raw", side_effect=side_effect):
             client = TestClient(app, raise_server_exceptions=False)
-            return client.get("/api/v1/capabilities")
+            return client.post("/api/v1/capabilities", json={})
     finally:
         app.dependency_overrides.pop(_resolve_auth_dep, None)
 

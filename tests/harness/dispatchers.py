@@ -258,19 +258,6 @@ class RestE2EDispatcher:
         body = env.build_rest_body(**kwargs)
         endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
         method = getattr(env, "REST_METHOD", "post")
-        # A GET-declared env still has a POST twin for the parameterised call:
-        # CapabilitiesEnv GETs /api/v1/capabilities on the parameterless happy
-        # path and POSTs the same route when protocols/context/adcp_version are
-        # set (salesagent-5yik) — both are real production routes, and its
-        # in-process ``_run_rest_request`` override makes exactly this choice.
-        # Without the mirror here the e2e leg would send a bodiless GET
-        # (``_rest_request_kwargs`` drops ``json=`` for get/delete) and grade a
-        # parameterless request while the scenario supplied parameters.
-        # FOLLOW-UP: the verb choice belongs to the env, not to two call sites —
-        # the durable fix is a ``rest_method_for(**kwargs)`` hook on BaseTestEnv
-        # that both this dispatcher and ``_run_rest_request`` read.
-        if method == "get" and kwargs:
-            method = "post"
         address = ToolAddress(Transport.E2E_REST, name=endpoint, method=method)
 
         response = _deliver_e2e_rest(env, address, {"url": endpoint, "body": body}, identity)

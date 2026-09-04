@@ -193,10 +193,11 @@ def _deliver_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any]
 
 # HTTP verbs with no request body — a JSON body kwarg is either rejected by
 # the client (starlette TestClient.get/httpx.Client.get do not accept `json=`
-# at all) or simply wrong to send. address_table.py's REST_TOOL_ALIASES made
-# get_adcp_capabilities (GET /api/v1/capabilities) genuinely REST-resolvable
-# , which surfaced this: every verb used to get `json=`
-# unconditionally, so a GET dispatch raised TypeError before any HTTP call.
+# at all) or simply wrong to send. Surfaced when /api/v1/capabilities still
+# answered a parameterless GET: every verb used to get `json=` unconditionally,
+# so a GET dispatch raised TypeError before any HTTP call. That route is gone
+# and no env dispatches a bodiless verb today, but the rule belongs to the verb,
+# not to the route, so it stays and is graded directly (test_client.py).
 _BODILESS_REST_VERBS = frozenset({"get", "delete"})
 
 

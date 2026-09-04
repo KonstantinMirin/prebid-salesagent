@@ -84,9 +84,9 @@ class CapabilitiesEnv(IntegrationEnv):
       carrying the real wire alongside the parsed payload — so the invalid-token
       rows (@T-UC-010-ext-c-a2a / @T-UC-010-ext-c-mcp) grade a real
       wire_error_envelope rather than a reconstructed exception.
-    - REST: /api/v1/capabilities answers on BOTH verbs — _run_rest_request GETs
-      the parameterless discovery call and POSTs a body when request params are
-      present. REST_METHOD pins the e2e dispatcher to the GET route.
+    - REST: POST /api/v1/capabilities, the tool's one route — the base's
+      _run_rest_request POSTs build_rest_body(**kwargs), which is `{}` for the
+      parameterless discovery call and the filter/context payload otherwise.
     """
 
     # Dispatch declaration: the base owns call_mcp/call_a2a.
@@ -100,8 +100,6 @@ class CapabilitiesEnv(IntegrationEnv):
     }
 
     REST_ENDPOINT = "/api/v1/capabilities"
-    # RestE2EDispatcher honors this hook (dispatchers.py) — the live route is GET.
-    REST_METHOD = "get"
 
     def _configure_mocks(self) -> None:
         """Happy-path adapter: default channels + full targeting capabilities."""
@@ -343,24 +341,6 @@ class CapabilitiesEnv(IntegrationEnv):
         per-field extraction needed.
         """
         return kwargs
-
-    def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
-        """REST dispatch: POST /api/v1/capabilities with a JSON body when
-        request params are present (protocols/context/adcp_version), else GET
-        the parameterless happy-path route — both are real production routes
-        (salesagent-5yik, owner decision 2026-07-24: POST, matching the
-        codebase's RPC-over-REST convention).
-
-        The request preamble (pop identity → commit factory data → client →
-        auth-dep override) is the base's ``_prepare_rest_request``; only the
-        verb choice is env-specific.
-        """
-        client, identity = self._prepare_rest_request(kwargs)
-        headers = self._rest_request_headers(identity)
-        if not kwargs:
-            return client.get(endpoint, headers=headers)
-        body = self.build_rest_body(**kwargs)
-        return client.post(endpoint, json=body, headers=headers)
 
     def parse_rest_response(self, data: dict[str, Any]) -> GetAdcpCapabilitiesResponse:
         """Parse REST JSON into GetAdcpCapabilitiesResponse."""
