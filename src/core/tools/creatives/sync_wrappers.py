@@ -15,6 +15,7 @@ from src.core.schema_helpers import to_push_notification_config
 from src.core.schemas.creative import CreativeAssetRequest, SyncCreativesRequest
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
+from src.core.tools._request_defaults import omit_unset
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 
 from ._sync import _sync_creatives_impl
@@ -73,13 +74,19 @@ def build_sync_creatives_request(
             c if isinstance(c, CreativeAssetRequest) else CreativeAssetRequest.model_validate(c, from_attributes=True)
             for c in creatives
         ],
-        idempotency_key=idempotency_key,
-        account=account,
-        assignments=assignments,
-        creative_ids=creative_ids,
-        delete_missing=delete_missing,
-        dry_run=dry_run,
-        validation_mode=validation_mode,
+        # Omitted when unsent so SyncCreativesRequest's own defaults apply: delete_missing
+        # and dry_run declare False and validation_mode declares strict, and forwarding a
+        # None overwrote all three with null. _sync_creatives_impl used to re-establish
+        # them by hand at the read site (bool(...), or "strict"); those are gone with this.
+        **omit_unset(
+            idempotency_key=idempotency_key,
+            account=account,
+            assignments=assignments,
+            creative_ids=creative_ids,
+            delete_missing=delete_missing,
+            dry_run=dry_run,
+            validation_mode=validation_mode,
+        ),
         # Coerced through the shared funnel rather than left to the model's own validation:
         # this is the seam where the untyped wire document arrives (A2A forwards the buyer's
         # raw dict), and to_push_notification_config carries the boundary with it -- a

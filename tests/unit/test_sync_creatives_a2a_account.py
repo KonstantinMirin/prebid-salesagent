@@ -121,16 +121,18 @@ class TestSyncCreativesAccountCoercion:
         typed error -- from the same exception, by the same call, so the path is the same
         either way.
 
-        The pinned path carries a UNION-MEMBER name the buyer never sent:
-        ``AccountReference`` is a union, and pydantic reports the first member's failure,
-        so ``first_validation_error_field`` renders ``account.AccountReference1``. That is
-        this codebase's answer today on every transport -- it is what the deleted wrapper
-        produced too, since a bare boundary derived the identical path -- so it is pinned
-        as measured rather than asserted as it ought to read. A field path is meant to
-        point into the document the buyer SENT; that it names a schema construct instead
-        is a real wart on the wire and is worth its own fix.
+        The path is ``account`` -- the field the buyer omitted. It used to be
+        ``account.AccountReference1``, a UNION-MEMBER name they never sent: forwarding an
+        explicit None made pydantic report the first union member's TYPE failure instead of
+        a missing field. ``build_sync_creatives_request`` omits unsent fields now, so the
+        model sees ``account`` as ABSENT and names it.
+
+        This test pinned that path "as measured rather than as it ought to read" and called
+        the wart worth its own fix. It was fixed by the change that stopped builders
+        overriding their models' declared defaults, which was aimed at something else --
+        so the pin is updated here rather than in a ticket of its own.
         """
-        assert_construction_rejects(lambda: self._call_handler_with_account(None), field="account.AccountReference1")
+        assert_construction_rejects(lambda: self._call_handler_with_account(None), field="account")
 
     def test_already_typed_account_passes_through(self):
         """An already-validated AccountReference is forwarded by identity, not re-validated."""

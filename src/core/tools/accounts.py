@@ -60,6 +60,7 @@ from src.core.schemas.account import (
 )
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
+from src.core.tools._request_defaults import omit_unset
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 from src.core.webhooks.registration import accept_push_notification_config
 from src.services.notification_proof_service import NotificationProofService, get_notification_proof_service
@@ -1618,8 +1619,13 @@ async def _sync_accounts_impl(
             context=req.context,
         )
 
+    # bool() here narrows the ANNOTATION, it does not supply the default. The model
+    # declares ``bool | None`` -- wider than the pinned {"type": "boolean"} -- so an
+    # explicit null is still representable and two callees below want a real bool. The
+    # default itself now arrives from the model, because the builder omits an unsent
+    # field instead of forwarding a None over it.
     dry_run = bool(req.dry_run)
-    delete_missing = bool(req.delete_missing)
+    delete_missing = req.delete_missing
 
     results: list[SyncResponseAccount] = []
     # Track natural keys in the payload for delete_missing
@@ -1866,14 +1872,16 @@ def build_sync_accounts_request(
     """
     return SyncAccountsRequest(
         accounts=accounts or [],
-        delete_missing=delete_missing,
-        dry_run=dry_run,
-        idempotency_key=idempotency_key,
-        push_notification_config=push_notification_config,
-        ext=ext,
-        context=context,
-        adcp_version=adcp_version,
-        adcp_major_version=adcp_major_version,
+        **omit_unset(
+            delete_missing=delete_missing,
+            dry_run=dry_run,
+            idempotency_key=idempotency_key,
+            push_notification_config=push_notification_config,
+            ext=ext,
+            context=context,
+            adcp_version=adcp_version,
+            adcp_major_version=adcp_major_version,
+        ),
     )
 
 

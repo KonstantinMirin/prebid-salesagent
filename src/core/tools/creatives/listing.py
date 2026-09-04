@@ -32,6 +32,7 @@ from src.core.schemas import (
 )
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
+from src.core.tools._request_defaults import omit_unset
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 
 logger = logging.getLogger(__name__)
@@ -173,7 +174,11 @@ def _blob_log_context(creative_id: str, tenant_id: str, principal_id: str) -> st
 def _build_list_creatives_request(
     filters: "CreativeFilters | None" = None,
     fields: list[str] | None = None,
-    include_assignments: bool = False,
+    # None, not False. ListCreativesRequest declares True and
+    # 3.1/creative/list-creatives-request.json says "default": true, so a False here was a
+    # SECOND default that INVERTED the spec's -- worse than a None defeating one, because a
+    # None at least fails to arrive rather than arriving wrong. Unsent now means unsent.
+    include_assignments: bool | None = None,
     sort: "Sort | None" = None,
     pagination: "PaginationRequest | None" = None,
     context: ContextObject | None = None,
@@ -250,11 +255,13 @@ def _build_list_creatives_request(
         filters=structured_filters,
         pagination=structured_pagination,
         sort=structured_sort,
-        fields=fields,
-        include_assignments=include_assignments,
-        context=context,
-        format=format,
-        page=page,
+        **omit_unset(
+            fields=fields,
+            include_assignments=include_assignments,
+            context=context,
+            format=format,
+            page=page,
+        ),
     )
 
 
@@ -602,9 +609,14 @@ async def list_creatives(
     sort: Sort | None = None,
     pagination: PaginationRequest | None = None,
     fields: list[FieldModel | str] | None = None,
+    # True, matching ListCreativesRequest and 3.1/creative/list-creatives-request.json's
+    # "default": true. FastMCP publishes THIS signature's default into the advertised
+    # inputSchema, so a False here told every MCP buyer the spec's default was the opposite
+    # of what it is. It cannot be None: a None publishes as "default": null, which is a
+    # different way of not matching the pin.
     include_assignments: Annotated[
         bool, PydanticField(description="Include package assignment details for each creative")
-    ] = False,
+    ] = True,
     context: ContextObject | None = None,  # Application level context per adcp spec
     ctx: Context | ToolContext | None = None,
 ):

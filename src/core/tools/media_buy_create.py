@@ -169,6 +169,7 @@ from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testin
 from src.core.tool_context import ToolContext
 from src.core.tools._mcp import mcp_result
 from src.core.tools._media_buy_transitions import resolve_flight_window_status
+from src.core.tools._request_defaults import omit_unset
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
     validate_budget_positive,
@@ -4575,23 +4576,27 @@ def _build_create_media_buy_request(
     # (#1537). Everything else is left to raise: ``adcp_error_for`` at the transport
     # boundary is the SINGLE translation point (#1417), turning a Pydantic
     # ValidationError into a typed error carrying the field path + suggestion.
+    # Omit-when-absent, for every field rather than for idempotency_key alone. Two things
+    # follow from it, and the second is why the special case became the rule: a missing
+    # REQUIRED key rejects as "Field required" instead of as a None type error, and an
+    # unsent OPTIONAL key takes CreateMediaBuyRequest's own declared default instead of
+    # overwriting it with null -- which is what forwarding None did to ``paused``, declared
+    # False by the model and by 3.1/media-buy/create-media-buy-request.json.
     return CreateMediaBuyRequest(
-        push_notification_config=push_notification_config,
-        brand=to_brand_reference(brand),
-        packages=packages,
-        start_time=start_time,
-        end_time=end_time,
-        po_number=po_number,
-        reporting_webhook=reporting_webhook,
-        context=context,
-        ext=ext,
-        account=account,
-        paused=paused,
-        # Omit-when-absent so a missing key rejects as "Field required",
-        # emitted as VALIDATION_ERROR (the 3.0.1 conformance storyboard
-        # accepts it; the spec prose prefers INVALID_REQUEST) — not as a
-        # None type error.
-        **({"idempotency_key": idempotency_key} if idempotency_key is not None else {}),
+        **omit_unset(
+            push_notification_config=push_notification_config,
+            brand=to_brand_reference(brand),
+            packages=packages,
+            start_time=start_time,
+            end_time=end_time,
+            po_number=po_number,
+            reporting_webhook=reporting_webhook,
+            context=context,
+            ext=ext,
+            account=account,
+            paused=paused,
+            idempotency_key=idempotency_key,
+        )
     )
 
 

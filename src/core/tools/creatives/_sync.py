@@ -114,14 +114,25 @@ def _sync_creatives_impl(
         SyncCreativesResponse with synced creatives and assignments
     """
 
-    # Normalised ONCE, here, because each needs a transformation the request does not carry:
-    # ``creatives`` is narrowed below by the creative_ids filter, and the two tri-state
-    # booleans plus the validation mode have an absent-means-default rule that the rest of
-    # this function must not have to restate at every read. Everything else is read as
-    # ``req.<field>`` at its use site -- no alias, so the request stays the one carrier.
+    # ``creatives`` is aliased because it is NARROWED below by the creative_ids filter.
+    # Everything else is read as ``req.<field>`` at its use site -- no alias, so the request
+    # stays the one carrier.
+    #
+    # These two used to be normalised here under an "absent-means-default rule that the
+    # rest of this function must not have to restate". The rule is the MODEL's:
+    # SyncCreativesRequest declares False and strict. It never arrived, because
+    # build_sync_creatives_request forwarded an explicit None over it, so this function
+    # re-established it by hand. The builder omits unsent fields now, so
+    # ``validation_mode``'s ``or "strict"`` is gone -- the declared value arrives.
+    # ``dry_run`` keeps a bool(), for a different reason; see below.
     creatives: Sequence[CreativeAsset | BaseModel | dict[str, Any]] = req.creatives
+    # bool() here narrows the ANNOTATION, it does not supply the default. The model
+    # declares ``bool | None`` -- wider than the pinned {"type": "boolean"} -- so an
+    # explicit null is still representable and two callees below want a real bool. The
+    # default itself now arrives from the model, because the builder omits an unsent
+    # field instead of forwarding a None over it.
     dry_run = bool(req.dry_run)
-    validation_mode = enum_value(req.validation_mode) or "strict"
+    validation_mode = enum_value(req.validation_mode)
 
     # AdCP 3.1.1 requires this key and defines it as CLIENT-generated so that resending
     # after a lost response is at-most-once. Its SHAPE is re-checked here so a malformed key

@@ -36,10 +36,19 @@ def _call_name(node: ast.Call) -> str | None:
 def _dict_splat_keys(node: ast.expr) -> set[str]:
     """String keys forwarded by a ``**`` splat of a dict literal.
 
-    Models the omit-when-absent idiom ``**({"k": v} if cond else {})`` (and a
-    plain ``**{"k": v}``) so a splat-forwarded field is not a guard blind spot.
+    Models three spellings, because a matcher that knows only one reports the other two
+    as DROPPED FIELDS -- the guard failing on correct code:
+
+    * ``**omit_unset(k=v, ...)`` -- the current idiom. The helper drops unsent values so
+      the model's declared default applies instead of being overwritten with a null
+      (src/core/tools/_request_defaults.py), and the names it forwards are its keywords.
+    * ``**({"k": v} if cond else {})`` -- the older per-field omit-when-absent form.
+    * ``**{"k": v}`` -- a plain dict literal.
+
     A ``**kwargs`` of a runtime-built dict stays unmodellable and is ignored.
     """
+    if isinstance(node, ast.Call):
+        return {kw.arg for kw in node.keywords if kw.arg is not None}
     if isinstance(node, ast.Dict):
         return {k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
     if isinstance(node, ast.IfExp):
@@ -122,7 +131,8 @@ def _extract_call_kwargs(file_path: Path, caller_name: str, callee_name: str) ->
     """Extract keyword arguments passed from caller to callee function.
 
     Finds calls like `callee_name(foo=foo, bar=bar, ...)` inside the named
-    caller function and returns the set of keyword argument names.
+    caller function and returns the set of keyword argument names. A ``**`` splat counts
+    as forwarding the names inside it -- see :func:`_dict_splat_keys`.
     """
     source = file_path.read_text()
     tree = ast.parse(source, filename=str(file_path))
@@ -151,6 +161,8 @@ def _extract_call_kwargs(file_path: Path, caller_name: str, callee_name: str) ->
         for kw in node.keywords:
             if kw.arg is not None:
                 kwargs.add(kw.arg)
+            else:
+                kwargs |= _dict_splat_keys(kw.value)
 
     return kwargs
 

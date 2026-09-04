@@ -58,6 +58,7 @@ from src.core.errors.details import ConfigurationDetails, ValidationDetails
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
 from src.core.tools._media_buy_status import resolve_canonical_status
+from src.core.tools._request_defaults import omit_unset
 from src.core.transport_helpers import NOT_PROVIDED, IdentityOrNotProvided, resolve_identity_if_not_provided
 
 logger = logging.getLogger(__name__)
@@ -430,14 +431,17 @@ def _build_get_media_buys_request(
     top-level suggestion (#1417).
     """
     return GetMediaBuysRequest(
-        media_buy_ids=media_buy_ids,
-        status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
-        account=account,
-        context=cast(ContextObject | None, context),
-        # A GetMediaBuysRequest field, so the BUILT request carries it. It used to
-        # travel as a separate parameter beside the request, which meant the model
-        # declared a field the built instance never held.
-        include_snapshot=include_snapshot,
+        **omit_unset(
+            media_buy_ids=media_buy_ids,
+            status_filter=cast(MediaBuyStatus | list[MediaBuyStatus] | None, status_filter),
+            account=account,
+            context=cast(ContextObject | None, context),
+            # A GetMediaBuysRequest field, so the BUILT request carries it. Omitted when
+            # unsent so the model's declared False applies -- forwarding None overwrote it,
+            # and _get_media_buys_impl read the result for truthiness three times to
+            # compensate.
+            include_snapshot=include_snapshot,
+        )
     )
 
 
