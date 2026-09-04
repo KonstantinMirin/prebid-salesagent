@@ -61,9 +61,49 @@ request is not.
 
 ### One declaration
 
-```python
-# src/core/tools/registry.py
+The tool's shape is **a subclass of the SDK's spec model with the unimplemented
+fields removed**. That subclass is the whole definition: it is what we announce,
+what we validate against, and what we pass around internally.
 
+```python
+# src/core/schemas/product.py
+
+@omit("catalog", "fields", "if_pricing_version", "pagination", ...)
+class GetProductsRequest(LibraryGetProductsRequest):
+    """What this seller implements of get_products.
+
+    The SDK model is the spec. This is the subset we have built.
+    """
+    TAGS: ClassVar[tuple[str, ...]] = ("products", "inventory", "catalog", "adcp")
+```
+
+`@omit` exists only because pydantic inherits fields — a subclass cannot
+un-declare one by leaving it out. It removes them after class construction and
+rebuilds:
+
+```python
+def omit(*fields: str):
+    def deco(cls):
+        for f in fields:
+            cls.model_fields.pop(f, None)
+        cls.model_rebuild(force=True)
+        return cls
+    return deco
+```
+
+Measured on the pinned pydantic: the spec model is **untouched** and still
+validates the omitted fields; ours rejects them under `extra="forbid"` and drops
+them under `extra="ignore"`, with the attribute absent from the instance either
+way; `model_json_schema()` carries only the narrowed set; and `isinstance` of the
+spec model still holds.
+
+That last property is what makes this free. Announced, accepted, and implemented
+are **the same class** — not three sets kept in step, and not a runtime narrowing
+applied at three call sites.
+
+### The registry is wiring only
+
+```python
 @dataclass(frozen=True)
 class RestBinding:
     verb: Literal["POST", "PUT"]
@@ -72,7 +112,7 @@ class RestBinding:
 
 @dataclass(frozen=True)
 class ToolSpec:
-    dto: type[BaseModel]            # the ONLY declaration of request shape
+    dto: type[BaseModel]            # the subclass above
     impl: Callable                  # async def (*, req, identity, **transport) -> Result
     rest: RestBinding | None        # None = not exposed over REST
     a2a: bool                       # exposed as an A2A skill
@@ -90,78 +130,41 @@ TOOLS: Mapping[str, ToolSpec] = {
 }
 ```
 
-`ToolSpec` carries **wiring only**: what the tool is, where it is reachable, and
-whether it needs a caller. Everything that describes the *shape* lives on the
-shape.
-
-```python
-# src/core/schemas/product.py
-
-class GetProductsRequest(LibraryGetProductsRequest):
-    """Extends the SDK's pinned request model."""
-
-    TAGS: ClassVar[tuple[str, ...]] = ("products", "inventory", "catalog", "adcp")
-    UNIMPLEMENTED: ClassVar[frozenset[str]] = frozenset({
-        "catalog", "fields", "if_pricing_version", ...
-    })
-```
-
-`TOOLS` is the source of truth. Adding a tool is adding a row. Forgetting a
-transport is not possible, because all three read the same mapping.
+`ToolSpec` says where a tool is reachable and what runs it. It says nothing about
+its shape, because the shape says that itself.
 
 ### One builder
 
 ```python
-@cache
-def supported_model(dto: type[BaseModel]) -> type[BaseModel]:
-    """`dto` minus the fields we do not implement. A real subclass, cached."""
-    drop = getattr(dto, "UNIMPLEMENTED", frozenset())
-    if not drop:
-        return dto
-    narrowed = type(f"{dto.__name__}Supported", (dto,), {})
-    for name in drop:
-        narrowed.model_fields.pop(name, None)
-    narrowed.model_rebuild(force=True)
-    return narrowed
-
-
 def build_request(tool: str, payload: Mapping[str, Any]) -> BaseModel:
     """The ONE construction seam."""
-    return supported_model(TOOLS[tool].dto).model_validate(payload)
+    return TOOLS[tool].dto.model_validate(payload)
 ```
 
-This replaces all sixteen `build_*_request` functions.
+One line, and it replaces all sixteen `build_*_request` functions. It performs
+no selection, because the DTO is already the accepted shape — the narrowing
+happened at class definition, once, where a reader looking for "what does this
+seller accept" will find it.
 
-**It does select, and the selection is a real narrowing rather than a filter.**
-Validating against the full DTO and dropping unimplemented fields afterwards
-does not work: a field the DTO *declares* is not `extra`, so the extra policy
-never sees it, and it reaches the implementation to be silently ignored. That is
-accept-and-ignore — a 200 with no effect, indistinguishable from having done
-what was asked. MCP happens to validate against its published schema and would
-catch it; **A2A and REST have no such boundary**, and for them
-`model_validate` is the only gate.
-
-Removing the field from a subclass closes it. Measured on the pinned pydantic:
+There is no `supported_model()`, no `UNIMPLEMENTED` set consulted at runtime, and
+no cache. A field we have not implemented is not declared on the class, so:
 
 | | `extra="forbid"` (dev/CI) | `extra="ignore"` (production) |
 |---|---|---|
 | buyer sends an unimplemented field | **rejected**, naming the field | accepted, **field absent from the instance** |
 | `hasattr(instance, field)` | — | `False` |
-| `isinstance(instance, DTO)` | `True` | `True` |
-| the base DTO | untouched | untouched |
 
-So an unimplemented field **cannot propagate** on any transport. In CI it is a
-loud rejection, which is where we want to hear about it; in production it is
-dropped at the boundary and the attribute does not exist downstream. Nothing can
-read it, because there is nothing to read.
+An unimplemented field therefore **cannot propagate on any transport**. This
+matters because the transports are not equally protected: MCP validates against
+its published schema and would catch a stray field anyway, but **A2A and REST
+have no such boundary** — `model_validate` is their only gate. Narrowing the
+class is what makes that one gate sufficient.
 
-`isinstance` holding is what keeps this cheap: `_impl(req: GetProductsRequest)`
-is unchanged, every type hint still means what it says, and the narrowed class is
-an ordinary subclass rather than a parallel model to keep in step.
-
-**The published schema is the same object.** MCP announces
-`supported_model(dto)`, so *announced*, *accepted* and *implemented* are one set
-by construction — not three sets kept in step by a guard.
+The alternative — validate against the full spec model and drop unimplemented
+fields afterwards — does not work. A field the model *declares* is not `extra`,
+so the extra policy never sees it, and it reaches the implementation to be
+silently ignored. That is accept-and-ignore: a 200 with no effect,
+indistinguishable from having done what was asked.
 
 Nothing else selects. Coercion (`to_account_reference`, `to_brand_reference`,
 the brand shorthand) is what `model_validate` already does; those helpers exist
@@ -272,7 +275,7 @@ having:
 > the set of fields an implementation honours is smaller than the set its DTO declares.
 
 **68 fields**, listed per tool in the measurement. This design does not fix that.
-It makes it **visible in one place** — `ToolSpec.unimplemented` — where today it
+It makes it **visible in one place** — the `@omit` list on each DTO — where today it
 is invisible, spread across sixteen builder signatures, and reproduced three
 times per tool.
 
@@ -303,7 +306,7 @@ Each step leaves the tree green and is independently revertible.
 5. **Generate the A2A card and dispatch**, deleting the `AgentSkill` literals and
    the `skill_handlers` dict.
 6. **Generate REST routes**, deleting the decorators and body-model assignments.
-7. **Populate `DTO.UNIMPLEMENTED`** from the measurement, per tool.
+7. **Narrow each DTO** with `@omit`, from the measurement, per tool.
 
 Steps 4–6 are where "declared once" becomes true. Step 3 is where the 68 fields
 start reaching implementations, and is the only step with buyer-visible risk.
