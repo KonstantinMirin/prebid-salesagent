@@ -398,103 +398,70 @@ implementation reads. Deciding what to do about each field — implement, or
 announce it as unsupported — is the next piece of work and needs the spec, not
 this document.
 
-## One divergence table, both directions
+## One divergence table, one column
 
-Divergence from the spec has two directions, and today they are declared in two
-places:
+Divergence from the spec has two directions, and only one of them can be
+declared in Python:
 
-| | meaning | today |
+| | meaning | how it is stated |
 |---|---|---|
-| omitted | the spec declares it; we do not implement it | the `@omit` list |
-| added | the spec does not declare it; we carry it anyway | `_NON_SCHEMA_FIELDS` |
+| added | the spec does not declare it; we carry it anyway | `account_id: str \| None = None` on the subclass |
+| omitted | the spec declares it; we do not implement it | nothing — absence has no syntax |
 
-`_NON_SCHEMA_FIELDS` is a `ClassVar[dict[str, str]]` on the DTO mapping a field
-to the reason it is carried. Two entries exist. One —
-`ListAccountsRequest.idempotency_key` — already says *"Remove with the builder"*,
-which is step 5 of this migration. The other,
-`GetMediaBuysRequest.account_id`, is a genuine additive divergence: a legacy
-filter predating the spec's `account`, which live code still refuses.
+**An added field needs no table, because declaring it IS the statement.** You
+write the field on the subclass, typed, greppable, in the file the reader is
+already looking at. Listing it a second time creates a second place to drift and
+records nothing the class does not already say. It is also derivable exactly:
 
-**These are one statement, so they get one place.** Splitting them means two
-things to keep in step, which is what this design exists to stop doing.
+```python
+added = set(cls.model_fields) - library_declared_fields(cls)
+```
+
+Measured against both live cases, that expression returns `{"account_id"}` and
+`{"idempotency_key"}` — precisely the two hand-written `_NON_SCHEMA_FIELDS`
+entries. So `_NON_SCHEMA_FIELDS` is a hand copy of a computed set, and it goes
+away with nothing to replace it. The conformance statement derives its added half
+the same way, from the classes, at the moment it is rendered.
+
+**A removed field is the only thing that needs naming**, because Python has no
+syntax for "this inherited field does not exist here". That is the whole table:
 
 ```python
 # src/core/schemas/conformance.py  — pure data, imports nothing
 
-DIVERGENCE: Mapping[str, Divergence] = {
-    "GetProductsRequest": Divergence(
-        omitted={"catalog": "not implemented", "fields": "not implemented", ...},
-        added={},
-    ),
-    "GetMediaBuysRequest": Divergence(
-        omitted={...},
-        added={"account_id": "legacy filter predating the spec's `account`; "
-                             "media_buy_list.py refuses a request that sets it"},
-    ),
+OMITTED: Mapping[str, Mapping[str, str]] = {
+    "GetProductsRequest": {"catalog": "not implemented",
+                           "fields": "not implemented", ...},
+    "GetMediaBuysRequest": {...},
 }
 ```
 
-`@omit` takes no field names. It reads this table:
-
-```python
-@omit_declared          # looks itself up in DIVERGENCE by class name
-class GetProductsRequest(LibraryGetProductsRequest): ...
-```
-
-so there is no list at the class that can drift from the list in the table —
-there is only the table. The announced-shape check reads the `added` half from
-the same rows, and `_NON_SCHEMA_FIELDS` goes away.
-
-The table is a leaf module holding only strings, so nothing it declares can
-create an import cycle with the schemas that consult it.
+`@omit_declared` takes no field names. It looks itself up by class name, so no
+list at the class can drift from the list in the table — there is only the table.
+The table is a leaf module holding strings, so nothing it declares can create an
+import cycle with the schemas that consult it.
 
 **A stale row fails at import, so nothing needs to check the table.**
 `model_fields.pop` already reports whether the key was there; a name that omitted
 nothing is a name the spec model does not declare:
 
 ```python
-def omit_declared(omitted, added=()):
-    def deco(cls):
-        stale = {f for f in omitted if cls.model_fields.pop(f, None) is None}
-        if stale:
-            raise ValueError(f"{cls.__name__}: cannot omit {sorted(stale)} — "
-                             "the spec model does not declare them")
-        spec = library_declared_fields(cls)      # fields from the adcp ancestry
-        caught_up = {f for f in added if f in spec}
-        if caught_up:
-            raise ValueError(f"{cls.__name__}: {sorted(caught_up)} is declared by the "
-                             "spec now — delete the 'added' row")
-        undeclared = {f for f in added if f not in cls.model_fields}
-        if undeclared:
-            raise ValueError(f"{cls.__name__}: {sorted(undeclared)} is listed as added "
-                             "but this model does not declare it")
-        cls.model_rebuild(force=True)
-        return cls
-    return deco
+def omit_declared(cls):
+    stale = {f for f in OMITTED[cls.__name__] if cls.model_fields.pop(f, None) is None}
+    if stale:
+        raise ValueError(f"{cls.__name__}: cannot omit {sorted(stale)} — "
+                         "the spec model does not declare them")
+    cls.model_rebuild(force=True)
+    return cls
 ```
 
-**The `added` check must ask the SPEC ANCESTRY, not the class.** An added field is
-one *we* declare on the subclass, so it is always in `cls.model_fields` — a check
-against the class would raise on every correct table.
-`library_declared_fields()` exists for this and is the same function the
-announced-shape gate uses: *"every field name declared by an `adcp` class in the
-model's ancestry"*. Verified against the live case — `account_id` is on our model
-and absent from the spec's twelve, which is exactly what makes the row real.
+A typo, and a field an SDK bump removed, are the same failure and raise the same
+error at decoration time. The application does not start with a wrong table.
 
-Three failures, all at decoration time, all fatal:
-
-| | raises |
-|---|---|
-| `omit("catalgo")` — typo, or a field an SDK bump removed | `cannot omit [...] — the spec model does not declare them` |
-| an `added` row the spec has since defined | `is declared by the spec now — delete the 'added' row` |
-| an `added` row naming a field we never declared | `is listed as added but this model does not declare it` |
-
-The application does not start with a wrong table. That is strictly better than a
-test asserting the same property, because a test permits the incorrect
-construction and then reports it; this makes the incorrect construction
-impossible. It is also the same reasoning the rest of this design runs on, and
-the reason there is no guard here: **a check that still allows the bad state is a
-worse instrument than a constructor that refuses it.**
+That is strictly better than a test asserting the same property, because a test
+permits the incorrect construction and then reports it; this makes the incorrect
+construction impossible. The rebuild is the last statement on the same path, so
+there is no second step to forget and no footgun to guard.
 
 **This table is the conformance statement.** Standards practice for implementing
 a subset of a protocol is a PICS — *"a structured document which asserts which
@@ -532,7 +499,7 @@ Everything the deleted suite was protecting is now structural:
 |---|---|
 | model declares every schema field | inherited; minus the table |
 | model rejects nothing the schema declares | the narrowed class is the accepted shape |
-| model has no field the schema lacks | the `added` half of the table |
+| model has no field the schema lacks | derived: `model_fields - library_declared_fields` |
 | advertised shape matches the model | MCP announces the model itself |
 
 ## Migration order
