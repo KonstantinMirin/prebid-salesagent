@@ -112,43 +112,65 @@ transport is not possible, because all three read the same mapping.
 ### One builder
 
 ```python
+@cache
+def supported_model(dto: type[BaseModel]) -> type[BaseModel]:
+    """`dto` minus the fields we do not implement. A real subclass, cached."""
+    drop = getattr(dto, "UNIMPLEMENTED", frozenset())
+    if not drop:
+        return dto
+    narrowed = type(f"{dto.__name__}Supported", (dto,), {})
+    for name in drop:
+        narrowed.model_fields.pop(name, None)
+    narrowed.model_rebuild(force=True)
+    return narrowed
+
+
 def build_request(tool: str, payload: Mapping[str, Any]) -> BaseModel:
     """The ONE construction seam."""
-    return _supported_model(TOOLS[tool].dto).model_validate(payload)
+    return supported_model(TOOLS[tool].dto).model_validate(payload)
 ```
 
 This replaces all sixteen `build_*_request` functions.
 
-**It does select — and the selection is derived, not written.** `_supported_model`
-returns the DTO narrowed to the fields we actually honour: `model_fields` minus
-`DTO.UNIMPLEMENTED`, built once and cached.
+**It does select, and the selection is a real narrowing rather than a filter.**
+Validating against the full DTO and dropping unimplemented fields afterwards
+does not work: a field the DTO *declares* is not `extra`, so the extra policy
+never sees it, and it reaches the implementation to be silently ignored. That is
+accept-and-ignore — a 200 with no effect, indistinguishable from having done
+what was asked. MCP happens to validate against its published schema and would
+catch it; **A2A and REST have no such boundary**, and for them
+`model_validate` is the only gate.
 
-That narrowing is what makes the unsupported fields behave correctly with
-machinery that already exists rather than new machinery. An unimplemented field
-is not *declared* on the model we validate against, so it is **extra** — and the
-extra policy is already decided and already environment-aware (critical pattern
-\#7): `extra="forbid"` in development and CI, `extra="ignore"` in production.
-A buyer sending an unimplemented field is refused in CI, where we want to hear
-about it, and ignored in production, where forward compatibility matters.
+Removing the field from a subclass closes it. Measured on the pinned pydantic:
 
-The alternative — validate against the full DTO and drop unimplemented fields
-afterwards — is **accept-and-ignore**, the quiet failure CLAUDE.md forbids. The
-buyer would get a 200 and no effect, with nothing distinguishing "we do not
-support this" from "we did what you asked".
+| | `extra="forbid"` (dev/CI) | `extra="ignore"` (production) |
+|---|---|---|
+| buyer sends an unimplemented field | **rejected**, naming the field | accepted, **field absent from the instance** |
+| `hasattr(instance, field)` | — | `False` |
+| `isinstance(instance, DTO)` | `True` | `True` |
+| the base DTO | untouched | untouched |
+
+So an unimplemented field **cannot propagate** on any transport. In CI it is a
+loud rejection, which is where we want to hear about it; in production it is
+dropped at the boundary and the attribute does not exist downstream. Nothing can
+read it, because there is nothing to read.
+
+`isinstance` holding is what keeps this cheap: `_impl(req: GetProductsRequest)`
+is unchanged, every type hint still means what it says, and the narrowed class is
+an ordinary subclass rather than a parallel model to keep in step.
+
+**The published schema is the same object.** MCP announces
+`supported_model(dto)`, so *announced*, *accepted* and *implemented* are one set
+by construction — not three sets kept in step by a guard.
 
 Nothing else selects. Coercion (`to_account_reference`, `to_brand_reference`,
-the brand shorthand) is what `model_validate` already does — those helpers exist
+the brand shorthand) is what `model_validate` already does; those helpers exist
 because the hand-written builders bypassed validation, not because pydantic
 cannot do it.
 
 A malformed payload raises `pydantic.ValidationError`, which every transport
 boundary already translates to `INVALID_REQUEST` with `field` and `issues`
 (`adcp_error_for`, checked before `ValueError` deliberately).
-
-**The published schema is the same narrowing.** MCP announces
-`_supported_model(dto)`, not `dto`, so a field we do not honour is never
-advertised. Announced, accepted and implemented become one set by construction
-rather than three sets kept in step.
 
 ### Derived registration
 
