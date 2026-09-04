@@ -126,6 +126,33 @@ today, which is the measurement this design started from.
 Announced, accepted, and implemented are **the same class** — not three sets kept
 in step, and not a runtime narrowing applied at three call sites.
 
+### Why a subclass, and why the narrowing must vanish
+
+Pydantic inheritance is additive: subclass and you get all 21 fields. There is no
+"inherit these five", so removing them is the only way to narrow while inheriting.
+
+The alternative — `create_model` from the SDK's own `FieldInfo` objects for the
+kept fields — was tested and works: no mutation, no rebuild, annotations and
+descriptions preserved, unimplemented fields rejected. **It is rejected anyway.**
+
+It produces a model that does not inherit the SDK's. Inheriting the SDK's request
+model is a principle here (critical pattern \#1), and `sdk_grounding()` enforces
+it at registration. **The narrowing is temporary; the principle is not.** As
+fields are implemented, each `@omit` list shrinks, and the correct end state is
+
+```python
+class GetProductsRequest(LibraryGetProductsRequest):
+    """Every field of the spec, implemented."""
+```
+
+with no decorator at all — `@omit()` with nothing to omit is already a plain
+subclass. A mechanism that converges to the principle is right; one that leaves
+us permanently outside it to service a temporary condition is not.
+
+So the cost of `@omit` — mutation plus a mandatory rebuild — is accepted
+deliberately, and the rebuild is documented above as a hazard precisely because
+it is a footgun that fails silently.
+
 ### The registry is wiring only
 
 ```python
