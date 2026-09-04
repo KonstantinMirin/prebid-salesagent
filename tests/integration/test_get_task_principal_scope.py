@@ -30,6 +30,7 @@ mocked repository returns whatever the test told it to and would pass identicall
 and after.
 """
 
+import uuid
 from typing import Any
 
 import pytest
@@ -40,9 +41,21 @@ from tests.harness.transport import Transport
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
-TENANT_ID = "task_scope_tenant"
 OWNER_ID = "principal_owner"
 INTRUDER_ID = "principal_intruder"
+
+
+@pytest.fixture
+def tenant_id(integration_db) -> str:
+    """A tenant of this test's own.
+
+    The integration database is shared and is not rolled back between tests, so a fixed
+    tenant id collides the moment a second test seeds it — which is what surfaced once the
+    tests ahead of these started passing and reaching their own seeding. Per-test isolation
+    is this suite's existing idiom (see test_idempotency_race) and removes the whole class
+    rather than making one get-or-create smarter.
+    """
+    return f"task_scope_{uuid.uuid4().hex[:8]}"
 
 
 class _GetTaskEnv(TaskManagementEnv):
@@ -61,7 +74,7 @@ class _CompleteTaskEnv(TaskManagementEnv):
     MCP_TOOL = "complete_task"
 
 
-def _seed(env, principal_id: str) -> str:
+def _seed(env, tenant_id: str, principal_id: str) -> str:
     """Seed a task owned by *principal_id*, and both principals if not already there.
 
     IDEMPOTENT on the tenant and principals, because a test that seeds a task for each of
@@ -81,16 +94,16 @@ def _seed(env, principal_id: str) -> str:
     from src.core.database.repositories.workflow import WorkflowRepository, build_context
 
     session = env.get_session()
-    tenant = session.scalars(select(Tenant).filter_by(tenant_id=TENANT_ID)).first()
+    tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
     if tenant is None:
-        tenant = TenantFactory(tenant_id=TENANT_ID)
+        tenant = TenantFactory(tenant_id=tenant_id)
     for pid in (OWNER_ID, INTRUDER_ID):
-        existing = session.scalars(select(Principal).filter_by(tenant_id=TENANT_ID, principal_id=pid)).first()
+        existing = session.scalars(select(Principal).filter_by(tenant_id=tenant_id, principal_id=pid)).first()
         if existing is None:
             PrincipalFactory(tenant=tenant, principal_id=pid)
 
-    context = build_context(session, tenant_id=TENANT_ID, principal_id=principal_id)
-    step = WorkflowRepository(session, TENANT_ID).create_step(
+    context = build_context(session, tenant_id=tenant_id, principal_id=principal_id)
+    step = WorkflowRepository(session, tenant_id).create_step(
         context=context,
         step_type="tool_call",
         owner="principal",
@@ -162,7 +175,7 @@ def _become(env, principal_id: str) -> str:
 class TestTaskIsScopedToItsPrincipal:
     """Read, list and complete, each graded on the envelope the buyer actually receives."""
 
-    def test_the_dispatch_really_runs_as_the_intruder(self, integration_db):
+    def test_the_dispatch_really_runs_as_the_intruder(self, tenant_id):
         """POSITIVE CONTROL: production must RESOLVE the caller as the intruder.
 
         Every other test here asserts a REFUSAL — and a refusal is also what you get when
@@ -177,28 +190,32 @@ class TestTaskIsScopedToItsPrincipal:
         credential does not survive the dispatch this fails loudly with the owner's id,
         instead of every refusal silently meaning nothing.
         """
-        with _CompleteTaskEnv(tenant_id=TENANT_ID, principal_id=OWNER_ID) as env:
-            intruders_own_task = _seed(env, INTRUDER_ID)
+        with _CompleteTaskEnv(tenant_id=tenant_id, principal_id=OWNER_ID) as env:
+            intruders_own_task = _seed(env, tenant_id, INTRUDER_ID)
             _assert_two_distinct_principals(env)
             _become(env, INTRUDER_ID)
-            payload = env.call_via(Transport.MCP, task_id=intruders_own_task, status="completed").payload
+            result = env.call_via(Transport.MCP, task_id=intruders_own_task, status="completed")
 
-        assert payload["completed_by"] == INTRUDER_ID, (
-            f"production resolved the caller as {payload['completed_by']!r}, not the intruder — "
+        assert not result.is_error, (
+            f"the intruder could not complete their OWN task, so this control cannot report who "
+            f"production resolved and every refusal below is ungrounded: {result}"
+        )
+        assert result.payload["completed_by"] == INTRUDER_ID, (
+            f"production resolved the caller as {result.payload['completed_by']!r}, not the intruder — "
             "the credential did not survive the dispatch, so every refusal in this file would "
             "be the owner being correctly allowed rather than the intruder being refused"
         )
 
-    def test_reading_another_principals_task_is_refused(self, integration_db):
+    def test_reading_another_principals_task_is_refused(self, tenant_id):
         """REFERENCE_NOT_FOUND on the wire, which is the code the storyboard demands.
 
         The intruder reads their OWN task first. That success is the inline proof that this
         dispatch authenticates as the intruder, so the refusal below is a refusal and not an
         absence of the question.
         """
-        with _GetTaskEnv(tenant_id=TENANT_ID, principal_id=OWNER_ID) as env:
-            owners_task = _seed(env, OWNER_ID)
-            intruders_task = _seed(env, INTRUDER_ID)
+        with _GetTaskEnv(tenant_id=tenant_id, principal_id=OWNER_ID) as env:
+            owners_task = _seed(env, tenant_id, OWNER_ID)
+            intruders_task = _seed(env, tenant_id, INTRUDER_ID)
             _assert_two_distinct_principals(env)
             _become(env, INTRUDER_ID)
             own = env.call_via(Transport.MCP, task_id=intruders_task)
@@ -213,7 +230,7 @@ class TestTaskIsScopedToItsPrincipal:
         assert result.is_error
         result.assert_wire_error("REFERENCE_NOT_FOUND")
 
-    def test_the_two_refusals_are_indistinguishable(self, integration_db):
+    def test_the_two_refusals_are_indistinguishable(self, tenant_id):
         """ "Not yours" and "not there" must be the SAME envelope, field for field.
 
         This is the control, and the reason the test above means anything. The obligation
@@ -227,8 +244,8 @@ class TestTaskIsScopedToItsPrincipal:
         forbids. The only field allowed to differ is the step_id the caller sent back to
         itself, which is blinded above with the reason stated.
         """
-        with _GetTaskEnv(tenant_id=TENANT_ID, principal_id=OWNER_ID) as env:
-            task_id = _seed(env, OWNER_ID)
+        with _GetTaskEnv(tenant_id=tenant_id, principal_id=OWNER_ID) as env:
+            task_id = _seed(env, tenant_id, OWNER_ID)
             _become(env, INTRUDER_ID)
             not_yours = env.call_via(Transport.MCP, task_id=task_id)
             not_there = env.call_via(Transport.MCP, task_id="step_no_such_task")
@@ -242,48 +259,56 @@ class TestTaskIsScopedToItsPrincipal:
             "a task that does not exist — the difference is what tells a buyer the task is real"
         )
 
-    def test_completing_another_principals_task_is_refused(self, integration_db):
+    def test_completing_another_principals_task_is_refused(self, tenant_id):
         """The WRITE half. The same unscoped lookup let A complete B's task."""
-        with _CompleteTaskEnv(tenant_id=TENANT_ID, principal_id=OWNER_ID) as env:
-            task_id = _seed(env, OWNER_ID)
+        with _CompleteTaskEnv(tenant_id=tenant_id, principal_id=OWNER_ID) as env:
+            task_id = _seed(env, tenant_id, OWNER_ID)
             _become(env, INTRUDER_ID)
             result = env.call_via(Transport.MCP, task_id=task_id, status="completed")
 
         assert result.is_error
         result.assert_wire_error("REFERENCE_NOT_FOUND")
 
-    def test_listing_does_not_show_another_principals_task(self, integration_db):
+    def test_listing_does_not_show_another_principals_task(self, tenant_id):
         """list_tasks was the widest of the three: it listed the whole tenant.
 
         Graded on both the page and the COUNT. A page scoped to the caller beside a
         tenant-wide total still discloses how many tasks the others hold — the same leak
         by arithmetic.
         """
-        with TaskManagementEnv(tenant_id=TENANT_ID, principal_id=OWNER_ID) as env:
-            _seed(env, OWNER_ID)
+        with TaskManagementEnv(tenant_id=tenant_id, principal_id=OWNER_ID) as env:
+            _seed(env, tenant_id, OWNER_ID)
             _become(env, INTRUDER_ID)
-            payload = env.call_via(Transport.MCP).payload
+            result = env.call_via(Transport.MCP)
 
-        assert payload["tasks"] == []
-        assert payload["total"] == 0
+        # Checked BEFORE subscripting: on an error the payload is None, and
+        # ``payload["tasks"]`` then raises TypeError, which reads as a broken test rather
+        # than as the dispatch having failed.
+        assert not result.is_error, f"list_tasks failed instead of returning an empty page: {result}"
+        assert result.payload["tasks"] == []
+        assert result.payload["total"] == 0
 
-    def test_the_owner_still_reads_and_lists_their_own(self, integration_db):
+    def test_the_owner_still_reads_and_lists_their_own(self, tenant_id):
         """The other half: scoping must not have locked the owner out.
 
         Both surfaces in one test because the risk they share is one over-broad filter.
         Asserted on the request payload, not merely on task_id, because a fix that returned
         the row stripped of its contents would satisfy an id check.
         """
-        with _GetTaskEnv(tenant_id=TENANT_ID, principal_id=OWNER_ID) as env:
-            task_id = _seed(env, OWNER_ID)
-            detail = env.call_via(Transport.MCP, task_id=task_id).payload
+        with _GetTaskEnv(tenant_id=tenant_id, principal_id=OWNER_ID) as env:
+            task_id = _seed(env, tenant_id, OWNER_ID)
+            read = env.call_via(Transport.MCP, task_id=task_id)
 
-        assert detail["task_id"] == task_id
-        assert detail["request_data"] == {"secret_brief": "the other buyer's brief"}
+        assert not read.is_error, f"the owner could not read their own task: {read}"
+        assert read.payload["task_id"] == task_id
+        assert read.payload["request_data"] == {"secret_brief": "the other buyer's brief"}
 
-        with TaskManagementEnv(tenant_id=TENANT_ID, principal_id=OWNER_ID) as env:
-            _seed(env, OWNER_ID)
-            payload = env.call_via(Transport.MCP).payload
+        # NO second _seed. The task above is committed and the tenant is this test's own,
+        # so seeding again would add a SECOND task and the one-task assertion below would
+        # be measuring the fixture rather than the filter.
+        with TaskManagementEnv(tenant_id=tenant_id, principal_id=OWNER_ID) as env:
+            listed = env.call_via(Transport.MCP)
 
-        assert [task["task_id"] for task in payload["tasks"]] == [task_id]
-        assert payload["total"] == 1
+        assert not listed.is_error, f"the owner could not list their own tasks: {listed}"
+        assert [task["task_id"] for task in listed.payload["tasks"]] == [task_id]
+        assert listed.payload["total"] == 1
