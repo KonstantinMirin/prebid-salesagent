@@ -2488,8 +2488,11 @@ def pinned_response_schema_candidates(tool_name: str) -> dict[str, str]:
 
     DRY DEBT, stated rather than hidden: this differs from the request-side helper only in
     the glob and the wording, so the two should be ONE function taking the suffix. It is
-    written here because ``tests/helpers/`` belongs to another lane in the change this
-    landed in; fold them together when that lane is free.
+    written here because ``tests/helpers/`` belonged to another lane, mid-slice, in the
+    change this landed in -- sequenced deliberately, not missed. Tracked as
+    salesagent-prkv.97, which names the fix and requires this paragraph to be DELETED with
+    it: a unification that leaves a note claiming duplication still exists is its own
+    stale rationale.
     """
     wanted = set(tool_name.split("_"))
     root = pinned_schema.schema_root()
