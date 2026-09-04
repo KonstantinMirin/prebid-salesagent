@@ -62,20 +62,33 @@ class _CompleteTaskEnv(TaskManagementEnv):
 
 
 def _seed(env, principal_id: str) -> str:
-    """Seed a tenant, both principals, and one task owned by OWNER_ID. Returns its step id.
+    """Seed a task owned by *principal_id*, and both principals if not already there.
+
+    IDEMPOTENT on the tenant and principals, because a test that seeds a task for each of
+    the two principals calls this twice against one env. Both principal rows exist either
+    way: an intruder with no row has no access_token, and ``_become`` would then fall back
+    to a mocked identity instead of the real header -> token -> DB chain — which is how the
+    first version of this file ended up never authenticating as anyone but the owner.
 
     Written through PRODUCTION's creators — ``build_context`` and
     ``WorkflowRepository.create_step`` — not constructed inline: the repository-pattern
     guard forbids new inline session writes, and using the real path means the ownership
     this test asserts on is established the way production establishes it.
     """
+    from sqlalchemy import select
+
+    from src.core.database.models import Principal, Tenant
     from src.core.database.repositories.workflow import WorkflowRepository, build_context
 
-    tenant = TenantFactory(tenant_id=TENANT_ID)
-    PrincipalFactory(tenant=tenant, principal_id=OWNER_ID)
-    PrincipalFactory(tenant=tenant, principal_id=INTRUDER_ID)
-
     session = env.get_session()
+    tenant = session.scalars(select(Tenant).filter_by(tenant_id=TENANT_ID)).first()
+    if tenant is None:
+        tenant = TenantFactory(tenant_id=TENANT_ID)
+    for pid in (OWNER_ID, INTRUDER_ID):
+        existing = session.scalars(select(Principal).filter_by(tenant_id=TENANT_ID, principal_id=pid)).first()
+        if existing is None:
+            PrincipalFactory(tenant=tenant, principal_id=pid)
+
     context = build_context(session, tenant_id=TENANT_ID, principal_id=principal_id)
     step = WorkflowRepository(session, TENANT_ID).create_step(
         context=context,
@@ -149,13 +162,53 @@ def _become(env, principal_id: str) -> str:
 class TestTaskIsScopedToItsPrincipal:
     """Read, list and complete, each graded on the envelope the buyer actually receives."""
 
-    def test_reading_another_principals_task_is_refused(self, integration_db):
-        """REFERENCE_NOT_FOUND on the wire, which is the code the storyboard demands."""
-        with _GetTaskEnv(tenant_id=TENANT_ID, principal_id=OWNER_ID) as env:
-            task_id = _seed(env, OWNER_ID)
+    def test_the_dispatch_really_runs_as_the_intruder(self, integration_db):
+        """POSITIVE CONTROL: production must RESOLVE the caller as the intruder.
+
+        Every other test here asserts a REFUSAL — and a refusal is also what you get when
+        the intruder was never asked at all. That is not hypothetical: the first version of
+        this file forged an identity by copying a different principal_id onto the owner's
+        token, the dispatcher read only the token, and all five tests ran as the owner. Once
+        the assertions were corrected they would have gone green against a build that leaks.
+
+        So this one drives a SUCCESS and reads back who production thinks called.
+        ``completed_by`` is written by complete_task from ``require_principal_id(identity)``
+        — the identity production resolved for itself, not a claim the test made. If the
+        credential does not survive the dispatch this fails loudly with the owner's id,
+        instead of every refusal silently meaning nothing.
+        """
+        with _CompleteTaskEnv(tenant_id=TENANT_ID, principal_id=OWNER_ID) as env:
+            intruders_own_task = _seed(env, INTRUDER_ID)
             _assert_two_distinct_principals(env)
             _become(env, INTRUDER_ID)
-            result = env.call_via(Transport.MCP, task_id=task_id)
+            payload = env.call_via(Transport.MCP, task_id=intruders_own_task, status="completed").payload
+
+        assert payload["completed_by"] == INTRUDER_ID, (
+            f"production resolved the caller as {payload['completed_by']!r}, not the intruder — "
+            "the credential did not survive the dispatch, so every refusal in this file would "
+            "be the owner being correctly allowed rather than the intruder being refused"
+        )
+
+    def test_reading_another_principals_task_is_refused(self, integration_db):
+        """REFERENCE_NOT_FOUND on the wire, which is the code the storyboard demands.
+
+        The intruder reads their OWN task first. That success is the inline proof that this
+        dispatch authenticates as the intruder, so the refusal below is a refusal and not an
+        absence of the question.
+        """
+        with _GetTaskEnv(tenant_id=TENANT_ID, principal_id=OWNER_ID) as env:
+            owners_task = _seed(env, OWNER_ID)
+            intruders_task = _seed(env, INTRUDER_ID)
+            _assert_two_distinct_principals(env)
+            _become(env, INTRUDER_ID)
+            own = env.call_via(Transport.MCP, task_id=intruders_task)
+            result = env.call_via(Transport.MCP, task_id=owners_task)
+
+        assert not own.is_error, (
+            "the intruder could not read their OWN task, so this env is not authenticating "
+            "as the intruder at all and the refusal below proves nothing"
+        )
+        assert own.payload["task_id"] == intruders_task
 
         assert result.is_error
         result.assert_wire_error("REFERENCE_NOT_FOUND")
