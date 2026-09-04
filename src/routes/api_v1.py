@@ -349,7 +349,7 @@ async def get_products(body: GetProductsBody, identity: ResolvedIdentity | None 
 
 
 @router.post("/capabilities")
-async def post_capabilities(body: GetAdcpCapabilitiesBody, identity: ResolvedIdentity | None = resolve_auth):
+async def get_adcp_capabilities(body: GetAdcpCapabilitiesBody, identity: ResolvedIdentity | None = resolve_auth):
     """Get AdCP capabilities (auth-optional discovery skill).
 
     The tool's one REST shape. Protocols filtering, context echo and the

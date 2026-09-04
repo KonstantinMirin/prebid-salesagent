@@ -9,19 +9,13 @@ those three sites becomes resolvable through :data:`ADDRESS_TABLE`
 automatically; a tool NOT registered on a transport raises
 :class:`NoAddressForTransport` instead of silently being unreachable.
 
-The one place hand-maintenance CAN be required: a REST route's Python handler
-function name does not always equal the AdCP tool name it implements (e.g.
-the ``POST /api/v1/capabilities`` handler is named ``post_capabilities`` but
-implements the ``get_adcp_capabilities`` tool). The route declares that
-identity itself via ``operation_id`` (preferred — no hand-maintained entry
-needed); :data:`REST_TOOL_ALIASES` is the fallback for a route that hasn't
-adopted ``operation_id`` yet, and tools with no REST route at all are
-recorded in :data:`REST_ABSENT_TOOLS` — both reviewed-growth-only, both
-validated against live registration by tests (see
-``tests/harness/test_address_table.py::TestRestAliasesAndAbsence``). A REST
-handler name that matches neither a known tool name, a declared
-``operation_id``, nor an alias raises :class:`UnresolvedRestHandlerName` at
-table-build time — it is NEVER silently registered under the wrong name. The
+A REST route's handler function IS named after the AdCP tool it implements, so
+the handler name is the tool identity and nothing translates between them. A
+handler name that is not a known tool name raises
+:class:`UnresolvedRestHandlerName` at table-build time — it is NEVER silently
+registered under the wrong name. Tools with no REST route at all are recorded in
+:data:`REST_ABSENT_TOOLS`, validated against live registration by tests (see
+``tests/harness/test_address_table.py::TestRestHandlerNamesAndAbsence``). The
 design this implements is stated in ``tests/harness/client.py``'s module
 docstring.
 
@@ -55,33 +49,9 @@ from tests.harness.transport import Transport
 # (tests/harness/client.py) — see design doc §4 "path_template handling".
 PATH_PARAM_RE = re.compile(r"\{(\w+)\}")
 
-# REST handler function name -> AdCP tool name, for the (hopefully rare) case
-# where a route's Python handler is not named after the tool it implements
-# AND the route does not (yet) self-declare its AdCP tool identity via
-# ``operation_id``. ``_index_rest`` prefers a route's declared ``operation_id``
-# over this map whenever it resolves to a known tool name — see
-# ``_index_rest``. This map is the fallback for routes that haven't adopted
-# ``operation_id`` yet; it is reviewed-growth-only: pinned exactly by
-# TestRestAliasesAndAbsence.test_rest_tool_aliases_pinned_exactly, so adding
-# an entry requires a deliberate, reviewed edit to that test too.
-#
-# It reached empty once — every /api/v1 handler was named after the AdCP tool it
-# implements — and has ONE entry. ``/api/v1/capabilities`` is served by a single
-# POST route whose handler is ``post_capabilities`` (src/routes/api_v1.py); the
-# name is left over from when the path also answered a parameterless GET named
-# after the tool, and the alias restores the tool identity the handler name does
-# not carry. AdCP does not define REST -- this project does -- so the tool name
-# stays canonical across every transport; a handler diverging from it is a defect,
-# not a naming choice, and the durable fix here is an ``operation_id`` on the
-# route (which ``_index_rest`` prefers), not a second alias.
-REST_TOOL_ALIASES: dict[str, str] = {
-    "post_capabilities": "get_adcp_capabilities",
-}
-
-# AdCP tool names known to have NO REST route at all (as opposed to a REST
-# route under a divergent name — that's REST_TOOL_ALIASES above). Documents
-# the absence as a KNOWN, intentional fact so the cross-registry consistency
-# guard (TestRestAliasesAndAbsence) treats it as expected rather than an
+# AdCP tool names known to have NO REST route at all. Documents the absence as a
+# KNOWN, intentional fact so the cross-registry consistency guard
+# (TestRestHandlerNamesAndAbsence) treats it as expected rather than an
 # accident of naming drift. Validated bidirectionally by
 # test_rest_absent_tools_stay_off_rest_and_are_real_tools: every entry here
 # must (a) NOT resolve on REST — else it's stale and should shrink — and (b)
@@ -113,12 +83,9 @@ class UnresolvedRestHandlerName(RuntimeError):
     """A REST route's handler name resolves to no known AdCP tool.
 
     Unlike :class:`NoAddressForTransport` (an EXPECTED per-tool-per-transport
-    miss), this is a BUG: a route exists, but its handler name is neither a
-    known MCP/A2A tool name, a declared ``operation_id`` that resolves to
-    one, nor an entry in :data:`REST_TOOL_ALIASES`. Fix by declaring
-    ``operation_id="<tool_name>"`` on the route (preferred), or by adding a
-    ``{handler_name: tool_name}`` entry to ``REST_TOOL_ALIASES`` if the
-    route can't yet adopt ``operation_id`` — never by weakening this check.
+    miss), this is a BUG: a route exists, but its handler name is not a known
+    MCP/A2A tool name. Fix by renaming the handler to the tool it implements —
+    never by weakening this check.
     If the route is legitimately NOT an AdCP tool (e.g. a future webhook
     receiver or internal helper mounted under ``/api/v1``), it is out of
     this indexer's scope; consult the design doc
@@ -133,11 +100,9 @@ class ToolAddress:
     """One transport's resolved address for one tool. Frozen/hashable — safe to cache."""
 
     transport: Transport
-    # MCP: tool name. A2A: skill id. REST: the RESOLVED AdCP tool name (post
-    # REST_TOOL_ALIASES substitution — may differ from the route's Python
-    # handler name). REST DELIVER (tests/harness/client.py) reads only
-    # path_template/method to dispatch, never `name`, so alias substitution
-    # here is transparent to dispatch.
+    # MCP: tool name. A2A: skill id. REST: the AdCP tool name, which is the
+    # route's Python handler name. REST DELIVER (tests/harness/client.py) reads
+    # only path_template/method to dispatch, never `name`.
     name: str
     path_template: str | None = None  # REST only, e.g. "/api/v1/media-buys/{media_buy_id}"
     method: str | None = None  # REST only, lowercase HTTP verb, e.g. "put"
@@ -175,10 +140,9 @@ class AddressTable:
     ``mcp_app``/``agent_card_factory``/``rest_app`` via the constructor
     instead of mutating the real production singletons.
 
-    ``_index_rest`` is the one exception to "no hand-maintained list": a
-    REST handler name that doesn't match a known MCP/A2A tool name is
-    resolved through ``REST_TOOL_ALIASES`` or raises
-    :class:`UnresolvedRestHandlerName` — see module docstring.
+    ``_index_rest`` raises :class:`UnresolvedRestHandlerName` for a REST
+    handler name that doesn't match a known MCP/A2A tool name — see module
+    docstring.
     """
 
     def __init__(
@@ -222,20 +186,6 @@ class AddressTable:
             for t in _A2A_FAMILY:
                 self._by_tool_transport[(skill.id, t)] = ToolAddress(t, name=skill.id)
 
-    @staticmethod
-    def _pick_rest_method(methods: set[str]) -> str:
-        """Deterministic verb choice for a route's method set: prefer POST (the
-        AdCP body-carrying shape), else the alphabetically-first remaining
-        verb — never ``next(iter(...))`` on an unordered set. Every route in
-        ``src/routes/api_v1.py`` declares one non-HEAD verb, so the live choice
-        is made over a single-verb set; the ordering rule itself is graded on a
-        synthetic multi-verb route (``TestRestVerbDeterminism``).
-        """
-        candidates = methods - {"HEAD"}
-        if "POST" in candidates:
-            return "post"
-        return sorted(candidates)[0].lower()
-
     def _index_rest(self) -> None:
         rest_app: Any = self._rest_app
         if rest_app is None:
@@ -249,33 +199,24 @@ class AddressTable:
             methods = getattr(route, "methods", None)
             if not path.startswith("/api/v1") or endpoint is None or not methods:
                 continue
-            handler_name = endpoint.__name__
-            declared_operation_id = getattr(route, "operation_id", None)
-            if declared_operation_id in known_tool_names:
-                # Route self-declares its AdCP tool identity — prefer it over
-                # both the raw handler name and REST_TOOL_ALIASES (the
-                # endgame the alias map's docstring describes).
-                tool_name = declared_operation_id
-            else:
-                tool_name = REST_TOOL_ALIASES.get(handler_name, handler_name)
+            tool_name = endpoint.__name__
             if tool_name not in known_tool_names:
                 raise UnresolvedRestHandlerName(
-                    f"REST route {path!r} handler {handler_name!r} resolves to tool name "
-                    f"{tool_name!r}, which is not a known MCP/A2A tool name. If "
-                    f"{handler_name!r} implements an existing AdCP tool under a divergent "
-                    f"name, add {handler_name!r}: <tool_name> to REST_TOOL_ALIASES "
-                    f"(tests/harness/address_table.py). If this route is not an AdCP tool "
-                    f"at all, it is out of this indexer's scope — see UnresolvedRestHandlerName."
+                    f"REST route {path!r} handler {tool_name!r} is not a known MCP/A2A tool "
+                    f"name. A REST handler is named after the AdCP tool it implements — if "
+                    f"this one implements an existing tool, rename it to that tool. If this "
+                    f"route is not an AdCP tool at all, it is out of this indexer's scope — "
+                    f"see UnresolvedRestHandlerName."
                 )
             existing = self._by_tool_transport.get((tool_name, Transport.REST))
             if existing is not None and existing.path_template != path:
                 raise UnresolvedRestHandlerName(
                     f"REST tool name {tool_name!r} resolves from more than one route: "
-                    f"{existing.path_template!r} and {path!r} (via handler {handler_name!r}). "
-                    f"A resolved AdCP tool name must be unique per REST family — check "
-                    f"REST_TOOL_ALIASES for a collision."
+                    f"{existing.path_template!r} and {path!r}. An AdCP tool name must be "
+                    f"unique per REST family."
                 )
-            method = self._pick_rest_method(methods)
+            (verb,) = methods
+            method = verb.lower()
             for t in _REST_FAMILY:
                 self._by_tool_transport[(tool_name, t)] = ToolAddress(
                     t, name=tool_name, path_template=path, method=method
