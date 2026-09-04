@@ -338,6 +338,28 @@ Feature: BR-UC-011 Manage Accounts
       | fifteen-chars-x      | below_min_length | length = 15 (minLength 16 - 1)   |
       | buyer sync key 0001! | bad_charset      | space and ! outside allowed set  |
 
+  @T-UC-011-sync-idempotency-omitted @sync @idempotency @validation @v3-1 @partition @boundary
+  Scenario: sync_accounts rejects a request that omits idempotency_key
+    Given the Buyer Agent has an authenticated connection
+    When the Buyer Agent sends a sync_accounts request with no idempotency_key and:
+    | brand.domain    | operator      | billing  |
+    | acme-corp.com   | acme-corp.com | operator |
+    Then the response arrives
+    And the response contains error code INVALID_REQUEST
+    And the response error field is idempotency_key
+    # The sibling of the malformed outline above, and the one that proves the field is
+    # REQUIRED rather than merely constrained: those rows send a key the pattern rejects,
+    # this one sends none at all. Without it, a seller that made idempotency_key optional
+    # would pass every idempotency scenario in this file -- which is exactly the state this
+    # agent was in until salesagent-prkv.86, with the deviation recorded in a test docstring
+    # and graded by nothing.
+    # ABSENCE IS STATED, not implied: the harness defaults a conformant key into every
+    # sync_accounts payload (a scenario grading `operator` must not be refused for a missing
+    # key first), so this scenario names OMIT_IDEMPOTENCY_KEY to send none.
+    # Storyboard: dist/compliance/3.1.1 has no account domain -- UNGRADED by the conformance
+    # storyboard, so the schema is the sole authority, same as the accept scenario above.
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/required
+
   @T-UC-011-sync-billing-enum @sync @billing @post-s7 @partition @boundary
   Scenario Outline: Sync with billing model <billing> -- <partition_name>
     Given the Buyer Agent has an authenticated connection

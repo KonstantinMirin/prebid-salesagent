@@ -41,6 +41,18 @@ from tests.factories.request import fresh_idempotency_key
 # ═══════════════════════════════════════════════════════════════════════
 
 
+#: Sentinel for the omitted-key scenario: pass ``idempotency_key=OMIT_IDEMPOTENCY_KEY``
+#: to send a sync_accounts payload carrying NO key at all.
+#:
+#: sync-accounts-request.json 3.1.1 lists idempotency_key in ``/required``, so "the seller
+#: refuses a request without one" is an obligation that needs grading — and it cannot be
+#: expressed by omitting the kwarg, because :func:`_sync_raw` defaults a key in for every
+#: scenario that simply does not care about it. Same shape, same reason, as
+#: ``tests.harness.media_buy_create.OMIT_IDEMPOTENCY_KEY`` and its ``OMIT_ACCOUNT`` sibling;
+#: kept local because that one is the create env's and this is the sync verb's wire path.
+OMIT_IDEMPOTENCY_KEY: Any = object()
+
+
 def _sync_raw(ctx: dict, **payload: Any) -> None:
     """Dispatch a LITERAL sync_accounts payload — no ``SyncAccountsRequest`` first.
 
@@ -75,10 +87,15 @@ def _sync_raw(ctx: dict, **payload: Any) -> None:
     ``setdefault``, so a scenario that names its own key still grades that key:
     the malformed-key rows (T-UC-011-sync-idempotency-malformed) pass 15-character
     and bad-charset values through and must keep reaching the boundary with them.
-    A scenario meaning to send NO key would say so by passing one explicitly here;
-    none does today, which is why defaulting makes nothing vacuous.
+    A scenario meaning to send NO key says so with :data:`OMIT_IDEMPOTENCY_KEY`,
+    which is popped rather than defaulted — omission has to be STATED, because
+    every scenario that simply does not care about the key looks identical to one
+    that means to leave it out, and those must get the default.
     """
-    payload.setdefault("idempotency_key", fresh_idempotency_key())
+    if payload.get("idempotency_key") is OMIT_IDEMPOTENCY_KEY:
+        del payload["idempotency_key"]
+    else:
+        payload.setdefault("idempotency_key", fresh_idempotency_key())
     dispatch_request(ctx, **payload)
 
 
@@ -1256,6 +1273,17 @@ def _dispatch_sync_table(ctx: dict, datatable: Any, *, idempotency_key: str | No
     if idempotency_key is not None:
         kwargs["idempotency_key"] = idempotency_key
     _sync_raw(ctx, accounts=accounts, **kwargs)
+
+
+@when("the Buyer Agent sends a sync_accounts request with no idempotency_key and:")
+def when_sync_accounts_without_idempotency_key(ctx: dict, datatable: Any) -> None:
+    """Send sync_accounts carrying NO idempotency_key — the omitted-required-field case.
+
+    The sibling of the malformed-key outline: that one grades a key the pin's pattern
+    rejects, this one grades a key that is not there at all. Both must be refused, and
+    only the second proves the field is REQUIRED rather than merely constrained.
+    """
+    _dispatch_sync_table(ctx, datatable, idempotency_key=OMIT_IDEMPOTENCY_KEY)
 
 
 @when("the Buyer Agent sends a sync_accounts request with:")
