@@ -633,196 +633,266 @@ def generate_full_valid_request(schema: dict[str, Any]) -> dict[str, Any]:
     return request_data
 
 
+#: Tools EXEMPT from a looping property, with the exemption's reason recorded at the site
+#: that raises it. Each set is MEASURED, never predicted: the sets started empty, the
+#: property test reported the actual exemptions, and those are what is pinned here. A new
+#: entry fails the test by name rather than printing a skip reason nobody reads.
+_REQUIRED_FIELD_EXEMPT: set[str] = {
+    # Seven of the thirteen graded request schemas mark NO required fields, so the property
+    # is vacuous for them. Recorded rather than passed over silently: "this schema requires
+    # nothing" is a fact about the pin worth noticing if it ever changes.
+    "get_adcp_capabilities",
+    "get_media_buy_delivery",
+    "get_media_buys",
+    "list_accounts",
+    "list_creative_formats",
+    "list_creatives",
+    "list_tasks",
+    # The one known relaxation — see _KNOWN_REQUIRED_FIELD_RELAXATIONS.
+    "get_products",
+}
+_MINIMAL_REQUEST_EXEMPT: set[str] = set()
+#: The two per-ITEM alignment rows: `status` on an array element is the domain status of
+#: that object, a different namespace from the protocol envelope's task status.
+_ENVELOPE_STATUS_EXEMPT: set[str] = {"Product", "SyncResponseAccount"}
+#: SyncResponseAccount carries no declared-field requirement of its own.
+_DECLARED_FIELDS_EXEMPT: set[str] = {"SyncResponseAccount"}
+#: Every response row's pinned schema marks at least one required field, so nothing is exempt
+#: here today. Empty is the measurement, not a placeholder: a row appearing means a pinned
+#: response schema stopped requiring anything, which is worth a decision.
+_RESPONSE_REQUIRED_EXEMPT: set[str] = set()
+
+#: ``tool -> the pin-required fields its request model makes OPTIONAL``. SHRINK-ONLY, and
+#: every row names its issue.
+#:
+#: salesagent-prkv.105: media-buy/get-products-request.json carries ``"required":
+#: ["buying_mode"]`` at the top level -- unconditionally; the document's ``allOf`` constrains
+#: buying_mode's VALUE ("if if_pricing_version then buying_mode must be 'wholesale'") and does
+#: not govern its requiredness, so the two obligations stack and we satisfy neither.
+#: GetProductsRequest declares it ``is_required()=False, default=None``.
+#:
+#: NOT FIXED HERE deliberately: making the field required rejects every get_products request
+#: that omits it, and those succeed today. That is a wire change and wants its own
+#: blast-radius measurement, counted over PAYLOAD PRODUCERS rather than over constructions of
+#: the class -- a type-name grep misses BDD steps, REST route tests and direct-call sites.
+#:
+#: This row exists because the property that should have caught it could not: the
+#: parametrized form's failure branch lived inside ``except ValidationError`` and
+#: GetProductsRequest, having no required fields at all, never raised -- so the check fell off
+#: the end of the function having asserted nothing. Not a skip; invisible even to ``-rs``.
+#: ``test_known_required_field_relaxations_are_still_real`` re-measures every row, so the
+#: exemption cannot outlive the gap.
+_KNOWN_REQUIRED_FIELD_RELAXATIONS: dict[str, set[str]] = {
+    "get_products": {"buying_mode"},
+}
+
+
+def _record_relaxation(
+    report: "_PropertyReport", tool_name: str, model_class: type, schema_ref: str, relaxed: set[str]
+) -> None:
+    """Route a relaxed pin-required field to the known-relaxation set, or fail.
+
+    A relaxation matching its recorded row is an EXEMPTION naming its issue; anything else --
+    a new tool, or a new field on a known tool -- is a failure. The row cannot silently widen.
+    """
+    known = _KNOWN_REQUIRED_FIELD_RELAXATIONS.get(tool_name, set())
+    if relaxed == known:
+        report.exempt(tool_name, f"known relaxation of {sorted(relaxed)} (salesagent-prkv.105)")
+        return
+    report.fail(
+        tool_name,
+        f"{model_class.__name__} makes {sorted(relaxed)} OPTIONAL where {schema_ref} marks them "
+        f"REQUIRED (recorded relaxation is {sorted(known) or 'none'}); relaxing a required field "
+        f"silently accepts non-conformant requests -- if it is supplied at the boundary, supply it "
+        f"there rather than making the contract optional",
+    )
+
+
+@dataclass
+class _PropertyReport:
+    """Per-subject findings for ONE property checked across EVERY graded subject.
+
+    The alignment checks are population properties -- "no tool advertises a field the spec
+    lacks" -- and they used to be one parametrized test per tool. That reports a population
+    defect ONE MEMBER AT A TIME: a failure named a single tool and you learned the rest by
+    re-running. Looping and aggregating means one failure names every offender and what was
+    wrong with each.
+
+    EXEMPTIONS ARE RECORDED, NEVER SKIPPED. ``pytest.skip`` cannot survive a loop -- it
+    aborts the whole property at the first exempt subject, so the tools after it go
+    ungraded. Worse, a skip is invisible: its reason is printed only under ``-rs`` and
+    nothing asserts on it, which is how a skip whose stated reason contradicted the pin sat
+    in this suite not-grading for months. So an exempt subject is collected and the
+    exemption SET is asserted against expectation, making a new one a failure that names
+    itself rather than a line nobody reads.
+    """
+
+    property_name: str
+    failures: dict[str, str] = dataclass_field(default_factory=dict)
+    exemptions: dict[str, str] = dataclass_field(default_factory=dict)
+
+    def fail(self, subject: str, detail: str) -> None:
+        """Record *subject* as violating the property, with what was wrong."""
+        self.failures[subject] = detail
+
+    def exempt(self, subject: str, reason: str) -> None:
+        """Record *subject* as not subject to the property, with why."""
+        self.exemptions[subject] = reason
+
+    def assert_clean(self, *, expected_exempt: set[str] = frozenset()) -> None:
+        """No subject violates the property, and the exempt set is the expected one."""
+        assert not self.failures, (
+            f"{len(self.failures)} of the graded subjects violate '{self.property_name}':\n"
+            + "\n".join(f"  {subject}: {detail}" for subject, detail in sorted(self.failures.items()))
+        )
+        assert set(self.exemptions) == expected_exempt, (
+            f"'{self.property_name}' exemptions changed.\n"
+            f"  expected: {sorted(expected_exempt)}\n"
+            f"  actual:   {sorted(self.exemptions)}\n"
+            + "\n".join(f"  {subject}: {reason}" for subject, reason in sorted(self.exemptions.items()))
+            + "\n\nAn exemption is a subject this property does not apply to. A NEW one means either "
+            "the property stopped being graded somewhere, or the expectation is stale -- both need a "
+            "decision, which is why the set is asserted rather than printed."
+        )
+
+
 class TestPydanticSchemaAlignment:
     """Test that Pydantic models accept all fields from AdCP JSON schemas."""
 
-    @pytest.mark.parametrize(
-        "schema_ref,model_class",
-        REQUEST_SCHEMA_PARAMS,
-    )
-    def test_model_accepts_all_schema_fields(self, schema_ref: str, model_class: type):
-        """Test that Pydantic model accepts ALL fields defined in JSON schema.
+    def test_no_model_rejects_a_field_its_pinned_schema_declares(self):
+        """Every graded model accepts a request carrying ALL fields its schema declares.
 
-        This is the critical test that would have caught:
-        - brand_manifest missing from CreateMediaBuyRequest
-        - filters missing from GetProductsRequest
+        The critical property, and the one that would have caught brand_manifest missing
+        from CreateMediaBuyRequest and filters missing from GetProductsRequest.
         """
-        # Load the JSON schema
-        schema = load_json_schema(schema_ref)
+        report = _PropertyReport("no model rejects a field its pinned schema declares")
+        for tool_name, (schema_ref, model_class) in sorted(graded_request_schemas().items()):
+            schema = load_json_schema(schema_ref)
+            try:
+                model_class(**generate_full_valid_request(schema))
+            except AdCPInvalidRequestError as exc:
+                # A custom business-rule validator (stricter than the raw schema) raised a
+                # typed INVALID_REQUEST -- e.g. AdCPPackageUpdate requires package_id and
+                # rejects immutable fields. Models MAY be stricter than spec; that is not a
+                # rejection of a SPEC field, which is what this property is about.
+                report.exempt(tool_name, f"{model_class.__name__} enforces a business-rule shape: {exc}")
+            except ValidationError as exc:
+                # TOP-LEVEL extra_forbidden only: a nested one (loc ("total_budget","total"))
+                # is the GENERATOR inventing a sub-key the pinned $ref does not declare, not
+                # the model rejecting a spec field. Reading loc[0] regardless reported
+                # total_budget as rejected while CreateMediaBuyRequest accepts it.
+                known = KNOWN_SCHEMA_LIBRARY_MISMATCHES.get(schema_ref, set())
+                rejected = sorted(
+                    err["loc"][0]
+                    for err in exc.errors()
+                    if err["type"] == "extra_forbidden" and len(err["loc"]) == 1 and err["loc"][0] not in known
+                )
+                if rejected:
+                    report.fail(
+                        tool_name,
+                        f"{model_class.__name__} rejected AdCP spec fields {rejected} declared by "
+                        f"{schema_ref}; spec-compliant buyers would get a validation error",
+                    )
+                elif any(err["type"] == "value_error" for err in exc.errors()):
+                    report.exempt(tool_name, f"{model_class.__name__} has custom validators stricter than spec: {exc}")
+                # Neither: missing-field errors mean the model requires MORE than spec, which
+                # is the sibling property's subject, not this one.
+        report.assert_clean()
 
-        # Generate a request with ALL fields from schema
-        full_request = generate_full_valid_request(schema)
+    def test_every_model_enforces_the_required_fields_its_schema_marks_required(self):
+        """No model relaxes a field the pinned schema marks required.
 
-        # This should NOT raise ValidationError
-        try:
-            instance = model_class(**full_request)
-            assert instance is not None
-        except AdCPInvalidRequestError as e:
-            # A custom business-rule validator (stricter than the raw schema) raised
-            # a typed INVALID_REQUEST — e.g. AdCPPackageUpdate requires package_id and
-            # rejects immutable fields. The synthetic generator does not satisfy those
-            # nested constraints. Models MAY be stricter than spec; this is acceptable
-            # as long as it is not rejecting a spec field (it requires a required field).
-            pytest.skip(
-                f"{model_class.__name__} enforces a business-rule shape "
-                f"(custom validator → INVALID_REQUEST), stricter than the schema. Acceptable. Error: {e}"
+        Relaxing one silently accepts non-conformant requests. Requiring MORE than spec is
+        acceptable business logic and is recorded as an exemption rather than a failure --
+        but the two are told apart here rather than collapsed, because the version that
+        collapsed them hid SyncCreativesRequest and UpdateMediaBuyRequest both relaxing
+        spec-required fields behind the words "may be intentional for flexibility".
+        """
+        report = _PropertyReport("every model enforces its schema's required fields")
+        for tool_name, (schema_ref, model_class) in sorted(graded_request_schemas().items()):
+            required_in_schema = set(extract_required_fields(load_json_schema(schema_ref))) - _VERSION_FIELDS
+            if not required_in_schema:
+                report.exempt(tool_name, f"{schema_ref} marks no required fields")
+                continue
+            try:
+                instance = model_class()
+            except ValidationError as exc:
+                enforced = {err["loc"][0] for err in exc.errors() if err["type"] == "missing"}
+                not_enforced = sorted(required_in_schema - enforced)
+                if not_enforced:
+                    _record_relaxation(report, tool_name, model_class, schema_ref, set(not_enforced))
+                elif enforced - required_in_schema:
+                    report.exempt(
+                        tool_name,
+                        f"{model_class.__name__} additionally requires {sorted(enforced - required_in_schema)}",
+                    )
+                continue
+            # Constructed with NO arguments at all, so every required field has a default.
+            defaulted = {field for field in required_in_schema if field in instance.model_dump()}
+            # "Has a default" is asked of the FIELD, not of model_dump(): a model that strips
+            # None on dump reports a None-defaulted field as having no default, which is half
+            # of why this branch used to pass over a real relaxation.
+            relaxed = {
+                fname
+                for fname in required_in_schema
+                if (mf := model_class.model_fields.get(fname)) is None or not mf.is_required()
+            }
+            if relaxed:
+                _record_relaxation(report, tool_name, model_class, schema_ref, relaxed)
+            else:
+                report.exempt(tool_name, f"all required fields carry model defaults: {sorted(defaulted)}")
+        report.assert_clean(expected_exempt=_REQUIRED_FIELD_EXEMPT)
+
+    def test_every_model_accepts_the_minimal_request_its_schema_allows(self):
+        """A request carrying only the schema's required fields constructs."""
+        report = _PropertyReport("every model accepts its schema's minimal request")
+        for tool_name, (schema_ref, model_class) in sorted(graded_request_schemas().items()):
+            minimal = generate_minimal_valid_request(load_json_schema(schema_ref))
+            for field in KNOWN_SCHEMA_LIBRARY_MISMATCHES.get(schema_ref, set()):
+                minimal.pop(field, None)
+            try:
+                model_class(**minimal)
+            except ValidationError as exc:
+                kinds = {err["type"] for err in exc.errors()}
+                if "value_error" in kinds:
+                    report.exempt(tool_name, f"{model_class.__name__} has custom validators stricter than spec: {exc}")
+                elif "missing" in kinds:
+                    missing = sorted({err["loc"][0] for err in exc.errors() if err["type"] == "missing"})
+                    report.exempt(tool_name, f"{model_class.__name__} requires {missing} beyond spec")
+                else:
+                    report.fail(
+                        tool_name,
+                        f"{model_class.__name__} rejected the minimal valid request for {schema_ref}: {exc}",
+                    )
+        report.assert_clean(expected_exempt=_MINIMAL_REQUEST_EXEMPT)
+
+    def test_known_required_field_relaxations_are_still_real(self):
+        """Every ``_KNOWN_REQUIRED_FIELD_RELAXATIONS`` row must still describe a live gap.
+
+        THE HALF THAT MAKES A KNOWN-RELAXATION SET DIFFERENT FROM AN EXCUSE. A row asserts two
+        things -- the pinned schema still marks the field required, and the model still makes
+        it optional -- and both are re-measured on every run. Make buying_mode required and
+        this fails BY NAME, so the row cannot outlive the defect it records.
+        """
+        graded = graded_request_schemas()
+        for tool_name, relaxed in sorted(_KNOWN_REQUIRED_FIELD_RELAXATIONS.items()):
+            assert tool_name in graded, f"{tool_name} is no longer a graded tool; delete its row"
+            schema_ref, model_class = graded[tool_name]
+            required = set(extract_required_fields(load_json_schema(schema_ref))) - _VERSION_FIELDS
+            still_required = sorted(relaxed & required)
+            assert still_required == sorted(relaxed), (
+                f"{schema_ref} no longer marks {sorted(relaxed - required)} required, so this row "
+                f"records a gap the pin has closed. Delete it."
             )
-        except ValidationError as e:
-            # Extract which fields were rejected. TOP-LEVEL only: a nested
-            # ``extra_forbidden`` (loc ``("total_budget", "total")``) is the GENERATOR
-            # inventing a sub-key the pinned $ref does not declare, not the model
-            # rejecting a spec field. Reading ``loc[0]`` regardless reported
-            # ``total_budget`` as rejected while CreateMediaBuyRequest accepts it —
-            # the instrument's gap dressed as a production defect, which is what
-            # ``_CannotSynthesize`` exists to keep out of this suite.
-            rejected_fields = [
-                err["loc"][0] for err in e.errors() if err["type"] == "extra_forbidden" and len(err["loc"]) == 1
-            ]
-            missing_fields = [err["loc"][0] for err in e.errors() if err["type"] == "missing"]
-            value_errors = [err for err in e.errors() if err["type"] == "value_error"]
-
-            # value_errors can indicate custom validators (business logic requirements)
-            # These are acceptable if they don't reject spec fields
-            # Only fail if we're rejecting fields that ARE in the spec
-            known = KNOWN_SCHEMA_LIBRARY_MISMATCHES.get(schema_ref, set())
-            rejected_fields = [f for f in rejected_fields if f not in known]
-            if rejected_fields:
-                error_msg = f"\n{model_class.__name__} REJECTED AdCP spec fields!\n"
-                error_msg += f"   Rejected fields: {rejected_fields}\n"
-                error_msg += "\n   This means clients sending spec-compliant requests will get validation errors.\n"
-                error_msg += f"   Schema: {schema_ref}\n"
-                error_msg += f"   Error details: {e}\n"
-                pytest.fail(error_msg)
-
-            # If there are value_errors but no rejected_fields, this likely means
-            # the model has stricter requirements than the spec (custom validators).
-            # This is acceptable - models CAN be stricter than spec.
-            # Only fail if the spec explicitly requires fields we're missing.
-            if value_errors and not rejected_fields:
-                # Check if error mentions fields not being provided
-                # This is okay - model can require more than spec
-                pytest.skip(
-                    f"{model_class.__name__} has stricter validation than spec (custom validators). "
-                    f"This is acceptable. Error: {e}"
-                )
-
-    @pytest.mark.parametrize("schema_ref,model_class", REQUEST_SCHEMA_PARAMS)
-    def test_model_has_all_required_fields(self, schema_ref: str, model_class: type):
-        """Test that Pydantic model requires all fields marked as required in JSON schema."""
-        # Load the JSON schema
-        schema = load_json_schema(schema_ref)
-
-        # Get required fields from schema
-        required_in_schema = set(extract_required_fields(schema))
-
-        # Skip adcp_version as it often has defaults
-        required_in_schema -= _VERSION_FIELDS
-
-        if not required_in_schema:
-            # No required fields in schema - nothing to test, which is fine
-            return
-
-        # Try to create model without required fields
-        try:
-            instance = model_class()
-
-            # If it succeeded, check which required fields have defaults
-            model_data = instance.model_dump()
-            fields_with_defaults = {field for field in required_in_schema if field in model_data}
-
-            # If ALL required fields have defaults, that might be intentional
-            if fields_with_defaults == required_in_schema:
-                pytest.skip(f"All required fields have defaults: {fields_with_defaults}")
-
-        except ValidationError as e:
-            # This is expected - required fields should cause validation errors
-            missing_from_error = {err["loc"][0] for err in e.errors() if err["type"] == "missing"}
-
-            # Verify that the fields flagged as missing match schema requirements
-            if missing_from_error != required_in_schema:
-                unexpected = missing_from_error - required_in_schema
-                not_enforced = required_in_schema - missing_from_error
-
-                # If model requires MORE fields than spec, that's acceptable (business logic)
-                # Only fail if model requires FEWER fields than spec
-                if not_enforced and not unexpected:
-                    # FAIL, not skip. The two lines above already say "Only fail if model
-                    # requires FEWER fields than spec" -- and this branch is exactly that
-                    # case, so skipping here contradicted the guard's own stated rule and
-                    # made it report green on the one thing it exists to catch. It hid two
-                    # real violations (SyncCreativesRequest and UpdateMediaBuyRequest both
-                    # relaxed the spec-required idempotency_key and account) behind the words
-                    # "may be intentional for flexibility" -- an assumption, not a finding.
-                    pytest.fail(
-                        f"{model_class.__name__} makes these OPTIONAL where the pinned schema "
-                        f"marks them REQUIRED: {sorted(not_enforced)}. Relaxing a required "
-                        f"field silently accepts non-conformant requests; if the field is "
-                        f"genuinely supplied at the boundary, supply it there rather than "
-                        f"making the contract optional."
-                    )
-
-                if unexpected and not not_enforced:
-                    pytest.skip(
-                        f"{model_class.__name__} requires additional fields beyond spec: {unexpected}. "
-                        f"This is acceptable for business logic."
-                    )
-
-                # Both unexpected and not_enforced - this can be legacy conversion logic
-                # For example, CreateMediaBuyRequest accepts legacy product_ids OR new packages,
-                # and requires po_number for business tracking
-                if unexpected and not_enforced:
-                    pytest.skip(
-                        f"{model_class.__name__} has flexible field requirements (likely legacy conversion). "
-                        f"Requires: {unexpected}, Optional where spec requires: {not_enforced}. "
-                        f"This is acceptable for backward compatibility."
-                    )
-
-    @pytest.mark.parametrize("schema_ref,model_class", REQUEST_SCHEMA_PARAMS)
-    def test_model_accepts_minimal_request(self, schema_ref: str, model_class: type):
-        """Test that Pydantic model accepts minimal valid request (only required fields).
-
-        Note: Models CAN require additional fields beyond the spec for business logic.
-        This test skips cases where models are intentionally stricter.
-        """
-        # Load the JSON schema
-        schema = load_json_schema(schema_ref)
-
-        # Generate minimal request
-        minimal_request = generate_minimal_valid_request(schema)
-
-        # Strip fields that are known library mismatches (spec has them, library doesn't yet)
-        known_mismatches = KNOWN_SCHEMA_LIBRARY_MISMATCHES.get(schema_ref, set())
-        for field in known_mismatches:
-            minimal_request.pop(field, None)
-
-        # This should work
-        try:
-            instance = model_class(**minimal_request)
-            assert instance is not None
-        except ValidationError as e:
-            # Check if this is a value_error (custom validator) - models can be stricter
-            value_errors = [err for err in e.errors() if err["type"] == "value_error"]
-            if value_errors:
-                pytest.skip(
-                    f"{model_class.__name__} has stricter validation than spec (custom validators). "
-                    f"This is acceptable for business logic. Error: {e}"
-                )
-
-            # Check if error is about missing fields - model requires more than spec
-            missing_errors = [err for err in e.errors() if err["type"] == "missing"]
-            if missing_errors:
-                missing_fields = {err["loc"][0] for err in missing_errors}
-                pytest.skip(
-                    f"{model_class.__name__} requires additional fields beyond spec: {missing_fields}. "
-                    f"This is acceptable for business logic."
-                )
-
-            # Other validation errors are real problems
-            pytest.fail(
-                f"{model_class.__name__} rejected minimal valid request.\n"
-                f"Schema: {schema_ref}\n"
-                f"Request: {minimal_request}\n"
-                f"Error: {e}"
+            still_optional = sorted(
+                fname
+                for fname in relaxed
+                if (mf := model_class.model_fields.get(fname)) is None or not mf.is_required()
+            )
+            assert still_optional == sorted(relaxed), (
+                f"{model_class.__name__} now enforces {sorted(relaxed - set(still_optional))}, so this row "
+                f"is stale. Delete it from _KNOWN_REQUIRED_FIELD_RELAXATIONS and from "
+                f"_REQUIRED_FIELD_EXEMPT."
             )
 
 
@@ -884,45 +954,27 @@ class TestSpecificFieldValidation:
 class TestFieldNameConsistency:
     """Test that field names match between Pydantic models and JSON schemas."""
 
-    @pytest.mark.parametrize(
-        "schema_ref,model_class",
-        REQUEST_SCHEMA_PARAMS,
-    )
-    def test_field_names_match_schema(self, schema_ref: str, model_class: type):
-        """Test that Pydantic model field names match JSON schema property names."""
-        # Load the JSON schema
-        schema = load_json_schema(schema_ref)
+    def test_no_model_is_missing_a_field_its_schema_declares(self):
+        """Every property the pinned schema declares is a field on the model.
 
-        # Get all properties from schema
-        schema_fields = set(schema.get("properties", {}).keys())
-
-        # Get all fields from Pydantic model
-        model_fields = set(model_class.model_fields.keys())
-
-        # Find discrepancies (excluding internal fields)
-        internal_fields = {"strategy_id", "testing_mode"}  # Known internal-only fields
-        model_fields_public = model_fields - internal_fields
-
-        # Fields in schema but not in model (potential missing fields)
-        missing_in_model = schema_fields - model_fields_public
-
-        # We're lenient here - having extra model fields is okay (for internal use)
-        # But missing schema fields is a problem
-        if missing_in_model:
-            # Some fields might be intentionally skipped (like adcp_version with defaults)
-            critical_missing = missing_in_model - _VERSION_FIELDS
-
-            # Filter out known spec-vs-library mismatches
-            known = KNOWN_SCHEMA_LIBRARY_MISMATCHES.get(schema_ref, set())
-            critical_missing = critical_missing - known
-
-            if critical_missing:
-                pytest.fail(
-                    f"\n{model_class.__name__} is missing schema fields!\n"
-                    f"   Missing: {critical_missing}\n"
-                    f"   These fields are defined in AdCP spec but not in Pydantic model.\n"
-                    f"   Schema: {schema_ref}\n"
+        Extra model fields are fine (internal use); a MISSING schema field is not.
+        """
+        report = _PropertyReport("no model is missing a field its schema declares")
+        internal_fields = {"strategy_id", "testing_mode"}
+        for tool_name, (schema_ref, model_class) in sorted(graded_request_schemas().items()):
+            schema_fields = set(load_json_schema(schema_ref).get("properties", {}))
+            missing = (
+                schema_fields
+                - (set(model_class.model_fields) - internal_fields)
+                - _VERSION_FIELDS
+                - KNOWN_SCHEMA_LIBRARY_MISMATCHES.get(schema_ref, set())
+            )
+            if missing:
+                report.fail(
+                    tool_name,
+                    f"{model_class.__name__} is missing {sorted(missing)}, defined by {schema_ref}",
                 )
+        report.assert_clean()
 
 
 class TestTheGeneratorAgreesWithThePin:
@@ -949,65 +1001,64 @@ class TestTheGeneratorAgreesWithThePin:
     get-products' ``buying_mode``.
     """
 
-    @pytest.mark.parametrize("tool_name", sorted(graded_request_schemas()))
-    def test_the_minimal_request_is_one_the_pinned_schema_accepts(self, tool_name: str) -> None:
-        schema_ref, _ = graded_request_schemas()[tool_name]
-        payload = generate_minimal_valid_request(load_json_schema(schema_ref))
+    def test_every_minimal_request_is_one_the_pinned_schema_accepts(self) -> None:
+        report = _PropertyReport("every minimal request is one the pinned schema accepts")
+        for tool_name, (schema_ref, _) in sorted(graded_request_schemas().items()):
+            payload = generate_minimal_valid_request(load_json_schema(schema_ref))
+            violations = {
+                ".".join(str(part) for part in error.absolute_path) or "<root>": error.message
+                for error in pinned_schema.validator_for(schema_ref).iter_errors(payload)
+            }
+            if violations:
+                report.fail(
+                    tool_name,
+                    f"not valid against {schema_ref}: "
+                    + "; ".join(f"at {path}: {message}" for path, message in sorted(violations.items())),
+                )
+        report.assert_clean()
+        # Fix the GENERATOR, not the model. A sample the pin rejects cannot grade whether a
+        # model accepts pinned samples -- it can only produce a false accusation.
 
-        violations = {
-            ".".join(str(part) for part in error.absolute_path) or "<root>": error.message
-            for error in pinned_schema.validator_for(schema_ref).iter_errors(payload)
-        }
-
-        assert not violations, (
-            f"the generator's minimal {tool_name} request is not valid against {schema_ref}:\n"
-            + "\n".join(f"  at {path}: {message}" for path, message in sorted(violations.items()))
-            + "\n\nFix the GENERATOR, not the model. A sample the pin rejects cannot grade "
-            "whether a model accepts pinned samples — it can only produce a false accusation."
-        )
-
-    @pytest.mark.parametrize("tool_name", sorted(graded_request_schemas()))
-    def test_every_full_request_property_matches_its_own_pinned_subschema(self, tool_name: str) -> None:
+    def test_every_full_request_property_matches_its_own_pinned_subschema(self) -> None:
         """Each generated property, graded against the pin's declaration OF THAT PROPERTY.
 
-        This is the one that catches an invented SHAPE, and the minimal-request check
-        above cannot: ``total_budget`` is not in create-media-buy's ``/required``, so the
-        minimal payload never carries it and the six-month exclusion would have been
-        reproduced under a green minimal check.
+        This is the one that catches an invented SHAPE, and the minimal-request check above
+        cannot: ``total_budget`` is not in create-media-buy's ``/required``, so the minimal
+        payload never carries it and the six-month exclusion would have been reproduced under
+        a green minimal check.
 
-        Per-property rather than whole-document, deliberately. The full request carries
-        every property AT ONCE, and a pinned schema may forbid exactly that:
-        get-products' ``allOf`` states "if you send if_pricing_version then buying_mode
-        must be 'wholesale'", so a document holding both is invalid for a reason that is
-        the full-request STRATEGY's, not the generator's. Grading each value against
-        ``properties[name]`` asks the question this test is actually about — is the shape
-        the generator invented the shape the pin declares — and leaves document-level
-        conditionals to the model, which is where they are enforced.
+        Per-property rather than whole-document, deliberately. The full request carries every
+        property AT ONCE, and a pinned schema may forbid exactly that: get-products' ``allOf``
+        states "if you send if_pricing_version then buying_mode must be 'wholesale'", so a
+        document holding both is invalid for a reason that is the full-request STRATEGY's, not
+        the generator's. Grading each value against ``properties[name]`` asks the question this
+        test is actually about, and leaves document-level conditionals to the model.
         """
-        schema_ref, _ = graded_request_schemas()[tool_name]
-        schema = load_json_schema(schema_ref)
-        validator = pinned_schema.validator_for(schema_ref)
-        declared = schema.get("properties", {})
-
-        violations = {}
-        for field, value in generate_full_valid_request(schema).items():
-            if field not in declared:
-                continue
-            # Validated as a one-key document so the pin's own $ref resolution applies;
-            # errors are then filtered to those rooted at this field, which drops the
-            # document-level conditionals this test deliberately does not grade.
-            for error in validator.iter_errors({field: value}):
-                if error.absolute_path and error.absolute_path[0] == field:
-                    violations[".".join(str(part) for part in error.absolute_path)] = error.message
-
-        assert not violations, (
-            f"the generator built {tool_name} properties that {schema_ref} does not "
-            f"declare that way:\n"
-            + "\n".join(f"  at {path}: {message}" for path, message in sorted(violations.items()))
-            + "\n\nFix the GENERATOR. A value the pin rejects, handed to a model that "
-            "correctly rejects it too, is reported by this suite as the MODEL rejecting a "
-            "spec field — which is how CreateMediaBuyRequest left the guard for six months."
-        )
+        report = _PropertyReport("every full-request property matches its own pinned subschema")
+        for tool_name, (schema_ref, _) in sorted(graded_request_schemas().items()):
+            schema = load_json_schema(schema_ref)
+            validator = pinned_schema.validator_for(schema_ref)
+            declared = schema.get("properties", {})
+            violations = {}
+            for field, value in generate_full_valid_request(schema).items():
+                if field not in declared:
+                    continue
+                # Validated as a one-key document so the pin's own $ref resolution applies;
+                # errors are then filtered to those rooted at this field, which drops the
+                # document-level conditionals this test deliberately does not grade.
+                for error in validator.iter_errors({field: value}):
+                    if error.absolute_path and error.absolute_path[0] == field:
+                        violations[".".join(str(part) for part in error.absolute_path)] = error.message
+            if violations:
+                report.fail(
+                    tool_name,
+                    f"{schema_ref} does not declare these that way: "
+                    + "; ".join(f"at {path}: {message}" for path, message in sorted(violations.items())),
+                )
+        report.assert_clean()
+        # Fix the GENERATOR. A value the pin rejects, handed to a model that correctly rejects
+        # it too, is reported by this suite as the MODEL rejecting a spec field -- which is how
+        # CreateMediaBuyRequest left the guard for six months.
 
 
 # ---------------------------------------------------------------------------
@@ -1949,134 +2000,139 @@ class TestSampleSynthesisFailsLoud:
 class TestResponseModelAlignment:
     """Local success models conform to the pinned AdCP response schemas."""
 
-    @pytest.mark.parametrize("alignment", RESPONSE_ALIGNMENTS, ids=lambda a: a.model.__name__)
-    def test_envelope_status_is_graded_for_every_registered_response(self, alignment: ResponseAlignment):
-        """``status`` enters declared_fields for EVERY registry row that the pin requires it on.
+    def test_envelope_status_is_graded_for_every_registered_response(self):
+        """``status`` enters declared_fields for EVERY row whose pinned schema requires it.
 
-        This is GH #1900's fifth acceptance bullet expressed as a MECHANISM rather than
-        as an outcome. Two models satisfied that bullet by accident: ``status`` is
-        composed onto the response through a top-level ``allOf``, and the resolver used
-        to derive declared_fields returned the raw ``oneOf`` arm without merging root
-        composition — so ``status`` never entered the derived set, and every check keyed
-        off it (the sample, and the model_dump-survival check written for exactly the
-        ``confirmed_at`` bug class) skipped the field silently on the two models where
-        it mattered most.
-
-        Asserting it here, once, for every row means a future resolver change that
-        re-hides ``status`` fails on this test by name instead of quietly reducing what
-        the other tests measure. A row whose pinned schema does NOT require status is
-        skipped rather than forced — the assertion is "graded wherever required", not
-        "present everywhere".
+        GH #1900's fifth acceptance bullet as a MECHANISM rather than an outcome. Two models
+        satisfied that bullet by accident: ``status`` is composed onto the response through a
+        top-level ``allOf``, and the resolver used to derive declared_fields returned the raw
+        ``oneOf`` arm without merging root composition -- so ``status`` never entered the
+        derived set, and every check keyed off it skipped the field silently on the two models
+        where it mattered most.
         """
-        if alignment.item_key is not None:
-            # Item-level rows describe an ELEMENT of an array (accounts[], media_buys[]),
-            # where `status` is the domain status of that object — a different namespace
-            # from the protocol envelope's task status. #1900 is about the envelope, so
-            # grading item rows here would assert the wrong thing under the right name.
-            pytest.skip(f"{alignment.model.__name__}: item-level row; envelope status is graded on the envelope row")
-        item = _resolve_response_item_schema(alignment)
-        if "status" not in set(item.get("required", [])):
-            pytest.skip(f"{alignment.model.__name__}: the pinned schema does not require status on this shape")
-        assert "status" in alignment.declared_fields, (
-            f"{alignment.model.__name__}: the pinned schema REQUIRES status on this response, but it is "
-            f"absent from declared_fields ({sorted(alignment.declared_fields)}), so no alignment check "
-            f"grades it. This is what an unmerged oneOf arm produces — see _success_shape."
-        )
-        assert "status" in alignment.model.model_fields, (
-            f"{alignment.model.__name__} does not declare status as a field; the pinned schema requires it "
-            f"and inheriting it via extra='allow' would let it vanish with a parent config change"
-        )
+        report = _PropertyReport("envelope status is graded wherever the pin requires it")
+        for alignment in RESPONSE_ALIGNMENTS:
+            subject = alignment.model.__name__
+            if alignment.item_key is not None:
+                # Item-level rows describe an ELEMENT of an array (accounts[], media_buys[]),
+                # where `status` is the domain status of that object -- a different namespace
+                # from the protocol envelope's task status.
+                report.exempt(subject, "item-level row; envelope status is graded on the envelope row")
+                continue
+            item = _resolve_response_item_schema(alignment)
+            if "status" not in set(item.get("required", [])):
+                report.exempt(subject, "the pinned schema does not require status on this shape")
+                continue
+            if "status" not in alignment.declared_fields:
+                report.fail(
+                    subject,
+                    f"the pin REQUIRES status but it is absent from declared_fields "
+                    f"({sorted(alignment.declared_fields)}), so no alignment check grades it -- "
+                    f"what an unmerged oneOf arm produces, see _success_shape",
+                )
+            elif "status" not in alignment.model.model_fields:
+                report.fail(
+                    subject,
+                    "does not declare status as a field; the pin requires it and inheriting it via "
+                    "extra='allow' would let it vanish with a parent config change",
+                )
+        report.assert_clean(expected_exempt=_ENVELOPE_STATUS_EXEMPT)
 
-    @pytest.mark.parametrize("alignment", RESPONSE_ALIGNMENTS, ids=lambda a: a.model.__name__)
-    def test_declared_fields_present_in_schema_and_model(self, alignment: ResponseAlignment):
+    def test_declared_fields_present_in_schema_and_model(self):
         """Each declared_field is defined by the pinned schema AND declared on the model.
 
-        Catches fields that production emits but the model only carries via inherited
-        extra='allow' (would silently vanish if the parent's extra-mode changed).
+        Catches fields production emits that the model only carries via inherited
+        extra='allow' (they would silently vanish if the parent's extra-mode changed), and
+        fields a custom ``model_dump()`` drops on the way to the wire.
         """
-        if not alignment.declared_fields:
-            pytest.skip(f"{alignment.model.__name__}: no declared-field requirement")
-        item = _resolve_response_item_schema(alignment)
-        schema_props = set(item.get("properties", {}))
-        model_fields = set(alignment.model.model_fields)
-        for fname in alignment.declared_fields:
-            assert fname in schema_props, f"{fname!r} not defined by pinned schema {alignment.schema_ref}"
-            assert fname in model_fields, (
-                f"{fname!r} is defined by the pinned schema but NOT declared on "
-                f"{alignment.model.__name__} (only surviving via extra='allow')"
-            )
+        report = _PropertyReport("declared fields are present in schema, model and dump")
+        for alignment in RESPONSE_ALIGNMENTS:
+            subject = alignment.model.__name__
+            if not alignment.declared_fields:
+                report.exempt(subject, "no declared-field requirement")
+                continue
+            item = _resolve_response_item_schema(alignment)
+            schema_props = set(item.get("properties", {}))
+            model_fields = set(alignment.model.model_fields)
+            problems = [
+                f"{fname!r} not defined by pinned schema {alignment.schema_ref}"
+                for fname in sorted(alignment.declared_fields)
+                if fname not in schema_props
+            ] + [
+                f"{fname!r} is defined by the pinned schema but NOT declared on the model "
+                f"(only surviving via extra='allow')"
+                for fname in sorted(alignment.declared_fields)
+                if fname in schema_props and fname not in model_fields
+            ]
+            # A field can be declared on the model yet still be silently dropped by a custom
+            # model_dump() override (an over-broad exclude set, or a "strip None" pass that
+            # also strips populated values) -- the exact bug class this suite exists to catch
+            # (#1868 review). Construct with a real value for each and confirm it survives.
+            if not problems and alignment.sample:
+                dumped = alignment.model(**alignment.sample).model_dump(mode="json")
+                problems += [
+                    f"{fname!r} is declared and populated in the sample but missing from "
+                    f"model_dump() -- silently dropped from the wire a buyer receives"
+                    for fname in sorted(alignment.declared_fields)
+                    if fname in alignment.sample and fname not in dumped
+                ]
+            if problems:
+                report.fail(subject, "; ".join(problems))
+        report.assert_clean(expected_exempt=_DECLARED_FIELDS_EXEMPT)
 
-        # A field can be declared on the model (above) yet still be silently
-        # dropped by a custom model_dump() override (e.g. an over-broad
-        # exclude set, or a "strip None" pass that also strips populated
-        # values) — the exact bug class this suite exists to catch
-        # (#1868 review). Construct with a real, populated value for
-        # every declared field and confirm each survives serialization.
-        if alignment.sample:
-            instance = alignment.model(**alignment.sample)
-            dumped = instance.model_dump(mode="json")
-            for fname in alignment.declared_fields:
-                if fname not in alignment.sample:
-                    continue
-                assert fname in dumped, (
-                    f"{fname!r} is declared on {alignment.model.__name__} and populated in the "
-                    f"constructor sample, but missing from model_dump() output — silently dropped "
-                    f"from the wire a buyer actually receives."
-                )
+    def test_required_fields_enforced(self):
+        """Every model enforces every field its pinned schema marks required.
 
-    @pytest.mark.parametrize("alignment", RESPONSE_ALIGNMENTS, ids=lambda a: a.model.__name__)
-    def test_required_fields_enforced(self, alignment: ResponseAlignment):
-        """The model enforces every field the pinned schema marks required.
-
-        A schema-required field is "enforced" one of two ways, both valid:
-        - the model has no default -> omitting it MUST raise ValidationError
-          (the model rejects an incomplete construction), or
-        - the model declares a spec-correct literal default (e.g.
-          CreateMediaBuySuccess.status, which IS invariant for a synchronous
-          success — unlike confirmed_at/revision, which are columns the
-          repository owns and therefore carry no default: a default there made
-          the response a second producer of persisted state) -> omitting it must NOT
-          raise, and the constructed model must still carry a non-None value
-          for it. Either way the schema's requiredness invariant holds; only
-          silently accepting an omitted field with no value at all would be
-          a real gap.
+        A schema-required field is "enforced" one of two ways, both valid: the model has no
+        default, so omitting it MUST raise; or it declares a spec-correct literal default (e.g.
+        CreateMediaBuySuccess.status, invariant for a synchronous success -- unlike
+        confirmed_at/revision, columns the repository owns, where a default would make the
+        response a second producer of persisted state), so omitting it must NOT raise and the
+        constructed model must still carry a non-None value. Only silently accepting an omitted
+        field with no value at all is a real gap.
         """
-        item = _resolve_response_item_schema(alignment)
-        required = set(item.get("required", [])) - _VERSION_FIELDS
-        if not required:
-            pytest.skip(f"{alignment.model.__name__}: pinned schema marks no required fields")
-        assert alignment.sample, (
-            f"{alignment.model.__name__}: schema requires {sorted(required)} but no sample provided"
-        )
-        model_defaulted = {
-            fname
-            for fname in required
-            if (mf := alignment.model.model_fields.get(fname)) is not None and not mf.is_required()
-        }
-        # A model-defaulted field guarantees its own value, so the caller-supplied
-        # sample need not carry it — only fields the model can't fill in itself
-        # must be present in the sample.
-        required_from_sample = required - model_defaulted
-        assert required_from_sample <= set(alignment.sample), (
-            f"sample for {alignment.model.__name__} missing required keys: "
-            f"{sorted(required_from_sample - set(alignment.sample))}"
-        )
-        # The complete required set constructs cleanly.
-        assert alignment.model(**alignment.sample) is not None
-        for fname in required:
-            partial = {k: v for k, v in alignment.sample.items() if k != fname}
-            if fname in model_defaulted:
-                # Model-defaulted: omission must NOT raise, and the default must
-                # still satisfy the schema's requiredness (a real, non-None value).
-                instance = alignment.model(**partial)
-                assert getattr(instance, fname) is not None, (
-                    f"{alignment.model.__name__}.{fname} is schema-required but the model's "
-                    f"own default left it None when omitted from the constructor call"
-                )
-            else:
-                # No model default: the model itself must reject an incomplete construction.
-                with pytest.raises(ValidationError):
-                    alignment.model(**partial)
+        report = _PropertyReport("every response model enforces its schema's required fields")
+        for alignment in RESPONSE_ALIGNMENTS:
+            subject = alignment.model.__name__
+            item = _resolve_response_item_schema(alignment)
+            required = set(item.get("required", [])) - _VERSION_FIELDS
+            if not required:
+                report.exempt(subject, "pinned schema marks no required fields")
+                continue
+            if not alignment.sample:
+                report.fail(subject, f"schema requires {sorted(required)} but no sample provided")
+                continue
+            model_defaulted = {
+                fname
+                for fname in required
+                if (mf := alignment.model.model_fields.get(fname)) is not None and not mf.is_required()
+            }
+            # A model-defaulted field guarantees its own value, so the caller-supplied sample
+            # need not carry it -- only fields the model cannot fill in itself must be present.
+            missing_from_sample = sorted((required - model_defaulted) - set(alignment.sample))
+            if missing_from_sample:
+                report.fail(subject, f"sample missing required keys: {missing_from_sample}")
+                continue
+            assert alignment.model(**alignment.sample) is not None
+            problems = []
+            for fname in sorted(required):
+                partial = {k: v for k, v in alignment.sample.items() if k != fname}
+                if fname in model_defaulted:
+                    instance = alignment.model(**partial)
+                    if getattr(instance, fname) is None:
+                        problems.append(
+                            f"{fname} is schema-required but the model's own default left it None "
+                            f"when omitted from the constructor call"
+                        )
+                else:
+                    try:
+                        alignment.model(**partial)
+                    except ValidationError:
+                        continue
+                    problems.append(f"{fname} is schema-required but omitting it did not raise")
+            if problems:
+                report.fail(subject, "; ".join(problems))
+        report.assert_clean(expected_exempt=_RESPONSE_REQUIRED_EXEMPT)
 
 
 def _extends_adcp_library_type(model: type) -> bool:
@@ -2409,31 +2465,30 @@ class TestNoNonSpecFieldsAreAdvertised:
       there is ONE declaration, consumed by both the runtime refusal and these tests.
     """
 
-    @pytest.mark.parametrize("tool_name", sorted(graded_request_schemas()))
-    def test_the_advertised_shape_carries_no_field_the_schema_lacks(self, tool_name: str) -> None:
+    def test_no_advertised_shape_carries_a_field_the_schema_lacks(self) -> None:
         """What buyers actually SEE, graded against the spec.
 
-        Keyed on the advertised parameter set rather than on model_fields, because that is
-        the thing the ticket is about: a field only misleads a buyer once it is published.
+        Keyed on the advertised parameter set rather than on model_fields, because that is the
+        thing the ticket is about: a field only misleads a buyer once it is published.
         """
         from src.core.tools._announced_shape import non_schema_fields
 
-        schema_ref, model_class = graded_request_schemas()[tool_name]
-        _, advertised = registered_tool_shapes()[tool_name]
-        spec_fields = set(load_json_schema(schema_ref).get("properties", {}))
-        assert spec_fields, f"{schema_ref} declares no properties — the pin moved, fix the ref"
+        report = _PropertyReport("no advertised shape carries a field the schema lacks")
+        for tool_name, (schema_ref, model_class) in sorted(graded_request_schemas().items()):
+            _, advertised = registered_tool_shapes()[tool_name]
+            spec_fields = set(load_json_schema(schema_ref).get("properties", {}))
+            assert spec_fields, f"{schema_ref} declares no properties — the pin moved, fix the ref"
+            extra = sorted(advertised - spec_fields - _VERSION_FIELDS - set(non_schema_fields(model_class)))
+            if extra:
+                report.fail(
+                    tool_name,
+                    f"advertises {extra}, which {schema_ref} does not define. Remove it, mark it "
+                    f"exclude=True if internal, or add it to {model_class.__name__}._NON_SCHEMA_FIELDS "
+                    f"with the reason it is carried anyway",
+                )
+        report.assert_clean()
 
-        extra = sorted(advertised - spec_fields - _VERSION_FIELDS - set(non_schema_fields(model_class)))
-
-        assert not extra, (
-            f"{tool_name} advertises {extra}, which {schema_ref} does not define. Buyers read "
-            f"the advertised shape as the contract, so this publishes a field as if it were "
-            f"spec. Remove it, mark it exclude=True if it is genuinely internal, or add it to "
-            f"{model_class.__name__}._NON_SCHEMA_FIELDS with the reason it is carried anyway."
-        )
-
-    @pytest.mark.parametrize("tool_name", sorted(graded_request_schemas()))
-    def test_no_locally_declared_field_is_absent_from_the_schema(self, tool_name: str) -> None:
+    def test_no_locally_declared_field_is_absent_from_the_schema(self) -> None:
         """The LATENT case: a field our subclass adds that no wrapper has exposed yet.
 
         The test above only sees published fields, and the runtime refusal only fires on
@@ -2441,29 +2496,29 @@ class TestNoNonSpecFieldsAreAdvertised:
         somebody adds the matching wrapper parameter, at which point it is published. Graded
         here so the departure is declared BEFORE that, not discovered by a buyer after.
 
-        Scoped to fields OUR subclass declares (nothing in the adcp ancestry declares them),
-        which is what makes this different from the test above: a field the SDK ships that
-        the pinned schema lacks is SDK-vs-spec drift, not something this repo can fix by
-        deleting a line, and it is caught above the moment it reaches a buyer.
+        Scoped to fields OUR subclass declares (nothing in the adcp ancestry declares them):
+        a field the SDK ships that the pinned schema lacks is SDK-vs-spec drift, not something
+        this repo can fix by deleting a line, and it is caught above the moment it reaches a
+        buyer.
         """
         from src.core.tools._announced_shape import library_declared_fields, non_schema_fields
 
-        schema_ref, model_class = graded_request_schemas()[tool_name]
-        spec_fields = set(load_json_schema(schema_ref).get("properties", {}))
-
-        locally_declared = {
-            name
-            for name, field in model_class.model_fields.items()
-            if not field.exclude and name not in library_declared_fields(model_class)
-        }
-        extra = sorted(locally_declared - spec_fields - _VERSION_FIELDS - set(non_schema_fields(model_class)))
-
-        assert not extra, (
-            f"{model_class.__name__} ({tool_name}) declares {extra}, which {schema_ref} does "
-            f"not define and no adcp library type declares either. Remove it, mark it "
-            f"exclude=True if it is internal, or add it to "
-            f"{model_class.__name__}._NON_SCHEMA_FIELDS with the reason it is carried anyway."
-        )
+        report = _PropertyReport("no locally declared field is absent from the schema")
+        for tool_name, (schema_ref, model_class) in sorted(graded_request_schemas().items()):
+            spec_fields = set(load_json_schema(schema_ref).get("properties", {}))
+            locally_declared = {
+                name
+                for name, field in model_class.model_fields.items()
+                if not field.exclude and name not in library_declared_fields(model_class)
+            }
+            extra = sorted(locally_declared - spec_fields - _VERSION_FIELDS - set(non_schema_fields(model_class)))
+            if extra:
+                report.fail(
+                    tool_name,
+                    f"{model_class.__name__} declares {extra}, which {schema_ref} does not define and no "
+                    f"adcp library type declares either",
+                )
+        report.assert_clean()
 
     def test_every_registered_tool_is_graded_or_provably_has_no_spec_schema(self) -> None:
         """No tool may drop out of the grading by resolving no schema.
