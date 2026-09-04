@@ -121,22 +121,12 @@ _KNOWN_DELIVER_OVERRIDES: set[tuple[str, str, str]] = {
     # conformance gap into a dispatch error (list_creative_formats assets).
     ("tests/harness/creative_formats.py", "CreativeFormatsEnv", "deliver_mcp"),
     ("tests/harness/creative_formats.py", "CreativeFormatsEnv", "deliver_a2a"),
-    # FIXME(#2201): list_tasks' wire is {tasks, total, offset, limit, has_more} —
-    # it omits the pinned-required query_summary + pagination, so the core's
-    # pinned parse fails. Same family as #1928 and #2012 above; removed when
-    # #2201 lands.
-    #
-    # RESTORED, and the baseline goes UP by one. This row previously existed and
-    # was deleted with the comment "that gap is now fixed in production, so it
-    # delegates and its entry is gone — the allowlist shrank". That claim was
-    # FALSE WHEN WRITTEN: the parse still raises today. So the recorded shrink
-    # moved the count BELOW the truth, and restoring the row moves it back toward
-    # the truth rather than excusing a new violation — the only circumstance in
-    # which one of these sets may grow. The gap was reproduced on the wire (not
-    # inferred) by tests/integration/test_get_task_principal_scope.py, which is
-    # the first caller anywhere to read a list_tasks result rather than only
-    # assert that a dispatch occurred.
-    ("tests/harness/task_management.py", "TaskManagementEnv", "deliver_mcp"),
+    # `TaskManagementEnv.deliver_mcp` was removed here. Its FIXME(#2201) reason -- the
+    # list_tasks wire omitting the pinned-required query_summary and pagination -- stopped
+    # being true when #2201 landed and the response started extending the pinned
+    # ListTasksResponse. Confirmed by the self-retiring test that guarded it going RED
+    # ('DID NOT RAISE') rather than by reading the change: the allowlist shrank because an
+    # instrument said so out loud.
     # Test doubles, not real envs: they exist to prove the dispatch contract.
     ("tests/harness/test_harness_base.py", "_TestEnv", "deliver_mcp"),
     # `_RealA2AWireCreativeSyncEnv` in

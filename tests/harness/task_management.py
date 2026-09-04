@@ -14,7 +14,6 @@ from __future__ import annotations
 from typing import Any
 
 from tests.harness._base import IntegrationEnv
-from tests.harness.transport import DeliverResult
 
 
 class TaskManagementEnv(IntegrationEnv):
@@ -23,8 +22,13 @@ class TaskManagementEnv(IntegrationEnv):
     No patches -- list_tasks reads real WorkflowStep rows via WorkflowUoW.
     """
 
-    # Dispatch declaration: the base owns call_mcp/call_a2a. list_tasks is
-    # MCP-only (no A2A skill, no REST route).
+    # Dispatch declaration: the base owns call_mcp/call_a2a and this env DELEGATES to the
+    # client core. It kept a deliver_mcp override under FIXME(#2201) because production's
+    # list_tasks wire omitted the pinned-required query_summary and pagination, so the
+    # core's parse-back raised. #2201 landed; the response extends the pinned
+    # ListTasksResponse now, the parse succeeds, and the override and its
+    # _KNOWN_DELIVER_OVERRIDES row are both gone. list_tasks is MCP-only (no A2A skill,
+    # no REST route).
     MCP_TOOL = "list_tasks"
     RESPONSE_MODEL = dict
 
@@ -32,36 +36,6 @@ class TaskManagementEnv(IntegrationEnv):
 
     def _configure_mocks(self) -> None:
         """No mocks needed -- real WorkflowUoW."""
-
-    # FIXME(#2201): production's list_tasks wire omits query_summary and
-    # pagination, both required by the pinned ListTasksResponse. Remove this
-    # override -- and its _KNOWN_DELIVER_OVERRIDES row -- when #2201 lands.
-    def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
-        """Dispatch WITHOUT the client core's pinned parse-back.
-
-        The core's UNWRAP parses the wire into ``spec_response_model("list_tasks")``
-        (``tests/harness/client.py``, ``_parse_pinned_response`` inside
-        ``_unwrap_tool_success``) and production's body is
-        ``{tasks, total, offset, limit, has_more}`` -- no ``query_summary``, no
-        ``pagination``, both of which the pinned model requires. So joining the core
-        turns a live conformance gap into a dispatch error: the ``ValidationError``
-        escapes ``_dispatch_core`` (whose try/except covers DELIVER only), is folded
-        into an error ``TransportResult`` by ``McpDispatcher``, and ``wire_response``
-        comes back ``None``. ``RESPONSE_MODEL``/``response_parser`` cannot rescue it --
-        they are consulted further down ``_deliver_via_client``, on a line the
-        exception never reaches.
-
-        ``_run_mcp_client`` is the SAME delivery the core's DELIVER step performs
-        (``client._deliver_mcp`` calls it with ``response_cls=dict``); this skips only
-        the parse-back. The override exists to keep the gap attributable rather than
-        hidden by loosening the core.
-
-        THIS DOCSTRING REPLACES ONE THAT SAID THE OPPOSITE. It claimed "production's
-        list_tasks emits the pinned-required query_summary + pagination, so the core's
-        pinned parse succeeds" -- false when written. It is why this override and its
-        allowlist row were deleted, and why the deletion was recorded as a shrink.
-        """
-        return self._run_mcp_client(self.MCP_TOOL, dict, **kwargs)
 
     def call_impl(self, **kwargs: Any) -> dict[str, Any]:
         """Call list_tasks directly with real DB (no transport dispatch)."""
