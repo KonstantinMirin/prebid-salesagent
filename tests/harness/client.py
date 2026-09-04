@@ -191,34 +191,11 @@ def _deliver_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any]
     return env._run_a2a_handler(address.name, dict, **kwargs)
 
 
-# HTTP verbs with no request body — a JSON body kwarg is either rejected by
-# the client (starlette TestClient.get/httpx.Client.get do not accept `json=`
-# at all) or simply wrong to send. Surfaced when /api/v1/capabilities still
-# answered a parameterless GET: every verb used to get `json=` unconditionally,
-# so a GET dispatch raised TypeError before any HTTP call. That route is gone
-# and no env dispatches a bodiless verb today, but the rule belongs to the verb,
-# not to the route, so it stays and is graded directly (test_client.py).
-_BODILESS_REST_VERBS = frozenset({"get", "delete"})
-
-
-def _rest_request_kwargs(method: str, body: dict[str, Any], **extra: Any) -> dict[str, Any]:
-    """Build the kwargs for ``getattr(client, method)(url, **kwargs)``.
-
-    Omits ``json=`` for bodiless verbs (get/delete) — see
-    ``_BODILESS_REST_VERBS``. Shared by in-process and e2e REST DELIVER so the
-    rule is defined once, not per call site.
-    """
-    kwargs: dict[str, Any] = dict(extra)
-    if method not in _BODILESS_REST_VERBS:
-        kwargs["json"] = body
-    return kwargs
-
-
 def _deliver_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> Any:
     kwargs = _with_identity({}, identity)
     client, _resolved_identity = env._prepare_rest_request(kwargs)
     method = address.method or "post"
-    return getattr(client, method)(wrapped["url"], **_rest_request_kwargs(method, wrapped["body"]))
+    return getattr(client, method)(wrapped["url"], json=wrapped["body"])
 
 
 def e2e_identity_headers(identity: Any) -> dict[str, str]:
@@ -287,7 +264,7 @@ def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str,
     method = address.method or "post"
 
     with httpx.Client(base_url=env.e2e_config.base_url, timeout=30) as client:
-        return getattr(client, method)(wrapped["url"], **_rest_request_kwargs(method, wrapped["body"], headers=headers))
+        return getattr(client, method)(wrapped["url"], json=wrapped["body"], headers=headers)
 
 
 def _deliver_e2e_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> dict[str, Any]:

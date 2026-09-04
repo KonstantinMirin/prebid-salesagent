@@ -224,15 +224,12 @@ class AddressTable:
 
     @staticmethod
     def _pick_rest_method(methods: set[str]) -> str:
-        """Deterministic verb choice for a multi-verb route: prefer POST (the
+        """Deterministic verb choice for a route's method set: prefer POST (the
         AdCP body-carrying shape), else the alphabetically-first remaining
-        verb — never ``next(iter(...))`` on an unordered set. No route in
-        ``src/routes/api_v1.py`` declares more than one non-HEAD verb, and no two
-        of them share a path, so today the choice is only ever made over a
-        single-verb set; the POST-preference branch is graded on a synthetic
-        multi-verb route (``TestRestVerbDeterminism``) and on ``_index_rest``
-        folding two same-path route objects together, so it keeps answering the
-        day a path answers on two verbs again.
+        verb — never ``next(iter(...))`` on an unordered set. Every route in
+        ``src/routes/api_v1.py`` declares one non-HEAD verb, so the live choice
+        is made over a single-verb set; the ordering rule itself is graded on a
+        synthetic multi-verb route (``TestRestVerbDeterminism``).
         """
         candidates = methods - {"HEAD"}
         if "POST" in candidates:
@@ -279,18 +276,6 @@ class AddressTable:
                     f"REST_TOOL_ALIASES for a collision."
                 )
             method = self._pick_rest_method(methods)
-            if existing is not None and existing.method is not None:
-                # Same path, second route object. FastAPI registers
-                # ``@router.get("/x")`` and ``@router.post("/x")`` as TWO routes,
-                # so a path that answers on several verbs never reaches
-                # ``_pick_rest_method`` as one method set. Re-run the choice over
-                # the union so the tool's single address gets the same
-                # deterministic verb a single multi-verb route would get —
-                # otherwise the winner is whichever route happens to be declared
-                # last, and reordering two decorators would silently flip the
-                # address (a body-carrying POST degrading to a GET that drops the
-                # body — see _BODILESS_REST_VERBS in tests/harness/client.py).
-                method = self._pick_rest_method({method.upper(), existing.method.upper()})
             for t in _REST_FAMILY:
                 self._by_tool_transport[(tool_name, t)] = ToolAddress(
                     t, name=tool_name, path_template=path, method=method
