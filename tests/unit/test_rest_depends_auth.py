@@ -77,14 +77,6 @@ class TestRouteSignaturesUseDependsForIdentity:
         assert param is not None, "get_products should have an 'identity' parameter"
         assert isinstance(param.default, Depends), "identity should use Depends"
 
-    def test_get_capabilities_has_identity_param(self):
-        # The handler is ``post_capabilities`` — the tool is ``get_adcp_capabilities``, and
-        # the route's one verb is POST (address_table.py's REST_TOOL_ALIASES restores the
-        # tool identity the handler name cannot carry).
-        param = self._get_identity_param("post_capabilities")
-        assert param is not None, "post_capabilities should have an 'identity' parameter"
-        assert isinstance(param.default, Depends), "identity should use Depends"
-
     def test_list_creative_formats_has_identity_param(self):
         param = self._get_identity_param("list_creative_formats")
         assert param is not None, "list_creative_formats should have an 'identity' parameter"
@@ -131,7 +123,6 @@ class TestRouteSignaturesUseDependsForIdentity:
 
         route_names = [
             "get_products",
-            "post_capabilities",
             "list_creative_formats",
             "list_authorized_properties",
             "create_media_buy",

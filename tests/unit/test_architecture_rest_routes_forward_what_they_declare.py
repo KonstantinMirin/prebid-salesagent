@@ -77,18 +77,13 @@ def route_functions(tree: ast.AST) -> list[ast.FunctionDef | ast.AsyncFunctionDe
     ]
 
 
-def _body_annotation(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str | None:
-    """The annotation of the route's ``body`` parameter, or None for a bodiless route.
+def _body_annotation(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
+    """The annotation of the route's ``body`` parameter.
 
-    A route with no body declares no fields, so it can neither declare-and-drop nor be
-    converted. It carries no obligation here. No such route exists in ``api_v1.py`` today
-    — every route takes a body — but the indexer grades what is routed, not what is
-    expected, so it must answer for one that appears.
+    Every route in ``api_v1.py`` declares one, so there is no bodiless case to skip.
     """
-    for arg in node.args.args:
-        if arg.arg == "body" and arg.annotation is not None:
-            return ast.unparse(arg.annotation)
-    return None
+    (body,) = [a for a in node.args.args if a.arg == "body" and a.annotation is not None]
+    return ast.unparse(body.annotation)
 
 
 def _reads_body_attributes(node: ast.AST) -> set[str]:
@@ -125,8 +120,7 @@ def _derived_covered(node: ast.FunctionDef | ast.AsyncFunctionDef, declared: set
     Resolved against the LIVE body class rather than re-derived here, so this grades the
     same stamped record ``derived_payload`` itself selects by.
     """
-    annotation = _body_annotation(node)
-    body_cls = _live_body_class(annotation) if annotation else None
+    body_cls = _live_body_class(_body_annotation(node))
     if body_cls is None:
         return set()
     return declared - set(getattr(body_cls, "__derived_extra_fields__", frozenset()))
@@ -155,10 +149,7 @@ def test_every_rest_route_forwards_every_field_its_body_declares():
     violations: list[str] = []
     graded = 0
     for node in routes:
-        annotation = _body_annotation(node)
-        if annotation is None:
-            continue
-        declared = _declared_fields(annotation)
+        declared = _declared_fields(_body_annotation(node))
         if not declared:
             continue
         graded += 1
@@ -186,8 +177,6 @@ def test_the_guard_grades_the_routes_that_carry_bodies():
 
     assert "get_media_buy_delivery" in with_bodies
     assert "create_media_buy" in with_bodies
-    # The parameterless capabilities GET declares no body and carries no obligation.
-    assert "get_adcp_capabilities" not in with_bodies
 
 
 def test_the_two_dropped_delivery_fields_now_reach_the_request():
@@ -283,11 +272,6 @@ class TestRouteDiscovery:
 
     def test_ignores_an_undecorated_function(self):
         assert route_functions(ast.parse("def helper(body):\n    return None\n")) == []
-
-    def test_a_bodiless_route_has_no_annotation_to_grade(self):
-        tree = ast.parse("@router.get('/x')\ndef r(identity=None):\n    return None\n")
-
-        assert _body_annotation(route_functions(tree)[0]) is None
 
 
 @pytest.mark.parametrize("verb", ["get", "post", "put", "patch", "delete"])

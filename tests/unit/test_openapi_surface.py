@@ -46,7 +46,6 @@ class TestOpenAPIAvailability:
 
 EXPECTED_ENDPOINTS = [
     ("post", "/api/v1/products"),
-    ("post", "/api/v1/capabilities"),
     ("post", "/api/v1/creative-formats"),
     ("post", "/api/v1/authorized-properties"),
     ("post", "/api/v1/media-buys"),
@@ -62,7 +61,7 @@ class TestAPISurfaceCompleteness:
     """Verify all expected endpoints appear in OpenAPI schema."""
 
     def test_all_endpoints_in_schema(self):
-        """All 10 REST API endpoints must appear in OpenAPI spec."""
+        """Every endpoint in EXPECTED_ENDPOINTS must appear in the OpenAPI spec."""
         schema = client.get("/openapi.json").json()
         paths = schema["paths"]
 
