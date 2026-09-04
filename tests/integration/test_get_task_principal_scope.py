@@ -30,6 +30,8 @@ mocked repository returns whatever the test told it to and would pass identicall
 and after.
 """
 
+from typing import Any
+
 import pytest
 
 from tests.factories import PrincipalFactory, TenantFactory
@@ -87,6 +89,23 @@ def _seed(env, principal_id: str) -> str:
     return step.step_id
 
 
+def _blind_echoed_ids(envelope: Any) -> Any:
+    """The envelope with every echoed ``step_id`` replaced by a constant.
+
+    ``details.step_id`` is the id the CALLER sent, so of course it differs between two
+    lookups of different ids — it is the one field that legitimately cannot match and is
+    not a disclosure, because the buyer already knows what they asked for. Everything else
+    must be identical. Blinding it here rather than comparing field-by-field is what keeps
+    the comparison total: a field added to this envelope later is compared automatically
+    instead of being silently omitted from a hand-written list.
+    """
+    if isinstance(envelope, dict):
+        return {k: ("<echoed>" if k == "step_id" else _blind_echoed_ids(v)) for k, v in envelope.items()}
+    if isinstance(envelope, list):
+        return [_blind_echoed_ids(item) for item in envelope]
+    return envelope
+
+
 def _as(env, principal_id: str):
     """The env's identity, re-pointed at *principal_id* — who is asking is the whole test."""
     return env.identity.model_copy(update={"principal_id": principal_id})
@@ -102,22 +121,35 @@ class TestTaskIsScopedToItsPrincipal:
             result = env.call_via(Transport.MCP, task_id=task_id, identity=_as(env, INTRUDER_ID))
 
         assert result.is_error
-        result.assert_wire_error("REFERENCE_NOT_FOUND", recovery="terminal")
+        result.assert_wire_error("REFERENCE_NOT_FOUND", recovery="correctable")
 
-    def test_an_absent_task_is_refused_identically(self, integration_db):
-        """The control, and the reason the test above means anything.
+    def test_the_two_refusals_are_indistinguishable(self, integration_db):
+        """ "Not yours" and "not there" must be the SAME envelope, field for field.
 
-        Two distinguishable refusals would disclose existence as surely as returning the
-        task, so what has to hold is that "not yours" and "not there" are THE SAME
-        envelope. Without this the assertion above passes even if the refusal is a
-        bespoke, revealing one.
+        This is the control, and the reason the test above means anything. The obligation
+        is not merely that a cross-principal lookup fails — it is that the buyer cannot
+        tell a task they may not see from one that does not exist. "Sellers MUST NOT reveal
+        whether the task exists under another account or principal."
+
+        Compared as WHOLE ENVELOPES, not as two error codes. A code-only assertion passes
+        even when the refusals differ in message, suggestion, or a details dict that names
+        the owning principal — and a leak in any of those is exactly the disclosure this
+        forbids. The only field allowed to differ is the step_id the caller sent back to
+        itself, which is blinded above with the reason stated.
         """
         with _GetTaskEnv(tenant_id=TENANT_ID, principal_id=OWNER_ID) as env:
-            _seed(env, OWNER_ID)
-            result = env.call_via(Transport.MCP, task_id="step_no_such_task", identity=_as(env, INTRUDER_ID))
+            task_id = _seed(env, OWNER_ID)
+            not_yours = env.call_via(Transport.MCP, task_id=task_id, identity=_as(env, INTRUDER_ID))
+            not_there = env.call_via(Transport.MCP, task_id="step_no_such_task", identity=_as(env, INTRUDER_ID))
 
-        assert result.is_error
-        result.assert_wire_error("REFERENCE_NOT_FOUND", recovery="terminal")
+        assert not_yours.is_error
+        assert not_there.is_error
+        not_there.assert_wire_error("REFERENCE_NOT_FOUND", recovery="correctable")
+
+        assert _blind_echoed_ids(not_yours.wire_error_envelope) == _blind_echoed_ids(not_there.wire_error_envelope), (
+            "the refusal for a task owned by another principal differs from the refusal for "
+            "a task that does not exist — the difference is what tells a buyer the task is real"
+        )
 
     def test_completing_another_principals_task_is_refused(self, integration_db):
         """The WRITE half. The same unscoped lookup let A complete B's task."""
@@ -131,7 +163,7 @@ class TestTaskIsScopedToItsPrincipal:
             )
 
         assert result.is_error
-        result.assert_wire_error("REFERENCE_NOT_FOUND", recovery="terminal")
+        result.assert_wire_error("REFERENCE_NOT_FOUND", recovery="correctable")
 
     def test_listing_does_not_show_another_principals_task(self, integration_db):
         """list_tasks was the widest of the three: it listed the whole tenant.
