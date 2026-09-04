@@ -126,32 +126,45 @@ today, which is the measurement this design started from.
 Announced, accepted, and implemented are **the same class** — not three sets kept
 in step, and not a runtime narrowing applied at three call sites.
 
-### Why a subclass, and why the narrowing must vanish
+### Why a subclass, and what it costs
 
 Pydantic inheritance is additive: subclass and you get all 21 fields. There is no
 "inherit these five", so removing them is the only way to narrow while inheriting.
 
-The alternative — `create_model` from the SDK's own `FieldInfo` objects for the
-kept fields — was tested and works: no mutation, no rebuild, annotations and
-descriptions preserved, unimplemented fields rejected. **It is rejected anyway.**
+**The narrowing may be permanent.** An earlier version of this document defended
+`@omit` on the grounds that the list converges to zero as fields are implemented.
+That defence is withdrawn: this agent may be permanently behind a fast-moving
+spec, and may deliberately diverge — retiring a field the spec keeps, or keeping
+one the spec retires. Nothing operational here depends on the list reaching zero.
+A permanent `@omit` list is one line per tool naming the gap.
 
-It produces a model that does not inherit the SDK's. Inheriting the SDK's request
-model is a principle here (critical pattern \#1), and `sdk_grounding()` enforces
-it at registration. **The narrowing is temporary; the principle is not.** As
-fields are implemented, each `@omit` list shrinks, and the correct end state is
+**This is a Liskov violation, stated rather than discovered later.** The subtype
+strengthens a precondition: it accepts a strict subset of what the parent accepts.
+Concretely, code typed to `LibraryGetProductsRequest` doing `req.catalog` gets an
+`AttributeError` on our instance, and **mypy will not catch it**, because mypy
+believes the parent's contract.
 
-```python
-class GetProductsRequest(LibraryGetProductsRequest):
-    """Every field of the spec, implemented."""
-```
+It is accepted for one measurable reason: **the victim set is empty and is
+cheaply kept empty.** A `Library*Request` used as an annotation or isinstance
+target outside `src/core/schemas/` appears once in `src/`, at
+`task_management.py:230`, where it is used *as* the DTO with no narrowing — so it
+cannot be a victim. LSP is a theorem about consumers; with no consumers it has no
+operational content. A guard forbidding `Library*Request` annotations outside the
+schemas package is what makes that provable rather than incidental, and it is
+part of this design rather than a follow-up.
 
-with no decorator at all — `@omit()` with nothing to omit is already a plain
-subclass. A mechanism that converges to the principle is right; one that leaves
-us permanently outside it to service a temporary condition is not.
+**What inheritance is actually claiming here is provenance, not
+substitutability**: these field definitions come from the spec, unretyped. That
+is precisely what `sdk_grounding()` checks by walking the MRO, and it is why
+bumping the SDK moves every advertised type with it. Python offers exactly one
+mechanism that carries provenance through the type system.
 
-So the cost of `@omit` — mutation plus a mandatory rebuild — is accepted
-deliberately, and the rebuild is documented above as a hazard precisely because
-it is a footgun that fails silently.
+The alternative — `create_model` from the SDK's own `FieldInfo` objects — was
+tested and works, with no mutation and no rebuild. It is rejected because it
+breaks `sdk_grounding()`'s MRO walk, and rewriting that gate around a declared
+`_SPEC_MODEL` link reintroduces the import-spelling dependence the gate was
+rebuilt to eliminate. **A reversal threshold is recorded below**, because that
+judgement can change.
 
 ### The registry is wiring only
 
@@ -358,6 +371,58 @@ implementation reads. Deciding what to do about each field — implement, or
 announce it as unsupported — is the next piece of work and needs the spec, not
 this document.
 
+## The conformance statement is derived, not authored
+
+Standards practice for implementing a subset of a protocol is a **PICS** — a
+Protocol Implementation Conformance Statement, *"a structured document which
+asserts which specific requirements are met by a given implementation"*. The
+`@omit` lists are exactly that, and the statement should be **computed** from
+them rather than maintained beside them:
+
+```python
+def conformance_gap(dto) -> frozenset[str]:
+    return library_declared_fields(dto) - set(dto.model_fields)
+```
+
+Both halves exist in `_announced_shape.py` today. There is still exactly one
+place specifying the fields — the SDK model minus the omit list — and the PICS is
+output. It is what the alignment tests grade against, and it is publishable to
+buyers if we choose.
+
+## Two guards this design requires
+
+Not decoration. This narrows a spec type inside the type system, which peer
+ecosystems do not do — they untype (Stripe), prune at the boundary (Kubernetes
+CRDs), or declare the subset out-of-band (PICS). The scaffolding is what makes
+the novelty safe.
+
+**1. The rebuild footgun becomes a test, not a paragraph.** For every registered
+DTO, assert `set(model_fields) == set(model_json_schema()["properties"])` modulo
+`_NON_SCHEMA_FIELDS`, and that each omitted field actually rejects under
+`extra="forbid"`. Forgetting `model_rebuild` then fails loudly instead of leaving
+a class that looks narrowed and is not.
+
+**2. No `Library*Request` annotation outside `src/core/schemas/`.** This is what
+keeps the LSP victim set empty by construction rather than by luck.
+
+## The alignment suite grades the opposite invariant
+
+`tests/unit/test_pydantic_schema_alignment.py` asserts the reverse of what this
+design introduces:
+
+> *"Every property the pinned schema declares is a field on the model. Extra
+> model fields are fine (internal use); a MISSING schema field is not."*
+> — `test_no_model_is_missing_a_field_its_schema_declares`
+
+and `test_no_model_rejects_a_field_its_pinned_schema_declares` beside it. **Any
+narrowed DTO fails both, by construction.** Those tests exist because missing
+fields were defects; this design redefines some of them as declared gaps.
+
+They must be renegotiated to: *every pinned-schema field is either declared on
+the DTO or named in its omit list; nothing else may be absent.* That is the PICS
+made executable, and it is real migration work — it belongs in the step list
+below rather than being discovered during step 3.
+
 ## Migration order
 
 Each step leaves the tree green and is independently revertible.
@@ -381,6 +446,10 @@ Each step leaves the tree green and is independently revertible.
    the `skill_handlers` dict.
 6. **Generate REST routes**, deleting the decorators and body-model assignments.
 7. **Narrow each DTO** with `@omit`, from the measurement, per tool.
+8. **Renegotiate the alignment suite** to grade "declared or omitted" rather than
+   "declared", and add the two guards above. This cannot follow step 7 — a
+   narrowed DTO fails the current suite immediately, so the renegotiation lands
+   with the first `@omit`.
 
 Steps 4–6 are where "declared once" becomes true. Step 3 is where the 68 fields
 start reaching implementations, and is the only step with buyer-visible risk.
