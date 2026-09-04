@@ -91,15 +91,40 @@ def omit(*fields: str):
     return deco
 ```
 
-Measured on the pinned pydantic: the spec model is **untouched** and still
-validates the omitted fields; ours rejects them under `extra="forbid"` and drops
-them under `extra="ignore"`, with the attribute absent from the instance either
-way; `model_json_schema()` carries only the narrowed set; and `isinstance` of the
-spec model still holds.
+**`model_rebuild(force=True)` is not optional, and skipping it fails in the
+dangerous direction.** `model_fields` is metadata; the validator and the JSON
+schema are compiled separately. Popping without rebuilding leaves them stale, so
+the class *looks* narrowed and is not:
 
-That last property is what makes this free. Announced, accepted, and implemented
-are **the same class** — not three sets kept in step, and not a runtime narrowing
-applied at three call sites.
+| after `model_fields.pop("c")` | without rebuild | with rebuild |
+|---|---|---|
+| `model_fields` | `['a']` | `['a']` |
+| `model_json_schema()` | `['a', 'c']` | `['a']` |
+| `model_validate({"a":1,"c":9})` | **accepted**, `hasattr(i,"c")` True | rejected |
+
+That is the same three-sets-out-of-step failure this design exists to remove,
+occurring inside pydantic. The rebuild is what makes `model_fields`, the
+published schema, and the validator one thing.
+
+**Verified against the real SDK model, not a synthetic one.** Applying `@omit`
+to the 16 fields no transport accepts today:
+
+```
+spec fields before : 21
+spec fields after  : 21        <- untouched
+ours               : brand, brief, context, filters, property_list
+json_schema props  : brand, brief, context, filters, property_list
+catalog            : ValidationError
+hasattr(catalog)   : False
+isinstance of spec : True
+```
+
+Forward references in the SDK model resolve; `model_rebuild(force=True)` handles
+them. The narrowed set is exactly the five fields all three transports accept
+today, which is the measurement this design started from.
+
+Announced, accepted, and implemented are **the same class** — not three sets kept
+in step, and not a runtime narrowing applied at three call sites.
 
 ### The registry is wiring only
 
@@ -174,6 +199,28 @@ cannot do it.
 A malformed payload raises `pydantic.ValidationError`, which every transport
 boundary already translates to `INVALID_REQUEST` with `field` and `issues`
 (`adcp_error_for`, checked before `ValueError` deliberately).
+
+### The implementation is typed to OUR model, not the spec's
+
+```python
+async def _get_products_impl(*, req: GetProductsRequest, identity: ResolvedIdentity) -> ...:
+```
+
+where `GetProductsRequest` is **our narrowed subclass**, never the SDK's model.
+
+The direction matters. Ours subclasses the spec model, so
+`isinstance(ours, LibraryGetProductsRequest)` is `True` — but
+`isinstance(spec_instance, GetProductsRequest)` is `False`. Typing the parameter
+to the spec model would therefore accept an instance carrying every omitted
+field; typing it to ours cannot, because ours has no such attribute to carry.
+
+So the guarantee is not "the boundary strips unimplemented fields and we trust
+it". It is that a value carrying an unimplemented field **cannot be constructed
+as the type the implementation accepts**. The narrowing holds at the type level,
+checked by mypy, not only at the validation call.
+
+This is the reason the SDK model must never appear in an `_impl` signature. It is
+the spec's shape, and the spec's shape is wider than what we built.
 
 ### Derived registration
 
