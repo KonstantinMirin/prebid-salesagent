@@ -118,8 +118,8 @@ def test_every_declared_factory_is_bound_to_a_registered_tool_and_a_pinned_schem
         f"{unbound} declare a baseline payload that nothing grades against the pin. A "
         f"factory is graded when its Meta.model is the request DTO of a REGISTERED tool "
         f"AND that DTO resolves a pinned schema. Either the model is not built by any "
-        f"tool, or its tool is ungraded — see "
-        f"tests/unit/test_pydantic_schema_alignment.py::TestNoNonSpecFieldsAreAdvertised."
+        f"tool, or its DTO resolves no schema through "
+        f"tests/helpers/request_schemas.graded_request_schemas."
     )
 
 

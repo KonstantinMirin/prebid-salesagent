@@ -42,11 +42,10 @@ async def test_schema_validator_initialization():
 # the same hand-maintained-second-copy disease PR #1868 exists to remove.
 # Its debugging purpose (what does the pinned schema require, does a given
 # payload validate) is already covered here (test_invalid_get_products_response,
-# test_get_products_request_validation below) and by
-# tests/unit/test_pydantic_schema_alignment.py's generate_minimal_valid_request /
-# generate_example_value (the schema-derived generator the script should have
-# reused instead of hand-rolling) and tests/unit/test_adcp_contract.py (the
-# production-model contract check). Had zero external references (no CI job,
+# test_get_products_request_validation below) and by tests/unit/test_adcp_contract.py
+# (the production-model contract check). The schema-derived request generator it should
+# have reused instead of hand-rolling lived in the alignment suite, deleted with it
+# (docs/design/one-tool-registry.md). Had zero external references (no CI job,
 # Makefile target, or doc link) — deleted rather than repaired.
 
 

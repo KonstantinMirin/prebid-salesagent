@@ -66,10 +66,16 @@ someone else's DTOs.
 
 Measured before removal: a duplicate `media_buy_id: str` on `UpdateMediaBuySuccess` left
 the guard green AND changed nothing observable — same annotation, same wire keys. The
-same field redeclared as `int` also left the guard green, but failed
-`test_pydantic_schema_alignment.py` in two places. So every redeclaration that reaches
-the wire is caught against the PINNED SCHEMA, and the only thing the guard could
-uniquely have caught is inert.
+same field redeclared as `int` also left the guard green, but failed the alignment suite
+in two places.
+
+That backstop is gone: the alignment suite was deleted in full
+([docs/design/one-tool-registry.md](../design/one-tool-registry.md)), because a design in
+which the DTO IS the pinned model minus a declared omission leaves nothing for it to
+compare. Redeclarations are graded instead by
+`tests/unit/test_architecture_schema_inheritance.py` against the library parent, which is
+the guard this section describes as removed — the section itself is stale, and the guard
+is live.
 
 ### Boundary Completeness Guard
 
@@ -485,7 +491,7 @@ make quality
 uv run pytest tests/unit/test_architecture_*.py tests/unit/test_*impl*.py -v
 
 # Single guard
-uv run pytest tests/unit/test_pydantic_schema_alignment.py -v
+uv run pytest tests/unit/test_architecture_schema_inheritance.py -v
 ```
 
 ## Relationship to Other Quality Mechanisms

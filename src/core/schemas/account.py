@@ -87,17 +87,6 @@ class ListAccountsRequest(LibraryListAccountsRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    _NON_SCHEMA_FIELDS: ClassVar[dict[str, str]] = {
-        "idempotency_key": (
-            "account/list-accounts-request.json (AdCP 3.1.1) does not declare idempotency_key, "
-            "and a read has no at-most-once guarantee for a key to carry. Retained TEMPORARILY "
-            "only because the UC-011 tolerance scenario builds this model in-process instead of "
-            "dispatching a raw payload, so it cannot construct its request without the field. "
-            "Production already tolerates the envelope without it. Remove with the builder and "
-            "wrapper parameters once the harness dispatches raw payloads (salesagent-prkv.65)."
-        )
-    }
-
     # TEMPORARY -- restored on purpose, and it must go. Tracked by salesagent-prkv.65.
     #
     # WHY IT IS BACK: @T-UC-011-list-read-idempotency-tolerance builds this model IN THE TEST

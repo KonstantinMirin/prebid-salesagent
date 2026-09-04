@@ -3,8 +3,8 @@ fully offline.
 
 Single source of truth for schema-shape assertions in tests (e.g. the BDD
 step "the response should be schema-valid against <file>") AND for the
-Pydantic-model alignment suite's schema walking
-(tests/unit/test_pydantic_schema_alignment.py). Reads the SDK's own "plain"
+request-factory conformance suite's schema walking
+(tests/unit/test_request_factory_schema_conformance.py). Reads the SDK's own "plain"
 schema tree (``adcp/_schemas/<major.minor>/``, sibling of the SDK's
 ``bundled/`` tree) — never the network, and never an independently vendored
 snapshot: the SDK's own installed version IS the pin (moves with

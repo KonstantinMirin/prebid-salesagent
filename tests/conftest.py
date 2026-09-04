@@ -166,7 +166,6 @@ _ENTITY_PATTERNS: dict[str, list[str]] = {
         "annotated_type",
         "all_response_str",
         "openapi_surface",
-        "manual_vs_generated",
         "json_serialization",
         "version_compat",
         "signals_response",

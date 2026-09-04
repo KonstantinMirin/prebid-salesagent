@@ -17,8 +17,8 @@ e2e-tier module from unit/integration is backwards layering.
 
 Schema loading and $ref resolution delegate to ``tests.helpers.pinned_schema``
 — the single source of truth every pinned-schema consumer in this repo reads
-through (also used by tests/unit/test_pydantic_schema_alignment.py and the
-integration suite). That module resolves from the SDK's "plain" tree
+through (also used by tests/unit/test_request_factory_schema_conformance.py and
+the integration suite). That module resolves from the SDK's "plain" tree
 (``adcp/_schemas/<major.minor>/``), not the ``bundled/`` subset: bundled only
 physically ships 8 of the SDK's 16 top-level categories (no ``account/``,
 ``enums/``, ``governance/``, etc.) — validating a task whose schema lives in

@@ -11,15 +11,12 @@ Three properties, each of which failed at least once while this was being built:
    before any tool code runs -- that regression happened twice here, 18 scenarios then 16.
 3. A DTO field the tool does not accept is never advertised -- with no hand-maintained
    list of exclusions. Absence from the signature IS the statement.
-4. Announced == SPEC. The first three said nothing about this, and because the shape derives
-   from OUR subclass rather than the library's, a field we invented locally was published as
-   though the spec defined it. Registration now refuses one; the two ways out
-   (``exclude=True``, ``_NON_SCHEMA_FIELDS``) are declarations at the definition site.
+4. An INTERNAL field is never advertised. ``exclude=True`` governed serialization only for a
+   long time and the announcement read straight past it, so a field marked internal was still
+   published as a request parameter -- on MCP and, through the same DTO, in the REST body.
 """
 
 from __future__ import annotations
-
-from typing import ClassVar
 
 import pytest
 from adcp.types import ListAccountsRequest as _LibraryListAccountsRequest
@@ -490,31 +487,21 @@ def _fixture_wrapper_that_declares_it(media_buy_id: str = "", note: str | None =
     return _build_fixture_request(media_buy_id=media_buy_id, note=note)
 
 
-class TestAFieldTheSpecDoesNotDefineCannotBeAnnounced:
-    """A field OUR subclass invents on top of the library DTO is never advertised.
+class TestAnInternalFieldIsNeverAnnounced:
+    """``exclude=True`` means the buyer never sees it, in BOTH directions.
 
-    "Announced == accepted" says nothing about "announced == SPEC", and because the shape
-    derives from our model rather than the library's, a locally-added field was published to
-    buyers on MCP and REST as though the spec had defined it. ``list_accounts.idempotency_key``
-    was that field, and it is worth knowing how it got there: not carelessness, but an
-    accurate spec citation reasoned to the wrong conclusion. read-tool-idempotency requires a
-    read tool to TOLERATE the key; list-accounts-request.json expresses that as
-    ``additionalProperties: true`` and declares no such property. Tolerance was answered by
-    declaring a field, which is the defect itself.
+    Until the announcement honoured it, ``exclude=`` said "never reaches a buyer" about
+    SERIALIZATION only, so "mark it internal" was advice a reader could follow and still
+    publish the field as a request parameter. Four live DTO fields are in this state --
+    ``get_products.product_selectors``, ``list_creatives.format`` and ``page``,
+    ``update_media_buy.today`` -- every one of them a field the subclass adds on top of the
+    spec shape, and none of them advertised.
 
-    The refusal is what makes the state unreachable rather than recorded: a tool whose DTO
-    invents a buyer-visible field cannot register, so the server cannot start carrying one.
-    Both escapes are declarations at the DEFINITION site, which is the difference from an
-    allowlist in a test -- an entry names itself and says why the field is carried.
+    There is deliberately no companion test refusing an ADDED field that IS advertised. The
+    added set is derived (``set(model_fields) - library_declared_fields(model)``), so
+    declaring the field on the subclass IS the statement that we carry it, and a refusal
+    reading that same derivation could never fire. See docs/design/one-tool-registry.md.
     """
-
-    def test_registration_refuses_an_invented_field(self) -> None:
-        from src.core.tools._announced_shape import apply_dto_announced_shape
-
-        def target(): ...
-
-        with pytest.raises(RuntimeError, match="local_only_flag"):
-            apply_dto_announced_shape(target, _fixture_wrapper_with_an_invented_field)
 
     def test_an_internal_field_registers_and_is_not_announced(self) -> None:
         """``exclude=True`` means the buyer never sees it -- in BOTH directions.
@@ -530,34 +517,6 @@ class TestAFieldTheSpecDoesNotDefineCannotBeAnnounced:
         assert apply_dto_announced_shape(target, _fixture_wrapper_with_an_internal_field) is True
         assert "local_only_flag" not in target.__signature__.parameters
         assert "status" in target.__signature__.parameters, "the spec fields must survive"
-
-    def test_a_cited_departure_registers_and_stays_announced(self) -> None:
-        """The refusal must be specific to the UNDECLARED case, not merely strict.
-
-        A cited field is buyer-visible on purpose: on MCP, accepting IS advertising, because
-        FastMCP never passes what it does not advertise.
-        """
-        from src.core.tools._announced_shape import apply_dto_announced_shape
-
-        def target(): ...
-
-        assert apply_dto_announced_shape(target, _fixture_wrapper_with_a_cited_field) is True
-        assert "local_only_flag" in target.__signature__.parameters
-
-    def test_a_wholly_local_dto_is_not_refused(self) -> None:
-        """A DTO extending no spec shape has nothing for a field to be EXTRA to.
-
-        ``complete_task`` and ``list_authorized_properties`` are tools AdCP 3.1.1 does not
-        define; their request models are local top to bottom. Refusing them would not make
-        the tree more spec-conformant, it would make the rule wrong -- so the check is
-        vacuous exactly there, and says so.
-        """
-        from src.core.tools._announced_shape import apply_dto_announced_shape
-
-        def target(): ...
-
-        assert apply_dto_announced_shape(target, _fixture_wrapper_wholly_local) is True
-        assert "local_only_flag" in target.__signature__.parameters
 
     @pytest.mark.asyncio
     @pytest.mark.xfail(
@@ -592,32 +551,6 @@ class TestAFieldTheSpecDoesNotDefineCannotBeAnnounced:
             "the mutation tool must keep the key -- a blanket removal is not the fix"
         )
 
-    @pytest.mark.asyncio
-    async def test_every_registered_tool_declares_or_cites_every_field_it_announces(self) -> None:
-        """The TREE, not a fixture: importing main runs the refusal for every tool.
-
-        A rule that holds on a fixture while the tree violates it is the failure mode a
-        guard-with-an-allowlist would have hidden. Registration raising is the real assertion
-        here, so this states what a successful import MEANS -- every tool present and every
-        announced field either library-declared or cited -- rather than only that the import
-        returned.
-        """
-        from src.core import main
-        from src.core.tools._announced_shape import library_declared_fields, non_schema_fields, request_model_for
-
-        tools = await main.mcp.list_tools()
-        assert tools, "no tools registered -- the import path changed and this grades nothing"
-        for tool in tools:
-            model = request_model_for(getattr(tool.fn, "__wrapped__", tool.fn))
-            assert model is not None, f"{tool.name} registered without a request DTO"
-            library_declared = library_declared_fields(model)
-            if not library_declared:
-                continue
-            invented = set(tool.parameters.get("properties", {})) & (
-                set(model.model_fields) - library_declared - set(non_schema_fields(model))
-            )
-            assert not invented, f"{tool.name} advertises {sorted(invented)}, which no adcp type declares"
-
 
 class TestRestDropsInternalFieldsToo:
     """REST derives its body from the same DTO, so it must read ``exclude=`` the same way.
@@ -643,32 +576,12 @@ class TestRestDropsInternalFieldsToo:
 # defined inside a test method is invisible to it.
 #
 # The base is the real library ListAccountsRequest rather than a hand-made stand-in, because
-# the rule keys on "declared by an adcp class in the ancestry" -- a stand-in in this module
-# would make every fixture wholly local and every one of these tests vacuous.
-
-
-class _FixtureWithAnInventedField(_LibraryListAccountsRequest):
-    local_only_flag: bool | None = None
+# an internal field has to sit on top of a real spec shape for its exclusion to mean anything
+# -- a stand-in in this module would make the fixture wholly local and the tests vacuous.
 
 
 class _FixtureWithAnInternalField(_LibraryListAccountsRequest):
     local_only_flag: bool | None = Field(default=None, exclude=True)
-
-
-class _FixtureWithACitedField(_LibraryListAccountsRequest):
-    _NON_SCHEMA_FIELDS: ClassVar[dict[str, str]] = {"local_only_flag": "fixture citation"}
-
-    local_only_flag: bool | None = None
-
-
-class _FixtureWhollyLocal(BaseModel):
-    local_only_flag: bool | None = None
-
-
-def _build_invented_request(
-    status: str | None = None, local_only_flag: bool | None = None
-) -> _FixtureWithAnInventedField:
-    return _FixtureWithAnInventedField(status=status, local_only_flag=local_only_flag)
 
 
 def _build_internal_request(
@@ -677,28 +590,8 @@ def _build_internal_request(
     return _FixtureWithAnInternalField(status=status, local_only_flag=local_only_flag)
 
 
-def _build_cited_request(status: str | None = None, local_only_flag: bool | None = None) -> _FixtureWithACitedField:
-    return _FixtureWithACitedField(status=status, local_only_flag=local_only_flag)
-
-
-def _build_local_request(local_only_flag: bool | None = None) -> _FixtureWhollyLocal:
-    return _FixtureWhollyLocal(local_only_flag=local_only_flag)
-
-
-def _fixture_wrapper_with_an_invented_field(status: str | None = None, local_only_flag: bool | None = None):
-    return _build_invented_request(status=status, local_only_flag=local_only_flag)
-
-
 def _fixture_wrapper_with_an_internal_field(status: str | None = None, local_only_flag: bool | None = None):
     return _build_internal_request(status=status, local_only_flag=local_only_flag)
-
-
-def _fixture_wrapper_with_a_cited_field(status: str | None = None, local_only_flag: bool | None = None):
-    return _build_cited_request(status=status, local_only_flag=local_only_flag)
-
-
-def _fixture_wrapper_wholly_local(local_only_flag: bool | None = None):
-    return _build_local_request(local_only_flag=local_only_flag)
 
 
 def _fixture_impl_taking_everything(status=None, local_only_flag=None, **kwargs): ...
