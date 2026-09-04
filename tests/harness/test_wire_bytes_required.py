@@ -24,7 +24,8 @@ from __future__ import annotations
 
 import pytest
 
-from tests.harness.transport import Transport, TransportResult
+from tests.harness.transport import Transport
+from tests.harness.wire_fixtures import wire_error_result
 
 
 def _two_layer(
@@ -70,7 +71,7 @@ def _no_wire_ctx(envelope: dict) -> dict:
         # only one on which a synthesized envelope may stand in for a wire), so
         # a step that still reddens here reddens on genuine absence rather than
         # because the fallback was structurally closed off.
-        "result": TransportResult(payload=None, envelope={}, wire_error_envelope=None, has_wire=False),
+        "result": wire_error_result(None),
         "error": RuntimeError(envelope["errors"][0]["message"]),
     }
 
@@ -83,7 +84,7 @@ def _wire_ctx(envelope: dict) -> dict:
         # has_wire=True: the positive control IS the captured-wire case — the
         # envelope below is what ``unwrap_rest_response`` recovered from a real
         # >= 400 HTTP body.
-        "result": TransportResult(payload=None, envelope={}, wire_error_envelope=envelope, has_wire=True),
+        "result": wire_error_result(envelope),
     }
 
 
@@ -199,7 +200,7 @@ class TestPackageOutcomeDispatchRequiresWireBytes:
             # has_wire=False, as in ``_no_wire_ctx``: nothing was captured, and
             # nothing (no synthesized envelope) stands in for one — the state a
             # reconstructed ctx["error"] is all that survives from.
-            "result": TransportResult(payload=None, envelope={}, wire_error_envelope=None, has_wire=False),
+            "result": wire_error_result(None),
             "error": error,
         }
 

@@ -11,6 +11,7 @@ instead of masking the drift (#1417).
 import pytest
 
 from tests.harness.transport import TransportResult, extract_wire_suggestion
+from tests.harness.wire_fixtures import wire_error_result
 
 
 class TestExtractWireSuggestionStrict:
@@ -67,7 +68,7 @@ def _result(envelope: dict) -> TransportResult:
     # state a real >= 400 wire body leaves behind. These tests grade what
     # ``assert_wire_error`` does with bytes that WERE received; declaring no
     # wire would model a dispatch that never reached a boundary at all.
-    return TransportResult(payload=None, envelope={}, wire_error_envelope=envelope, has_wire=True)
+    return wire_error_result(envelope)
 
 
 class TestRequireSuggestionDemandsBothMirroredLayers:

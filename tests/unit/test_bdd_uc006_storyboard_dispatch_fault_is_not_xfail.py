@@ -39,7 +39,7 @@ from _pytest.outcomes import Skipped, XFailed
 
 from src.core.exceptions import AdCPInternalError, build_two_layer_error_envelope
 from tests.bdd.steps.domain import uc006_storyboard_creative_sync as steps
-from tests.harness.transport import TransportResult
+from tests.harness.wire_fixtures import wire_error_result
 
 #: The scenario tags whose Then steps this module mutates. Both are deliberately
 #: UN-ledgered: a ledgered tag would xfail the scenario before the injected fault
@@ -96,15 +96,13 @@ def _errored_ctx() -> dict[str, Any]:
     ``ctx['result'].error_envelope()``), and ``response`` is NEVER set. The
     Given-supplied keys are present because the Givens ran before the When.
     """
-    result = TransportResult(
-        # The injected fault is a REST 500 whose body came back over HTTP —
-        # bytes crossed the wire, so the site declares True. No synthesized
-        # envelope: only the IMPL dispatcher, which has no wire, may populate
-        # that field (tests/unit/test_harness_mcp_never_synthesizes.py).
-        has_wire=True,
-        payload=None,
+    result = wire_error_result(
+        # The injected fault is a REST 500 whose body came back over HTTP — bytes
+        # crossed the wire, which the fixture derives from the envelope being present.
+        # No synthesized envelope: only the IMPL dispatcher, which has no wire, may
+        # populate that field (tests/unit/test_harness_mcp_never_synthesizes.py).
+        _INJECTED_500_ENVELOPE,
         error=_INJECTED_500,
-        wire_error_envelope=_INJECTED_500_ENVELOPE,
     )
     return {
         "env": _NoSessionEnv(),

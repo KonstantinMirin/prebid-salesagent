@@ -327,32 +327,18 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
     #: reason. This mapping may shrink; it must never grow silently.
     FIXTURE_CONSTRUCTORS: dict[str, str] = {
         "tests/integration/test_harness_wire_response.py": (
-            "this module fabricates results to grade wire_field/wire_dict against a known declaration"
+            "this module fabricates results to grade wire_field/wire_dict against a known declaration. "
+            "It does NOT use tests/harness/wire_fixtures.py and must not: its sites are SUCCESS-path "
+            "(payload + wire_response), not error envelopes; one is TransportResult(payload=None) inside "
+            "pytest.raises(TypeError), a site that exists TO NOT go through a helper; and this is the guard "
+            "module for the contract, so constructing through the helper it guards would be grading itself"
         ),
-        "tests/unit/test_bdd_uc006_storyboard_dispatch_fault_is_not_xfail.py": (
-            "mutation grader: fabricates the ctx an injected REST 500 leaves behind (has_wire=True — that "
-            "body did come back over HTTP) and drives every UC-006 storyboard Then step through it"
-        ),
-        "tests/unit/test_boundary_handling_delivery_layering.py": (
-            "fabricates a result carrying only a wire_error_envelope, to grade that the delivery-boundary "
-            "Then steps read the envelope rather than a reconstructed exception"
-        ),
-        "tests/harness/test_transport_conformance.py": (
-            "fabricates an error result per transport to grade TransportResult's own conformance contract, "
-            "with no dispatch to declare anything"
-        ),
-        "tests/harness/test_outcome_helpers_wire_contract.py": (
-            "fabricates error-envelope results to grade the _outcome_helpers wire readers against known envelope shapes"
-        ),
-        "tests/unit/test_generic_then_devacuum.py": (
-            "fabricates a wire rejection (has_wire=True — the envelope did come back) to grade that the "
-            "partition/boundary Then steps require it, and REJECT the client-side pydantic error that a "
-            "test-process request build leaves behind; that error is the whole subject, so a real dispatch "
-            "cannot produce the input"
-        ),
-        "tests/harness/test_wire_bytes_required.py": (
-            "fabricates results with and without a captured envelope to grade that the wire-bytes guard "
-            "refuses to assert on a reconstruction"
+        "tests/harness/wire_fixtures.py": (
+            "THE fabricator. Six modules used to hand-roll the same construction and each held a row here; "
+            "they now call wire_error_result() and this is the single site. has_wire is derived from whether "
+            "an envelope was captured, because across all seventeen former call sites the declaration was "
+            "never independent of it — see that module's docstring, including the escape for a future site "
+            "that genuinely needs an inconsistent pair"
         ),
     }
 

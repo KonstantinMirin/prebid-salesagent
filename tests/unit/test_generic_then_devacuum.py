@@ -51,7 +51,8 @@ def test_valid_partition_with_known_field_still_passes() -> None:
 
 def _wire_rejection_ctx(code: str = "INVALID_REQUEST") -> dict:
     """A ctx as a real WIRE rejection leaves it: a TransportResult with an envelope."""
-    from tests.harness.transport import Transport, TransportResult
+    from tests.harness.transport import Transport
+    from tests.harness.wire_fixtures import wire_error_result
 
     envelope = {
         "transport": Transport.A2A.value,
@@ -59,9 +60,7 @@ def _wire_rejection_ctx(code: str = "INVALID_REQUEST") -> dict:
         "adcp_error": {"code": code, "message": "Invalid request parameters", "recovery": "correctable"},
         "errors": [{"code": code, "message": "Invalid request parameters", "recovery": "correctable"}],
     }
-    return {
-        "result": TransportResult(has_wire=True, error=Exception(code), envelope=envelope, wire_error_envelope=envelope)
-    }
+    return {"result": wire_error_result(envelope, error=Exception(code), envelope=envelope)}
 
 
 def test_invalid_partition_with_real_wire_rejection_still_passes() -> None:

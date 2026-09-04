@@ -21,7 +21,7 @@ from src.core.exceptions import AdCPValidationError, build_two_layer_error_envel
 # Importing the domain module registers its boundary handler post-refactor.
 from tests.bdd.steps.domain import uc004_delivery  # noqa: F401
 from tests.bdd.steps.generic.then_payload import then_boundary_handling_result
-from tests.harness.transport import TransportResult
+from tests.harness.wire_fixtures import wire_error_result
 
 DELIVERY_FIELD = "reporting_dimensions"  # a delivery-domain boundary field
 
@@ -57,7 +57,7 @@ def test_invalid_delivery_boundary_with_wire_rejection_passes():
     # has_wire=True: the fixture stands in for a dispatch whose rejection was
     # CAPTURED off the wire, which is the state the step must read from. The
     # envelope is built by the production builder only so the shape is genuine.
-    ctx = {"result": TransportResult(error=None, wire_error_envelope=envelope, has_wire=True)}
+    ctx = {"result": wire_error_result(envelope)}
     then_boundary_handling_result(ctx, DELIVERY_FIELD, "invalid")  # no raise
 
 
