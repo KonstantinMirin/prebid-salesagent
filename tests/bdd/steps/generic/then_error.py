@@ -11,7 +11,13 @@ from __future__ import annotations
 
 from pytest_bdd import parsers, then
 
-from tests.bdd.steps._outcome_helpers import payload_or_none, wire_error_dict, wire_error_envelope_or_none
+from tests.bdd.steps._outcome_helpers import (
+    payload_or_none,
+    wire_entry_errors,
+    wire_error_dict,
+    wire_error_envelope_or_none,
+    wire_field,
+)
 
 # ── Helpers ─────────────────────────────────────────────────────────
 
@@ -1349,3 +1355,54 @@ def then_error_field_contains(ctx: dict, field: str) -> None:
     actual = error.get("field")
     assert actual is not None, f"Wire error carries no 'field' pointer; error object was {error!r}"
     assert field in str(actual), f"Expected error field to contain {field!r}, got {actual!r}"
+
+
+# ── Per-ENTRY errors ─────────────────────────────────────────────────
+#
+# A DIFFERENT CHANNEL from everything above, and the distinction is the point.
+# Every other step in this file grades the ERROR ENVELOPE — adcp_error, the shape
+# a refusal takes. These grade an error carried INSIDE a success: sync_accounts
+# and sync_creatives answer per row, so one rejected row rides in a completed
+# response at accounts[].errors / creatives[].errors while the others succeed.
+# assert_wire_error structurally cannot serve those; there is no envelope.
+#
+# Consolidates two domain-local spellings that asserted the same thing on the same
+# shape — uc011's 'the per-account errors array contains an error with code' and
+# uc006's 'the per-creative errors[0].code should be'. uc011's was the stronger of
+# the two (it pinned the entry count); uc006's took creatives[0] positionally, so
+# the right code landing on the wrong row would have passed. Both now run the
+# stronger rule.
+#
+# NOT extended to UC-004, which looks similar and is not: get-media-buy-delivery
+# puts its failures in a ROOT errors[] and names the buy inside details, so there
+# is no per-entry container to select. Collapsing the two shapes would mean one
+# step switching on response topology, which is the DRY invariant's "genuinely
+# different operations that happen to look similar" case. UC-004 keeps its own.
+
+
+def _entry_error_codes(ctx: dict, collection: str) -> list[str]:
+    """Codes on the SOLE *collection* entry's ``errors[]``, located on the wire.
+
+    The count is PINNED to one. An index-0 default is only sound on a genuinely
+    single-entry response, and pinning it means a scenario that grows a second row
+    fails loudly instead of grading whichever row happens to be first -- which is
+    the weakness this consolidation removed from uc006's positional read.
+    """
+    entries = wire_field(ctx, collection)
+    assert len(entries) == 1, (
+        f"the sole-entry read needs exactly one {collection} entry on the wire, got "
+        f"{len(entries)}. Sole-entry is the point: grading row 0 of a multi-row response is "
+        f"how the right code on the WRONG row passes. A multi-row scenario needs a selector "
+        f"form, which does not exist because nothing needs one yet -- add it with the "
+        f"scenario that does."
+    )
+    errors = wire_entry_errors(ctx, collection, index=0)
+    assert errors, f"The {collection} entry carries an EMPTY errors[], so it reports no failure at all"
+    return [error.get("code") if isinstance(error, dict) else getattr(error, "code", None) for error in errors]
+
+
+@then(parsers.re(r'the (?P<collection>\w+) entry carries error code "(?P<code>[^"]+)"$'))
+def then_sole_entry_error_code(ctx: dict, collection: str, code: str) -> None:
+    """The response's SOLE *collection* entry carries *code*. One property only."""
+    codes = _entry_error_codes(ctx, collection)
+    assert code in codes, f"Expected error code {code!r} on the sole {collection} entry, got {codes}"

@@ -1584,7 +1584,7 @@ Feature: BR-UC-006 Sync Creative Assets
     When the Buyer Agent sends sync_creatives
     Then the response envelope should be schema-valid against sync-creatives-response.json
     And the per-creative result should report action "failed"
-    And the per-creative errors[0].code should be "PROVENANCE_REQUIRED"
+    And the creatives entry carries error code "PROVENANCE_REQUIRED"
     # provenance_enforcement Phase 2: cheapest buyer mistake -- no provenance attached.
     # Seller accepts envelope but per-creative action=failed with PROVENANCE_REQUIRED.
     # provenance_enforcement: provenance entirely absent under provenance_required policy
@@ -1596,7 +1596,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And the Buyer Agent submits a creative whose provenance object omits digital_source_type
     When the Buyer Agent sends sync_creatives
     Then the per-creative result should report action "failed"
-    And the per-creative errors[0].code should be "PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING"
+    And the creatives entry carries error code "PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING"
     # provenance_enforcement Phase 3: provenance attached but missing digital_source_type
     # under a policy with require_digital_source_type=true. Distinct from
     # PROVENANCE_REQUIRED because provenance IS present.
@@ -1609,7 +1609,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And the Buyer Agent submits a creative whose provenance object lacks a disclosure block
     When the Buyer Agent sends sync_creatives
     Then the per-creative result should report action "failed"
-    And the per-creative errors[0].code should be "PROVENANCE_DISCLOSURE_MISSING"
+    And the creatives entry carries error code "PROVENANCE_DISCLOSURE_MISSING"
     # provenance_enforcement Phase 5: structural disclosure check. Seller inspects the
     # submitted manifest against creative_policy.provenance_requirements.require_disclosure_metadata
     # without calling any verifier. error.field points at the missing disclosure path.
@@ -1637,7 +1637,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And the on-list verifier responds with ai_generated true at confidence at least 0.9
     When the seller invokes the verifier against the creative manifest
     Then the per-creative result should report action "failed"
-    And the per-creative errors[0].code should be "PROVENANCE_CLAIM_CONTRADICTED"
+    And the creatives entry carries error code "PROVENANCE_CLAIM_CONTRADICTED"
     And the error details should include agent_url, feature_id, claimed_value, observed_value, and confidence
     And the error details should NOT carry detail_url or verifier extension fields
     # provenance_truth_of_claim: buyer claims digital_source_type=digital_capture (non-AI)

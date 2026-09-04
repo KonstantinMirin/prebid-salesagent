@@ -440,19 +440,6 @@ def then_per_creative_result_not_failed_due_to_format_id(ctx: dict) -> None:
     )
 
 
-@then(parsers.parse('the per-creative errors[0].code should be "{code}"'))
-def then_per_creative_errors_0_code(ctx: dict, code: str) -> None:
-    """Assert the first per-creative error's code matches *code*, or xfail on a genuine production gap."""
-    first = _first_creative_result(ctx, f'a per-creative errors[0].code == "{code}"')
-    errors = first.errors or []
-    assert errors, (
-        f"expected per-creative errors[0].code={code!r}, but production returned no errors "
-        f"(action={_action_str(first.action)!r}, warnings={first.warnings!r})"
-    )
-    actual_code = errors[0].code
-    assert actual_code == code, f"expected per-creative errors[0].code={code!r}, got {actual_code!r}"
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # THEN steps — bulk multi-format sync assertions
 # ═══════════════════════════════════════════════════════════════════════

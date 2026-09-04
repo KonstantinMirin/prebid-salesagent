@@ -472,7 +472,7 @@ Feature: BR-UC-011 Manage Accounts
     Given the Buyer Agent has an authenticated connection
     When the Buyer Agent sends a sync_accounts request with a settings-update entry keyed by unknown account_id "acc_does_not_exist"
     Then the settings-update entry has action "failed"
-    And the per-account errors array contains an error with code "UNSUPPORTED_PROVISIONING"
+    And the accounts entry carries error code "UNSUPPORTED_PROVISIONING"
     And the per-account error recovery is "correctable"
     And the per-account error with code "UNSUPPORTED_PROVISIONING" carries a non-empty suggestion
     When the Buyer Agent sends a list_accounts request
@@ -611,7 +611,7 @@ Feature: BR-UC-011 Manage Accounts
     | acme-corp.com   | acme-corp.com | operator |
     Then the account for brand domain "acme-corp.com" has action "failed"
     And the account has status "rejected"
-    And the per-account errors array contains an error with code "BILLING_NOT_SUPPORTED"
+    And the accounts entry carries error code "BILLING_NOT_SUPPORTED"
     And the error message explains the billing model is not available
     And the error should include "suggestion" field with remediation guidance
     And the per-account error recovery is "correctable"
@@ -631,7 +631,7 @@ Feature: BR-UC-011 Manage Accounts
     | brand.domain    | operator      | billing  |
     | acme-corp.com   | acme-corp.com | operator |
     Then the account for brand domain "acme-corp.com" has action "failed"
-    And the per-account errors array contains an error with code "BILLING_NOT_SUPPORTED"
+    And the accounts entry carries error code "BILLING_NOT_SUPPORTED"
     When the Buyer Agent retries the sync_accounts request with billing "agent" and a fresh idempotency_key
     Then the account for brand domain "acme-corp.com" has action "created"
     And the account billing is "agent"
@@ -655,7 +655,7 @@ Feature: BR-UC-011 Manage Accounts
     | acme-corp.com   | pinnacle-media.com | agent    |
     Then the account for brand domain "acme-corp.com" has action "failed"
     And the account has status "rejected"
-    And the per-account errors array contains an error with code "BILLING_NOT_PERMITTED_FOR_AGENT"
+    And the accounts entry carries error code "BILLING_NOT_PERMITTED_FOR_AGENT"
     And the per-account error recovery is "correctable"
     And the per-account error details rejected_billing is "agent"
     And the per-account error details suggested_billing is "operator"
@@ -674,7 +674,7 @@ Feature: BR-UC-011 Manage Accounts
     When the Buyer Agent sends a sync_accounts request with:
     | brand.domain    | operator           | billing  |
     | acme-corp.com   | pinnacle-media.com | agent    |
-    Then the per-account errors array contains an error with code "BILLING_NOT_PERMITTED_FOR_AGENT"
+    Then the accounts entry carries error code "BILLING_NOT_PERMITTED_FOR_AGENT"
     When the Buyer Agent retries the sync_accounts request with the seller's suggested_billing value and a fresh idempotency_key
     Then the account for brand domain "acme-corp.com" has action "created"
     And the account billing is "operator"
@@ -813,7 +813,7 @@ Feature: BR-UC-011 Manage Accounts
     When the Buyer Agent sends a sync_accounts request provisioning brand domain "acme-corp.com" with a paused notification config subscriber "delivery-reports" for url "https://buyer.example/webhooks/adcp/account" and event_types "scheduled"
     Then the account for brand domain "acme-corp.com" has action "failed"
     And the account has status "rejected"
-    And the per-account errors array contains an error with code "VALIDATION_ERROR"
+    And the accounts entry carries error code "VALIDATION_ERROR"
     And the per-account error field points at "notification_configs[0].event_types[0]"
     # Graduated (T2 increment F4b): _check_notification_configs rejects
     # media-buy-anchored event types on the account surface pre-persist.
@@ -829,7 +829,7 @@ Feature: BR-UC-011 Manage Accounts
     When the Buyer Agent sends a sync_accounts request provisioning brand domain "acme-corp.com" with two notification config entries both using subscriber "buyer-primary"
     Then the account for brand domain "acme-corp.com" has action "failed"
     And the account has status "rejected"
-    And the per-account errors array contains an error with code "VALIDATION_ERROR"
+    And the accounts entry carries error code "VALIDATION_ERROR"
     And the per-account error field points at "notification_configs[1].subscriber_id"
     # Graduated (T2 increment F4b): _check_notification_configs rejects duplicate
     # subscriber_id values within one submitted array pre-persist.
@@ -845,7 +845,7 @@ Feature: BR-UC-011 Manage Accounts
     And the webhook proof-of-control challenge for "https://buyer.example/webhooks/adcp/unreachable" fails
     When the Buyer Agent sends a sync_accounts request re-sending subscriber "buyer-primary" as active with url "https://buyer.example/webhooks/adcp/unreachable"
     Then the account for brand domain "acme-corp.com" has action "failed"
-    And the per-account errors array contains an error with code "VALIDATION_ERROR"
+    And the accounts entry carries error code "VALIDATION_ERROR"
     And the per-account error field points at "notification_configs[0].url"
     And the account keeps its prior notification_configs set unchanged
     # Graduated (T2 increment F4c): NotificationProofService performs a bounded
@@ -904,7 +904,7 @@ Feature: BR-UC-011 Manage Accounts
     And an account for brand domain "acme-corp.com" already exists with billing "operator"
     When the Buyer Agent sends a sync_accounts request with a settings-update entry keyed by the existing account's account_id carrying entry-root sandbox true
     Then the settings-update entry has action "failed"
-    And the per-account errors array contains an error with code "UNSUPPORTED_FEATURE"
+    And the accounts entry carries error code "UNSUPPORTED_FEATURE"
     And the per-account error recovery is "correctable"
     And the per-account error field points at "sandbox"
     When the Buyer Agent sends a list_accounts request
@@ -1388,7 +1388,7 @@ Feature: BR-UC-011 Manage Accounts
     | brand.domain  | operator      | billing  | sandbox |
     | acme-corp.com | acme-corp.com | operator | true    |
     Then the account for brand domain "acme-corp.com" has action "failed"
-    And the per-account errors array contains an error with code "UNSUPPORTED_FEATURE"
+    And the accounts entry carries error code "UNSUPPORTED_FEATURE"
     And the per-account error recovery is "correctable"
     And the per-account error field points at "sandbox"
     And the per-account error suggestion mentions "get_adcp_capabilities"
