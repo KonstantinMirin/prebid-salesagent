@@ -178,7 +178,7 @@ class RestBinding:
 @dataclass(frozen=True)
 class ToolSpec:
     dto: type[BaseModel]            # the subclass above
-    impl: Callable                  # async def (*, req, identity, **transport) -> Result
+    impl: Callable                  # async def (*, req, identity, ...) -> Result
     rest: RestBinding | None        # None = not exposed over REST
     a2a: bool                       # exposed as an A2A skill
     auth: Literal["required", "optional"]   # a property of the TOOL, not of a transport
@@ -248,6 +248,13 @@ async def _get_products_impl(*, req: GetProductsRequest, identity: ResolvedIdent
 
 where `GetProductsRequest` is **our narrowed subclass**, never the SDK's model.
 
+**The `*` is a change, not the status quo.** No implementation is keyword-only
+today. It is proposed because this design introduces a *generic* call site: the
+registry invokes `spec.impl(...)` for every tool, so a parameter added or
+reordered in one implementation would silently rebind under positional calling.
+Keyword-only makes that a `TypeError` instead. It costs one character per
+signature and is worth stating rather than smuggling in.
+
 The direction matters. Ours subclasses the spec model, so
 `isinstance(ours, LibraryGetProductsRequest)` is `True` — but
 `isinstance(spec_instance, GetProductsRequest)` is `False`. Typing the parameter
@@ -295,8 +302,26 @@ req = build_request(name, payload)
 return await spec.impl(req=req, identity=identity, **transport_derived)
 ```
 
-`transport_derived` is the three known values — `context_id`,
-`raw_wire_payload`, `request_hash` — supplied by the boundary, never by a buyer.
+`transport_derived` is a **closed set of three**, not open kwargs. Measured
+across all twelve implementations:
+
+| impl | beyond `req` and `identity` |
+|---|---|
+| `_create_media_buy_impl` | `context_id`, `raw_wire_payload` |
+| `_update_media_buy_impl` | `context_id` |
+| `_sync_creatives_impl` | `request_hash` |
+| the other nine | nothing |
+
+**No implementation takes `**kwargs`**, and none may. The generic call passes only
+what the target declares — `accepted_kwargs(impl)` already exists for exactly
+this. An open `**kwargs` at this seam would let a transport hand an
+implementation anything at all, which is the accept-and-ignore hazard one layer
+below the one this design removes.
+
+These three are supplied by the boundary and never by a buyer. `raw_wire_payload`
+in particular is the request as sent, captured before normalisation, and exists
+because RFC 8785 idempotency hashing needs the payload the buyer actually sent —
+not the model built from it.
 
 ## Decisions this forces, and the answers
 
