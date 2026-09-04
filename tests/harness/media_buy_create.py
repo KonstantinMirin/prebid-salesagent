@@ -362,7 +362,27 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             kwargs.pop("account")
         elif kwargs.get("account") is None:
             kwargs["account"] = {"account_id": self._default_account_id()}
+        else:
+            # An account was NAMED -- by a step, or by create_test_media_buy_request_dict,
+            # which writes the literal DEFAULT_TEST_ACCOUNT_ID. Present is not the same as
+            # resolvable: the transport boundary looks the reference up, so the row still
+            # has to exist or the dispatch answers ACCOUNT_NOT_FOUND instead of whatever the
+            # test is about. Seeding only the suite's own default is what keeps a test that
+            # names a MISSING account still missing it.
+            self._seed_named_account_ref(kwargs["account"])
         return kwargs
+
+    def _seed_named_account_ref(self, account: Any) -> None:
+        """Seed the row behind an account reference, when it is the suite's default.
+
+        Takes the reference in either spelling -- the wire dict a per-field caller passes,
+        or the typed AccountReference on a built request -- because both paths reach the
+        same boundary lookup.
+        """
+        root = getattr(account, "root", account)
+        account_id = root.get("account_id") if isinstance(root, dict) else getattr(root, "account_id", None)
+        if account_id == DEFAULT_TEST_ACCOUNT_ID:
+            self.setup_default_account()
 
     def _seed_named_account(self, req: Any) -> None:
         """Seed the account a caller-BUILT request names, when it is the suite's default.
@@ -374,9 +394,8 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         suspended, foreign) and manufacturing a row for it would erase the case.
         """
         account = getattr(req, "account", None)
-        root = getattr(account, "root", None) if account is not None else None
-        if getattr(root, "account_id", None) == DEFAULT_TEST_ACCOUNT_ID:
-            self.setup_default_account()
+        if account is not None:
+            self._seed_named_account_ref(account)
 
     def _default_account_id(self) -> str:
         """The seeded account's id, or a literal when there is no DB bound.

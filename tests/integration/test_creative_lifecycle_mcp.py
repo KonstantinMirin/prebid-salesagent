@@ -1206,7 +1206,9 @@ class TestCreativeLifecycleMCP:
             # Through the shared builder, since the wrapper takes the built request.
             response = await create_media_buy_raw(
                 req=_build_create_media_buy_request(
-                    account={"account_id": "acct_test"},
+                    # This module seeds ACCOUNT_ID, not the suite default; the wrapper resolves
+                    # the reference, so it has to name the row this file created.
+                    account={"account_id": ACCOUNT_ID},
                     brand={"domain": "testbrand.com"},
                     packages=packages,
                     start_time=datetime.now(UTC) + timedelta(days=1),

@@ -318,7 +318,7 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_explicit_skill_create_media_buy(
-        self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
+        self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator, sample_account
     ):
         """Test explicit skill invocation for create_media_buy.
 
@@ -347,6 +347,9 @@ class TestA2ASkillInvocation:
             skill_params = {
                 "brand": {"domain": "testbrand.com"},
                 "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+                # The SEEDED account: the A2A skill resolves the reference at the boundary,
+                # so an unseeded id answers ACCOUNT_NOT_FOUND before the skill runs.
+                "account": sample_account,
                 "packages": [
                     {
                         "product_id": sample_products[0],  # Use product_id per AdCP spec
@@ -489,7 +492,7 @@ class TestA2ASkillInvocation:
 
     @pytest.mark.asyncio
     async def test_explicit_skill_create_media_buy_manual_approval(
-        self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
+        self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator, sample_account
     ):
         """Test create_media_buy returns status=submitted when manual approval required."""
         # Update tenant to require manual approval
@@ -521,6 +524,9 @@ class TestA2ASkillInvocation:
             skill_params = {
                 "brand": {"domain": "testbrand.com"},
                 "idempotency_key": f"int-key-{uuid.uuid4().hex}",
+                # The SEEDED account: the A2A skill resolves the reference at the boundary,
+                # so an unseeded id answers ACCOUNT_NOT_FOUND before the skill runs.
+                "account": sample_account,
                 "packages": [
                     {
                         "product_id": sample_products[0],

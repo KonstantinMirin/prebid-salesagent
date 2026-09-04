@@ -78,7 +78,7 @@ class TestA2AMessageFieldValidation:
 
     @pytest.mark.asyncio
     async def test_create_media_buy_message_field_exists(
-        self, handler, mock_auth_context, sample_tenant, sample_principal, sample_products
+        self, handler, mock_auth_context, sample_tenant, sample_principal, sample_products, sample_account
     ):
         """Test create_media_buy returns a valid message field.
 
@@ -105,6 +105,10 @@ class TestA2AMessageFieldValidation:
                 ],
                 "start_time": start_date.isoformat(),
                 "end_time": end_date.isoformat(),
+                # The SEEDED account, not a literal: the A2A skill resolves the reference at
+                # the boundary, so an id with no row answers ACCOUNT_NOT_FOUND before the
+                # message field this test is about is ever built.
+                "account": sample_account,
             }
 
             # Call the handler method directly - this is where the bug occurred

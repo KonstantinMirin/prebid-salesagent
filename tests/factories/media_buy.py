@@ -135,6 +135,11 @@ def _ensure_default_account(tenant_id: str) -> str:
     from tests.factories.account import AccountFactory
 
     session = MediaBuyFactory._meta.sqlalchemy_session
+    if session is None:
+        # ``MediaBuyFactory.build()`` — constructs the instance and persists nothing, so
+        # there is no row for the FK to point at and nothing to query. Return the id so the
+        # built object still carries the account a persisted one would.
+        return DEFAULT_TEST_ACCOUNT_ID
     existing = session.scalars(
         select(Account).filter_by(tenant_id=tenant_id, account_id=DEFAULT_TEST_ACCOUNT_ID)
     ).first()
