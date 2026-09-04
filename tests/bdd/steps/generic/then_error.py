@@ -503,17 +503,28 @@ def then_entire_sync_operation_fails(ctx: dict) -> None:
 
 @then(parsers.parse('the error code should be "{code}"'))
 def then_error_code(ctx: dict, code: str) -> None:
-    """Assert the error code matches — wire-first, reconstructed fallback.
+    """Assert the error code on the WIRE. No reconstructed fallback.
 
-    When the scenario dispatched through a wire transport, assert on the real
-    wire envelope's code (the buyer-facing contract); otherwise fall back to the
-    reconstructed ``ctx['error']`` for IMPL/no-wire scenarios (ztl6.6).
+    There used to be one: with no wire envelope this read ``ctx['error']`` -- the
+    exception the harness reconstructed, or an error an earlier step promoted there.
+    It is gone because it had NO CONSUMERS. Measured across the whole BDD suite by
+    making it raise: 2642 of 2643 passing scenarios already graded the wire, and the
+    ONE that did not was BR-UC-004's adapter-error scenario, which asserted envelope
+    failure for a per-item error the pin puts in the payload. Fixing that scenario
+    (adca254f9) left this branch with nothing.
+
+    Keeping it would keep the hazard it enabled: a scenario whose payload never
+    reaches the seller still passes here, because a client-side exception
+    reconstructs into something with a code. That is the vacuum ``the response
+    arrives`` exists to make visible, and a fallback quietly undoes it.
     """
     actual = _wire_code(ctx)
-    if actual is None:
-        error = ctx.get("error")
-        assert error is not None, "No error recorded in ctx"
-        actual = _get_error_code(error)
+    assert actual is not None, (
+        f"Expected wire error code {code!r}, but no wire envelope was captured. The dispatch "
+        f"either succeeded or failed before reaching a transport -- a client-side exception is "
+        f"not a seller's answer. If this scenario grades a PER-ITEM error inside a successful "
+        f"response, assert it there instead (see 'the <collection> entry carries error code')."
+    )
     assert actual == code, f"Expected error code '{code}', got '{actual}'"
 
 
@@ -528,26 +539,21 @@ def then_error_code(ctx: dict, code: str) -> None:
 
 @then(parsers.parse('the error recovery should be "{recovery}"'))
 def then_error_recovery(ctx: dict, recovery: str) -> None:
-    """Assert the error recovery hint matches — wire-first, reconstructed fallback.
+    """Assert the error recovery hint on the WIRE. No reconstructed fallback.
 
-    On a wire transport the recovery is read from the real envelope via
-    ``assert_wire_error`` (the buyer-facing contract); IMPL/no-wire scenarios
-    fall back to the reconstructed ``ctx['error']``.
+    Same measurement as ``then_error_code``: this fallback had ZERO consumers across
+    the whole BDD suite, so it graded nothing and could only ever have let a
+    never-dispatched scenario pass.
     """
     envelope = wire_error_envelope_or_none(ctx)
-    if envelope is not None:
-        wire_code = _wire_code(ctx)
-        assert wire_code, f"Expected wire error code when asserting recovery={recovery!r}: {envelope}"
-        ctx["result"].assert_wire_error(wire_code, recovery=recovery)
-        return
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    from src.core.exceptions import AdCPSalesAgentError
-
-    if isinstance(error, AdCPSalesAgentError):
-        assert error.recovery == recovery, f"Expected recovery '{recovery}', got '{error.recovery}'"
-    else:
-        raise AssertionError(f"Cannot check recovery on non-AdCPSalesAgentError: {type(error).__name__}")
+    assert envelope is not None, (
+        f"Expected a wire envelope to read recovery={recovery!r} from, and none was captured. "
+        f"The reconstructed fallback that used to answer here had ZERO consumers across the "
+        f"whole BDD suite and is gone -- see then_error_code for the measurement."
+    )
+    wire_code = _wire_code(ctx)
+    assert wire_code, f"Expected wire error code when asserting recovery={recovery!r}: {envelope}"
+    ctx["result"].assert_wire_error(wire_code, recovery=recovery)
 
 
 @then('the error should include a "suggestion" field')
