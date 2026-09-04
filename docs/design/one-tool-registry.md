@@ -448,6 +448,41 @@ the same rows, and `_NON_SCHEMA_FIELDS` goes away.
 The table is a leaf module holding only strings, so nothing it declares can
 create an import cycle with the schemas that consult it.
 
+**A stale row fails at import, so nothing needs to check the table.**
+`model_fields.pop` already reports whether the key was there; a name that omitted
+nothing is a name the spec model does not declare:
+
+```python
+def omit_declared(omitted, added=()):
+    def deco(cls):
+        stale = {f for f in omitted if cls.model_fields.pop(f, None) is None}
+        if stale:
+            raise ValueError(f"{cls.__name__}: cannot omit {sorted(stale)} — "
+                             "the spec model does not declare them")
+        already = {f for f in added if f in cls.model_fields}
+        if already:
+            raise ValueError(f"{cls.__name__}: {sorted(already)} is declared by the "
+                             "spec now — delete the 'added' row")
+        cls.model_rebuild(force=True)
+        return cls
+    return deco
+```
+
+Both directions, both at decoration time, both fatal:
+
+| | raises |
+|---|---|
+| `omit("catalgo")` — typo | `cannot omit ['catalgo'] — the spec model does not declare them` |
+| a field the SDK bump removed | same |
+| an `added` row the spec has since defined | `is declared by the spec now — delete the 'added' row` |
+
+The application does not start with a wrong table. That is strictly better than a
+test asserting the same property, because a test permits the incorrect
+construction and then reports it; this makes the incorrect construction
+impossible. It is also the same reasoning the rest of this design runs on, and
+the reason there is no guard here: **a check that still allows the bad state is a
+worse instrument than a constructor that refuses it.**
+
 **This table is the conformance statement.** Standards practice for implementing
 a subset of a protocol is a PICS — *"a structured document which asserts which
 specific requirements are met by a given implementation"*. That is what this is,
@@ -475,12 +510,8 @@ design's whole point is that some schema fields are deliberately absent. Its
 sibling `test_no_model_rejects_a_field_its_pinned_schema_declares` is the same
 assertion from the other side.
 
-**One check survives, and it is about the table rather than the models:** every
-name in `DIVERGENCE` must exist in the spec model it names. `@omit("catalgo")`
-omits nothing and leaves the field announced; an `added` row for a field the spec
-has since defined is a row that should have been deleted on the SDK bump. That is
-a few lines against the table, not a suite against the models — and it is the only
-thing an SDK bump can silently invalidate.
+**No check replaces them.** A stale table cannot be constructed: the decorator
+raises. See below.
 
 Everything the deleted suite was protecting is now structural:
 
