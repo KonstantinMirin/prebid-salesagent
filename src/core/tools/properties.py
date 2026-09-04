@@ -205,9 +205,25 @@ def build_list_authorized_properties_request(
     the raw wrapper takes an already-built ``req``, so intersecting a body against it would
     yield the empty set.
 
-    ``ext`` is deliberately absent. ListAuthorizedPropertiesRequest declares it, but no
-    transport accepts it and ``_list_authorized_properties_impl`` never reads it; adding a
-    kwarg here would advertise an input whose only outcome is nothing happening.
+    ``ext`` is deliberately absent. ListAuthorizedPropertiesRequest declares it, but
+    ``_list_authorized_properties_impl`` never reads it, so adding a kwarg here would
+    advertise an input whose only outcome is nothing happening.
+
+    This paragraph used to claim "no transport accepts it", and A2A did: its skill handler
+    built the DTO directly with ``accepted=None`` instead of calling this builder, so the
+    field this docstring rules out was reachable on one transport and refused on the other
+    two (the REST body rejects it as ``extra_forbidden``). A decision recorded only in
+    prose is one a later call site can contradict without noticing; that handler now goes
+    through ``select_request_fields_for``, which makes this paragraph true by construction
+    rather than by assertion, and
+    ``tests/unit/test_architecture_a2a_handlers_select_off_the_tool.py`` keeps it so.
+
+    The pinned spec has nothing to say here either way: AdCP 3.1.1 defines no
+    ``list-authorized-properties-request.json`` at all -- the operation is absent from the
+    3.1 schema index and from the SDK's tool definitions, having been replaced by the
+    property-list family (``create_property_list`` / ``get_property_list`` /
+    ``list_property_lists``). It survives in 2.5. So this tool's request shape is OURS, and
+    "no implementation reads it" is the whole argument against carrying ``ext``.
     """
     return ListAuthorizedPropertiesRequest(
         publisher_domains=publisher_domains,

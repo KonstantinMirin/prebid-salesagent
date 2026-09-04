@@ -2093,9 +2093,7 @@ class AdCPRequestHandler(RequestHandler):
         """
         # Identity already resolved at transport boundary (on_message_send)
 
-        # Map A2A parameters to ListAuthorizedPropertiesRequest
-        # Note: ListAuthorizedPropertiesRequest was removed from adcp 3.2.0, use local schema
-        from src.core.schemas import ListAuthorizedPropertiesRequest
+        from src.core.tools.properties import build_list_authorized_properties_request, list_authorized_properties
 
         # Warn about deprecated 'tags' parameter (removed in AdCP 2.5)
         if "tags" in parameters:
@@ -2104,12 +2102,16 @@ class AdCPRequestHandler(RequestHandler):
                 "This parameter was removed in AdCP 2.5 and will be ignored."
             )
 
-        request = ListAuthorizedPropertiesRequest.model_validate(
-            # accepted=None because this site builds the DTO itself rather than calling a
-            # narrower callee -- there is no signature to intersect with, so the DTO alone
-            # decides. Stated rather than defaulted into: the unnarrowed form is a real
-            # answer here, and making it explicit is what keeps it from being the easy one.
-            select_request_fields(ListAuthorizedPropertiesRequest, parameters, None)
+        # Through the SHARED builder, selected off the TOOL -- the same two steps the other
+        # twelve skill handlers take. This site used to build the DTO itself and pass
+        # accepted=None, on the stated ground that "there is no signature to intersect
+        # with". There was one: build_list_authorized_properties_request, which MCP and
+        # REST have always gone through. Opting out of the intersection meant A2A accepted
+        # `ext` -- a field the builder does not take, `_list_authorized_properties_impl`
+        # never reads, and the REST body refuses outright as extra_forbidden. Which answer
+        # a buyer got depended on which transport they picked.
+        request = build_list_authorized_properties_request(
+            **select_request_fields_for(list_authorized_properties, parameters)
         )
 
         # Call core function with identity
