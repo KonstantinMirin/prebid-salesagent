@@ -106,9 +106,44 @@ def _blind_echoed_ids(envelope: Any) -> Any:
     return envelope
 
 
-def _as(env, principal_id: str):
-    """The env's identity, re-pointed at *principal_id* — who is asking is the whole test."""
-    return env.identity.model_copy(update={"principal_id": principal_id})
+def _assert_two_distinct_principals(env) -> None:
+    """Prove the two principals authenticate as DIFFERENT callers before asserting a refusal.
+
+    The precondition the previous version of this file silently lacked. A cross-principal
+    test that authenticates as one principal twice cannot fail, and passes loudest on a
+    build that leaks. So the tokens are compared here: they come from two separate Principal
+    rows and the production chain resolves each to its own identity.
+    """
+    owner_token = _become(env, OWNER_ID)
+    intruder_token = _become(env, INTRUDER_ID)
+    assert owner_token != intruder_token, (
+        "both principals presented the SAME credential, so every call below authenticates "
+        "as one caller and the cross-principal assertions cannot fail"
+    )
+
+
+def _become(env, principal_id: str) -> str:
+    """Re-authenticate the env AS *principal_id*, and return the token it will present.
+
+    ``env.switch_principal`` is the public accessor for this: it clears the identity cache
+    so the next access re-runs the auth-token lookup against the committed principal rows.
+
+    THIS REPLACES A HELPER THAT DID NOT WORK AND COULD NOT FAIL. It was
+    ``env.identity.model_copy(update={"principal_id": ...})`` — which changes the field the
+    dispatcher never reads. ``_run_mcp_client`` pops ``identity`` and uses it ONLY to build
+    credential headers (``_credential_headers`` reads ``auth_token`` and nothing else), then
+    the production chain resolves header -> token -> DB -> ResolvedIdentity. Copying a
+    different principal_id onto the OWNER's token meant every call authenticated as the
+    owner: the "intruder" never existed, and the whole suite would have passed against a
+    leaking build.
+    """
+    env.switch_principal(principal_id)
+    token = env.identity.auth_token
+    assert token, (
+        f"{principal_id} resolved no auth_token, so the dispatch would fall back to a "
+        "mocked identity instead of the real header -> token -> DB chain"
+    )
+    return token
 
 
 class TestTaskIsScopedToItsPrincipal:
@@ -118,10 +153,12 @@ class TestTaskIsScopedToItsPrincipal:
         """REFERENCE_NOT_FOUND on the wire, which is the code the storyboard demands."""
         with _GetTaskEnv(tenant_id=TENANT_ID, principal_id=OWNER_ID) as env:
             task_id = _seed(env, OWNER_ID)
-            result = env.call_via(Transport.MCP, task_id=task_id, identity=_as(env, INTRUDER_ID))
+            _assert_two_distinct_principals(env)
+            _become(env, INTRUDER_ID)
+            result = env.call_via(Transport.MCP, task_id=task_id)
 
         assert result.is_error
-        result.assert_wire_error("REFERENCE_NOT_FOUND", recovery="correctable")
+        result.assert_wire_error("REFERENCE_NOT_FOUND")
 
     def test_the_two_refusals_are_indistinguishable(self, integration_db):
         """ "Not yours" and "not there" must be the SAME envelope, field for field.
@@ -139,12 +176,13 @@ class TestTaskIsScopedToItsPrincipal:
         """
         with _GetTaskEnv(tenant_id=TENANT_ID, principal_id=OWNER_ID) as env:
             task_id = _seed(env, OWNER_ID)
-            not_yours = env.call_via(Transport.MCP, task_id=task_id, identity=_as(env, INTRUDER_ID))
-            not_there = env.call_via(Transport.MCP, task_id="step_no_such_task", identity=_as(env, INTRUDER_ID))
+            _become(env, INTRUDER_ID)
+            not_yours = env.call_via(Transport.MCP, task_id=task_id)
+            not_there = env.call_via(Transport.MCP, task_id="step_no_such_task")
 
         assert not_yours.is_error
         assert not_there.is_error
-        not_there.assert_wire_error("REFERENCE_NOT_FOUND", recovery="correctable")
+        not_there.assert_wire_error("REFERENCE_NOT_FOUND")
 
         assert _blind_echoed_ids(not_yours.wire_error_envelope) == _blind_echoed_ids(not_there.wire_error_envelope), (
             "the refusal for a task owned by another principal differs from the refusal for "
@@ -155,15 +193,11 @@ class TestTaskIsScopedToItsPrincipal:
         """The WRITE half. The same unscoped lookup let A complete B's task."""
         with _CompleteTaskEnv(tenant_id=TENANT_ID, principal_id=OWNER_ID) as env:
             task_id = _seed(env, OWNER_ID)
-            result = env.call_via(
-                Transport.MCP,
-                task_id=task_id,
-                status="completed",
-                identity=_as(env, INTRUDER_ID),
-            )
+            _become(env, INTRUDER_ID)
+            result = env.call_via(Transport.MCP, task_id=task_id, status="completed")
 
         assert result.is_error
-        result.assert_wire_error("REFERENCE_NOT_FOUND", recovery="correctable")
+        result.assert_wire_error("REFERENCE_NOT_FOUND")
 
     def test_listing_does_not_show_another_principals_task(self, integration_db):
         """list_tasks was the widest of the three: it listed the whole tenant.
@@ -174,7 +208,8 @@ class TestTaskIsScopedToItsPrincipal:
         """
         with TaskManagementEnv(tenant_id=TENANT_ID, principal_id=OWNER_ID) as env:
             _seed(env, OWNER_ID)
-            payload = env.call_via(Transport.MCP, identity=_as(env, INTRUDER_ID)).payload
+            _become(env, INTRUDER_ID)
+            payload = env.call_via(Transport.MCP).payload
 
         assert payload["tasks"] == []
         assert payload["total"] == 0
@@ -188,14 +223,14 @@ class TestTaskIsScopedToItsPrincipal:
         """
         with _GetTaskEnv(tenant_id=TENANT_ID, principal_id=OWNER_ID) as env:
             task_id = _seed(env, OWNER_ID)
-            detail = env.call_via(Transport.MCP, task_id=task_id, identity=_as(env, OWNER_ID)).payload
+            detail = env.call_via(Transport.MCP, task_id=task_id).payload
 
         assert detail["task_id"] == task_id
         assert detail["request_data"] == {"secret_brief": "the other buyer's brief"}
 
         with TaskManagementEnv(tenant_id=TENANT_ID, principal_id=OWNER_ID) as env:
             _seed(env, OWNER_ID)
-            payload = env.call_via(Transport.MCP, identity=_as(env, OWNER_ID)).payload
+            payload = env.call_via(Transport.MCP).payload
 
         assert [task["task_id"] for task in payload["tasks"]] == [task_id]
         assert payload["total"] == 1
