@@ -12,6 +12,15 @@ dist/compliance/3.1.1/domains/media-buy/scenarios/get_products_async.yaml grade 
     expect total_matching 0, "Sellers MUST scope task reconciliation to the authenticated
     account + principal pair."
 
+GRADED SHORT OF THAT STEP, deliberately and recorded here rather than left to be inferred:
+the listing assertions below check that the id is absent from the intruder's body and
+present in the owner's, NOT that a count reads zero. list_tasks' response does not satisfy
+its own pinned schema — it omits the required ``query_summary`` and ``pagination``
+(FIXME(#2201)) — so ``total_matching`` does not exist to assert on, and the count field
+that does exist is unsettled. The disclosure half of the obligation is graded now because
+it can be stated without naming a field; the volume half is graded when the response
+conforms.
+
 WorkflowRepository.get_by_step_id and list_by_tenant/count_by_tenant filtered
 ``DBContext.tenant_id`` and nothing else, so inside one tenant every authenticated
 principal could read, list and COMPLETE every other principal's tasks. Nothing covered it,
@@ -130,6 +139,31 @@ def _blind_echoed_ids(envelope: Any) -> Any:
     if isinstance(envelope, list):
         return [_blind_echoed_ids(item) for item in envelope]
     return envelope
+
+
+def _body_mentions(body: Any, task_id: str) -> bool:
+    """Whether *task_id* appears ANYWHERE in *body* — at any depth, in any field.
+
+    The list obligation is a DISCLOSURE claim, so it is asserted the way disclosure
+    actually works: either the buyer can see the id somewhere in what came back, or they
+    cannot. Stated that way it names no field, so it survives the response being reshaped
+    — which matters here specifically, because list_tasks' body does not satisfy its own
+    pinned schema (FIXME(#2201)) and every field name in it is subject to change. A
+    ``payload["tasks"]``/``payload["total"]`` assertion would have to be rewritten by
+    whoever fixes that, and rewritten assertions are where obligations quietly weaken.
+
+    Substring, not equality: an id leaked inside a message ("task step_x belongs to
+    another principal") is the same disclosure as an id leaked in a field. Keys are
+    searched as well as values, since an id can be a map key.
+
+    Same technique as :func:`_blind_echoed_ids` — compare what the buyer can observe,
+    structurally, instead of field by field.
+    """
+    if isinstance(body, dict):
+        return any(task_id in str(key) or _body_mentions(value, task_id) for key, value in body.items())
+    if isinstance(body, list):
+        return any(_body_mentions(item, task_id) for item in body)
+    return isinstance(body, str) and task_id in body
 
 
 def _assert_two_distinct_principals(env) -> None:
@@ -272,28 +306,50 @@ class TestTaskIsScopedToItsPrincipal:
     def test_listing_does_not_show_another_principals_task(self, tenant_id):
         """list_tasks was the widest of the three: it listed the whole tenant.
 
-        Graded on both the page and the COUNT. A page scoped to the caller beside a
-        tenant-wide total still discloses how many tasks the others hold — the same leak
-        by arithmetic.
+        The owner lists FIRST, and their own id must be in their own body. Without that
+        half, "the id is absent from the intruder's body" also passes when the body is
+        empty for any reason at all — a broken list, a failed seed, a filter that matches
+        nothing — and would report a leak as closed on a build where listing is simply
+        dead. It is the same positive control as
+        :meth:`test_the_dispatch_really_runs_as_the_intruder`, applied to the page.
+
+        Volume-by-arithmetic — a caller-scoped page beside a tenant-wide total, which
+        discloses how many tasks the others hold — is NOT graded here. It cannot be
+        stated without naming count fields, and list_tasks' body does not conform to its
+        pinned schema, so those names are unsettled (FIXME(#2201)). It is graded once the
+        response conforms.
         """
         with TaskManagementEnv(tenant_id=tenant_id, principal_id=OWNER_ID) as env:
-            _seed(env, tenant_id, OWNER_ID)
+            owners_task = _seed(env, tenant_id, OWNER_ID)
+            _assert_two_distinct_principals(env)
+            _become(env, OWNER_ID)
+            owners_view = env.call_via(Transport.MCP)
             _become(env, INTRUDER_ID)
-            result = env.call_via(Transport.MCP)
+            intruders_view = env.call_via(Transport.MCP)
 
-        # Checked BEFORE subscripting: on an error the payload is None, and
-        # ``payload["tasks"]`` then raises TypeError, which reads as a broken test rather
-        # than as the dispatch having failed.
-        assert not result.is_error, f"list_tasks failed instead of returning an empty page: {result}"
-        assert result.payload["tasks"] == []
-        assert result.payload["total"] == 0
+        # Checked BEFORE reading the body: on an error the wire is None, and an absence
+        # assertion against None passes for the wrong reason.
+        assert not owners_view.is_error, f"the owner could not list their own tasks: {owners_view}"
+        assert not intruders_view.is_error, f"list_tasks failed instead of returning a page: {intruders_view}"
 
-    def test_the_owner_still_reads_and_lists_their_own(self, tenant_id):
+        assert _body_mentions(owners_view.wire_response, owners_task), (
+            "the owner's own task is missing from the owner's own listing, so listing returns "
+            "nothing to anyone and the absence asserted below proves nothing"
+        )
+        assert not _body_mentions(intruders_view.wire_response, owners_task), (
+            f"the owner's task id appears in the intruder's listing: {intruders_view.wire_response!r}"
+        )
+
+    def test_the_owner_still_reads_their_own(self, tenant_id):
         """The other half: scoping must not have locked the owner out.
 
-        Both surfaces in one test because the risk they share is one over-broad filter.
-        Asserted on the request payload, not merely on task_id, because a fix that returned
-        the row stripped of its contents would satisfy an id check.
+        Asserted on the request payload, not merely on task_id, because a fix that
+        returned the row stripped of its contents would satisfy an id check.
+
+        Reading only. The listing half of this pair moved INTO
+        :meth:`test_listing_does_not_show_another_principals_task`, where it does work as
+        that test's positive control, rather than sitting here where a dead listing would
+        fail one test and silently hollow out the other.
         """
         with _GetTaskEnv(tenant_id=tenant_id, principal_id=OWNER_ID) as env:
             task_id = _seed(env, tenant_id, OWNER_ID)
@@ -302,13 +358,3 @@ class TestTaskIsScopedToItsPrincipal:
         assert not read.is_error, f"the owner could not read their own task: {read}"
         assert read.payload["task_id"] == task_id
         assert read.payload["request_data"] == {"secret_brief": "the other buyer's brief"}
-
-        # NO second _seed. The task above is committed and the tenant is this test's own,
-        # so seeding again would add a SECOND task and the one-task assertion below would
-        # be measuring the fixture rather than the filter.
-        with TaskManagementEnv(tenant_id=tenant_id, principal_id=OWNER_ID) as env:
-            listed = env.call_via(Transport.MCP)
-
-        assert not listed.is_error, f"the owner could not list their own tasks: {listed}"
-        assert [task["task_id"] for task in listed.payload["tasks"]] == [task_id]
-        assert listed.payload["total"] == 1

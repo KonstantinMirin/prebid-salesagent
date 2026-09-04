@@ -118,12 +118,25 @@ _KNOWN_DELIVER_OVERRIDES: set[tuple[str, str, str]] = {
     ("tests/harness/delivery_poll.py", "DeliveryPollEnv", "deliver_a2a"),
     # Their real wire does not satisfy the tool's PINNED response model, which
     # the client core parses into — so joining the core would turn a live
-    # conformance gap into a dispatch error. Each is a schema gap graded
-    # elsewhere (list_creative_formats assets). TaskManagementEnv WAS here for
-    # the list_tasks query_summary/pagination gap; that gap is now fixed in
-    # production, so it delegates and its entry is gone — the allowlist shrank.
+    # conformance gap into a dispatch error (list_creative_formats assets).
     ("tests/harness/creative_formats.py", "CreativeFormatsEnv", "deliver_mcp"),
     ("tests/harness/creative_formats.py", "CreativeFormatsEnv", "deliver_a2a"),
+    # FIXME(#2201): list_tasks' wire is {tasks, total, offset, limit, has_more} —
+    # it omits the pinned-required query_summary + pagination, so the core's
+    # pinned parse fails. Same family as #1928 and #2012 above; removed when
+    # #2201 lands.
+    #
+    # RESTORED, and the baseline goes UP by one. This row previously existed and
+    # was deleted with the comment "that gap is now fixed in production, so it
+    # delegates and its entry is gone — the allowlist shrank". That claim was
+    # FALSE WHEN WRITTEN: the parse still raises today. So the recorded shrink
+    # moved the count BELOW the truth, and restoring the row moves it back toward
+    # the truth rather than excusing a new violation — the only circumstance in
+    # which one of these sets may grow. The gap was reproduced on the wire (not
+    # inferred) by tests/integration/test_get_task_principal_scope.py, which is
+    # the first caller anywhere to read a list_tasks result rather than only
+    # assert that a dispatch occurred.
+    ("tests/harness/task_management.py", "TaskManagementEnv", "deliver_mcp"),
     # Test doubles, not real envs: they exist to prove the dispatch contract.
     ("tests/harness/test_harness_base.py", "_TestEnv", "deliver_mcp"),
     # `_RealA2AWireCreativeSyncEnv` in

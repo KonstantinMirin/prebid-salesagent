@@ -133,8 +133,10 @@ def _dispatch_via_env_pinning_one_dispatch_core(env, transport: Transport, tool:
 #   ``last_updated`` timestamp minted per call, so a byte-exact wire comparison
 #   between two dispatches is non-deterministic by construction. Pinning
 #   equivalence for it needs a clock freeze, not a looser assertion.
-# * ``TaskManagementEnv``/``list_tasks`` — covered separately below for the
-#   dispatch MECHANISM only; see that test for why the wire half is excluded.
+# * ``TaskManagementEnv``/``list_tasks`` — does not delegate at all: its wire
+#   omits the pinned-required ``query_summary``/``pagination``, so the core's
+#   parse-back raises. It keeps a deliver_mcp override, allowlisted under
+#   FIXME(#2201), and the test below grades that the gap is still real.
 _NEWLY_DELEGATING_ENVS: list[tuple[str, str, str, dict, tuple[Transport, ...]]] = [
     ("tests.harness.account_list", "AccountListEnv", "list_accounts", {}, (Transport.MCP, Transport.A2A)),
     ("tests.harness.creative_list", "CreativeListEnv", "list_creatives", {}, (Transport.MCP, Transport.A2A)),
@@ -440,34 +442,44 @@ class TestNewlyDelegatingEnvEquivalence:
 
         _assert_success_equivalent(via, client_result)
 
-    def test_task_management_env_stops_hand_rolling_mcp_dispatch(self, integration_db):
-        """Change-set B7: the 34th quartet env routes through the client.
+    def test_task_management_env_still_cannot_join_the_client_core(self, integration_db):
+        """FIXME(#2201): the ONE reason ``TaskManagementEnv`` keeps a deliver_mcp override.
 
-        ``TaskManagementEnv`` (``tests/harness/task_management.py``) is new in
-        the PR under remediation and was written on the old pattern — its
-        ``call_mcp`` is a hand-written ``self._run_mcp_client("list_tasks",
-        dict, **kwargs)``. B7 deletes it; ``list_tasks`` is MCP-only (no A2A
-        skill, no REST route — see that module's docstring), so MCP is the
-        whole surface.
+        This test used to assert the opposite — that the env routes through
+        ``_dispatch_core`` — and its docstring said the ``list_tasks``-vs-pinned-schema
+        gap "is graded elsewhere and not smuggled into this lane's gate". NOTHING was
+        grading it. ``ListTasksResponse`` appears in exactly one test module (this one),
+        which declined to grade it, and ``test_pydantic_schema_alignment.py`` has no
+        ``list_tasks`` entry. The claim was false when written, and it is what let
+        ``TaskManagementEnv``'s allowlist row be deleted as a "shrink" with the note
+        "that gap is now fixed in production".
 
-        MECHANISM only, no wire-equivalence half, and the reason is a real
-        finding rather than a convenience: ``AdCPTestClient``'s UNWRAP parses
-        the wire into ``spec_response_model("list_tasks")`` — the pinned
-        ``ListTasksResponse`` — and production's ``list_tasks`` wire body has
-        neither the required ``query_summary`` nor ``pagination`` field, so
-        that parse raises ``ValidationError``. The env's own ``call_mcp``
-        never noticed because it passes ``dict`` as the response class and
-        validates nothing. That is a ``list_tasks``-vs-pinned-schema
-        conformance gap, NOT a dispatch defect, so it is graded
-        elsewhere and not smuggled into this lane's gate — but it does mean
-        B7's "route its scenarios through the client" needs that gap resolved
-        (or an explicit env ``response_parser`` override) to land.
+        The old test passed over the gap because it asserted MECHANISM only
+        (``seen == [(MCP, "list_tasks")]``) while ``call_via`` folds the resulting
+        ``ValidationError`` into an error ``TransportResult`` instead of raising — so a
+        dispatch that FAILED registered as a dispatch that HAPPENED. A mechanism pin
+        that cannot see the outcome it enables is the same defect one layer up; when
+        adding one, assert the result too.
+
+        So this now grades the excuse instead of repeating it, and retires itself: the
+        moment production emits ``query_summary`` + ``pagination`` this goes red, and the
+        override, its ``_KNOWN_DELIVER_OVERRIDES`` row and this test are deleted together.
         """
+        from pydantic import ValidationError
+
         from tests.harness.task_management import TaskManagementEnv
 
         with TaskManagementEnv(tenant_id="nd-list-tasks-mcp", principal_id="p1") as env:
             env.setup_default_data()
-            _dispatch_via_env_pinning_one_dispatch_core(env, Transport.MCP, "list_tasks")
+            with pytest.raises(ValidationError) as raised:
+                AdCPTestClient(env).call("list_tasks", {}, Transport.MCP)
+
+        missing = {error["loc"][0] for error in raised.value.errors() if error["type"] == "missing"}
+        assert missing == {"query_summary", "pagination"}, (
+            f"the core's pinned parse of list_tasks reports {sorted(missing)} missing, not the "
+            "query_summary/pagination gap #2201 describes — if production now emits both, delete "
+            "TaskManagementEnv.deliver_mcp, its _KNOWN_DELIVER_OVERRIDES row, and this test"
+        )
 
 
 @pytest.mark.integration
