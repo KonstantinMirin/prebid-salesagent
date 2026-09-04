@@ -69,7 +69,6 @@ class RestBinding:
     verb: Literal["POST", "PUT"]
     path: str                       # "/media-buys/{media_buy_id}"
     path_fields: frozenset[str] = frozenset()
-    auth: Literal["required", "optional"] = "required"
 
 @dataclass(frozen=True)
 class ToolSpec:
@@ -77,19 +76,34 @@ class ToolSpec:
     impl: Callable                  # async def (*, req, identity, **transport) -> Result
     rest: RestBinding | None        # None = not exposed over REST
     a2a: bool                       # exposed as an A2A skill
-    tags: tuple[str, ...]           # agent-card tags; description comes from the SDK
-    unimplemented: frozenset[str] = frozenset()   # DTO fields we do not honour yet
+    auth: Literal["required", "optional"]   # a property of the TOOL, not of a transport
 
 TOOLS: Mapping[str, ToolSpec] = {
     "get_products": ToolSpec(
         dto=GetProductsRequest,
         impl=_get_products_impl,
-        rest=RestBinding("POST", "/products", auth="optional"),
+        rest=RestBinding("POST", "/products"),
         a2a=True,
-        tags=("products", "inventory", "catalog", "adcp"),
+        auth="optional",
     ),
     ...
 }
+```
+
+`ToolSpec` carries **wiring only**: what the tool is, where it is reachable, and
+whether it needs a caller. Everything that describes the *shape* lives on the
+shape.
+
+```python
+# src/core/schemas/product.py
+
+class GetProductsRequest(LibraryGetProductsRequest):
+    """Extends the SDK's pinned request model."""
+
+    TAGS: ClassVar[tuple[str, ...]] = ("products", "inventory", "catalog", "adcp")
+    UNIMPLEMENTED: ClassVar[frozenset[str]] = frozenset({
+        "catalog", "fields", "if_pricing_version", ...
+    })
 ```
 
 `TOOLS` is the source of truth. Adding a tool is adding a row. Forgetting a
@@ -99,19 +113,42 @@ transport is not possible, because all three read the same mapping.
 
 ```python
 def build_request(tool: str, payload: Mapping[str, Any]) -> BaseModel:
-    """The ONE construction seam. Pydantic validates; nothing selects."""
-    return TOOLS[tool].dto.model_validate(payload)
+    """The ONE construction seam."""
+    return _supported_model(TOOLS[tool].dto).model_validate(payload)
 ```
 
-This replaces all sixteen `build_*_request` functions. It performs no field
-selection, because there is nothing to select: the DTO is the accepted shape.
-Coercion (`to_account_reference`, `to_brand_reference`, the brand shorthand) is
-what `model_validate` already does — those helpers exist because the hand-written
-builders bypassed validation, not because pydantic cannot do it.
+This replaces all sixteen `build_*_request` functions.
+
+**It does select — and the selection is derived, not written.** `_supported_model`
+returns the DTO narrowed to the fields we actually honour: `model_fields` minus
+`DTO.UNIMPLEMENTED`, built once and cached.
+
+That narrowing is what makes the unsupported fields behave correctly with
+machinery that already exists rather than new machinery. An unimplemented field
+is not *declared* on the model we validate against, so it is **extra** — and the
+extra policy is already decided and already environment-aware (critical pattern
+\#7): `extra="forbid"` in development and CI, `extra="ignore"` in production.
+A buyer sending an unimplemented field is refused in CI, where we want to hear
+about it, and ignored in production, where forward compatibility matters.
+
+The alternative — validate against the full DTO and drop unimplemented fields
+afterwards — is **accept-and-ignore**, the quiet failure CLAUDE.md forbids. The
+buyer would get a 200 and no effect, with nothing distinguishing "we do not
+support this" from "we did what you asked".
+
+Nothing else selects. Coercion (`to_account_reference`, `to_brand_reference`,
+the brand shorthand) is what `model_validate` already does — those helpers exist
+because the hand-written builders bypassed validation, not because pydantic
+cannot do it.
 
 A malformed payload raises `pydantic.ValidationError`, which every transport
 boundary already translates to `INVALID_REQUEST` with `field` and `issues`
 (`adcp_error_for`, checked before `ValueError` deliberately).
+
+**The published schema is the same narrowing.** MCP announces
+`_supported_model(dto)`, not `dto`, so a field we do not honour is never
+advertised. Announced, accepted and implemented become one set by construction
+rather than three sets kept in step.
 
 ### Derived registration
 
@@ -151,26 +188,46 @@ return await spec.impl(req=req, identity=identity, **transport_derived)
 
 ## Decisions this forces, and the answers
 
-**`exclude=True` fields.** `get_products.product_selectors`,
-`list_creatives.format`, `list_creatives.page`, `update_media_buy.today` are
-marked internal. `model_validate` would accept them from a buyer. They must be
-stripped from the payload before validation, in `build_request`, from
-`dto.model_fields` — derived, not listed. This is the one place that decision
-lives; today it is made three times, and once wrongly (see below).
+**Internal fields do not belong on a request DTO.** `product_selectors`,
+`format`, `page` and `today` are marked `exclude=True` on buyer-facing request
+models. They are not buyer input; they are values internal callers set. They move
+to an extended model:
 
-**`exclude=True` means two different things.** It survived a nested `model_dump`
-and deleted a buyer's `creative_ids` from the request, causing a
-cross-principal acceptance. The marker means "do not send this back"; it must
-never mean "do not accept this". `build_request` must read the field set for
-acceptance, and only serialization may consult `exclude`.
+```python
+class GetProductsInternal(GetProductsRequest):
+    product_selectors: list[ProductSelector] | None = None
+```
+
+The buyer DTO then declares only buyer fields, `exclude=True` disappears from
+requests entirely, and internal callers name the model that has what they need.
+Measured: `product_selectors` is read **nowhere** in `src/`; `today` is read once,
+by `media_buy_update.py:503`.
+
+This also removes a bug class. `exclude=True` survived a nested `model_dump` and
+deleted a buyer's `creative_ids` from a request, producing a cross-principal
+acceptance. The marker means "do not send this back"; it silently also meant "do
+not accept this". With internal fields on a separate model there is no marker on
+the request path to misread.
+
+**Tags belong to the DTO, not to the registry.** The SDK supplies `description`
+and per-field descriptions; it carries no tags, so tags are ours — but they
+describe the *tool's shape*, like the descriptions beside them, not its wiring.
+`DTO.TAGS` sits with them. The agent card reads it.
+
+**Auth is a property of the tool, not of a transport.** It cannot be true that a
+route needs a caller over REST and not over MCP. Today it is declared twice —
+`resolve_auth` on five REST routes, `require_valid_token=False` in the matching
+raw wrappers — and they happen to agree; nothing makes them. `ToolSpec.auth`
+declares it once and every transport reads it.
+
+It is resolved **above** `_impl`, in three steps, and a request reaches the
+implementation only if all three hold: the route is one that requires a caller;
+the credential is valid; the caller is authorized to invoke this tool. `_impl`
+receives a `ResolvedIdentity` and makes no auth decision — which is already the
+rule (critical pattern \#5) and is unchanged by this design.
 
 **Path fields.** `media_buy_id` comes from the URL. `RestBinding.path_fields`
 declares it; the REST generator merges it into the payload before validation.
-
-**Auth mode.** Two tools are auth-optional. `RestBinding.auth` carries it.
-
-**Descriptions.** Already derived from the SDK (`_sdk_tool_defs`). Only `tags`
-are ours, so only `tags` sit in the registry.
 
 **`GET /capabilities` is deleted.** It is a second shape for a tool that already
 has one: it takes no body, so a buyer cannot send `protocols`, `context`, `ext`
@@ -178,10 +235,12 @@ or the version envelope, while the same tool over `POST`, MCP and A2A accepts al
 five. One tool, one shape.
 
 **The version envelope.** `core/version-envelope.json` declares `adcp_version`
-and `adcp_major_version`, referenced by 68 pinned request schemas. **Neither is
-required.** They are DTO fields like any other and need no special handling —
-which is what removes the `_VERSION_ENVELOPE_FIELDS` stripping that currently
-binds them on 11 REST routes and drops them.
+and `adcp_major_version`, referenced by 68 of 115 pinned request schemas.
+**Neither is required.** They are ordinary DTO fields needing no special
+handling — which removes the `_VERSION_ENVELOPE_FIELDS` stripping that currently
+binds `adcp_version` on 11 REST routes and drops it before the builder. For
+`list_accounts` and `sync_accounts` that is a live defect today: the builders
+take both parameters and never receive them.
 
 ## The known gap, deliberately not closed here
 
@@ -208,6 +267,10 @@ Each step leaves the tree green and is independently revertible.
    current three declarations. No behaviour change; the assertion is the proof
    the rows are right.
 2. **Delete `GET /capabilities`.**
+2b. **Move internal fields to extended models.** Four fields, three DTOs. No
+   buyer-visible change — they are `exclude=True` today, so no transport accepts
+   them already. This must precede step 3, because after it the DTO is the
+   accepted shape without qualification.
 3. **Replace the sixteen builders with `build_request`**, one tool at a time.
    Per tool, the accepted set grows from the builder's subset to the DTO's full
    set — this is a wire change and each tool needs its blast radius measured the
@@ -218,7 +281,7 @@ Each step leaves the tree green and is independently revertible.
 5. **Generate the A2A card and dispatch**, deleting the `AgentSkill` literals and
    the `skill_handlers` dict.
 6. **Generate REST routes**, deleting the decorators and body-model assignments.
-7. **Populate `unimplemented`** from the measurement, per tool.
+7. **Populate `DTO.UNIMPLEMENTED`** from the measurement, per tool.
 
 Steps 4–6 are where "declared once" becomes true. Step 3 is where the 68 fields
 start reaching implementations, and is the only step with buyer-visible risk.
