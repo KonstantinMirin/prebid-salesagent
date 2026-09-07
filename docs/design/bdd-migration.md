@@ -15,15 +15,36 @@ Five measurement clusters ran against the corpus. Their reports are in
 queue is [bdd-decisions.html](../reports/bdd-decisions.html), which measures itself
 from the tree at render time rather than quoting a report.
 
-**Seeding is bypassed more than it is duplicated.** 191 inline creative dict
-literals across 53 files, 41 distinct key-sets — and **110 built entirely by hand,
-going through no owner at all**, 84 of which omit `assets`, a field with no default
-on either `oneOf` branch. The first draft made "fifteen owners" the headline. The
-review corrected that: the fifteen are heterogeneous artifact kinds (an ORM row
+**Seeding is bypassed more than it is duplicated**, and the counts have a
+committed classifier — `scripts/audit/creative_literal_sites.py`, which states its
+definition so it can be argued with rather than guessed at:
+
+| `--scope` | literals | hand-built | omitting `assets` |
+|---|---|---|---|
+| `tests` | 234 | 210 | **97** |
+| `bdd` | 50 | 50 | **4** |
+
+`assets` is required on both `oneOf` branches of the pinned model, so an omitting
+payload cannot validate and passes today only because nothing reads it.
+
+**Only 4 of the 97 are in `tests/bdd`.** Fifty are in `tests/unit`, 37 in
+`tests/integration`, 5 in `tests/e2e`. So the number that made this urgent is real
+and mostly NOT a harness defect — which decides the scope question below. An
+earlier draft quoted 191/110/84 from an agent report; those figures predate the
+classifier and are superseded.
+
+Fifteen owners exist, but they are heterogeneous artifact kinds — an ORM row
 factory, an assets-slot builder, request-dict builders, `CreativeAsset`
-constructors, JSON fixture data) that cannot share one owner, and three of them
-ship the pre-3.1.1 shape. **The 110 owner-bypassing sites are the target, not the
-owner count.**
+constructors, JSON fixture data — that cannot share one owner. Three ship the
+pre-3.1.1 shape. **The owner-bypassing sites are the target, not the owner count.**
+
+**Scope, decided.** The migration stays BDD-scoped; the Phase 0 guard goes
+tests-wide immediately, pinning all 97 as a shrink-only ratchet; the 93 non-BDD
+sites become a sibling epic with a committed denominator. Every safety mechanism
+here is BDD-specific — the request capture sits at the BDD dispatch entries, the
+shared baseline is a BDD run, the ctx protocol and per-file agent model are
+step-file constructs — so migrating non-BDD files inside this epic would mean
+migrating them with no gate this epic provides.
 
 **A wrong payload is sometimes the point, and nothing says which.** *"You cannot
 tell a deliberate malformation from an accidental one at the seeding site."* Six
@@ -104,7 +125,7 @@ the call site.
 **Gate — and the mechanism matters.** A guard cannot find an unmarked malformation
 by looking for markers. It must **validate every inline creative and pricing
 literal against the pinned model and require the marker on any that fails.** At
-Phase 0 the 191 literals are still inline, so the guard sweeps *literals*, not
+Phase 0 the literals are still inline, so the guard sweeps *literals*, not
 factory calls — otherwise it grades nothing until Phase 2 and is a gate for a
 different phase wearing this one's name.
 
@@ -128,7 +149,7 @@ begins, which is exactly how the retired epic failed.
 
 **1c — pricing options are a different disease.** Not owner collapse:
 *"one writer, fifteen mutators, one clobberer."* `ctx["default_pricing_option"]` is
-written once (`tests/bdd/conftest.py:4930`) and mutated in place downstream. The fix
+written once (`tests/bdd/conftest.py:4936`) and mutated in place downstream. The fix
 is freeze-the-default and convert mutators to overrides. Same phase, different work
 shape.
 
@@ -136,14 +157,23 @@ shape.
 `scripts/audit/compare_runs.py` treats any per-nodeid outcome change as a failure,
 including `passed -> xfailed`, and flags disappeared nodeids. That is real and
 verified in code. But the evidence base proves outcomes do not read the seeded
-object: **84 structurally-invalid creatives pass green today.** A collapse that
+object: **97 structurally-invalid creatives pass green today.** A collapse that
 normalizes an invalid seed, or flips which production branch runs, produces zero
 outcome changes.
 
-So the sufficient gate is one seam away: both dispatch paths converge on a single
-ctx writer (`tests/bdd/steps/generic/_dispatch.py:69`). **Capture the dispatched
-wire payload per nodeid before and after, and diff those.** Any payload delta not
-explained by a declared normalization is the silent repair this phase fears.
+So the sufficient gate is a request-payload diff — **and it must capture on the
+REQUEST side**, which is not where an earlier draft of this document sent it.
+`_dispatch.py:69` is `_populate_ctx_from_result(ctx, result)`: it receives the
+RESPONSE, and `TransportResult` carries `payload`/`envelope`/`wire_response`/
+`wire_error_envelope` and no request-as-dispatched. The silent repair this phase
+fears is a change in the REQUEST, so capturing there cannot see it.
+
+There is no single request-side convergence today — `dispatch_request` goes via
+`env.call_via`, `dispatch_via_client` via `AdCPTestClient.call`, plus
+`when_request._call_via`. **Capture at those three entries**, or introduce the
+convergence first and capture there, which is worth doing on its own merits.
+Capture per nodeid before and after; any delta not explained by a declared
+normalization is the silent repair.
 `compare_runs.py` becomes the cheaper outer check. Note its own documented ~19
 nodeids of transport-parameter flap between identical runs — that tolerance goes in
 the gate, not in a reader's head.
@@ -194,8 +224,11 @@ done.
 
 **Cut, on the review's recommendation, and the reasoning is sound.** The 41
 env.mock sites work on all three in-process transports; what they cost is e2e
-grading breadth, and that gap is already visible and ratcheted by
-`tests/unit/test_architecture_e2e_rest_escape_hatches.py`, which pins
+grading breadth. That gap is only COARSELY ratcheted today, and an earlier draft
+overstated it: `tests/unit/test_architecture_e2e_rest_escape_hatches.py` scans
+`_HARNESS_DIR.glob("*.py")` — harness-only — so no pinned tuple sees an
+`env.mock[...]` reach in a step body, and a 42nd site added tomorrow fires no
+guard. The tuples it does pin are
 `EXPECTED_XFAIL_ROUTES`, `EXPECTED_E2E_REST_PARAMETRIZE_GATES`,
 `EXPECTED_E2E_REST_EXCLUSION_POINTS` and `EXPECTED_UNSUPPORTED_DECLARATIONS` as
 exact tuples. It cannot silently grow.
@@ -213,8 +246,8 @@ pick a scenario that already works.
 ## If the budget halves
 
 The core that must survive: Phase 0 re-scoped to unify the three sentinel families,
-the three pre-3.1.1 owners killed, the 84 assets-omitting hand-built sites
-migrated, and the 65 empty Thens resolved. Those pass unconditionally today and
+the three pre-3.1.1 owners killed, the 4 BDD assets-omitting sites migrated and
+the other 93 pinned by the tests-wide guard, and the 65 empty Thens resolved. Those pass unconditionally today and
 always will.
 
 Everything else degrades gracefully. The 174 truthiness assertions grade presence —
