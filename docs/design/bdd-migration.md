@@ -89,7 +89,7 @@ validates every literal against the pinned model and requires the marker on what
 fails. At this point the literals are still inline, so the guard sweeps *literals*,
 not factory calls.
 
-Task `.1`. The tests-wide pin is `.6`.
+Task `.1`. The non-BDD deletion is `.6`.
 
 ## Item 2 — creatives
 
@@ -217,8 +217,12 @@ every deletion is mirrored upstream — per-scenario work, budgeted rather than
 discovered — or the next generation pass reintroduces them and the deleted steps
 become unbound lines.
 
-**`.6` — pin the 97 tests-wide as a shrink-only ratchet**, migrate none outside BDD,
-file the sibling epic with a committed denominator.
+**`.6` — delete the 93 non-BDD invalid literals and the tests holding them.** The
+validity guard stays scoped to `tests/bdd` + `tests/harness`, because the non-BDD
+sites are not being marked, they are being removed. Gate: `creative_literal_sites.py
+--scope tests` reports zero invalid literals outside BDD, the suite is green, and
+every disappeared nodeid is on the deletion list with no surviving nodeid changing
+outcome.
 
 **`.9` — the env.mock gap, reduced to declaration.** The 41 sites work on all three
 in-process transports; what they cost is e2e grading breadth. That gap is only
@@ -242,8 +246,8 @@ routing entangled with the scenario work.
 ## If the budget halves
 
 The core that must survive: Item 1 re-scoped to unify the three sentinel families,
-the three pre-3.1.1 owners killed, the 4 BDD assets-omitting sites migrated with the
-other 93 pinned tests-wide, and the 65 empty Thens resolved. Those pass
+the three pre-3.1.1 owners killed, the 4 BDD assets-omitting sites migrated,
+the other 93 deleted, and the 65 empty Thens resolved. Those pass
 unconditionally today and always will. Everything else degrades gracefully — the 174
 truthiness assertions grade presence, which is weak but not nothing.
 
@@ -257,12 +261,14 @@ is transport-agnostic by construction. The trap — 21 twin-sets whose names dif
 by transport, colliding into silent deletion if both are renamed — is recorded in
 [bdd-harness-architecture.md](bdd-harness-architecture.md).
 
-**Non-BDD seeding.** The 93 invalid literals in `tests/unit`, `tests/integration` and
-`tests/e2e` are pinned by `.6` and migrated by the sibling epic. Every safety
-mechanism here is BDD-specific — the request capture sits at the BDD dispatch
-entries, the shared baseline is a BDD run, the ctx protocol and per-file agent model
-are step-file constructs — so migrating them here would mean migrating them with no
-gate this epic provides.
+**Non-BDD seeding — deleted, not migrated.** The creative pipeline is not
+implemented to 3.1.1, so the 93 invalid literals in `tests/unit`,
+`tests/integration` and `tests/e2e` encode a shape production does not produce.
+Those tests fail and get deleted (`.6`). Pinning them as a shrink-only ratchet, as
+an earlier draft proposed, would have preserved 93 tests asserting a contract
+nothing implements. The one piece of judgment in that deletion: if removing a test
+leaves a real obligation ungraded, the obligation moves to `tests/bdd` as a
+scenario — it does not vanish silently.
 
 **Production defects.** GH #2012, #1998, #2058 and adcontextprotocol/adcp#7329 are
 owned elsewhere. The harness grades and ledgers them; it does not fix them.
