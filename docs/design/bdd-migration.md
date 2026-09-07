@@ -180,11 +180,17 @@ the gate, not in a reader's head.
 
 ## Phase 2 — migrate the call sites
 
-**Parallel, sharded by file.** 110 hand-built sites first — they bypass every owner
-and hold the 84 invalid payloads — then the remaining literals. Deliberate
+**Parallel, sharded by file.** The hand-built sites first — they bypass every owner
+and hold the invalid payloads — then the remaining literals. Counts and the shard
+list come from `scripts/audit/creative_literal_sites.py`, never from this text. Deliberate
 malformations migrate to the marked form rather than being normalized away.
 
-**Gate:** payload-diff clean, plus collection count unchanged. The first draft said
+**Gate:** payload-diff clean, plus collection count unchanged. KNOWN BLIND SPOT:
+the diff sees only DISPATCHED requests, so the handful of DB-row-seeding literals
+(`given_entities`, `given_media_buy` — about 5 of the 50) are guarded by the Phase 0
+validity guard, outcome identity and the per-class production mutation instead. That
+is adequate at that volume, and the agent taking those files needs to know the
+payload gate is blind there. The first draft said
 "every shard verifies itself", which implies a full BDD run per shard — 8324
 in-process nodeids × ~50 shards. **Shards compare against a shared baseline in one
 batched run.**
