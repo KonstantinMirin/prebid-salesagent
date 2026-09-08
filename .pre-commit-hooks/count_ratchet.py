@@ -158,14 +158,19 @@ def resolve_ratchet_paths(
     return repo_root, src_path, repo_root / baseline_name
 
 
-def refuse_unmeasured(label: str, reason: str, detail: str = "") -> NoReturn:
+def refuse_unmeasured(label: str, reason: str, detail: str = "", *, version: str = "") -> NoReturn:
     """Refuse to yield a number, and say why. Never returns.
 
     A counter's only two outcomes are a measurement and a refusal. There is no
     third one where the tool half-ran and the caller gets to decide, because the
     caller's number goes straight into ``run_count_ratchet``, which writes it.
+
+    ``version`` names the tool that failed. A refusal is the message most likely to
+    be read after a dependency bump, so it is the one that most needs to say which
+    build of the tool produced it.
     """
-    print(f"NOT_MEASURED: {label} did not run to completion — {reason}", file=sys.stderr)
+    instrument = f"{label} [{version}]" if version else label
+    print(f"NOT_MEASURED: {instrument} did not run to completion — {reason}", file=sys.stderr)
     if detail:
         print(detail, file=sys.stderr)
     print("", file=sys.stderr)
@@ -174,6 +179,54 @@ def refuse_unmeasured(label: str, reason: str, detail: str = "") -> NoReturn:
     print("writes an improvement to the baseline on an ORDINARY run, after which", file=sys.stderr)
     print("every honest run fails against a ceiling nobody chose.", file=sys.stderr)
     raise SystemExit(2)
+
+
+def version_probe(cmd: Sequence[str]) -> list[str]:
+    """The ``--version`` invocation for the tool *cmd* runs.
+
+    DERIVED from the counting command rather than declared beside it. A
+    ``version_cmd=`` parameter would be a second place to name the tool, and a
+    provenance line that names a DIFFERENT tool than the one that produced the
+    number is worse than no line at all. Every counter here shells out as
+    ``[sys.executable, "-m", <module>, ...]``, so the probe is that same prefix; the
+    fallback covers a bare executable.
+    """
+    if len(cmd) >= 3 and cmd[1] == "-m":
+        return [cmd[0], "-m", cmd[2], "--version"]
+    return [cmd[0], "--version"]
+
+
+def _tool_version(cmd: Sequence[str], *, cwd: Path) -> str:
+    """The counting tool's own version line, or a NAMED unknown.
+
+    ADR-009's caveat has lived in ``check_mypy_untyped_defs_count``'s docstring and
+    nowhere a run can see: "counts drift with mypy / plugin versions". A mypy or
+    SQLAlchemy/Pydantic plugin bump moves the count with no source change, and the
+    same holds for pylint/astroid and R0801 — so the number lands in the baseline
+    with no record of what produced it, and the next honest run fails against a
+    ceiling that a dependency bump set.
+
+    Deliberately NOT written into the baseline FILE. A version there would make a
+    bump a visible diff, which is the appeal — but it would equally make every
+    contributor on a different patch release produce one, and the driver's
+    upstream-ceiling probe reads baselines across git refs, so a version key in them
+    is a new way for the ratchet to disagree with itself about what a baseline says.
+    Provenance belongs in the run's output, which is where a reader goes when a count
+    moves and the source did not.
+
+    A failed probe yields ``version UNKNOWN (<why>)`` rather than refusing. This is
+    provenance, not a measurement: no number depends on it, so a refusal would block
+    a commit over a cosmetic failure. It is NAMED rather than omitted, because a line
+    that silently dropped the version is the same defect one size down.
+    """
+    try:
+        probe = subprocess.run(version_probe(cmd), capture_output=True, text=True, cwd=cwd, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"version UNKNOWN ({type(exc).__name__})"
+    if probe.returncode != 0:
+        return f"version UNKNOWN (exit {probe.returncode})"
+    lines = (probe.stdout or probe.stderr or "").strip().splitlines()
+    return lines[0].strip() if lines else "version UNKNOWN (no output)"
 
 
 def run_counting_tool(
@@ -208,16 +261,24 @@ def run_counting_tool(
     what it counted. This replaces a ``has_findings`` predicate whose contract
     was "rc 1 is fine as long as SOMETHING was found", under which a crash that
     had already emitted findings was indistinguishable from a clean run.
+
+    The echoed line also carries WHICH TOOL measured it — see :func:`_tool_version`.
+    The denominator without the instrument is half a provenance record: these counts
+    drift with tool and plugin versions, so a number that moved with no source change
+    is otherwise unattributable.
     """
+    version = _tool_version(cmd, cwd=cwd)
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
     output = result.stdout or ""
     detail = (result.stderr or output or "")[:truncate]
     if not accepts_returncode(result.returncode):
-        refuse_unmeasured(label, f"exit status {result.returncode}", detail)
+        refuse_unmeasured(label, f"exit status {result.returncode}", detail, version=version)
     evidence = completion_marker(output)
     if evidence is None:
-        refuse_unmeasured(label, "its output carries no completion marker, so it stopped early", detail)
-    print(f"  {label}: completed — {evidence}")
+        refuse_unmeasured(
+            label, "its output carries no completion marker, so it stopped early", detail, version=version
+        )
+    print(f"  {label} [{version}]: completed — {evidence}")
     return result
 
 
