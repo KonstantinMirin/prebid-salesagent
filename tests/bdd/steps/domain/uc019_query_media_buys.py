@@ -1656,10 +1656,16 @@ def _assert_error_recovery(ctx: dict, expected: str) -> None:
     )
 
 
-@then(parsers.parse('the error should include a "recovery" field indicating terminal failure'))
-def then_error_recovery_terminal(ctx: dict) -> None:
-    """Assert error has terminal recovery classification."""
-    _assert_error_recovery(ctx, "terminal")
+# Five steps stood here and below, none of them bound: `the error should include a
+# "recovery" field indicating terminal failure`, `the error message should contain
+# "{fragment}"`, `the error message should indicate "{text}" is not a valid MediaBuyStatus`,
+# and the two empty-media_buys-with-error variants. This module registers LOCALLY (its test
+# module star-imports it rather than conftest listing it), yet none of the five matches a
+# sentence in ANY feature — the wider check, so the verdict holds either way.
+#
+# Two of them were the wrong oracle as well as unreachable: they searched `str(error)` for a
+# fragment, and the message is prose CODE_TABLE derives from the code. The bound sentences
+# in BR-UC-019 grade the code, which carries the same obligation without pinning wording.
 
 
 def _current_suggestion(ctx: dict) -> str:
@@ -1755,15 +1761,6 @@ def then_error_has_suggestion(ctx: dict) -> None:
     _current_suggestion(ctx)
 
 
-@then(parsers.parse('the error message should contain "{fragment}"'))
-def then_error_contains(ctx: dict, fragment: str) -> None:
-    """Assert error message contains a specific fragment."""
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    msg = str(error).lower()
-    assert fragment.lower() in msg, f"Expected '{fragment}' in error: {error}"
-
-
 @then(parsers.parse('the response errors array should include error code "{code}"'))
 def then_response_errors_include(ctx: dict, code: str) -> None:
     """Assert response.errors contains the specified error code."""
@@ -1801,19 +1798,6 @@ def then_errors_name_omitted_media_buy(ctx: dict, mb_id: str) -> None:
         f"expected an advisory naming the omitted media buy {real_id!r} — in `details`, since "
         f"`message` is derived from the code table and cannot carry it; the response carried "
         f"{len(errors)} advisory/advisories: {haystacks}"
-    )
-
-
-@then(parsers.parse('the error message should indicate "{text}" is not a valid MediaBuyStatus'))
-def then_error_invalid_status(ctx: dict, text: str) -> None:
-    """Assert error mentions the invalid status value."""
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    msg = str(error).lower()
-    # Step text requires BOTH: mention of the invalid value AND that it's about status
-    assert text.lower() in msg, f"Expected invalid value '{text}' to appear in error message, got: {error}"
-    assert "status" in msg, (
-        f"Expected 'status' to appear in error message (indicating this is a status validation error), got: {error}"
     )
 
 
@@ -2324,28 +2308,6 @@ def then_any_status_returned(ctx: dict) -> None:
             f"All-status filter should return all media buys, but '{label}' (real_id={real_id}) is missing. "
             f"Returned: {returned_ids}"
         )
-
-
-@then(parsers.parse('the response should include an empty media_buys array with error "{code}"'))
-def then_empty_with_error(ctx: dict, code: str) -> None:
-    """Assert empty media_buys with specific error code in response."""
-    buys = _get_media_buys(ctx)
-    assert len(buys) == 0, f"Expected empty media_buys, got {len(buys)}"
-    resp = require_payload(ctx)
-    errors = getattr(resp, "errors", None) or []
-    codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
-    assert code in codes, f"Expected error '{code}' in errors, got {codes}"
-
-
-@then(parsers.parse('empty media_buys with error "{code}"'))
-def then_empty_buys_with_error(ctx: dict, code: str) -> None:
-    """Assert empty media_buys with error (boundary table shorthand)."""
-    buys = _get_media_buys(ctx)
-    assert len(buys) == 0, f"Expected empty, got {len(buys)}"
-    resp = require_payload(ctx)
-    errors = getattr(resp, "errors", None) or []
-    codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
-    assert code in codes, f"Expected '{code}' in response errors, got {codes}"
 
 
 @then(parsers.parse('error "{code}" with suggestion'))

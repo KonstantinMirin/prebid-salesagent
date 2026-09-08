@@ -375,16 +375,26 @@ def when_sync_creatives_short_credentials(ctx: dict) -> None:
 # ── Then steps ──────────────────────────────────────────────────────
 
 
-# NOTE: the request-level rejection Then for these scenarios does NOT live here.
-# Its sentence is now identical to the one already defined at
-# ``tests/bdd/steps/domain/uc_get_products_inventory.py`` (``the request is
-# rejected with VALIDATION_ERROR naming field "{field}"``), and every step module
-# in tests/bdd/conftest.py's ``pytest_plugins`` shares ONE global namespace — so
-# a second definition of that literal would be an ambiguous, first-wins binding
-# (exactly what ``test_guards_bdd_duplicate_step_literals`` forbids). The seam
-# scenarios above therefore bind the shared step, which asserts the identical
-# triple through the identical helper; its docstring carries the rationale that
-# used to live here.
+# NOTE: the request-level rejection Then for these scenarios does not live here, and no
+# longer lives in ``uc_get_products_inventory.py`` either — this note used to point there,
+# at ``the request is rejected with VALIDATION_ERROR naming field "{field}"``, and that
+# cross-reference had gone stale: the sentence occurs in no feature, so the step it named
+# bound nothing and has been deleted.
+#
+# The request-level refusals in local-egress-ssrf-refusal.feature were reworded into three
+# narrower sentences, and those are what grade them now: ``the response arrives``, ``the
+# response contains error code VALIDATION_ERROR`` and ``the response error field is
+# push_notification_config.url`` (or ``property_list.agent_url``), all in
+# ``generic/then_error.py``. The decomposition keeps the same obligations — ``correctable``
+# included, because ``then_response_error_code`` calls ``assert_wire_error`` without a
+# recovery and the helper DEFAULTS it from CODE_TABLE, so a refusal re-classified
+# transient still fails. What remains here is the per-ITEM sentence below, whose failure
+# lives inside a success envelope and so cannot share the request-level step.
+#
+# The one-global-namespace constraint that motivated the original arrangement is unchanged:
+# every module in tests/bdd/conftest.py's ``pytest_plugins`` shares one step registry, so a
+# second definition of a literal is an ambiguous first-wins binding, which
+# ``test_guards_bdd_duplicate_step_literals`` forbids.
 
 
 @then(

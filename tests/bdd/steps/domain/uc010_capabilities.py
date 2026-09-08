@@ -1021,11 +1021,9 @@ def then_reporting_methods_subset(ctx: dict, allowed: str) -> None:
     assert not invalid, f"reporting_delivery_methods carries values outside {sorted(allowed_set)}: {sorted(invalid)}"
 
 
-@then("media_buy.execution.targeting should include geo_countries and geo_regions as booleans")
-def then_targeting_geo_booleans(ctx: dict) -> None:
-    targeting = wire_field(ctx, "media_buy.execution.targeting")
-    for key in ("geo_countries", "geo_regions"):
-        assert isinstance(targeting.get(key), bool), f"targeting.{key} not a boolean: {targeting!r}"
+# `media_buy.execution.targeting should include geo_countries and geo_regions as booleans`
+# bound here and occurs in no feature. The targeting block is still graded, by the
+# `media_buy.execution.targeting` reads in the outline Thens above.
 
 
 def _assert_wire_equals(ctx: dict, path: str, expected: str) -> None:
