@@ -363,6 +363,7 @@ def test_guard_subjects_resolve() -> None:
         "tests.factories.malformed",
         "malformed",
         "MALFORMATION_KINDS",
+        "MALFORMATION_OBLIGATIONS",
         "assert_declared_malformations",
         why="nothing would declare or grade a deliberate malformation.",
     )
@@ -375,6 +376,8 @@ def test_guard_subjects_resolve() -> None:
     assert_guard_subject_resolves(
         "tests.bdd.steps.generic._dispatch",
         "dispatch_request",
+        "dispatch_via_client",
+        GATE_ENTRY,
         why="the runtime gate would hang off nothing.",
     )
 
