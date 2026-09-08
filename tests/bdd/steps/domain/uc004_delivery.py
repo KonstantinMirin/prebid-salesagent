@@ -1182,8 +1182,17 @@ def when_request_no_attribution(ctx: dict, mb_id: str) -> None:
     )
 )
 def when_request_with_attribution(ctx: dict, mb_id: str, aw_json: str) -> None:
-    """Request with attribution window."""
+    """Request with attribution window, recording what was sent for the echo Then.
+
+    ``ctx["request_attribution"]`` is the REQUEST AS SENT, and it is written here
+    because this is the only step that knows it. ``then_attribution_echo`` read that
+    key with hardcoded fallbacks (``7`` / ``"days"``) and nothing wrote it, so it
+    compared the response against constants that happened to match this scenario's
+    Examples — a seller that ignored the buyer's window entirely and always answered
+    7 days would have passed (salesagent-b9hi1.1).
+    """
     aw = json.loads(aw_json)
+    ctx["request_attribution"] = aw
     dispatch_request(ctx, media_buy_ids=[mb_id], attribution_window=aw)
 
 
@@ -2756,11 +2765,19 @@ def then_attribution_model(ctx: dict, model: str) -> None:
 
 @then("the attribution_window should echo the applied post_click window")
 def then_attribution_echo(ctx: dict) -> None:
-    """Assert attribution window echoes the buyer's requested post_click values.
+    """Assert attribution_window echoes the post_click window THE BUYER SENT.
 
-    The production code echoes the buyer-requested post_click window
-    (preserving unit and interval).  This step verifies the echoed values
-    match the request — not merely that they are non-None.
+    Reads the request as dispatched, with NO default. It used to read
+    ``ctx["request_attribution"]`` — a key no step wrote — and fall back to
+    ``interval=7`` / ``unit="days"``, so it compared the response against two
+    constants. They happened to equal this scenario's Examples, which is why it
+    passed; a seller that ignored the requested window entirely and always answered
+    7 days would have passed identically, and the docstring claimed the opposite of
+    what the code did (salesagent-b9hi1.1).
+
+    The absent-key branch now FAILS instead of defaulting. A Then that cannot find
+    what the buyer asked for cannot grade an echo, and saying so is the whole repair:
+    the defect was not a weak comparison, it was a comparison against a constant.
     """
     assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
     resp = require_payload(ctx)
@@ -2774,18 +2791,25 @@ def then_attribution_echo(ctx: dict) -> None:
         "attribution_window.post_click is None — buyer requested a post_click window which should be echoed"
     )
 
-    # Read the buyer-requested values from ctx (set by the When step)
-    requested = ctx.get("request_attribution", {})
-    req_interval = requested.get("post_click_interval", 7)
-    req_unit = requested.get("post_click_unit", "days")
+    # The request as sent, written by the When that sent it. Required, not defaulted.
+    requested = ctx.get("request_attribution")
+    assert requested is not None, (
+        "No request_attribution recorded — the When that sends attribution_window must "
+        "record it, or this step is comparing the response against nothing"
+    )
+    requested_pc = requested.get("post_click")
+    assert requested_pc is not None, (
+        f"The request carried no post_click window, so there is no echo to grade: {requested!r}"
+    )
+    req_interval = requested_pc["interval"]
+    req_unit = requested_pc["unit"]
 
-    # Assert the echoed values match the request
     assert pc.interval == req_interval, (
-        f"attribution_window.post_click.interval should echo request value {req_interval}, got {pc.interval}"
+        f"attribution_window.post_click.interval should echo the requested {req_interval}, got {pc.interval}"
     )
     pc_unit = pc.unit.value if hasattr(pc.unit, "value") else str(pc.unit)
     assert pc_unit == req_unit, (
-        f"attribution_window.post_click.unit should echo request value {req_unit!r}, got {pc_unit!r}"
+        f"attribution_window.post_click.unit should echo the requested {req_unit!r}, got {pc_unit!r}"
     )
 
 
