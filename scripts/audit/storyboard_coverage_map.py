@@ -73,14 +73,39 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.audit import scenario_liveness_join, storyboard_spec  # noqa: E402
+from src.core.tools.registry import TOOLS  # noqa: E402
 
-#: What this agent advertises, DERIVED from ``src/core/tools/registry.py`` —
-#: :func:`storyboard_spec.advertised_tools` is the reader and its docstring records what
-#: the hand-maintained set that used to live here had drifted into. Deriving matters
-#: because this set decides the DOMAIN every count downstream is quoted over: a tool
-#: added to ``src/`` and not here silently shrinks the conformance path, and a tool named
-#: here and implemented nowhere silently widens it.
-advertised_tools = storyboard_spec.advertised_tools
+#: What this agent advertises. NOT a list — the registry's own keys.
+#:
+#: ``TOOLS`` is, in CLAUDE.md's words, "the one declaration every transport derives
+#: from": MCP registration loops it, the A2A card is ``_derived_skills()`` over it, and
+#: the REST router adds a route per ``rest`` binding. So its keys ARE what a buyer can
+#: reach, which is exactly what the storyboard schema's ``required_tools`` gate asks.
+#:
+#: This was a hand-maintained set, with a comment deferring the derivation to the
+#: repo's broader "5 hand-maintained discovery surfaces" work (#1210). Measured at the
+#: 3.1.1 pin it had drifted THREE NAMES IN EACH DIRECTION while both sides held
+#: fourteen entries, so every count-based check read 14 = 14 and agreed:
+#:
+#:   claimed, served by nothing here   activate_signal, get_signals,
+#:                                     list_authorized_properties
+#:   served, claimed nowhere           complete_task, get_task_status, list_tasks
+#:
+#: None of the three extras is a tool this agent serves: ``get_signals`` is an
+#: OUTBOUND call we make as a client (``src/core/signals_agent_registry.py``),
+#: ``activate_signal`` appears once in ``src/`` and only in a comment about NOT
+#: registering it, and ``list_authorized_properties`` is an Admin UI route with no AdCP
+#: tool behind it. ``src/core/schemas/capability_declarations.py`` had already recorded
+#: the same mistake about the same tool, and the real runner baseline quoted in this
+#: module's docstring names ``get_signals`` among the tools it observed us not
+#: advertising.
+#:
+#: This set decides the DOMAIN every count downstream is quoted over, and the domain of
+#: the ``make quality`` triage gate
+#: (``test_architecture_storyboard_issue_map.py::test_every_on_path_storyboard_is_triaged``),
+#: through ``tool_gate()`` below. The remaining ten places that enumerate tools outside
+#: ``registry.py`` are salesagent-prkv.106.16's, not this module's.
+ADVERTISED_TOOLS = frozenset(TOOLS)
 
 
 def classify(
@@ -224,7 +249,6 @@ def statuses_from_vendored_index(repo: Path, index: dict[str, Any]) -> dict[str,
     module existed; it does not get a third here.
     """
     declared = storyboard_spec.declared_capabilities(repo)
-    tools = advertised_tools(repo)
     storyboards: dict[str, dict[str, Any]] = index["storyboards"]
     required_by = {
         storyboard_spec.storyboard_key(rel): entry["required_by"]
@@ -240,7 +264,7 @@ def statuses_from_vendored_index(repo: Path, index: dict[str, Any]) -> dict[str,
             required_tools=set(entry.get("required_tools", [])),
             requires_capability=_index_capability(capability),
             decl=declared,
-            tools=tools,
+            tools=ADVERTISED_TOOLS,
             required_by=required_by,
         )
         statuses[rel] = status
@@ -329,7 +353,6 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         raise storyboard_spec.StoryboardAuditError(f"missing pinned compliance tree: {dist}")
 
     decl = storyboard_spec.declared_capabilities(repo)
-    tools = advertised_tools(repo)
     claims = covered_storyboards(repo)
     required_by = storyboard_spec.requiring_indexes(dist)
 
@@ -343,7 +366,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
 
     rows: list[dict[str, Any]] = []
     for sb in storyboard_spec.storyboards(dist):
-        status, reason = classify(sb.rel, sb.text, decl, tools, required_by)
+        status, reason = classify(sb.rel, sb.text, decl, ADVERTISED_TOOLS, required_by)
         covered_by = sorted(set(claims.get(sb.stem, [])))
         live = sorted(s for s in covered_by if liveness[s].graded_by_live_scenario)
         rows.append(
@@ -373,7 +396,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     return {
         "pinned_version": version,
         "declared": {k: sorted(v) for k, v in decl.items()},
-        "advertised_tools": sorted(tools),
+        "advertised_tools": sorted(ADVERTISED_TOOLS),
         "totals": coverage_totals(rows, liveness_measured=liveness_measured),
         "storyboards": rows,
     }

@@ -27,41 +27,77 @@ was joined at all. NOT-MEASURED is a verdict, never folded into a passing side.
 
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from pathlib import Path
-
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INDEX = REPO_ROOT / "tests" / "fixtures" / "adcp_storyboards_pinned" / "index.json"
 
 sys.path.insert(0, str(REPO_ROOT))
 
-from scripts.audit import storyboard_coverage_map, storyboard_spec  # noqa: E402
+from scripts.audit import storyboard_coverage_map  # noqa: E402
 
 
 def _index() -> dict:
     return json.loads(INDEX.read_text(encoding="utf-8"))
 
 
-def test_advertised_tools_are_read_from_the_live_tool_registry() -> None:
-    """The AST reader must see exactly the tools the registry declares.
+def test_the_coverage_map_advertises_exactly_what_the_registry_declares() -> None:
+    """One set, derived on both sides — so no hand-edit can reintroduce a second list.
 
-    ``advertised_tools`` reads ``src/core/tools/registry.py`` statically, because the
-    audit scripts must run with no application dependencies resolved. That reader can
-    drift from the real declaration — a renamed dict, a row added by ``update()``, a
-    computed key — and a SHORT tool set silently narrows the conformance path, which is
-    the failure the derivation exists to end. This is the only test that compares the
-    static read against the live mapping.
+    This is deliberately an EQUALITY over two derivations rather than a check of the
+    current values. The defect it locks out is not "the list is wrong today", it is "a
+    list exists at all": the previous hand-maintained set had drifted three names in
+    each direction while both sides held fourteen entries, so every count-based check
+    read 14 = 14 and agreed. Only comparing the MEMBERS finds that, and only comparing
+    them against the registry keeps finding it.
+
+    It stays live against the obvious ways a second list creeps back —
+    ``frozenset(TOOLS) | {"get_signals"}``, or a literal reinstated wholesale — because
+    either changes the members.
     """
     from src.core.tools.registry import TOOLS
 
-    assert storyboard_coverage_map.advertised_tools(REPO_ROOT) == set(TOOLS), (
-        "the advertised-tool set the coverage map classifies with does not match "
-        "src/core/tools/registry.py's TOOLS. Either the AST reader in "
-        "storyboard_spec.advertised_tools no longer matches how the registry declares "
-        "its rows, or the set is being declared somewhere instead of derived."
+    assert storyboard_coverage_map.ADVERTISED_TOOLS == set(TOOLS), (
+        "the advertised-tool set the coverage map classifies with is not the tool registry's "
+        "keys. src/core/tools/registry.py::TOOLS is the one declaration every transport is "
+        "generated from, so it is what a buyer can actually reach; anything else here is a "
+        "second list, and the last one drifted three names in each direction unnoticed."
+    )
+
+
+def test_the_advertised_tool_set_is_derived_in_source_not_written_out() -> None:
+    """The members can agree today and still be a list. This reads the assignment.
+
+    ``ADVERTISED_TOOLS = frozenset({...fourteen strings...})`` would pass the equality
+    above on the day it was written and drift the day after — which is the entire
+    history of this constant. The assignment must name ``TOOLS``.
+    """
+    source = Path(storyboard_coverage_map.__file__).read_text(encoding="utf-8")
+    assignments = [
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == "ADVERTISED_TOOLS" for t in node.targets)
+    ]
+    assert len(assignments) == 1, f"expected exactly one ADVERTISED_TOOLS assignment, found {len(assignments)}"
+
+    names = {n.id for n in ast.walk(assignments[0].value) if isinstance(n, ast.Name)}
+    assert "TOOLS" in names, (
+        "ADVERTISED_TOOLS must be DERIVED from the tool registry, not written out. "
+        f"Its assignment references {sorted(names) or 'no name at all'} — a literal set of tool "
+        "names is a second declaration of what this agent serves, and it drifts."
+    )
+    literals = [
+        node
+        for node in ast.walk(assignments[0].value)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    ]
+    assert literals == [], (
+        f"ADVERTISED_TOOLS names tool(s) literally: {[n.value for n in literals]}. Adding to or "
+        "subtracting from the registry here is exactly the divergence deriving it removes."
     )
 
 
@@ -97,32 +133,6 @@ def test_no_on_path_storyboard_is_gated_only_by_tools_we_do_not_implement() -> N
             f"  {rel}: required_tools {sorted(index['storyboards'][rel]['required_tools'])}" for rel in offenders
         )
     )
-
-
-@pytest.mark.parametrize(
-    "registry_source,expected",
-    [
-        ("OTHER: dict[str, int] = {'a': 1}\n", "no module-level _TOOLS"),
-        ("_TOOLS: dict[str, int] = {}\n", "is empty"),
-        ("_TOOLS: dict[str, int] = {**other}\n", "not statically readable"),
-        ("_TOOLS: dict[str, int] = other_mapping\n", "not a dict literal"),
-    ],
-)
-def test_the_tool_registry_reader_refuses_what_it_cannot_read(
-    tmp_path: Path, registry_source: str, expected: str
-) -> None:
-    """A reader that cannot see the declaration must raise, not return a small set.
-
-    The failure mode being closed off: a silently short set takes storyboards OFF-PATH,
-    which is invisible — nothing downstream can tell "we do not advertise this tool"
-    apart from "the reader stopped working". Meta-test over each refusal branch: a guard
-    that cannot fail is not a guard.
-    """
-    module = tmp_path / "src" / "core" / "tools"
-    module.mkdir(parents=True)
-    (module / "registry.py").write_text(registry_source, encoding="utf-8")
-    with pytest.raises(storyboard_spec.StoryboardAuditError, match=expected):
-        storyboard_spec.advertised_tools(tmp_path)
 
 
 # ── The claim/coverage split ────────────────────────────────────────────────
