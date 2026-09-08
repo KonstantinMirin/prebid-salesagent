@@ -142,9 +142,22 @@ EXPECTED_GATED_STORYBOARDS: frozenset[str] = frozenset(
 )
 
 #: Floor under the record count itself. A count, not a set — the records are the
-#: thing being counted, and 1351 individual ids would be a second index rather
+#: thing being counted, and 1303 individual ids would be a second index rather
 #: than a floor. It catches wholesale collapse; the SET above catches a misroute.
-MINIMUM_INDEX_CHECKS = 1351
+#:
+#: 1351 -> 1303 (salesagent-b341x.22). The 48 records that left belonged to three
+#: storyboards — universal/error-compliance-signals.yaml,
+#: universal/get-signals-pagination-integrity.yaml and
+#: universal/schema-validation-signals.yaml — that were on-path ONLY because the
+#: coverage map's hand-maintained ADVERTISED_TOOLS claimed `get_signals` and
+#: `activate_signal`, which no transport registers. Deriving the set from
+#: src/core/tools/registry.py took them off the path, so those 48 were never
+#: gradable and were inflating the denominator every conformance number here is
+#: quoted against. Lowering a floor is normally the thing this file exists to
+#: prevent; it is correct here because the drop was MEASURED and its cause named,
+#: which is the same discipline EXPECTED_GATED_STORYBOARDS above states for a
+#: deliberate reclassification.
+MINIMUM_INDEX_CHECKS = 1303
 
 
 @requires_pinned_bundle

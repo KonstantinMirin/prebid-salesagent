@@ -192,6 +192,68 @@ def declared_capabilities(repo: Path) -> dict[str, set[str]]:
     }
 
 
+#: The module that declares which tools this agent implements, and the dict in it that
+#: carries the declaration. ``src/core/tools/registry.py`` is the one declaration every
+#: transport is generated from (its own docstring: "MCP registration loops this mapping,
+#: the A2A card is ``_derived_skills()`` over it, and the REST router adds a route per
+#: ``rest`` binding"), so its keys ARE what a buyer can reach — which is exactly what the
+#: storyboard ``required_tools`` gate asks about.
+_TOOL_REGISTRY_MODULE = ("src", "core", "tools", "registry.py")
+_TOOL_REGISTRY_NAME = "_TOOLS"
+
+
+def advertised_tools(repo: Path) -> set[str]:
+    """The AdCP tool names this agent advertises, read from the tool registry.
+
+    DERIVED, never declared. This used to be a hand-maintained set in
+    ``storyboard_coverage_map`` and it had drifted in BOTH directions at the 3.1.1 pin:
+    it claimed ``activate_signal``, ``get_signals`` and ``list_authorized_properties``,
+    none of which the registry implements, and it omitted ``complete_task``,
+    ``get_task_status`` and ``list_tasks``, which it does. The three phantom signals
+    tools put three storyboards ON-PATH — ``universal/error-compliance-signals.yaml``,
+    ``universal/get-signals-pagination-integrity.yaml``,
+    ``universal/schema-validation-signals.yaml``, 48 checks between them — and the
+    ``make quality`` triage gate (``test_architecture_storyboard_issue_map.py``)
+    enforced a conformance path three storyboards wider than the agent has tools for.
+    ``src/core/schemas/capability_declarations.py`` had already recorded the same
+    mistake about the same tool ("BACKED, but NOT by a ``get_signals`` tool ...
+    ``src/core/tools/signals.py`` was unreachable from every transport"), and the real
+    runner baseline quoted in ``storyboard_coverage_map``'s docstring names
+    ``get_signals`` among the tools it observed us NOT advertising.
+
+    Read by AST rather than by importing ``src.core.tools.registry``: the registry
+    imports every ``_impl`` in the codebase, and these audit scripts must stay runnable
+    with no application dependencies resolved. ``test_architecture_storyboard_spec.py``
+    grades this reader against the live ``TOOLS`` mapping, so an AST walk that stops
+    matching the real declaration reddens rather than quietly returning a short set.
+    """
+    where = repo.joinpath(*_TOOL_REGISTRY_MODULE)
+    tree = ast.parse(where.read_text(encoding="utf-8"))
+    for node in tree.body:
+        target = node.target if isinstance(node, ast.AnnAssign) else None
+        if target is None and isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+        if not (isinstance(target, ast.Name) and target.id == _TOOL_REGISTRY_NAME):
+            continue
+        if not isinstance(node.value, ast.Dict):
+            raise StoryboardAuditError(f"{where}: {_TOOL_REGISTRY_NAME} is not a dict literal")
+        # A non-literal key (a splat, an f-string, a name) means the registry declares a
+        # tool this reader cannot see. Refuse: a short tool set silently NARROWS the
+        # conformance path, which is the failure this function exists to end.
+        names = {k.value for k in node.value.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+        if len(names) != len(node.value.keys):
+            raise StoryboardAuditError(
+                f"{where}: {_TOOL_REGISTRY_NAME} has {len(node.value.keys)} entries but only "
+                f"{len(names)} plain string keys. Some tool name is not statically readable, so "
+                "the derived advertised-tool set would be short and the conformance path would "
+                "silently shrink."
+            )
+        if not names:
+            raise StoryboardAuditError(f"{where}: {_TOOL_REGISTRY_NAME} is empty")
+        return names
+    raise StoryboardAuditError(f"{where}: no module-level {_TOOL_REGISTRY_NAME} to read the tool set from")
+
+
 # ── Storyboard universe ─────────────────────────────────────────────────────
 
 _SKIP_PREFIXES = ("domains/", "test-kits/", "test-vectors/")
@@ -993,19 +1055,17 @@ def run_cli(
     build_fn: Callable[..., dict[str, Any]],
     render_fn: Callable[[dict[str, Any]], str],
     jsonl_fn: Callable[[dict[str, Any]], list[dict[str, Any]]] | None = None,
-    *,
-    configure_args: Callable[[argparse.ArgumentParser], None] | None = None,
-    build_args: Callable[[argparse.Namespace], tuple[Any, ...]] | None = None,
 ) -> int:
-    """Standard CLI: parse args, ``build_fn(*build_args(args))``, print, catch.
+    """Standard CLI: parse args, ``build_fn(repo, adcp)``, print, catch.
 
-    Default shape (``configure_args``/``build_args`` both ``None``) is
-    ``--repo/--adcp/--markdown[/--jsonl]``, ``build_fn(repo, adcp)`` — every
-    ``storyboard_*.py`` sibling but ``storyboard_reconciliation`` uses this
-    default. A consumer whose ``build_fn`` takes different arguments (e.g.
-    ``storyboard_reconciliation.build(proposals, expected)``) supplies both
-    hooks instead of hand-rolling its own argparse + print + error-handling
-    boilerplate — the duplicate ``main()`` this module exists to close.
+    One shape, for every caller: ``--repo/--adcp/--markdown[/--jsonl]``. The
+    ``configure_args``/``build_args`` hooks that used to make the argument set
+    pluggable had exactly one user, ``storyboard_reconciliation``, which took a
+    required ``--proposals`` directory the repository does not carry; deleting that
+    script (salesagent-b341x.24) left the hooks with no caller, and a pluggable seam
+    nothing plugs into is a second shape waiting to be reintroduced. An audit script's
+    subject is the repo plus the pinned bundle — guarded by
+    ``tests/unit/test_architecture_audit_scripts_have_a_subject.py``.
 
     ``--jsonl`` emits one JSON object per line. A consumer that offers it is
     declaring that the JSONL is its SOURCE OF TRUTH and the markdown a
@@ -1023,16 +1083,13 @@ def run_cli(
     and repeats the same catch.
     """
     parser = argparse.ArgumentParser(description=description)
-    if configure_args is None:
-        parser.add_argument("--repo", type=Path, default=Path.cwd())
-        # Resolved AFTER parsing, from --repo, so it goes through adcp_home():
-        # $ADCP_HOME, then the in-repo release bundle, then a personal clone.
-        # Defaulting to the clone here made the published regeneration command
-        # fail on any machine that has the bundle and no clone — which is every
-        # CI runner and every contributor.
-        parser.add_argument("--adcp", type=Path, default=None)
-    else:
-        configure_args(parser)
+    parser.add_argument("--repo", type=Path, default=Path.cwd())
+    # Resolved AFTER parsing, from --repo, so it goes through adcp_home():
+    # $ADCP_HOME, then the in-repo release bundle, then a personal clone.
+    # Defaulting to the clone here made the published regeneration command
+    # fail on any machine that has the bundle and no clone — which is every
+    # CI runner and every contributor.
+    parser.add_argument("--adcp", type=Path, default=None)
     parser.add_argument("--markdown", action="store_true")
     if jsonl_fn is not None:
         parser.add_argument("--jsonl", action="store_true")
@@ -1041,10 +1098,9 @@ def run_cli(
         # Inside the try: adcp_home() consults pinned_version(), which reads the
         # installed SDK and raises the typed error on pin drift. Resolving out
         # here would traceback instead of the documented "error: ..." exit 1.
-        if getattr(args, "adcp", None) is None and hasattr(args, "repo"):
+        if args.adcp is None:
             args.adcp = adcp_home(args.repo)
-        call_args = build_args(args) if build_args is not None else (args.repo.resolve(), args.adcp.resolve())
-        result = build_fn(*call_args)
+        result = build_fn(args.repo.resolve(), args.adcp.resolve())
     except StoryboardAuditError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

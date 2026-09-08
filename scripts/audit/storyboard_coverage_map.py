@@ -72,28 +72,15 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.audit import storyboard_spec  # noqa: E402
+from scripts.audit import scenario_liveness_join, storyboard_spec  # noqa: E402
 
-# ADVERTISED_TOOLS is intentionally still hand-maintained here — deriving it
-# from src/core/tools/ is tracked separately as part of the repo's broader
-# "5 hand-maintained discovery surfaces" initiative (#1210/qz2g), not folded
-# into this ticket's parsing-primitive extraction.
-ADVERTISED_TOOLS = {
-    "activate_signal",
-    "create_media_buy",
-    "get_adcp_capabilities",
-    "get_media_buy_delivery",
-    "get_media_buys",
-    "get_products",
-    "get_signals",
-    "list_accounts",
-    "list_authorized_properties",
-    "list_creative_formats",
-    "list_creatives",
-    "sync_accounts",
-    "sync_creatives",
-    "update_media_buy",
-}
+#: What this agent advertises, DERIVED from ``src/core/tools/registry.py`` —
+#: :func:`storyboard_spec.advertised_tools` is the reader and its docstring records what
+#: the hand-maintained set that used to live here had drifted into. Deriving matters
+#: because this set decides the DOMAIN every count downstream is quoted over: a tool
+#: added to ``src/`` and not here silently shrinks the conformance path, and a tool named
+#: here and implemented nowhere silently widens it.
+advertised_tools = storyboard_spec.advertised_tools
 
 
 def classify(
@@ -237,6 +224,7 @@ def statuses_from_vendored_index(repo: Path, index: dict[str, Any]) -> dict[str,
     module existed; it does not get a third here.
     """
     declared = storyboard_spec.declared_capabilities(repo)
+    tools = advertised_tools(repo)
     storyboards: dict[str, dict[str, Any]] = index["storyboards"]
     required_by = {
         storyboard_spec.storyboard_key(rel): entry["required_by"]
@@ -252,7 +240,7 @@ def statuses_from_vendored_index(repo: Path, index: dict[str, Any]) -> dict[str,
             required_tools=set(entry.get("required_tools", [])),
             requires_capability=_index_capability(capability),
             decl=declared,
-            tools=ADVERTISED_TOOLS,
+            tools=tools,
             required_by=required_by,
         )
         statuses[rel] = status
@@ -286,6 +274,54 @@ def covered_storyboards(repo: Path) -> dict[str, list[str]]:
     return claims
 
 
+#: The four coverage verdicts one on-path storyboard can hold. ``CLAIMED`` and
+#: ``NOT-MEASURED`` are the two this map used to publish as one: both render as a
+#: scenario id in the "Covered by" column, and only one of them is coverage.
+COVERAGE_LIVE = "LIVE"
+COVERAGE_CLAIMED = "CLAIMED-ONLY"
+COVERAGE_NOT_MEASURED = "NOT-MEASURED"
+COVERAGE_NONE = "NONE"
+
+
+def coverage_totals(rows: list[dict[str, Any]], *, liveness_measured: bool) -> dict[str, Any]:
+    """Totals for :func:`build`, over the rows it just classified.
+
+    Its own function because it is the only part of ``build`` that has to be graded
+    offline: everything else needs the pinned tree, and a totals block that folds an
+    undecidable row into a passing side is exactly what
+    ``tests/unit/test_architecture_storyboard_coverage_totals.py`` has to be able to
+    reproduce with three synthetic rows.
+
+    Every number here states its denominator by construction — ``on_path`` is the
+    denominator for the four coverage verdicts, which partition it, and ``storyboards``
+    is the denominator for the statuses, which partition that. ``unknown`` is in the
+    block because ``classify_gates`` can return ``UNKNOWN`` ("unclassified tier") and
+    nothing counted it: an UNKNOWN row was in ``storyboards`` and in none of the rest,
+    so a tier this classifier does not recognise disappeared between two numbers that
+    both looked complete.
+    """
+    on_path = [r for r in rows if r["status"] == "ON-PATH"]
+    verdicts = [r["coverage"] for r in on_path]
+    return {
+        "storyboards": len(rows),
+        "on_path": len(on_path),
+        "gated": len([r for r in rows if r["status"] == "GATED"]),
+        "off_path": len([r for r in rows if r["status"] == "OFF-PATH"]),
+        # NOT a passing side and NOT folded into one: a tier the classifier does not
+        # recognise is a refusal to classify, reported as its own number.
+        "unknown": len([r for r in rows if r["status"] == "UNKNOWN"]),
+        # Whether a real `pytest tests/bdd` run produced the liveness artifact this
+        # map joined. False makes `on_path_covered_live` unquotable, which is why it
+        # travels with the totals rather than being inferred from a zero.
+        "liveness_measured": liveness_measured,
+        "on_path_covered_live": verdicts.count(COVERAGE_LIVE),
+        "on_path_claimed_not_live": verdicts.count(COVERAGE_CLAIMED),
+        "on_path_coverage_not_measured": verdicts.count(COVERAGE_NOT_MEASURED),
+        "on_path_uncovered": verdicts.count(COVERAGE_NONE),
+        "off_path_but_claimed": len([r for r in rows if r["status"] in {"OFF-PATH", "GATED"} and r["covered_by"]]),
+    }
+
+
 def build(repo: Path, adcp: Path) -> dict[str, Any]:
     version = storyboard_spec.pinned_version(repo)
     dist = storyboard_spec.dist_root(adcp, version)
@@ -293,48 +329,104 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         raise storyboard_spec.StoryboardAuditError(f"missing pinned compliance tree: {dist}")
 
     decl = storyboard_spec.declared_capabilities(repo)
+    tools = advertised_tools(repo)
     claims = covered_storyboards(repo)
     required_by = storyboard_spec.requiring_indexes(dist)
 
+    # The join `storyboard_check_index` already performs, performed HERE so that this
+    # map and the roadmap built on it stop publishing a tag CLAIM under a heading that
+    # reads as coverage. `covered_by` is presence of a `@storyboard-v3.1` tag plus a
+    # `@source` footer and nothing more — a tagged scenario with zero bound steps has
+    # counted as coverage since this map was written.
+    liveness = scenario_liveness_join.build_index({s for ids in claims.values() for s in ids})
+    liveness_measured = any(f.measured_this_run for f in liveness.values())
+
     rows: list[dict[str, Any]] = []
     for sb in storyboard_spec.storyboards(dist):
-        status, reason = classify(sb.rel, sb.text, decl, ADVERTISED_TOOLS, required_by)
+        status, reason = classify(sb.rel, sb.text, decl, tools, required_by)
+        covered_by = sorted(set(claims.get(sb.stem, [])))
+        live = sorted(s for s in covered_by if liveness[s].graded_by_live_scenario)
         rows.append(
             {
                 "storyboard": sb.rel,
                 "stem": sb.stem,
                 "status": status,
                 "reason": reason,
-                "covered_by": sorted(set(claims.get(sb.stem, []))),
+                "covered_by": covered_by,
+                "covered_by_live": live,
+                # A claim with no measurement behind it is NOT-MEASURED, never
+                # CLAIMED-ONLY: "we ran the suite and these steps are not bound" and
+                # "nobody ran the suite" are different findings, and only the first is
+                # a statement about the scenario.
+                "coverage": (
+                    COVERAGE_NONE
+                    if not covered_by
+                    else COVERAGE_LIVE
+                    if live
+                    else COVERAGE_CLAIMED
+                    if liveness_measured
+                    else COVERAGE_NOT_MEASURED
+                ),
             }
         )
 
-    on_path = [r for r in rows if r["status"] == "ON-PATH"]
     return {
         "pinned_version": version,
         "declared": {k: sorted(v) for k, v in decl.items()},
-        "advertised_tools": sorted(ADVERTISED_TOOLS),
-        "totals": {
-            "storyboards": len(rows),
-            "on_path": len(on_path),
-            "on_path_uncovered": len([r for r in on_path if not r["covered_by"]]),
-            "off_path_but_claimed": len([r for r in rows if r["status"] in {"OFF-PATH", "GATED"} and r["covered_by"]]),
-        },
+        "advertised_tools": sorted(tools),
+        "totals": coverage_totals(rows, liveness_measured=liveness_measured),
         "storyboards": rows,
     }
 
 
+def coverage_cell(coverage: str, scenario_ids: list[str]) -> str:
+    """The "Covered by" cell, which names the VERDICT alongside the scenarios.
+
+    A bare list of scenario ids is what made this column read as coverage. The verdict
+    is what the reader needs: the same ids mean "graded" under LIVE, "tagged and
+    dormant" under CLAIMED-ONLY, and "nobody ran the suite" under NOT-MEASURED. Public
+    because the roadmap renders the same column and a second spelling of it is how the
+    two reports start disagreeing about what a scenario id means.
+    """
+    if coverage == COVERAGE_NONE:
+        return "**— NO SCENARIO —**"
+    ids = ", ".join(f"`{c}`" for c in scenario_ids)
+    if coverage == COVERAGE_LIVE:
+        return f"{ids} (LIVE)"
+    if coverage == COVERAGE_CLAIMED:
+        return f"{ids} (**claim only — steps not bound or harness not wired**)"
+    return f"{ids} (**NOT MEASURED — no BDD run joined**)"
+
+
 def render(result: dict[str, Any]) -> str:
+    totals = result["totals"]
+    on_path = totals["on_path"]
+    live_line = (
+        f"- of those, **graded by a LIVE scenario: {totals['on_path_covered_live']} of {on_path}**; "
+        f"claim only (tagged, steps not bound or harness not wired): {totals['on_path_claimed_not_live']}"
+        if totals["liveness_measured"]
+        else (
+            f"- of those, **liveness NOT MEASURED for all {totals['on_path_coverage_not_measured']}**: no "
+            "`test-results/bdd_scenario_liveness.json` was joined, so no claim on this page has been "
+            "shown to grade anything. Run `pytest tests/bdd` and regenerate."
+        )
+    )
     out = [
         f"# Storyboard coverage map — AdCP {result['pinned_version']}",
         "",
         f"Declared protocols: `{', '.join(result['declared']['protocols'])}` · "
         f"specialisms: `{', '.join(result['declared']['specialisms'])}`",
         "",
-        f"- storyboards examined: **{result['totals']['storyboards']}**",
-        f"- on our conformance path: **{result['totals']['on_path']}**",
-        f"- **on-path with NO scenario: {result['totals']['on_path_uncovered']}**",
-        f"- off-path/gated but claimed by a scenario: **{result['totals']['off_path_but_claimed']}**",
+        f"Advertised tools (derived from `src/core/tools/registry.py`): `{', '.join(result['advertised_tools'])}`",
+        "",
+        f"- storyboards examined: **{totals['storyboards']}** — on path **{on_path}**, "
+        f"gated {totals['gated']}, off path {totals['off_path']}, "
+        f"**UNCLASSIFIED {totals['unknown']}**",
+        f"- claimed by a `@storyboard-v3.1` scenario: **{on_path - totals['on_path_uncovered']} of {on_path}** "
+        "on-path storyboards. A claim is a TAG, not coverage:",
+        live_line,
+        f"- **on-path with NO scenario at all: {totals['on_path_uncovered']} of {on_path}**",
+        f"- off-path/gated but claimed by a scenario: **{totals['off_path_but_claimed']}**",
         "",
         "## On our conformance path",
         "",
@@ -344,8 +436,20 @@ def render(result: dict[str, Any]) -> str:
     for r in result["storyboards"]:
         if r["status"] != "ON-PATH":
             continue
-        covered = ", ".join(f"`{c}`" for c in r["covered_by"]) or "**— NOT COVERED —**"
-        out.append(f"| `{r['storyboard']}` | {r['reason']} | {covered} |")
+        out.append(f"| `{r['storyboard']}` | {r['reason']} | {coverage_cell(r['coverage'], r['covered_by'])} |")
+    if unknown := [r for r in result["storyboards"] if r["status"] == "UNKNOWN"]:
+        out += [
+            "",
+            "## Unclassified — NOT MEASURED",
+            "",
+            "`classify_gates` recognised neither `universal/`, `specialisms/`, `protocols/` nor "
+            "`domains/` for these. They are not off path; nothing decided. Every count above "
+            "excludes them, which is why they are listed rather than absorbed.",
+            "",
+            "| Storyboard | Why unclassified |",
+            "|---|---|",
+        ]
+        out += [f"| `{r['storyboard']}` | {r['reason']} |" for r in unknown]
     out += [
         "",
         "## Off path or gated, but a scenario claims them",
