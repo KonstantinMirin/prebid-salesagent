@@ -654,7 +654,7 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
 #     or agent_url. So those six record obligations production does not meet, which were
 #     never ledgered because no scenario reaches them.
 #
-# Writing those scenarios is filed separately. When they are written, the assertion should
+# Writing those scenarios is filed as salesagent-xighb. When they are written, the assertion should
 # be re-expressed against the CODE plus the sanctioned wire oracle rather than against
 # prose: core/error.json leaves `suggestion` free-form text the seller may reword, and
 # these keyword tests would grade one seller's phrasing.

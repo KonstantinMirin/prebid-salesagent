@@ -373,7 +373,7 @@ def given_expired_token(ctx: dict) -> None:
 # and a SURVIVING function in this module reads it — deleting the Given would have left a live
 # reader whose condition can never become true.
 #
-# The missing scenarios are filed. Write the scenario, then bind the step.
+# The missing scenarios are filed as salesagent-xighb. Write the scenario, then bind the step.
 
 
 @given("the seller system is experiencing an internal failure")
