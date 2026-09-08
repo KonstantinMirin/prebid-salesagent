@@ -267,6 +267,22 @@ services:
   # serves /mcp/ and /a2a (SKIP_NGINX is true; the healthcheck already probes :8080).
   adcp-server-storyboard:
     <<: *adcp-server
+    # Waits for adcp-server to be HEALTHY, not merely started, and that is about MIGRATIONS.
+    # The entrypoint runs `alembic upgrade` on boot; two servers booting together against one
+    # database run it twice concurrently, and the loser dies on the half-applied step:
+    #
+    #   Running upgrade 7a8c3e1170a5 -> a164b85bab9e
+    #   column "payload_hash" of relation "media_buys" already exists
+    #
+    # Sequencing on health is what makes the second run a no-op: by then the first has
+    # finished and alembic finds nothing left to apply. The inherited depends_on (postgres
+    # only) is REPLACED rather than extended -- a `<<:` merge overwrites the key, so postgres
+    # is restated here; dropping it would let this service start before the database.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      adcp-server:
+        condition: service_healthy
     environment:
       <<: *adcp-server-env
       ENVIRONMENT: production
