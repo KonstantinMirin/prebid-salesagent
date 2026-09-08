@@ -4842,8 +4842,7 @@ def given_creative_with_generative_format(ctx: dict) -> None:
 @given("the Seller Agent does not have GEMINI_API_KEY configured")
 def given_no_gemini_api_key(ctx: dict) -> None:
     """Remove GEMINI_API_KEY from the config mock."""
-    env = ctx["env"]
-    env.mock["config"].return_value.gemini_api_key = None
+    ctx["env"].set_gemini_api_key(None)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -5127,9 +5126,7 @@ def given_message_asset_no_gemini_key(ctx: dict) -> None:
     last_creative.setdefault("assets", {}).update(
         build_assets(text_spec("message", content="Generate a banner ad for summer sale"))
     )
-    # Remove GEMINI_API_KEY from config mock
-    env = ctx["env"]
-    env.mock["config"].return_value.gemini_api_key = None
+    ctx["env"].set_gemini_api_key(None)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -5205,10 +5202,10 @@ def given_creative_generative_no_gemini(ctx: dict) -> None:
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    # Set up generative format but WITHOUT gemini key
-    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    # Now remove the key — setup_generative_build sets it, we override
-    env.mock["config"].return_value.gemini_api_key = None
+    # Generative format, and the key NOT configured. Said once, as an argument, rather
+    # than set and then unset: the two-step form left the env briefly in a state no
+    # scenario describes, and the second step had to know the config mock's shape.
+    fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key=None)
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-gen-no-key-001",
         name="Generative No Key",
@@ -5312,8 +5309,7 @@ def given_gemini_api_key_configured(ctx: dict) -> None:
     If setup_generative_build was already called, the key is already set.
     This step acts as an explicit guard / documentation step.
     """
-    env = ctx["env"]
-    env.mock["config"].return_value.gemini_api_key = "test-gemini-key"
+    ctx["env"].set_gemini_api_key("test-gemini-key")
 
 
 @given(parsers.parse('a generative creative with an asset of role "{role}" containing "{content}"'))
