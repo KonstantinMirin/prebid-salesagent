@@ -4460,7 +4460,24 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     # That is what tests/unit/test_e2e_rest_ssrf_blocked_scenario_collected.py pins.
     #
     # A tool that genuinely lost a wrapper is a PRODUCTION gap. Add the route.
-    _parametrize_ctx(metafunc, transports, [Transport.E2E_REST, Transport.E2E_MCP, Transport.E2E_A2A])
+    # e2e_mcp and e2e_a2a are OPT-IN, and that is a capacity decision rather than a
+    # correctness one. Their dispatchers have existed since #1858 and nothing named them,
+    # so turning them on for every scenario adds ~1600 in-network variants at once: the
+    # bdd_e2e selection goes 2864 -> 8566 against ONE shared server and ONE /adcp database,
+    # while tox -p runs the other suites alongside it. Measured consequence of doing that
+    # unconditionally (run sa-47b58c6f): an xdist worker died with
+    # `KeyError: <WorkerController gw20>`, the unit suite spent 25 minutes to run 714 tests
+    # and ended INTERNALERROR, and suites that touch none of this — admin, e2e — failed
+    # too. A saturated box manufactures failures that look like defects.
+    #
+    # So they are enabled per-run by BDD_E2E_TRANSPORTS=all, which is how the rollout in
+    # salesagent-e0enw is meant to go: turn them on for one feature, classify what breaks
+    # as harness gap versus real transport defect, and only then widen. Nothing about the
+    # collection logic differs — the same six ids appear the moment the variable is set.
+    e2e_members = [Transport.E2E_REST]
+    if os.environ.get("BDD_E2E_TRANSPORTS") == "all":
+        e2e_members += [Transport.E2E_MCP, Transport.E2E_A2A]
+    _parametrize_ctx(metafunc, transports, e2e_members)
 
 
 def _ssl_failure(exc: BaseException | None, depth: int = 0) -> ssl.SSLError | None:

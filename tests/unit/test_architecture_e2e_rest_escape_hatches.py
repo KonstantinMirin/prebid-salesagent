@@ -252,9 +252,12 @@ def find_e2e_rest_append_expressions(tree: ast.Module) -> tuple[str, ...]:
 
 
 # The pinned call sites. Same discipline as the gate pin above.
-EXPECTED_E2E_REST_APPEND_EXPRESSIONS: tuple[str, ...] = (
-    "_parametrize_ctx(metafunc, transports, [Transport.E2E_REST, Transport.E2E_MCP, Transport.E2E_A2A])",
-)
+# E2E_REST is named UNCONDITIONALLY here, and that is the property this pin now protects:
+# the list it seeds carries no gate, so no scenario can lose e2e_rest. E2E_MCP and E2E_A2A
+# are appended under BDD_E2E_TRANSPORTS=all on the following line, which this detector does
+# not see because it looks for E2E_REST — deliberate. Those two are a capacity rollout
+# (salesagent-e0enw); e2e_rest is the transport this module exists to keep ungated.
+EXPECTED_E2E_REST_APPEND_EXPRESSIONS: tuple[str, ...] = ("[Transport.E2E_REST]",)
 
 
 def test_e2e_rest_append_expressions_match_the_pin() -> None:
