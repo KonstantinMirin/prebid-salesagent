@@ -1107,9 +1107,9 @@ class TestCreativeLifecycleMCP:
                 identity,
             )
 
-            # Verify response -- create_media_buy returns CreateMediaBuyResult
-            # which supports tuple unpacking: (domain_response, status)
-            domain_response, status = response
+            # create_media_buy returns the oneOf BRANCH itself; the protocol status is a
+            # field on it, not a second element of a pair.
+            domain_response = response
             print(f"DEBUG create_media_buy response: {domain_response}")
             if hasattr(domain_response, "errors") and domain_response.errors:
                 print(f"DEBUG errors: {domain_response.errors}")

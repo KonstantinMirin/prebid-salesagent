@@ -312,7 +312,7 @@ class TestCreateMediaBuyResponseShapes:
         """
         from src.core.schemas import Error
 
-        resp = CreateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="msg")])
+        resp = CreateMediaBuyError(status="failed", errors=[Error(code="VALIDATION_ERROR", message="msg")])
         assert resp.errors is not None
         assert len(resp.errors) == 1
 
@@ -330,58 +330,30 @@ class TestCreateMediaBuyResponseShapes:
         dumped = resp.model_dump()
         assert "workflow_step_id" not in dumped
 
-    def test_result_wrapper_supports_tuple_unpacking(self):
-        """UC-002-R04: CreateMediaBuyResult supports (response, status) unpacking.
+    def test_body_carries_status_beside_the_domain_fields(self):
+        """The buyer receives ONE flat document: envelope fields at the root, not nested.
 
-        Spec: UNSPECIFIED (implementation-defined result wrapper pattern)
+        Spec: create-media-buy-response.json composes core/protocol-envelope.json at its root
+        via ``allOf``, so ``status`` is a sibling of ``media_buy_id``, not a wrapper around it.
         Covers: UC-002-MAIN-21
         """
-        success = _make_success(media_buy_id="mb_1")
-        result = CreateMediaBuyResult(status="completed", response=success)
-        response, status = result
-        assert status == "completed"
-        assert response.media_buy_id == "mb_1"
-
-    def test_result_serializes_with_status_field(self):
-        """UC-002-R05: CreateMediaBuyResult.model_dump includes status at top level.
-
-        Spec: UNSPECIFIED (implementation-defined result wrapper serialization)
-        Covers: UC-002-MAIN-21
-        """
-        success = _make_success(media_buy_id="mb_1")
-        result = CreateMediaBuyResult(status="completed", response=success)
-        dumped = result.model_dump()
+        dumped = _make_success(media_buy_id="mb_1").model_dump()
         assert dumped["status"] == "completed"
         assert dumped["media_buy_id"] == "mb_1"
 
-    def test_result_serializes_replayed_marker_when_set(self):
-        """`replayed=True` surfaces as a top-level boolean; omitted when False.
+    def test_replayed_marks_a_replay_and_is_false_on_a_fresh_response(self):
+        """``replayed`` distinguishes a cached answer from a fresh one.
 
-        Spec: AdCP 3.0.1 idempotency — a replayed cached success carries a
-        top-level ``replayed: true`` envelope marker; fresh responses omit it
-        so they stay byte-identical. Injected at response time via
-        CreateMediaBuyResult._serialize, never stored in the cached body.
+        Spec: core/protocol-envelope.json — "Set to true when this response was returned from
+        the idempotency cache rather than from a fresh execution. Set to false (or omitted)
+        when the request was executed fresh." This seller emits ``false``, the same as its
+        other thirteen tools.
         """
-        success = _make_success(media_buy_id="mb_1")
+        assert _make_success(media_buy_id="mb_1").model_dump()["replayed"] is False
 
-        # Fresh (default): no replayed key on the wire.
-        fresh = CreateMediaBuyResult(status="completed", response=success).model_dump()
-        assert "replayed" not in fresh
-
-        # Replay: top-level replayed=True alongside status and the payload fields.
-        replay = CreateMediaBuyResult(status="completed", response=success, replayed=True).model_dump()
-        assert replay["replayed"] is True
-        assert replay["status"] == "completed"
-        assert replay["media_buy_id"] == "mb_1"
-
-    def test_replayed_defaults_false_and_preserves_unpacking(self):
-        """replayed defaults False and does not disturb (response, status) unpacking."""
-        success = _make_success(media_buy_id="mb_1")
-        result = CreateMediaBuyResult(status="completed", response=success)
-        assert result.replayed is False
-        response, status = result
-        assert status == "completed"
-        assert response.media_buy_id == "mb_1"
+        replay = _make_success(media_buy_id="mb_1")
+        replay.replayed = True
+        assert replay.model_dump()["replayed"] is True
 
 
 class TestCreateMediaBuyValidation:
@@ -1473,8 +1445,8 @@ class TestCreateMediaBuyIdempotency:
             result = await invoke_tool("create_media_buy", req, identity)
 
         assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        assert result.response.media_buy_id == "mb_original_123"
+        assert isinstance(result, CreateMediaBuySuccess)
+        assert result.media_buy_id == "mb_original_123"
         assert result.status == "completed"
         assert result.replayed is True  # spec replay marker, injected at replay time (never stored)
         mock_attempts.find_by_key.assert_called_once_with(
@@ -1573,7 +1545,9 @@ class TestCreateMediaBuyAdapterInteraction:
         from src.core.schemas import Error
         from src.core.tools.media_buy_create import _execute_adapter_media_buy_creation
 
-        error_response = CreateMediaBuyError(errors=[Error(code="BUDGET_EXCEEDED", message="Budget too high")])
+        error_response = CreateMediaBuyError(
+            status="failed", errors=[Error(code="BUDGET_EXCEEDED", message="Budget too high")]
+        )
 
         mock_adapter = MagicMock()
         mock_adapter.create_media_buy.return_value = error_response
@@ -1739,7 +1713,7 @@ class TestCreateMediaBuyAdapterInteraction:
 
             # Should return a simulated success without calling adapter
             assert result is not None
-            response, status = result
+            response, status = result, result.status
             assert status == "completed"
             assert response.media_buy_id is not None
             assert response.media_buy_id.startswith("dry_run_")
@@ -1886,7 +1860,7 @@ class TestUpdateMediaBuyResponseShapes:
         """
         from src.core.schemas import Error
 
-        resp = UpdateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="fail")])
+        resp = UpdateMediaBuyError(status="failed", errors=[Error(code="VALIDATION_ERROR", message="fail")])
         dumped = resp.model_dump()
         assert "errors" in dumped
         # success fields should not be present or should be None
@@ -1990,8 +1964,8 @@ class TestUpdateMediaBuyMainFlow:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuySuccess)
-        assert result.response.media_buy_id == "mb_resolved"
+        assert isinstance(result, UpdateMediaBuySuccess)
+        assert result.media_buy_id == "mb_resolved"
 
     def test_partial_update_omitted_fields_unchanged(self):
         """UC-003-MF03: only specified fields update, rest preserved.
@@ -2081,7 +2055,7 @@ class TestUpdateMediaBuyPauseResume:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert isinstance(result, UpdateMediaBuySuccess)
         # Adapter should be called with pause action
         adapter.update_media_buy.assert_called_once_with(
             media_buy_id=ANY, action="pause_media_buy", package_id=ANY, budget=ANY, today=ANY
@@ -2147,7 +2121,7 @@ class TestUpdateMediaBuyPauseResume:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert isinstance(result, UpdateMediaBuySuccess)
         adapter.update_media_buy.assert_called_once_with(
             media_buy_id=ANY, action="resume_media_buy", package_id=ANY, budget=ANY, today=ANY
         )
@@ -2213,7 +2187,7 @@ class TestUpdateMediaBuyPauseResume:
             # Should succeed without any CurrencyLimit lookups
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert isinstance(result, UpdateMediaBuySuccess)
         # The key assertion: session.scalars should NOT be called for currency limit
         # because pause doesn't change budget or dates
         # (adapter is called directly for pause action)
@@ -2499,9 +2473,9 @@ class TestUpdateMediaBuyCreativeIds:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuySuccess)
-        assert result.response.affected_packages is not None
-        assert len(result.response.affected_packages) >= 1
+        assert isinstance(result, UpdateMediaBuySuccess)
+        assert result.affected_packages is not None
+        assert len(result.affected_packages) >= 1
         # The old assignment should have been deleted (replacement semantics)
         uow_session.delete.assert_called_with(mock_existing_assignment)
 
@@ -2861,7 +2835,7 @@ class TestUpdateMediaBuyCreativeIds:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert isinstance(result, UpdateMediaBuySuccess)
         # c1 and c3 should be deleted (removed)
         deleted_ids = {call.args[0].creative_id for call in uow_session.delete.call_args_list}
         assert "c1" in deleted_ids
@@ -3095,10 +3069,10 @@ class TestUpdateMediaBuyManualApproval:
         # + task_id), not a completed success (which would falsely claim the update was
         # applied), carried in the UpdateMediaBuyResult protocol envelope (#1417). The
         # workflow step is marked requires_approval.
-        assert isinstance(result.response, UpdateMediaBuySubmitted)
+        assert isinstance(result, UpdateMediaBuySubmitted)
         assert result.status == "submitted"
-        assert result.response.status == "submitted"
-        assert result.response.task_id == "step_1"
+        assert result.status == "submitted"
+        assert result.task_id == "step_1"
         ctx_mgr.audit_workflow_step_result.assert_called_once_with(
             ANY, ANY, status="requires_approval", request_obj=ANY, add_comment=ANY
         )
@@ -3167,7 +3141,7 @@ class TestUpdateMediaBuyManualApproval:
         # Spec 3.1.1: a pending-approval update is the SUBMITTED variant, carried in the
         # UpdateMediaBuyResult protocol envelope (#1417). implementation_date is not part
         # of that envelope (the update is not yet applied), so it is absent/None.
-        assert isinstance(result.response, UpdateMediaBuySubmitted)
+        assert isinstance(result, UpdateMediaBuySubmitted)
         assert result.status == "submitted"
         dumped = result.model_dump()
         assert dumped["status"] == "submitted"
@@ -3196,6 +3170,7 @@ class TestUpdateMediaBuyAdapterFailure:
         identity = _make_identity()
 
         adapter_error = UpdateMediaBuyError(
+            status="failed",
             errors=[Error(code="ACTIVATION_WORKFLOW_FAILED", message="Network timeout")],
         )
 
@@ -3237,8 +3212,8 @@ class TestUpdateMediaBuyAdapterFailure:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuyError)
-        assert len(result.response.errors) >= 1
+        assert isinstance(result, UpdateMediaBuyError)
+        assert len(result.errors) >= 1
 
     def test_no_db_changes_on_adapter_failure(self):
         """UC-003-AF02: adapter failure means no DB records updated.
@@ -3278,6 +3253,7 @@ class TestUpdateMediaBuyAdapterFailure:
         # and the adapter's own diagnostic reaches the operator through the
         # exception and the logs, not through a hand-built buyer-facing advisory.
         adapter_error = UpdateMediaBuyError(
+            status="failed",
             errors=[Error(code="SERVICE_UNAVAILABLE", details={"adapter": "gam"})],
         )
 
@@ -3322,7 +3298,7 @@ class TestUpdateMediaBuyAdapterFailure:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuyError)
+        assert isinstance(result, UpdateMediaBuyError)
         ctx_mgr.audit_workflow_step_result.assert_called_once_with(
             "step_1", ANY, status="failed", error_message=CODE_TABLE["SERVICE_UNAVAILABLE"].message
         )
@@ -4442,7 +4418,7 @@ class TestBRRule018AtomicResponse:
         """
         from src.core.schemas import Error
 
-        resp = CreateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="fail")])
+        resp = CreateMediaBuyError(status="failed", errors=[Error(code="VALIDATION_ERROR", message="fail")])
         dumped = resp.model_dump()
         # media_buy_id should not be set or should be None
         assert dumped.get("media_buy_id") is None
@@ -4467,7 +4443,7 @@ class TestBRRule018AtomicResponse:
         """
         from src.core.schemas import Error
 
-        resp = UpdateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="fail")])
+        resp = UpdateMediaBuyError(status="failed", errors=[Error(code="VALIDATION_ERROR", message="fail")])
         dumped = resp.model_dump()
         assert dumped.get("affected_packages") is None
 
@@ -4504,6 +4480,7 @@ class TestBRRule043ContextEcho:
         from src.core.schemas import Error
 
         err_resp = CreateMediaBuyError(
+            status="failed",
             errors=[Error(code="VALIDATION_ERROR", message="fail")],
             context=context_obj,
         )

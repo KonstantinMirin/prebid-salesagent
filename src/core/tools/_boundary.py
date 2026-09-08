@@ -56,34 +56,29 @@ import inspect
 import logging
 import typing
 from collections.abc import Callable
-from typing import Any, cast
-
-from adcp.types import ProtocolEnvelope
-from adcp.types.generated_poc.core.version_envelope import AdcpVersionEnvelope
-from pydantic import BaseModel
+from typing import Any
 
 from src.core.idempotency_canonical import canonical_request_hash
 from src.core.idempotency_replay import cache_success, lookup_cached_replay, maybe_evict_expired
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas._base import BuyerRequest
+from src.core.schemas._base import AdcpResponse, BuyerRequest
 from src.core.version_negotiation import SERVED_ADCP_VERSION
 
 logger = logging.getLogger(__name__)
 
 
-def _response_model_for(impl: Callable[..., Any]) -> type[ProtocolEnvelope] | None:
+def _response_model_for(impl: Callable[..., Any]) -> type[AdcpResponse] | None:
     """The model an implementation returns, read off its annotation.
 
     Derived rather than declared: a registry row says which DTO a tool ACCEPTS, and the
     implementation's own signature already says what it returns. Storing the response type
     a second time would be a second declaration that can disagree with the function.
 
-    Narrowed to ``ProtocolEnvelope``, not ``BaseModel``, because that is what an AdCP response
-    IS -- every pinned response schema composes ``core/protocol-envelope.json`` with ``allOf``,
-    and all fourteen models inherit the class. The narrowing is what lets this module ASSIGN
-    ``replayed`` instead of probing ``model_fields`` for it, and
-    ``test_architecture_dto_adds_no_field.py`` grades that every registered tool keeps the
-    base, so the annotation cannot quietly become a lie.
+    Narrowed to ``AdcpResponse``, which is what an AdCP response IS -- every pinned response
+    schema composes the version and protocol envelopes at its root, and that base carries both.
+    The narrowing is what lets this module ASSIGN ``adcp_version`` and ``replayed`` and CALL
+    ``revive`` without probing for them; ``_register_tool`` refuses at import any tool whose
+    response does not descend from it, so the annotation cannot quietly become a lie.
 
     ``None`` when the callable has no readable annotations, rather than a raise: the only
     consequence is that a cached envelope cannot be revived, so the request executes fresh --
@@ -95,45 +90,16 @@ def _response_model_for(impl: Callable[..., Any]) -> type[ProtocolEnvelope] | No
     except Exception:
         return None
     annotation = hints.get("return")
-    if isinstance(annotation, type) and issubclass(annotation, ProtocolEnvelope):
+    if isinstance(annotation, type) and issubclass(annotation, AdcpResponse):
         return annotation
     return None
-
-
-def _is_task_envelope(model: type[BaseModel]) -> bool:
-    """Whether this response model wraps a domain response in a protocol status.
-
-    ``CreateMediaBuyResult`` and its siblings declare ``status`` beside ``response``; a plain
-    response like ``SyncCreativesResponse`` declares neither. The distinction decides what
-    goes INTO the cache and what comes back out, and it is read off the model so the two
-    directions cannot disagree.
-
-    A class that is not a Pydantic model declares no fields and so is not an envelope. That
-    is not only a type guard: this runs on the success path of every keyed request, so a
-    raise here would lose the answer to work that already happened.
-    """
-    return (
-        isinstance(model, type) and issubclass(model, BaseModel) and {"status", "response"} <= set(model.model_fields)
-    )
-
-
-def _cacheable_body(result: Any) -> Any:
-    """The part of ``result`` the cache stores: the domain response, never the wrapper.
-
-    ``IdempotencyAttemptRepository.record_success`` documents the stored shape as
-    ``{"status": <protocol task status>, "response": <model dump>}`` -- the protocol status
-    beside the domain response, because a pending buy's ``submitted`` is not a valid DOMAIN
-    status and cannot ride inside the payload. Handing it the wrapper instead would store the
-    status twice, in two vocabularies.
-    """
-    return result.response if _is_task_envelope(type(result)) else result
 
 
 def _deserializer_for(impl: Callable[..., Any]) -> Callable[[dict[str, Any]], Any | None]:
     """Turn a stored envelope back into a typed response, or None if it no longer validates.
 
-    The exact inverse of :func:`_cacheable_body`: a task envelope is rebuilt from the stored
-    protocol status plus the stored domain response; a plain response is the stored response.
+    ``AdcpResponse.revive`` resolves the stored body to its type -- for a tool whose schema is
+    a ``oneOf``, to the BRANCH the buyer originally received.
 
     None means "treat as a miss": a stored envelope that stopped validating -- because the
     response model changed between the deploy that wrote it and the one replaying it, inside
@@ -145,9 +111,7 @@ def _deserializer_for(impl: Callable[..., Any]) -> Callable[[dict[str, Any]], An
     reason, and the cached body stays clean so repeated replays of one key each carry it once.
 
     A plain assignment, with no check that the field exists: every response model inherits
-    ``adcp.types.ProtocolEnvelope``, so every response HAS it. This used to probe
-    ``model_fields`` and ``setattr``, which is what a boundary does when the models it handles
-    disagree about their own envelope -- and they did: four of the fourteen were missing it.
+    ``AdcpResponse``, which ``_register_tool`` refuses to register a tool without.
     """
     model = _response_model_for(impl)
 
@@ -155,10 +119,7 @@ def _deserializer_for(impl: Callable[..., Any]) -> Callable[[dict[str, Any]], An
         if model is None:
             return None
         try:
-            if _is_task_envelope(model):
-                result = model.model_validate({"status": envelope["status"], "response": envelope["response"]})
-            else:
-                result = model.model_validate(envelope["response"])
+            result = model.revive(envelope["response"])
         except Exception:
             logger.warning("Cached %s envelope failed validation — treating as a miss", model.__name__, exc_info=True)
             return None
@@ -193,7 +154,7 @@ def _keyed_scope(req: BuyerRequest, identity: ResolvedIdentity | None) -> tuple[
     return identity.tenant_id, identity.principal_id, identity.account_id, key
 
 
-async def invoke_tool(tool_name: str, req: BuyerRequest, identity: ResolvedIdentity | None = None) -> ProtocolEnvelope:
+async def invoke_tool(tool_name: str, req: BuyerRequest, identity: ResolvedIdentity | None = None) -> AdcpResponse:
     """Run the registry's tool named ``tool_name``.
 
     The form every transport calls. A transport names the TOOL and hands over the request it
@@ -210,7 +171,7 @@ async def invoke(
     impl: Callable[..., Any],
     req: BuyerRequest,
     identity: ResolvedIdentity | None = None,
-) -> ProtocolEnvelope:
+) -> AdcpResponse:
     """Run ``tool_name`` for a request that arrived over a transport.
 
     An implementation is called with the request and the caller, and nothing else. There is
@@ -228,19 +189,14 @@ async def invoke(
     return _served(await _invoke(tool_name, impl, req, identity))
 
 
-def _served(response: ProtocolEnvelope) -> ProtocolEnvelope:
+def _served(response: AdcpResponse) -> AdcpResponse:
     """Stamp the release this build served onto one response envelope.
 
     THE one assignment. Both of ``invoke``'s answers pass through it -- a fresh run and a
     replayed one -- so a replay echoes the release that is serving it, which is what the
     buyer's connection is actually speaking.
     """
-    # Every registered response inherits BOTH ``ProtocolEnvelope`` (status, replayed, ...) and
-    # the SDK's ``AdcpVersionEnvelope`` (adcp_version). Python has no intersection type, so the
-    # cast names the half this assignment needs;
-    # ``test_architecture_response_envelope_bases`` grades that the half is really there for
-    # every tool, which is what keeps the cast from being a hope.
-    cast("AdcpVersionEnvelope", response).adcp_version = SERVED_ADCP_VERSION
+    response.adcp_version = SERVED_ADCP_VERSION
     return response
 
 
@@ -249,7 +205,7 @@ async def _invoke(
     impl: Callable[..., Any],
     req: BuyerRequest,
     identity: ResolvedIdentity | None = None,
-) -> ProtocolEnvelope:
+) -> AdcpResponse:
     """``invoke`` without the envelope stamp: resolve the account, honour the key, run it."""
     account = req.get_account()
     if account is not None and identity is not None:
@@ -282,7 +238,7 @@ async def _invoke(
         account_id=account_id,
         tool_name=tool_name,
         idempotency_key=key,
-        response_model=_cacheable_body(result),
+        response_model=result,
         # The result's OWN protocol status, not a constant. A create awaiting human approval
         # is ``submitted``, and storing it as completed would make the replay reconstruct the
         # wrong response variant -- the buyer would see a success where the original answer

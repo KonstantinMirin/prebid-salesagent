@@ -390,16 +390,12 @@ def then_response_within_sla(ctx: dict) -> None:
     assert error is None, f"Expected a successful response to verify SLA, got error: {error}"
     result = require_payload(ctx)
     assert result.status == "success", f"Expected status='success' (full pipeline completed), got '{result.status}'"
-    assert isinstance(result.response, CreateMediaBuySuccess), (
-        f"Expected CreateMediaBuySuccess, got {type(result.response).__name__}"
-    )
+    assert isinstance(result, CreateMediaBuySuccess), f"Expected CreateMediaBuySuccess, got {type(result).__name__}"
 
     # Production-computed: media_buy_id proves the pipeline completed end-to-end
-    assert result.response.media_buy_id, (
-        "media_buy_id is empty — pipeline did not complete (fast error is not SLA compliance)"
-    )
+    assert result.media_buy_id, "media_buy_id is empty — pipeline did not complete (fast error is not SLA compliance)"
     # Production-computed: packages prove adapter + persistence completed
-    assert result.response.packages, "packages list is empty — adapter/persistence did not complete"
+    assert result.packages, "packages list is empty — adapter/persistence did not complete"
 
     # --- Part 2: Assert no synchronous adapter I/O on request thread ---
     # The controllable latency risk for p95 SLA is synchronous external

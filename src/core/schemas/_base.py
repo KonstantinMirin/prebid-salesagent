@@ -99,6 +99,7 @@ from adcp.types.generated_poc.enums.media_buy_valid_action import (
 from adcp.types.generated_poc.enums.snapshot_unavailable_reason import (
     SnapshotUnavailableReason as LibrarySnapshotUnavailableReason,
 )
+from adcp.types.generated_poc.enums.task_status import TaskStatus as LibraryTaskStatus
 from adcp.types.generated_poc.media_buy.get_media_buys_response import (
     MediaBuy as LibraryGetMediaBuysMediaBuy,
 )
@@ -157,8 +158,11 @@ from pydantic import (
     AwareDatetime,
     BaseModel,
     ConfigDict,
+    Discriminator,
     Field,
     RootModel,
+    Tag,
+    TypeAdapter,
     model_serializer,
     model_validator,
 )
@@ -741,7 +745,69 @@ def _mirror_media_buy_status(model: Any) -> Any:
     return model
 
 
-class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess, ProtocolEnvelope):
+#: ``union root -> TypeAdapter`` for the tools whose response schema is a ``oneOf``. Populated
+#: beside the branches, which is the only place that knows them; :meth:`AdcpResponse.revive`
+#: is the only reader. A root absent from here has a single shape and validates as itself.
+_BRANCH_ADAPTERS: dict[type, TypeAdapter] = {}
+
+
+class AdcpResponse(AdcpVersionEnvelope, ProtocolEnvelope):
+    """What every AdCP response IS: the two envelopes its schema composes at the root.
+
+    Declares NO fields of its own. It exists to name a TYPE, and a field added here would put
+    a key on the wire that no pinned schema declares.
+
+    Every response schema opens with the same root composition --
+    ``"allOf": [{"$ref": "../core/version-envelope.json"}, {"$ref": "../core/protocol-envelope.json"}]``
+    -- and a root ``allOf`` in JSON Schema draft-07 applies to the whole document, so it reaches
+    every branch of a root ``oneOf`` unconditionally. The SDK's generator does not: it applies
+    the bases to some branches and not others (adcontextprotocol/adcp-client-python#1136, and
+    its spec-side twin adcontextprotocol/adcp#7324, closed with the ruling that the schemas are
+    correct and the codegen is not). Inheriting this base RESTORES that composition; it does not
+    widen anything.
+
+    The boundary writes exactly two fields onto a response -- ``adcp_version`` in
+    ``_boundary._served`` and ``replayed`` in ``_boundary._deserializer_for`` -- and they come
+    from the two different bases above. Naming both here is what lets the boundary be typed
+    rather than cast.
+    """
+
+    @classmethod
+    def revive(cls, data: dict[str, Any]) -> "AdcpResponse":
+        """Rebuild a stored response of this type, resolving a ``oneOf`` to its branch.
+
+        A response whose schema is a single shape validates as itself. A union root resolves
+        through the discriminated union registered for it, which returns the BRANCH the buyer
+        originally received -- validating against the root would build the root and drop
+        whatever the branch declares.
+
+        Raises whatever pydantic raises; the caller decides that an unrevivable stored body is
+        a cache miss.
+        """
+        adapter = _BRANCH_ADAPTERS.get(cls)
+        return adapter.validate_python(data) if adapter is not None else cls.model_validate(data)
+
+
+class CreateMediaBuyResult(AdcpResponse):
+    """The three shapes a create_media_buy response can take, as one nameable type.
+
+    ``media-buy/create-media-buy-response.json`` is a root ``oneOf`` over Success, Error and
+    Submitted. The SDK renders that as a bare union alias, which is correct for a
+    non-discriminated ``oneOf`` -- but a union alias is ``types.UnionType``, not a ``type``, so
+    it cannot be a return annotation this codebase can resolve. ``_boundary._response_model_for``
+    reads the implementation's annotation and requires a class; given a union it returns None
+    and the idempotency replay silently disables for the tool.
+
+    So the branches inherit a common root and the implementation returns THAT. Each branch
+    stays its own SDK type and serializes itself.
+    """
+
+
+class UpdateMediaBuyResult(AdcpResponse):
+    """The three shapes an update_media_buy response can take. See ``CreateMediaBuyResult``."""
+
+
+class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess, CreateMediaBuyResult):
     """Successful create_media_buy response, extending the SDK success branch.
 
     Extends the official adcp CreateMediaBuySuccess type with internal workflow tracking.
@@ -921,15 +987,25 @@ class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess,
         return self.model_dump(context={"include_internal": True}, **kwargs)
 
 
-class CreateMediaBuyError(AdCPCreateMediaBuyError):
+class CreateMediaBuyError(AdCPCreateMediaBuyError, CreateMediaBuyResult):
     """Failed create_media_buy response, extending the SDK error branch.
 
     Extends the official adcp CreateMediaBuyError type.
-    Per AdCP PR #113, this response contains ONLY domain data.
+
+    ``status`` and ``replayed`` arrive from ``CreateMediaBuyResult``: the SDK's error branch
+    does not carry ``ProtocolEnvelope`` (adcp-client-python#1136) although the schema composes
+    it at the root, so the root ``allOf`` reaches this branch through the shared base instead.
     """
 
+    #: Required, with no default. ``core/protocol-envelope.json`` lists ``status`` in
+    #: ``required`` and declares no default; the SDK model supplies ``completed``, which on an
+    #: error response is the wrong value. Removing it makes an error that does not state its
+    #: status unconstructible. Same annotation as the parent, so this is a strengthening and
+    #: needs no inheritance allowlist row.
+    status: LibraryTaskStatus
 
-class CreateMediaBuySubmitted(AdCPCreateMediaBuySubmitted):
+
+class CreateMediaBuySubmitted(AdCPCreateMediaBuySubmitted, CreateMediaBuyResult):
     """Async/pending create_media_buy response, extending the SDK submitted branch.
 
     Spec 3.1.1 ``create-media-buy-response.json`` models a buy that cannot be
@@ -954,75 +1030,6 @@ class CreateMediaBuySubmitted(AdCPCreateMediaBuySubmitted):
 # task envelope is produced by the tool's approval branches and lives on
 # CreateMediaBuyResult.response (Success | Error | Submitted).
 CreateMediaBuyResponse = CreateMediaBuySuccess | CreateMediaBuyError
-
-
-class TaskResultEnvelope(AdcpVersionEnvelope, ProtocolEnvelope, SalesAgentBaseModel):
-    """DRY base for protocol-status-wrapping result types.
-
-    Serializes to {"status": <TaskStatus>, ...response_fields} by flattening the domain
-    response at the root and overwriting the envelope fields this wrapper owns. Subclasses
-    declare the typed 'response' field.
-
-    IT INHERITS ``ProtocolEnvelope``, which is the whole point of the class. Every pinned
-    response schema composes that envelope with ``allOf``, and the nine tools whose models
-    descend from an SDK response get its eleven fields for free. This wrapper does not descend
-    from one -- it is ours, built to pair a domain response with the protocol status -- so
-    before this base it declared ``status: str`` by hand and nothing else. Ten of the eleven
-    envelope fields were therefore absent from create_media_buy and update_media_buy, and
-    ``replayed`` had to be hand-added to ``CreateMediaBuyResult`` alone to make replay
-    observable at all. That hand-addition is deleted; the field arrives here now.
-
-    ``status`` is the envelope's ``TaskStatus`` rather than a bare ``str``, so a value outside
-    the pinned enum no longer type-checks.
-
-    It inherits ``AdcpVersionEnvelope`` for the same reason it inherits ``ProtocolEnvelope``:
-    the other twelve tools' responses get ``adcp_version`` from that SDK base through their
-    own response model, and this wrapper is not one of them. Without it, create_media_buy and
-    update_media_buy were the only two responses that could not carry the release the seller
-    served -- the field the boundary stamps on every envelope. Same shape as
-    ``CompleteTaskResponse(AdcpVersionEnvelope, ProtocolEnvelope)`` below.
-    """
-
-    @model_serializer(mode="wrap")
-    def _serialize(self, serializer, info):
-        result = self.response.model_dump(mode=info.mode, context=info.context)
-        result["status"] = self.status
-        # Projected like ``status``, and for the identical reason: the WRAPPER owns the
-        # envelope fields, and this body is built from the domain response, which carries its
-        # own unset ``adcp_version`` and would drop it under exclude_none.
-        result["adcp_version"] = self.adcp_version
-        # The wrapper owns ``replayed``, not the domain response. A variant that declares its
-        # own (``UpdateMediaBuySubmitted`` does, via the SDK parent) would otherwise emit the
-        # response's default -- which is how a REPLAYED submitted update went on the wire
-        # saying ``replayed: false``, asserting a fresh execution. Popped unconditionally and
-        # re-added only when true, so a fresh response omits it exactly as the schema says:
-        # "set to false (or omitted) when the request was executed fresh".
-        result.pop("replayed", None)
-        if self.replayed:
-            result["replayed"] = True
-        return result
-
-
-class CreateMediaBuyResult(TaskResultEnvelope):
-    """Wrapper combining create_media_buy domain response with protocol status.
-
-    Serializes to {"status": "...", ...response_fields}, allowing callers to
-    pass the model directly to ToolResult without calling model_dump().
-
-    Supports tuple unpacking (response, status) for backward compatibility
-    with existing callers and tests.
-    """
-
-    response: CreateMediaBuySuccess | CreateMediaBuyError | CreateMediaBuySubmitted
-
-    # ``replayed`` and the serializer that omits it when false used to be declared HERE, and
-    # only here -- which is why create_media_buy carried the replay marker and its three
-    # siblings did not. Both live on TaskResultEnvelope now, so update_media_buy gets the same
-    # behaviour instead of the inverted one it had (emitting ``replayed: false`` on a replay).
-
-    def __iter__(self):
-        """Support tuple unpacking: response, status = result."""
-        return iter((self.response, self.status))
 
 
 # --- Update Media Buy Response Components ---
@@ -1050,7 +1057,7 @@ class AffectedPackage(LibraryPackage):
     )
 
 
-class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess, ProtocolEnvelope):  # type: ignore[misc]
+class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess, UpdateMediaBuyResult):  # type: ignore[misc]
     """Successful update_media_buy response, extending the SDK success branch.
 
     Extends the official adcp UpdateMediaBuySuccess type with internal workflow tracking.
@@ -1203,7 +1210,10 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess, ProtocolEnvelope):  # typ
         return self.model_dump(context={"include_internal": True}, **kwargs)
 
 
-class UpdateMediaBuyError(AdCPUpdateMediaBuyError):  # type: ignore[misc]
+class UpdateMediaBuyError(AdCPUpdateMediaBuyError, UpdateMediaBuyResult):  # type: ignore[misc]
+    #: Required, not defaulted -- see ``CreateMediaBuyError.status``.
+    status: LibraryTaskStatus
+
     """Failed update_media_buy response, extending the SDK error branch.
 
     Extends the official adcp UpdateMediaBuyError type.
@@ -1211,7 +1221,7 @@ class UpdateMediaBuyError(AdCPUpdateMediaBuyError):  # type: ignore[misc]
     """
 
 
-class UpdateMediaBuySubmitted(AdCPUpdateMediaBuySubmitted):  # type: ignore[misc]
+class UpdateMediaBuySubmitted(AdCPUpdateMediaBuySubmitted, UpdateMediaBuyResult):  # type: ignore[misc]
     """Async/pending update_media_buy response, extending the SDK submitted branch.
 
     Spec 3.1.1 ``update-media-buy-response.json`` models a not-yet-applied update
@@ -1233,14 +1243,41 @@ class UpdateMediaBuySubmitted(AdCPUpdateMediaBuySubmitted):  # type: ignore[misc
 UpdateMediaBuyResponse = UpdateMediaBuySuccess | UpdateMediaBuyError | UpdateMediaBuySubmitted
 
 
-class UpdateMediaBuyResult(TaskResultEnvelope):
-    """Wrapper combining update_media_buy domain response with protocol status.
+def _media_buy_branch(value: Any) -> str:
+    """Which ``oneOf`` branch a stored create/update media-buy response is.
 
-    Serializes to {"status": "...", ...response_fields}, mirroring
-    CreateMediaBuyResult so wire transports surface ProtocolEnvelope.status.
+    Both schemas discriminate the same way, by required fields rather than by a tag: the
+    submitted branch is the only one whose ``status`` is the const ``"submitted"``, the success
+    branch is the only one requiring ``media_buy_id``, and the error branch requires ``errors``.
+
+    ``media_buy_id`` is tested BEFORE ``errors`` because a SUCCESS response carries ``errors``
+    too -- ``property_list_unsupported_advisories`` puts advisories there -- so keying on
+    ``errors`` first would resolve a successful buy to the error branch.
     """
+    data = value if isinstance(value, dict) else value.__dict__
+    if data.get("status") == "submitted":
+        return "submitted"
+    if data.get("media_buy_id") is not None:
+        return "success"
+    return "error"
 
-    response: UpdateMediaBuySuccess | UpdateMediaBuyError | UpdateMediaBuySubmitted
+
+_BRANCH_ADAPTERS[CreateMediaBuyResult] = TypeAdapter(
+    Annotated[
+        Annotated[CreateMediaBuySuccess, Tag("success")]
+        | Annotated[CreateMediaBuyError, Tag("error")]
+        | Annotated[CreateMediaBuySubmitted, Tag("submitted")],
+        Discriminator(_media_buy_branch),
+    ]
+)
+_BRANCH_ADAPTERS[UpdateMediaBuyResult] = TypeAdapter(
+    Annotated[
+        Annotated[UpdateMediaBuySuccess, Tag("success")]
+        | Annotated[UpdateMediaBuyError, Tag("error")]
+        | Annotated[UpdateMediaBuySubmitted, Tag("submitted")],
+        Discriminator(_media_buy_branch),
+    ]
+)
 
 
 class TaskStatus(StrEnum):
@@ -2490,10 +2527,10 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
             # WHY NOT THE TYPED ERROR: this validator runs inside pydantic, which FastMCP
             # drives through a TypeAdapter BEFORE the tool body. A typed error raised there
             # never passes with_error_logging (the tool has not been entered) and is not a
-            # pydantic ValidationError either, so RequestCompatMiddleware's converter skips
-            # it too -- FastMCP masked it into a prose ToolError and the buyer received no
-            # envelope at all: no code, no field, no suggestion. A pydantic error is the one
-            # shape every boundary already converts.
+            # pydantic ValidationError either, so no converter on the MCP path picks it up --
+            # FastMCP masked it into a prose ToolError and the buyer received no envelope at
+            # all: no code, no field, no suggestion. A pydantic error is the one shape every
+            # boundary already converts.
             #
             # WHY THE loc: core/error.json defines `field` as "JSONPath-lite" and its own
             # example is request-rooted -- 'packages[0].targeting'. Naming the loc here lets
@@ -3307,7 +3344,7 @@ class CompleteTaskRequest(BuyerRequest, AdcpVersionEnvelope):
     context: ContextObject | None = Field(default=None, description="Application-level context")
 
 
-class CompleteTaskResponse(AdcpVersionEnvelope, ProtocolEnvelope):
+class CompleteTaskResponse(AdcpResponse):
     """Response from completing a task.
 
     On the SDK's base envelopes for the same reason the request is: the pin defines no
@@ -3402,7 +3439,7 @@ class GetAdcpCapabilitiesRequest(BuyerRequest, LibraryGetAdcpCapabilitiesRequest
     )
 
 
-class GetAdcpCapabilitiesResponse(LibraryGetAdcpCapabilitiesResponse):
+class GetAdcpCapabilitiesResponse(LibraryGetAdcpCapabilitiesResponse, AdcpResponse):
     """The get_adcp_capabilities response."""
 
 
@@ -3413,7 +3450,7 @@ class ListTasksRequest(BuyerRequest, LibraryListTasksRequest):
     """
 
 
-class ListTasksResponse(LibraryListTasksResponse):
+class ListTasksResponse(LibraryListTasksResponse, AdcpResponse):
     """Extends the pinned ListTasksResponse.
 
     Was a raw dict ``{tasks, total, offset, limit, has_more}`` -- six violations of
@@ -3444,7 +3481,7 @@ class ListTasksResponse(LibraryListTasksResponse):
         return result
 
 
-class GetTaskStatusResponse(LibraryGetTaskStatusResponse):
+class GetTaskStatusResponse(LibraryGetTaskStatusResponse, AdcpResponse):
     """Extends the pinned GetTaskStatusResponse (the spec names the task ``get-task-status-status``).
 
     Was a raw dict (GH #2202): ``protocol`` and ``task_type`` absent, and ``type`` emitted in
@@ -3501,7 +3538,7 @@ class GetMediaBuysRequest(BuyerRequest, LibraryGetMediaBuysRequest):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
 
-class GetMediaBuysResponse(NestedModelSerializerMixin, LibraryGetMediaBuysResponse):
+class GetMediaBuysResponse(NestedModelSerializerMixin, LibraryGetMediaBuysResponse, AdcpResponse):
     """Extends library GetMediaBuysResponse.
 
     Library provides: media_buys, errors, context, pagination, sandbox, ext, and the

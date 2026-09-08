@@ -136,6 +136,7 @@ class TestProtocolEnvelope:
         from src.core.schemas import CreateMediaBuyError
 
         response = CreateMediaBuyError(
+            status="failed",
             errors=[{"code": "VALIDATION_ERROR", "message": "Budget too low"}],
         )
 
@@ -162,6 +163,7 @@ class TestProtocolEnvelopeStatusLogic:
         from src.core.schemas import CreateMediaBuyError
 
         response = CreateMediaBuyError(
+            status="failed",
             errors=[{"code": "VALIDATION_ERROR", "message": "Currency EUR is not supported"}],
         )
 
@@ -177,6 +179,7 @@ class TestProtocolEnvelopeStatusLogic:
         from src.core.schemas import CreateMediaBuyError
 
         response = CreateMediaBuyError(
+            status="failed",
             errors=[{"code": "missing_required_field", "message": "Missing required field: budget"}],
         )
 
@@ -191,6 +194,7 @@ class TestProtocolEnvelopeStatusLogic:
         from src.core.schemas import CreateMediaBuyError
 
         response = CreateMediaBuyError(
+            status="failed",
             errors=[{"code": "AUTH_REQUIRED", "message": "Principal not found"}],
         )
 
@@ -205,6 +209,7 @@ class TestProtocolEnvelopeStatusLogic:
         from src.core.schemas import CreateMediaBuyError
 
         response = CreateMediaBuyError(
+            status="failed",
             errors=[{"code": "invalid_token", "message": "Token expired"}],
         )
 

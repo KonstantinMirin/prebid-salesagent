@@ -1592,27 +1592,6 @@ def _dispatch_create(ctx: dict) -> None:
     request_kwargs = _ensure_request_defaults(ctx)
     dispatch_request(ctx, **request_kwargs)
 
-    # Post-process: promote error results
-    _promote_create_errors(ctx)
-
-
-def _promote_create_errors(ctx: dict) -> None:
-    """Promote CreateMediaBuyError responses to ctx['error']."""
-    resp = payload_or_none(ctx)
-    if resp is None:
-        return
-    from src.core.schemas._base import CreateMediaBuyError as CMBError
-
-    if hasattr(resp, "response") and isinstance(resp.response, CMBError) and resp.response.errors:
-        ctx["error"] = resp.response.errors[0]
-        # This promotion makes the error payload INVISIBLE to success-path Thens —
-        # that was the point of the old `del ctx["response"]`, and retiring the key
-        # did not retire the requirement. Clear every source the payload accessors
-        # read, or require_payload/payload_or_none hand the error payload straight
-        # back and a success-path Then grades it as a success.
-        ctx.pop("result", None)
-        ctx.pop("self_dispatched_response", None)
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # THEN steps — package-specific assertions

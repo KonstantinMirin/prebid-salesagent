@@ -74,6 +74,7 @@ _LAZY_EXPORTS: dict[str, str] = {
     "assert_no_marker_in_envelope": "tests.helpers.envelope_assertions",
     "assert_no_raw_validation_leak": "tests.helpers.envelope_assertions",
     "locate_envelope_error": "tests.helpers.envelope_assertions",
+    "locate_envelope_errors": "tests.helpers.envelope_assertions",
     "assert_delivered_unsigned": "tests.helpers.hmac_assertions",
     "assert_signature_verifies_over_wire_body": "tests.helpers.hmac_assertions",
     "concurrent_commit_in_write_window": "tests.helpers.race_window",
@@ -129,6 +130,7 @@ __all__ = [
     # Envelope assertions
     "assert_envelope_shape",
     "locate_envelope_error",
+    "locate_envelope_errors",
     "assert_no_raw_validation_leak",
     "assert_no_marker_in_envelope",
     # HMAC signature assertions

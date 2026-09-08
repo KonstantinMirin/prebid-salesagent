@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from enum import Enum, StrEnum
 from typing import Any, ClassVar, Literal
 
-from adcp.types import CreativeStatus, ProtocolEnvelope
+from adcp.types import CreativeStatus
 from adcp.types import Error as LibraryError
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import (
@@ -63,6 +63,7 @@ from pydantic_core import PydanticCustomError
 from src.core.config import get_pydantic_extra_mode
 from src.core.enum_helpers import enum_value
 from src.core.schemas._base import (
+    AdcpResponse,
     BuyerRequest,
     FormatId,
     NestedModelSerializerMixin,
@@ -555,7 +556,7 @@ class AssignmentResult(SalesAgentBaseModel):
     )
 
 
-class SyncCreativesResponse(LibrarySyncCreativesSuccess, ProtocolEnvelope):
+class SyncCreativesResponse(LibrarySyncCreativesSuccess, AdcpResponse):
     """Extends library SyncCreativesResponse success variant.
 
     adcp 3.9: SyncCreativesResponse is now a union TypeAlias (not RootModel).
@@ -633,7 +634,7 @@ class ListCreativeFormatsRequest(BuyerRequest, LibraryListCreativeFormatsRequest
         return _upgrade_legacy_format_ids(values)
 
 
-class ListCreativeFormatsResponse(NestedModelSerializerMixin, LibraryListCreativeFormatsResponse):
+class ListCreativeFormatsResponse(NestedModelSerializerMixin, LibraryListCreativeFormatsResponse, AdcpResponse):
     """Extends library ListCreativeFormatsResponse from AdCP spec.
 
     Inherits all AdCP-compliant fields from adcp library,
@@ -698,7 +699,7 @@ class Pagination(LibraryResponsePagination):
     pass  # Inherits all fields from library: cursor, has_more, total_count
 
 
-class ListCreativesResponse(NestedModelSerializerMixin, LibraryListCreativesResponse):
+class ListCreativesResponse(NestedModelSerializerMixin, LibraryListCreativesResponse, AdcpResponse):
     """Extends library ListCreativesResponse with local subtypes.
 
     Library provides: context, creatives, ext, format_summary, pagination,

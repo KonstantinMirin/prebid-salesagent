@@ -98,8 +98,8 @@ class TestImplReplaysCachedSuccess:
         result = await invoke_tool("create_media_buy", _make_request(idem_key), _identity(tenant_id, principal_id))
 
         assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        assert result.response.media_buy_id == "mb_original_123"
+        assert isinstance(result, CreateMediaBuySuccess)
+        assert result.media_buy_id == "mb_original_123"
         assert result.status == "completed"
         assert result.replayed is True  # top-level replay marker, injected at replay time
 
@@ -184,9 +184,9 @@ class TestImplReplaysCachedSuccess:
             tenant_id = env._tenant_id
             principal_id = env._principal_id
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert isinstance(result, CreateMediaBuySuccess)
         assert result.replayed is False, "A fresh key must execute fresh — never replay"
-        assert result.response.media_buy_id != "mb_seeded_other"
+        assert result.media_buy_id != "mb_seeded_other"
 
         # The fresh success cached its own row under other_key (pins the store path).
         with MediaBuyUoW(tenant_id) as uow:
@@ -323,6 +323,7 @@ class TestErrorsAreNeverCached:
             adapter = env.mock["adapter"].return_value
             adapter.create_media_buy.side_effect = None
             adapter.create_media_buy.return_value = CreateMediaBuyError(
+                status="failed",
                 errors=[Error(code="SERVICE_UNAVAILABLE", message="adapter failure", recovery="terminal")],
                 context=None,
             )
@@ -399,6 +400,7 @@ class TestErrorsAreNeverCached:
             # backstop (the rejection raises before the persist).
             adapter.create_media_buy.side_effect = None
             adapter.create_media_buy.return_value = CreateMediaBuyError(
+                status="failed",
                 errors=[Error(code="SERVICE_UNAVAILABLE", message="adapter failure", recovery="terminal")],
                 context=None,
             )
@@ -410,7 +412,7 @@ class TestErrorsAreNeverCached:
             adapter.create_media_buy.side_effect = adapter._original_create_side_effect
             second = env.call_impl(**dict(kwargs))
 
-        assert isinstance(second.response, CreateMediaBuySuccess), f"retry must re-execute, got {second}"
+        assert isinstance(second, CreateMediaBuySuccess), f"retry must re-execute, got {second}"
         assert second.status != "failed"
         assert second.replayed is False, "an error caches nothing — the retry is a fresh execution, not a replay"
 

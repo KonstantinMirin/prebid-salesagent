@@ -334,7 +334,7 @@ class TestCreateMediaBuyManualApproval:
         # Spec 3.1.1: the submitted response carries task_id (the workflow step id),
         # not media_buy_id — resolve the persisted buy via the workflow mapping,
         # exactly as the approval flow does (PR #1567 round-2 item 2).
-        media_buy_id = resolve_media_buy_id_from_task(result.response.task_id)
+        media_buy_id = resolve_media_buy_id_from_task(result.task_id)
         with get_db_session() as session:
             mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id)).first()
             assert mb is not None, "Media buy record should exist in DB"
@@ -391,7 +391,7 @@ class TestCreateMediaBuyManualApproval:
 
         # Resolve the buy from the buyer-visible task_id via the workflow
         # mapping — the submitted response has no media_buy_id (spec 3.1.1).
-        media_buy_id = resolve_media_buy_id_from_task(result.response.task_id)
+        media_buy_id = resolve_media_buy_id_from_task(result.task_id)
 
         result = run_approval(media_buy_id, mb_tenant_with_approval["tenant_id"])
         assert result.ok, f"execute_approved_media_buy should succeed, got error: {result.error_msg}"
@@ -433,10 +433,10 @@ class TestCreateMediaBuyAdapterAtomicity:
 
         result = await _create_media_buy_impl(req=req, identity=mb_identity)
 
-        assert result.status == "completed", f"Expected completed, got {result.status}. Response: {result.response}"
+        assert result.status == "completed", f"Expected completed, got {result.status}. Response: {result}"
 
         with get_db_session() as session:
-            mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == result.response.media_buy_id)).first()
+            mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == result.media_buy_id)).first()
             assert mb is not None, "Media buy should be persisted in DB"
             assert mb.media_buy_id is not None
             # Mock adapter flow results in pending_creatives (creatives not yet assigned/approved).
@@ -528,9 +528,9 @@ class TestUpdateMediaBuyCreativeAssignments:
         create_result = await _create_media_buy_impl(req=create_req, identity=mb_identity)
         assert create_result.status == "completed"
 
-        media_buy_id = create_result.response.media_buy_id
-        assert create_result.response.packages
-        package_id = create_result.response.packages[0].package_id
+        media_buy_id = create_result.media_buy_id
+        assert create_result.packages
+        package_id = create_result.packages[0].package_id
 
         update_req = UpdateMediaBuyRequest(
             account={"account_id": "acct_test"},
@@ -548,7 +548,7 @@ class TestUpdateMediaBuyCreativeAssignments:
         )
         update_result = _update_media_buy_impl(req=update_req, identity=mb_identity)
 
-        assert not update_result.response.errors
+        assert not update_result.errors
 
     @pytest.mark.asyncio
     async def test_invalid_placement_ids_rejected(
@@ -569,8 +569,8 @@ class TestUpdateMediaBuyCreativeAssignments:
         create_result = await _create_media_buy_impl(req=create_req, identity=mb_identity)
         assert create_result.status == "completed"
 
-        media_buy_id = create_result.response.media_buy_id
-        package_id = create_result.response.packages[0].package_id
+        media_buy_id = create_result.media_buy_id
+        package_id = create_result.packages[0].package_id
 
         update_req = UpdateMediaBuyRequest(
             account={"account_id": "acct_test"},
@@ -622,8 +622,8 @@ class TestGetMediaBuysResponseFields:
             ],
         )
         create_result = await _create_media_buy_impl(req=create_req, identity=mb_identity)
-        assert create_result.status == "completed", f"Create failed: {create_result.response}"
-        media_buy_id = create_result.response.media_buy_id
+        assert create_result.status == "completed", f"Create failed: {create_result}"
+        media_buy_id = create_result.media_buy_id
 
         # Use explicit status_filter to include all statuses — newly created media buys
         # may be pending_creatives (no creatives) or pending_start (future start), not active
@@ -682,9 +682,9 @@ class TestGetMediaBuysResponseFields:
             ],
         )
         create_result = await _create_media_buy_impl(req=create_req, identity=mb_identity)
-        assert create_result.status == "completed", f"Create failed: {create_result.response}"
-        media_buy_id = create_result.response.media_buy_id
-        package_id = create_result.response.packages[0].package_id
+        assert create_result.status == "completed", f"Create failed: {create_result}"
+        media_buy_id = create_result.media_buy_id
+        package_id = create_result.packages[0].package_id
 
         # Mock the creative agent format registry to avoid real HTTP calls
         mock_format = create_test_format(
@@ -798,8 +798,8 @@ class TestGetMediaBuysResponseFields:
             ],
         )
         create_result = await _create_media_buy_impl(req=create_req, identity=mb_identity)
-        assert create_result.status == "completed", f"Create failed: {create_result.response}"
-        media_buy_id = create_result.response.media_buy_id
+        assert create_result.status == "completed", f"Create failed: {create_result}"
+        media_buy_id = create_result.media_buy_id
 
         # Persist a terminal/explicit lifecycle status AND a flight window that
         # spans "today" (started yesterday, ends in a week). Date-derivation
@@ -899,8 +899,8 @@ class TestCreateMediaBuyFullRoundtrip:
         )
 
         result = await _create_media_buy_impl(req=req, identity=mb_identity)
-        assert result.status == "completed", f"Create failed: {result.response}"
-        media_buy_id = result.response.media_buy_id
+        assert result.status == "completed", f"Create failed: {result}"
+        media_buy_id = result.media_buy_id
 
         with get_db_session() as session:
             mb = session.scalars(select(MediaBuy).where(MediaBuy.media_buy_id == media_buy_id)).first()
@@ -935,7 +935,7 @@ class TestUpdateMediaBuyOwnership:
         req = _make_create_request()
         result = await _create_media_buy_impl(req=req, identity=mb_identity)
         assert result.status == "completed"
-        media_buy_id = result.response.media_buy_id
+        media_buy_id = result.media_buy_id
 
         # Create a different principal
         other_pid = f"other_principal_{uuid.uuid4().hex[:8]}"
@@ -985,7 +985,7 @@ class TestUpdateMediaBuyAdapterError:
         req = _make_create_request()
         result = await _create_media_buy_impl(req=req, identity=mb_identity)
         assert result.status == "completed"
-        media_buy_id = result.response.media_buy_id
+        media_buy_id = result.media_buy_id
 
         # Move the buy to 'active' so 'pause' passes the state-machine gate and
         # actually reaches the adapter — a pending_creatives buy (no creatives)

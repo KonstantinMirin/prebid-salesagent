@@ -1738,6 +1738,7 @@ class TestAdCPContract:
 
         # Test error response (oneOf error branch)
         error_response = CreateMediaBuyError(
+            status="failed",
             errors=[{"code": "test_error", "message": "test error"}],
         )
         adcp_error = error_response.model_dump()
@@ -1756,6 +1757,7 @@ class TestAdCPContract:
             packages=[],
         )
         error_via_union: CreateMediaBuyResponse = CreateMediaBuyError(
+            status="failed",
             errors=[{"code": "test", "message": "test"}],
         )
 
@@ -1807,6 +1809,7 @@ class TestAdCPContract:
 
         # Test error response (oneOf error branch)
         error_response = UpdateMediaBuyError(
+            status="failed",
             errors=[{"code": "update_failed", "message": "Update operation failed"}],
         )
         adcp_error = error_response.model_dump()

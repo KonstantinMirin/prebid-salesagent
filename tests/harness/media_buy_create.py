@@ -11,16 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 from src.core.schemas import CreateMediaBuyRequest
-from src.core.schemas._base import (
-    CreateMediaBuyError,
-    CreateMediaBuyResult,
-    CreateMediaBuySubmitted,
-    CreateMediaBuySuccess,
-)
+from src.core.schemas._base import CreateMediaBuyResult
 from tests.harness._base import IntegrationEnv, json_safe
 from tests.harness.egress import EgressHatchMixin
 from tests.harness.transport import DeliverResult
@@ -482,30 +477,14 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         return json_safe(self._ensure_required_request_fields(kwargs))
 
     def parse_rest_response(self, data: dict[str, Any]) -> CreateMediaBuyResult:
-        """Parse a flattened create_media_buy wire body back into a CreateMediaBuyResult.
+        """Rebuild a create_media_buy wire body as the branch the buyer received.
 
-        ``CreateMediaBuyResult`` serializes flat: the response fields plus a
-        top-level protocol ``status`` and, on a cached idempotency replay, the
-        spec's top-level ``replayed: true`` marker — both are popped back onto
-        the wrapper so wire tests can assert ``result.payload.replayed``. The
-        CreateMediaBuySuccess|CreateMediaBuyError|CreateMediaBuySubmitted union
-        mirrors the production A2A discrimination (adcp_a2a_server.py): submitted
-        first (status="submitted" + task_id, no media_buy_id — a submitted
-        envelope must not reconstruct as Success/Error), then ``media_buy_id``
-        (present only on success) — not ``errors``, since a *successful* buy may
-        also carry non-fatal advisory ``errors``. An error body has ``errors``
-        and no ``media_buy_id``, so it reconstructs as a CreateMediaBuyError.
+        ``CreateMediaBuyResult.revive`` is the same discrimination production runs when it
+        reads a cached idempotency replay out of the store, so a test asserting on the
+        reconstructed branch is asserting on production's own resolution rather than on a
+        copy of it that can disagree.
         """
-        status = data.pop("status", "completed")
-        replayed = data.pop("replayed", False)
-        response: CreateMediaBuySuccess | CreateMediaBuyError | CreateMediaBuySubmitted
-        if status == "submitted":
-            response = CreateMediaBuySubmitted(status=status, **data)
-        elif data.get("media_buy_id") is not None:
-            response = CreateMediaBuySuccess.carrier(**data)
-        else:
-            response = CreateMediaBuyError(**data)
-        return CreateMediaBuyResult(response=response, status=status, replayed=replayed)
+        return cast("CreateMediaBuyResult", CreateMediaBuyResult.revive(data))
 
 
 class RealFormatResolverMediaBuyCreateEnv(MediaBuyCreateEnv):

@@ -18,7 +18,6 @@ from typing import ClassVar
 from adcp.types import Account as LibraryAccountDomain
 from adcp.types import ListAccountsRequest as LibraryListAccountsRequest
 from adcp.types import ListAccountsResponse as LibraryListAccountsResponse
-from adcp.types import ProtocolEnvelope
 from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
 from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
 from adcp.types.generated_poc.account.sync_accounts_response import (
@@ -28,6 +27,7 @@ from pydantic import ConfigDict, model_validator
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import (
+    AdcpResponse,
     BuyerRequest,
     NestedModelSerializerMixin,
     validate_idempotency_key_shape,
@@ -141,7 +141,7 @@ class SyncAccountsRequest(BuyerRequest, LibrarySyncAccountsRequest):
 # ---------------------------------------------------------------------------
 
 
-class ListAccountsResponse(NestedModelSerializerMixin, LibraryListAccountsResponse):
+class ListAccountsResponse(NestedModelSerializerMixin, LibraryListAccountsResponse, AdcpResponse):
     """Extends library ListAccountsResponse.
 
     Library provides: accounts, errors, pagination, context, ext.
@@ -178,7 +178,7 @@ class SyncResponseAccount(LibraryAccount):
 class SyncAccountsResponse(
     NestedModelSerializerMixin,
     LibrarySyncAccountsSuccess,  # type: ignore[misc]
-    ProtocolEnvelope,
+    AdcpResponse,
 ):
     """Extends library SyncAccountsResponse success variant.
 

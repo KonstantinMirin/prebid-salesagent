@@ -18,7 +18,7 @@ class TestCreateMediaBuyErrorHandling:
     def test_isinstance_check_identifies_error_response(self):
         """Test that isinstance() correctly identifies CreateMediaBuyError."""
         error_response = CreateMediaBuyError(
-            errors=[Error(code="VALIDATION_ERROR", message="Budget exceeds daily limit")]
+            status="failed", errors=[Error(code="VALIDATION_ERROR", message="Budget exceeds daily limit")]
         )
 
         # Verify it's identified as error, not success
@@ -40,10 +40,11 @@ class TestCreateMediaBuyErrorHandling:
         on a CreateMediaBuyError object, which doesn't have that attribute.
         """
         error_response = CreateMediaBuyError(
+            status="failed",
             errors=[
                 Error(code="VALIDATION_ERROR", message="Budget exceeds daily limit"),
                 Error(code="SERVICE_UNAVAILABLE", message="Requested inventory not available"),
-            ]
+            ],
         )
 
         # CreateMediaBuyError has 'errors' field
@@ -65,7 +66,9 @@ class TestCreateMediaBuyErrorHandling:
 
     def test_error_response_with_single_error(self):
         """Test CreateMediaBuyError with single error (AdCP spec requires min_length=1)."""
-        error_response = CreateMediaBuyError(errors=[Error(code="INVALID_REQUEST", message="Single validation error")])
+        error_response = CreateMediaBuyError(
+            status="failed", errors=[Error(code="INVALID_REQUEST", message="Single validation error")]
+        )
 
         # Verify error response structure
         assert isinstance(error_response, CreateMediaBuyError)

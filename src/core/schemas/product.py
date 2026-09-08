@@ -19,6 +19,7 @@ from pydantic import ConfigDict, Field, model_validator
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import (
+    AdcpResponse,
     BuyerRequest,
     FormatId,
     NestedModelSerializerMixin,
@@ -312,7 +313,7 @@ class GetProductsRequest(BuyerRequest, LibraryGetProductsRequest):
     )
 
 
-class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse):
+class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse, AdcpResponse):
     """Extends library GetProductsResponse - all fields inherited from AdCP spec.
 
     Per AdCP PR #113, this response contains ONLY domain data.

@@ -1955,14 +1955,13 @@ def _submitted_approval_result(step, req: CreateMediaBuyRequest, adapter) -> Cre
     mirrors the update-path fix b8b7e751b). Single construction site shared by the
     manual-approval and config-approval branches (DRY, PR #1567 round-3).
     """
-    return CreateMediaBuyResult(
-        response=CreateMediaBuySubmitted(
-            task_id=step.step_id,  # Client tracks approval via this ID
-            context=req.context,
-            errors=property_list_unsupported_advisories(req.packages, adapter),
-            message=f"Media buy submitted for approval (task {step.step_id}).",
-        ),
-        status=AdcpTaskStatus.submitted.value,
+    return CreateMediaBuySubmitted(
+        task_id=step.step_id,  # Client tracks approval via this ID
+        context=req.context,
+        errors=property_list_unsupported_advisories(req.packages, adapter),
+        message=f"Media buy submitted for approval (task {step.step_id}).",
+        # No explicit status: the branch's own field is a const "submitted" in the pin, and
+        # stating it again here is a second place for it to be wrong.
     )
 
 
@@ -3581,7 +3580,8 @@ async def _create_media_buy_impl(
                 context=req.context,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
             )
-            return CreateMediaBuyResult(response=simulated_response, status=AdcpTaskStatus.completed.value)
+            simulated_response.status = AdcpTaskStatus.completed.value
+            return simulated_response
 
         # Call adapter using shared creation logic
         # Note: start_time variable already resolved from 'asap' to actual datetime if needed
@@ -4256,8 +4256,8 @@ async def _create_media_buy_impl(
             },
         )
 
-        _buy_result = CreateMediaBuyResult(response=modified_response, status=AdcpTaskStatus.completed.value)
-        return _buy_result
+        modified_response.status = AdcpTaskStatus.completed.value
+        return modified_response
 
     except AdCPSalesAgentError as adcp_err:
         # Re-raise transport-agnostic errors (CREATIVE_UPLOAD_FAILED, etc.) without wrapping.

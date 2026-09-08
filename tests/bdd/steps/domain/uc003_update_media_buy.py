@@ -819,28 +819,6 @@ def when_send_update_request(ctx: dict) -> None:
     else:
         dispatch_request(ctx, **raw)
 
-    # Post-process: promote error responses to ctx["error"]
-    _promote_update_errors(ctx)
-
-
-def _promote_update_errors(ctx: dict) -> None:
-    """Promote UpdateMediaBuyError responses to ctx['error'] for Then steps."""
-    resp = payload_or_none(ctx)
-    if resp is None:
-        return
-    from src.core.schemas._base import UpdateMediaBuyError
-
-    if isinstance(resp, UpdateMediaBuyError) and resp.errors:
-        ctx["error"] = resp.errors[0]
-        ctx["error_response"] = resp
-        # This promotion makes the error payload INVISIBLE to success-path Thens —
-        # that was the point of the old `del ctx["response"]`, and retiring the key
-        # did not retire the requirement. Clear every source the payload accessors
-        # read, or require_payload/payload_or_none hand the error payload straight
-        # back and a success-path Then grades it as a success.
-        ctx.pop("result", None)
-        ctx.pop("self_dispatched_response", None)
-
 
 # ═══════════════════════════════════════════════════════════════════════
 # THEN steps — update-specific assertions
@@ -1086,41 +1064,6 @@ def then_no_errors_field(ctx: dict) -> None:
     wire_absent(ctx, "errors")
 
 
-@then('the response should contain an "errors" array')
-def then_response_has_errors_array(ctx: dict) -> None:
-    """Assert the response contains an 'errors' field with a non-empty list.
-
-    For error responses, ctx["error"] is set and ctx["response"] is deleted
-    by _promote_update_errors. This step checks the raw error response stored
-    in ctx["error_response"] and validates that each error has the required
-    AdCP Error structure (code + message fields).
-    """
-    from src.core.schemas._base import UpdateMediaBuyError
-
-    error_resp = ctx.get("error_response")
-    if error_resp is not None:
-        assert isinstance(error_resp, UpdateMediaBuyError), (
-            f"Expected error_response to be UpdateMediaBuyError, got {type(error_resp).__name__}"
-        )
-        assert error_resp.errors is not None and len(error_resp.errors) >= 1, (
-            f"Error response has empty/None errors: {error_resp}"
-        )
-        # Validate AdCP Error structure: each error must have code and message
-        for i, err in enumerate(error_resp.errors):
-            assert err.code, f"errors[{i}] missing required 'code' field: {err!r}"
-            assert err.message, f"errors[{i}] missing required 'message' field: {err!r}"
-        return
-    # Fallback: _promote_update_errors sets ctx["error"] from errors[0]
-    error = ctx.get("error")
-    assert error is not None, (
-        "Expected response to contain 'errors' array but no error found — "
-        "neither ctx['error_response'] nor ctx['error'] is set"
-    )
-    # Validate the promoted error has AdCP Error structure
-    assert error.code, f"Promoted error missing required 'code' field: {error!r}"
-    assert error.message, f"Promoted error missing required 'message' field: {error!r}"
-
-
 @then("the response should contain a task_id")
 def then_response_contains_task_id(ctx: dict) -> None:
     """Assert the submitted envelope carries a non-empty task_id on the real wire.
@@ -1166,16 +1109,13 @@ def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
     """Assert the response does NOT contain a given field.
 
     BR-RULE-018 INV-1/INV-2: Success responses must not contain error fields,
-    and error responses must not contain success-specific fields. Handles both
-    directions by checking ctx['response'] (success) first, then error_response/error.
-
-    The success-path check reads the REAL serialized wire (``ctx["wire_response"]``
-    via ``wire_dict``), not ``response.model_dump()``: media_buy_id and
-    implementation_date are not declared on UpdateMediaBuySubmitted, so a
-    model-level check passes vacuously and can never catch a wire regression (e.g.
-    the A2A submitted reconstruction leaking a field). Absent-or-null on the wire
-    satisfies "does NOT contain" (a null field is not conveyed); a real value is a
-    contract violation. This is the Core Invariant / Design-Refinement Q5.
+    and error responses must not contain success-specific fields. Both directions read
+    the REAL serialized wire — ``ctx["wire_response"]`` on success, the two-layer error
+    envelope on failure — never ``model_dump()``: media_buy_id and implementation_date
+    are not declared on UpdateMediaBuySubmitted, so a model-level check passes vacuously
+    and can never catch a wire regression (e.g. the A2A submitted reconstruction leaking
+    a field). Absent-or-null on the wire satisfies "does NOT contain" (a null field is
+    not conveyed); a real value is a contract violation.
     """
     # Success-path response — assert against the buyer-facing serialized wire.
     response = payload_or_none(ctx)
@@ -1187,21 +1127,11 @@ def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
         )
         _assert_a2a_submitted_task_has_no_artifacts(ctx)
         return
-    # Error-path response (BR-RULE-018 INV-2)
-    error_resp = ctx.get("error_response")
-    if error_resp is not None and hasattr(error_resp, "model_dump"):
-        data = error_resp.model_dump(exclude_none=True)
-        assert field_name not in data, (
-            f"Error response should NOT contain '{field_name}' field "
-            f"(BR-RULE-018 INV-2), but found: {data.get(field_name)!r}"
-        )
-        return
-    # Fallback: check error object directly
-    error = ctx.get("error")
-    assert error is not None, f"Cannot check absence of '{field_name}' — no response, error_response, or error in ctx"
-    field_val = getattr(error, field_name, None)
-    assert field_val is None, (
-        f"Error should NOT contain '{field_name}' field (BR-RULE-018 INV-2), but found: {field_val!r}"
+    # Error-path response (BR-RULE-018 INV-2) — the envelope the buyer received.
+    envelope = ctx["result"].error_envelope()
+    assert envelope.get(field_name) is None, (
+        f"Error envelope should NOT contain '{field_name}' field "
+        f"(BR-RULE-018 INV-2), but found: {envelope.get(field_name)!r}"
     )
 
 

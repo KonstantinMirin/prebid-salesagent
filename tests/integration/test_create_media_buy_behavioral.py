@@ -238,7 +238,7 @@ class TestMaxDailySpendExceeded:
             # to confirm the daily-spend check did not reject this budget.
             result = env.call_impl(req=req)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert isinstance(result, CreateMediaBuySuccess)
 
     def test_max_daily_spend_same_day_flight_uses_min_one_day(self, integration_db):
         """Same-day flight (0 calendar days) uses min 1 day for daily spend calculation.
@@ -292,7 +292,7 @@ class TestMaxDailySpendExceeded:
             # No cap -> daily-spend check skipped -> pipeline reaches success.
             result = env.call_impl(req=req)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert isinstance(result, CreateMediaBuySuccess)
 
 
 class TestCreativeMissingUrl:
@@ -817,8 +817,8 @@ class TestMainFlowObligations:
             result = env.call_impl(req=req)
 
         assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        assert result.response.media_buy_id is not None
+        assert isinstance(result, CreateMediaBuySuccess)
+        assert result.media_buy_id is not None
 
     def test_auto_approve_calls_link_workflow_to_object(self, integration_db):
         """Auto-approve path persists ObjectWorkflowMapping before update_workflow_step.
@@ -838,12 +838,12 @@ class TestMainFlowObligations:
             env.setup_product_chain(tenant)
             result = env.call_impl(req=req)
 
-            assert isinstance(result.response, CreateMediaBuySuccess)
+            assert isinstance(result, CreateMediaBuySuccess)
             ctx_mgr_mock = env.mock["context_mgr"].return_value
             ctx_mgr_mock.link_workflow_to_object.assert_called_once_with(
                 step_id=ANY,
                 object_type="media_buy",
-                object_id=result.response.media_buy_id,
+                object_id=result.media_buy_id,
                 action="create",
                 tenant_id=ANY,
             )
@@ -862,7 +862,7 @@ class TestMainFlowObligations:
             # Production-state assertion: the ObjectWorkflowMapping row must actually
             # be persisted in the DB (the harness runs the real link_workflow_to_object).
             repo = WorkflowRepository(env._session, tenant_id=tenant.tenant_id)
-            mapping = repo.get_latest_mapping_for_object("media_buy", result.response.media_buy_id)
+            mapping = repo.get_latest_mapping_for_object("media_buy", result.media_buy_id)
             assert mapping is not None, "ObjectWorkflowMapping row was not persisted for the auto-approved media buy"
 
     @pytest.mark.asyncio
@@ -971,7 +971,7 @@ class TestMainFlowObligations:
             # All products exist -> pipeline reaches success without a not-found error.
             result = env.call_impl(req=req)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert isinstance(result, CreateMediaBuySuccess)
 
     def test_currency_validation_supported(self, integration_db):
         """Currency supported by tenant passes validation.
@@ -986,7 +986,7 @@ class TestMainFlowObligations:
             env.setup_product_chain(tenant, currency="USD")
             result = env.call_impl(req=req)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert isinstance(result, CreateMediaBuySuccess)
 
     def test_targeting_overlay_validation(self, integration_db):
         """Valid targeting overlay passes validation.
@@ -1013,7 +1013,7 @@ class TestMainFlowObligations:
         # used to be patched to return [] here, which short-circuited the very check this
         # test claims to exercise -- and the overlay has no exclude field, so there was
         # never an overlap to suppress. It now runs for real.
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert isinstance(result, CreateMediaBuySuccess)
 
     def test_auto_approval_determination(self, integration_db):
         """Auto-approval when tenant allows and adapter doesn't require manual approval.
@@ -1029,7 +1029,7 @@ class TestMainFlowObligations:
 
             # Auto-approval: adapter.create_media_buy was called (not the manual path)
             # with the original request and the resolved package/flight arguments.
-            assert isinstance(result.response, CreateMediaBuySuccess)
+            assert isinstance(result, CreateMediaBuySuccess)
             assert result.status == "completed"
             env.mock["adapter"].return_value.create_media_buy.assert_called_once_with(req, ANY, ANY, ANY, ANY)
 
@@ -1061,8 +1061,8 @@ class TestMainFlowObligations:
             env.setup_product_chain(tenant)
             result = env.call_impl(req=req)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        assert result.response.media_buy_id is not None
+        assert isinstance(result, CreateMediaBuySuccess)
+        assert result.media_buy_id is not None
 
 
 class TestPreconditionObligations:
@@ -1113,8 +1113,8 @@ class TestAsapStartTimingObligations:
             result = env.call_impl(req=req)
 
         # The function got past the asap resolution and created the media buy.
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        assert result.response.media_buy_id is not None
+        assert isinstance(result, CreateMediaBuySuccess)
+        assert result.media_buy_id is not None
 
     def test_asap_flight_days_calculation(self, integration_db):
         """ASAP uses resolved start time for flight days calculation.
@@ -1141,7 +1141,7 @@ class TestAsapStartTimingObligations:
             env.setup_product_chain(tenant)
             result = env.call_impl(req=req)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert isinstance(result, CreateMediaBuySuccess)
 
 
 class TestManualApprovalObligations:
@@ -1162,7 +1162,7 @@ class TestManualApprovalObligations:
 
         # Spec 3.1.1: pending approval is the Submitted task envelope, not a
         # confirmed Success (PR #1567 round-2 item 2).
-        assert isinstance(result.response, CreateMediaBuySubmitted)
+        assert isinstance(result, CreateMediaBuySubmitted)
         assert result.status == "submitted"  # Not "completed"
 
     def test_adapter_requires_review_enters_manual_path(self, integration_db):
@@ -1181,7 +1181,7 @@ class TestManualApprovalObligations:
             mock_adapter.manual_approval_operations = ["create_media_buy"]
             result = env.call_impl(req=req)
 
-        assert isinstance(result.response, CreateMediaBuySubmitted)
+        assert isinstance(result, CreateMediaBuySubmitted)
         assert result.status == "submitted"
 
     def test_seller_notification_sent_on_manual_approval(self, integration_db):
@@ -1225,8 +1225,8 @@ class TestManualApprovalObligations:
         assert result.status == "submitted"
         # Spec 3.1.1 CreateMediaBuySubmitted: task_id is the required handle the
         # buyer polls; workflow_step_id/media_buy_id are not on this envelope.
-        assert isinstance(result.response, CreateMediaBuySubmitted)
-        assert result.response.task_id
+        assert isinstance(result, CreateMediaBuySubmitted)
+        assert result.task_id
 
     def test_no_adapter_execution_before_approval(self, integration_db):
         """Adapter is NOT called when manual approval is required.
@@ -1264,7 +1264,7 @@ class TestManualApprovalObligations:
         # Pending approval means it's ready for accept/reject; the buyer holds
         # the task_id the reject flow resolves (spec 3.1.1 Submitted envelope).
         assert result.status == "submitted"
-        assert result.response.task_id
+        assert result.task_id
 
     def test_buyer_can_poll_approval_progress(self, integration_db):
         """Response includes task_id for polling.
@@ -1282,8 +1282,8 @@ class TestManualApprovalObligations:
             _require_manual_approval(env)
             result = env.call_impl(req=req)
 
-        assert isinstance(result.response, CreateMediaBuySubmitted)
-        assert result.response.task_id
+        assert isinstance(result, CreateMediaBuySubmitted)
+        assert result.task_id
 
 
 class TestInlineCreativeObligations:
@@ -1470,31 +1470,6 @@ class TestProposalBasedObligations:
 
 class TestCrossCuttingObligations:
     """Cross-cutting obligation tests."""
-
-    def test_response_never_both_success_and_error(self):
-        """CreateMediaBuyResult response is EITHER success or error, never both.
-
-        Covers: UC-002-CC-ATOMIC-RESPONSE-SEMANTICS-03
-        """
-        # Success response has no errors field
-        from src.core.schemas import Package as RespPkg
-
-        success = CreateMediaBuySuccess.carrier(
-            media_buy_id="mb_1", packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)]
-        )
-        success_result = CreateMediaBuyResult(response=success, status="completed")
-
-        assert isinstance(success_result.response, CreateMediaBuySuccess)
-        assert not isinstance(success_result.response, CreateMediaBuyError)
-
-        # Error response has no media_buy_id
-        from src.core.schemas import Error
-
-        error = CreateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="test error")])
-        error_result = CreateMediaBuyResult(response=error, status="failed")
-
-        assert isinstance(error_result.response, CreateMediaBuyError)
-        assert not isinstance(error_result.response, CreateMediaBuySuccess)
 
     def test_manual_approval_persistence_before_adapter(self, integration_db):
         """Manual approval persists records before adapter execution.
@@ -1756,7 +1731,7 @@ class TestExtensionObligations:
             # Adapter returns an error envelope (not success).
             env.mock["adapter"].return_value.create_media_buy.side_effect = None
             env.mock["adapter"].return_value.create_media_buy.return_value = CreateMediaBuyError(
-                errors=[Error(code="SERVICE_UNAVAILABLE", message="GAM API error")]
+                status="failed", errors=[Error(code="SERVICE_UNAVAILABLE", message="GAM API error")]
             )
             with pytest.raises(AdCPAdapterError):
                 env.call_impl(req=req)
@@ -1777,7 +1752,7 @@ class TestExtensionObligations:
             # No cap -> the very large budget passes the daily-spend check.
             result = env.call_impl(req=req)
 
-        assert isinstance(result.response, CreateMediaBuySuccess)
+        assert isinstance(result, CreateMediaBuySuccess)
 
     def test_proposal_not_found_error_code(self):
         """PROPOSAL_NOT_FOUND error code is used for missing proposals.
