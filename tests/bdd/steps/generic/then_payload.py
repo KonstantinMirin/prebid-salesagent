@@ -324,10 +324,9 @@ def then_three_returned(ctx: dict, a: str, b: str, c: str) -> None:
         assert name in names, f"Expected '{name}' in results, got {names}"
 
 
-@then(parsers.parse('the returned format type should be "{fmt_type}"'))
-def then_returned_type(ctx: dict, fmt_type: str) -> None:
-    for f in _get_formats(ctx):
-        assert _fmt_type_str(f) == fmt_type, f"Expected type '{fmt_type}', got '{_fmt_type_str(f)}'"
+# `the returned format type should be "{fmt_type}"` bound here — the third casualty of adcp
+# 3.12 dropping `type` from Format, alongside the two noted above. No feature carries the
+# sentence.
 
 
 # -- Partition/boundary test outcomes ------------------------------------------
