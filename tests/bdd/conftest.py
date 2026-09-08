@@ -881,6 +881,140 @@ _XFAIL_TAGS: dict[str, str] = {
 # some examples exercise unimplemented features. Each entry: (tag, node_id
 # substrings that should xfail, reason).
 _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
+    # ── UC-006 ROUTE PARTITION (salesagent-lqm79) ──
+    # These 16 Scenario Outlines disagree ROW TO ROW, which is why they are here and not
+    # in _UC006_WIRED_SCENARIOS: a route matches on a scenario's markers and cannot say
+    # "these Examples rows, not those". Wiring them wakes 128 passing nodes; these 70 are
+    # the rows that do not pass, parked one row at a time.
+    #
+    # MEASURED, not inferred from the group. The uc006 catch-all's xfail_reason was set to
+    # None locally and the file run against a real Postgres (410 passed / 209 failed /
+    # 85 xfailed over its 617 catch-all nodes); each row below carries ITS OWN blocker,
+    # and a row is parked only if a node of that row actually failed. A row whose siblings
+    # fail is not parked -- that is a row nobody looked at.
+    #
+    # The reasons are BLOCKER CATEGORIES, deliberately. 81% of what wiring reveals is
+    # test-side (missing step definitions, steps that do not cover their own Examples rows,
+    # payloads the malformation gate refuses), so "production behaviour not implemented"
+    # would reproduce the catch-all's own mislabelling one level finer. Where the blocker
+    # is unverified this says so rather than guessing.
+    #
+    # strict=True is the consumer's default here, so a parked row that starts passing
+    # becomes XPASS(strict) and fails -- the list cannot rot quietly.
+    (
+        "T-UC-006-boundary-approval",
+        {
+            '-ai-powered-"ai-powered"-a review workflow should be created with AI review]',
+            '[rest-auto-approve-"auto-approve"-the creative status should be set to approved immediately]',
+        },
+        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+    ),
+    (
+        "T-UC-006-boundary-assignment-weight",
+        {
+            "-weight = -1 (min - 1)--1-the error should be INVALID_REQUEST with suggestion]",
+            "-weight = 101 (max + 1)-101-the error should be INVALID_REQUEST with suggestion]",
+        },
+        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+    ),
+    (
+        "T-UC-006-boundary-assignments-structure",
+        {
+            "-entry missing creative_id-an assignment entry with only package_id-the error should be INVALID_REQUEST]",
+            "-entry missing package_id-an assignment entry with only creative_id-the error should be INVALID_REQUEST]",
+            "[rest-duplicate (creative_id, package_id) pair-two assignment entries with same creative_id and package_id-the second should be an idempotent upsert]",
+        },
+        "uc006 route partition (salesagent-lqm79): no step definition for one of its steps; unverified: not one of the named test-side blockers",
+    ),
+    (
+        "T-UC-006-boundary-generative",
+        {
+            '-generative, no GEMINI_API_KEY-a creative with a generative format but GEMINI_API_KEY not configured-the error should include "suggestion" field]',
+        },
+        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+    ),
+    (
+        "T-UC-006-boundary-provenance",
+        {
+            "-provenance present + no provenance policy-a creative with provenance metadata-no product with provenance_required-the creative should be processed without warning]",
+            "-provenance present + policy requires provenance-a creative with provenance metadata-a product with creative_policy.provenance_required = true-the creative should be processed without warning]",
+        },
+        "uc006 route partition (salesagent-lqm79): the dispatched payload is refused by the malformation gate and undeclared",
+    ),
+    (
+        "T-UC-006-boundary-validation-mode",
+        {
+            '-unknown value-"partial"-the system should reject with INVALID_REQUEST]',
+        },
+        "uc006 route partition (salesagent-lqm79): no step definition for one of its steps",
+    ),
+    (
+        "T-UC-006-main-lenient-warnings",
+        {
+            "[rest]",
+        },
+        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+    ),
+    (
+        "T-UC-006-partition-assignment-pkg",
+        {},
+        "uc006 route partition (salesagent-lqm79): ",
+    ),
+    (
+        "T-UC-006-partition-assignment-weight",
+        {
+            "-weight_above_max-101-the error should be INVALID_REQUEST with suggestion]",
+            "-weight_below_min--1-the error should be INVALID_REQUEST with suggestion]",
+        },
+        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+    ),
+    (
+        "T-UC-006-partition-assignments-structure",
+        {
+            "-missing_creative_id-an assignment entry missing creative_id-the error should be INVALID_REQUEST with suggestion]",
+            '-with_placement_targeting-an assignment with creative_id "c1", package_id "p1", and placement_ids ["slot_a"]-the assignment should be created with placement targeting]',
+        },
+        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+    ),
+    (
+        "T-UC-006-partition-format-id",
+        {
+            "-agent_unreachable-a format_id whose agent is unreachable-AGENT_UNREACHABLE]",
+            "-empty_name-an empty name and a known format_id-INVALID_REQUEST]",
+            "-missing_format_id-no format_id-INVALID_REQUEST]",
+            "-unknown_format-a format_id unknown to all agents-REFERENCE_NOT_FOUND]",
+        },
+        "uc006 route partition (salesagent-lqm79): the Then step does not handle this row's outcome string",
+    ),
+    (
+        "T-UC-006-partition-generative",
+        {
+            "-generative_no_gemini_key-output_format_ids present-message asset but no GEMINI_API_KEY-CONFIGURATION_ERROR]",
+        },
+        "uc006 route partition (salesagent-lqm79): the Then step does not handle this row's outcome string",
+    ),
+    (
+        "T-UC-006-partition-idempotency-key",
+        {
+            '-boundary_min-"12345678"-the request should proceed normally]',
+        },
+        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+    ),
+    (
+        "T-UC-006-partition-provenance",
+        {
+            "-provenance_present_not_required-a creative with provenance metadata-no product with provenance_required-the creative should be processed without warning]",
+            "-provenance_present_required-a creative with provenance metadata-a product with creative_policy.provenance_required = true-the creative should be processed without warning]",
+        },
+        "uc006 route partition (salesagent-lqm79): the dispatched payload is refused by the malformation gate and undeclared",
+    ),
+    (
+        "T-UC-006-partition-validation-mode",
+        {
+            "-unknown_value-partial-rejected with INVALID_REQUEST]",
+        },
+        "uc006 route partition (salesagent-lqm79): the Then step does not handle this row's outcome string",
+    ),
     # ── UPSTREAM SPEC BUG: adcontextprotocol/adcp#7338 ──
     # Row-level, not tag-level, and that distinction was MEASURED. Only the "-valid" rows
     # build a success response and therefore validate assets against the pinned schema; the
@@ -5165,6 +5299,192 @@ _UC003_STORYBOARD_CLIENT_TAGS = frozenset(
     {"T-UC-003-storyboard-media-buy-not-found", "T-UC-003-storyboard-not-cancellable-on-recancel"}
 )
 
+#: UC-006 scenarios CreativeSyncEnv provably serves, keyed by SCENARIO IDENTITY.
+#:
+#: Identity, not behavioural family, because the family tags do not partition along
+#: the wired boundary: measured over all 617 catch-all scenarios, only 102 of the 338
+#: that pass are selectable by a family tag whose every member passes -- @partition,
+#: @boundary, @format-id and the rest each span passing, failing and step-less
+#: scenarios at once, so wiring by family forces failures awake alongside passes.
+#: By identity the same measurement selects 210 nodes across these 49 scenarios, every
+#: one of which passes on every transport and every Examples row.
+#:
+#: MEASURED, not assumed (salesagent-lqm79): the catch-all row below and this row build
+#: the SAME env, so "wiring" is not building a harness -- it is naming the scenarios the
+#: existing one serves. Setting the catch-all's xfail_reason to None locally and running
+#: the file against a real Postgres gives 410 passed / 209 failed / 85 xfailed; grouped
+#: by identity, 49 scenarios pass on every node, 23 are step-less, 20 carry their own
+#: xfail and 7 fail on production defects. These are the 49.
+#:
+#: The rest stay on the catch-all with their blockers named in salesagent-lqm79. Adding
+#: an entry here GROWS the executing surface; it exempts nothing from grading.
+#: 27 UC-006 scenarios, blocker measured (salesagent-lqm79).
+_UC006_NO_STEP_DEFINITION = frozenset(
+    {
+        "T-UC-006-boundary-creative-status",
+        "T-UC-006-boundary-creative-status-response",
+        "T-UC-006-boundary-delete-missing",
+        "T-UC-006-boundary-sandbox",
+        "T-UC-006-creative-item-missing-content",
+        "T-UC-006-creative-item-multi-asset",
+        "T-UC-006-creative-item-text-array",
+        "T-UC-006-creative-variable-declared",
+        "T-UC-006-creative-variable-invalid-type",
+        "T-UC-006-creative-variable-required-flag",
+        "T-UC-006-daast-tracker-asset",
+        "T-UC-006-daast-tracker-no-non-linear-target",
+        "T-UC-006-error-details-conflict",
+        "T-UC-006-error-details-creative-rejected",
+        "T-UC-006-error-details-policy-violation",
+        "T-UC-006-main-async-submitted",
+        "T-UC-006-main-delete-missing-conflict",
+        "T-UC-006-partition-creative-status-terminal",
+        "T-UC-006-rule-039-inv5-lenient",
+        "T-UC-006-rule-093-inv1",
+        "T-UC-006-rule-093-inv3",
+        "T-UC-006-sandbox-errors-no-flag",
+        "T-UC-006-sandbox-happy",
+        "T-UC-006-sandbox-submitted-no-flag",
+        "T-UC-006-vast-tracker-asset",
+        "T-UC-006-vast-tracker-forbidden-event",
+        "T-UC-006-vast-tracker-progress-requires-offset",
+    }
+)
+
+#: 2 UC-006 scenarios, blocker measured (salesagent-lqm79).
+_UC006_STALE_XFAIL = frozenset(
+    {
+        "T-UC-006-boundary-format-id",
+        "T-UC-006-ext-a",
+    }
+)
+
+#: 2 UC-006 scenarios, blocker measured (salesagent-lqm79).
+_UC006_UNDECLARED_MALFORMATION = frozenset(
+    {
+        "T-UC-006-partition-assignment-fmt",
+        "T-UC-006-rule-094-inv2",
+    }
+)
+
+#: 1 UC-006 scenarios, blocker measured (salesagent-lqm79).
+_UC006_MISSING_HARNESS_SEAM = frozenset(
+    {
+        "T-UC-006-rule-037-inv4",
+    }
+)
+
+#: 3 UC-006 scenarios, blocker measured (salesagent-lqm79).
+_UC006_UNVERIFIED_FAILURE = frozenset(
+    {
+        "T-UC-006-rule-033-inv2",
+        "T-UC-006-rule-035-static",
+        "T-UC-006-rule-037-inv6",
+    }
+)
+
+#: 16 UC-006 scenarios, blocker measured (salesagent-lqm79).
+_UC006_OWN_XFAIL = frozenset(
+    {
+        "T-UC-006-ext-b",
+        "T-UC-006-ext-c",
+        "T-UC-006-ext-d",
+        "T-UC-006-ext-d-whitespace",
+        "T-UC-006-ext-e",
+        "T-UC-006-ext-f",
+        "T-UC-006-ext-g",
+        "T-UC-006-ext-h",
+        "T-UC-006-ext-i",
+        "T-UC-006-ext-k",
+        "T-UC-006-main-unchanged",
+        "T-UC-006-main-weight",
+        "T-UC-006-rule-035-inv2",
+        "T-UC-006-rule-039-inv2",
+        "T-UC-006-rule-039-inv4",
+        "T-UC-006-sandbox-validation",
+    }
+)
+
+_UC006_WIRED_SCENARIOS = frozenset(
+    {
+        # NOT here, and not parked either: T-UC-006-boundary-format-id and
+        # T-UC-006-ext-a PASS once wired, and a pre-existing strict xfail then turns
+        # that pass into XPASS(strict) -- a FAILURE. For boundary-format-id it is
+        # _UC006_VALIDATION_XFAIL's "SPEC-PRODUCTION GAP: _SyntheticError lacks
+        # suggestion field"; production emits the field now, so the reason is stale.
+        # A stale xfail is graduated one scenario at a time
+        # (.claude/rules/workflows/xpass-graduation.md), never parked under a second
+        # marker -- parking a passing row is how a route silences working behaviour.
+        # The 15 Scenario Outlines whose Examples rows disagree: wired here so their
+        # passing rows execute, with the non-passing rows parked per row in
+        # _SELECTIVE_XFAIL. A route cannot express row-level disagreement.
+        "T-UC-006-boundary-approval",
+        "T-UC-006-boundary-assignment-weight",
+        "T-UC-006-boundary-assignments-structure",
+        "T-UC-006-boundary-generative",
+        "T-UC-006-boundary-provenance",
+        "T-UC-006-boundary-validation-mode",
+        "T-UC-006-main-lenient-warnings",
+        "T-UC-006-partition-assignment-pkg",
+        "T-UC-006-partition-assignment-weight",
+        "T-UC-006-partition-assignments-structure",
+        "T-UC-006-partition-format-id",
+        "T-UC-006-partition-generative",
+        "T-UC-006-partition-idempotency-key",
+        "T-UC-006-partition-provenance",
+        "T-UC-006-partition-validation-mode",
+        "T-UC-006-boundary-assignment-format",
+        "T-UC-006-boundary-assignment-package",
+        "T-UC-006-boundary-creative-scope",
+        "T-UC-006-boundary-media-buy",
+        "T-UC-006-boundary-principal",
+        "T-UC-006-ext-a-empty",
+        "T-UC-006-ext-j",
+        "T-UC-006-main",
+        "T-UC-006-main-approval",
+        "T-UC-006-main-assign",
+        "T-UC-006-main-provenance-warning",
+        "T-UC-006-main-update",
+        "T-UC-006-main-warnings",
+        "T-UC-006-partition-approval-mode",
+        "T-UC-006-partition-auth",
+        "T-UC-006-partition-creative-scope",
+        "T-UC-006-partition-mb-status",
+        "T-UC-006-rule-033-inv1",
+        "T-UC-006-rule-033-inv3",
+        "T-UC-006-rule-033-inv4",
+        "T-UC-006-rule-033-inv5",
+        "T-UC-006-rule-036-inv1",
+        "T-UC-006-rule-036-inv2",
+        "T-UC-006-rule-036-inv3",
+        "T-UC-006-rule-036-inv4",
+        "T-UC-006-rule-036-inv5",
+        "T-UC-006-rule-036-inv6",
+        "T-UC-006-rule-037-inv1",
+        "T-UC-006-rule-037-inv2",
+        "T-UC-006-rule-037-inv3",
+        "T-UC-006-rule-037-inv5",
+        "T-UC-006-rule-038-inv1",
+        "T-UC-006-rule-038-inv3",
+        "T-UC-006-rule-038-inv4",
+        "T-UC-006-rule-038-inv4-violated",
+        "T-UC-006-rule-038-inv5",
+        "T-UC-006-rule-039-inv1",
+        "T-UC-006-rule-039-inv3",
+        "T-UC-006-rule-039-inv6",
+        "T-UC-006-rule-040-inv1",
+        "T-UC-006-rule-040-inv2",
+        "T-UC-006-rule-040-inv3",
+        "T-UC-006-rule-040-inv4",
+        "T-UC-006-rule-093-inv2",
+        "T-UC-006-rule-094-inv1",
+        "T-UC-006-rule-094-inv3",
+        "T-UC-006-rule-094-inv4",
+        "T-UC-006-rule-094-inv5",
+        "T-UC-006-sandbox-production",
+    }
+)
+
 ENV_ROUTES: list[EnvRoute] = [
     # ── @egress (local SSRF / webhook-credential refusal feature) ───────────
     # These scenarios carry T-EGRESS-* identity tags, NOT T-UC-<n>, so
@@ -5342,35 +5662,91 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="uc006-creative-sync",
         when=_uc(
             "UC-006",
-            lambda m: bool(
-                m
-                & {
-                    "account",
-                    "creative-invariant",
-                    "BR-RULE-034",
-                    "webhook-ssrf",
-                    "uc006-storyboard-routing",
-                    "uc006-idempotency",
-                    # @creative-approval drives the approval_mode branches of
-                    # _processing.py, whose ai-powered branch reaches the background
-                    # AI-review executor — an effect that leaves the sync
-                    # transaction. CreativeSyncEnv mocks that executor, which is what
-                    # makes the effect observable rather than a race with a real
-                    # background thread. This set is the ONLY thing standing between a
-                    # UC-006 scenario and dormancy, so a scenario CreativeSyncEnv
-                    # genuinely serves belongs in it — the entry grows the executing
-                    # surface, it does not exempt anything from grading.
-                    "creative-approval",
-                }
+            lambda m: (
+                bool(
+                    m
+                    & {
+                        "account",
+                        "creative-invariant",
+                        "BR-RULE-034",
+                        "webhook-ssrf",
+                        "uc006-storyboard-routing",
+                        "uc006-idempotency",
+                        # @creative-approval drives the approval_mode branches of
+                        # _processing.py, whose ai-powered branch reaches the background
+                        # AI-review executor — an effect that leaves the sync
+                        # transaction. CreativeSyncEnv mocks that executor, which is what
+                        # makes the effect observable rather than a race with a real
+                        # background thread. This set is the ONLY thing standing between a
+                        # UC-006 scenario and dormancy, so a scenario CreativeSyncEnv
+                        # genuinely serves belongs in it — the entry grows the executing
+                        # surface, it does not exempt anything from grading.
+                        "creative-approval",
+                    }
+                )
+                # Plus the scenarios named one by one, because the family tags do not
+                # partition along the wired boundary -- see _UC006_WIRED_SCENARIOS.
+                or bool(m & _UC006_WIRED_SCENARIOS)
             ),
         ),
         env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
     ),
     EnvRoute(
-        tag="uc006-not-wired",
+        tag="uc006-stepless",
+        when=_uc("UC-006", lambda m, s=_UC006_NO_STEP_DEFINITION: bool(m & s)),
+        env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
+        xfail_reason=(
+            "UC-006 not wired: no step definition for one of its steps, so it grades nothing (salesagent-eii8n names the blocking sentence per scenario)"
+        ),
+    ),
+    EnvRoute(
+        tag="uc006-graduation",
+        when=_uc("UC-006", lambda m, s=_UC006_STALE_XFAIL: bool(m & s)),
+        env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
+        xfail_reason=(
+            "UC-006 not wired: it PASSES, and a pre-existing strict xfail turns that into XPASS(strict). The reason is stale and graduates one scenario at a time (.claude/rules/workflows/xpass-graduation.md), never by parking a passing row"
+        ),
+    ),
+    EnvRoute(
+        tag="uc006-malformation",
+        when=_uc("UC-006", lambda m, s=_UC006_UNDECLARED_MALFORMATION: bool(m & s)),
+        env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
+        xfail_reason=(
+            "UC-006 not wired: the dispatched payload is refused by the malformation gate and not declared. Fix the payload or declare it with the code the buyer must receive -- an xfail here would hide exactly what that gate exists to show"
+        ),
+    ),
+    EnvRoute(
+        tag="uc006-harness-seam",
+        when=_uc("UC-006", lambda m, s=_UC006_MISSING_HARNESS_SEAM: bool(m & s)),
+        env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
+        xfail_reason=(
+            "UC-006 not wired: CreativeSyncEnv lacks the seam this scenario asserts on. A harness gap, not a production one"
+        ),
+    ),
+    EnvRoute(
+        tag="uc006-unverified",
+        when=_uc("UC-006", lambda m, s=_UC006_UNVERIFIED_FAILURE: bool(m & s)),
+        env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
+        xfail_reason=(
+            "UC-006 not wired: fails for a reason that is none of the named test-side blockers and has NOT been individually diagnosed. Not filed as a production defect on a classifier's say-so"
+        ),
+    ),
+    EnvRoute(
+        tag="uc006-own-xfail",
+        when=_uc("UC-006", lambda m, s=_UC006_OWN_XFAIL: bool(m & s)),
+        env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
+        xfail_reason=(
+            "UC-006 not wired: already carries its own xfail for a named reason; this row keeps it off the unclassified path and adds nothing"
+        ),
+    ),
+    EnvRoute(
+        tag="uc006-unclassified",
         when=_uc("UC-006", lambda m: True),
         env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
-        xfail_reason="UC-006 harness not yet wired for non-account scenarios",
+        xfail_reason=(
+            "UC-006 UNCLASSIFIED: no row names this scenario, so nobody has decided what "
+            "blocks it. Wire it, or give it a row naming its blocker -- do not leave it here"
+        ),
     ),
     # ── UC-018 ──────────────────────────────────────────────────────────────
     EnvRoute(
