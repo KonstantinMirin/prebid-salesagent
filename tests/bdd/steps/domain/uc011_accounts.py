@@ -477,8 +477,19 @@ def given_accounts_with_3_statuses(ctx: dict, s1: str, s2: str, s3: str) -> None
 
 @given("the agent has no accessible accounts")
 def given_no_accounts(ctx: dict) -> None:
-    """Agent has no accessible accounts (tenant + principal exist but no accounts)."""
+    """Agent has no accessible accounts (tenant + principal exist but no accounts).
+
+    Emptiness is the default -- accounts reach this agent only through
+    ``_create_accessible_account``, which records every one it grants. The
+    falsifiable half is the other direction: a scenario that granted an account
+    and then declares the agent has none is grading the opposite of its sentence.
+    """
     _setup_tenant_and_principal(ctx)
+    granted = ctx.get("expected_account_ids", set())
+    assert not granted, (
+        f"Step claims the agent has no accessible accounts, but this scenario "
+        f"already granted access to {sorted(granted)}."
+    )
 
 
 @given(parsers.parse("the agent has {count:d} accessible accounts"))

@@ -45,8 +45,20 @@ def given_buyer_no_auth(ctx: dict) -> None:
 
 @given("no hostname-based tenant resolution is possible")
 def given_no_hostname_tenant(ctx: dict) -> None:
-    """No tenant can be resolved from hostname."""
-    ctx["hostname_tenant"] = None
+    """No tenant can be resolved from hostname.
+
+    In process there is no hostname to resolve from: the tenant reaches the tool
+    through the identity, so "no hostname resolution" holds exactly when the
+    request carries no identity — which the preceding "the Buyer has no
+    authentication credentials" Given establishes. This step checks that pairing
+    rather than setting a ``hostname_tenant`` key no step read; the sentence used
+    to hold whether or not the scenario had actually removed the identity.
+    """
+    assert ctx.get("identity") is None, (
+        "Step claims no hostname-based tenant resolution is possible, but the "
+        "scenario still carries an identity that resolves one — the request would "
+        f"reach a tenant anyway: {ctx['identity']!r}"
+    )
 
 
 @given("no tenant can be resolved from the request context")

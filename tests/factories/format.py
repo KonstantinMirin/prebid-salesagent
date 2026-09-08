@@ -54,6 +54,10 @@ _ASSET_CLASS_MAP = {
     "html": HtmlFormatAsset,
 }
 
+# The asset-type vocabulary this factory can build, for steps that need to check
+# a claimed asset type is real rather than build one. Derived, not restated.
+ASSET_TYPES = frozenset(_ASSET_CLASS_MAP)
+
 
 def make_asset(asset_type: str, asset_id: str | None = None) -> ImageFormatAsset:
     """Create a typed asset object from an asset type string.

@@ -1470,16 +1470,36 @@ def given_media_buy_already_created_same_key(ctx: dict) -> None:
 @given(parsers.parse("the request includes {count:d} package with a valid product_id"))
 @given(parsers.parse("the request includes {count:d} packages with valid product_ids"))
 def given_request_includes_packages(ctx: dict, count: int) -> None:
-    """Add packages with valid product_ids to the request."""
-    ctx["package_count"] = count
+    """The pending create request carries exactly *count* packages.
+
+    The packages themselves come from the request the preceding "a valid
+    create_media_buy request" Given built, so this sentence does not add them --
+    it pins the count that request must already have. Recording the number into a
+    ctx key nothing read let the sentence claim any number at all.
+    """
+    packages = ctx["request_kwargs"].get("packages") or []
+    assert len(packages) == count, (
+        f"Step claims the request includes {count} package(s) with valid product_ids, "
+        f"but the request carries {len(packages)}."
+    )
 
 
 # Canonical owner of "the ad server adapter is available" — removed from the
 # generic given_media_buy.py module to avoid a cross-module shadow.
 @given("the ad server adapter is available")
 def given_adapter_available(ctx: dict) -> None:
-    """Mark the ad server adapter as available for the scenario."""
-    ctx["adapter_available"] = True
+    """The scenario's env has an ad server adapter for the create to reach.
+
+    Availability is the env's default, so there is nothing to turn on; what the
+    step establishes is that the adapter the create will call is actually
+    mocked in this env -- the same check ``given_adapter_supports_reporting``
+    already makes in UC-019. The ctx flag it used to set was read by no step, so
+    an env with no adapter passed this sentence just as happily.
+    """
+    assert "adapter" in ctx["env"].mock, (
+        "Step claims 'the ad server adapter is available' but no adapter mock is "
+        f"configured in this env: {sorted(ctx['env'].mock)}"
+    )
 
 
 @given("the request does NOT include an idempotency_key")

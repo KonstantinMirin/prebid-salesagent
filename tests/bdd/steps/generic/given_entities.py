@@ -13,6 +13,7 @@ from pytest_bdd import given, parsers
 
 from tests.bdd.steps.generic._registry import sync_registry as _sync_registry
 from tests.factories.format import (
+    ASSET_TYPES,
     CATEGORY_MAP,
     FormatFactory,
     FormatIdFactory,
@@ -27,8 +28,17 @@ from tests.factories.format import (
 
 @given("a Seller Agent is operational and accepting requests")
 def given_seller_operational(ctx: dict) -> None:
-    """Seller agent is up and accepting requests (Background)."""
-    ctx["seller_operational"] = True
+    """Seller agent is up and accepting requests (Background).
+
+    The harness env IS the seller agent, so "operational" is not something this
+    sentence configures -- it is something it can check: a scenario reaches this
+    Background with a env carrying the tenant its requests resolve against. The
+    ctx flag it used to set was read by no step.
+    """
+    assert ctx["env"]._tenant_id, (
+        "Background claims a Seller Agent is operational and accepting requests, "
+        "but the harness env carries no tenant for a request to resolve against."
+    )
 
 
 @given("a tenant is resolvable from the request context")
@@ -250,20 +260,37 @@ def given_seller_various_input_formats(ctx: dict) -> None:
 
 @given("a seller with creative agent formats of various types")
 def given_seller_creative_agent_various_types(ctx: dict) -> None:
-    """Seller has creative agent formats of various types (partition/boundary)."""
-    ctx["creative_agent_formats"] = [
-        {"name": "audio-format", "type": "audio"},
-        {"name": "video-format", "type": "video"},
-        {"name": "display-format", "type": "display"},
-        {"name": "dooh-format", "type": "dooh"},
-    ]
+    """Seller has creative agent formats of various types (partition/boundary).
+
+    The catalog these scenarios query is the harness default reference set, and it
+    has to stay that way: T-UC-005-partition-agent-type and its boundary sibling
+    are ledgered against upstream adcp#7338 precisely because the REFERENCE
+    formats declare ``pixel_tracker``. Replacing the registry here would erase the
+    gap the ledger entry grades.
+
+    So what the sentence can establish is that the variety it claims is real --
+    every type it names must be one the pinned format vocabulary admits. The list
+    of raw dicts this replaced was written into a ctx key no step read (and raw
+    dicts in a registry Given are what ``test_architecture_bdd_no_dict_registry``
+    exists to refuse).
+    """
+    for creative_type in ("audio", "video", "display", "dooh"):
+        assert creative_type in CATEGORY_MAP, (
+            f"Step claims a seller catalog 'of various types', but {creative_type!r} is "
+            f"not a known creative format category: {sorted(CATEGORY_MAP)}"
+        )
 
 
 @given("a seller with creative agent formats containing various asset types")
 def given_seller_creative_agent_various_assets(ctx: dict) -> None:
-    """Seller has creative agent formats with various asset types (partition/boundary)."""
-    ctx["creative_agent_formats"] = [
-        {"name": "image-format", "assets": [{"type": "image"}]},
-        {"name": "video-format", "assets": [{"type": "video"}]},
-        {"name": "text-format", "assets": [{"type": "text"}]},
-    ]
+    """Seller has creative agent formats with various asset types (partition/boundary).
+
+    Same reasoning as ``given_seller_creative_agent_various_types``: the served
+    catalog stays the reference set, so this checks the claimed variety against
+    the pinned asset vocabulary instead of recording it into a dead ctx key.
+    """
+    for asset_type in ("image", "video", "text"):
+        assert asset_type in ASSET_TYPES, (
+            f"Step claims format assets 'of various types', but {asset_type!r} is not "
+            f"a known format asset type: {sorted(ASSET_TYPES)}"
+        )

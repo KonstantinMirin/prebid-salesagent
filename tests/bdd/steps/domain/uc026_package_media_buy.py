@@ -732,12 +732,18 @@ def _own_pkg_with_metadata(ctx: dict, pkg_id: str, **metadata: Any) -> None:
     """Create a media buy with a package, recording metadata about its intended state.
 
     All 'the Buyer owns a media buy with a package ...' steps use this shared
-    helper. The metadata dict captures the step's semantic claim (e.g., keyword
-    targets, catalogs) so downstream steps can reference it.
+    helper. The ``metadata`` kwargs keep each sentence's semantic claim at its own
+    call site (keyword targets, catalogs, expected product) -- they are NOT
+    applied: ``_create_media_buy_for_update`` builds the default package, and
+    production takes no such per-package configuration from this path.
+
+    They used to be stashed in ``ctx["package_metadata"]`` "so downstream steps
+    can reference it". No downstream step ever did, so a sentence could claim a
+    package "having catalogs" and nothing anywhere would notice the package had
+    none. The stash is gone; the claims stay visible at the call sites, where the
+    scenarios that need them wired can be found.
     """
     _create_media_buy_for_update(ctx)
-    if metadata:
-        ctx.setdefault("package_metadata", {}).update(metadata)
 
 
 @given(parsers.parse('the Buyer owns a media buy with a package "{pkg_id}" having no keyword targets'))
@@ -1521,14 +1527,16 @@ def given_boundary_replacement(ctx: dict, boundary_point: str) -> None:
 
 
 @when("the Buyer Agent invokes the create_media_buy MCP tool")
-def when_invoke_create_mcp(ctx: dict) -> None:
-    """Dispatch create_media_buy through MCP transport."""
-    _dispatch_create(ctx)
-
-
 @when("the Buyer Agent sends the create_media_buy A2A task")
-def when_send_create_a2a(ctx: dict) -> None:
-    """Dispatch create_media_buy through A2A transport."""
+def when_dispatch_create_named_transport(ctx: dict) -> None:
+    """Dispatch create_media_buy; the transport named in the sentence is narrative.
+
+    Every BDD scenario is parametrized over all four transports, so a sentence
+    saying "MCP tool" or "A2A task" does not choose one -- the run does. These
+    were two functions with the same body, each stashing a ``package_transport_hint``
+    ("mcp" / "a2a") that no step read, which made the two sentences look like they
+    dispatched differently. They never did.
+    """
     _dispatch_create(ctx)
 
 

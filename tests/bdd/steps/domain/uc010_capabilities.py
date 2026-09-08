@@ -207,8 +207,14 @@ def given_creative_supports_compliance(ctx: dict) -> None:
 
 
 @given("the adapter is unavailable")
+@given("a tenant is resolvable but adapter is unavailable")
 def given_adapter_unavailable(ctx: dict) -> None:
-    """Adapter factory raises — production degrades to the [display] default channel."""
+    """Adapter factory raises — production degrades to the [display] default channel.
+
+    Owns both spellings. The "a tenant is resolvable but ..." one was a second
+    function with the same body plus a ``has_tenant`` flag no step read; tenant
+    resolvability is the env's default, so the two sentences name the same state.
+    """
     ctx["env"].make_adapter_unavailable()
 
 
@@ -331,12 +337,6 @@ def given_adapter_targeting_config(ctx: dict, config: str) -> None:
 def given_full_degradation_baseline(ctx: dict) -> None:
     """full_response degradation row: happy path (default env — adapter + DB up)."""
     _config(ctx)["full"] = True
-
-
-@given("a tenant is resolvable but adapter is unavailable")
-def given_tenant_adapter_unavailable(ctx: dict) -> None:
-    """adapter_fail row: tenant resolves, adapter factory raises → [display] default."""
-    ctx["env"].make_adapter_unavailable()
 
 
 @given("a tenant is resolvable but database query fails")

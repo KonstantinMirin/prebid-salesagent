@@ -679,11 +679,19 @@ def given_package_creative_ref_nonexistent(ctx: dict, pkg_id: str, creative_id: 
 def given_no_snapshot_for_package(ctx: dict, pkg_id: str) -> None:
     """Establish that no snapshot data exists for a package.
 
-    The default state in the harness is no snapshot data — the adapter mock
-    (when present) returns no data unless explicitly configured. Record the
-    expectation in ctx so Then steps can verify the correct unavailable_reason.
+    Absence is the harness default — the adapter mock returns no data unless a
+    Given configures some. The falsifiable half is the other direction: a
+    scenario that configured snapshot data for this package and then declares it
+    unavailable is grading the opposite of what it says. The ctx set this
+    replaced was written for "Then steps to verify the unavailable_reason" and
+    no Then ever read it.
     """
-    ctx.setdefault("snapshot_unavailable_packages", set()).add(pkg_id)
+    configured = ctx.get("adapter_snapshot_data", {})
+    seeded_for_pkg = [mb_id for mb_id, pkgs in configured.items() if pkg_id in pkgs]
+    assert not seeded_for_pkg, (
+        f"Step claims no snapshot data is available for package {pkg_id!r}, but a "
+        f"prior Given configured snapshot data for it under media buy(s) {seeded_for_pkg}."
+    )
 
 
 @given("the ad platform adapter supports realtime reporting")

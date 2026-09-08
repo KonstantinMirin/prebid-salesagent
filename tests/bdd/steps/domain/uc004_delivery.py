@@ -33,15 +33,6 @@ from tests.helpers.hmac_assertions import assert_signature_verifies_over_wire_bo
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
-def _pending(ctx: dict, step: str) -> None:
-    """Mark a step as pending implementation (harness not yet wired for BDD).
-
-    Using this instead of bare ``pass`` avoids triggering the duplicate-body
-    structural guard while clearly documenting which steps need harness work.
-    """
-    ctx.setdefault("pending_steps", []).append(step)
-
-
 def _parse_json_list(text: str) -> list[str]:
     """Parse a JSON-like list string from Gherkin, e.g., '["mb-001", "mb-002"]'."""
     return json.loads(text)
@@ -224,16 +215,31 @@ def given_media_buy_known_owner(ctx: dict, mb_id: str) -> None:
     _ensure_media_buy_in_db(ctx, mb_id, owner)
 
 
+def _assert_media_buy_unseeded(ctx: dict, mb_id: str) -> None:
+    """The scenario must not have seeded the media buy it calls nonexistent.
+
+    Absence is the default -- a UC-004 scenario creates every media buy it wants
+    through a Given, so anything unseeded does not exist. The falsifiable half is
+    the other direction: a scenario that seeds ``mb-001`` and then declares it
+    absent is testing nothing, and used to say so into a ctx list no step read.
+    """
+    seeded = ctx.get("media_buys", {})
+    assert mb_id not in seeded, (
+        f"Step claims no media buy exists with id {mb_id!r}, but this scenario seeded it. Seeded ids: {sorted(seeded)}"
+    )
+
+
 @given(parsers.parse('no media buy exists with id "{mb_id}"'))
 def given_no_media_buy(ctx: dict, mb_id: str) -> None:
     """Ensure no media buy with this ID exists."""
-    ctx.setdefault("nonexistent_media_buys", []).append(mb_id)
+    _assert_media_buy_unseeded(ctx, mb_id)
 
 
 @given(parsers.parse('no media buy exists with id "{mb_id1}" or "{mb_id2}"'))
 def given_no_media_buys(ctx: dict, mb_id1: str, mb_id2: str) -> None:
     """Ensure neither media buy exists."""
-    ctx.setdefault("nonexistent_media_buys", []).extend([mb_id1, mb_id2])
+    _assert_media_buy_unseeded(ctx, mb_id1)
+    _assert_media_buy_unseeded(ctx, mb_id2)
 
 
 @given(parsers.parse('the principal "{principal_id}" has no media buys'))
@@ -244,9 +250,19 @@ def given_principal_no_buys(ctx: dict, principal_id: str) -> None:
 
 @given(parsers.parse('no principal "{principal_id}" exists in the tenant database'))
 def given_no_principal(ctx: dict, principal_id: str) -> None:
-    """No principal with this ID exists."""
-    ctx["principal_exists"] = False
-    ctx["nonexistent_principal"] = principal_id
+    """No principal with this ID exists.
+
+    The harness seeds exactly one principal -- the authenticated one -- so any
+    other id is absent by construction. What this can establish is that the
+    scenario did not name THAT one: "no principal X exists" while X is the caller
+    would grade the opposite of what it says. The two ctx flags this replaced
+    were read by no step.
+    """
+    authenticated = ctx["env"]._principal_id
+    assert principal_id != authenticated, (
+        f"Step claims principal {principal_id!r} does not exist, but it is the "
+        "authenticated principal this scenario dispatches as."
+    )
 
 
 def _create_unique_media_buy(
@@ -566,20 +582,16 @@ def _persist_webhook_config_if_needed(ctx: dict, env: Any) -> None:
 
 
 @given(parsers.parse('a media buy "{mb_id}" with an active reporting_webhook configured'))
-def given_webhook_configured(ctx: dict, mb_id: str) -> None:
-    """Media buy has an active webhook endpoint configured."""
-    _set_active_webhook(ctx, mb_id)
-
-
 @given(parsers.parse('a media buy "{mb_id}" with an active reporting_webhook'))
-def given_webhook_active(ctx: dict, mb_id: str) -> None:
-    """Media buy has an active webhook (same as configured)."""
-    _set_active_webhook(ctx, mb_id)
-
-
 @given(parsers.parse('a media buy "{mb_id}" with webhook delivery configured'))
-def given_webhook_delivery_configured(ctx: dict, mb_id: str) -> None:
-    """Media buy has webhook delivery configured."""
+def given_webhook_configured(ctx: dict, mb_id: str) -> None:
+    """Media buy has an active webhook endpoint configured.
+
+    Three sentences, one precondition. They were three functions with the same
+    body plus a ``webhook_variant`` flag ("active" / "delivery") that no step
+    read -- so the variant was a distinction the scenarios could see in their
+    Gherkin and the harness could not act on. One owner, three spellings.
+    """
     _set_active_webhook(ctx, mb_id)
 
 
@@ -591,8 +603,22 @@ def given_no_webhook(ctx: dict, mb_id: str) -> None:
 
 @given(parsers.parse('the reporting_frequency is "{frequency}"'))
 def given_reporting_frequency(ctx: dict, frequency: str) -> None:
-    """Set the reporting frequency for webhook delivery."""
-    ctx["reporting_frequency"] = frequency
+    """The scenario's reporting webhook fires at this frequency.
+
+    Nothing on this path reaches a per-scenario frequency switch, so what the step
+    establishes is that the frequency the scenario names is one the pinned
+    ``ReportingWebhook.reporting_frequency`` enum admits. That is not ceremony:
+    ``tests/factories/webhook.py`` records the live bug where a webhook config
+    spelled this field ``frequency``, the model dropped the unknown key, and a
+    scenario that "configures daily reporting" configured nothing. The top-level
+    ctx flag this replaced was read by no step.
+    """
+    from adcp.types import ReportingFrequency
+
+    allowed = {m.value for m in ReportingFrequency}
+    assert frequency in allowed, (
+        f"reporting_frequency {frequency!r} is not in the pinned ReportingFrequency enum: {sorted(allowed)}"
+    )
 
 
 @given(parsers.parse('a media buy "{mb_id}" with webhook authentication scheme "{scheme}"'))
@@ -753,16 +779,79 @@ def given_webhook_flaky(ctx: dict) -> None:
 # ── Reporting dimensions / attribution / seller capabilities ──────
 
 
+def _assert_wire_carries_dimension(dimension: str) -> None:
+    """The named reporting dimension must be one the delivery wire can carry.
+
+    Derived from ``PackageDelivery`` rather than a literal list, so the vocabulary
+    cannot drift from what a package breakdown can actually hold: a ``by_<dim>``
+    field IS the dimension's wire surface.
+
+    This is all a seller-capability sentence can establish here, and it is why the
+    positive and negative sentences check the same thing: production has NO
+    per-seller reporting-capability gate (there is no column, no adapter flag and
+    no capabilities field for it), so a dimension is never "unsupported" by a
+    seller -- it is either expressible on the wire or misspelled. Each of these
+    steps used to record a ctx flag instead, and no step anywhere read one.
+    """
+    from src.core.schemas.delivery import PackageDelivery
+
+    carried = {
+        name[3:] for name in PackageDelivery.model_fields if name.startswith("by_") and not name.endswith("_truncated")
+    }
+    assert dimension in carried, (
+        f"Step names reporting dimension {dimension!r}, which no PackageDelivery "
+        f"breakdown field can carry. Known dimensions: {sorted(carried)}"
+    )
+
+
+def _assert_wire_carries_metric(metric: str) -> None:
+    """The named delivery metric must be a field a breakdown entry can carry.
+
+    Same derivation and same reason as ``_assert_wire_carries_dimension``:
+    ``PlacementBreakdown`` is the pinned per-entry metric surface, and production
+    has no per-seller metric capability gate for either sentence to configure.
+    """
+    from src.core.schemas.delivery import PlacementBreakdown
+
+    assert metric in PlacementBreakdown.model_fields, (
+        f"Step names delivery metric {metric!r}, which is not a field on "
+        f"PlacementBreakdown -- no breakdown entry could ever report it."
+    )
+
+
+def _assert_attribution_window_has_no_seller_toggle() -> None:
+    """attribution_window is buyer-configurable, with no seller-side opt-out.
+
+    Both "the seller supports configurable attribution windows" and its negation
+    reduce to this one production fact, so both establish it: the buyer sends the
+    window on the request and nothing on the seller side can refuse it. What the
+    two scenarios then grade is production's actual echo behaviour, not a
+    precondition either sentence could set.
+    """
+    from src.core.schemas.delivery import GetMediaBuyDeliveryRequest
+
+    assert "attribution_window" in GetMediaBuyDeliveryRequest.model_fields, (
+        "Step claims attribution windows are configurable, but the delivery "
+        "request carries no attribution_window field."
+    )
+    toggles = [f for f in GetMediaBuyDeliveryRequest.model_fields if "attribution" in f and f != "attribution_window"]
+    assert not toggles, (
+        f"The request now carries an attribution capability toggle ({toggles}) -- "
+        "the supports/does-NOT-support sentences can finally differ, so they must "
+        "stop sharing this body."
+    )
+
+
 @given(parsers.parse('the seller supports reporting dimension "{dimension}"'))
 def given_seller_supports_dimension(ctx: dict, dimension: str) -> None:
     """Seller supports a specific reporting dimension."""
-    ctx.setdefault("supported_dimensions", []).append(dimension)
+    _assert_wire_carries_dimension(dimension)
 
 
 @given(parsers.parse('the seller does NOT support reporting dimension "{dimension}"'))
 def given_seller_no_dimension(ctx: dict, dimension: str) -> None:
     """Seller does not support a specific reporting dimension."""
-    ctx.setdefault("unsupported_dimensions", []).append(dimension)
+    _assert_wire_carries_dimension(dimension)
 
 
 @given(parsers.parse('the seller supports reporting dimensions "{dim1}" and "{dim2}"'))
@@ -772,6 +861,8 @@ def given_seller_supports_dimensions(ctx: dict, dim1: str, dim2: str) -> None:
     Also configures the adapter with simulated breakdown data so that
     multi-dimension requests (BR-RULE-091 INV-1) return non-empty arrays.
     """
+    _assert_wire_carries_dimension(dim1)
+    _assert_wire_carries_dimension(dim2)
     env = ctx["env"]
     for mb_id in ctx.get("media_buys", {}):
         env.set_adapter_response(media_buy_id=mb_id)
@@ -779,32 +870,32 @@ def given_seller_supports_dimensions(ctx: dict, dim1: str, dim2: str) -> None:
 
 @given(parsers.parse('the seller does NOT support "{capability}"'))
 def given_seller_no_capability(ctx: dict, capability: str) -> None:
-    """Seller does not support a capability."""
-    ctx.setdefault("unsupported_capabilities", []).append(capability)
+    """Seller does not support a capability (used for reporting dimensions)."""
+    _assert_wire_carries_dimension(capability)
 
 
 @given("the seller supports configurable attribution windows")
 def given_seller_supports_attribution(ctx: dict) -> None:
     """Seller supports configurable attribution windows."""
-    ctx["supports_attribution_windows"] = True
+    _assert_attribution_window_has_no_seller_toggle()
 
 
 @given("the seller does NOT support configurable attribution windows")
 def given_seller_no_attribution(ctx: dict) -> None:
     """Seller does not support configurable attribution windows."""
-    ctx["supports_attribution_windows"] = False
+    _assert_attribution_window_has_no_seller_toggle()
 
 
 @given(parsers.parse('the seller does NOT report metric "{metric}"'))
 def given_seller_no_metric(ctx: dict, metric: str) -> None:
     """Seller does not report a specific metric."""
-    ctx.setdefault("unsupported_metrics", []).append(metric)
+    _assert_wire_carries_metric(metric)
 
 
 @given(parsers.parse('the seller reports metric "{metric}"'))
 def given_seller_reports_metric(ctx: dict, metric: str) -> None:
     """Seller reports a specific metric."""
-    ctx.setdefault("supported_metrics", []).append(metric)
+    _assert_wire_carries_metric(metric)
 
 
 @given("there are more geo breakdown entries than the requested limit")
@@ -1127,12 +1218,20 @@ def when_validate_webhook_config(ctx: dict) -> None:
 
 @when(parsers.parse('the webhook scheduler evaluates "{mb_id}"'))
 def when_webhook_evaluates(ctx: dict, mb_id: str) -> None:
-    """Webhook scheduler evaluates a media buy for delivery."""
-    wh = ctx.get("webhook_config", {}).get(mb_id, {})
-    if not wh.get("active"):
-        ctx["webhook_skipped"] = True
-    else:
-        ctx["webhook_evaluated"] = mb_id
+    """Webhook scheduler evaluates a media buy for delivery.
+
+    The evaluation itself is not driven from here -- nothing calls the scheduler --
+    so the two ctx flags this used to branch into ("skipped" / "evaluated") were
+    the harness recording its own verdict, and no step read either. The following
+    ``then_skip_no_webhook`` grades the real surface: whether a webhook POST was
+    made. What this step can honestly do is confirm the media buy it names is one
+    a Given actually configured a webhook state for.
+    """
+    configured = ctx.get("webhook_config", {})
+    assert mb_id in configured, (
+        f"The scheduler was asked to evaluate {mb_id!r}, but no Given configured a "
+        f"webhook state for it. Configured: {sorted(configured)}"
+    )
 
 
 # ── Reporting dimensions When steps ─────────────────────────────────
@@ -1156,14 +1255,17 @@ def _request_single_mb(ctx: dict, mb_id: str) -> None:
 
 
 @when(parsers.parse('the Buyer Agent requests delivery metrics for "{mb_id}"'))
+@when(parsers.parse('the Buyer Agent queries delivery metrics for media buy "{mb_id}"'))
+@when(parsers.re(r'the Buyer Agent requests delivery metrics for media_buy_ids \["(?P<mb_id>[^"]+)"\]$'))
 def when_request_single_mb(ctx: dict, mb_id: str) -> None:
-    """Request delivery metrics for a single media buy."""
-    _request_single_mb(ctx, mb_id)
+    """Request delivery metrics for a single media buy.
 
-
-@when(parsers.parse('the Buyer Agent requests delivery metrics for "{mb_id}" without attribution_window'))
-def when_request_no_attribution(ctx: dict, mb_id: str) -> None:
-    """Request without attribution window."""
+    Three spellings of one dispatch -- "requests ... for", "queries ... for media
+    buy", and the quoted ``media_buy_ids [...]`` form. They were three functions
+    with the same body, each also stashing a flag naming its own spelling
+    (``query_variant``, ``id_format``) that no step read: the wire call is
+    identical, so there was nothing for a Then to tell apart.
+    """
     _request_single_mb(ctx, mb_id)
 
 
@@ -1310,22 +1412,10 @@ def when_boundary_sampling(ctx: dict, boundary_value: str) -> None:
     _dispatch_partition(ctx, "sampling_method", boundary_value)
 
 
-@when(parsers.parse('the Buyer Agent queries delivery metrics for media buy "{mb_id}"'))
-def when_query_single_mb(ctx: dict, mb_id: str) -> None:
-    """Query delivery metrics for a single media buy (sandbox scenarios)."""
-    _request_single_mb(ctx, mb_id)
-
-
 @when("the Buyer Agent queries delivery metrics for a non-existent media buy")
 def when_query_nonexistent(ctx: dict) -> None:
     """Query delivery metrics for a non-existent media buy."""
     dispatch_request(ctx, media_buy_ids=["mb-nonexistent"])
-
-
-@when(parsers.re(r'the Buyer Agent requests delivery metrics for media_buy_ids \["(?P<mb_id>[^"]+)"\]$'))
-def when_request_single_id_quoted(ctx: dict, mb_id: str) -> None:
-    """Request for a single media buy ID (quoted format)."""
-    _request_single_mb(ctx, mb_id)
 
 
 @when(
@@ -1335,7 +1425,25 @@ def when_request_single_id_quoted(ctx: dict, mb_id: str) -> None:
     )
 )
 def when_request_without_field(ctx: dict, mb_id: str, field: str) -> None:
-    """Request without a specific optional field (attribution_window etc)."""
+    """Request without a specific optional field (attribution_window etc).
+
+    Also owns the "without attribution_window" sentence, which used to have its
+    own ``parsers.parse`` step shadowing this regex with an identical body plus
+    an ``omitted_fields`` list no step read.
+
+    Omitting a field is only meaningful if the request HAS one to omit, so the
+    named field must be real: "without frobnicator" would otherwise dispatch a
+    perfectly ordinary request and grade whatever came back.
+    """
+    from src.core.schemas.delivery import GetMediaBuyDeliveryRequest
+
+    assert field in GetMediaBuyDeliveryRequest.model_fields, (
+        f"Step omits {field!r} from the delivery request, but the request carries "
+        f"no such field: {sorted(GetMediaBuyDeliveryRequest.model_fields)}"
+    )
+    assert field not in (ctx.get("request_kwargs") or {}), (
+        f"Step claims the request goes out without {field!r}, but a prior step put it there."
+    )
     _request_single_mb(ctx, mb_id)
 
 
