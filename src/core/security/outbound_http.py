@@ -112,7 +112,7 @@ place and add a fifth thing to get wrong per call site.
 Retries wait BR-RULE-029's 1s/2s/4s plus jitter. An origin's ``Retry-After`` can
 LENGTHEN that wait, never shorten it, and only up to a bounded amount — a header
 is a request, not an instruction, and an unbounded one would let any counterparty
-pin a worker. The value the buyer sees rides out in ``AdCPError``'s own top-level
+pin a worker. The value the buyer sees rides out in ``AdCPSalesAgentError``'s own top-level
 ``retry_after`` slot (clamped to the spec's [1, 3600]), not in ``details``. ``ADCP_OUTBOUND_BACKOFF_BASE_SECONDS``
 shortens the base for test speed and nothing else — it cannot change the shape or
 remove the jitter, it is deliberately not passed through ``tox.ini`` or either

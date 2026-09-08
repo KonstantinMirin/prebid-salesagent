@@ -27,7 +27,7 @@ skip_no_audience_agent = pytest.mark.skipif(
 )
 
 from src.core.errors.codes import CODE_TABLE
-from src.core.exceptions import AdCPError, build_two_layer_error_envelope
+from src.core.exceptions import AdCPSalesAgentError, build_two_layer_error_envelope
 from src.core.security import outbound_http as outbound_http_module
 from src.core.security.outbound_http import OutboundRequestBlocked
 from src.core.signals_agent_registry import SignalsAgent, SignalsAgentRegistry
@@ -533,7 +533,7 @@ class TestExhaustedFailureReachesTheRegistryClassified:
 
         agent = SignalsAgent(agent_url=agent_url, name="stub-signals-agent", enabled=True, timeout=10)
 
-        with pytest.raises(AdCPError) as exc_info:
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             await SignalsAgentRegistry()._fetch_signals_operator(agent, brief="a brief")
 
         # The recovery is read from the pinned enumMetadata rather than written as
@@ -668,7 +668,7 @@ class TestDialTimeRefusalIsNotRetriedOrLaundered:
         origin = mcp_origin_tls(get_signals=_unreached_get_signals)
         agent = SignalsAgent(agent_url=origin.base_url, name="stub-signals-agent", enabled=True, timeout=10)
 
-        with pytest.raises(AdCPError) as exc_info:
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             await SignalsAgentRegistry()._fetch_signals_operator(agent, brief="a brief")
 
         assert hatch_closes_between_precheck_and_dial == [origin.base_url], (

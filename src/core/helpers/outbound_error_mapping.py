@@ -65,8 +65,8 @@ from typing import NoReturn
 
 from src.core.exceptions import (
     AdCPConfigurationError,
-    AdCPError,
     AdCPRateLimitError,
+    AdCPSalesAgentError,
     AdCPServiceUnavailableError,
     clamp_retry_after,
 )
@@ -81,7 +81,9 @@ from src.core.security.outbound_http import (
 )
 
 
-def adcp_error_for_status(status: int | None, *, retry_after: float | None, provenance: UrlProvenance) -> AdCPError:
+def adcp_error_for_status(
+    status: int | None, *, retry_after: float | None, provenance: UrlProvenance
+) -> AdCPSalesAgentError:
     """The one status -> AdCP-error-class table both seams' mappers consume.
 
     429 -> ``RATE_LIMITED`` carrying the clamped ``retry_after``; any other 4xx

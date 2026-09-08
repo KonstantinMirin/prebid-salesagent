@@ -60,7 +60,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 import requests
 
-from src.core.exceptions import AdCPError
+from src.core.exceptions import AdCPSalesAgentError
 from src.core.schemas import Principal, ReportingPeriod
 from src.core.security.egress.attempts import OutboundDeliveryFailed
 from src.core.security.outbound_http import OutboundError
@@ -79,11 +79,11 @@ _TODAY = datetime(2026, 7, 29, tzinfo=UTC)
 
 # The exception TYPE a vendor call raises is exactly what the migration changes:
 # ``requests.exceptions.RequestException`` today, an ``OutboundError`` or a mapped
-# ``AdCPError`` once the site routes through the seam. This file grades attempt
+# ``AdCPSalesAgentError`` once the site routes through the seam. This file grades attempt
 # counts, so it names all three and leaves the taxonomy to be graded where it
 # belongs — ``tests/integration/test_outbound_http.py`` for the seam's own
 # classes, the adapter's error tests for the mapping.
-_VENDOR_FAILURE = (requests.exceptions.RequestException, OutboundError, AdCPError)
+_VENDOR_FAILURE = (requests.exceptions.RequestException, OutboundError, AdCPSalesAgentError)
 
 
 class _BareEnv(IntegrationEnv):
@@ -360,7 +360,7 @@ def test_kevel_update_does_not_retry_a_failing_origin(local_origin_tls, monkeypa
     would grade an implementation detail the migration deliberately changes at
     every site.
     """
-    from src.core.exceptions import AdCPError
+    from src.core.exceptions import AdCPSalesAgentError
 
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
@@ -368,7 +368,7 @@ def test_kevel_update_does_not_retry_a_failing_origin(local_origin_tls, monkeypa
 
     adapter = _kevel(local_origin_tls)
 
-    with pytest.raises(AdCPError) as exc_info:
+    with pytest.raises(AdCPSalesAgentError) as exc_info:
         adapter.update_media_buy(
             media_buy_id="kevel_999",
             action="pause_media_buy",
@@ -427,7 +427,7 @@ def test_broadstreet_request_does_not_retry_a_failing_origin(local_origin_tls, m
 
     client = _broadstreet(local_origin_tls)
 
-    with pytest.raises(AdCPError) as exc_info:
+    with pytest.raises(AdCPSalesAgentError) as exc_info:
         client.get("/networks")
 
     assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
@@ -474,7 +474,7 @@ def test_gam_report_download_does_not_retry_a_failing_origin(local_origin_tls, m
     # to assert on was that relabelled string -- and the download branch's
     # migration onto `raise_mapped_outbound_error` bought nothing observable,
     # because this outer handler swallowed the classification on the way out.
-    # An `except AdCPError: raise` branch ahead of the catch-all is what changed, and
+    # An `except AdCPSalesAgentError: raise` branch ahead of the catch-all is what changed, and
     # this is where it shows: the seam's own class, its attempt count, and its
     # fixed message survive to the caller.
     with pytest.raises(OutboundDeliveryFailed) as raised:

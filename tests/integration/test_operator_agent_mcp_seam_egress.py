@@ -44,7 +44,7 @@ from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistr
 from src.core.errors.codes import CODE_TABLE
 from src.core.exceptions import (
     AdCPConfigurationError,
-    AdCPError,
+    AdCPSalesAgentError,
     AdCPServiceUnavailableError,
     build_two_layer_error_envelope,
 )
@@ -58,7 +58,7 @@ from tests.integration.test_outbound_http import fast_backoff
 pytestmark = [pytest.mark.integration]
 
 
-def _assert_wire_pair(exc: AdCPError, code: str, *, pinned_recovery: str) -> None:
+def _assert_wire_pair(exc: AdCPSalesAgentError, code: str, *, pinned_recovery: str) -> None:
     """Assert the buyer-visible envelope is *code* paired with its pinned recovery.
 
     Asserts on the two-layer WIRE envelope, not on the exception's attributes:

@@ -1291,21 +1291,10 @@ def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPSalesAgentEr
 # ---------------------------------------------------------------------------
 # Names origin/main spells differently
 # ---------------------------------------------------------------------------
-# Aliases, not classes: each pair below is ONE concept that the two branches
+# An alias, not a class: the pair below is ONE concept that the two branches
 # named differently, so binding a second name costs nothing, while defining a
 # second class would put two answers on the wire for one failure.
 #
-# ``AdCPError`` is this branch's ``AdCPSalesAgentError`` under its former name.
-# The rename is repo-wide here (42 modules) but origin/main's egress work landed
-# after it, so ``src/core/helpers/outbound_error_mapping.py`` and
-# ``src/core/security/egress/policy.py`` still import the old spelling. Those two
-# modules ALSO still call the retired constructor API — a positional ``message``
-# and a plain-dict ``details``, both of which this base class refuses — so this
-# alias makes them import, not work. They need porting to the keyword-only,
-# typed-details constructor before either can raise. Delete this name in the same
-# change.
-AdCPError = AdCPSalesAgentError
-
 # ``AdCPBlockedUrlError`` is origin/main's name for the SSRF refusal, and the two
 # were ONE condition, not two: the pinned 3.1.1 ``enums/error-code.json`` defines
 # no URL/SSRF code at all (the nearest, AGENT_BLOCKED, is about a blocked AGENT),

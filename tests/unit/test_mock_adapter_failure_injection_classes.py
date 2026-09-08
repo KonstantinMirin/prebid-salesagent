@@ -38,7 +38,7 @@ from src.core.errors.codes import CODE_TABLE, ErrorCodeT, Recovery
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPConfigurationError,
-    AdCPError,
+    AdCPSalesAgentError,
     AdCPValidationError,
 )
 
@@ -54,7 +54,7 @@ def _adapter_with_behavior(monkeypatch: pytest.MonkeyPatch, behavior: dict) -> M
     return adapter
 
 
-def _buyer_facing_wire(exc: AdCPError) -> str:
+def _buyer_facing_wire(exc: AdCPSalesAgentError) -> str:
     """Every field of *exc* a buyer can read, as one string to search.
 
     ``internal_detail`` is deliberately absent — it is non-wire by construction
@@ -70,7 +70,7 @@ def _buyer_facing_wire(exc: AdCPError) -> str:
     )
 
 
-def _assert_pinned_envelope(exc: AdCPError, *, code: ErrorCodeT) -> None:
+def _assert_pinned_envelope(exc: AdCPSalesAgentError, *, code: ErrorCodeT) -> None:
     """Grade one raised failure against the pin, on every derived channel.
 
     Written once because all four raising tests grade the same envelope; only
@@ -106,7 +106,7 @@ def _assert_pinned_envelope(exc: AdCPError, *, code: ErrorCodeT) -> None:
 def test_knob_selects_the_class_whose_pinned_recovery_it_names(
     monkeypatch: pytest.MonkeyPatch,
     injected: str,
-    expected_cls: type[AdCPError],
+    expected_cls: type[AdCPSalesAgentError],
     expected_code: ErrorCodeT,
     expected_recovery: Recovery,
 ) -> None:

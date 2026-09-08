@@ -441,7 +441,7 @@ class Kevel(AdServerAdapter):
             except OutboundError as e:
                 # Narrowed, not widened: AdCPPackageNotFoundError is raised inside
                 # this same try and is deliberately NOT caught here — widening to
-                # AdCPError would swallow it and report a package-not-found as an
+                # AdCPSalesAgentError would swallow it and report a package-not-found as an
                 # adapter failure.
                 self.log(f"Error creating Kevel Creative or Ad: {e}")
                 for asset in assets:

@@ -436,7 +436,7 @@ class TestNoPreviewsAdvisoryIsACorrectableRejection:
 
 
 class TestTypedErrorForwardingKeepsTheTriple:
-    """A typed AdCPError's code, recovery AND field all reach the advisory.
+    """A typed AdCPSalesAgentError's code, recovery AND field all reach the advisory.
 
     ``_sync.py``'s ``except AdCPSalesAgentError`` branch (:430-461) is the advisory
     path whose values come from the raised error rather than from the call

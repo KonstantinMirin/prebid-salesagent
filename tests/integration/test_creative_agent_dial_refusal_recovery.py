@@ -31,7 +31,7 @@ refused seam call is not that class, falls through to the generic
     recovery="transient"
 
 which tells the buyer to retry a refusal that will recur identically forever.
-``src/core/tools/creatives/_sync.py``'s own outer ``except AdCPError as e:``
+``src/core/tools/creatives/_sync.py``'s own outer ``except AdCPSalesAgentError as e:``
 handler (around line 359) ALREADY carries a typed error's own
 ``recovery``/``error_code`` onto the per-item result correctly — the defect is
 that the seam failure never reaches it, because the inner generic

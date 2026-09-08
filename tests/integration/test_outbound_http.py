@@ -1698,7 +1698,7 @@ def test_details_carries_exactly_the_declared_detail_keys(seam_call, monkeypatch
     httpx error string may be added to it (spec point 6). That rule is a comment
     on a ClassVar referenced nowhere else, and the call sites migrating onto the
     seam lean on it — including this ticket's, which carries ``retry_after`` in
-    ``AdCPError``'s own slot precisely so ``details`` does not grow.
+    ``AdCPSalesAgentError``'s own slot precisely so ``details`` does not grow.
 
     Graded on a 429 WITH a Retry-After, which is the answer most likely to leak a
     fourth key.

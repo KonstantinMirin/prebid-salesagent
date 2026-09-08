@@ -48,8 +48,7 @@ class MCPAuthMiddleware(Middleware):
             # ``ToolError("<message>")`` and the buyer gets no code, no recovery
             # and no suggestion — while A2A and REST answer the same rejected
             # credential with the full two-layer envelope. Translate here through
-            # the SAME boundary translator (never a hand-built envelope), exactly
-            # as RequestCompatMiddleware does for its own out-of-tool raises.
+            # the SAME boundary translator, never a hand-built envelope.
             _translate_to_tool_error(exc)
 
         if context.fastmcp_context:
