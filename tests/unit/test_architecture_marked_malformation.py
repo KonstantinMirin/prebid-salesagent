@@ -52,8 +52,8 @@ from tests.factories.malformed import (
     GATED_ITEMS,
     MALFORMATION_KINDS,
     _Malformed,
+    malformation_problems,
     malformed,
-    undeclared_malformations,
 )
 from tests.unit._architecture_helpers import (
     assert_detector_catches_ast_snippets,
@@ -314,6 +314,11 @@ _CONFORMANT_CREATIVE: dict[str, Any] = {
 }
 
 
+def _rejected_creative(creative_id: str = "creative-meta-001") -> dict[str, Any]:
+    """The conformant creative minus ``assets`` — measured REJECTED by the pin (``Field required``)."""
+    return {**{k: v for k, v in _CONFORMANT_CREATIVE.items() if k != "assets"}, "creative_id": creative_id}
+
+
 @pytest.mark.arch_guard
 def test_positive_control_static_detector_catches_unauditable_markers() -> None:
     """The static detector flags every shape of unauditable declaration."""
@@ -342,9 +347,8 @@ def test_negative_control_conformant_declaration_not_flagged() -> None:
 @pytest.mark.arch_guard
 def test_positive_control_runtime_gate_flags_unmarked_malformation() -> None:
     """An undeclared item the pinned model rejects is reported, with the pydantic reason."""
-    payload = {k: v for k, v in _CONFORMANT_CREATIVE.items() if k != "assets"}
-    payload["creative_id"] = "creative-meta-unmarked-001"
-    problems = undeclared_malformations({"creatives": [payload]})
+    payload = _rejected_creative("creative-meta-unmarked-001")
+    problems = malformation_problems({"creatives": [payload]})
     assert len(problems) == 1, problems
     assert "creative-meta-unmarked-001" in problems[0]
     assert "assets" in problems[0]
@@ -353,9 +357,9 @@ def test_positive_control_runtime_gate_flags_unmarked_malformation() -> None:
 @pytest.mark.arch_guard
 def test_positive_control_runtime_gate_accepts_the_marked_form() -> None:
     """The SAME rejected bytes, declared, pass — and stay byte-identical on the way."""
-    payload = {k: v for k, v in _CONFORMANT_CREATIVE.items() if k != "assets"}
-    declared = malformed("absent_key", "no assets key: exercises the preview-failure branch", payload)
-    assert undeclared_malformations({"creatives": [declared]}) == []
+    payload = _rejected_creative()
+    declared = malformed("absent_key", "no assets key: exercises the preview-failure branch", payload, pin_rejects=True)
+    assert malformation_problems({"creatives": [declared]}) == []
     assert isinstance(declared, _Malformed)
     assert dict(declared) == payload, "the declaration must not alter what reaches the wire"
 
@@ -363,7 +367,7 @@ def test_positive_control_runtime_gate_accepts_the_marked_form() -> None:
 @pytest.mark.arch_guard
 def test_negative_control_runtime_gate_passes_a_conformant_literal() -> None:
     """A conformant creative is NOT flagged — the gate asks the model, not for markers."""
-    assert undeclared_malformations({"creatives": [_CONFORMANT_CREATIVE]}) == []
+    assert malformation_problems({"creatives": [_CONFORMANT_CREATIVE]}) == []
 
 
 @pytest.mark.arch_guard
@@ -385,12 +389,110 @@ def test_scenario_level_control_dispatch_request_refuses_an_unmarked_malformatio
 
     ctx: dict[str, Any] = {"env": SimpleNamespace(call_via=call_via), "transport": Transport.MCP}
 
-    payload = {k: v for k, v in _CONFORMANT_CREATIVE.items() if k != "assets"}
+    payload = _rejected_creative()
     with pytest.raises(AssertionError, match="not declared malformed"):
         dispatch_request(ctx, creatives=[payload])
     assert dispatched == [], "the gate must refuse BEFORE anything reaches the transport"
 
-    declared = malformed("absent_key", "no assets key: exercises the preview-failure branch", payload)
+    declared = malformed("absent_key", "no assets key: exercises the preview-failure branch", payload, pin_rejects=True)
     dispatch_request(ctx, creatives=[declared])
     assert dispatched == [[declared]]
     assert dict(dispatched[0][0]) == payload
+
+
+# ---------------------------------------------------------------------------
+# The declaration is graded against the pin's ACTUAL verdict — both directions
+# ---------------------------------------------------------------------------
+#
+# ``kind`` is the SHAPE of the wrongness; whether the pinned model catches it is an
+# INDEPENDENT axis, which is why ``pin_rejects`` carries it rather than being derived
+# from a partition of kinds. Measured counterexample to any such partition:
+# ``uc006_sync_creatives.py:6190`` is declared ``semantic`` and the pin REJECTS it
+# (format_id.id must match ``^[a-zA-Z0-9_-]+$``), while a DIFFERENT semantic case — an
+# unknown but well-formed format id — the pin ACCEPTS.
+#
+#     pin_rejects=True  and the pin ACCEPTS   -> REPAIRED malformation. Report it,
+#                                                naming the site and the kind.
+#     pin_rejects=False and the pin REJECTS   -> MIS-DECLARED. Report it, quoting the
+#                                                pydantic error.
+#     the pin's verdict matches the declaration -> nothing to report.
+#
+# WHY IT IS NEEDED: the gate USED TO skip every declared item without validating it, so a
+# declaration that had stopped being true was invisible. Once a ``CreativeAssetRequest``
+# factory exists, ``malformed("absent_key", why, Factory.payload())`` declares an absence
+# the factory has just supplied — the marker lies and the gate says nothing.
+#
+# THE UNDECLARED HALF IS UNCHANGED and is anchored by two controls already in this file
+# rather than restated here: ``test_positive_control_runtime_gate_flags_unmarked_malformation``
+# (undeclared + pin-rejected still fails) and
+# ``test_negative_control_runtime_gate_passes_a_conformant_literal`` (undeclared +
+# conformant still passes). A declaration stays REQUIRED only on items the pin rejects
+# and is never demanded on a conformant payload — b341x.1's deliberate asymmetry, which
+# grading declared items in both directions does not disturb.
+
+
+@pytest.mark.arch_guard
+@pytest.mark.parametrize(
+    ("declared", "must_report"),
+    [
+        pytest.param(
+            malformed(
+                "absent_key",
+                "declares the assets key absent — but these bytes carry it, which is exactly "
+                "what a factory default does to a malformation",
+                {**_CONFORMANT_CREATIVE, "creative_id": "creative-meta-repaired-001"},
+                pin_rejects=True,
+            ),
+            ("creatives[0]", "creative-meta-repaired-001", "absent_key"),
+            id="repaired",
+        ),
+        pytest.param(
+            malformed(
+                "absent_key",
+                "claims the pin tolerates a creative with no assets key; measured, it does not",
+                _rejected_creative("creative-meta-misdeclared-001"),
+                pin_rejects=False,
+            ),
+            ("creatives[0]", "creative-meta-misdeclared-001", "Field required"),
+            id="mis-declared",
+        ),
+        pytest.param(
+            malformed(
+                "absent_key",
+                "no assets key: exercises the preview-failure branch",
+                _rejected_creative("creative-meta-honest-reject-001"),
+                pin_rejects=True,
+            ),
+            (),
+            id="honest-rejection",
+        ),
+        pytest.param(
+            malformed(
+                "empty_string",
+                "an empty name is conformant to the pin and wrong downstream, which is the scenario's subject",
+                {**_CONFORMANT_CREATIVE, "creative_id": "creative-meta-honest-accept-001", "name": ""},
+                pin_rejects=False,
+            ),
+            (),
+            id="honest-acceptance",
+        ),
+    ],
+)
+def test_declaration_is_graded_against_the_pins_actual_verdict(
+    declared: _Malformed, must_report: tuple[str, ...]
+) -> None:
+    """A DECLARED item is validated rather than skipped, and both disagreements fail."""
+    problems = malformation_problems({"creatives": [declared]})
+    if not must_report:
+        assert problems == [], (
+            f"the declaration agrees with the pin (pin_rejects={declared.pin_rejects}), so the "
+            "gate must stay silent:\n" + "\n".join(problems)
+        )
+        return
+    assert len(problems) == 1, (
+        f"a declaration that disagrees with the pin (pin_rejects={declared.pin_rejects}) must be "
+        f"reported exactly once; got {len(problems)}. Skipping declared items is how a "
+        "declaration that has stopped being true stays invisible:\n" + "\n".join(problems)
+    )
+    missing = [needle for needle in must_report if needle not in problems[0]]
+    assert not missing, f"the report omits {missing}, so nobody can act on it:\n{problems[0]}"

@@ -54,6 +54,7 @@ from typing import Any
 
 import factory
 
+from src.core.schemas.creative import CreativeAssetRequest
 from src.core.tools.registry import TOOLS
 
 
@@ -76,7 +77,7 @@ def dto(tool: str) -> type:
 
 
 from tests.factories.creative_asset import build_assets, image_spec
-from tests.factories.format import AGENT_URL
+from tests.factories.format import AGENT_URL, FormatIdFactory
 from tests.helpers.sample_account import SAMPLE_ACCOUNT
 
 
@@ -148,6 +149,72 @@ class _RequestFactory(factory.Factory):
         return data
 
 
+class CreativeAssetRequestFactory(_RequestFactory):
+    """One creative ITEM of a ``sync_creatives`` request, as the wire dict.
+
+    Not a tool factory: it binds ``src.core.schemas.creative.CreativeAssetRequest``, the
+    item model ``SyncCreativesRequest.creatives`` holds and the one the runtime
+    malformation gate validates every dispatched creative against
+    (``GATED_ITEMS``, ``tests/factories/malformed.py``). ``_RequestFactory`` is already
+    the base for sub-object payload factories — ``tests/factories/webhook.py`` binds
+    three ``adcp.types`` sub-objects the same way.
+
+    IT IS NAMED FOR THE REQUEST MODEL, and that is load-carrying. ``CreativeAssetFactory``
+    (``tests/factories/creative_asset.py``) builds the RESPONSE model, and feeding a
+    response-shaped creative to a request is a defect this repo has already had — see the
+    note in ``make_creative_asset_request``. So does ``make_test_banner_creative``, and so
+    do the per-file ``_make_creative*`` helpers. Reach for one of those by habit and the
+    confusion comes back.
+
+    Lives here rather than beside the concept in ``creative_asset.py`` because
+    ``request.py`` imports ``build_assets``/``image_spec`` from that module at line 78,
+    ABOVE ``_RequestFactory``: the reverse import is a cycle, reproduced as
+    ``ImportError: cannot import name 'build_assets'``.
+
+    OVERRIDE CONTRACT (all four measured against ``CreativeAssetRequest``)::
+
+        payload()                     the conformant baseline; the pin ACCEPTS it
+        payload(name="")              CHANGE a field   (still accepted — wrongness is downstream)
+        payload(provenance={...})     ADD a field      (provenance/inputs/tags/status/weight
+                                                        are real fields; extra="forbid" means a
+                                                        TYPO is caught by the runtime gate)
+        payload(assets=OMIT)          REMOVE the key entirely
+        payload(format_id=None)       key PRESENT carrying null
+
+    The last two are why ``OMIT`` matters here: the pin reports an ABSENT ``format_id``
+    and a NULL ``format_id`` identically (``[type=oneOf]``), so the call site is the only
+    place that can say which one the author meant — the same distinction ``malformed()``'s
+    ``kind`` carries.
+
+    A MALFORMATION IS ALWAYS A ``payload()`` OVERRIDE, NEVER A ``build()`` KWARG.
+    Overrides land after ``model_dump`` and reach the wire verbatim; ``build()`` routes
+    them through the model and raises in the test's own setup (measured:
+    ``build(format_id=None)`` raises ``[type=oneOf]``).
+
+    ``OMIT`` IS HONOURED AT THE TOP LEVEL ONLY. ``payload()`` loops over
+    ``overrides.items()``, so ``format_id={"id": X, "agent_url": OMIT}`` writes the
+    sentinel object into the nested dict verbatim. Express a nested omission by passing
+    the whole nested dict. A recursive walk would have to guess how deep the caller meant.
+
+    THE ``format_id`` DEFAULT IS FOR CTX-FREE CALLERS. It dumps through the model, so
+    ``AGENT_URL`` comes back NORMALISED with a trailing slash, and its HOST is
+    ``creative.adcontextprotocol.org`` while ``CreativeSyncEnv.DEFAULT_AGENT_URL`` is
+    ``creative.test.example.com``. A BDD step that adopts the default therefore changes
+    WHICH creative agent its payload names — a behaviour change, not a byte one — so BDD
+    callers pass ``format_id={"id": ..., "agent_url": env.DEFAULT_AGENT_URL}``. Overridden
+    values are passed through verbatim, which is what makes an un-normalised URL
+    expressible at all.
+    """
+
+    class Meta:
+        model = CreativeAssetRequest
+
+    creative_id = factory.Sequence(lambda n: f"creative-{n:03d}")
+    name = "Test Creative"
+    format_id = factory.SubFactory(FormatIdFactory, id="display_300x250")
+    assets = factory.LazyFunction(lambda: build_assets(image_spec("image")))
+
+
 class CreateMediaBuyRequestFactory(_RequestFactory):
     """A create_media_buy request that conforms to ``media-buy/create-media-buy-request.json``.
 
@@ -188,6 +255,11 @@ class SyncCreativesRequestFactory(_RequestFactory):
     literal dict, so the ``assets`` shape has the same single owner every other
     creative test uses. ``assets`` is on the pin's ``/required`` for a creative
     asset, which a hand-written ``{creative_id, name, format_id}`` triple misses.
+
+    The ITEM here is still a literal, and ``CreativeAssetRequestFactory`` above now owns
+    that shape. Routing this default through it would change the bytes of an existing
+    baseline (role ``banner`` vs ``image``, and the normalised ``agent_url``), so it is
+    left for the sweep that grades the dispatched wire payload (salesagent-b341x.11).
     """
 
     class Meta:

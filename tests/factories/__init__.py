@@ -36,10 +36,11 @@ from tests.factories.inventory_profile import InventoryProfileFactory
 from tests.factories.media_buy import GetMediaBuysMediaBuyFactory, MediaBuyFactory, MediaPackageFactory
 from tests.factories.metrics import FormatPerformanceMetricsFactory
 from tests.factories.principal import PrincipalFactory
-from tests.factories.product import PricingOptionFactory, ProductFactory
+from tests.factories.product import PricingOptionFactory, PricingOptionRequestFactory, ProductFactory
 from tests.factories.request import (
     OMIT,
     CreateMediaBuyRequestFactory,
+    CreativeAssetRequestFactory,
     ListAccountsRequestFactory,
     ListCreativeFormatsRequestFactory,
     SyncAccountsRequestFactory,
@@ -91,6 +92,7 @@ __all__ = [
     "CollectionListReferenceFactory",
     "CreativeAgentFactory",
     "CreativeAssetFactory",
+    "CreativeAssetRequestFactory",
     "CreativeAssignmentFactory",
     "CreativeFactory",
     "CreateMediaBuyRequestFactory",
@@ -107,6 +109,7 @@ __all__ = [
     "MediaBuyFactory",
     "MediaPackageFactory",
     "PricingOptionFactory",
+    "PricingOptionRequestFactory",
     "PrincipalFactory",
     "ProductFactory",
     "PropertyListReferenceFactory",

@@ -34,6 +34,7 @@ from tests.factories.creative_asset import (
 )
 from tests.factories.malformed import malformed
 from tests.factories.principal import PrincipalFactory
+from tests.factories.request import OMIT, CreativeAssetRequestFactory
 from tests.harness.creative_sync import creative_fingerprint
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2067,11 +2068,15 @@ def given_creative_with_known_format_no_media_url(ctx: dict) -> None:
         "requires BOTH creative.url and data['url'] to be absent. CreativeAssetRequest rejects "
         "it with assets Field required [type=missing] — assets are NOT optional on the request "
         "schema, contrary to what this step used to claim.",
-        {
-            "creative_id": creative_id,
-            "name": "Creative Without media_url",
-            "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        },
+        CreativeAssetRequestFactory.payload(
+            creative_id=creative_id,
+            name="Creative Without media_url",
+            format_id={"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
+            # OMIT, not absence-by-default: the factory HAS a valid assets default, and
+            # dropping this line is the exact repair the gate now reports.
+            assets=OMIT,
+        ),
+        pin_rejects=True,
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -2645,12 +2650,14 @@ def given_creative_with_name_no_format(ctx: dict, name: str) -> None:
         "CreativeAssetRequest rejects it with [type=oneOf] provide exactly one of format_id or "
         "format_kind. The pin reports an omitted key identically, which is exactly why the kind "
         "is declared here rather than derived from the value.",
-        {
-            "creative_id": f"creative-no-fmt-{name.lower().replace(' ', '-')}-001",
-            "name": name,
-            "format_id": None,
-            "assets": build_assets(image_spec("image")),
-        },
+        CreativeAssetRequestFactory.payload(
+            creative_id=f"creative-no-fmt-{name.lower().replace(' ', '-')}-001",
+            name=name,
+            # None, not OMIT: the key must be ON THE WIRE carrying null. The two are
+            # indistinguishable in the pin's error and distinguishable only here.
+            format_id=None,
+        ),
+        pin_rejects=True,
     )
     ctx.setdefault("creatives", []).append(creative_payload)
 
@@ -2686,12 +2693,13 @@ def given_creative_invalid_schema(ctx: dict) -> None:
         "purpose so the scenario grades CREATIVE_VALIDATION_FAILED and not "
         "CREATIVE_FORMAT_REQUIRED; sending the wrong type is the scenario's whole subject, so "
         "these exact bytes must reach the wire unrepaired.",
-        {
-            "creative_id": "creative-invalid-schema-001",
-            "name": "Invalid Schema Creative",
-            "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-            "assets": "not-a-valid-assets-structure",
-        },
+        CreativeAssetRequestFactory.payload(
+            creative_id="creative-invalid-schema-001",
+            name="Invalid Schema Creative",
+            format_id={"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+            assets="not-a-valid-assets-structure",
+        ),
+        pin_rejects=True,
     )
     ctx.setdefault("creatives", []).append(creative_payload)
 
@@ -4852,11 +4860,14 @@ def given_creative_with_no_format_id(ctx: dict) -> None:
         "rejects it with [type=oneOf] provide exactly one of format_id or format_kind, the same "
         "message an explicit None produces, which is why absent_key is declared rather than "
         "inferred.",
-        {
-            "creative_id": "creative-no-fmt-001",
-            "name": "Creative Without Format",
-            "assets": build_assets(image_spec("image")),
-        },
+        CreativeAssetRequestFactory.payload(
+            creative_id="creative-no-fmt-001",
+            name="Creative Without Format",
+            # OMIT, not None: the key must be ABSENT. Drop this line and the factory
+            # default puts a valid format_id back — reported now, not silent.
+            format_id=OMIT,
+        ),
+        pin_rejects=True,
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_no_format"] = True
@@ -6194,12 +6205,14 @@ def given_creative_with_invalid_format_id(ctx: dict) -> None:
         "format_id.id String should match pattern '^[a-zA-Z0-9_-]+$' "
         "[type=string_pattern_mismatch]. The scenario grades syntactic format-id validation, so "
         "the spaces and '!!!' are the payload's point and must survive to the wire.",
-        {
-            "creative_id": creative_id,
-            "name": "Invalid Format Creative",
-            "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-            "assets": build_assets(image_spec("image")),
-        },
+        CreativeAssetRequestFactory.payload(
+            creative_id=creative_id,
+            name="Invalid Format Creative",
+            format_id={"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
+        ),
+        # semantic, and the pin REJECTS it. The kind says nothing about that: a different
+        # semantic case — an unknown but well-formed format id — the pin ACCEPTS.
+        pin_rejects=True,
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
