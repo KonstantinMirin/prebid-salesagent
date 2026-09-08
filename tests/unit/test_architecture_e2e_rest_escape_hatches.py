@@ -916,15 +916,24 @@ def _env_mock_reach_sites() -> list[tuple[str, str]]:
 #: method it is invisible to every existing lock, and a 45th could be added with nothing
 #: going red.
 #:
-#: EXACT SET, NOT SHRINK-ONLY, and deliberately so. The task that filed this asked for a
-#: shrink-only tuple; this file's own doctrine is the opposite and gives the reason at the
-#: top — "the exact-set comparison already fails in both directions, and a ceiling derived
-#: from the pin can never fail independently". A shrink is also a reviewable event here,
-#: which the record proves: this population was 41 step-body reaches when the task was
-#: filed and is 37 now, because four gemini Givens in uc006 were routed through a real
-#: ``env.set_gemini_api_key()`` seam. That is the direction of travel this pin exists to
-#: encourage, and it should cost one line of pin update, not pass unnoticed under a
-#: ceiling with headroom.
+#: EXACT SET, NOT SHRINK-ONLY. THIS IS A DELIBERATE OVERRIDE OF THE TASK THAT FILED IT
+#: (salesagent-b341x.9) AND OF THE "shrink-only ratchet" WORDING IN THE PARENT EPIC. It is
+#: not a deviation to be tidied back; read this before "restoring" a ceiling.
+#:
+#: Three reasons, in order of weight:
+#:
+#: 1. A ceiling derived from the pin CAN NEVER FAIL INDEPENDENTLY — this file's own
+#:    docstring says so at the top, about its other four pins, and the argument does not
+#:    change for the fifth. An exact set fails in BOTH directions.
+#: 2. The record settles it empirically. This population was 41 step-body reaches when the
+#:    task was filed and is 37 now, because four gemini Givens in uc006 were routed through
+#:    a real ``env.set_gemini_api_key()`` seam. Under a ceiling pinned at 41 those four
+#:    repairs pass unnoticed AND leave four slots of headroom — a new reach could then be
+#:    added with nothing going red. That is the fence-with-headroom defect arriving through
+#:    the very mechanism meant to prevent it.
+#: 3. A repair costing one reviewable line of pin update is a FEATURE. Routing a reach away
+#:    is the direction of travel this pin exists to encourage, and it should be recorded
+#:    rather than silently absorbed.
 EXPECTED_ENV_MOCK_REACHES: frozenset[tuple[str, str]] = frozenset(
     {
         ("tests/bdd/steps/_outcome_helpers.py", "_assert_audit_adapter_mock"),
