@@ -33,9 +33,20 @@ nodeids, SIGKILLed at 957s) and the tool named it nowhere.
 
 So the suite set is the UNION of four sources -- each run's ``.suites`` manifest
 (what ``run_all_tests.sh`` recorded that run as having executed) and each run's
-reports on disk -- and a suite in that set with no report on either side is
-NOT MEASURED: named, counted, and fatal. Not measured is never folded into
-"compared and fine".
+reports on disk. Every suite in that set is named and counted; none is ever
+folded into "compared and fine". Two of them are fatal and one is not, and the
+difference is which claim the gap can falsify:
+
+NOT MEASURED (fatal)
+    Ran in the baseline and produced nothing now -- the event a regression gate
+    exists for -- or declared by a manifest and produced by neither run, which
+    the reports alone cannot even see.
+
+NOT COMPARABLE (reported)
+    Present only in the new run. It has no pre-existing tests, so it cannot
+    falsify the safety claim, and failing on it would fire every time a suite is
+    added. Naming a suite on the command line overrides this: an explicit
+    request that cannot be answered is a refusal, whatever the shape.
 
 KNOWN NOISE, measured before trusting this tool, and now COMPUTED rather than
 left to the reader. Two runs of the SAME code disagree on about 19 of 8182
@@ -50,7 +61,7 @@ an unpaired removal is a disappearance. Measured against innet_080926_0943 vs
 innet_080926_1145, that accounts for 19 of 19.
 
 Exit status is 1 when any pre-existing test changed outcome, when any nodeid
-genuinely disappeared, or when any suite went unmeasured -- so this can gate.
+genuinely disappeared, or when any suite went NOT MEASURED -- so this can gate.
 
     python3 scripts/audit/compare_runs.py <baseline-dir> <new-dir> [suite.json ...]
 """
@@ -221,17 +232,30 @@ def compare(baseline: pathlib.Path, new: pathlib.Path, suite: str) -> SuiteCompa
     )
 
 
-def _why_unmeasured(suite: str, in_old: bool, in_new: bool, declared_old: bool, declared_new: bool) -> str | None:
-    """Why this suite could not be compared, or ``None`` if it can be."""
+def _why_unmeasured(in_old: bool, in_new: bool, declared_old: bool, declared_new: bool) -> tuple[str, bool] | None:
+    """``(reason, fatal)`` for a suite that cannot be compared, else ``None``.
+
+    Only one of the three uncomparable shapes is benign, and the difference is
+    which claim it can falsify. This tool's claim is "no PRE-EXISTING test
+    changed outcome": a suite that exists only in the new run has no
+    pre-existing tests, so it cannot falsify that and failing on it would fire
+    every time a suite is added. It is still named and counted, because a
+    verdict that quietly excludes part of the run is the disease.
+
+    The other two are fatal. A suite that ran in the baseline and produced
+    nothing now is the exact event a regression gate exists for, and a suite
+    both manifests declared while neither produced one was never measured at
+    all -- the reports alone cannot even see that case.
+    """
     if in_old and in_new:
         return None
     manifests = [side for side, was in (("baseline", declared_old), ("new", declared_new)) if was]
     declared = f" (declared by the {' and '.join(manifests)} manifest)" if manifests else ""
     if in_old:
-        return f"ran in the baseline, produced NO report in the new run{declared}"
+        return f"ran in the baseline, produced NO report in the new run{declared}", True
     if in_new:
-        return f"produced no report in the baseline, only in the new run{declared} — nothing to compare against"
-    return f"NO report on either side{declared}"
+        return f"only in the new run{declared} — no baseline to compare against", False
+    return f"NO report on either side{declared}", True
 
 
 def _resolve_suites(
@@ -275,23 +299,32 @@ def main() -> int:
 
     compared: list[SuiteComparison] = []
     unmeasured: list[tuple[str, str]] = []
+    uncomparable: list[tuple[str, str]] = []
     for suite in suites:
-        reason = _why_unmeasured(
-            suite,
+        verdict = _why_unmeasured(
             in_old=suite in sides["baseline"][1],
             in_new=suite in sides["new"][1],
             declared_old=suite in (sides["baseline"][0] or set()),
             declared_new=suite in (sides["new"][0] or set()),
         )
-        if reason is None:
+        if verdict is None:
             compared.append(compare(baseline, new, suite))
+        elif verdict[1] or sys.argv[3:]:
+            # A suite named on the command line was asked for by a human. Not
+            # being able to compare it is a refusal, whatever the shape.
+            unmeasured.append((suite, verdict[0]))
         else:
-            unmeasured.append((suite, reason))
+            uncomparable.append((suite, verdict[0]))
 
-    return _report(compared, unmeasured, len(suites))
+    return _report(compared, unmeasured, uncomparable, len(suites))
 
 
-def _report(compared: list[SuiteComparison], unmeasured: list[tuple[str, str]], total: int) -> int:
+def _report(
+    compared: list[SuiteComparison],
+    unmeasured: list[tuple[str, str]],
+    uncomparable: list[tuple[str, str]],
+    total: int,
+) -> int:
     """Print the scope, then a verdict that cannot be read apart from it."""
     shared = sum(c.shared for c in compared)
     print(f"\nSCOPE: {len(compared)} of {total} suites compared, {shared} shared nodeids graded.")
@@ -303,6 +336,11 @@ def _report(compared: list[SuiteComparison], unmeasured: list[tuple[str, str]], 
     if unmeasured:
         print(f"\nNOT MEASURED: {len(unmeasured)} of {total} suites — each is a hole in any verdict below.")
         for suite, reason in unmeasured:
+            print(f"    {suite}: {reason}")
+
+    if uncomparable:
+        print(f"\nNOT COMPARABLE: {len(uncomparable)} of {total} suites — outside the claim, not a hole in it.")
+        for suite, reason in uncomparable:
             print(f"    {suite}: {reason}")
 
     regressed = [c.suite for c in compared if c.regressed]

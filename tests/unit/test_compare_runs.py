@@ -134,6 +134,26 @@ def test_a_declared_suite_missing_from_both_runs_is_not_measured(
     assert "e2e" in out, f"the undeclared-but-unmeasured suite must be named:\n{out}"
 
 
+def test_a_suite_only_in_the_new_run_is_reported_but_not_fatal(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A new suite has no pre-existing tests, so it cannot falsify the claim.
+
+    Failing on it would fire every time a suite is added, and a gate that cries
+    wolf is how ``--update-baseline`` habits start. It is still named: a verdict
+    that quietly excludes part of the run is the disease this ticket is about.
+    """
+    unit = {"tests/unit/test_a.py::test_one": "passed"}
+    _write_run(tmp_path / "old", {"unit": unit}, declared=["unit"])
+    _write_run(tmp_path / "new", {"unit": unit, "storyboard": unit}, declared=["unit", "storyboard"])
+
+    status, out = _run(tmp_path, capsys)
+
+    assert status == 0, f"a brand-new suite is not a regression:\n{out}"
+    assert "storyboard" in out, f"it must still be named and counted:\n{out}"
+    assert "NOT COMPARABLE" in out, out
+
+
 def test_a_suite_named_on_the_command_line_but_absent_refuses(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
