@@ -190,54 +190,66 @@ def test_read_json_baseline_reads_object(tmp_path: Path) -> None:
     }
 
 
-def test_run_counting_tool_rc0_returns(monkeypatch: pytest.MonkeyPatch) -> None:
-    expected = _cp(stdout="ok", returncode=0)
+_DONE = "DONE"
+
+
+def _finished(stdout: str) -> str | None:
+    return _DONE if _DONE in stdout else None
+
+
+def test_run_counting_tool_returns_when_the_tool_finished(monkeypatch: pytest.MonkeyPatch) -> None:
+    expected = _cp(stdout="ok\nDONE", returncode=0)
     monkeypatch.setattr(count_ratchet.subprocess, "run", lambda *_a, **_k: expected)
     got = count_ratchet.run_counting_tool(
         ["true"],
         cwd=_REPO,
-        has_findings=lambda _r: False,
         label="tool",
+        accepts_returncode={0, 1}.__contains__,
+        completion_marker=_finished,
     )
     assert got is expected
 
 
-def test_run_counting_tool_rc1_with_findings_returns(monkeypatch: pytest.MonkeyPatch) -> None:
-    expected = _cp(stdout="finding", returncode=1)
+def test_run_counting_tool_returns_on_an_accepted_findings_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    expected = _cp(stdout="finding\nDONE", returncode=1)
     monkeypatch.setattr(count_ratchet.subprocess, "run", lambda *_a, **_k: expected)
     got = count_ratchet.run_counting_tool(
         ["tool"],
         cwd=_REPO,
-        has_findings=lambda r: bool((r.stdout or "").strip()),
         label="tool",
+        accepts_returncode={0, 1}.__contains__,
+        completion_marker=_finished,
     )
     assert got is expected
 
 
-def test_run_counting_tool_rc1_empty_findings_exits_2(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(count_ratchet.subprocess, "run", lambda *_a, **_k: _cp(stdout="", returncode=1))
+def test_run_counting_tool_without_a_completion_marker_exits_2(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Findings and an accepted status are not proof: a crash produces both."""
+    monkeypatch.setattr(count_ratchet.subprocess, "run", lambda *_a, **_k: _cp(stdout="finding", returncode=1))
     with pytest.raises(SystemExit) as exc:
         count_ratchet.run_counting_tool(
             ["tool"],
             cwd=_REPO,
-            has_findings=lambda r: bool((r.stdout or "").strip()),
             label="tool",
+            accepts_returncode={0, 1}.__contains__,
+            completion_marker=_finished,
         )
     assert exc.value.code == 2
 
 
-def test_run_counting_tool_rc2_exits_2(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_counting_tool_rejected_status_exits_2(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         count_ratchet.subprocess,
         "run",
-        lambda *_a, **_k: _cp(stdout="findings", returncode=2),
+        lambda *_a, **_k: _cp(stdout="findings\nDONE", returncode=2),
     )
     with pytest.raises(SystemExit) as exc:
         count_ratchet.run_counting_tool(
             ["tool"],
             cwd=_REPO,
-            has_findings=lambda r: True,
             label="tool",
+            accepts_returncode={0, 1}.__contains__,
+            completion_marker=_finished,
         )
     assert exc.value.code == 2
 
@@ -282,6 +294,7 @@ def test_count_untyped_defs_errors_tallies_sentinel(monkeypatch: pytest.MonkeyPa
             "b.py:2: error: y",
             "c.py:3: note: not an error",
             "d.py:4: error: z",
+            "Found 3 errors in 3 files (checked 27 source files)",
         ]
     )
     monkeypatch.setattr(
@@ -293,7 +306,11 @@ def test_count_untyped_defs_errors_tallies_sentinel(monkeypatch: pytest.MonkeyPa
 
 
 def test_count_untyped_defs_errors_zero_on_clean(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(count_ratchet.subprocess, "run", lambda *_a, **_k: _cp(stdout="", returncode=0))
+    monkeypatch.setattr(
+        count_ratchet.subprocess,
+        "run",
+        lambda *_a, **_k: _cp(stdout="Success: no issues found in 412 source files\n", returncode=0),
+    )
     assert check_mypy_untyped_defs_count.count_untyped_defs_errors(_REPO) == 0
 
 
@@ -766,3 +783,176 @@ def test_run_count_ratchet_auto_lower_still_allowed_under_ceiling(
 
     assert rc == 0
     assert writes == [{"a": 12}]
+
+
+# ---------------------------------------------------------------------------
+# A count from a tool that did not finish is not a number (salesagent-b341x.20)
+#
+# run_count_ratchet writes the baseline on an ORDINARY run — no --update-baseline
+# — whenever the count dropped and nothing regressed. That auto-lower is the
+# intended ratchet behaviour, and it is exactly why a SHORT count is dangerous
+# rather than merely wrong: a pylint or mypy process that dies partway through
+# src/ returns fewer hits, the short tally reads as an improvement, and a wrong
+# ceiling is committed permanently. Afterwards every honest run measures MORE
+# and fails with "Code duplication increased!", whose only documented remedy —
+# raise the baseline — is forbidden by policy.
+#
+# The upstream-ceiling probe does NOT cover this. It is one-sided: it refuses
+# values ABOVE the ceiling, and a short count is spuriously BELOW it, so
+# min(baseline, current) sails through. The probe stops a raise; nothing stopped
+# a fabricated drop.
+#
+# So the counters must prove the tool reached the end before their number is
+# allowed to exist at all.
+# ---------------------------------------------------------------------------
+
+check_code_duplication = _load("check_code_duplication")
+
+_PYLINT_SCORE = "\n--------\nYour code has been rated at 9.64/10\n"
+
+
+def test_pylint_that_died_after_emitting_findings_is_not_measured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The short-count shape: two R0801 hits, then a fatal, and no score line.
+
+    The old guard was ``returncode & 33 and count == 0``. Both halves must hold,
+    so a crash that had already emitted findings satisfied neither and the
+    partial tally was returned as if it were the answer.
+    """
+    partial = "a.py:1:0: R0801: Similar lines in 2 files\nb.py:2:0: R0801: Similar lines in 2 files\n"
+    monkeypatch.setattr(
+        count_ratchet.subprocess,
+        "run",
+        lambda *_a, **_k: _cp(stdout=partial, stderr="astroid.exceptions.AstroidError", returncode=1),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        check_code_duplication.count_duplications("src/")
+
+    assert exc.value.code == 2
+
+
+def test_pylint_killed_mid_scan_is_not_measured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A signal death leaves a clean-looking prefix and no score line."""
+    partial = "a.py:1:0: R0801: Similar lines in 2 files\n"
+    monkeypatch.setattr(count_ratchet.subprocess, "run", lambda *_a, **_k: _cp(stdout=partial, returncode=-9))
+
+    with pytest.raises(SystemExit) as exc:
+        check_code_duplication.count_duplications("src/")
+
+    assert exc.value.code == 2
+
+
+def test_pylint_that_finished_is_counted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Refusing must not become refusing everything: a complete run still counts.
+
+    pylint exits 8 (the refactor bit) when R0801 fired and 0 when it did not;
+    the score line is printed only once the whole run is over.
+    """
+    complete = "a.py:1:0: R0801: Similar lines in 2 files\nb.py:2:0: R0801: Similar lines in 2 files" + _PYLINT_SCORE
+    monkeypatch.setattr(count_ratchet.subprocess, "run", lambda *_a, **_k: _cp(stdout=complete, returncode=8))
+
+    assert check_code_duplication.count_duplications("src/") == 2
+
+
+def test_pylint_clean_run_is_counted_as_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        count_ratchet.subprocess,
+        "run",
+        lambda *_a, **_k: _cp(stdout="Your code has been rated at 10.00/10\n", returncode=0),
+    )
+
+    assert check_code_duplication.count_duplications("scripts/") == 0
+
+
+def test_mypy_that_aborted_after_emitting_errors_is_not_measured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``: error:`` anywhere in stdout used to be enough to accept a rc=1 run.
+
+    A mypy that dies partway through src/ has emitted plenty of them, and prints
+    no summary line — which is the only thing that says it checked everything it
+    was asked to check.
+    """
+    partial = "a.py:1: error: x\nb.py:2: error: y\n"
+    monkeypatch.setattr(count_ratchet.subprocess, "run", lambda *_a, **_k: _cp(stdout=partial, returncode=1))
+
+    with pytest.raises(SystemExit) as exc:
+        check_mypy_untyped_defs_count.count_untyped_defs_errors(_REPO)
+
+    assert exc.value.code == 2
+
+
+def test_mypy_summary_disagreeing_with_the_tally_is_not_measured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """mypy states its own error count; a tally that disagrees was mis-parsed."""
+    stdout = "a.py:1: error: x\nFound 9 errors in 4 files (checked 27 source files)\n"
+    monkeypatch.setattr(count_ratchet.subprocess, "run", lambda *_a, **_k: _cp(stdout=stdout, returncode=1))
+
+    with pytest.raises(SystemExit) as exc:
+        check_mypy_untyped_defs_count.count_untyped_defs_errors(_REPO)
+
+    assert exc.value.code == 2
+
+
+def test_a_short_pylint_run_does_not_lower_the_committed_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole point, end to end: no --update-baseline, and no write.
+
+    Without proof of completion this run auto-lowers src 29 -> 2, because 2 is
+    below the baseline, below the upstream ceiling, and indistinguishable from
+    real progress. Nothing regresses, so nothing fails and nothing is printed
+    that a reader could act on -- the file is simply rewritten.
+    """
+    baseline = tmp_path / ".duplication-baseline"
+    baseline.write_text(json.dumps({"src": 29, "tests": 63, "scripts": 40}, indent=2) + "\n", encoding="utf-8")
+    before = baseline.read_text(encoding="utf-8")
+    (tmp_path / "src").mkdir()
+
+    partial = "a.py:1:0: R0801: Similar lines in 2 files\nb.py:2:0: R0801: Similar lines in 2 files\n"
+    monkeypatch.setattr(
+        count_ratchet.subprocess,
+        "run",
+        lambda *_a, **_k: _cp(stdout=partial, stderr="astroid crashed", returncode=1),
+    )
+    monkeypatch.setattr(
+        check_code_duplication,
+        "resolve_ratchet_paths",
+        lambda **_kwargs: (tmp_path, tmp_path / "src", baseline),
+    )
+    monkeypatch.setattr(
+        check_code_duplication,
+        "parse_ratchet_args",
+        lambda _description: type("Args", (), {"update_baseline": False})(),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        check_code_duplication.main()
+
+    assert exc.value.code == 2
+    assert baseline.read_text(encoding="utf-8") == before, (
+        "A crashed pylint run lowered the committed ceiling. Every honest run "
+        "afterwards fails with 'Code duplication increased!' and the only "
+        "documented remedy is forbidden by policy."
+    )
+
+
+def test_a_complete_pylint_run_still_auto_lowers_the_baseline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Auto-lowering is the ratchet working. Proving completion must not stop it."""
+    baseline = tmp_path / ".duplication-baseline"
+    baseline.write_text(json.dumps({"src": 29, "tests": 63, "scripts": 5}, indent=2) + "\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+
+    complete = "a.py:1:0: R0801: Similar lines in 2 files" + _PYLINT_SCORE
+    monkeypatch.setattr(count_ratchet.subprocess, "run", lambda *_a, **_k: _cp(stdout=complete, returncode=8))
+    monkeypatch.setattr(
+        check_code_duplication,
+        "resolve_ratchet_paths",
+        lambda **_kwargs: (tmp_path, tmp_path / "src", baseline),
+    )
+    monkeypatch.setattr(
+        check_code_duplication,
+        "parse_ratchet_args",
+        lambda _description: type("Args", (), {"update_baseline": False})(),
+    )
+    monkeypatch.setattr(count_ratchet, "resolve_upstream_ceiling", lambda **_kwargs: {})
+
+    assert check_code_duplication.main() == 0
+    assert json.loads(baseline.read_text(encoding="utf-8")) == {"src": 1, "tests": 1, "scripts": 1}

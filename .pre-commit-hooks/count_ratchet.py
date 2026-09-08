@@ -27,6 +27,22 @@ path that can write — create, ``--update-baseline``, compare and auto-lower.
 Growth is unrepresentable through the tooling rather than merely visible to a
 reviewer; ``tests/unit/test_architecture_ratchet_hooks_use_driver.py`` keeps it
 that way for hooks written later.
+
+That probe is ONE-SIDED, and the other side leaked for just as long. It refuses
+values ABOVE the ceiling; a count that is spuriously BELOW it is exactly what a
+crashed tool produces, and ``min(baseline, current)`` waves it through. Since
+this module auto-lowers on an ORDINARY run — no ``--update-baseline``, no
+failure, no line a reviewer could act on — a pylint or mypy process that dies
+partway through ``src/`` commits a ceiling nobody chose, and every honest run
+afterwards fails with a message whose only documented remedy is forbidden by
+policy (salesagent-b341x.20).
+
+Refusing to write a suspicious number cannot fix that, because nothing about a
+short count LOOKS suspicious: it is a smaller integer. So the fix is one step
+earlier, at ``run_counting_tool``, which makes a short count unrepresentable
+instead of detectable — a counter that shells out must say how the tool's
+COMPLETION is recognised, and a tool that did not complete yields a refusal
+rather than a number.
 """
 
 from __future__ import annotations
@@ -40,7 +56,7 @@ import tarfile
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TextIO
+from typing import NoReturn, TextIO
 
 #: Refs consulted for the upstream ceiling, in order. ``origin/main`` is what CI
 #: compares against; the merge base is what a branch actually departed from, and
@@ -142,20 +158,66 @@ def resolve_ratchet_paths(
     return repo_root, src_path, repo_root / baseline_name
 
 
+def refuse_unmeasured(label: str, reason: str, detail: str = "") -> NoReturn:
+    """Refuse to yield a number, and say why. Never returns.
+
+    A counter's only two outcomes are a measurement and a refusal. There is no
+    third one where the tool half-ran and the caller gets to decide, because the
+    caller's number goes straight into ``run_count_ratchet``, which writes it.
+    """
+    print(f"NOT_MEASURED: {label} did not run to completion — {reason}", file=sys.stderr)
+    if detail:
+        print(detail, file=sys.stderr)
+    print("", file=sys.stderr)
+    print("A partial count is not a low count. Refusing rather than returning a", file=sys.stderr)
+    print("number: a short tally reads as an improvement, and run_count_ratchet", file=sys.stderr)
+    print("writes an improvement to the baseline on an ORDINARY run, after which", file=sys.stderr)
+    print("every honest run fails against a ceiling nobody chose.", file=sys.stderr)
+    raise SystemExit(2)
+
+
 def run_counting_tool(
     cmd: Sequence[str],
     *,
     cwd: Path,
-    has_findings: Callable[[subprocess.CompletedProcess[str]], bool],
     label: str,
+    accepts_returncode: Callable[[int], bool],
+    completion_marker: Callable[[str], str | None],
     truncate: int = 800,
 ) -> subprocess.CompletedProcess[str]:
-    """Run a count tooling command; abort on fatal / empty-findings exit 1."""
+    """Run a counting tool, and return only if it demonstrably FINISHED.
+
+    Both proofs are REQUIRED keywords with no default, which is the whole point:
+    a counter cannot be written that shells out without saying how completion is
+    recognised. The two are independent, and a real short count trips one or the
+    other:
+
+    ``accepts_returncode``
+        The exit statuses that mean "ran to the end". Not "did not obviously
+        explode" — pylint's status is a bitmask and a fatal on ONE module sets a
+        bit while the process still exits and still prints the hits it found.
+
+    ``completion_marker``
+        ``stdout -> evidence, or None``. The line a tool prints only after
+        finishing (pylint's score, mypy's ``Found N errors ... (checked N source
+        files)``). An exit code cannot distinguish a process killed at 60% from
+        one that finished, and a signal death is not even in the tool's own
+        vocabulary; the trailing marker can, because it is never reached.
+
+    The evidence is echoed, so a run states what it measured instead of only
+    what it counted. This replaces a ``has_findings`` predicate whose contract
+    was "rc 1 is fine as long as SOMETHING was found", under which a crash that
+    had already emitted findings was indistinguishable from a clean run.
+    """
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
-    if result.returncode not in (0, 1) or (result.returncode == 1 and not has_findings(result)):
-        print(f"ERROR: {label} failed while counting:", file=sys.stderr)
-        print((result.stderr or result.stdout or "")[:truncate], file=sys.stderr)
-        raise SystemExit(2)
+    output = result.stdout or ""
+    detail = (result.stderr or output or "")[:truncate]
+    if not accepts_returncode(result.returncode):
+        refuse_unmeasured(label, f"exit status {result.returncode}", detail)
+    evidence = completion_marker(output)
+    if evidence is None:
+        refuse_unmeasured(label, "its output carries no completion marker, so it stopped early", detail)
+    print(f"  {label}: completed — {evidence}")
     return result
 
 
