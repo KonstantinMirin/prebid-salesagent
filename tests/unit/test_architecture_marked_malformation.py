@@ -56,18 +56,21 @@ from types import SimpleNamespace
 from typing import Any, get_args
 
 import pytest
-from adcp.types import ErrorCode
 from pydantic import ValidationError
 
 import scripts.audit.creative_literal_sites as census_module
 import tests.factories.malformed as malformed_module
 from scripts.audit.creative_literal_sites import SCOPES, scan
+from src.core.errors.codes import AppErrorCode, ErrorCode, Recovery
+from src.core.schemas.creative import CreativeAssetRequest
 from tests.factories.malformed import (
     GATED_ITEMS,
     MALFORMATION_KINDS,
     MALFORMATION_OBLIGATIONS,
+    PIN_DERIVABLE_OBLIGATION,
     _Malformed,
-    _obligation_of,
+    _pin_refuses_the_bytes,
+    _pin_rejection,
     malformation_problems,
     malformed,
 )
@@ -470,10 +473,11 @@ def test_negative_control_gated_dispatch_not_flagged() -> None:
 @pytest.mark.parametrize(
     "obligation",
     [
-        pytest.param(ErrorCode.CREATIVE_NOT_FOUND, id="an-ErrorCode-that-is-not-an-obligation"),
         pytest.param("INVALID_REQUEST", id="the-name-as-a-string"),
+        pytest.param("AGENT_UNREACHABLE", id="a-seller-code-name-as-a-string"),
         pytest.param(True, id="the-boolean-this-axis-replaced"),
         pytest.param(None, id="nothing"),
+        pytest.param(Recovery.CORRECTABLE, id="a-StrEnum-member-from-a-different-vocabulary"),
     ],
 )
 def test_malformed_refuses_an_obligation_outside_the_vocabulary(obligation: Any) -> None:
@@ -483,6 +487,13 @@ def test_malformed_refuses_an_obligation_outside_the_vocabulary(obligation: Any)
     that still passes ``True`` must not be silently read as "the pin rejects it": that
     is the collapse this axis exists to end. It cannot reach the gate wearing the new
     keyword.
+
+    THE STRING CASES ARE THE LOAD-BEARING ONES, and there are two because there are two
+    arms. ``ErrorCode`` and ``AppErrorCode`` are both ``StrEnum``s whose value is the
+    member name, so ``"INVALID_REQUEST" in MALFORMATION_OBLIGATIONS`` is True and
+    ``"AGENT_UNREACHABLE" in`` it is too — membership alone admits either, and the gate
+    then compares with ``is`` and grades neither. Only an isinstance check over both arms
+    refuses them.
     """
     with pytest.raises((ValueError, TypeError), match="obligation"):
         malformed("wrong_type", "a real reason", {"a": 1}, obligation=obligation)
@@ -516,7 +527,7 @@ def test_the_obligation_reads_the_whole_error_set_not_the_first_error(order: tup
         [{"type": kind, "loc": (kind,), "input": "x"} for kind in order],
     )
     assert [error["type"] for error in rejection.errors()] == list(order), "the control lost control of the order"
-    assert _obligation_of(rejection) is ErrorCode.INVALID_REQUEST
+    assert _pin_refuses_the_bytes(rejection) is True
 
 
 @pytest.mark.arch_guard
@@ -563,13 +574,112 @@ def test_the_gate_and_the_census_share_one_discriminator() -> None:
 
 
 @pytest.mark.arch_guard
-def test_the_obligation_vocabulary_is_wire_codes_not_local_strings() -> None:
-    """Both members are ``adcp.types.ErrorCode``, so the axis names codes the wire knows."""
-    assert MALFORMATION_OBLIGATIONS == {ErrorCode.INVALID_REQUEST, ErrorCode.VALIDATION_ERROR}
-    assert all(isinstance(obligation, ErrorCode) for obligation in MALFORMATION_OBLIGATIONS), (
-        "a local string vocabulary can name a code the boundary never emits, which is the "
-        "one thing a scenario author must be able to trust here"
+def test_the_obligation_vocabulary_is_this_repos_own_table_both_arms() -> None:
+    """The vocabulary is ``ErrorCodeT`` — the spec's codes AND this seller's — and derived.
+
+    Importing the SDK enum alone silently drops ``AppErrorCode``'s 8 members, and that
+    arm is not decoration: ``AGENT_UNREACHABLE`` is a graded outcome in
+    ``BR-UC-006-sync-creatives.feature``'s own Examples table, and across
+    ``tests/bdd/features`` the seller's codes are named 22 times. An author whose
+    malformation obliges one of those would otherwise have to name a code the buyer does
+    not receive.
+
+    Derived from the enums rather than listed, so it cannot drift from them — a written
+    list would be a third declaration of a vocabulary that already exists twice.
+    """
+    assert MALFORMATION_OBLIGATIONS == set(ErrorCode) | set(AppErrorCode)
+    assert ErrorCode.INVALID_REQUEST in MALFORMATION_OBLIGATIONS
+    assert AppErrorCode.AGENT_UNREACHABLE in MALFORMATION_OBLIGATIONS, (
+        "the seller's own codes must be nameable, or a malformation whose obligation is "
+        "AGENT_UNREACHABLE has no honest way to say so"
     )
+    assert all(isinstance(obligation, ErrorCode | AppErrorCode) for obligation in MALFORMATION_OBLIGATIONS)
+
+
+@pytest.mark.arch_guard
+def test_the_graded_partition_is_the_only_thing_the_pin_can_derive() -> None:
+    """The gate grades ``is it INVALID_REQUEST or not`` — and that is the honest limit.
+
+    Nothing about bytes the pin ACCEPTS says which of the seller's rules refuses them:
+    ``assets: {}`` obliges VALIDATION_ERROR and an unreachable format agent obliges
+    AGENT_UNREACHABLE, and the schema cannot tell those apart. So the pin's own answer is
+    a three-state — refuses / accepts / objects-only-to-a-key — and the declaration is
+    graded against the one distinction in it.
+    """
+    assert PIN_DERIVABLE_OBLIGATION is ErrorCode.INVALID_REQUEST
+    assert PIN_DERIVABLE_OBLIGATION in MALFORMATION_OBLIGATIONS
+    accepted = _pin_rejection(CreativeAssetRequest, _CONFORMANT_CREATIVE)
+    assert _pin_refuses_the_bytes(accepted) is False
+    refused = _pin_rejection(CreativeAssetRequest, _rejected_creative())
+    assert _pin_refuses_the_bytes(refused) is True
+    key_only = _pin_rejection(CreativeAssetRequest, {**_CONFORMANT_CREATIVE, "snippet": "<div/>"})
+    assert _pin_refuses_the_bytes(key_only) is None
+
+
+@pytest.mark.arch_guard
+@pytest.mark.parametrize(
+    "obligation",
+    [
+        pytest.param(ErrorCode.VALIDATION_ERROR, id="a-spec-code"),
+        pytest.param(AppErrorCode.AGENT_UNREACHABLE, id="a-seller-code"),
+        pytest.param(ErrorCode.CREATIVE_NOT_FOUND, id="an-unrelated-spec-code"),
+    ],
+)
+def test_a_declaration_that_is_not_the_pins_obligation_is_graded_not_ignored(obligation: Any) -> None:
+    """Every code other than INVALID_REQUEST is MIS-DECLARED on bytes the pin refuses.
+
+    This is what the partition buys and what a two-member comparison lost. MEASURED
+    before the change: a site declaring ``AGENT_UNREACHABLE`` over a payload the pin
+    refuses produced 0 problems — the ``declared is VALIDATION_ERROR`` branch did not
+    match, the ``declared is INVALID_REQUEST`` branch did not match, and the site was
+    graded by NEITHER. Widening the vocabulary without widening the comparison would have
+    opened exactly the hole the vocabulary was widened to close.
+    """
+    declared = malformed(
+        "absent_key",
+        "claims these bytes reach the seller's rules; measured, the pin refuses them first",
+        _rejected_creative("creative-meta-third-code-001"),
+        obligation=obligation,
+    )
+    problems = malformation_problems({"creatives": [declared]})
+    assert len(problems) == 1, (
+        f"a declaration of {obligation.name} over bytes the pin refuses must be reported; "
+        f"got {len(problems)}. Grading only two named members is how a third code goes silent."
+    )
+    assert "MIS-DECLARED" in problems[0]
+    assert obligation.name in problems[0], "the report must name what was declared"
+
+
+@pytest.mark.arch_guard
+@pytest.mark.parametrize(
+    "obligation",
+    [
+        pytest.param(ErrorCode.INVALID_REQUEST, id="declared-INVALID_REQUEST"),
+        pytest.param(ErrorCode.VALIDATION_ERROR, id="declared-VALIDATION_ERROR"),
+        pytest.param(AppErrorCode.AGENT_UNREACHABLE, id="declared-a-seller-code"),
+    ],
+)
+def test_the_undeclared_key_refusal_is_not_author_trusted(obligation: Any) -> None:
+    """An unknown key is refused WHATEVER the author named — the pin's reason set decides.
+
+    The vocabulary having no member for an undeclared key prevents the honest mistake.
+    It does not prevent the careless one: nothing stops an author writing
+    ``obligation=INVALID_REQUEST`` on a site whose only defect is an unknown key, and it
+    is the careless one that ships. So the refusal is keyed on the pin's ACTUAL reason
+    set — exactly ``{extra_forbidden}`` — and not on what was declared.
+    """
+    declared = malformed(
+        "semantic",
+        "a pre-3.1.1 snippet key the schema never declared",
+        {**_CONFORMANT_CREATIVE, "creative_id": "creative-meta-key-only-001", "snippet": "<div/>"},
+        obligation=obligation,
+    )
+    problems = malformation_problems({"creatives": [declared]})
+    assert len(problems) == 1, (
+        f"declaring {obligation.name} must not buy a pass on an undeclared-key site; got {len(problems)}"
+    )
+    assert "UNDECLARED KEY" in problems[0]
+    assert "_accept_only_declared_fields" in problems[0], "the report must point at the guarantee that grades it"
 
 
 @pytest.mark.arch_guard
@@ -797,12 +907,17 @@ def test_an_object_that_is_not_a_dict_or_list_is_not_walked_into() -> None:
 # (format_id.id must match ``^[a-zA-Z0-9_-]+$``), while a DIFFERENT semantic case — an
 # unknown but well-formed format id — the pin ACCEPTS and the seller's rules refuse.
 #
+# The comparison is a PARTITION — is the declared code INVALID_REQUEST, and does the pin
+# agree — because that is the only distinction the pin can derive:
+#
 #     INVALID_REQUEST  and the pin ACCEPTS       -> REPAIRED malformation. Report it,
 #                                                   naming the site and the kind.
-#     VALIDATION_ERROR and the pin REJECTS       -> MIS-DECLARED. Report it, quoting the
+#     ANY OTHER CODE   and the pin REJECTS       -> MIS-DECLARED. Report it, quoting the
 #                                                   pydantic error.
-#     either, and the pin's ONLY objection is an
-#     UNDECLARED KEY                             -> REFUSED. Not a malformation at all.
+#     any code at all, and the pin's ONLY
+#     objection is an UNDECLARED KEY             -> REFUSED. Not a malformation at all,
+#                                                   and NOT author-trusted: the pin's
+#                                                   reason set decides, not the marker.
 #     the pin's verdict matches the declaration  -> nothing to report.
 #
 # THE AXIS USED TO BE A BOOLEAN, and one boolean spanned two obligations. MEASURED on
@@ -813,7 +928,7 @@ def test_an_object_that_is_not_a_dict_or_list_is_not_walked_into() -> None:
 #     ENVIRONMENT=production   extra=ignore   extra key only -> ACCEPTED
 #                                             missing assets -> REJECTED [missing]
 #
-# So ``obligation=ErrorCode.INVALID_REQUEST`` meant one thing for bytes the model refuses on their MERITS and
+# So pin_rejects=True meant one thing for bytes the model refuses on their MERITS and
 # another for bytes the boundary STRIPS, and a declaration on the second kind was honest
 # in development and reported itself REPAIRED in production, from the same literal. The
 # obligation names the wire code instead, which is both environment-independent and the
