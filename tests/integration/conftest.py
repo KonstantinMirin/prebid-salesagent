@@ -804,55 +804,12 @@ def authenticated_admin_client(test_admin_app):
         del os.environ["ADCP_AUTH_TEST_MODE"]
 
 
-@pytest.fixture
-def test_media_buy_workflow(populated_db):
-    """Provide complete media buy workflow test setup."""
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import Creative, MediaBuy
-    from tests.fixtures import CreativeFactory, MediaBuyFactory
-
-    data = populated_db
-
-    # Create media buy
-    media_buy_data = MediaBuyFactory.create(
-        tenant_id=data["tenant"]["tenant_id"],
-        principal_id=data["principal"]["principal_id"],
-        status="draft",
-    )
-
-    # Create creatives
-    creatives_data = CreativeFactory.create_batch(
-        2,
-        tenant_id=data["tenant"]["tenant_id"],
-        principal_id=data["principal"]["principal_id"],
-    )
-
-    # Insert into database using ORM
-    with get_db_session() as db_session:
-        media_buy = MediaBuy(
-            tenant_id=media_buy_data["tenant_id"],
-            media_buy_id=media_buy_data["media_buy_id"],
-            principal_id=media_buy_data["principal_id"],
-            status=media_buy_data["status"],
-            config=media_buy_data["config"],
-            total_budget=media_buy_data["total_budget"],
-        )
-        db_session.add(media_buy)
-
-        for creative_data in creatives_data:
-            creative = Creative(
-                tenant_id=creative_data["tenant_id"],
-                creative_id=creative_data["creative_id"],
-                principal_id=creative_data["principal_id"],
-                format_id=creative_data["format_id"],
-                status=creative_data["status"],
-                content=creative_data["content"],
-            )
-            db_session.add(creative)
-
-        db_session.commit()
-
-    return {**data, "media_buy": media_buy_data, "creatives": creatives_data}
+# ``test_media_buy_workflow`` was here and is DELETED along with the dict
+# ``CreativeFactory`` it seeded from (tests/fixtures/factories.py). It had zero consumers
+# and could not have run for any of them: ``CreativeFactory.create_batch`` was never
+# defined on that class, and the ORM ``Creative`` it then constructed has no ``format_id``
+# or ``content`` column (they are ``format`` / ``agent_url`` / ``data``). Seed a media buy
+# with ``MediaBuyFactory`` and creatives with ``CreativeFactory`` from tests/factories/.
 
 
 @pytest.fixture

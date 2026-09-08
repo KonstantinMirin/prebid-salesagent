@@ -57,6 +57,13 @@ CREATIVE_KEYS = {
     "media_url",
 }
 PRICING_KEYS = {"pricing_option_id", "pricing_model", "rate", "currency", "fixed_price", "floor_price"}
+
+#: Fields a creative payload carried BEFORE 3.1.1, when content sat inline instead of in
+#: the ``assets`` slot map. Named rather than inlined in ``scan()`` because a second
+#: consumer grades it: ``tests/unit/test_architecture_no_pre_311_creative_builders.py``
+#: refuses to let a shared test BUILDER seed any of them, and a guard with its own copy
+#: of the set would drift from the census that motivates it.
+PRE_311_KEYS = {"snippet", "snippet_type", "template_variables", "duration", "variants"}
 FACTORY_CALLS = ("Factory", "build", "create", "payload")
 
 SCOPES = {
@@ -103,9 +110,7 @@ def scan(paths: list[str]):
                             "line": node.lineno,
                             "hand_built": not inside,
                             "omits_assets": "assets" not in keys,
-                            "pre_311": bool(
-                                keys & {"snippet", "snippet_type", "template_variables", "duration", "variants"}
-                            ),
+                            "pre_311": bool(keys & PRE_311_KEYS),
                         }
                     )
                 elif len(keys & PRICING_KEYS) >= 2:

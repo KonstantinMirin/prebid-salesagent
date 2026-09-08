@@ -101,7 +101,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/conftest.py", "sample_tenant"),
     ("tests/integration/conftest.py", "sample_principal"),
     ("tests/integration/conftest.py", "sample_products"),
-    ("tests/integration/conftest.py", "test_media_buy_workflow"),
     # tests/integration/test_adapter_factory.py
     ("tests/integration/test_adapter_factory.py", "setup_adapters"),
     # tests/integration/test_gam_adapter_auth.py — no AdapterConfigFactory exists yet
@@ -709,7 +708,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/conftest.py", "sample_principal"),
     ("tests/integration/conftest.py", "sample_products"),
     ("tests/integration/conftest.py", "sample_tenant"),
-    ("tests/integration/conftest.py", "test_media_buy_workflow"),
     ("tests/integration/conftest.py", "test_tenant_with_data"),
     ("tests/integration/test_a2a_skill_invocation.py", "test_explicit_skill_create_media_buy_manual_approval"),
     ("tests/integration/test_a2a_skill_invocation.py", "test_update_media_buy_skill"),
