@@ -1656,16 +1656,77 @@ def _assert_error_recovery(ctx: dict, expected: str) -> None:
     )
 
 
-# Five steps stood here and below, none of them bound: `the error should include a
-# "recovery" field indicating terminal failure`, `the error message should contain
-# "{fragment}"`, `the error message should indicate "{text}" is not a valid MediaBuyStatus`,
-# and the two empty-media_buys-with-error variants. This module registers LOCALLY (its test
-# module star-imports it rather than conftest listing it), yet none of the five matches a
-# sentence in ANY feature — the wider check, so the verdict holds either way.
+# ── Unbound, and KEPT: obligations whose scenario was reworded or never written ──
 #
-# Two of them were the wrong oracle as well as unreachable: they searched `str(error)` for a
-# fragment, and the message is prose CODE_TABLE derives from the code. The bound sentences
-# in BR-UC-019 grade the code, which carries the same obligation without pinning wording.
+# No feature binds the four steps below — checked by literal grep and by matching each
+# pattern against all 49534 sentences rendered from every feature's Examples through
+# pytest-bdd's own FeatureParser. They are kept anyway, because "nothing binds it" is not
+# evidence of deadness: each reads ctx state that live steps still write and asserts a real
+# obligation, so deleting them would destroy the only record that the obligation was
+# identified.
+#
+# The two empty-media_buys steps are the clearest case. @T-UC-019-boundary-principal DOES
+# carry the obligation, in three Examples rows, but the outcome column was reworded to
+# `empty media_buys with soft error code "AUTH_MISSING" message "..."` — which matches no
+# step definition, here or anywhere. Those three rows are additionally xfailed on transport
+# grounds ("principal_id=null/empty/ghost is unreachable — a valid token always resolves to
+# a real principal"), a DELIBERATE gap, so the rows are not silently dormant. If that gate is
+# ever lifted, these two are the implementations to re-point at the reworded sentence.
+#
+# `then_error_contains` and `then_error_invalid_status` grade the error MESSAGE by substring.
+# That is the wrong oracle to re-bind as written — CODE_TABLE derives the sentence from the
+# code, so a code assertion carries the same obligation without pinning one seller's wording
+# — but the obligation `then_error_invalid_status` names (the rejection identifies WHICH
+# value was invalid) is real and belongs on `errors[0].field` or `details`.
+#
+# `the error should include a "recovery" field indicating terminal failure` was deleted
+# rather than kept: it is a genuine duplicate. The bound refusal step derives the expected
+# recovery from `_pinned_recovery(code)`, so the terminal classification is already graded
+# from the pin wherever a terminal code is asserted — strictly stronger than restating it.
+
+
+@then(parsers.parse('the error message should contain "{fragment}"'))
+def then_error_contains(ctx: dict, fragment: str) -> None:
+    """Assert error message contains a specific fragment."""
+    error = ctx.get("error")
+    assert error is not None, "Expected an error"
+    msg = str(error).lower()
+    assert fragment.lower() in msg, f"Expected '{fragment}' in error: {error}"
+
+
+@then(parsers.parse('the error message should indicate "{text}" is not a valid MediaBuyStatus'))
+def then_error_invalid_status(ctx: dict, text: str) -> None:
+    """Assert error mentions the invalid status value."""
+    error = ctx.get("error")
+    assert error is not None, "Expected an error"
+    msg = str(error).lower()
+    # Step text requires BOTH: mention of the invalid value AND that it's about status
+    assert text.lower() in msg, f"Expected invalid value '{text}' to appear in error message, got: {error}"
+    assert "status" in msg, (
+        f"Expected 'status' to appear in error message (indicating this is a status validation error), got: {error}"
+    )
+
+
+@then(parsers.parse('the response should include an empty media_buys array with error "{code}"'))
+def then_empty_with_error(ctx: dict, code: str) -> None:
+    """Assert empty media_buys with specific error code in response."""
+    buys = _get_media_buys(ctx)
+    assert len(buys) == 0, f"Expected empty media_buys, got {len(buys)}"
+    resp = require_payload(ctx)
+    errors = getattr(resp, "errors", None) or []
+    codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
+    assert code in codes, f"Expected error '{code}' in errors, got {codes}"
+
+
+@then(parsers.parse('empty media_buys with error "{code}"'))
+def then_empty_buys_with_error(ctx: dict, code: str) -> None:
+    """Assert empty media_buys with error (boundary table shorthand)."""
+    buys = _get_media_buys(ctx)
+    assert len(buys) == 0, f"Expected empty, got {len(buys)}"
+    resp = require_payload(ctx)
+    errors = getattr(resp, "errors", None) or []
+    codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
+    assert code in codes, f"Expected '{code}' in response errors, got {codes}"
 
 
 def _current_suggestion(ctx: dict) -> str:
