@@ -16,6 +16,7 @@ quality-ci:
 	uv run ruff format --check .
 	uv run ruff check .
 	uv run ruff check --config ruff-egress.toml --ignore-noqa --no-respect-gitignore src/ scripts/
+	uv run ruff check --config ruff-boundary.toml --no-respect-gitignore src/ scripts/
 	uv run mypy src/ --config-file=mypy.ini
 	# Layer-2 ratchets. These are declared stages:[pre-push] in .pre-commit-config.yaml, and
 	# this repo's documented workflow (ephemeral branches merged LOCALLY, `git push` never run)

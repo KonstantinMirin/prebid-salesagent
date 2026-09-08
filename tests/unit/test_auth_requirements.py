@@ -39,7 +39,7 @@ class TestAuthenticationRequirements:
 
     def test_sync_creatives_requires_authentication(self):
         """sync_creatives must reject requests without authentication."""
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         creatives = [creative_payload(creative_id="test_creative", name="Test Creative")]
 
@@ -49,7 +49,7 @@ class TestAuthenticationRequirements:
 
     def test_sync_creatives_with_invalid_auth(self):
         """sync_creatives must reject requests with invalid authentication."""
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         # ResolvedIdentity with None principal_id (simulates invalid token)
         invalid_identity = ResolvedIdentity(principal_id=None, tenant_id="test_tenant")
@@ -152,7 +152,7 @@ class TestAuthenticationRequirements:
 
     def test_identity_with_none_principal_id(self):
         """ResolvedIdentity with None principal_id should be rejected."""
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         # ResolvedIdentity with None principal_id (invalid token scenario)
         identity = ResolvedIdentity(principal_id=None, tenant_id="test_tenant")
@@ -167,7 +167,7 @@ class TestAuthenticationRequirements:
 
     def test_identity_with_empty_string_principal_id(self):
         """ResolvedIdentity with empty string principal_id should be rejected."""
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         # ResolvedIdentity with empty principal_id
         identity = ResolvedIdentity(principal_id="", tenant_id="test_tenant")
@@ -186,7 +186,7 @@ class TestAuthenticationErrorMessages:
 
     def test_sync_creatives_error_message_mentions_header(self):
         """Error message should mention x-adcp-auth header."""
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         with pytest.raises(AdCPAuthenticationError) as exc_info:
             _sync_creatives_impl(req=sync_creatives_request(), identity=None)

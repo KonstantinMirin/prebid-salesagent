@@ -92,7 +92,7 @@ class TestSyncPushNotificationConfig:
 
     def test_push_notification_config_dict_form(self, identity, mock_format_spec):
         """Line 117-118: dict push_notification_config extracts URL."""
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
             response = _sync_creatives_impl(
@@ -109,7 +109,7 @@ class TestSyncPushNotificationConfig:
         from adcp.types.generated_poc.core.push_notification_config import Authentication
         from adcp.types.generated_poc.enums.auth_scheme import AuthenticationScheme
 
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         config = PushNotificationConfig(
             url=f"{UNDIALLED_PUBLIC_HTTPS_ORIGIN}/hook",
@@ -128,7 +128,7 @@ class TestSyncBaseModelNormalization:
 
     def test_base_model_subclass_normalization(self, identity, mock_format_spec):
         """Line 171: Pass a BaseModel (not CreativeAsset, not dict) as creative."""
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         # Create a BaseModel subclass that has CreativeAsset-compatible fields
         class CustomCreative(BaseModel):
@@ -150,7 +150,7 @@ class TestSyncDryRunExistingCreative:
 
     def test_dry_run_existing_creative_shows_update(self, identity, mock_format_spec):
         """Lines 217-218: dry_run=True with existing creative increments updated_count."""
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
             mock_existing = MagicMock()
@@ -174,7 +174,7 @@ class TestSyncUnchangedCount:
     def test_unchanged_update_counted(self, identity, mock_format_spec):
         """Line 285: unchanged_count incremented when update returns unchanged action."""
         from src.core.schemas import SyncCreativeResult
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
             mock_existing = MagicMock()
@@ -213,7 +213,7 @@ class TestSyncAiReviewReasonOnUpdate:
     def test_ai_review_reason_extracted(self, mock_format_spec):
         """Line 301: existing creative with ai_review data and ai-powered approval mode."""
         from src.core.schemas import SyncCreativeResult
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         tenant = {"tenant_id": "t1", "approval_mode": "ai-powered", "slack_webhook_url": None}
         identity = PrincipalFactory.make_identity(
@@ -266,7 +266,7 @@ class TestSyncProvenanceWarningOnUpdate:
     def test_provenance_warning_on_update(self, mock_format_spec):
         """Lines 306-309: provenance_warning appended when check returns warning."""
         from src.core.schemas import SyncCreativeResult
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         identity = PrincipalFactory.make_identity(
             principal_id="p1",
@@ -326,7 +326,7 @@ class TestSyncMixedMessageSuffix:
     def test_mixed_created_and_updated_message(self, identity, mock_format_spec):
         """Line 472: message includes both created and updated counts."""
         from src.core.schemas import SyncCreativeResult
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
             mock_existing = MagicMock()

@@ -109,13 +109,13 @@ ALLOWLIST: frozenset[tuple[str, str, str]] = frozenset(
         ("src/core/tools/media_buy_update.py", "_update_media_buy_impl", "sync_creatives"),
         # FIXME(#1644): the delivery webhook scheduler holds a
         # get_db_session() session open, hands it to _send_report_for_media_buy,
-        # and that helper calls _get_media_buy_delivery_impl, which opens its own
+        # and that helper calls delivery_for_media_buy, which opens its own
         # MediaBuyUoW on the same scoped session — and the caller keeps using the
         # session afterwards (session.scalar/scalars/expunge).
         (
             "src/services/delivery_webhook_scheduler.py",
             "_send_report_for_media_buy",
-            "_get_media_buy_delivery_impl",
+            "delivery_for_media_buy",
         ),
     }
 )
