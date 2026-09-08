@@ -1840,14 +1840,20 @@ def then_account_status(ctx: dict, status: str) -> None:
 
 @then(parsers.parse('the account has action "{action}"'))
 def then_account_action_generic(ctx: dict, action: str) -> None:
-    """Assert the first/last referenced account has the expected action.
+    """Assert the referenced account carries the expected per-account ``action``.
 
-    For validation errors (no response), action='failed' is satisfied by
-    the presence of a caught exception — Pydantic rejects the request
-    before per-account processing, which is equivalent to all accounts failing.
+    ``action`` is a PER-ENTRY outcome inside the success variant of the response
+    (sync-accounts-response.json oneOf/0 → accounts[].action), so a request the
+    seller rejected wholesale has no account to carry one — the two oneOf branches
+    are alternatives, and a step that accepted either would grade neither.
+
+    The branch that did exactly that is gone: ``if action == "failed" and
+    ctx["error"] ...: return`` let a request-level rejection satisfy a per-account
+    claim. It was also unreachable — ``the account has action "created"`` is the
+    only rendering of this sentence in the whole feature set, so no scenario ever
+    took it. A scenario that genuinely wants a wholesale rejection asks for the
+    error envelope, which the error Thens grade.
     """
-    if action == "failed" and ctx.get("error") is not None and payload_or_none(ctx) is None:
-        return  # Request-level validation error ≡ per-account failure
     acct = ctx.get("last_account") or require_payload(ctx).accounts[0]
     actual = _action_str(acct.action)
     assert actual == action, f"Expected action '{action}', got '{actual}'"
