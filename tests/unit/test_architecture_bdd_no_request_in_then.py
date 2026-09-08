@@ -83,10 +83,10 @@ _DISPATCH_IN_THEN_ALLOWLIST: set[str] = {
     # throughout: removing six message-substring branches from then_payload_size_limits,
     # dropping the local beads ids out of the FIXME comments, and re-adding the spec-gap
     # note each shifted the numbers below.
-    "bdd/steps/domain/uc002_nfr.py:147 then_auth_before_business_logic",
-    "bdd/steps/domain/uc002_nfr.py:218 then_rate_limiting_enforced",
-    "bdd/steps/domain/uc002_nfr.py:264 then_payload_size_limits",
-    "bdd/steps/domain/uc002_nfr.py:434 then_budget_validated_against_min_order",
+    "bdd/steps/domain/uc002_nfr.py:146 then_auth_before_business_logic",
+    "bdd/steps/domain/uc002_nfr.py:217 then_rate_limiting_enforced",
+    "bdd/steps/domain/uc002_nfr.py:263 then_payload_size_limits",
+    "bdd/steps/domain/uc002_nfr.py:429 then_budget_validated_against_min_order",
 }
 
 _ASSERT_ON_REQUEST_ALLOWLIST: set[str] = set()

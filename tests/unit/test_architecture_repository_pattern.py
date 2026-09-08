@@ -420,7 +420,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_mcp_tool_roundtrip_validation.py", "test_tenant_id"),
     # tests/integration/test_mcp_tools_audit.py
     ("tests/integration/test_mcp_tools_audit.py", "test_tenant_id"),
-    ("tests/integration/test_mcp_tools_audit.py", "test_get_media_buy_delivery_roundtrip_safety"),
     # tests/integration/test_minimum_spend_validation.py
     ("tests/integration/test_minimum_spend_validation.py", "setup_test_data"),
     ("tests/integration/test_minimum_spend_validation.py", "test_no_minimum_when_not_set"),
@@ -1069,7 +1068,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_inventory_tree_lazy_loading.py", "_bind_factories"),
     ("tests/integration/test_mcp_tool_roundtrip_validation.py", "real_products_in_db"),
     ("tests/integration/test_mcp_tool_roundtrip_validation.py", "test_tenant_id"),
-    ("tests/integration/test_mcp_tools_audit.py", "test_get_media_buy_delivery_roundtrip_safety"),
     ("tests/integration/test_mcp_tools_audit.py", "test_tenant_id"),
     ("tests/integration/test_media_buy_readiness.py", "test_completed_state"),
     ("tests/integration/test_media_buy_readiness.py", "test_draft_state_no_packages"),
