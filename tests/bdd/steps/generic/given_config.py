@@ -275,11 +275,12 @@ def push_notification_config_with_url(ctx: dict, url: str) -> None:
     neighbour cannot be owned by one keyword.
 
     The two copies were not equivalent, and the difference was a live defect: the
-    @given one set ``push_notification_config`` (which the dispatch reads) AND the
-    url; the @when one set only ``push_notification_url``. Scenarios routed to the
-    @when copy therefore dispatched with NO webhook config, while the Then step
-    that checks "the system registered the webhook" fell back to the url key and
-    passed anyway.
+    @given one set ``push_notification_config`` (which the dispatch reads) AND a
+    ``push_notification_url`` mirror; the @when one set only the mirror. Scenarios
+    routed to the @when copy therefore dispatched with NO webhook config, while the
+    Then step that checks "the system registered the webhook" fell back to the url
+    key and passed anyway. Both the fallback and the mirror are gone: the config is
+    the one key, so a scenario that fails to attach one now fails.
     """
     attach_push_notification_config(ctx, url)
 
@@ -291,8 +292,8 @@ def attach_push_notification_config(ctx: dict, url: str) -> dict:
     already deduplicated what a config LOOKS like; this deduplicates what
     attaching one MEANS, which is where the copies actually diverged:
 
-      * this module set ``push_notification_config`` and ``push_notification_url``
-        but never ``request_kwargs``;
+      * this module set ``push_notification_config`` and a ``push_notification_url``
+        mirror but never ``request_kwargs``;
       * ``given_media_buy.given_media_buy_with_push_config`` set the config and
         ``request_kwargs["push_notification_config"]`` but never the url.
 
@@ -302,13 +303,14 @@ def attach_push_notification_config(ctx: dict, url: str) -> dict:
     docstring above describes between the @given and @when copies, one level up:
     the sentences were unified and the STATE THEY LEAVE was not.
 
-    Writes all three. ``request_kwargs`` only when the scenario has one, because
-    creating it here would hand a create-shaped bag to a scenario that dispatches
-    something else.
+    Writes the config, and ``request_kwargs`` only when the scenario has one,
+    because creating it here would hand a create-shaped bag to a scenario that
+    dispatches something else. The url mirror is NOT written: once the Then step
+    stopped falling back to it, nothing read it, and a second spelling of a fact
+    is how the two sentences disagreed in the first place.
     """
     config = PushNotificationConfigRequestFactory.payload(url=url)
     ctx["push_notification_config"] = config
-    ctx["push_notification_url"] = url
     if "request_kwargs" in ctx:
         ctx["request_kwargs"]["push_notification_config"] = config
     return config

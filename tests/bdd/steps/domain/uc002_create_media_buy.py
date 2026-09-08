@@ -99,7 +99,6 @@ def given_request_with_natural_key(ctx: dict, brand: str, operator: str) -> None
 def given_request_without_account(ctx: dict) -> None:
     """Set up a create_media_buy request with no account field."""
     ctx["account_ref"] = None
-    ctx["account_absent"] = True
 
 
 @given("a valid create_media_buy request with creative assignments")
@@ -1379,7 +1378,6 @@ def given_tenant_auto_approval(ctx: dict) -> None:
         "Step claims auto-approval but the adapter mock gates create_media_buy on "
         f"manual approval: {adapter_mock.manual_approval_operations!r}"
     )
-    ctx["tenant_auto_approval"] = True
 
 
 # ── v3.1 idempotency replay / missing (T-UC-002-v31-idempotency-{replay,missing}) ──

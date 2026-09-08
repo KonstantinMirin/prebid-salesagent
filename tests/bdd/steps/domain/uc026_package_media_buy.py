@@ -376,8 +376,6 @@ def given_product_with_pricing(ctx: dict, product_id: str, options: str) -> None
 
         ctx["pricing_option_map"] = pricing_map
 
-    ctx["product_pricing_options"] = options
-
 
 @given(parsers.parse('the product "{product_id}" supports format_ids {format_ids}'))
 def given_product_format_ids(ctx: dict, product_id: str, format_ids: str) -> None:
@@ -400,8 +398,6 @@ def given_product_format_ids(ctx: dict, product_id: str, format_ids: str) -> Non
         product.format_ids = _to_format_id_dicts(expected)
         env._commit_factory_data()
 
-    ctx["product_format_ids"] = format_ids
-
 
 # --- Package table request construction ---
 
@@ -410,7 +406,6 @@ def _build_package_request(ctx: dict, datatable: list[list[str]], transport: str
     """Shared: build request kwargs with a package from data table."""
     kwargs = _ensure_request_defaults(ctx)
     _apply_package_table(kwargs, datatable, ctx)
-    ctx.setdefault("package_transport_hint", transport)
 
 
 @given(parsers.parse("a valid create_media_buy MCP tool request with packages array containing:"))
@@ -589,7 +584,6 @@ def given_pricing_not_in_product(ctx: dict, option: str, product_id: str) -> Non
         f"Pricing option '{option}' (resolved: '{resolved}') should NOT be in "
         f"product '{product_id}' but found in {actual_ids}"
     )
-    ctx.setdefault("expected_missing_pricing_options", []).append(option)
 
 
 @given(parsers.parse('the product "{product_id}" has a minimum spend requirement of {amount:d}'))
@@ -665,7 +659,6 @@ def given_product_lacks_pricing_option(ctx: dict, product_id: str, option: str) 
     assert resolved not in actual_ids and option not in actual_ids, (
         f"Pricing option '{option}' should NOT be in product '{product_id}' but found in {actual_ids}"
     )
-    ctx.setdefault("expected_missing_pricing_options", []).append(option)
 
 
 @given(parsers.parse('the product "{product_id}" has pricing_option "{option}" with max_bid={max_bid}'))
@@ -677,7 +670,6 @@ def given_pricing_option_max_bid(ctx: dict, product_id: str, option: str, max_bi
     actual_options = getattr(product, "pricing_options", None)
     assert actual_options and len(actual_options) > 0, f"Product '{product_id}' has no pricing_options"
     # Record max_bid semantics for downstream assertions
-    ctx.setdefault("pricing_option_max_bid", {})[option] = as_bool(max_bid)
 
 
 # --- Dedup / cross-buy Given steps ---
@@ -696,13 +688,11 @@ def given_no_existing_packages(ctx: dict) -> None:
     assert "existing_package_id" not in ctx, (
         "Expected no existing packages but existing_package_id is already in context"
     )
-    ctx["no_existing_packages"] = True
 
 
 @given(parsers.parse('the Buyer is creating a new media buy "{mb_id}"'))
 def given_creating_new_mb(ctx: dict, mb_id: str) -> None:
     """Set up state for creating a new (different) media buy."""
-    ctx["new_media_buy_name"] = mb_id
     ctx.pop("request_kwargs", None)
 
 
@@ -1533,21 +1523,18 @@ def given_boundary_replacement(ctx: dict, boundary_point: str) -> None:
 @when("the Buyer Agent invokes the create_media_buy MCP tool")
 def when_invoke_create_mcp(ctx: dict) -> None:
     """Dispatch create_media_buy through MCP transport."""
-    ctx["package_transport_hint"] = "mcp"
     _dispatch_create(ctx)
 
 
 @when("the Buyer Agent sends the create_media_buy A2A task")
 def when_send_create_a2a(ctx: dict) -> None:
     """Dispatch create_media_buy through A2A transport."""
-    ctx["package_transport_hint"] = "a2a"
     _dispatch_create(ctx)
 
 
 @when(parsers.parse('the Buyer Agent sends the create_media_buy request for "{mb_id}"'))
 def when_send_create_for_mb(ctx: dict, mb_id: str) -> None:
     """Dispatch create_media_buy for a specific (cross-buy) media buy."""
-    ctx["dispatched_for_mb_id"] = mb_id
     _dispatch_create(ctx)
 
 

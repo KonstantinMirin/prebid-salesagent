@@ -189,7 +189,6 @@ def given_media_buy_with_status_and_reach_unit(ctx: dict, mb_id: str, owner: str
         "status": status,
         "reach_unit": reach_unit,
     }
-    ctx.setdefault("reach_units", {})[mb_id] = reach_unit
     _ensure_media_buy_in_db(ctx, mb_id, owner, status)
 
 
@@ -575,14 +574,12 @@ def given_webhook_configured(ctx: dict, mb_id: str) -> None:
 @given(parsers.parse('a media buy "{mb_id}" with an active reporting_webhook'))
 def given_webhook_active(ctx: dict, mb_id: str) -> None:
     """Media buy has an active webhook (same as configured)."""
-    ctx.setdefault("webhook_variant", "active")
     _set_active_webhook(ctx, mb_id)
 
 
 @given(parsers.parse('a media buy "{mb_id}" with webhook delivery configured'))
 def given_webhook_delivery_configured(ctx: dict, mb_id: str) -> None:
     """Media buy has webhook delivery configured."""
-    ctx.setdefault("webhook_variant", "delivery")
     _set_active_webhook(ctx, mb_id)
 
 
@@ -619,11 +616,12 @@ def given_webhook_auth_scheme(ctx: dict, mb_id: str, scheme: str) -> None:
 def given_shared_secret_valid(ctx: dict) -> None:
     """A valid shared secret for HMAC."""
     secret = "a" * 32
+    # ONE key. ``then_hmac_computation`` reproduces the signature from
+    # ``ctx['webhook_secret']`` -- the same value production uses to generate the
+    # header. A second ``signing_secret`` mirror used to be written here "so both
+    # keys stay in lockstep"; nothing ever read it, so it was a copy that could
+    # only ever drift.
     ctx["webhook_secret"] = secret
-    # ``then_hmac_computation`` reproduces the signature from
-    # ``ctx['signing_secret']`` (the production code uses the same value to
-    # generate the header). Mirror it here so both keys stay in lockstep.
-    ctx["signing_secret"] = secret
     env = ctx["env"]
     if getattr(env, "_session", None) is not None:
         _persist_webhook_config_if_needed(ctx, env)
@@ -713,7 +711,6 @@ def given_webhook_failed_n_times(ctx: dict, n: int) -> None:
     endpoint_key = f"{env._tenant_id}:{webhook_url}"
     env.seed_breaker_failures(endpoint_key, n)
     ctx["circuit_breaker_endpoint_key"] = endpoint_key
-    ctx["webhook_failure_count"] = n
 
 
 @given(parsers.parse('a media buy "{mb_id}" with circuit breaker in "{state}" state'))
@@ -723,7 +720,6 @@ def given_circuit_breaker_state(ctx: dict, mb_id: str, state: str) -> None:
     webhook_url = ctx.get("webhook_config", {}).get(mb_id, {}).get("url", _webhook_url(env))
     endpoint_key = f"{env._tenant_id}:{webhook_url}"
     env.set_breaker_state(endpoint_key, state)
-    ctx["circuit_breaker_state"] = state
     ctx["circuit_breaker_endpoint_key"] = endpoint_key
 
 
@@ -738,7 +734,6 @@ def given_circuit_breaker_timeout(ctx: dict) -> None:
     env = ctx["env"]
     endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
     env.elapse_breaker_timeout(endpoint_key)
-    ctx["circuit_breaker_timeout_elapsed"] = True
 
 
 @given("the webhook endpoint has recovered and returns 200")
@@ -777,7 +772,6 @@ def given_seller_supports_dimensions(ctx: dict, dim1: str, dim2: str) -> None:
     Also configures the adapter with simulated breakdown data so that
     multi-dimension requests (BR-RULE-091 INV-1) return non-empty arrays.
     """
-    ctx.setdefault("supported_dimensions", []).extend([dim1, dim2])
     env = ctx["env"]
     for mb_id in ctx.get("media_buys", {}):
         env.set_adapter_response(media_buy_id=mb_id)
@@ -1009,7 +1003,6 @@ def when_deliver_webhook(ctx: dict, mb_id: str) -> None:
 @when(parsers.parse('the system delivers a "{report_type}" webhook report for "{mb_id}"'))
 def when_deliver_typed_webhook(ctx: dict, report_type: str, mb_id: str) -> None:
     """System delivers a typed webhook report via WebhookDeliveryService."""
-    ctx["report_type"] = report_type
     try:
         result = _call_webhook_service(
             ctx,
@@ -1171,7 +1164,6 @@ def when_request_single_mb(ctx: dict, mb_id: str) -> None:
 @when(parsers.parse('the Buyer Agent requests delivery metrics for "{mb_id}" without attribution_window'))
 def when_request_no_attribution(ctx: dict, mb_id: str) -> None:
     """Request without attribution window."""
-    ctx.setdefault("omitted_fields", []).append("attribution_window")
     _request_single_mb(ctx, mb_id)
 
 
@@ -1321,7 +1313,6 @@ def when_boundary_sampling(ctx: dict, boundary_value: str) -> None:
 @when(parsers.parse('the Buyer Agent queries delivery metrics for media buy "{mb_id}"'))
 def when_query_single_mb(ctx: dict, mb_id: str) -> None:
     """Query delivery metrics for a single media buy (sandbox scenarios)."""
-    ctx.setdefault("query_variant", True)
     _request_single_mb(ctx, mb_id)
 
 
@@ -1334,7 +1325,6 @@ def when_query_nonexistent(ctx: dict) -> None:
 @when(parsers.re(r'the Buyer Agent requests delivery metrics for media_buy_ids \["(?P<mb_id>[^"]+)"\]$'))
 def when_request_single_id_quoted(ctx: dict, mb_id: str) -> None:
     """Request for a single media buy ID (quoted format)."""
-    ctx.setdefault("id_format", "quoted")
     _request_single_mb(ctx, mb_id)
 
 
@@ -1346,7 +1336,6 @@ def when_request_single_id_quoted(ctx: dict, mb_id: str) -> None:
 )
 def when_request_without_field(ctx: dict, mb_id: str, field: str) -> None:
     """Request without a specific optional field (attribution_window etc)."""
-    ctx.setdefault("omitted_fields", []).append(field)
     _request_single_mb(ctx, mb_id)
 
 
@@ -3968,7 +3957,6 @@ def _dispatch_webhook_credentials(ctx: dict, value: str) -> None:
 
     try:
         WebhookVerifier(webhook_secret=secret)
-        ctx["webhook_validated"] = True
     except Exception as exc:
         ctx["error"] = exc
 

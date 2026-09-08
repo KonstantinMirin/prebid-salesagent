@@ -575,8 +575,6 @@ def given_product_minimum_spend(ctx: dict, amount: int, currency: str) -> None:
     """
     import pytest
 
-    ctx["expected_min_budget"] = amount
-    ctx["expected_min_budget_currency"] = currency
     pytest.xfail(
         f"SPEC-PRODUCTION GAP: Per-product minimum spend ({amount} {currency}) "
         "not yet implemented. Production uses CurrencyLimit.min_package_budget "
@@ -640,7 +638,6 @@ def given_packages_same_currency(ctx: dict, currency: str) -> None:
     package's pricing_option_id to reference it. This is a Given step — it
     SETS state rather than merely asserting it.
     """
-    ctx["expected_currency"] = currency
     env = ctx["env"]
     kwargs = _ensure_request_defaults(ctx)
     # Create a pricing option with the desired currency
@@ -701,7 +698,6 @@ def given_packages_valid_pricing(ctx: dict) -> None:
                 "Step claims 'valid pricing_option_id' but the ID does not reference "
                 "an existing PricingOption record."
             )
-    ctx["pricing_validated"] = True
 
 
 @given("a valid create_media_buy request with 2 packages")
@@ -2238,14 +2234,12 @@ def given_creative_boundary(ctx: dict, config: str) -> None:
         # Weight=0 (paused) cannot be set at creation time — production always
         # assigns 100. Expected value reflects production reality, not the
         # boundary intent from the scenario name.
-        ctx["expected_creative_weight"] = 100
 
     elif config == "weight=100":
         # Creative reference — weight=100 (max rotation) is valid boundary
         creative = _create_approved_creative(ctx, "cr-w100")
         _add_creative_ids_to_package(ctx, [creative.creative_id])
         # Store the expected weight for boundary verification.
-        ctx["expected_creative_weight"] = 100
 
     elif config == "101 uploads":
         # 101 inline creatives — exceeds spec limit
@@ -2662,12 +2656,10 @@ def given_optimization_goal_partition(ctx: dict, partition: str) -> None:
     elif partition == "metric_not_supported_by_product":
         # Configure product to not support metric optimization
         _set_optimization_goals(ctx, [_metric_goal("viewability")])
-        ctx["product_lacks_metric_optimization"] = True
 
     elif partition == "event_not_supported_by_product":
         # Configure product to not support event/conversion tracking
         _set_optimization_goals(ctx, [_event_goal(event_sources=_simple_event_sources())])
-        ctx["product_lacks_conversion_tracking"] = True
 
     else:
         raise ValueError(f"Unknown optimization goal partition: {partition}")
@@ -2731,19 +2723,15 @@ def given_optimization_goals_boundary(ctx: dict, config: str) -> None:
 
     elif config == "metric capable":
         _set_optimization_goals(ctx, [_metric_goal("clicks")])
-        ctx["product_has_metric_optimization"] = True
 
     elif config == "no metric capability":
         _set_optimization_goals(ctx, [_metric_goal("clicks")])
-        ctx["product_lacks_metric_optimization"] = True
 
     elif config == "event capable":
         _set_optimization_goals(ctx, [_event_goal(event_sources=_simple_event_sources())])
-        ctx["product_has_conversion_tracking"] = True
 
     elif config == "no event capability":
         _set_optimization_goals(ctx, [_event_goal(event_sources=_simple_event_sources())])
-        ctx["product_lacks_conversion_tracking"] = True
 
     elif config == "freq min=1 max=3":
         _set_optimization_goals(
@@ -2828,7 +2816,6 @@ def given_request_proposal_mode(ctx: dict) -> None:
     kwargs["total_budget"] = {"amount": 5000.0, "currency": "USD"}
     # Remove the packages array to signal proposal mode (seller derives packages)
     kwargs.pop("packages", None)
-    ctx["proposal_mode"] = True
 
 
 @given(parsers.parse('proposal "{proposal_id}" does not exist or has expired'))
@@ -2847,7 +2834,6 @@ def given_proposal_not_exists(ctx: dict, proposal_id: str) -> None:
     import pytest
 
     assert proposal_id, "proposal_id must be non-empty"
-    ctx["expected_proposal_missing"] = proposal_id
     pytest.xfail(
         "SPEC-PRODUCTION GAP: Production has no proposal store — cannot establish "
         f"'proposal \"{proposal_id}\" does not exist or has expired' precondition. "
@@ -2870,7 +2856,6 @@ def given_proposal_budget_guidance_min(ctx: dict, amount: int) -> None:
     import pytest
 
     assert amount >= 0, f"Budget guidance minimum must be non-negative, got {amount}"
-    ctx["expected_budget_guidance_min"] = amount
     pytest.xfail(
         "SPEC-PRODUCTION GAP: Production has no proposal budget guidance — cannot establish "
         f"'total_budget_guidance.min is {amount}' precondition. FIXME"
@@ -2972,7 +2957,6 @@ def given_legacy_mode_no_packages(ctx: dict) -> None:
     kwargs["total_budget"] = {"amount": total, "currency": "USD"}
     # Remove the packages array to signal legacy mode
     kwargs.pop("packages", None)
-    ctx["legacy_mode"] = True
 
 
 @given("the request supplies no buyer packages array")
@@ -3315,11 +3299,12 @@ def given_webhook_configured(ctx: dict) -> None:
     # ``notification-config`` (subscriber_id + event_types) is for. The
     # ``events: ["status_change"]`` this used to carry was accepted by the model and
     # dropped on the way out, so it selected nothing and nothing asserted on it.
-    # ONE writer for all three ctx keys. This used to set the config and
-    # request_kwargs but not push_notification_url, while given_config's sentence
-    # set the config and the url but not request_kwargs — so what a scenario ended
+    # ONE writer for both ctx keys. This used to set the config and request_kwargs
+    # but not the push_notification_url mirror, while given_config's sentence set
+    # the config and the mirror but not request_kwargs — so what a scenario ended
     # up holding depended on which sentence it used, and a Then reading the key its
     # sentence never wrote passed on a fallback instead of on the thing it names.
+    # The mirror is gone; the config is the one spelling of the fact.
     attach_push_notification_config(ctx, webhook_url)
 
 

@@ -668,7 +668,6 @@ def given_valid_actions_excludes(ctx: dict, action: str) -> None:
     must be a real valid-action name the gate would consult.
     """
     assert action, "valid_actions exclusion step requires a non-empty action name"
-    ctx.setdefault("excluded_valid_actions", set()).add(action)
 
 
 @given("the media buy has committed delivery that the seller cannot cancel mid-flight")
@@ -685,7 +684,6 @@ def given_media_buy_uncancellable(ctx: dict) -> None:
 
     kwargs = _ensure_update_defaults(ctx)
     kwargs["canceled"] = True
-    ctx["uncancellable"] = True
     # Branch the seller-side refusal at the update adapter with the canonical code.
     env = ctx["env"]
     mock_adapter = env.mock["update_adapter"].return_value
@@ -906,8 +904,6 @@ def given_seller_minimum_budget(ctx: dict, amount: int, currency: str) -> None:
     """
     import pytest
 
-    ctx["expected_min_budget"] = amount
-    ctx["expected_min_budget_currency"] = currency
     pytest.xfail(
         f"SPEC-PRODUCTION GAP: Seller minimum budget ({amount} {currency}) "
         "not carried in production. v3.1 BUDGET_TOO_LOW error details "

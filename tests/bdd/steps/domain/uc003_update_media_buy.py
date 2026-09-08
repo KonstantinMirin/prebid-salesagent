@@ -463,7 +463,6 @@ def given_daily_spend_ok(ctx: dict) -> None:
                         f"{max_daily} — step claims 'does not exceed max_daily_package_spend' "
                         "but existing packages violate the constraint"
                     )
-    ctx.setdefault("daily_spend_validated", True)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -588,7 +587,6 @@ def given_placement_ids_valid(ctx: dict) -> None:
     # When product has no placements restriction, all placements are
     # valid by definition — this is correct AdCP semantics (no restriction = all allowed).
     # Log which path was taken for debugging.
-    ctx.setdefault("placement_validation_path", "unrestricted" if allowed is None else "restricted")
 
 
 @given("the package update includes inline creatives with valid content")
@@ -648,7 +646,6 @@ def given_package_update_optimization_goals_default(ctx: dict) -> None:
     # Default: single metric goal (clicks) — representative for replacement semantics test.
     # The parameterized variant (with goals_value) handles scenario-specific goals.
     kwargs["packages"][0]["optimization_goals"] = json.loads('[{"kind": "metric", "metric": "clicks", "priority": 1}]')
-    ctx.setdefault("optimization_goals_source", "default_clicks")
 
 
 @given(parsers.parse("the package update includes optimization_goals: {goals_value}"))
@@ -672,7 +669,6 @@ def given_package_update_optimization_goals(ctx: dict, goals_value: str) -> None
         # Step text "includes optimization_goals: <not provided>" is a Scenario Outline
         # convention: the field slot exists in the template but this row omits the value.
         kwargs["packages"][0].pop("optimization_goals", None)
-        ctx["optimization_goals_omitted"] = True
         assert "optimization_goals" not in kwargs["packages"][0], (
             "optimization_goals should be absent after '<not provided>' — preservation test requires omission"
         )

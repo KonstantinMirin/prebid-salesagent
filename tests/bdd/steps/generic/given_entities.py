@@ -34,7 +34,6 @@ def given_seller_operational(ctx: dict) -> None:
 @given("a tenant is resolvable from the request context")
 def given_tenant_resolvable(ctx: dict) -> None:
     """Tenant can be resolved from request context (Background)."""
-    ctx["has_tenant"] = True
     ctx.setdefault("tenant_id", "test_tenant")
 
 
@@ -42,7 +41,6 @@ def given_tenant_resolvable(ctx: dict) -> None:
 @given("a tenant exists with completed setup checklist")
 def given_tenant_setup_complete(ctx: dict) -> None:
     """Tenant has completed all setup steps (Background)."""
-    ctx["tenant_setup_complete"] = True
     ctx.setdefault("tenant_id", "test_tenant")
 
 
@@ -61,7 +59,6 @@ def given_principal_exists(ctx: dict, principal_id: str) -> None:
     This step records the principal_id for later use.
     """
     ctx.setdefault("principal_id", principal_id)
-    ctx["principal_exists"] = True
 
 
 @given(parsers.parse('an authenticated request with principal_id "{principal_id}"'))
@@ -74,7 +71,6 @@ def given_authenticated_request(ctx: dict, principal_id: str) -> None:
 @given("at least one creative agent is registered with format definitions")
 def given_creative_agent_registered(ctx: dict) -> None:
     """At least one creative agent has format definitions (Background)."""
-    ctx["creative_agents_registered"] = True
     ctx.setdefault("registry_formats", [])
 
 
@@ -117,7 +113,6 @@ def given_additional_creative_agents(ctx: dict) -> None:
 def given_no_formats(ctx: dict) -> None:
     """No creative agents have any formats registered."""
     ctx["registry_formats"] = []
-    ctx["creative_agents_registered"] = False
     _sync_registry(ctx)
 
 

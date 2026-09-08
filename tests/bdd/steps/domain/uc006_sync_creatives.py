@@ -185,7 +185,6 @@ def given_account_is(ctx: dict, account_setup: str) -> None:
 
     if account_setup == "not provided":
         ctx["account_ref"] = None
-        ctx["account_absent"] = True
         return
 
     # Parse JSON account setup
@@ -194,7 +193,6 @@ def given_account_is(ctx: dict, account_setup: str) -> None:
     # Check for invalid oneOf: both account_id and brand present
     if "account_id" in config and "brand" in config:
         ctx["account_ref"] = None
-        ctx["account_invalid_both"] = True
         return
 
     if "account_id" in config:
@@ -599,8 +597,6 @@ def given_tenant_approval_mode_creative(ctx: dict, approval_mode: str) -> None:
 
         given_tenant_approval_mode(ctx, approval_mode)
         return
-
-    ctx["approval_mode_expected"] = stripped if stripped not in ("not configured", "not set") else "require-human"
 
 
 def _set_tenant_approval_mode(ctx: dict, mode: str) -> None:
@@ -1158,7 +1154,6 @@ def given_assignments_referencing_that_package(ctx: dict) -> None:
 def given_no_assignments_field(ctx: dict) -> None:
     """Explicitly omit the assignments field from the request (absent path)."""
     ctx.pop("assignments", None)
-    ctx["assignments_absent"] = True
 
 
 @given("an empty assignments array")
@@ -1170,7 +1165,6 @@ def given_empty_assignments_array(ctx: dict) -> None:
     xfails with SPEC-PRODUCTION GAP reason when production does not raise.
     """
     ctx["assignments"] = {}
-    ctx["assignments_empty"] = True
 
 
 @given(parsers.parse('an assignment with creative_id "{creative_id}" and package_id "{package_id}"'))
@@ -1227,7 +1221,6 @@ def given_assignment_entry_missing_creative_id(ctx: dict) -> None:
     package = MediaPackageFactory(media_buy=media_buy)
     env._commit_factory_data()
     ctx["assignments"] = {"": [package.package_id]}
-    ctx["assignment_missing_creative_id"] = True
 
 
 @given("an assignment entry with only creative_id")
@@ -1241,7 +1234,6 @@ def given_assignment_entry_missing_package_id(ctx: dict) -> None:
     """
     creative_id = ctx["creatives"][-1]["creative_id"]
     ctx["assignments"] = {creative_id: []}
-    ctx["assignment_missing_package_id"] = True
 
 
 @given("an assignment with weight 0")
@@ -1270,7 +1262,6 @@ def given_assignment_with_weight_zero(ctx: dict) -> None:
     ctx["package"] = package
     creative_id = ctx["creatives"][-1]["creative_id"]
     ctx["assignments"] = {creative_id: [package.package_id]}
-    ctx["assignment_weight_zero"] = True
 
 
 @given('an assignment with placement_ids ["slot_a"]')
@@ -1298,7 +1289,6 @@ def given_assignment_with_placement_ids(ctx: dict) -> None:
     ctx["package"] = package
     creative_id = ctx["creatives"][-1]["creative_id"]
     ctx["assignments"] = {creative_id: [package.package_id]}
-    ctx["assignment_placement_ids"] = ["slot_a"]
 
 
 # --- 5o9e: assignment-basic Given steps (package_id+weight, multi-package, duplicate, missing fields) ---
@@ -1453,7 +1443,6 @@ def given_two_assignment_entries_same_ids(ctx: dict) -> None:
     # The assignments dict shape (creative_id → [pkg_ids]) naturally deduplicates,
     # so we store a flag for the When step to send the duplicate explicitly.
     ctx["assignments"] = {creative_id: [package.package_id, package.package_id]}
-    ctx["assignment_duplicate_pair"] = True
 
 
 @given(
@@ -1484,7 +1473,6 @@ def given_assignment_with_ids_and_placement(ctx: dict, creative_id: str, package
     _media_buy, package = _setup_assignment_package(ctx, package_id=package_id)
     real_creative_id = ctx["creatives"][-1]["creative_id"]
     ctx["assignments"] = {real_creative_id: [package.package_id]}
-    ctx["assignment_placement_ids"] = json.loads(placement_ids)
 
 
 @given("an assignment entry missing creative_id")
@@ -1842,7 +1830,7 @@ def then_no_assignment_processing(ctx: dict) -> None:
     for r in resp.creatives:
         assigned = r.assigned_to or []
         assert not assigned, (
-            f"Expected no assignments processed (ctx.assignments_absent=True), "
+            f"Expected no assignments processed (the request omitted the assignments field), "
             f"but SyncCreativeResult({r.creative_id}).assigned_to={assigned}"
         )
 
@@ -2186,8 +2174,6 @@ def then_creative_action_failed(ctx: dict) -> None:
     )
 
     errs = getattr(first, "errors", None) or []
-    ctx["failed_creative_result"] = first
-    ctx["failed_creative_errors"] = errs
     _promote_creative_errors_to_ctx(ctx, errs)
 
 
@@ -2255,7 +2241,6 @@ def given_assignments_to_package_only_accepts(ctx: dict, accepted_format: str) -
     ctx["product"] = product
     creative_id = ctx.get("creative_id") or ctx["creatives"][-1]["creative_id"]
     ctx["assignments"] = {creative_id: [package.package_id]}
-    ctx["product_only_accepts"] = accepted_format
 
 
 @given("assignments referencing a non-existent package_id")
@@ -3138,8 +3123,6 @@ def given_existing_assignment_in_media_buy(ctx: dict) -> None:
         weight=100,
     )
     env._commit_factory_data()
-    ctx["package_existing"] = package_1
-    ctx["creative_orm"] = creative
     # Start building the assignments dict with the existing package
     ctx["assignments"] = {creative_id: [package_1.package_id]}
 
@@ -3165,7 +3148,6 @@ def given_new_assignment_to_another_package(ctx: dict) -> None:
         package_config={"product_id": product.product_id, "budget": 500.0},
     )
     env._commit_factory_data()
-    ctx["package_new"] = package_2
     # Add the new package to the existing assignments dict
     creative_id = ctx["creatives"][-1]["creative_id"]
     ctx["assignments"][creative_id].append(package_2.package_id)
@@ -4321,7 +4303,6 @@ def given_creative_exists_for_principal(ctx: dict, creative_id: str, principal_i
     )
     env._commit_factory_data()
     ctx["pre_existing_creative_id"] = creative_id
-    ctx["pre_existing_creative"] = creative
 
 
 @when(parsers.parse('the Buyer Agent syncs creative "{creative_id}"'))
@@ -4769,7 +4750,6 @@ def given_idempotency_key(ctx: dict, key_value: str | None, empty: str | None) -
     Some values use ]xN notation for length generation (e.g., "a]x254").
     """
     if key_value is None and empty is not None:
-        ctx["idempotency_key_absent"] = True
         return
 
     actual_value = key_value or ""
@@ -5957,7 +5937,6 @@ def given_creative_exists_for_principal_same_tenant(ctx: dict, creative_id: str,
     gets its own get-or-create row, never overwriting ctx["principal"]).
     """
     given_creative_exists_for_principal(ctx, creative_id, principal_id)
-    ctx["pre_existing_principal_id"] = principal_id
 
 
 @then(parsers.parse('the created creative should be associated with principal "{principal_id}"'))
@@ -6068,7 +6047,6 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
         format_id={"id": format_id, "agent_url": agent_url},
         assets=assets,
     )
-    ctx["own_creative_id"] = own_creative["creative_id"]
     dispatch_request(
         ctx,
         creatives=[own_creative],
@@ -7137,7 +7115,6 @@ def _preseed_creative_for_principal(ctx: dict, creative_id: str, principal_id: s
     )
     env._commit_factory_data()
     ctx["pre_existing_creative_id"] = creative_id
-    ctx["pre_existing_principal_id"] = principal_id
 
     # Build the creative payload for the sync request
     _build_creative_scope_payload(ctx, creative_id)
