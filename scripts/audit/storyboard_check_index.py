@@ -153,7 +153,7 @@ def _ledger_steps(repo: Path) -> dict[tuple[str, str], list[str]]:
 
 
 def binding_buckets(repo: Path, adcp: Path) -> dict[str, str]:
-    """Scenario id -> binding-sweep bucket (A verified … E blocked).
+    """Scenario id -> binding-sweep bucket (``storyboard_binding_sweep.BUCKET_LEGEND``).
 
     A scenario in bucket B cites a storyboard it does not actually claim, so
     "covered by that scenario" is a weaker statement than it looks. Carrying the
