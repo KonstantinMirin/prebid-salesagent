@@ -605,12 +605,18 @@ def _announced_schema(dto: type[BaseModel]) -> dict[str, Any]:
 
 
 class BuyerRequest:
-    """Accessors for ``account`` and ``idempotency_key``, on every request whether it declares them.
+    """Accessors for the envelope the boundary reads, on every request whether it declares it.
 
-    The boundary needs both for every tool -- ``account`` to scope authorization,
-    ``idempotency_key`` to decide at-most-once -- but only 10 of the 14 pinned request schemas
-    declare an account and only 4 declare a key. Mixed in, these answer None for the rest, so
-    the boundary asks the request instead of writing ``getattr(req, "account", None)``.
+    The boundary needs these for every tool -- ``account`` to scope authorization,
+    ``idempotency_key`` to decide at-most-once, the two version pins to negotiate -- but only
+    10 of the 14 pinned request schemas declare an account and only 4 declare a key. Mixed in,
+    these answer None for the rest, so the boundary asks the request instead of writing
+    ``getattr(req, "account", None)``.
+
+    The version pins are the case where every request DOES declare the field, and the accessor
+    still earns its place: this mixin declares no fields, so ``BuyerRequest`` -- the type the
+    boundary and the registry hand around -- has no ``adcp_version`` attribute to reach for.
+    Asking through a method keeps that call type-checked instead of cast.
 
     METHODS, not properties: pydantic does not let a DTO's field shadow a property of the same
     name. The value is stored and ``model_dump`` shows it, but attribute access returns the
@@ -693,6 +699,14 @@ class BuyerRequest:
     def get_idempotency_key(self) -> str | None:
         """The at-most-once key this request carries, or None when its schema declares none."""
         return self.__dict__.get("idempotency_key")
+
+    def get_adcp_version(self) -> str | None:
+        """The release this buyer pins, or None when it pinned none."""
+        return self.__dict__.get("adcp_version")
+
+    def get_adcp_major_version(self) -> int | None:
+        """The major this buyer pins, or None when it pinned none."""
+        return self.__dict__.get("adcp_major_version")
 
 
 class SalesAgentBaseModel(LibraryAdCPBaseModel):

@@ -24,22 +24,52 @@ _FULL_SPEC_VERSION: str = adcp.get_adcp_spec_version()
 #: would encode the accident that this seller currently speaks exactly one release.
 SERVED_ADCP_VERSION: str = ".".join(_FULL_SPEC_VERSION.split(".")[:2])
 
+
+def _major_of(release: str) -> int:
+    """The major number a release-precision version names: ``"3.1"`` -> ``3``."""
+    return int(release.split(".", 1)[0])
+
+
 SUPPORTED_ADCP_VERSIONS: list[str] = [SERVED_ADCP_VERSION]
-SUPPORTED_ADCP_MAJORS: list[int] = [int(SERVED_ADCP_VERSION.split(".")[0])]
+SUPPORTED_ADCP_MAJORS: list[int] = [_major_of(SERVED_ADCP_VERSION)]
+
+
+def _is_unsupported(adcp_version: str | None, adcp_major_version: int | None) -> bool:
+    """Whether this pair of pins names something this seller does not speak.
+
+    Each pin the buyer SENDS is a constraint, and they are judged INDEPENDENTLY -- an
+    unsupported release is a rejection whatever the major says, and the reverse. Reading
+    them as alternatives ("either one matching is enough") accepted a request pinning
+    ``adcp_version: "99.0"`` alongside a supported major, which is a release this build
+    cannot serve. An absent pin constrains nothing.
+    """
+    if adcp_version is not None and adcp_version not in SUPPORTED_ADCP_VERSIONS:
+        return True
+    if adcp_major_version is not None and adcp_major_version not in SUPPORTED_ADCP_MAJORS:
+        return True
+    # Both pins are supported on their own. They can still CONTRADICT each other -- a buyer
+    # asking for release "3.1" under major 4 names no release that exists. Unreachable while
+    # this seller speaks a single release (a supported release and a supported major then
+    # always agree), and reachable the moment the supported set grows, which is exactly when
+    # nobody would think to add the check.
+    return adcp_version is not None and adcp_major_version is not None and _major_of(adcp_version) != adcp_major_version
 
 
 def negotiate_adcp_version(adcp_version: str | None, adcp_major_version: int | None) -> None:
     """Reject a buyer's version/major pin outside what this seller supports.
 
-    No-op (silent accept) when the caller sent no pin at all, or when the pin
-    matches a supported release. Raises ``AdCPVersionUnsupportedError`` ->
-    wire code ``VERSION_UNSUPPORTED`` otherwise.
+    No-op (silent accept) when the caller sent no pin at all, or when every pin it did send
+    is one this seller speaks. Raises ``AdCPVersionUnsupportedError`` -> wire code
+    ``VERSION_UNSUPPORTED`` otherwise.
+
+    ``recovery`` is DERIVED from the pinned ``enums/error-code.json``, which puts
+    ``VERSION_UNSUPPORTED`` at ``correctable`` -- the buyer re-pins and retries. The
+    universal error-compliance storyboard's ``expected:`` prose says ``fatal``, but that
+    block is narrative: its graded ``validations:`` check the code and the echoed context,
+    never the recovery. The metadata says ``correctable`` in every published bundle through
+    3.2.0-rc.1, so the prose is an upstream contradiction rather than a coming change.
     """
-    if adcp_version is None and adcp_major_version is None:
-        return
-    if adcp_version is not None and adcp_version in SUPPORTED_ADCP_VERSIONS:
-        return
-    if adcp_major_version is not None and adcp_major_version in SUPPORTED_ADCP_MAJORS:
+    if not _is_unsupported(adcp_version, adcp_major_version):
         return
 
     from src.core.errors.details import VersionUnsupportedDetails
@@ -52,6 +82,9 @@ def negotiate_adcp_version(adcp_version: str | None, adcp_major_version: int | N
     raise AdCPVersionUnsupportedError(
         details=VersionUnsupportedDetails(
             supported_versions=list(SUPPORTED_ADCP_VERSIONS),
+            # A buyer rejected on a MAJOR pin needs the majors to retry against; without
+            # this the answer names only releases, which is not what they sent.
+            supported_majors=list(SUPPORTED_ADCP_MAJORS),
             build_version=get_version(),
             adcp_version=adcp_version,
             adcp_major_version=adcp_major_version,

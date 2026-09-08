@@ -62,7 +62,7 @@ from src.core.idempotency_canonical import canonical_request_hash
 from src.core.idempotency_replay import cache_success, lookup_cached_replay, maybe_evict_expired
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas._base import AdcpResponse, BuyerRequest
-from src.core.version_negotiation import SERVED_ADCP_VERSION
+from src.core.version_negotiation import SERVED_ADCP_VERSION, negotiate_adcp_version
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +185,17 @@ async def invoke(
     work, so an implementation neither knows it nor should have to. AdCP 3.1.1
     ``compliance/universal/version-negotiation.yaml`` grades it at the envelope root with
     ``envelope_field_present`` and ``envelope_field_pattern`` (advisory at 3.1, MUST at 4.0).
+
+    The INBOUND half of that negotiation runs here too, and FIRST. A version pin is a property
+    of the request in exactly the sense the account and the key are, so it belongs at the one
+    chokepoint rather than inside a tool -- and inside a tool is where it used to live, on
+    ``get_adcp_capabilities`` alone, which is the only tool a buyer pinning an unsupported
+    release could not reach normally. ``compliance/universal/error-compliance.yaml`` grades it
+    on ``get_products``. Running before the account is enriched and before the request is
+    hashed is deliberate: a rejected pin should not resolve an account, touch the replay cache,
+    or be answered from it. It raises, so it leaves without passing through ``_served``.
     """
+    negotiate_adcp_version(req.get_adcp_version(), req.get_adcp_major_version())
     return _served(await _invoke(tool_name, impl, req, identity))
 
 
