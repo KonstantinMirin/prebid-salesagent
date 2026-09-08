@@ -5,14 +5,22 @@ either a declared malformation or a defect, and the difference is stated at the 
 where the payload is written" — and this file is only one of them.
 
     THE RUNTIME GATE FINDS UNMARKED MALFORMATIONS.
-    ``assert_declared_malformations`` (``tests/factories/malformed.py``), called from
-    ``dispatch_request`` (``tests/bdd/steps/generic/_dispatch.py``) before ``json_safe``
-    rebuilds the dicts, validates every dispatched item against the pinned model. It has
-    to be a runtime gate and this file cannot take that job over: measured,
+    ``assert_declared_malformations`` (``tests/factories/malformed.py``), reached through
+    ``gate_and_record`` (``tests/bdd/steps/generic/_dispatch.py``) before ``json_safe``
+    rebuilds the dicts, validates every dispatched item against the pinned model — at
+    every position it sits, top-level ``creatives`` and ``packages[].creatives`` alike.
+    It has to be a runtime gate and this file cannot take that job over: measured,
     ``ast.literal_eval`` succeeds on 0 of the 40 creative literals in
     ``uc006_sync_creatives.py`` (46 of 50 across ``--scope bdd``) — every one holds a
     Name, Attribute, Call or f-string — so a source-level validation gate would pass
     vacuously green over the file holding 80% of the subject.
+
+    THIS FILE ALSO CHECKS THAT THE GATE IS REACHED AT ALL.
+    ``test_every_path_to_a_transport_gates_first`` is the one part of the mechanism a
+    static scan can own outright: it flags any ``env.call_via`` / ``client.call`` under
+    ``tests/bdd`` whose enclosing function does not call ``gate_and_record`` above it.
+    The gate shipped covering one step-level entry of three, which is what that test
+    exists to stop happening a fourth time.
 
     THIS FILE KEEPS THE DECLARATIONS AUDITABLE, and owns the shrink-only list of sites
     that are known to hold an undeclared malformation. It asserts that every
@@ -30,7 +38,9 @@ them and a tolerance would only mask the malformation on the day the scenario is
 
 Site census comes from ``scan()``/``SCOPES`` in
 ``scripts/audit/creative_literal_sites.py`` rather than a second definition of "site",
-so the audit and the guard cannot disagree about what they are counting.
+so the audit and the guard cannot disagree about what they are counting. The runtime
+gate takes ``EXTRA_FORBIDDEN`` from the same module on the same grounds, and
+``test_the_gate_and_the_census_share_one_discriminator`` keeps it that way.
 
 Structured on ``tests/unit/test_architecture_no_packages_field_literal.py`` (the
 allowlist-plus-staleness idiom, and exemption of a legitimate producer BY IDENTITY) and
