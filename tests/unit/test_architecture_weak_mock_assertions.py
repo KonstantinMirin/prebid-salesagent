@@ -212,7 +212,6 @@ BARE_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_update_media_buy_behavioral.py", "test_valid_date_range_persists_to_db"),
     # FIXME(#1370): pre-existing bare assertions outside tests/unit/ (surfaced by SCAN_DIRS widen)
     ("tests/bdd/steps/domain/uc006_sync_creatives.py", "then_background_ai_review_submitted"),
-    ("tests/harness/test_harness_delivery_poll.py", "test_pricing_options"),
     ("tests/integration/test_delivery_poll_behavioral.py", "test_adapter_failure_writes_audit_log"),
     ("tests/integration/test_gam_tenant_setup.py", "test_admin_ui_network_detection_endpoint"),
 }

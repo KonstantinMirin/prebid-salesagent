@@ -23,7 +23,8 @@ from src.core.exceptions import (
     AdCPAuthRequiredError,
     AdCPValidationError,
 )
-from src.core.schemas import GetMediaBuyDeliveryResponse
+from src.core.schemas import GetMediaBuyDeliveryResponse, PricingModel
+from tests.helpers.delivery_pricing import delivery_packages, package_pricing_fields, seed_delivery_pricing
 
 # ---------------------------------------------------------------------------
 # UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
@@ -792,18 +793,14 @@ class TestPackageLevelBreakdowns:
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            option_id = seed_delivery_pricing(tenant)
             MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_two_pkg",
                 start_date=date(2025, 3, 1),
                 end_date=date(2025, 3, 31),
-                raw_request={
-                    "packages": [
-                        {"package_id": "pkg_A", "product_id": "prod_A"},
-                        {"package_id": "pkg_B", "product_id": "prod_B"},
-                    ],
-                },
+                raw_request={"packages": delivery_packages("pkg_A", "pkg_B", pricing_option_id=option_id)},
             )
 
             env.set_adapter_response(
@@ -846,6 +843,7 @@ class TestPackageLevelBreakdowns:
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            option_id = seed_delivery_pricing(tenant)
             MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
@@ -853,12 +851,7 @@ class TestPackageLevelBreakdowns:
                 status="active",
                 start_date=date(2025, 1, 1),
                 end_date=date(2025, 12, 31),
-                raw_request={
-                    "packages": [
-                        {"package_id": "pkg_X", "product_id": "prod_X"},
-                        {"package_id": "pkg_Y", "product_id": "prod_Y"},
-                    ],
-                },
+                raw_request={"packages": delivery_packages("pkg_X", "pkg_Y", pricing_option_id=option_id)},
             )
 
             env.set_adapter_response(
@@ -892,18 +885,14 @@ class TestPackageLevelBreakdowns:
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            option_id = seed_delivery_pricing(tenant)
             MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_sum",
                 start_date=date(2025, 4, 1),
                 end_date=date(2025, 4, 30),
-                raw_request={
-                    "packages": [
-                        {"package_id": "pkg_1", "product_id": "prod_1"},
-                        {"package_id": "pkg_2", "product_id": "prod_2"},
-                    ],
-                },
+                raw_request={"packages": delivery_packages("pkg_1", "pkg_2", pricing_option_id=option_id)},
             )
 
             env.set_adapter_response(
@@ -1145,24 +1134,37 @@ class TestPackageDeliveryStatus:
             assert status_map["mb_active"] == "active"
             assert status_map["mb_completed"] == "completed"
 
-    def test_rq5_package_delivery_has_no_delivery_status_field(self):
-        """PackageDelivery lacks delivery_status -- obligation gap.
+    def test_rq5_package_delivery_declares_delivery_status_but_nothing_computes_it(self):
+        """delivery_status is DECLARED on by_package and left unset -- the gap moved.
+
+        This case used to assert `"delivery_status" not in PackageDelivery.model_fields`,
+        with a message saying to update it to PASS if the field ever appeared. It has:
+        get-media-buy-delivery-response.json declares delivery_status on a by_package item
+        (enum delivering/completed/budget_exhausted/flight_ended/goal_met), and
+        PackageDelivery inherits it from the library type.
+
+        The obligation gap is now one layer in -- the field exists and the construction
+        site in `_get_media_buy_delivery_impl` never computes it -- so that is what this
+        grades. It is spec-OPTIONAL (not in the item's `required` set), so an unset value
+        is conformant, not a violation.
 
         Covers: UC-004-MAIN-10
         """
         from src.core.schemas.delivery import DeliveryStatus, PackageDelivery
 
-        assert DeliveryStatus.delivering.value == "delivering"
-        assert DeliveryStatus.completed.value == "completed"
-        assert DeliveryStatus.budget_exhausted.value == "budget_exhausted"
-        assert DeliveryStatus.flight_ended.value == "flight_ended"
-        assert DeliveryStatus.goal_met.value == "goal_met"
+        assert {m.value for m in DeliveryStatus} == {
+            "delivering",
+            "not_delivering",
+            "completed",
+            "budget_exhausted",
+            "flight_ended",
+            "goal_met",
+        }
 
-        field_names = set(PackageDelivery.model_fields.keys())
-        assert "delivery_status" not in field_names, (
-            "If this fails, delivery_status was added to PackageDelivery -- "
-            "update this test to PASS and verify the computation logic."
-        )
+        assert "delivery_status" in PackageDelivery.model_fields
+        pkg = PackageDelivery(package_id="pkg_1", impressions=1.0, spend=1.0, **package_pricing_fields())
+        assert pkg.delivery_status is None
+        assert "delivery_status" not in pkg.model_dump()
 
 
 @pytest.mark.requires_db
@@ -1602,8 +1604,17 @@ class TestUnpopulatedFieldsGraceful:
         assert totals.impressions == 5000.0
         assert totals.spend == 250.0
 
-    def test_package_delivery_schema_lacks_creative_level_breakdowns(self):
-        """PackageDelivery does not have by_creative / creative_level_breakdowns (gap G42).
+    def test_package_delivery_declares_by_creative_but_nothing_populates_it(self):
+        """by_creative is DECLARED on by_package and left unset -- the gap moved.
+
+        get-media-buy-delivery-response.json declares by_creative on a by_package item
+        ("Available when the seller supports creative-level reporting"), and PackageDelivery
+        inherits it. Gap G42 is therefore no longer "the field is missing" but "nothing
+        computes it"; it is spec-OPTIONAL, so leaving it unset is conformant.
+
+        The construction here also carries pricing_model/rate/currency, which the item's
+        `required` set names and types non-nullable -- the old `=None` triple is not a
+        PackageDelivery the wire would accept.
 
         Covers: UC-004-MAIN-20
         """
@@ -1616,13 +1627,12 @@ class TestUnpopulatedFieldsGraceful:
             clicks=None,
             completed_views=None,
             pacing_index=1.0,
-            pricing_model=None,
-            rate=None,
-            currency=None,
+            **package_pricing_fields(),
         )
-        assert "by_creative" not in PackageDelivery.model_fields
-        assert pkg.package_id == "pkg_001"
-        assert pkg.impressions == 5000.0
+        assert "by_creative" in PackageDelivery.model_fields
+        assert pkg.by_creative is None
+        assert "by_creative" not in pkg.model_dump()
+        assert (pkg.package_id, pkg.impressions) == ("pkg_001", 5000.0)
 
     def test_full_response_assembles_with_all_gap_fields_absent(self, integration_db):
         """End-to-end: _impl returns valid response despite gap fields being absent.
@@ -1657,9 +1667,11 @@ class TestUnpopulatedFieldsGraceful:
             # viewability is now present on DeliveryTotals
             assert "viewability" in DeliveryTotals.model_fields
 
-            # Gap G42: creative_level_breakdowns (by_creative) not on PackageDelivery
+            # Gap G42: by_creative IS declared on by_package (the pin adds it); what is
+            # absent is a producer, so it stays unset and is dropped from the dump.
             for pkg in delivery.by_package:
-                assert "by_creative" not in type(pkg).model_fields
+                assert "by_creative" in type(pkg).model_fields
+                assert pkg.by_creative is None
 
             # Response serializes cleanly
             dumped = result.model_dump()
@@ -2124,6 +2136,13 @@ class TestEndToEndDeliveryMetricsCpmPricing:
     def test_cpm_pricing_option_identified_in_response(self, integration_db):
         """CPM pricing option should be identifiable in the delivery response.
 
+        The pin says HOW it is identifiable: get-media-buy-delivery-response.json requires
+        pricing_model, rate and currency on every by_package entry. There is no
+        pricing_option_id on a by_package item and no pricing_options on a delivery item,
+        so the old `hasattr(delivery, "pricing_options") or any(hasattr(pkg, ...))` could
+        only ever evaluate False -- it never ran, because the buy named a pricing option
+        that no row produced and the impl refused to price the package.
+
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-03
         """
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
@@ -2132,18 +2151,13 @@ class TestEndToEndDeliveryMetricsCpmPricing:
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            option_id = seed_delivery_pricing(tenant, product_id="prod_cpm2", pricing_model="cpm", rate="2.50")
             MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_cpm2",
                 raw_request={
-                    "packages": [
-                        {
-                            "package_id": "pkg_cpm2",
-                            "product_id": "prod_cpm2",
-                            "pricing_option_id": "cpm_usd_fixed",
-                        }
-                    ],
+                    "packages": delivery_packages("pkg_cpm2", product_id="prod_cpm2", pricing_option_id=option_id)
                 },
             )
             env.set_adapter_response(
@@ -2159,11 +2173,8 @@ class TestEndToEndDeliveryMetricsCpmPricing:
                 end_date="2025-06-30",
             )
 
-            delivery = result.media_buy_deliveries[0]
-            assert hasattr(delivery, "pricing_options") or any(
-                hasattr(pkg, "pricing_option_id") and pkg.pricing_option_id == "cpm_usd_fixed"
-                for pkg in delivery.by_package
-            )
+            pkg = result.media_buy_deliveries[0].by_package[0]
+            assert (pkg.pricing_model, pkg.rate, pkg.currency) == (PricingModel.cpm, 2.5, "USD")
 
 
 # ---------------------------------------------------------------------------
@@ -2248,6 +2259,11 @@ class TestEndToEndDeliveryMetricsCpcPricing:
     def test_cpc_pricing_option_identified_in_response(self, integration_db):
         """CPC pricing option should be identifiable in the delivery response.
 
+        Graded on the three fields the pin requires on a by_package entry. The old
+        assertion looked for `pricing_option_id` on the item, which the pin does not
+        declare, and the buy named "cpc_usd_standard" -- an id `_get_pricing_options`
+        cannot produce, since it reconstructs `{model}_{currency}_{fixed|auction}`.
+
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-04
         """
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
@@ -2256,18 +2272,13 @@ class TestEndToEndDeliveryMetricsCpcPricing:
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            option_id = seed_delivery_pricing(tenant, product_id="prod_cpc2", pricing_model="cpc", rate="0.50")
             MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_cpc2",
                 raw_request={
-                    "packages": [
-                        {
-                            "package_id": "pkg_cpc2",
-                            "product_id": "prod_cpc2",
-                            "pricing_option_id": "cpc_usd_standard",
-                        }
-                    ],
+                    "packages": delivery_packages("pkg_cpc2", product_id="prod_cpc2", pricing_option_id=option_id)
                 },
             )
             env.set_adapter_response(
@@ -2283,11 +2294,8 @@ class TestEndToEndDeliveryMetricsCpcPricing:
                 end_date="2025-06-30",
             )
 
-            delivery = result.media_buy_deliveries[0]
-            assert hasattr(delivery, "pricing_options") or any(
-                hasattr(pkg, "pricing_option_id") and pkg.pricing_option_id == "cpc_usd_standard"
-                for pkg in delivery.by_package
-            )
+            pkg = result.media_buy_deliveries[0].by_package[0]
+            assert (pkg.pricing_model, pkg.rate, pkg.currency) == (PricingModel.cpc, 0.5, "USD")
 
 
 # ---------------------------------------------------------------------------
@@ -2368,6 +2376,10 @@ class TestDeliveryMetricsFlatRatePricing:
     def test_flat_rate_pricing_option_identified_in_response(self, integration_db):
         """FLAT_RATE pricing option should be identifiable in the delivery response.
 
+        Graded on the three fields the pin requires on a by_package entry, for the same
+        reason as the CPM and CPC siblings; "flat_rate_premium" was an id
+        `_get_pricing_options` cannot produce.
+
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-05
         """
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
@@ -2376,18 +2388,15 @@ class TestDeliveryMetricsFlatRatePricing:
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
+            option_id = seed_delivery_pricing(
+                tenant, product_id="prod_flat2", pricing_model="flat_rate", rate="5000.00"
+            )
             MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_flat2",
                 raw_request={
-                    "packages": [
-                        {
-                            "package_id": "pkg_flat2",
-                            "product_id": "prod_flat2",
-                            "pricing_option_id": "flat_rate_premium",
-                        }
-                    ],
+                    "packages": delivery_packages("pkg_flat2", product_id="prod_flat2", pricing_option_id=option_id)
                 },
             )
             env.set_adapter_response(
@@ -2403,11 +2412,8 @@ class TestDeliveryMetricsFlatRatePricing:
                 end_date="2025-06-30",
             )
 
-            delivery = result.media_buy_deliveries[0]
-            assert hasattr(delivery, "pricing_options") or any(
-                hasattr(pkg, "pricing_option_id") and pkg.pricing_option_id == "flat_rate_premium"
-                for pkg in delivery.by_package
-            )
+            pkg = result.media_buy_deliveries[0].by_package[0]
+            assert (pkg.pricing_model, pkg.rate, pkg.currency) == (PricingModel.flat_rate, 5000.0, "USD")
 
 
 # ---------------------------------------------------------------------------
@@ -2415,68 +2421,18 @@ class TestDeliveryMetricsFlatRatePricing:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.requires_db
-class TestDeliveryResponsePreservesExtFields:
-    """Delivery response should preserve ext fields from adapter.
-
-    Covers: UC-004-RESPONSE-SERIALIZATION-SALESAGENT-02
-    """
-
-    def test_ext_fields_preserved_in_delivery_data(self, integration_db):
-        """ext fields from adapter response should flow through to MediaBuyDeliveryData.
-
-        Covers: UC-004-RESPONSE-SERIALIZATION-SALESAGENT-02
-        """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                media_buy_id="mb_ext",
-            )
-            env.set_adapter_response("mb_ext", impressions=1000, spend=50.0)
-
-            result = env.call_impl(
-                media_buy_ids=["mb_ext"],
-                start_date="2025-06-01",
-                end_date="2025-06-30",
-            )
-
-            assert len(result.media_buy_deliveries) == 1
-            delivery = result.media_buy_deliveries[0]
-            assert hasattr(delivery, "ext") and delivery.ext is not None
-
-    def test_ext_fields_preserved_in_model_dump(self, integration_db):
-        """ext fields should survive model_dump() serialization.
-
-        Covers: UC-004-RESPONSE-SERIALIZATION-SALESAGENT-02
-        """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                media_buy_id="mb_ext2",
-            )
-            env.set_adapter_response("mb_ext2", impressions=1000, spend=50.0)
-
-            result = env.call_impl(
-                media_buy_ids=["mb_ext2"],
-                start_date="2025-06-01",
-                end_date="2025-06-30",
-            )
-
-            dumped = result.model_dump()
-            delivery_dumped = dumped["media_buy_deliveries"][0]
-            assert "ext" in delivery_dumped
+# ``TestDeliveryResponsePreservesExtFields`` is RETIRED, both cases with it.
+#
+# Both asserted that a media_buy_deliveries item carries an ``ext`` key. The pinned item
+# declares media_buy_id, status, totals, by_package, daily_breakdown, windows,
+# pricing_model, is_final, is_adjusted, finalized_at and expected_availability -- no ``ext``
+# -- and MediaBuyDeliveryData dropped the field when it started extending the library type
+# (critical pattern #1). Demanding a seller-invented key on the wire is the inverse of the
+# serialization contract these were filed under; the ``ext`` the version envelope carries
+# lives on the RESPONSE, and is graded there.
+#
+# The unit siblings (test_delivery_schema_contracts.py::TestMediaBuyDeliveryDataFields) were
+# retired in the same change for the same reason.
 
 
 # ---------------------------------------------------------------------------

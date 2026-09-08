@@ -13,6 +13,7 @@ from datetime import UTC, date, datetime
 from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
 from src.core.tools._boundary import invoke_tool
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
+from tests.helpers.delivery_pricing import delivery_package, delivery_packages, delivery_pricing_options
 
 #: adcp_version / adcp_major_version / ext are the version-envelope trio every request
 #: model carries; they are transport-envelope concerns, not per-tool buyer fields, and no
@@ -97,25 +98,21 @@ class TestDeliveryPollEnvContract:
     def test_pricing_options(self):
         """set_pricing_options makes pricing data available to _impl."""
         with DeliveryPollEnv() as env:
-            from unittest.mock import MagicMock
-
-            mock_pricing = MagicMock()
-            mock_pricing.pricing_model = "cpm"
-            mock_pricing.rate = 5.0
-            env.set_pricing_options({"1": mock_pricing})
+            env.set_pricing_options(delivery_pricing_options("po_1", pricing_model="cpm", rate="5.00"))
 
             env.add_buy(
                 media_buy_id="mb_001",
-                raw_request={
-                    "packages": [{"package_id": "pkg_001", "product_id": "prod_001", "pricing_option_id": "1"}],
-                },
+                raw_request={"packages": [delivery_package(pricing_option_id="po_1")]},
             )
             env.set_adapter_response("mb_001", impressions=5000)
 
             response = env.call_impl(media_buy_ids=["mb_001"])
             assert isinstance(response, GetMediaBuyDeliveryResponse)
-            # Pricing mock was called
-            env.mock["pricing"].assert_called()
+            # The configured option reached the wire, not merely the lookup: asserting only
+            # that env.mock["pricing"] was CALLED passed even while a MagicMock option
+            # produced a MagicMock currency and the buy was dropped into errors[].
+            pkg = response.media_buy_deliveries[0].by_package[0]
+            assert (pkg.rate, pkg.currency) == (5.0, "USD")
 
     def test_unregistered_media_buy_id_produces_error(self):
         """Adapter mock must fail for unregistered media_buy_ids, not silently succeed.
@@ -150,12 +147,7 @@ class TestDeliveryPollEnvContract:
         with DeliveryPollEnv() as env:
             env.add_buy(
                 media_buy_id="mb_multi",
-                raw_request={
-                    "packages": [
-                        {"package_id": "pkg_A", "product_id": "prod_001"},
-                        {"package_id": "pkg_B", "product_id": "prod_002"},
-                    ],
-                },
+                raw_request={"packages": delivery_packages("pkg_A", "pkg_B")},
             )
             env.set_adapter_response(
                 "mb_multi",

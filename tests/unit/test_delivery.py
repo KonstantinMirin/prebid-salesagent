@@ -50,6 +50,7 @@ from src.core.tools._boundary import invoke_tool
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.services.webhook_delivery_service import CircuitBreaker, CircuitState, WebhookDeliveryService
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
+from tests.helpers.delivery_pricing import delivery_package, delivery_packages, delivery_pricing_options
 
 # ---------------------------------------------------------------------------
 # Fixtures (shared across all test classes)
@@ -102,11 +103,10 @@ def _make_mock_media_buy(
     buy.principal_id = principal_id
     buy.tenant_id = tenant_id
     buy.is_paused = False
-    buy.raw_request = raw_request or {
-        "packages": [
-            {"package_id": "pkg_001", "product_id": "prod_1"},
-        ]
-    }
+    # Packages name a pricing option, because ``package-request.json`` REQUIRES one on
+    # every package — a buy without it is a shape ``create_media_buy`` cannot store, and
+    # the impl rightly refuses to report delivery it cannot price.
+    buy.raw_request = raw_request or {"packages": delivery_packages()}
     return buy
 
 
@@ -189,7 +189,9 @@ def _standard_patches(
         ),
         "pricing_options": patch(
             f"{_PATCH_PREFIX}._get_pricing_options",
-            return_value=pricing_options or {},
+            # The option ``_make_mock_media_buy``'s packages name. NOT ``{}`` — the pin
+            # REQUIRES pricing_model/rate/currency on every by_package entry.
+            return_value=pricing_options if pricing_options is not None else delivery_pricing_options(),
         ),
         "uow": patch(
             f"{_PATCH_PREFIX}.MediaBuyUoW",
@@ -257,7 +259,7 @@ class TestDeliveryPollingSingleBuy:
             budget=10000.0,
             start_date=date(2025, 1, 1),
             end_date=date(2025, 12, 31),
-            raw_request={"packages": [{"package_id": "pkg_a", "product_id": "prod_1"}]},
+            raw_request={"packages": delivery_packages("pkg_a")},
         )
 
         mock_adapter = MagicMock()
@@ -336,14 +338,14 @@ class TestDeliveryPollingMultiBuy:
             budget=5000.0,
             start_date=date(2025, 1, 1),
             end_date=date(2025, 12, 31),
-            raw_request={"packages": [{"package_id": "pkg_1a", "product_id": "prod_1"}]},
+            raw_request={"packages": delivery_packages("pkg_1a")},
         )
         buy2 = _make_mock_media_buy(
             media_buy_id="mb_agg_2",
             budget=8000.0,
             start_date=date(2025, 3, 1),
             end_date=date(2025, 12, 31),
-            raw_request={"packages": [{"package_id": "pkg_2a", "product_id": "prod_2"}]},
+            raw_request={"packages": delivery_packages("pkg_2a")},
         )
 
         mock_adapter = MagicMock()
@@ -1009,13 +1011,8 @@ class TestDeliveryPricingOptionLookup:
         buy = _make_mock_media_buy(
             media_buy_id="mb_cpm",
             budget=10000.0,
-            raw_request={"packages": [{"package_id": "pkg_cpm", "product_id": "prod_1", "pricing_option_id": "1"}]},
+            raw_request={"packages": [delivery_package(package_id="pkg_cpm", pricing_option_id="po_cpm")]},
         )
-
-        mock_po = MagicMock()
-        mock_po.id = 1
-        mock_po.pricing_model = PricingModel.cpm
-        mock_po.rate = Decimal("5.00")
 
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
@@ -1035,7 +1032,7 @@ class TestDeliveryPricingOptionLookup:
             req,
             adapter=mock_adapter,
             target_buys=[("mb_cpm", buy)],
-            pricing_options={"1": mock_po},
+            pricing_options=delivery_pricing_options("po_cpm", pricing_model="cpm", rate="5.00"),
         )
 
         assert response.aggregated_totals.impressions == 10000.0
@@ -1054,13 +1051,8 @@ class TestDeliveryPricingOptionLookup:
         buy = _make_mock_media_buy(
             media_buy_id="mb_cpc",
             budget=5000.0,
-            raw_request={"packages": [{"package_id": "pkg_cpc", "product_id": "prod_1", "pricing_option_id": "2"}]},
+            raw_request={"packages": [delivery_package(package_id="pkg_cpc", pricing_option_id="po_cpc")]},
         )
-
-        mock_po = MagicMock()
-        mock_po.id = 2
-        mock_po.pricing_model = "cpc"  # DB stores string, not enum
-        mock_po.rate = Decimal("0.50")
 
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
@@ -1081,7 +1073,8 @@ class TestDeliveryPricingOptionLookup:
             req,
             adapter=mock_adapter,
             target_buys=[("mb_cpc", buy)],
-            pricing_options={"2": mock_po},
+            # "cpc" as a plain string: the DB column is String(20), not the enum.
+            pricing_options=delivery_pricing_options("po_cpc", pricing_model="cpc", rate="0.50"),
         )
 
         delivery = response.media_buy_deliveries[0]
@@ -1100,13 +1093,8 @@ class TestDeliveryPricingOptionLookup:
         buy = _make_mock_media_buy(
             media_buy_id="mb_flat",
             budget=5000.0,
-            raw_request={"packages": [{"package_id": "pkg_flat", "product_id": "prod_1", "pricing_option_id": "3"}]},
+            raw_request={"packages": [delivery_package(package_id="pkg_flat", pricing_option_id="po_flat")]},
         )
-
-        mock_po = MagicMock()
-        mock_po.id = 3
-        mock_po.pricing_model = PricingModel.flat_rate
-        mock_po.rate = Decimal("5000.00")
 
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
@@ -1127,7 +1115,7 @@ class TestDeliveryPricingOptionLookup:
             req,
             adapter=mock_adapter,
             target_buys=[("mb_flat", buy)],
-            pricing_options={"3": mock_po},
+            pricing_options=delivery_pricing_options("po_flat", pricing_model="flat_rate", rate="5000.00"),
         )
 
         delivery = response.media_buy_deliveries[0]
@@ -1135,6 +1123,49 @@ class TestDeliveryPricingOptionLookup:
         # FLAT_RATE: no click computation (clicks should be None)
         pkg = delivery.by_package[0]
         assert pkg.clicks is None
+
+    def test_by_package_carries_the_resolved_pricing_options_terms(self):
+        """The three pin-REQUIRED pricing fields on by_package come from the resolved option.
+
+        Spec: get-media-buy-delivery-response.json (AdCP 3.1, the pinned version) lists
+        ``pricing_model``, ``rate`` and ``currency`` in the by_package item's ``required``
+        set and types all three non-nullable (rate {type: number, minimum: 0}, currency
+        {type: string, pattern: ^[A-Z]{3}$}).
+
+        This grades the VALUES, which nothing else did: the sibling cases above assert
+        clicks and spend, and the failure mode this pins -- ``_package_pricing`` refusing a
+        package whose buy names no pricing option -- reaches every one of them as a crash,
+        so a green suite never proved the writer put the right numbers on the wire.
+
+        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
+        """
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_terms",
+            raw_request={"packages": [delivery_package(package_id="pkg_terms")]},
+        )
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
+            media_buy_id="mb_terms",
+            impressions=20000,
+            spend=100.0,
+            packages=[{"package_id": "pkg_terms", "impressions": 20000, "spend": 100.0}],
+        )
+
+        response = _run_impl_with_patches(
+            GetMediaBuyDeliveryRequest(media_buy_ids=["mb_terms"]),
+            adapter=mock_adapter,
+            target_buys=[("mb_terms", buy)],
+            pricing_options=delivery_pricing_options(pricing_model="cpm", rate="5.00", currency="USD"),
+        )
+
+        pkg = response.media_buy_deliveries[0].by_package[0]
+        assert (pkg.pricing_model, pkg.rate, pkg.currency) == (PricingModel.cpm, 5.0, "USD")
+        # ...and they SURVIVE serialization. The SDK base dumps with exclude_none=True, so
+        # an unset one is dropped rather than emitted as null, which is how a delivery
+        # response went schema-invalid without any model complaining (GH #2130).
+        dumped = response.model_dump()["media_buy_deliveries"][0]["by_package"][0]
+        assert {"pricing_model", "rate", "currency"} <= dumped.keys()
 
 
 # ===========================================================================
@@ -1152,7 +1183,7 @@ class TestDeliveryUpgradeCompat:
         """
         buy = _make_mock_media_buy(
             media_buy_id="mb_ref",
-            raw_request={"packages": [{"package_id": "pkg_1", "product_id": "prod_1"}]},
+            raw_request={"packages": delivery_packages("pkg_1")},
         )
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
