@@ -55,6 +55,20 @@ def delivery_packages(*package_ids: str, **kwargs: Any) -> list[dict[str, Any]]:
     return [delivery_package(package_id=pid, **kwargs) for pid in (package_ids or ("pkg_001",))]
 
 
+def package_pricing_fields(
+    pricing_model: str = "cpm",
+    rate: float = 5.0,
+    currency: str = "USD",
+) -> dict[str, Any]:
+    """The three pin-REQUIRED pricing kwargs, for a hand-built ``PackageDelivery``.
+
+    ``by_package`` items list ``pricing_model``, ``rate`` and ``currency`` in their
+    ``required`` set, so a fixture that omits them is not building the object the pin
+    describes — it is building one the wire will reject.
+    """
+    return {"pricing_model": pricing_model, "rate": rate, "currency": currency}
+
+
 def delivery_pricing_options(
     pricing_option_id: str = PRICING_OPTION_ID,
     pricing_model: str = "cpm",

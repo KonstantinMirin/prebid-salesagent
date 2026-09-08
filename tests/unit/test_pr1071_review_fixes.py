@@ -6,12 +6,19 @@ Each test exercises the actual code path to verify correct behavior.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.core.schemas import GetProductsRequest
+from src.core.schemas import (
+    AdapterGetMediaBuyDeliveryResponse,
+    AdapterPackageDelivery,
+    DeliveryTotals,
+    GetProductsRequest,
+    ReportingPeriod,
+)
+from tests.helpers.delivery_pricing import delivery_packages, delivery_pricing_options
 
 
 class TestDeliveryLoopErrorHandling:
@@ -55,9 +62,7 @@ class TestDeliveryLoopErrorHandling:
         good_buy.start_date = date.today() - timedelta(days=5)
         good_buy.end_date = date.today() + timedelta(days=5)
         good_buy.budget = "1000.00"
-        good_buy.raw_request = {
-            "packages": [{"package_id": "pkg1", "product_id": "prod1"}],
-        }
+        good_buy.raw_request = {"packages": delivery_packages("pkg1")}
 
         bad_buy = MagicMock()
         # This will raise when accessed in the loop (e.g., start_date raises)
@@ -70,6 +75,19 @@ class TestDeliveryLoopErrorHandling:
 
         target_buys = [("mb_good", good_buy), ("mb_bad", bad_buy)]
 
+        # A REAL adapter response, for the same reason bad_buy carries a real status: a bare
+        # MagicMock makes `totals.viewability` a MagicMock, DeliveryTotals rejects it, and
+        # BOTH buys land in the error path — so the test passes or fails on mock leakage
+        # rather than on the corruption it is about.
+        adapter = MagicMock()
+        adapter.get_media_buy_delivery.return_value = AdapterGetMediaBuyDeliveryResponse(
+            media_buy_id="mb_good",
+            reporting_period=ReportingPeriod(start=datetime.now(UTC) - timedelta(days=5), end=datetime.now(UTC)),
+            totals=DeliveryTotals(impressions=1000, spend=50.0),
+            by_package=[AdapterPackageDelivery(package_id="pkg1", impressions=1000, spend=50.0)],
+            currency="USD",
+        )
+
         mock_repo = MagicMock()
         mock_repo.get_packages.return_value = []
 
@@ -80,10 +98,13 @@ class TestDeliveryLoopErrorHandling:
 
         with (
             patch("src.core.auth.get_principal_object", return_value=MagicMock()),
-            patch("src.core.tools.media_buy_delivery.get_adapter", return_value=MagicMock()),
+            patch("src.core.tools.media_buy_delivery.get_adapter", return_value=adapter),
             patch("src.core.tools.media_buy_delivery.MediaBuyUoW", return_value=mock_uow),
             patch("src.core.tools.media_buy_delivery._get_target_media_buys", return_value=target_buys),
-            patch("src.core.tools.media_buy_delivery._get_pricing_options", return_value={}),
+            patch(
+                "src.core.tools.media_buy_delivery._get_pricing_options",
+                return_value=delivery_pricing_options(),
+            ),
         ):
             response = _get_media_buy_delivery_impl(req, identity)
 
