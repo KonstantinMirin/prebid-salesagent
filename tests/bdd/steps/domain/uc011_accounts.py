@@ -4021,10 +4021,10 @@ def when_agent_list_accounts(ctx: dict, name: str) -> None:
 @when("the Buyer Agent sends a list_accounts request with no principal_id")
 def when_list_accounts_no_principal(ctx: dict) -> None:
     """Send list_accounts with an identity that has tenant_id but no principal_id."""
-    from src.core.resolved_identity import ResolvedIdentity
+    from tests.factories.principal import PrincipalFactory
 
     tenant = ctx["tenant"]
-    broken_identity = ResolvedIdentity(
+    broken_identity = PrincipalFactory.make_identity(
         tenant_id=tenant.tenant_id,
         principal_id=None,
         protocol="mcp",
@@ -4035,11 +4035,11 @@ def when_list_accounts_no_principal(ctx: dict) -> None:
 @when("the Buyer Agent sends a sync_accounts request with no principal_id and:")
 def when_sync_no_principal(ctx: dict, datatable: Any) -> None:
     """Send sync_accounts with an identity that has tenant_id but no principal_id."""
-    from src.core.resolved_identity import ResolvedIdentity
     from src.core.schemas.account import SyncAccountsRequest
+    from tests.factories.principal import PrincipalFactory
 
     tenant = ctx["tenant"]
-    broken_identity = ResolvedIdentity(
+    broken_identity = PrincipalFactory.make_identity(
         tenant_id=tenant.tenant_id,
         principal_id=None,
         protocol="mcp",
