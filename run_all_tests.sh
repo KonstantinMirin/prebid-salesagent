@@ -201,8 +201,11 @@ trap cleanup EXIT
 echo "Building pinned creative-agent image (single-sourced)..."
 scripts/creative-agent-stack.sh build
 
+# adcp-server-storyboard is named explicitly even though it shares adcp-server's build
+# context: `dc up -d` would otherwise build it mid-bringup, after this step reported the
+# build done. Same Dockerfile, so it is a layer-cache hit, not a second real build.
 echo "Building image + bringing up the app stack in-network (project: $COMPOSE_PROJECT_NAME)..."
-dc build postgres adcp-server proxy tests
+dc build postgres adcp-server adcp-server-storyboard proxy tests
 
 # Pre-create logs/ group-writable + setgid BEFORE anything else touches the
 # bind mount: adcp-server bind-mounts .:/app and creates logs/audit.log at

@@ -58,14 +58,28 @@ _PROTOCOLS: tuple[str, ...] = ("mcp", "a2a")
 # A2A takes the agent's BASE url, NOT its JSON-RPC endpoint. A2A is card-first:
 # the SDK calls buildCardUrls(), which appends `/.well-known/agent.json` then
 # `/.well-known/agent-card.json` to the url verbatim — it does NOT strip a
-# transport suffix the way computeBaseUrl() does. Passing `http://proxy:8000/a2a`
-# therefore asks for `/a2a/.well-known/agent-card.json`, which 404s (verified live
-# against the e2e stack), and the runner reports the agent unreachable without
+# transport suffix the way computeBaseUrl() does. Passing the url WITH its `/a2a`
+# suffix therefore asks for `/a2a/.well-known/agent-card.json`, which 404s (verified
+# live against the e2e stack), and the runner reports the agent unreachable without
 # grading anything. From the base url the card is found at
 # `/.well-known/agent-card.json` and the RPC endpoint (`/a2a`) comes off the card.
+#
+# The agent is `adcp-server-storyboard`, NOT the `adcp-server` behind `proxy` that the
+# other in-network suites drive. It is the same image, the same database and the same
+# anchored configuration, differing in one variable: ENVIRONMENT=production, so the
+# boundary runs `extra="ignore"` and DROPS a property this seller's schemas do not
+# declare instead of refusing it. That is what a deployed seller does, and a conformance
+# storyboard grades a deployed seller. Under the development strictness the other suites
+# want, the five read tools answered INVALID_REQUEST to a request carrying
+# `idempotency_key` -- a field AdCP 3.1 puts on every task request and
+# compliance/universal/read-tool-idempotency.yaml requires sellers to TOLERATE.
+#
+# Port 8080, no proxy hop: nginx-development.conf is a pass-through that forwards `Host`
+# unchanged, so it changes nothing the storyboard grades, and the FastAPI process serves
+# /mcp/ and /a2a on 8080 directly (SKIP_NGINX is true on the service).
 _DEFAULT_AGENT_URLS: dict[str, str] = {
-    "mcp": "http://proxy:8000/mcp/",
-    "a2a": "http://proxy:8000",
+    "mcp": "http://adcp-server-storyboard:8080/mcp/",
+    "a2a": "http://adcp-server-storyboard:8080",
 }
 
 # Env vars the storyboard-conformance job MAY set. The compliance/schema paths

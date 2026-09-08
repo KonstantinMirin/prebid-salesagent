@@ -42,7 +42,7 @@ services:
       timeout: 5s
       retries: 5
 
-  adcp-server:
+  adcp-server: &adcp-server
     build: .
     # NO `user:` directive, deliberately -- and this one is worth spelling out,
     # because it used to carry the OPPOSITE fix.
@@ -73,7 +73,7 @@ services:
     #
     # HOME: /tmp below is kept: harmless once the baked uid 1001 (which does have
     # a passwd entry) is back, and removing it is a separate change.
-    environment:
+    environment: &adcp-server-env
       # A raw numeric uid has no /etc/passwd entry, so HOME would default to "/"
       # (unwritable). Same reason the `tests` service sets this.
       HOME: /tmp
@@ -238,6 +238,38 @@ services:
       # `starting`) under heavy concurrent test-suite load, because there
       # was no grace period for Docker to report `starting` during
       start_period: 60s
+
+  # ─── The agent the STORYBOARD grades, and only the storyboard ───────────────
+  #
+  # A conformance storyboard grades a DEPLOYED seller, and a deployed seller runs the
+  # production boundary: `extra="ignore"`, so a property this seller's schemas do not
+  # declare is DROPPED rather than refused. AdCP 3.1 extends the `idempotency_key`
+  # request envelope to every task request including read-only tools
+  # (compliance/universal/read-tool-idempotency.yaml, titled "TOLERANCE": "Sellers MUST
+  # tolerate the field on reads in 3.1"), while the pinned per-tool read schemas still do
+  # not declare it. Under development strictness the five read tools therefore REFUSED a
+  # field the spec says to tolerate, and answered INVALID_REQUEST to a conformant buyer.
+  #
+  # A SECOND server rather than flipping `adcp-server` above, because that setting is
+  # deliberate and carries its own comment: bdd_e2e/e2e/admin want the live server to
+  # reject spec-invalid input exactly as the in-process transports do, and that grading
+  # must not be softened to make a different suite pass. Two servers, one database, each
+  # graded under the posture its own suite is about.
+  #
+  # Merged from the anchors above, so there is ONE owner of this service's shape and this
+  # block states only the difference. Everything else -- image, volumes, extra_hosts, the
+  # egress posture, the TLS trust store -- is inherited and cannot drift.
+  #
+  # No proxy in front of it: config/nginx/nginx-development.conf is a pass-through
+  # (`proxy_pass http://$adcp_server$request_uri`, no rewriting) that forwards `Host`
+  # unchanged, so for the storyboard's paths the hop changes nothing it grades. The
+  # runner reaches this service directly on 8080, which is where the FastAPI process
+  # serves /mcp/ and /a2a (SKIP_NGINX is true; the healthcheck already probes :8080).
+  adcp-server-storyboard:
+    <<: *adcp-server
+    environment:
+      <<: *adcp-server-env
+      ENVIRONMENT: production
 
   proxy:
     image: nginx:stable
