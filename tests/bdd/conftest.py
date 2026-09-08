@@ -5165,6 +5165,79 @@ _UC003_STORYBOARD_CLIENT_TAGS = frozenset(
     {"T-UC-003-storyboard-media-buy-not-found", "T-UC-003-storyboard-not-cancellable-on-recancel"}
 )
 
+#: UC-006 scenarios CreativeSyncEnv provably serves, keyed by SCENARIO IDENTITY.
+#:
+#: Identity, not behavioural family, because the family tags do not partition along
+#: the wired boundary: measured over all 617 catch-all scenarios, only 102 of the 338
+#: that pass are selectable by a family tag whose every member passes -- @partition,
+#: @boundary, @format-id and the rest each span passing, failing and step-less
+#: scenarios at once, so wiring by family forces failures awake alongside passes.
+#: By identity the same measurement selects 210 nodes across these 49 scenarios, every
+#: one of which passes on every transport and every Examples row.
+#:
+#: MEASURED, not assumed (salesagent-lqm79): the catch-all row below and this row build
+#: the SAME env, so "wiring" is not building a harness -- it is naming the scenarios the
+#: existing one serves. Setting the catch-all's xfail_reason to None locally and running
+#: the file against a real Postgres gives 410 passed / 209 failed / 85 xfailed; grouped
+#: by identity, 49 scenarios pass on every node, 23 are step-less, 20 carry their own
+#: xfail and 7 fail on production defects. These are the 49.
+#:
+#: The rest stay on the catch-all with their blockers named in salesagent-lqm79. Adding
+#: an entry here GROWS the executing surface; it exempts nothing from grading.
+_UC006_WIRED_SCENARIOS = frozenset(
+    {
+        "T-UC-006-boundary-assignment-format",
+        "T-UC-006-boundary-assignment-package",
+        "T-UC-006-boundary-creative-scope",
+        "T-UC-006-boundary-media-buy",
+        "T-UC-006-boundary-principal",
+        "T-UC-006-ext-a-empty",
+        "T-UC-006-ext-j",
+        "T-UC-006-main",
+        "T-UC-006-main-approval",
+        "T-UC-006-main-assign",
+        "T-UC-006-main-provenance-warning",
+        "T-UC-006-main-update",
+        "T-UC-006-main-warnings",
+        "T-UC-006-partition-approval-mode",
+        "T-UC-006-partition-auth",
+        "T-UC-006-partition-creative-scope",
+        "T-UC-006-partition-mb-status",
+        "T-UC-006-rule-033-inv1",
+        "T-UC-006-rule-033-inv3",
+        "T-UC-006-rule-033-inv4",
+        "T-UC-006-rule-033-inv5",
+        "T-UC-006-rule-036-inv1",
+        "T-UC-006-rule-036-inv2",
+        "T-UC-006-rule-036-inv3",
+        "T-UC-006-rule-036-inv4",
+        "T-UC-006-rule-036-inv5",
+        "T-UC-006-rule-036-inv6",
+        "T-UC-006-rule-037-inv1",
+        "T-UC-006-rule-037-inv2",
+        "T-UC-006-rule-037-inv3",
+        "T-UC-006-rule-037-inv5",
+        "T-UC-006-rule-038-inv1",
+        "T-UC-006-rule-038-inv3",
+        "T-UC-006-rule-038-inv4",
+        "T-UC-006-rule-038-inv4-violated",
+        "T-UC-006-rule-038-inv5",
+        "T-UC-006-rule-039-inv1",
+        "T-UC-006-rule-039-inv3",
+        "T-UC-006-rule-039-inv6",
+        "T-UC-006-rule-040-inv1",
+        "T-UC-006-rule-040-inv2",
+        "T-UC-006-rule-040-inv3",
+        "T-UC-006-rule-040-inv4",
+        "T-UC-006-rule-093-inv2",
+        "T-UC-006-rule-094-inv1",
+        "T-UC-006-rule-094-inv3",
+        "T-UC-006-rule-094-inv4",
+        "T-UC-006-rule-094-inv5",
+        "T-UC-006-sandbox-production",
+    }
+)
+
 ENV_ROUTES: list[EnvRoute] = [
     # ── @egress (local SSRF / webhook-credential refusal feature) ───────────
     # These scenarios carry T-EGRESS-* identity tags, NOT T-UC-<n>, so
@@ -5342,26 +5415,31 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="uc006-creative-sync",
         when=_uc(
             "UC-006",
-            lambda m: bool(
-                m
-                & {
-                    "account",
-                    "creative-invariant",
-                    "BR-RULE-034",
-                    "webhook-ssrf",
-                    "uc006-storyboard-routing",
-                    "uc006-idempotency",
-                    # @creative-approval drives the approval_mode branches of
-                    # _processing.py, whose ai-powered branch reaches the background
-                    # AI-review executor — an effect that leaves the sync
-                    # transaction. CreativeSyncEnv mocks that executor, which is what
-                    # makes the effect observable rather than a race with a real
-                    # background thread. This set is the ONLY thing standing between a
-                    # UC-006 scenario and dormancy, so a scenario CreativeSyncEnv
-                    # genuinely serves belongs in it — the entry grows the executing
-                    # surface, it does not exempt anything from grading.
-                    "creative-approval",
-                }
+            lambda m: (
+                bool(
+                    m
+                    & {
+                        "account",
+                        "creative-invariant",
+                        "BR-RULE-034",
+                        "webhook-ssrf",
+                        "uc006-storyboard-routing",
+                        "uc006-idempotency",
+                        # @creative-approval drives the approval_mode branches of
+                        # _processing.py, whose ai-powered branch reaches the background
+                        # AI-review executor — an effect that leaves the sync
+                        # transaction. CreativeSyncEnv mocks that executor, which is what
+                        # makes the effect observable rather than a race with a real
+                        # background thread. This set is the ONLY thing standing between a
+                        # UC-006 scenario and dormancy, so a scenario CreativeSyncEnv
+                        # genuinely serves belongs in it — the entry grows the executing
+                        # surface, it does not exempt anything from grading.
+                        "creative-approval",
+                    }
+                )
+                # Plus the scenarios named one by one, because the family tags do not
+                # partition along the wired boundary -- see _UC006_WIRED_SCENARIOS.
+                or bool(m & _UC006_WIRED_SCENARIOS)
             ),
         ),
         env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
