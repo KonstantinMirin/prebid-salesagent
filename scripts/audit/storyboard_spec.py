@@ -673,6 +673,14 @@ def tag_literal(tag: str = STORYBOARD_TAG) -> str:
 ARTIFACT_ENV_VAR = "BDD_LIVENESS_ARTIFACT"
 DEFAULT_ARTIFACT_PATH = "bdd_scenario_liveness.json"
 
+#: What the storyboard conformance session COLLECTED, at (protocol, track, storyboard,
+#: step) grain. Named here rather than in either end so the job that writes it and the
+#: index that reads it cannot drift to different paths -- the same reason the liveness
+#: artifact's name lives here. Consumed by
+#: ``storyboard_check_index._exercised_storyboards``; written by
+#: ``tests/storyboard/collected.py``.
+COLLECTED_ARTIFACT_PATH = "storyboard_collected.json"
+
 #: Identity tag -> use-case number. Byte-identical copies previously sat in
 #: tests/bdd/conftest.py and scripts/audit/scenario_liveness_join.py, each with
 #: a comment stating it mirrored the other.

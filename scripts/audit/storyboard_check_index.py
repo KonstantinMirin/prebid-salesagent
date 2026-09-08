@@ -38,6 +38,7 @@ Read-only. ``--jsonl`` for the source of truth, ``--markdown`` for the report.
 from __future__ import annotations
 
 import dataclasses
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -170,7 +171,35 @@ def _exercised_storyboards(repo: Path) -> set[str]:
     session computes exactly that set in-process for its stale-entry check
     (``test_storyboard_conformance.pytest_generate_tests``) and does not persist it.
     Publishing it would make this per-check rather than per-storyboard.
+
+    IT IS PUBLISHED NOW, and this reads it when it is there. The ledger inference is
+    kept as the FALLBACK rather than deleted, because an absent artifact must not read
+    as "the run exercised nothing" -- turning a missing measurement into a confident
+    zero is the same defect one level up, and it is the one that made this function
+    worth a ticket. So: measurement when we have it, the old bounded over-count when we
+    do not, never a silent zero.
     """
+    artifact = _collected_artifact_path(repo)
+    if artifact.exists():
+        payload = json.loads(artifact.read_text(encoding="utf-8"))
+        collected = {c["storyboard_id"] for c in payload.get("checks", [])}
+        if collected:
+            return collected
+    return _ledger_storyboards(repo)
+
+
+def _collected_artifact_path(repo: Path) -> Path:
+    """Where the conformance session publishes what it collected.
+
+    Indirected through a function so the guard suite can point it somewhere else; the
+    path itself has ONE owner, ``storyboard_spec.COLLECTED_ARTIFACT_PATH``, shared with
+    the emitter in ``tests/storyboard/collected.py``.
+    """
+    return repo / "test-results" / storyboard_spec.COLLECTED_ARTIFACT_PATH
+
+
+def _ledger_storyboards(repo: Path) -> set[str]:
+    """The pre-artifact inference: storyboards the FAILURE ledger holds a row for."""
     return {check_id.storyboard_key for check_id in ledger.load(repo / ledger.LEDGER)}
 
 
