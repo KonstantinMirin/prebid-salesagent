@@ -1533,37 +1533,13 @@ def given_media_buy_already_created_same_key(ctx: dict) -> None:
     ctx["adapter_calls_after_first_create"] = adapter_mock.create_media_buy.call_count
 
 
-@given(parsers.parse("a valid create_media_buy request with:\n{datatable}"))
-def given_valid_request_with_table(ctx: dict, datatable) -> None:
-    """Build a create_media_buy request from a field/value data table."""
-    request_fields: dict = {}
-    # datatable is a list of lists (rows), where first row is header
-    if hasattr(datatable, "__iter__"):
-        rows = list(datatable)
-        # Skip header row if it looks like column names
-        if rows and hasattr(rows[0], "__iter__"):
-            header = [str(c).strip() for c in rows[0]]
-            for row in rows[1:]:
-                cells = [str(c).strip() for c in row]
-                if len(cells) >= 2:
-                    field_name = cells[header.index("field")] if "field" in header else cells[0]
-                    field_value = cells[header.index("value")] if "value" in header else cells[1]
-                    request_fields[field_name] = field_value
-
-    ctx["request_fields"] = request_fields
-
-    # Extract specific fields into ctx for use by other steps
-    if "idempotency_key" in request_fields:
-        ctx["idempotency_key"] = request_fields["idempotency_key"]
-    if "account" in request_fields:
-        # Parse "account_id "acc-001"" format
-        acct_val = request_fields["account"]
-        if acct_val.startswith('account_id "') and acct_val.endswith('"'):
-            ctx["request_account_id"] = acct_val.split('"')[1]
-    if "brand" in request_fields:
-        brand_val = request_fields["brand"]
-        if brand_val.startswith('domain "') and brand_val.endswith('"'):
-            ctx["request_brand_domain"] = brand_val.split('"')[1]
+# `a valid create_media_buy request with:` used to have a SECOND definition here, whose
+# pattern was `"a valid create_media_buy request with:\n{datatable}"`. A pytest-bdd step name
+# never contains a newline — zero of the 49534 sentences rendered from every feature's
+# Examples do — so that pattern could not match anything, and the sentence has always been
+# served by `given_media_buy.py::given_valid_create_request_with_table`, which builds the real
+# request kwargs. This copy only stashed `ctx["request_fields"]` and `ctx["request_brand_domain"]`,
+# which nothing reads, plus `ctx["request_account_id"]`, which three live steps write.
 
 
 @given(parsers.parse("the request includes {count:d} package with a valid product_id"))
@@ -1591,7 +1567,9 @@ def given_adapter_available(ctx: dict) -> None:
 def given_no_idempotency_key(ctx: dict) -> None:
     """Explicitly set request to have no idempotency_key."""
     ctx["idempotency_key"] = None
-    ctx.get("request_fields", {}).pop("idempotency_key", None)
+    # The `ctx["request_fields"]` pop that stood here was already a no-op: the only writer
+    # of that key was the unbindable datatable Given noted above, so the get() always
+    # returned a fresh empty dict.
 
 
 @given(parsers.parse("the idempotency_key is set to {value}"))
@@ -1713,61 +1691,6 @@ def then_dual_emit_media_buy_status(ctx: dict) -> None:
         )
 
 
-@then(parsers.parse('I remember the "{field}" as "{alias}"'))
-def then_remember_field(ctx: dict, field: str, alias: str) -> None:
-    """Remember a response field value for later comparison."""
-    response = require_payload(ctx)
-    if hasattr(response, field):
-        value = getattr(response, field)
-    elif isinstance(response, dict):
-        value = response.get(field)
-    else:
-        dumped = response.model_dump() if hasattr(response, "model_dump") else {}
-        value = dumped.get(field)
-    assert value is not None, f"Cannot remember None value for '{field}'"
-    ctx.setdefault("remembered", {})[alias] = value
-
-
-@then(parsers.parse('the response "{field}" should equal the remembered "{alias}"'))
-def then_response_equals_remembered(ctx: dict, field: str, alias: str) -> None:
-    """Assert a response field equals a previously remembered value."""
-    response = require_payload(ctx)
-    remembered = ctx.get("remembered", {})
-    assert alias in remembered, f"No remembered value for '{alias}'"
-
-    if hasattr(response, field):
-        actual = getattr(response, field)
-    elif isinstance(response, dict):
-        actual = response.get(field)
-    else:
-        dumped = response.model_dump() if hasattr(response, "model_dump") else {}
-        actual = dumped.get(field)
-
-    assert actual == remembered[alias], (
-        f"Response {field}={actual!r} does not equal remembered {alias}={remembered[alias]!r}"
-    )
-
-
-@then(parsers.parse('the response "{field}" should NOT equal the remembered "{alias}"'))
-def then_response_not_equals_remembered(ctx: dict, field: str, alias: str) -> None:
-    """Assert a response field does NOT equal a previously remembered value."""
-    response = require_payload(ctx)
-    remembered = ctx.get("remembered", {})
-    assert alias in remembered, f"No remembered value for '{alias}'"
-
-    if hasattr(response, field):
-        actual = getattr(response, field)
-    elif isinstance(response, dict):
-        actual = response.get(field)
-    else:
-        dumped = response.model_dump() if hasattr(response, "model_dump") else {}
-        actual = dumped.get(field)
-
-    assert actual != remembered[alias], (
-        f"Response {field}={actual!r} should NOT equal remembered {alias}={remembered[alias]!r}"
-    )
-
-
 @then(parsers.parse('the response should include the previously created "{field}"'))
 def then_response_includes_previously_created(ctx: dict, field: str) -> None:
     """Assert the idempotency replay returned the ORIGINAL create's value.
@@ -1848,58 +1771,22 @@ def _get_error_message_for_step(error: object, ctx: dict | None = None) -> str:
 # ── Order naming steps (hand-authored, adcp 3.12 / PR #1217) ──
 
 
-@then(parsers.parse('I remember the ad server order name as "{alias}"'))
-def then_remember_order_name(ctx: dict, alias: str) -> None:
-    """Remember the ad server order name for later comparison."""
-    response = require_payload(ctx)
-    # Order name is typically in the adapter call args or response metadata
-    order_name = ctx.get("last_order_name")
-    assert order_name is not None, "No order name recorded — harness must capture it"
-    ctx.setdefault("remembered", {})[alias] = order_name
-
-
-@then(parsers.parse('the ad server order name should differ from the remembered "{alias}"'))
-def then_order_name_differs(ctx: dict, alias: str) -> None:
-    """Assert the order name from the latest request differs from the remembered one."""
-    remembered = ctx.get("remembered", {})
-    assert alias in remembered, f"No remembered value for '{alias}'"
-    current = ctx.get("last_order_name")
-    assert current is not None, "No order name for current request"
-    assert current != remembered[alias], f"Order name '{current}' should differ from remembered '{remembered[alias]}'"
-
-
-@then(parsers.parse('the ad server order name should not contain "{substring}"'))
-def then_order_name_no_substring(ctx: dict, substring: str) -> None:
-    """Assert the order name does not contain the given substring."""
-    order_name = ctx.get("last_order_name")
-    assert order_name is not None, "No order name recorded"
-    assert substring not in order_name, f"Order name '{order_name}' should not contain '{substring}'"
-
-
-@then("the ad server order name should contain the media_buy_id from the response")
-def then_order_name_contains_media_buy_id(ctx: dict) -> None:
-    """Assert the order name contains the media_buy_id from the create response."""
-    order_name = ctx.get("last_order_name")
-    response = payload_or_none(ctx)
-    assert order_name is not None, "No order name recorded"
-    assert response is not None, "No response in ctx"
-    media_buy_id = getattr(response, "media_buy_id", None)
-    if isinstance(response, dict):
-        media_buy_id = response.get("media_buy_id")
-    assert media_buy_id is not None, "No media_buy_id in response"
-    assert media_buy_id in order_name, f"Order name '{order_name}' should contain media_buy_id '{media_buy_id}'"
-
-
-@given(parsers.parse('the tenant order_name_template is "{template}"'))
-def given_order_name_template(ctx: dict, template: str) -> None:
-    """Set a custom order_name_template on the tenant."""
-    ctx.setdefault("tenant_config", {})["order_name_template"] = template
-
-
-@given("the tenant uses the default order_name_template")
-def given_default_order_name_template(ctx: dict) -> None:
-    """Use the default order_name_template (no override)."""
-    ctx.setdefault("tenant_config", {}).pop("order_name_template", None)
+# ── Order naming steps: DELETED, hand-authored for adcp 3.12 / PR #1217 ──
+#
+# Nine steps stood here — `I remember the "{field}" as "{alias}"`, its two comparison
+# siblings, four `ad server order name` Thens, and the two `order_name_template` Givens.
+# No feature binds any of their sentences: the strings do not occur in tests/bdd/features
+# at all, by literal grep and by rendering every Examples row through pytest-bdd's own
+# FeatureParser (the resolver validated against the control "a creative with no format_id",
+# which greps zero times and binds at BR-UC-006-sync-creatives.feature:866).
+#
+# They could not have graded order naming even if a scenario bound them: four of them read
+# `ctx["last_order_name"]`, and NOTHING in tests/ ever writes that key, so each would have
+# failed on its own "No order name recorded" guard. The two Givens wrote
+# `ctx["tenant_config"]`, which no step reads either.
+#
+# Order-name templating is therefore UNGRADED, and was before this deletion. Wiring it needs
+# a harness that captures the adapter's order name, not these steps back.
 
 
 @then("the Buyer should be notified via webhook")
