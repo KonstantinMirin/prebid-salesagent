@@ -209,6 +209,11 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
                 "stem": row["stem"],
                 "citation": f"repo=adcp ref={coverage['pinned_version']} path={row['storyboard']}",
                 "scenarios": row["covered_by"],
+                # The claim/coverage split the coverage map now carries, passed through
+                # rather than re-derived: "Scenario" in this table was a tag claim, and
+                # "scenarios TO WRITE" counted only the storyboards with no tag at all.
+                "scenarios_live": row["covered_by_live"],
+                "coverage": row["coverage"],
                 "required_tools": sorted(storyboard_spec.required_tools(text)),
                 "checks": checks,
                 **build_row_status_fields(stem=row["stem"], text=text),
@@ -241,7 +246,14 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
         "totals": {
             "on_path": len(on_path),
             "gated": len(gated),
+            "unknown": coverage["totals"]["unknown"],
+            "liveness_measured": coverage["totals"]["liveness_measured"],
             "no_scenario": sum(1 for r in rows if not r["scenarios"]),
+            "scenario_not_live": sum(1 for r in rows if r["coverage"] == storyboard_coverage_map.COVERAGE_CLAIMED),
+            "scenario_not_measured": sum(
+                1 for r in rows if r["coverage"] == storyboard_coverage_map.COVERAGE_NOT_MEASURED
+            ),
+            "scenario_live": sum(1 for r in rows if r["coverage"] == storyboard_coverage_map.COVERAGE_LIVE),
             "no_ticket": sum(1 for r in rows if not r["tracking_issues"]),
             "no_scenario_no_ticket": sum(1 for r in rows if not r["scenarios"] and not r["tracking_issues"]),
             "distinct_issues": len({i for r in rows for i in r["tracking_issues"]}),
@@ -281,7 +293,22 @@ def render(result: dict[str, Any]) -> str:
         "gated checks are indexed with `gate=GATED` rather than dropped.",
         f"- **measured FAILING: {result['totals']['failing']} storyboards, "
         f"{result['totals']['ledgered_checks']} ledgered checks**",
-        f"- **scenarios TO WRITE: {result['totals']['no_scenario']}**",
+        f"- **storyboards with NO scenario claiming them: {result['totals']['no_scenario']} of "
+        f"{result['totals']['on_path']}**",
+        (
+            f"- of the {result['totals']['on_path'] - result['totals']['no_scenario']} that ARE claimed: "
+            f"**{result['totals']['scenario_live']} graded by a live scenario**, "
+            f"{result['totals']['scenario_not_live']} claim-only (tagged, steps not bound or harness "
+            "not wired). A claim is a `@storyboard-v3.1` TAG; only the first number is coverage."
+            if result["totals"]["liveness_measured"]
+            else (
+                f"- of the {result['totals']['on_path'] - result['totals']['no_scenario']} that ARE claimed: "
+                f"**liveness NOT MEASURED for all {result['totals']['scenario_not_measured']}** — no "
+                "`test-results/bdd_scenario_liveness.json` was joined, so no **Scenario** cell below has "
+                "been shown to grade anything. Run `pytest tests/bdd` and regenerate."
+            )
+        ),
+        f"- **unclassified storyboards (no verdict at all): {result['totals']['unknown']}**",
         f"- **tickets TO FILE: {result['totals']['no_ticket']}**",
         f"- **neither scenario nor ticket: {result['totals']['no_scenario_no_ticket']}**",
         f"- existing tickets to REUSE: **{result['totals']['distinct_issues']}**",
@@ -294,8 +321,12 @@ def render(result: dict[str, Any]) -> str:
         "",
         "Reading the cells:",
         "",
-        "- **Scenario** — an id means a `@storyboard-v3.1` scenario claims this storyboard; "
-        "**TO WRITE** means none does. A listed scenario does *not* mean its checks all pass — "
+        "- **Scenario** — an id means a `@storyboard-v3.1` scenario CLAIMS this storyboard; "
+        "**NO SCENARIO** means none does. The parenthesis is the claim's liveness, joined from a "
+        "real `pytest tests/bdd` run plus the `ENV_ROUTES` registry: `LIVE` is the only one that "
+        "is coverage, `claim only` means the scenario is tagged but its steps are not bound or its "
+        "harness is not wired, and `NOT MEASURED` means no BDD run was joined and nothing about "
+        "the claim has been established. A listed scenario does *not* mean its checks all pass — "
         "compare against Status.",
         "- **Ticket** — `#N (partial)` is an EXISTING issue to reuse, covering some of this "
         "storyboard's checks; the map's `note:` says what it leaves out. **TO FILE** means "
@@ -317,7 +348,7 @@ def render(result: dict[str, Any]) -> str:
         "|---|---|---|---|---|---|---|---|",
     ]
     for r in result["rows"]:
-        scenarios = ", ".join(f"`{s}`" for s in r["scenarios"]) or "**TO WRITE**"
+        scenarios = storyboard_coverage_map.coverage_cell(r["coverage"], r["scenarios"])
         tools = ", ".join(f"`{t}`" for t in r["required_tools"]) or "—"
         checks = ", ".join(f"{k}×{v}" for k, v in r["checks"].items()) or "—"
         divergence = r["divergence"] or "—"

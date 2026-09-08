@@ -192,6 +192,68 @@ def declared_capabilities(repo: Path) -> dict[str, set[str]]:
     }
 
 
+#: The module that declares which tools this agent implements, and the dict in it that
+#: carries the declaration. ``src/core/tools/registry.py`` is the one declaration every
+#: transport is generated from (its own docstring: "MCP registration loops this mapping,
+#: the A2A card is ``_derived_skills()`` over it, and the REST router adds a route per
+#: ``rest`` binding"), so its keys ARE what a buyer can reach — which is exactly what the
+#: storyboard ``required_tools`` gate asks about.
+_TOOL_REGISTRY_MODULE = ("src", "core", "tools", "registry.py")
+_TOOL_REGISTRY_NAME = "_TOOLS"
+
+
+def advertised_tools(repo: Path) -> set[str]:
+    """The AdCP tool names this agent advertises, read from the tool registry.
+
+    DERIVED, never declared. This used to be a hand-maintained set in
+    ``storyboard_coverage_map`` and it had drifted in BOTH directions at the 3.1.1 pin:
+    it claimed ``activate_signal``, ``get_signals`` and ``list_authorized_properties``,
+    none of which the registry implements, and it omitted ``complete_task``,
+    ``get_task_status`` and ``list_tasks``, which it does. The three phantom signals
+    tools put three storyboards ON-PATH — ``universal/error-compliance-signals.yaml``,
+    ``universal/get-signals-pagination-integrity.yaml``,
+    ``universal/schema-validation-signals.yaml``, 48 checks between them — and the
+    ``make quality`` triage gate (``test_architecture_storyboard_issue_map.py``)
+    enforced a conformance path three storyboards wider than the agent has tools for.
+    ``src/core/schemas/capability_declarations.py`` had already recorded the same
+    mistake about the same tool ("BACKED, but NOT by a ``get_signals`` tool ...
+    ``src/core/tools/signals.py`` was unreachable from every transport"), and the real
+    runner baseline quoted in ``storyboard_coverage_map``'s docstring names
+    ``get_signals`` among the tools it observed us NOT advertising.
+
+    Read by AST rather than by importing ``src.core.tools.registry``: the registry
+    imports every ``_impl`` in the codebase, and these audit scripts must stay runnable
+    with no application dependencies resolved. ``test_architecture_storyboard_spec.py``
+    grades this reader against the live ``TOOLS`` mapping, so an AST walk that stops
+    matching the real declaration reddens rather than quietly returning a short set.
+    """
+    where = repo.joinpath(*_TOOL_REGISTRY_MODULE)
+    tree = ast.parse(where.read_text(encoding="utf-8"))
+    for node in tree.body:
+        target = node.target if isinstance(node, ast.AnnAssign) else None
+        if target is None and isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+        if not (isinstance(target, ast.Name) and target.id == _TOOL_REGISTRY_NAME):
+            continue
+        if not isinstance(node.value, ast.Dict):
+            raise StoryboardAuditError(f"{where}: {_TOOL_REGISTRY_NAME} is not a dict literal")
+        # A non-literal key (a splat, an f-string, a name) means the registry declares a
+        # tool this reader cannot see. Refuse: a short tool set silently NARROWS the
+        # conformance path, which is the failure this function exists to end.
+        names = {k.value for k in node.value.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+        if len(names) != len(node.value.keys):
+            raise StoryboardAuditError(
+                f"{where}: {_TOOL_REGISTRY_NAME} has {len(node.value.keys)} entries but only "
+                f"{len(names)} plain string keys. Some tool name is not statically readable, so "
+                "the derived advertised-tool set would be short and the conformance path would "
+                "silently shrink."
+            )
+        if not names:
+            raise StoryboardAuditError(f"{where}: {_TOOL_REGISTRY_NAME} is empty")
+        return names
+    raise StoryboardAuditError(f"{where}: no module-level {_TOOL_REGISTRY_NAME} to read the tool set from")
+
+
 # ── Storyboard universe ─────────────────────────────────────────────────────
 
 _SKIP_PREFIXES = ("domains/", "test-kits/", "test-vectors/")
