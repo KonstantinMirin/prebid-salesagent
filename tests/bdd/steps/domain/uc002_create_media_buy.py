@@ -791,15 +791,6 @@ def then_error_has_setup_details(ctx: dict) -> None:
     )
 
 
-@then(parsers.parse('the error message should contain "{count} accounts"'))
-def then_error_contains_count(ctx: dict, count: str) -> None:
-    """Assert error message mentions the specific number of matching accounts."""
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    msg = str(error)
-    assert f"{count} account" in msg.lower() or f"{count}" in msg, f"Expected '{count} accounts' in error: {msg}"
-
-
 @then(parsers.parse("the result should be {outcome}"))
 def then_result_should_be(ctx: dict, outcome: str) -> None:
     """Assert outcome of a partition/boundary scenario.
@@ -1348,70 +1339,6 @@ def _assert_error_outcome(ctx: dict, outcome: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given("the account exists but is accessible only to a different agent")
-def given_account_other_agent(ctx: dict) -> None:
-    """Create an account with access granted to a different principal."""
-    from tests.factories.principal import PrincipalFactory
-
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-
-    account_id = ctx.get("request_account_id", "acc_other_agent")
-    # Create account
-    account = AccountFactory(
-        tenant=tenant,
-        account_id=account_id,
-        status="active",
-        brand={"domain": "other-agent-denied.com"},
-        operator="other-agent-denied.com",
-    )
-    # Grant access to a DIFFERENT principal — not the requesting agent
-    other_principal = PrincipalFactory(tenant=tenant)
-    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
-
-
-@given("the natural key resolves to an account accessible only to a different agent")
-def given_natural_key_other_agent(ctx: dict) -> None:
-    """Create an account matching the natural key with access to a different principal."""
-    from tests.factories.principal import PrincipalFactory
-
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-
-    account = AccountFactory(
-        tenant=tenant,
-        status="active",
-        brand={"domain": "other-agent.com"},
-        operator="other-agent.com",
-    )
-    other_principal = PrincipalFactory(tenant=tenant)
-    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
-
-
-@given("the sandbox account exists but is accessible only to a different agent")
-def given_sandbox_account_other_agent(ctx: dict) -> None:
-    """Create a sandbox account with access to a different principal."""
-    from tests.factories.principal import PrincipalFactory
-
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-
-    account_id = ctx.get("request_account_id", "acc_sandbox_other")
-    account = AccountFactory(
-        tenant=tenant,
-        account_id=account_id,
-        status="active",
-        sandbox=True,
-        brand={"domain": "sandbox-denied.com"},
-        operator="sandbox-denied.com",
-    )
-    other_principal = PrincipalFactory(tenant=tenant)
-    AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=other_principal, account=account)
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # Hand-authored: Idempotency steps (adcp 3.12 / PR #1217 review)
 # ═══════════════════════════════════════════════════════════════════════
@@ -1549,12 +1476,6 @@ def given_request_includes_packages(ctx: dict, count: int) -> None:
     ctx["package_count"] = count
 
 
-@given("the package has a positive budget meeting minimum spend")
-def given_package_positive_budget(ctx: dict) -> None:
-    """Ensure the package has a budget that meets minimum spend requirements."""
-    ctx["package_budget_valid"] = True
-
-
 # Canonical owner of "the ad server adapter is available" — removed from the
 # generic given_media_buy.py module to avoid a cross-module shadow.
 @given("the ad server adapter is available")
@@ -1586,28 +1507,21 @@ def given_idempotency_key_set(ctx: dict, value: str) -> None:
         ctx["idempotency_key"] = value
 
 
-@when(parsers.parse('the Buyer Agent sends the same create_media_buy request with idempotency_key "{key}"'))
-def when_send_same_request_with_key(ctx: dict, key: str) -> None:
-    """Replay the same create_media_buy request with the given idempotency_key.
-
-    Uses the same request fields from the previous request but ensures the
-    idempotency_key matches the provided value.
-    """
-    ctx["idempotency_key"] = key
-    ctx["is_replay"] = True
-    # Dispatch the request through the harness
-    from tests.bdd.steps.generic._dispatch import dispatch_request
-
-    dispatch_request(ctx)
-
-
-@when("the Buyer Agent sends a second create_media_buy request with the same parameters")
-def when_send_second_request(ctx: dict) -> None:
-    """Send a second create_media_buy request with identical parameters."""
-    ctx["is_second_request"] = True
-    from tests.bdd.steps.generic._dispatch import dispatch_request
-
-    dispatch_request(ctx)
+# Seven more steps stood here and above, none of them bound: `the error message should
+# contain "{count} accounts"`, three cross-agent access Givens (`the account exists but is
+# accessible only to a different agent` and its natural-key and sandbox siblings), `the
+# package has a positive budget meeting minimum spend`, and the two idempotency Whens
+# (`sends the same create_media_buy request with idempotency_key ...`, `sends a second
+# create_media_buy request with the same parameters`). Each sentence greps zero times in
+# tests/bdd/features and matches none of the 49534 rendered sentences.
+#
+# Both obligations behind them are still graded, by live scenarios that say it differently,
+# which is why deleting these loses no coverage. Cross-principal account scoping:
+# @T-UC-002-ym1c-access-scope ("the natural key matches 2 accounts but the agent can access
+# 1") and @T-UC-002-fb2l-unauth-no-disclosure, in BR-UC-002-account-access.feature.
+# Idempotent replay: @T-UC-002-v31-idempotency-replay ("a media buy was already created for
+# the same seller with that idempotency_key"). These seven were a second, unreached path to
+# the same ground.
 
 
 @then("the response should succeed")
