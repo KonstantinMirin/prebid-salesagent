@@ -17,6 +17,8 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Final
 
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 
 logger = logging.getLogger(__name__)
@@ -114,10 +116,10 @@ class McpCredentialGate:
     decided here.
     """
 
-    def __init__(self, app: Any) -> None:
+    def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
-    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope.get("type") != "http" or scope.get("method") != "POST":
             await self.app(scope, receive, send)
             return
@@ -128,7 +130,7 @@ class McpCredentialGate:
             await self.app(scope, receive, send)
             return
 
-        buffered: list[dict] = []
+        buffered: list[Message] = []
         body = b""
         while True:
             message = await receive()
@@ -146,9 +148,10 @@ class McpCredentialGate:
 
         pending = iter(buffered)
 
-        async def replay() -> dict:
+        async def replay() -> Message:
             """Hand back the buffered messages, then defer to the real receive."""
-            return next(pending, None) or await receive()
+            buffered_message = next(pending, None)
+            return buffered_message if buffered_message is not None else await receive()
 
         await self.app(scope, replay, send)
 
@@ -167,7 +170,7 @@ def _tool_requires_credential(tool_name: str) -> bool:
     return spec is not None and spec.auth == "required"
 
 
-async def _send_challenge(send: Any) -> None:
+async def _send_challenge(send: Send) -> None:
     """Answer 401 with the AdCP envelope in the body and the challenge in the header.
 
     The body is the same two-layer envelope every other transport returns for AUTH_MISSING,
