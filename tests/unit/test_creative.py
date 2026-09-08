@@ -4627,23 +4627,26 @@ class TestProvenanceModel:
         from src.core.schemas import DigitalSourceType, Provenance
 
         prov = Provenance(
-            digital_source_type=DigitalSourceType.composite_with_trained_model,
-            ai_tool="DALL-E 3",
-            human_oversight=True,
-            declared_by="Agency XYZ",
+            digital_source_type=DigitalSourceType.composite_with_trained_algorithmic_media,
+            ai_tool={"name": "DALL-E 3", "provider": "OpenAI"},
+            human_oversight="directed",
+            declared_by={"role": "agency"},
             created_time=datetime(2026, 2, 1, 12, 0, tzinfo=UTC),
-            c2pa="https://c2pa.example.com/manifest/123",
-            disclosure="This creative was generated using AI tools with human oversight.",
-            verification={"method": "c2pa", "verified": True},
+            c2pa={"manifest_url": "https://c2pa.example.com/manifest/123"},
+            disclosure={"required": True},
+            verification=[{"verified_by": "c2pa", "result": "ai_generated"}],
         )
         data = prov.model_dump(mode="json")
-        assert data["digital_source_type"] == "composite_with_trained_model"
-        assert data["ai_tool"] == {"name": "DALL-E 3"}
-        assert data["human_oversight"] is True
-        assert data["declared_by"] == "Agency XYZ"
-        assert data["c2pa"] == "https://c2pa.example.com/manifest/123"
-        assert data["disclosure"].startswith("This creative was generated")
-        assert data["verification"]["method"] == "c2pa"
+        assert data["digital_source_type"] == "composite_with_trained_algorithmic_media"
+        # version is unset and therefore ABSENT, not null: an unset optional must not
+        # reach the wire as JSON null (the omission rule these schemas serialize by).
+        assert data["ai_tool"] == {"name": "DALL-E 3", "provider": "OpenAI"}
+        assert data["human_oversight"] == "directed"
+        assert data["declared_by"]["role"] == "agency"
+        assert data["c2pa"]["manifest_url"] == "https://c2pa.example.com/manifest/123"
+        assert data["disclosure"]["required"] is True
+        assert data["verification"][0]["verified_by"] == "c2pa"
+        assert data["verification"][0]["result"] == "ai_generated"
 
     def test_provenance_serialization_minimal(self):
         """Provenance model with only required field."""
@@ -4657,16 +4660,22 @@ class TestProvenanceModel:
         """All IPTC Digital Source Type values are available."""
         from src.core.schemas import DigitalSourceType
 
+        # THE PINNED VOCABULARY. This set used to carry composite_with_trained_model,
+        # trained_algorithmic_model and minor_human_edits, which the pin renamed, renamed
+        # and dropped respectively — and it passed, because it compared a local hand-written
+        # copy of the enum against a hand-written copy of its values. Both sides were stale
+        # together. DigitalSourceType is now the library enum itself, so this asserts the
+        # pin rather than a duplicate's agreement with itself.
         expected = {
             "digital_capture",
             "digital_creation",
             "composite_capture",
             "composite_synthetic",
-            "composite_with_trained_model",
-            "trained_algorithmic_model",
+            "composite_with_trained_algorithmic_media",
+            "trained_algorithmic_media",
             "algorithmic_media",
             "human_edits",
-            "minor_human_edits",
+            "data_driven_media",
         }
         actual = {e.value for e in DigitalSourceType}
         assert actual == expected
