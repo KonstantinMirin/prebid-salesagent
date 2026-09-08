@@ -693,16 +693,21 @@ class TestListTransportParity:
                 status="approved",
             )
 
-            # Spec vocabulary (AdCP 3.1.1): status is a member of `filters`, not a
-            # top-level request field. The flat spelling was retired with the rest of the
-            # non-spec surface; the MCP path rejects it at the wire (VALIDATION_ERROR on
-            # /status, additionalProperties) precisely because the announced shape is now
-            # derived from the DTO. call_impl still tolerated the flat form, which is why
-            # only the wire-crossing half of this parity test failed.
+            # ``statuses``, plural, because that is what the pinned CreativeFilters
+            # declares -- there is no ``status`` member. The singular spelling used to
+            # sit here and the test passed anyway, vacuously: the pinned model DROPPED
+            # the unknown key, so ``call_impl`` filtered on nothing and ``call_mcp``
+            # filtered on nothing, and two unfiltered listings trivially agree. Parity
+            # was being asserted over a filter neither side applied.
+            # It surfaced when MCP began validating through the DTO like the other two
+            # transports: the wire half started refusing the undeclared key
+            # (INVALID_REQUEST, additionalProperties on /filters/status) while the impl
+            # half kept silently discarding it. The sibling A2A test above already used
+            # the plural; only this one was missed.
             # call_impl takes the TYPED filter (it hands the object straight to _impl);
             # call_mcp takes the wire dict, which FastMCP coerces. Same field either way.
-            impl_response = env.call_impl(filters=CreativeFilters(status=["approved"]))
-            mcp_response = env.call_mcp(filters={"status": ["approved"]})
+            impl_response = env.call_impl(filters=CreativeFilters(statuses=["approved"]))
+            mcp_response = env.call_mcp(filters={"statuses": ["approved"]})
 
         assert len(impl_response.creatives) == len(mcp_response.creatives)
         assert impl_response.creatives[0].creative_id == mcp_response.creatives[0].creative_id
