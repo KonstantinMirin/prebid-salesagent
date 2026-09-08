@@ -57,6 +57,7 @@ from uuid import uuid4
 from adcp.types import AccountReference
 
 from src.core.schemas import SyncCreativesRequest, SyncCreativesResponse
+from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.egress import EgressHatchMixin
@@ -609,7 +610,7 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
     #: is "use a fresh UUID v4 for each request", which is what a real buyer does per call.
     @property
     def DEFAULT_IDEMPOTENCY_KEY(self) -> str:  # noqa: N802 - kept as the documented name
-        return f"harness-idem-{uuid4().hex}"
+        return mint(f"harness-idem-{uuid4().hex}")
 
     def _with_required_request_fields(self, kwargs: dict, *, with_account: bool = True) -> dict:
         """Fill the spec-required fields a scenario has not set itself.

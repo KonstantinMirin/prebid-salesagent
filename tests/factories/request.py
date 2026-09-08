@@ -78,6 +78,7 @@ def dto(tool: str) -> type:
 
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.factories.format import AGENT_URL, FormatIdFactory
+from tests.factories.mint import mint, mint_shared
 from tests.helpers.sample_account import SAMPLE_ACCOUNT
 
 
@@ -106,8 +107,13 @@ def fresh_idempotency_key() -> str:
     because a REUSED key replays the original response instead of performing the
     operation — a replay test wants one stable key for the whole scenario and
     should say so by overriding, which is a decision no default can make for it.
+
+    ``mint`` records what this GENERATED, so ``compare_payloads`` can tell this key
+    apart from the pinned literal ``"test-idem-key-0001"`` that 210 dispatched
+    events carry in the same field and that no value-shaped rule can distinguish
+    from it (tests/factories/mint.py).
     """
-    return f"idem-{uuid.uuid4().hex}"
+    return mint(f"idem-{uuid.uuid4().hex}")
 
 
 @cache
@@ -123,7 +129,11 @@ def _campaign_window() -> tuple[datetime, datetime]:
     read the clock.
     """
     anchor = datetime.now(UTC).replace(microsecond=0)
-    return anchor + timedelta(days=1), anchor + timedelta(days=30)
+    # mint_SHARED, not mint: the ``@cache`` above means this runs once per process and
+    # every later test reuses the same two datetimes without re-minting them. A
+    # per-test record would forget them after the test that warmed the cache, and
+    # ~200 dispatched ``start_time``/``end_time`` values would read CHANGED forever.
+    return mint_shared(anchor + timedelta(days=1)), mint_shared(anchor + timedelta(days=30))
 
 
 class _RequestFactory(factory.Factory):

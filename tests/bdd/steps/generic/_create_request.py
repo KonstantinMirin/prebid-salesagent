@@ -58,6 +58,8 @@ def build_create_request_kwargs(
     """
     from datetime import UTC, datetime, timedelta
 
+    from tests.factories.mint import mint
+
     if product_id is None:
         product_id = ctx["default_product"].product_id
     if pricing_option is None:
@@ -65,8 +67,12 @@ def build_create_request_kwargs(
     now = datetime.now(UTC)
     kwargs: dict[str, Any] = {
         "brand": {"domain": "testbrand.com"},
-        "start_time": (now + timedelta(days=1)).isoformat(),
-        "end_time": (now + timedelta(days=30)).isoformat(),
+        # Clock-derived and therefore different on every run. ``mint`` records it as
+        # GENERATED so ``compare_payloads`` interns it instead of reporting every
+        # media-buy scenario as CHANGED; the pinned literals beside it (the brand
+        # domain, the PO number) are untouched and still diffed verbatim.
+        "start_time": mint((now + timedelta(days=1)).isoformat()),
+        "end_time": mint((now + timedelta(days=30)).isoformat()),
         "packages": [
             {
                 "product_id": product_id,

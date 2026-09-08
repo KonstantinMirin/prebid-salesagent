@@ -50,6 +50,7 @@ from tests.bdd.steps.domain.uc006_sync_creatives import (
     when_sync_creative,
 )
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
+from tests.bdd.steps.generic._dispatch import gate_and_record
 from tests.factories.creative_asset import build_assets, image_spec, text_spec, url_spec, video_spec
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -552,6 +553,11 @@ def then_format_id_roundtrips_verbatim(ctx: dict) -> None:
 
     # ── PRIMARY: read the creative back over the wire ──────────────────────
     client = ctx.get("client") or AdCPTestClient(env)
+    # A READ-BACK still reaches a transport, so it owes the same two obligations as
+    # any other dispatch. It does NOT go through ``dispatch_via_client``: that entry
+    # is the single writer of the ctx dispatch-result contract, and this read-back
+    # must not clobber the result the scenario is actually grading.
+    gate_and_record({})
     listed = client.call("list_creatives", {}, ctx["transport"])
     wire = listed.wire_response
     assert isinstance(wire, dict), (

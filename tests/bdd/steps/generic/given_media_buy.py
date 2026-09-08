@@ -26,6 +26,7 @@ from tests.factories import (
     PricingOptionFactory,
     ProductFactory,
 )
+from tests.factories.mint import mint
 from tests.helpers.adcp_factories import valid_reporting_webhook
 from tests.helpers.egress_hatches import UNDIALLED_PUBLIC_HTTPS_ORIGIN
 
@@ -57,7 +58,7 @@ def _resolve_date_token(value: str, clock: Any) -> str:
 
 def _future(days: int = 1) -> datetime:
     """Return a timezone-aware datetime N days in the future."""
-    return datetime.now(UTC) + timedelta(days=days)
+    return mint(datetime.now(UTC) + timedelta(days=days))
 
 
 def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
@@ -98,7 +99,7 @@ def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
     # whereas ``media_buy_create._ensure_idempotency_key`` mints a FRESH key per call
     # so ordinary dispatches create independent buys. Merging them would either make
     # every scenario replay or stop the replay scenarios replaying.
-    ctx["request_kwargs"].setdefault("idempotency_key", f"bdd-key-{uuid.uuid4().hex}")
+    ctx["request_kwargs"].setdefault("idempotency_key", mint(f"bdd-key-{uuid.uuid4().hex}"))
 
     # account is REQUIRED on CreateMediaBuyRequest too (create-media-buy-request.json
     # /required), and unlike the key it must RESOLVE: the transport boundary looks the
@@ -2791,7 +2792,7 @@ def given_request_with_proposal_id(ctx: dict, proposal_id: str) -> None:
 def given_request_with_proposal_and_budget(ctx: dict, amount: int) -> None:
     """Set up a create_media_buy request with proposal_id and total_budget."""
     kwargs = _ensure_request_defaults(ctx)
-    kwargs["proposal_id"] = f"prop-{uuid.uuid4().hex[:8]}"
+    kwargs["proposal_id"] = mint(f"prop-{uuid.uuid4().hex[:8]}")
     kwargs["total_budget"] = {"amount": float(amount), "currency": "USD"}
 
 
@@ -2804,7 +2805,7 @@ def given_request_proposal_mode(ctx: dict) -> None:
     from the proposal's product allocations.
     """
     kwargs = _ensure_request_defaults(ctx)
-    kwargs["proposal_id"] = f"prop-{uuid.uuid4().hex[:8]}"
+    kwargs["proposal_id"] = mint(f"prop-{uuid.uuid4().hex[:8]}")
     kwargs["total_budget"] = {"amount": 5000.0, "currency": "USD"}
     # Remove the packages array to signal proposal mode (seller derives packages)
     kwargs.pop("packages", None)

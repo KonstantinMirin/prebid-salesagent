@@ -21,6 +21,7 @@ from src.core.schemas._base import (
     CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
 )
+from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv, json_safe
 from tests.harness.egress import EgressHatchMixin
 from tests.harness.transport import DeliverResult
@@ -86,8 +87,8 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         # underscore in the id (e.g. the "test_tenant" default) fails the
         # AdCP publisher_domain pattern when products resolve property_tags.
         suffix = uuid.uuid4().hex[:10]
-        kwargs.setdefault("tenant_id", f"mbcreate{suffix}")
-        kwargs.setdefault("principal_id", f"agent{suffix}")
+        kwargs.setdefault("tenant_id", mint(f"mbcreate{suffix}"))
+        kwargs.setdefault("principal_id", mint(f"agent{suffix}"))
         super().__init__(**kwargs)
 
     def setup_media_buy_data(self) -> tuple:
@@ -268,7 +269,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             if pkg_count == 0:
                 pkg_count = 1
 
-            media_buy_id = f"mb_{uuid.uuid4().hex[:8]}"
+            media_buy_id = mint(f"mb_{uuid.uuid4().hex[:8]}")
             # adapter_ack, not a bare construction: this stands in for an ad-server
             # adapter's return, and an adapter has no row to read confirmed_at/revision
             # from. Using the same factory production adapters use keeps the fake
@@ -277,7 +278,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
                 media_buy_id=media_buy_id,
                 packages=[
                     {
-                        "package_id": f"pkg_{uuid.uuid4().hex[:8]}",
+                        "package_id": mint(f"pkg_{uuid.uuid4().hex[:8]}"),
                         "product_id": f"prod_{i}",
                         "budget": 5000.0,
                         "status": "active",
@@ -363,7 +364,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         if kwargs.get("idempotency_key") is OMIT_IDEMPOTENCY_KEY:
             kwargs.pop("idempotency_key")
         else:
-            kwargs.setdefault("idempotency_key", f"test-key-{uuid.uuid4().hex}")
+            kwargs.setdefault("idempotency_key", mint(f"test-key-{uuid.uuid4().hex}"))
 
         if kwargs.get("account") is OMIT_ACCOUNT:
             kwargs.pop("account")

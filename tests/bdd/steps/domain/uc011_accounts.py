@@ -32,7 +32,7 @@ from tests.bdd.steps._outcome_helpers import (
     wire_field,
 )
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
-from tests.bdd.steps.generic._dispatch import dispatch_request, dispatch_via_client
+from tests.bdd.steps.generic._dispatch import dispatch_request, dispatch_via_client, gate_and_record
 from tests.bdd.steps.generic._table import as_bool
 from tests.bdd.steps.generic._table import rows as table_rows
 from tests.bdd.steps.generic.then_error import _wire_code
@@ -296,7 +296,7 @@ def _sync_pre_create(ctx: dict, brand_domain: str, operator: str, billing: str, 
             originals["payment_terms"] = extra["payment_terms"]
         # Capture DB-assigned fields from the response
         if hasattr(acct, "account_id"):
-            originals["account_id"] = acct.account_id
+            _capture_server_account_id(ctx, acct.account_id)
         if hasattr(acct, "status"):
             originals["status"] = _status_str(acct.status)
     # Clear response so the next When step's response is fresh
@@ -3576,7 +3576,12 @@ def _persisted_subscribers(ctx: dict, domain: str | None = None) -> list[Any]:
     from src.core.schemas.account import ListAccountsRequest
 
     env = ctx["env"]
-    read_back = env.call_via(ctx["transport"], req=ListAccountsRequest())
+    # Gated and recorded in place, for the reason the docstring above already gives
+    # for not routing through ``dispatch_request``: a read-back reaches a transport
+    # like any other dispatch, but it must not overwrite ctx["result"].
+    read_back_kwargs = {"req": ListAccountsRequest()}
+    gate_and_record(read_back_kwargs)
+    read_back = env.call_via(ctx["transport"], **read_back_kwargs)
     assert read_back.is_success, f"list_accounts read-back failed: {read_back.error!r}"
     listed = read_back.payload
     if domain is not None:
@@ -4413,10 +4418,34 @@ def then_brandless_rejected_validation_error(ctx: dict) -> None:
 
 
 def _existing_account_id(ctx: dict) -> str:
-    """The account_id the ``already exists`` Given captured from its pre-create sync."""
+    """The account_id the ``already exists`` Given captured from its pre-create sync.
+
+    Recorded as run-variant at the CAPTURE sites (:func:`_capture_server_account_id`),
+    not here: four call sites read this id out of ``ctx["original_field_values"]`` and
+    two of them bypass this helper entirely, so minting here covered half the traffic —
+    measured, on the module's own before/after pair.
+    """
     account_id = ctx.get("original_field_values", {}).get("account_id")
     assert account_id, "Given must pre-create an account and capture its account_id in original_field_values"
     return account_id
+
+
+def _capture_server_account_id(ctx: dict, account_id: str) -> None:
+    """Stash a SERVER-GENERATED account_id for a later settings-update entry.
+
+    THE one place a production-minted id enters this module's ctx, which is why the mint
+    record is written here. ``AccountRepository`` generates it as
+    ``f"acc_{uuid4().hex[:12]}"`` (src/core/database/repositories/account.py), so it
+    differs on every run and no FACTORY recorded it — the mint registry's premise is
+    that factories record what they generate, and production is not a factory and must
+    not import a test module. The test-side capture is where the scenario chooses to
+    carry a server-generated value into a later request, so it is where the recording
+    belongs; recording at the READ sites instead missed the two that index
+    ``ctx["original_field_values"]`` directly.
+    """
+    from tests.factories.mint import mint
+
+    ctx.setdefault("original_field_values", {})["account_id"] = mint(account_id)
 
 
 def _dispatch_entry(ctx: dict, entry: dict[str, Any]) -> None:
@@ -4559,7 +4588,7 @@ def when_sync_provision_with_billing_entity(ctx: dict, domain: str, legal_name: 
     )
     resp = payload_or_none(ctx)
     if resp is not None and getattr(resp, "accounts", None):
-        ctx.setdefault("original_field_values", {})["account_id"] = resp.accounts[0].account_id
+        _capture_server_account_id(ctx, resp.accounts[0].account_id)
 
 
 @when(

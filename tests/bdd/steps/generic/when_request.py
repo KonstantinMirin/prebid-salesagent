@@ -10,12 +10,12 @@ Steps store results in ctx:
 from __future__ import annotations
 
 import json
-from typing import Any, cast
+from typing import Any
 
 from pytest_bdd import given, parsers, when
 
 from src.core.schemas import FormatId, ListCreativeFormatsRequest
-from tests.bdd.steps.generic._dispatch import WireCtx, _populate_ctx_from_result, dispatch_request
+from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.harness.transport import Transport
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -42,42 +42,54 @@ def _call(ctx: dict, req: ListCreativeFormatsRequest | None = None) -> None:
 def _call_via(
     ctx: dict, transport: str | Transport, req: ListCreativeFormatsRequest | None = None, **extra: Any
 ) -> None:
-    """Call env.call_via for transport-specific dispatch.
+    """Dispatch through *transport* — an ADAPTER over :func:`dispatch_request`.
 
-    ``extra`` forwards additional flat tool kwargs (e.g. a structured ``filters``
-    dict for list_creatives) straight through to ``env.call_via``; existing
-    callers pass none and are unaffected.
+    The body that used to live here (its own transport map, its own per-transport
+    ``req`` shaping, its own call to ``env.call_via``) is gone. It was the second of
+    three step-level dispatch entries, and being a second entry is what let the
+    malformation gate cover one path of three (salesagent-99w2t) and what would have
+    let a payload capture measure a subset of the traffic. What remains is the
+    signature its six call sites use.
+
+    Three differences went with the fold; each was measured before it was made:
+
+    TRANSPORT. ``dispatch_request`` reads ``ctx['transport']`` through the single
+    normalizer ``_as_transport``, which casefolds and accepts every ``Transport``
+    member; this function took the transport as an ARGUMENT and mapped it with a
+    private, case-sensitive ``{"a2a","mcp","rest"}`` dict. Writing the argument into
+    ``ctx`` is not a translation, it is the truth: of 335 recorded dispatches through
+    this seam, the argument equalled ``ctx['transport']`` in 335, and the seven step
+    functions that passed a LITERAL transport were deleted as unbound in b59d4cbbc.
+    The one caller with no ``ctx['transport']`` at all
+    (``tests/integration/test_harness_wire_response.py``, which builds ``{"env": env}``)
+    means to dispatch through the transport it names, and now says so in the key the
+    normalizer reads.
+
+    ``req`` SHAPING. The MCP branch used to flatten ``req.model_dump(exclude_none=True)``
+    into the kwargs; ``dispatch_request`` forwards ``req=`` unchanged. That is
+    equivalent for both remaining ``req``-passing callers, because both dispatch on
+    ``CreativeFormatsEnv``, whose ``deliver_mcp`` override routes to ``_run_mcp_client``
+    — which pops ``req`` and performs the IDENTICAL ``model_dump(exclude_none=True)``
+    with the same "explicit kwargs win" precedence (tests/harness/_base.py). Deleting
+    the shaping is also what makes the capture transport-INDEPENDENT: with it, the same
+    scenario recorded ``format_ids[].agent_url`` on MCP and ``req.format_ids[].agent_url``
+    on a2a/rest — a different key path and a different value type for 335 events — and
+    ``compare_payloads.py``'s transport-twin tolerance would have been comparing unlike
+    with unlike. The equivalence is PINNED in both halves, because it does NOT hold for
+    an env on the base client-core path (which would send ``{"req": <model>}`` as the
+    MCP arguments): ``tests/unit/test_bdd_dispatch_seam.py`` pins that ``req`` travels
+    whole out of here, and ``tests/integration/test_bdd_dispatch_seam.py`` sends a real
+    ``format_ids`` filter through all three transports and requires the seller to honour
+    it — which it cannot if ``req`` stopped reaching the tool as arguments.
+
+    THE GATE AND THE CAPTURE now run here, which is the point. Predicted cost: zero new
+    failures — all 144 dispatches carrying a top-level ``creatives`` list already arrive
+    through ``dispatch_request`` (salesagent-ryzil.2).
     """
-    if isinstance(transport, Transport):
-        t = transport
-    else:
-        transport_map = {"a2a": Transport.A2A, "mcp": Transport.MCP, "rest": Transport.REST}
-        if transport not in transport_map:
-            raise RuntimeError(f"when_request._call_via: unrecognized wire transport {transport!r}")
-        t = transport_map[transport]
-    env = ctx["env"]
-
-    kwargs: dict[str, Any] = {}
+    ctx["transport"] = transport
     if req is not None:
-        if t == Transport.MCP:
-            kwargs.update(req.model_dump(exclude_none=True))
-        else:
-            kwargs["req"] = req
-    kwargs.update(extra)
-
-    # Route through the SHARED populator, which is the single owner of the
-    # ctx dispatch-result contract. The hand-rolled version here populated a
-    # subset of the six keys: it set error/response/wire_response but omitted
-    # the two error-envelope keys, and (before the secure-fetch branch patched
-    # it locally) ctx["result"] — the key with exactly one producer — which
-    # silently downgraded the wire-first Then steps to the lossy reconstructed
-    # ctx["error"] fallback. Both branches fixed that; delegating keeps ONE
-    # spelling of the contract instead of two that can drift apart again.
-    # The `except Exception: ctx["error"] = exc` that used to wrap this went
-    # with it: hand-stashing an exception is the antipattern the project's BDD
-    # rules forbid, and call_via already returns transport failures as a
-    # TransportResult carrying the real wire envelope.
-    _populate_ctx_from_result(cast("WireCtx", ctx), env.call_via(t, **kwargs))
+        extra["req"] = req
+    dispatch_request(ctx, **extra)
 
 
 def _call_raw(ctx: dict, **payload: Any) -> None:

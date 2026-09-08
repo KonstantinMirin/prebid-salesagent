@@ -47,7 +47,12 @@ def _generate_unique_id(label: str) -> str:
     """
     import uuid
 
-    return f"{label}-{uuid.uuid4().hex[:8]}"
+    from tests.factories.mint import mint
+
+    # A PINNED prefix with a GENERATED suffix ("mb-001-7a693ba8"): the one shape no
+    # value-shaped normalization rule classifies correctly, which is why the mint
+    # site records it instead (tests/factories/mint.py).
+    return mint(f"{label}-{uuid.uuid4().hex[:8]}")
 
 
 def _register_media_buy(ctx: dict, label: str, media_buy: Any) -> None:

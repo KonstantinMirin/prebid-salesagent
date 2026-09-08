@@ -23,6 +23,7 @@ from tests.bdd.steps._outcome_helpers import _get_response_field, payload_or_non
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal, seed_natural_key_matches
 from tests.bdd.steps.generic._create_request import build_create_request_kwargs
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
+from tests.factories.mint import mint
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — request setup and account state
@@ -719,7 +720,7 @@ def when_send_create_media_buy(ctx: dict) -> None:
         from tests.bdd.steps.generic._dispatch import dispatch_request
 
         kwargs = _build_idempotency_request_kwargs(ctx)
-        kwargs["idempotency_key"] = f"uc002-manual-{uuid.uuid4().hex}"
+        kwargs["idempotency_key"] = mint(f"uc002-manual-{uuid.uuid4().hex}")
         account_ref = ctx.get("account_ref")
         if account_ref is not None:
             kwargs["account"] = account_ref.model_dump(mode="json", exclude_none=True)

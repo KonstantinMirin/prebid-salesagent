@@ -3674,7 +3674,9 @@ def _generate_unique_id(label: str) -> str:
     """Generate a unique media_buy_id from a Gherkin label."""
     import uuid
 
-    return f"{label}-{uuid.uuid4().hex[:8]}"
+    from tests.factories.mint import mint
+
+    return mint(f"{label}-{uuid.uuid4().hex[:8]}")
 
 
 def _register_media_buy_label(ctx: dict, label: str, real_id: str) -> None:

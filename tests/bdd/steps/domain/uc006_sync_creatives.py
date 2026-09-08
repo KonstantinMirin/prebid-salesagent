@@ -97,7 +97,9 @@ def _e2e_unique_id(prefix: str) -> str:
     """
     import uuid
 
-    return f"{prefix}_{uuid.uuid4().hex[:8]}"
+    from tests.factories.mint import mint
+
+    return mint(f"{prefix}_{uuid.uuid4().hex[:8]}")
 
 
 # ═══════════════════════════════════════════════════════════════════════

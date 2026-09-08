@@ -27,6 +27,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
+from tests.factories.mint import mint
 from tests.factories.webhook import PushNotificationConfigRequestFactory
 from tests.harness._mixins import LocalOriginMixin
 from tests.harness.media_buy_dual import MediaBuyDualEnv
@@ -201,9 +202,9 @@ class MediaBuyPushRegistrationEnv(LocalOriginMixin, MediaBuyDualEnv):
             # Spread, not keywords: an ``overrides`` carrying ``start_time`` must
             # OVERRIDE it, not raise "got multiple values for keyword argument".
             **{
-                "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
-                "end_time": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
-                "idempotency_key": f"fo99-{uuid.uuid4().hex}",
+                "start_time": mint((datetime.now(UTC) + timedelta(days=1)).isoformat()),
+                "end_time": mint((datetime.now(UTC) + timedelta(days=30)).isoformat()),
+                "idempotency_key": mint(f"fo99-{uuid.uuid4().hex}"),
                 **overrides,
             },
         )
