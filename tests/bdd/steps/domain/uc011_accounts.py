@@ -2041,8 +2041,16 @@ def then_no_accounts_modified(ctx: dict) -> None:
         "No last_sync_accounts recorded — the When that dispatched the sync must record the "
         "entries it sent, or this step cannot tell which accounts must not exist"
     )
-    domains = {a["brand"]["domain"] for a in requested if (a.get("brand") or {}).get("domain")}
-    assert domains, f"The dispatched sync named no brand domain, so there is nothing to check: {requested!r}"
+    # Element-level, not `assert domains`: sync-accounts-request.json REQUIRES brand.domain
+    # on every entry, so an entry without one is not a case to skip — it means the When
+    # recorded something the pin would refuse, and the set built from it would silently be
+    # the wrong denominator for the leak check below.
+    missing = [i for i, a in enumerate(requested) if not (a.get("brand") or {}).get("domain")]
+    assert missing == [], (
+        f"Dispatched sync entries {missing} carry no brand.domain, which the pin requires — "
+        f"the recorded request is not one the seller could have accepted: {requested!r}"
+    )
+    domains = {a["brand"]["domain"] for a in requested}
 
     # Unscoped by tenant on purpose: the caller was never identified, so no tenant is
     # theirs, and "created nothing anywhere" is the honest reading of the obligation.
