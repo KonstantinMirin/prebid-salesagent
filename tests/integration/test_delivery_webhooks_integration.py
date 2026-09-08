@@ -349,37 +349,6 @@ async def test_dont_call_get_media_buy_delivery_tool_unless_media_buy_start_date
 
 @pytest.mark.requires_db
 @pytest.mark.asyncio
-async def test_call_get_media_buy_delivery_for_ended_campaign(integration_db):
-    """Test webhook behavior for ended campaigns."""
-    tenant_id, principal_id = _create_test_tenant_and_principal()
-
-    # Ended yesterday
-    yesterday = datetime.now(UTC).date() - timedelta(days=1)
-    start_date = yesterday - timedelta(days=7)
-
-    _create_basic_media_buy_with_webhook(tenant_id, principal_id, start_date=start_date, end_date=yesterday)
-
-    scheduler = DeliveryWebhookScheduler()
-
-    async def fake_send_notification(*args, **kwargs):
-        return True
-
-    with patch.object(scheduler.webhook_service, "send_notification", new_callable=AsyncMock) as mock_send:
-        await scheduler._send_reports()
-
-        # It should send a report because status is active in DB
-        assert mock_send.call_count == 1
-
-        # With current implementation, dynamic status="completed" -> filtered out of active list -> empty deliveries
-        args, kwargs = mock_send.call_args
-        payload = kwargs.get("payload")
-        result = payload.result
-        # Just verify result structure is valid
-        assert result is not None
-
-
-@pytest.mark.requires_db
-@pytest.mark.asyncio
 async def test_scheduler_status_filter_includes_completed_campaigns(integration_db):
     """Regression: scheduler delivery query must include ended (completed) campaigns.
 

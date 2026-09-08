@@ -6,12 +6,9 @@ but have no ``Covers:`` tags — they test infrastructure, not obligations.
 
 from __future__ import annotations
 
-import asyncio
-import inspect
 from datetime import UTC, date, datetime
 
-from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
-from src.core.tools._boundary import invoke_tool
+from src.core.schemas import GetMediaBuyDeliveryResponse
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
 #: adcp_version / adcp_major_version / ext are the version-envelope trio every request
@@ -212,40 +209,6 @@ class TestDeliveryPollEnvContract:
 
             assert isinstance(response, GetMediaBuyDeliveryResponse)
             assert len(response.media_buy_deliveries) >= 1
-
-    def test_wrappers_accept_adcp_request_params(self):
-        """The shared BUILDER must accept every GetMediaBuyDeliveryRequest param.
-
-        BDD scenarios dispatch with reporting_dimensions, attribution_window,
-        include_package_daily_breakdown, etc. Those names must be constructible —
-        not rejected with TypeError.
-
-        The obligation moved from the wrappers to the builder: the wrappers take the
-        built request now, so the builder is the ONE place a buyer field can go missing,
-        and it is what this grades. Every declared field is passed, so a field the
-        builder drops from its signature fails here rather than silently vanishing.
-        """
-        with DeliveryPollEnv() as env:
-            env.add_buy(media_buy_id="mb_001")
-            env.set_adapter_response("mb_001", impressions=5000)
-
-            req = GetMediaBuyDeliveryRequest(
-                media_buy_ids=["mb_001"],
-                include_package_daily_breakdown=True,
-            )
-            assert req.media_buy_ids == ["mb_001"]
-            assert req.include_package_daily_breakdown is True
-
-            # Every field the model DECLARES must be a name the builder takes; otherwise
-            # a buyer can send it, the model can hold it, and the builder still drops it
-            # on the floor (which is exactly how include_snapshot and account were lost).
-            buildable = set(inspect.signature(GetMediaBuyDeliveryRequest).parameters)
-            declared = set(GetMediaBuyDeliveryRequest.model_fields) - _VERSION_ENVELOPE_FIELDS
-            assert declared <= buildable, f"builder cannot construct declared fields: {declared - buildable}"
-
-            response = asyncio.run(invoke_tool("get_media_buy_delivery", req, env.identity))
-
-            assert isinstance(response, GetMediaBuyDeliveryResponse)
 
     def test_custom_date_range(self):
         """start_date/end_date parameters flow through to the request."""

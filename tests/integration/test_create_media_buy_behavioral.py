@@ -1968,13 +1968,9 @@ class TestPostconditionObligations:
 class TestUpgradeObligations:
     """3.6 upgrade boundary field propagation tests."""
 
-    def test_buyer_campaign_ref_rejected_in_strict_mode(self):
-        """buyer_campaign_ref is no longer in the AdCP spec (removed in 3.12).
-
-        Covers: UC-002-UPG-01
-        """
-        with pytest.raises(ValidationError, match="buyer_campaign_ref"):
-            _make_request(buyer_campaign_ref="CAMP-2024-Q1")
+    # test_buyer_campaign_ref_rejected_in_strict_mode is RETIRED:
+    # create-media-buy-request.json declares additionalProperties: true, so the test
+    # asserted a dev-only policy as if it were the spec.
 
     def test_ext_field_carries_custom_data(self):
         """ext field can carry buyer_campaign_ref as custom extension data.
