@@ -1430,7 +1430,9 @@ def load_hook_module(name: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def collect_bdd_node_ids_with_e2e_enabled(target: str, *, timeout: int = 300) -> list[str]:
+def collect_bdd_node_ids_with_e2e_enabled(
+    target: str, *, randomly_seed: int | None = None, timeout: int = 300
+) -> list[str]:
     """Collect pytest node ids under *target* with BDD_E2E_ENABLED=true.
 
     Shared by the e2e_rest known-failures ledger fitness function and any
@@ -1438,7 +1440,16 @@ def collect_bdd_node_ids_with_e2e_enabled(target: str, *, timeout: int = 300) ->
     same subprocess invocation, same env, same flags (-n0 satisfies the
     BDD_E2E_ENABLED xdist guard; addopts is cleared so -q prints bare
     nodeids).
+
+    *randomly_seed* selects the collection ORDER. The default (``None``)
+    disables pytest-randomly, which is what a caller asserting "this scenario
+    is collected" wants: one stable order. A caller asserting that collection
+    does not DEPEND on order passes two different seeds and compares — the
+    suite runs with pytest-randomly live and a fresh seed per run
+    (``tox.ini`` [testenv:bdd_inprocess] does not pass ``-p no:randomly``), so
+    order-sensitive collection shows up there as a per-run flap.
     """
+    order = ["-p", "no:randomly"] if randomly_seed is None else ["-p", "randomly", f"--randomly-seed={randomly_seed}"]
     proc = subprocess.run(
         [
             sys.executable,
@@ -1449,8 +1460,7 @@ def collect_bdd_node_ids_with_e2e_enabled(target: str, *, timeout: int = 300) ->
             "-q",
             "-o",
             "addopts=",
-            "-p",
-            "no:randomly",
+            *order,
             "-n0",
         ],
         cwd=repo_root(),
