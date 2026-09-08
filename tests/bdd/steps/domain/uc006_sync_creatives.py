@@ -3630,7 +3630,20 @@ def then_workflow_step_has_status(ctx: dict, expected: str) -> None:
 
 @given("a creative with any format_id")
 def given_creative_with_any_format(ctx: dict) -> None:
-    """Set up a creative with an arbitrary format_id (format check is irrelevant)."""
+    """A creative whose own format is deliberately UNCONSTRAINED.
+
+    The two scenarios on this sentence — BR-RULE-039 INV-3 (empty product
+    format_ids allows all formats) and INV-6 (no product_id skips the check) —
+    grade the PRODUCT side of format compatibility. The creative's format is the
+    part that must not matter, so the arrangement here is the plain known-format
+    creative and nothing else.
+
+    Deliberately NOT registering the format with the creative agent, which is what
+    separates this from its two neighbours: arranging an agent-served format would
+    establish a property these scenarios are asserting the absence of a dependence
+    on, and a later reader would not be able to tell which of the two the pass
+    depended on.
+    """
     given_creative_with_format(ctx)
 
 
@@ -4854,7 +4867,32 @@ def given_no_gemini_api_key(ctx: dict) -> None:
 @given("a creative with a known HTTP-based format_id")
 @given("a creative with a known HTTP-registered format_id")
 def given_creative_with_known_http_format(ctx: dict) -> None:
-    """Set up a creative with a known format_id backed by an HTTP agent."""
+    """A creative whose format the registry SERVES, over a dialled HTTP agent_url.
+
+    The sentence names two properties and this step now arranges both instead of
+    inheriting them. KNOWN: ``configure_agent_served_creative`` puts the format in
+    the listing ``_processing.py`` searches, so ``find_format`` resolves it and
+    production enters the agent-backed branch that T-UC-006-rule-035-static grades
+    ("validated by the creative agent", "preview URLs should be generated").
+    Delegating to the plain known-format Given did NOT arrange that: the harness
+    default leaves ``run_async`` returning ``[]``, ``find_format`` returns None, and
+    the agent-backed branch is skipped entirely — so the scenario asserted a preview
+    that production had no path to produce.
+
+    HTTP-BASED: asserted rather than assumed, because it is the discriminator
+    against this outline's sibling row ``a creative with an adapter (non-HTTP)
+    format_id``. Production splits on ``is_dialled_agent_url`` (_validation.py:124),
+    so the same predicate decides it here — an ``adapter://`` DEFAULT_AGENT_URL would
+    silently turn this row into a duplicate of its sibling.
+    """
+    from src.core.format_resolver import is_dialled_agent_url
+
+    env = ctx["env"]
+    fmt = env.configure_agent_served_creative(generative=False, format_id="display_300x250")
+    assert is_dialled_agent_url(fmt["agent_url"]), (
+        f"this sentence promises an HTTP-based format, but the agent_url is {fmt['agent_url']!r}, "
+        "which production classifies as an adapter format and exempts from external validation"
+    )
     given_creative_with_format(ctx)
 
 
@@ -5006,11 +5044,22 @@ def _assert_generative_build(ctx: dict, prompt_source: str) -> None:
 @given("a creative with no output_format_ids")
 @given("a creative with a static format (no output_format_ids)")
 def given_creative_no_output_format_ids(ctx: dict) -> None:
-    """Set up a creative with a static format (no output_format_ids).
+    """A creative whose format is REGISTERED and carries an empty output_format_ids.
 
-    Uses the default registry mock which returns a format without
-    output_format_ids, so the creative is classified as static.
+    ``configure_agent_served_creative(generative=False, ...)`` is the single place
+    that decides what "static" means — it sets ``output_format_ids = []``, which is
+    exactly what ``format_resolver.is_generative`` reads — so this step states the
+    precondition instead of hoping for it.
+
+    It previously said it "uses the default registry mock which returns a format
+    without output_format_ids". That was not what happened. The default leaves
+    ``run_async`` returning ``[]``, so ``find_format`` resolves NOTHING and
+    ``_processing.py:329`` never reaches the generative/static split at all. The row
+    "static creative (no output_format_ids) -> processed without generative build"
+    was therefore passing on a request that had no format to classify, which is a
+    weaker fact than the one it claims and is true of an unknown format too.
     """
+    ctx["env"].configure_agent_served_creative(generative=False, format_id="display_300x250")
     given_creative_with_format(ctx)
 
 
