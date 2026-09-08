@@ -32,6 +32,7 @@ from src.core.schemas import (
     ReportingPeriod,
 )
 from src.core.schemas.product import ProductFilters
+from tests.helpers.delivery_pricing import package_pricing_fields
 
 # ---------------------------------------------------------------------------
 # Enum completeness
@@ -82,7 +83,15 @@ class TestDeliveryTypeEnum:
 
 class TestDeliveryTotalsFields:
     def test_round_trip(self):
-        data = {"impressions": 1000, "spend": 5.0, "conversions": 12, "viewability": 0.85}
+        # viewability is an OBJECT in delivery-metrics.json, not the bare rate the
+        # hand-written model used to take: viewable_rate is one field of it, alongside the
+        # measurable_impressions denominator the pin says that rate is computed over.
+        data = {
+            "impressions": 1000,
+            "spend": 5.0,
+            "conversions": 12,
+            "viewability": {"measurable_impressions": 900, "viewable_impressions": 765, "viewable_rate": 0.85},
+        }
         obj = DeliveryTotals(**data)
         dumped = obj.model_dump()
         reconstructed = DeliveryTotals(**dumped)
@@ -119,24 +128,23 @@ class TestDailyBreakdownFields:
 
 
 class TestMediaBuyDeliveryDataFields:
-    def test_ext_defaults_to_empty_dict(self):
-        obj = MediaBuyDeliveryData(
-            media_buy_id="buy_1",
-            status="active",
-            totals=DeliveryTotals(impressions=0, spend=0),
-            by_package=[],
-        )
-        assert obj.ext == {}
+    # ``test_ext_defaults_to_empty_dict`` and ``test_pricing_options_present`` are RETIRED.
+    #
+    # Both graded fields of the hand-written model that the pin does not declare on a
+    # media_buy_deliveries item -- its properties are media_buy_id, status, totals,
+    # by_package, daily_breakdown, windows, pricing_model, is_final, is_adjusted,
+    # finalized_at, expected_availability -- and both were removed when the model started
+    # extending the library type (critical pattern #1). Asserting a seller-invented field
+    # is present is the inverse of the contract these tests exist to pin.
 
-    def test_pricing_options_present(self):
+    def test_minimal_construction(self):
         obj = MediaBuyDeliveryData(
             media_buy_id="buy_1",
             status="active",
-            pricing_options=[{"id": "po_1", "model": "cpm"}],
             totals=DeliveryTotals(impressions=0, spend=0),
             by_package=[],
         )
-        assert obj.pricing_options == [{"id": "po_1", "model": "cpm"}]
+        assert (obj.media_buy_id, obj.status, obj.by_package) == ("buy_1", "active", [])
 
 
 class TestReportingPeriodFields:
@@ -210,7 +218,9 @@ def _make_delivery_response(**overrides):
                 "media_buy_id": "buy_1",
                 "status": "active",
                 "totals": {"impressions": 1000, "spend": 5.0},
-                "by_package": [{"package_id": "pkg_1", "impressions": 1000, "spend": 5.0}],
+                # pricing_model/rate/currency are in the by_package item's `required` set
+                # and are non-nullable, so a minimal entry still carries all three.
+                "by_package": [{"package_id": "pkg_1", "impressions": 1000, "spend": 5.0, **package_pricing_fields()}],
             }
         ],
     }
