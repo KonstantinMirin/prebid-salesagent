@@ -7,6 +7,24 @@ UC-002 (create_media_buy) — same resolve_account(), same exceptions.
 Steps dispatch through CreativeSyncEnv which exercises sync_creatives wrappers
 (MCP/A2A/REST) that call enrich_identity_with_account() → resolve_account().
 
+HOW A CREATIVE IS BUILT HERE, because the next step written in this file will copy
+whatever it finds. Every creative item goes through
+``CreativeAssetRequestFactory.payload()`` — the REQUEST model's factory, never a
+hand-typed dict and never ``CreativeAssetFactory``, which builds the RESPONSE model.
+Three rules follow from its override contract (tests/factories/request.py):
+
+* ``format_id`` is ALWAYS stated. The factory's default normalises ``AGENT_URL`` to
+  a trailing slash and names ``creative.adcontextprotocol.org``, while these
+  scenarios talk to ``env.DEFAULT_AGENT_URL`` — inheriting it would silently change
+  WHICH creative agent the payload names.
+* ``assets`` is stated only when it differs from the conformant baseline. A step
+  that says nothing about assets means "any valid asset will do", which is exactly
+  what the baseline supplies.
+* A deliberate wrongness is an OVERRIDE plus a declaration: ``assets=OMIT`` /
+  ``format_id=None`` for the bytes, ``malformed(kind, why, ..., pin_rejects=...)``
+  around them for the claim. Dropping the override lets a factory default repair the
+  scenario, and ``assert_declared_malformations`` reports that at dispatch.
+
 """
 
 from __future__ import annotations
@@ -140,12 +158,12 @@ def given_creative_with_format(ctx: dict) -> None:
 
     format_id, agent_url, assets = _format_payload(ctx, env)
     creative_id = "creative-known-fmt-001"
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": "Test Creative with Known Format",
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": assets,
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name="Test Creative with Known Format",
+        format_id={"id": format_id, "agent_url": agent_url},
+        assets=assets,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
     ctx["creative_agent_url"] = agent_url
@@ -525,12 +543,12 @@ def given_creative_with_name_and_format(ctx: dict, name: str) -> None:
 
     format_id, agent_url, assets = _format_payload(ctx, env)
     creative_id = f"creative-{name.lower().replace(' ', '-')}-001"
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": name,
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": assets,
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name=name,
+        format_id={"id": format_id, "agent_url": agent_url},
+        assets=assets,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
 
@@ -834,12 +852,11 @@ def given_creative_with_specific_format(ctx: dict, creative_format: str) -> None
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     creative_id = "creative-fmt-partition-001"
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": "Test Creative (format partition)",
-        "format_id": {"id": creative_format, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name="Test Creative (format partition)",
+        format_id={"id": creative_format, "agent_url": env.DEFAULT_AGENT_URL},
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = creative_format
     ctx["creative_id"] = creative_id
@@ -1868,12 +1885,14 @@ def given_creative_with_unknown_format(ctx: dict) -> None:
 
     format_id = "nonexistent_format_999"
     creative_id = "creative-unknown-fmt-001"
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": "Unknown Format Creative",
-        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name="Unknown Format Creative",
+        # Well-formed but unknown: the pin ACCEPTS this id (it satisfies
+        # FormatId.id's pattern), so the wrongness is a registry miss downstream
+        # and there is nothing here to declare malformed.
+        format_id={"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
 
@@ -1897,12 +1916,11 @@ def given_creative_with_unreachable_agent(ctx: dict) -> None:
 
     format_id = "display_300x250"
     creative_id = "creative-unreachable-001"
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": "Unreachable Agent Creative",
-        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name="Unreachable Agent Creative",
+        format_id={"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
 
@@ -2611,12 +2629,12 @@ def given_creative_not_in_library(ctx: dict) -> None:
     env = ctx["env"]
     _ensure_tenant_principal_from_db(ctx, env)
     format_id, agent_url, assets = _format_payload(ctx, env)
-    creative_payload = {
-        "creative_id": "creative-new-no-db-001",
-        "name": "Brand New Creative",
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": assets,
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-new-no-db-001",
+        name="Brand New Creative",
+        format_id={"id": format_id, "agent_url": agent_url},
+        assets=assets,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
 
 
@@ -2630,12 +2648,15 @@ def given_creative_with_empty_name(ctx: dict) -> None:
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     format_id, agent_url, assets = _format_payload(ctx, env)
-    creative_payload = {
-        "creative_id": "creative-empty-name-001",
-        "name": "",
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": assets,
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-empty-name-001",
+        # An empty name is CONFORMANT to the pin — its wrongness is production's
+        # CREATIVE_NAME_EMPTY, downstream of validation — so it takes no
+        # malformation declaration. See tests/factories/malformed.py's asymmetry.
+        name="",
+        format_id={"id": format_id, "agent_url": agent_url},
+        assets=assets,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
 
@@ -2669,12 +2690,11 @@ def given_creative_format_id_empty_name(ctx: dict) -> None:
     """Set up a creative with a valid format_id but empty name — boundary case."""
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    creative_payload = {
-        "creative_id": "creative-fmt-empty-name-001",
-        "name": "",
-        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-fmt-empty-name-001",
+        name="",
+        format_id={"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = "display_300x250"
 
@@ -2753,12 +2773,12 @@ def _build_creative_payload(ctx: dict, *, provenance: dict | None = None) -> dic
     ensure_tenant_principal(ctx, env)
     format_id, agent_url, assets = _format_payload(ctx, env)
     creative_id = f"creative-provenance-{'with' if provenance else 'without'}-001"
-    payload: dict = {
-        "creative_id": creative_id,
-        "name": "Provenance Test Creative",
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": assets,
-    }
+    payload: dict = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name="Provenance Test Creative",
+        format_id={"id": format_id, "agent_url": agent_url},
+        assets=assets,
+    )
     if provenance is not None:
         payload["provenance"] = provenance
     ctx.setdefault("creatives", []).append(payload)
@@ -3408,15 +3428,15 @@ def given_generative_creative_served_by_agent(ctx: dict) -> None:
     fmt = env.setup_generative_build(format_id="gen_banner")
     creative_id = "creative-generative-001"
     ctx.setdefault("creatives", []).append(
-        {
-            "creative_id": creative_id,
-            "name": "Generative Creative",
-            "format_id": fmt,
+        CreativeAssetRequestFactory.payload(
+            creative_id=creative_id,
+            name="Generative Creative",
+            format_id=fmt,
             # Built through the canonical AssetSpec mechanism, never hand-rolled:
             # 3.1 assets are a discriminated union keyed by role, and a hand-built
             # dict misses the asset_type discriminator (GH #1391).
-            "assets": build_assets(text_spec("prompt", content="a headline about running shoes")),
-        }
+            assets=build_assets(text_spec("prompt", content="a headline about running shoes")),
+        )
     )
     ctx["creative_format_id"] = fmt["id"]
     ctx["creative_agent_url"] = fmt["agent_url"]
@@ -3470,12 +3490,12 @@ def given_creative_reaching_the_agent(ctx: dict, creative_state: str, format_kin
 
     creative_id = f"creative-{creative_state}-{format_kind}-001"
     ctx.setdefault("creatives", []).append(
-        {
-            "creative_id": creative_id,
-            "name": "Agent-served Creative",
-            "format_id": fmt,
-            "assets": build_assets(text_spec("prompt", content="a headline about running shoes")),
-        }
+        CreativeAssetRequestFactory.payload(
+            creative_id=creative_id,
+            name="Agent-served Creative",
+            format_id=fmt,
+            assets=build_assets(text_spec("prompt", content="a headline about running shoes")),
+        )
     )
     ctx["creative_format_id"] = fmt["id"]
     ctx["creative_agent_url"] = fmt["agent_url"]
@@ -3847,12 +3867,14 @@ def given_creative_with_format_agent_url(ctx: dict, agent_url: str) -> None:
     ensure_tenant_principal(ctx, env)
     format_id = ctx.get("creative_format_id", "display_300x250")
     creative_id = "creative-url-norm-001"
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": "URL Normalization Creative",
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name="URL Normalization Creative",
+        # The un-normalised agent_url from the scenario row is the subject here, and
+        # payload() overrides reach the wire verbatim — build() would route it
+        # through the model and normalise away the very thing under test.
+        format_id={"id": format_id, "agent_url": agent_url},
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
     ctx["creative_agent_url"] = agent_url
@@ -4022,16 +4044,16 @@ def given_creative_with_provenance_source_type(ctx: dict, source_type: str) -> N
     ensure_tenant_principal(ctx, env)
     format_id = "display_300x250"
     creative_id = "creative-provenance-source-001"
-    payload: dict = {
-        "creative_id": creative_id,
-        "name": "Provenance Source Type Creative",
-        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        "provenance": {"digital_source_type": source_type},
-        "assets": build_assets(image_spec("image", url="https://example.com/banner.png")),
-    }
+    payload: dict = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name="Provenance Source Type Creative",
+        format_id={"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
+        # ADDING a real field, not perturbing one: provenance is declared on
+        # CreativeAssetRequest, so extra="forbid" would catch a typo here.
+        provenance={"digital_source_type": source_type},
+    )
     ctx.setdefault("creatives", []).append(payload)
     ctx["creative_format_id"] = format_id
-    ctx["creative_provenance_source_type"] = source_type
 
 
 @given(parsers.parse('an asset within the creative declaring digital_source_type "{source_type}"'))
@@ -4293,12 +4315,11 @@ def when_sync_specific_creative(ctx: dict, creative_id: str) -> None:
     """Sync a specific creative by ID (uses the authenticated principal from ctx)."""
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": f"Synced creative {creative_id}",
-        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name=f"Synced creative {creative_id}",
+        format_id={"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     dispatch_request(ctx, creatives=ctx["creatives"])
 
@@ -4353,18 +4374,21 @@ def given_two_creatives_one_valid_one_empty_name(ctx: dict) -> None:
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     format_id, agent_url, assets = _format_payload(ctx, env)
-    valid_payload = {
-        "creative_id": "creative-valid-001",
-        "name": "Valid Creative",
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": assets,
-    }
-    invalid_payload = {
-        "creative_id": "creative-invalid-empty-name",
-        "name": "",
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": assets,
-    }
+    valid_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-valid-001",
+        name="Valid Creative",
+        format_id={"id": format_id, "agent_url": agent_url},
+        assets=assets,
+    )
+    # "invalid" to PRODUCTION, not to the pin: an empty name is schema-conformant
+    # and fails per-creative validation, which is what makes the pair grade a
+    # partial success rather than a whole-request refusal.
+    invalid_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-invalid-empty-name",
+        name="",
+        format_id={"id": format_id, "agent_url": agent_url},
+        assets=assets,
+    )
     ctx["creatives"] = [valid_payload, invalid_payload]
     ctx["valid_creative_id"] = "creative-valid-001"
     ctx["invalid_creative_id"] = "creative-invalid-empty-name"
@@ -4449,15 +4473,13 @@ def given_creative_with_adapter_format(ctx: dict) -> None:
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     format_id = "adapter_display_300x250"
-    creative_payload = {
-        "creative_id": "creative-adapter-fmt-001",
-        "name": "Adapter Format Creative",
-        "format_id": {"id": format_id, "agent_url": "adapter://local-gam"},
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-adapter-fmt-001",
+        name="Adapter Format Creative",
+        format_id={"id": format_id, "agent_url": "adapter://local-gam"},
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
-    ctx["adapter_format"] = True
 
 
 @then("the creative should be processed without external agent validation")
@@ -4526,12 +4548,11 @@ def given_creative_with_agent_url_and_format(ctx: dict, agent_url: str, format_i
     """Set up a creative with a specific agent_url and format_id."""
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    creative_payload = {
-        "creative_id": "creative-fmt-match-001",
-        "name": "Format Match Creative",
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-fmt-match-001",
+        name="Format Match Creative",
+        format_id={"id": format_id, "agent_url": agent_url},
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
     ctx["creative_agent_url"] = agent_url
@@ -4808,15 +4829,14 @@ def given_creative_with_generative_format(ctx: dict) -> None:
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    creative_payload = {
-        "creative_id": "creative-generative-001",
-        "name": "Generative Creative",
-        "format_id": fmt,
-        "assets": build_assets(text_spec("message", content="Generate a banner ad for summer sale")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-generative-001",
+        name="Generative Creative",
+        format_id=fmt,
+        assets=build_assets(text_spec("message", content="Generate a banner ad for summer sale")),
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
 
 
 @given("the Seller Agent does not have GEMINI_API_KEY configured")
@@ -4872,7 +4892,6 @@ def given_creative_with_no_format_id(ctx: dict) -> None:
         pin_rejects=True,
     )
     ctx.setdefault("creatives", []).append(creative_payload)
-    ctx["creative_no_format"] = True
 
 
 @given("a creative with a format_id unknown to all agents")
@@ -4893,12 +4912,11 @@ def given_creative_empty_name_known_format(ctx: dict) -> None:
     """Set up a creative with an empty name and a known format_id."""
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    creative_payload = {
-        "creative_id": "creative-empty-name-001",
-        "name": "",
-        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-empty-name-001",
+        name="",
+        format_id={"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = "display_300x250"
 
@@ -4994,7 +5012,6 @@ def given_creative_no_output_format_ids(ctx: dict) -> None:
     output_format_ids, so the creative is classified as static.
     """
     given_creative_with_format(ctx)
-    ctx["generative_creative"] = False
 
 
 @given("a creative with output_format_ids present")
@@ -5003,18 +5020,29 @@ def given_creative_output_format_ids_present(ctx: dict) -> None:
 
     Delegates to the existing generative format setup but does NOT add
     assets — prompt source is controlled by the next Given step.
+
+    ``assets=OMIT`` states that absence rather than leaving it to happen: the
+    factory HAS a conformant assets default, so dropping the line would put an
+    image asset in a creative whose whole point is that its prompt source is
+    chosen later. NOT declared ``malformed``, and that is measured rather than
+    assumed — the pin does reject an absent ``assets``, but every scenario using
+    this sentence follows it with a step that writes the key
+    (``message asset with prompt text``, ``no prompt assets or inputs``,
+    ``message asset but no GEMINI_API_KEY``; feature lines 894-896), so the
+    DISPATCHED item is conformant. ``malformed(..., pin_rejects=True)`` here would
+    be graded against the dispatched bytes and reported as REPAIRED.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    creative_payload = {
-        "creative_id": "creative-generative-part-001",
-        "name": "Generative Partition Creative",
-        "format_id": fmt,
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-generative-part-001",
+        name="Generative Partition Creative",
+        format_id=fmt,
+        assets=OMIT,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
 
 
 @given("a creative with output_format_ids present (create)")
@@ -5023,19 +5051,22 @@ def given_creative_output_format_ids_present_create(ctx: dict) -> None:
 
     Same as output_format_ids present but explicitly a new creative_id
     so production takes the create path where name fallback applies.
+
+    ``assets=OMIT`` for the reason given on ``given_creative_output_format_ids_present``:
+    the absence is deliberate and the next Given writes the key, so the dispatched
+    item is conformant and no malformation is declared.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    creative_payload = {
-        "creative_id": "creative-generative-create-001",
-        "name": "My Summer Campaign Banner",
-        "format_id": fmt,
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-generative-create-001",
+        name="My Summer Campaign Banner",
+        format_id=fmt,
+        assets=OMIT,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
-    ctx["generative_create_path"] = True
 
 
 @given("any assets")
@@ -5131,15 +5162,14 @@ def given_creative_generative_with_prompt(ctx: dict) -> None:
     ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
     asset_prompt = "Design a responsive ad for holiday promotion"
-    creative_payload = {
-        "creative_id": "creative-gen-prompt-001",
-        "name": "Generative With Prompt",
-        "format_id": fmt,
-        "assets": build_assets(text_spec("message", content=asset_prompt)),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-gen-prompt-001",
+        name="Generative With Prompt",
+        format_id=fmt,
+        assets=build_assets(text_spec("message", content=asset_prompt)),
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
     ctx["expected_asset_prompt"] = asset_prompt
 
 
@@ -5153,16 +5183,17 @@ def given_new_creative_generative_no_prompt_with_name(ctx: dict) -> None:
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    creative_payload = {
-        "creative_id": "creative-gen-name-fallback-001",
-        "name": "Summer Sale Banner",
-        "format_id": fmt,
-        "assets": {},
-    }
+    # assets={}, not OMIT: an EMPTY assets object is what the scenario means by "no
+    # prompt", and the pin accepts it — so this is a conformant payload whose
+    # wrongness is downstream, not a malformation.
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-gen-name-fallback-001",
+        name="Summer Sale Banner",
+        format_id=fmt,
+        assets={},
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
-    ctx["generative_create_path"] = True
 
 
 @given("a creative with a generative format but GEMINI_API_KEY not configured")
@@ -5178,15 +5209,14 @@ def given_creative_generative_no_gemini(ctx: dict) -> None:
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
     # Now remove the key — setup_generative_build sets it, we override
     env.mock["config"].return_value.gemini_api_key = None
-    creative_payload = {
-        "creative_id": "creative-gen-no-key-001",
-        "name": "Generative No Key",
-        "format_id": fmt,
-        "assets": build_assets(text_spec("message", content="Generate a banner ad")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-gen-no-key-001",
+        name="Generative No Key",
+        format_id=fmt,
+        assets=build_assets(text_spec("message", content="Generate a banner ad")),
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -5266,15 +5296,13 @@ def given_creative_format_with_output_format_ids(ctx: dict) -> None:
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    creative_payload = {
-        "creative_id": "creative-gen-inv1-001",
-        "name": "Generative Detection Test",
-        "format_id": fmt,
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-gen-inv1-001",
+        name="Generative Detection Test",
+        format_id=fmt,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
 
 
 @given("GEMINI_API_KEY is configured")
@@ -5293,21 +5321,26 @@ def given_generative_creative_with_asset_role(ctx: dict, role: str, content: str
     """Set up a generative creative with a specific asset role containing prompt text.
 
     INV-2: prompt found in assets (message/brief/prompt role) -> that text used as build prompt.
+
+    The asset goes through ``text_spec`` rather than being written as
+    ``{role: {"content": content}}``: that hand-built form carries no
+    ``asset_type`` discriminator, and ``CreativeAssetRequest`` rejects it with
+    ``assets.<role>.AssetVariant Unable to extract tag using discriminator
+    'asset_type' [type=union_tag_not_found]``. The scenario's subject is WHICH
+    text becomes the build prompt, never the missing discriminator, so this is a
+    defect fixed rather than a malformation declared (GH #1391).
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    creative_payload = {
-        "creative_id": "creative-gen-inv2-001",
-        "name": "Generative Prompt From Assets",
-        "format_id": fmt,
-        "assets": {
-            role: {"content": content},
-        },
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-gen-inv2-001",
+        name="Generative Prompt From Assets",
+        format_id=fmt,
+        assets=build_assets(text_spec(role, content=content)),
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
 
 
 @given(
@@ -5324,16 +5357,17 @@ def given_generative_creative_with_context_description(ctx: dict, description: s
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    creative_payload = {
-        "creative_id": "creative-gen-inv3-001",
-        "name": "Generative Context Description",
-        "format_id": fmt,
-        "assets": {},
-        "inputs": [{"name": "default", "context_description": description}],
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-gen-inv3-001",
+        name="Generative Context Description",
+        format_id=fmt,
+        assets={},
+        # inputs is a declared CreativeAssetRequest field, so this ADDS a real key
+        # rather than smuggling one past extra="forbid".
+        inputs=[{"name": "default", "context_description": description}],
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
 
 
 @given(parsers.parse('a generative creative named "{name}" with no prompt assets or inputs'))
@@ -5346,16 +5380,14 @@ def given_generative_creative_named_no_prompt(ctx: dict, name: str) -> None:
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
-    creative_payload = {
-        "creative_id": "creative-gen-inv4-001",
-        "name": name,
-        "format_id": fmt,
-        "assets": {},
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-gen-inv4-001",
+        name=name,
+        format_id=fmt,
+        assets={},
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
-    ctx["generative_create_path"] = True
 
 
 @given("a generative creative that already exists with generated content")
@@ -5399,15 +5431,18 @@ def given_generative_creative_exists_with_content(ctx: dict) -> None:
     )
     env._commit_factory_data()
 
-    # Prepare the update payload (no prompt assets or inputs yet — added by next step)
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": "Existing Generative Creative",
-        "format_id": fmt,
-    }
+    # Prepare the update payload (no prompt assets or inputs yet — added by next step).
+    # assets=OMIT states the absence; "the update has no prompt assets or inputs"
+    # (feature line 489) then writes assets={}, which the pin accepts, so the
+    # dispatched item is conformant and takes no malformation declaration.
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name="Existing Generative Creative",
+        format_id=fmt,
+        assets=OMIT,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
     ctx["existing_generative_data"] = existing_data
 
 
@@ -5439,15 +5474,14 @@ def given_generative_creative_with_user_assets_and_prompt(ctx: dict) -> None:
     ensure_tenant_principal(ctx, env)
     fmt = env.setup_generative_build(format_id="display_gen", gemini_api_key="test-gemini-key")
     user_image = image_spec("image", url="https://example.com/user-banner.png")
-    creative_payload = {
-        "creative_id": "creative-gen-inv6-001",
-        "name": "Generative With User Assets",
-        "format_id": fmt,
-        "assets": build_assets(text_spec("message", content="Generate a responsive ad"), user_image),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-gen-inv6-001",
+        name="Generative With User Assets",
+        format_id=fmt,
+        assets=build_assets(text_spec("message", content="Generate a responsive ad"), user_image),
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
-    ctx["generative_creative"] = True
     # The same spec(s) used to build the mock are stored for verification (assert_assets).
     ctx["user_provided_assets"] = [user_image]
 
@@ -5942,12 +5976,11 @@ def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: s
         {"principal_id": principal_id, "tenant_id": tenant.tenant_id},
         lambda: PrincipalFactory(tenant=tenant, principal_id=principal_id),
     )
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": f"Synced creative {creative_id}",
-        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name=f"Synced creative {creative_id}",
+        format_id={"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     dispatch_request(ctx, creatives=ctx["creatives"])
 
@@ -5983,12 +6016,12 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
     env._commit_factory_data()
     ctx["xp_package_id"] = pkg.package_id
     format_id, agent_url, assets = _format_payload(ctx, env)
-    own_creative = {
-        "creative_id": "creative-own-b",
-        "name": "Own Creative",
-        "format_id": {"id": format_id, "agent_url": agent_url},
-        "assets": assets,
-    }
+    own_creative = CreativeAssetRequestFactory.payload(
+        creative_id="creative-own-b",
+        name="Own Creative",
+        format_id={"id": format_id, "agent_url": agent_url},
+        assets=assets,
+    )
     ctx["own_creative_id"] = own_creative["creative_id"]
     dispatch_request(
         ctx,
@@ -7008,12 +7041,11 @@ def _build_creative_scope_payload(ctx: dict, creative_id: str) -> dict:
     """
     env = ctx["env"]
     _ensure_tenant_principal_from_db(ctx, env)
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": f"Creative {creative_id}",
-        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id=creative_id,
+        name=f"Creative {creative_id}",
+        format_id={"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_id"] = creative_id
     return creative_payload
@@ -7321,12 +7353,12 @@ def given_creatives_all_fail(ctx: dict, count: int) -> None:
     creatives = ctx.setdefault("creatives", [])
     for i in range(count):
         creatives.append(
-            {
-                "creative_id": f"creative-fail-{i:03d}",
-                "name": "",  # empty name → per-creative validation failure
-                "format_id": {"id": format_id, "agent_url": agent_url},
-                "assets": assets,
-            }
+            CreativeAssetRequestFactory.payload(
+                creative_id=f"creative-fail-{i:03d}",
+                name="",  # empty name → per-creative validation failure, and pin-conformant
+                format_id={"id": format_id, "agent_url": agent_url},
+                assets=assets,
+            )
         )
     ctx["validation_mode"] = "lenient"
 
