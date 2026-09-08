@@ -629,6 +629,21 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
         # is a separate build, not a gap in this scenario's own test setup. The
         # obligation still grades fully on the three in-process transports
         # (a2a/mcp/rest).
+        # Added by salesagent-b341x.19's inherited-failure sweep. set_gemini_api_key was
+        # created by b341x.9's routing, which moved four env.mock reaches out of uc006 step
+        # bodies and INTO the harness — where this file's scan can finally see them. The
+        # method sets an in-process config mock, and the key it sets belongs to the SERVER's
+        # own configuration, so over e2e_rest there is no surface to set it on: the honest
+        # options were "declare unrealizable" or "silently no-op and assert against
+        # unconfigured server state". The scenarios it gates (BR-RULE-036's generative-build
+        # preconditions) still grade fully on a2a/mcp/rest.
+        (
+            "tests/harness/creative_sync.py",
+            "set_gemini_api_key",
+            "GEMINI_API_KEY is read from the SERVER's own configuration, and e2e_rest talks to "
+            "a process this harness does not configure — there is no surface for setting or "
+            "clearing another process's env-derived config mid-scenario",
+        ),
         (
             "tests/harness/_base.py",
             "inject_untyped_exception",

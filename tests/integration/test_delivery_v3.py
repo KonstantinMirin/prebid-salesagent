@@ -571,13 +571,26 @@ class TestDeliveryPricingOptionIntegration:
         package = response.media_buy_deliveries[0].by_package[0]
         assert (package.pricing_model, package.rate, package.currency) == ("cpm", 5.00, "USD")
 
-    def test_uppercase_pricing_model_resolves_through_a_lowercase_id(self, integration_db):
+    def test_uppercase_pricing_model_resolves_through_its_own_id(self, integration_db, factory_session):
         """An option stored with a non-lowercase pricing_model is still FOUND by its id.
 
-        The synthetic id is LOWERCASE, always. Nothing normalises ``pricing_model`` on the
+        THE INVARIANT IS AGREEMENT, NOT CASE. Nothing normalises ``pricing_model`` on the
         way into ``pricing_options``, so a row can hold ``"CPM"`` — and the builder and the
         matcher must still agree about what that row is called, or a package names an
-        option no reader can find.
+        option no reader can find. Both go through
+        ``synthetic_pricing_option_id``, so they agree whatever the case is.
+
+        This test used to additionally assert the id was LOWERCASE — ``option_id ==
+        "cpm_usd_auction"`` — and that claim is simply false:
+        ``synthetic_pricing_option_id`` lowercases ``currency`` and does NOT touch
+        ``pricing_model``, so a ``"CPM"`` row yields ``"CPM_usd_auction"``. The test failed
+        on its own premise, one line before reaching the lookup it exists to exercise. The
+        agreement it names never got tested.
+
+        LOWERCASING THE BUILDER WOULD NOT BE A TEST FIX. That id is announced by
+        get_products and named by a PackageRequest, so changing its case changes what is on
+        the wire — the same "not this change's to decide" the paragraph below draws about
+        normalising the column.
 
         It stops at the lookup, deliberately. Reporting such a package is a SEPARATE and
         currently impossible thing: ``PackageDelivery.pricing_model`` is the pinned
@@ -587,32 +600,37 @@ class TestDeliveryPricingOptionIntegration:
 
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-01
         """
+        from sqlalchemy import select
+
         from src.core.database.repositories.product import ProductRepository
         from src.core.tools.media_buy_delivery import _get_pricing_options
+        from tests.factories.product import PricingOptionFactory
 
-        with get_db_session() as session:
-            base = _setup_base_state(session)
-            uppercase_option = PricingOption(
-                tenant_id=base["tenant_id"],
-                product_id=base["product_id"],
-                pricing_model="CPM",
-                rate=Decimal("7.50"),
-                currency="USD",
-                is_fixed=False,
-            )
-            session.add(uppercase_option)
-            session.commit()
+        session = factory_session
+        base = _setup_base_state(session)
+        product = session.scalars(
+            select(Product).filter_by(tenant_id=base["tenant_id"], product_id=base["product_id"])
+        ).one()
+        uppercase_option = PricingOptionFactory(
+            product=product,
+            pricing_model="CPM",
+            rate=Decimal("7.50"),
+            currency="USD",
+            is_fixed=False,
+        )
 
-            option_id = synthetic_pricing_option_id(uppercase_option)
-            assert option_id == "cpm_usd_auction", f"synthetic id is not lowercase: {option_id!r}"
+        option_id = synthetic_pricing_option_id(uppercase_option)
+        assert option_id == "CPM_usd_auction", (
+            f"the builder passes pricing_model through and lowercases only currency; got {option_id!r}"
+        )
 
-            # The matcher rebuilds the id from the row's own columns. It finds the row
-            # only if it cased it the same way the builder did.
-            found = _get_pricing_options(
-                [option_id], tenant_id=base["tenant_id"], product_repo=ProductRepository(session, base["tenant_id"])
-            )
-            assert option_id in found, f"{option_id!r} resolved to no option; matcher built {list(found)}"
-            assert found[option_id].rate == Decimal("7.50")
+        # The matcher rebuilds the id from the row's own columns. It finds the row
+        # only if it cased it the same way the builder did — which is the point.
+        found = _get_pricing_options(
+            [option_id], tenant_id=base["tenant_id"], product_repo=ProductRepository(session, base["tenant_id"])
+        )
+        assert option_id in found, f"{option_id!r} resolved to no option; matcher built {list(found)}"
+        assert found[option_id].rate == Decimal("7.50")
 
 
 @pytest.mark.requires_db
