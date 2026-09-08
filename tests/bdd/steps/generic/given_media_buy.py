@@ -2312,9 +2312,22 @@ def given_request_with_inline_creatives(ctx: dict) -> None:
 def given_inline_creative_missing_url(ctx: dict) -> None:
     """ext-g: strip the content URL from the inline creative's primary asset.
 
-    Production's reference-creative validation requires a content URL; without
-    it the create path rejects the creative and the wire error message names the
-    missing URL.
+    WHAT THIS ACTUALLY REACHES, measured rather than intended. The empty URL is
+    refused at the REQUEST BOUNDARY, not by production's reference-creative
+    validation: ``CreativeAssetRequest`` rejects ``url: ""`` with
+    ``assets.primary.AssetVariant.image.url Input should be a valid URL, input is
+    empty [type=url_parsing]``. So T-UC-002-ext-g grades an INVALID_REQUEST from
+    the boundary and never gets as far as the reference-creative URL check its
+    sentence names. It passes anyway because its Then steps ask only that the
+    operation failed and that the error carries a suggestion — any error satisfies
+    them. That assertion gap is UC-002's to close (salesagent-b341x.7); recorded
+    here so the next reader is not misled by the sentence.
+
+    This docstring previously asserted the opposite — "keeps the asset structurally
+    valid so it syncs to the library" — and that was never true. Until the
+    ``asset_type`` fix in ``_add_inline_creatives``, the asset was refused one step
+    earlier still, for ``union_tag_not_found``, so the empty URL was not even the
+    reason the request died.
     """
     kwargs = _ensure_request_defaults(ctx)
     pkg = kwargs["packages"][0]
@@ -2323,9 +2336,8 @@ def given_inline_creative_missing_url(ctx: dict) -> None:
     for creative in creatives:
         primary = creative.get("assets", {}).get("primary")
         assert primary is not None, "Inline creative has no primary asset to clear the URL on"
-        # Empty (not absent) URL keeps the asset structurally valid so it syncs to
-        # the library, then production's reference-creative URL validation rejects
-        # it with a message naming the missing URL (ext-g intent).
+        # Empty, not absent: an absent url would fail as a MISSING field, and the
+        # scenario is about a URL the buyer supplied and left blank.
         primary["url"] = ""
 
 
