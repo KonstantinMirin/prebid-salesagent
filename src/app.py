@@ -35,7 +35,7 @@ from src.a2a_server.adcp_a2a_server import (
 from src.a2a_server.context_builder import AdCPCallContextBuilder
 from src.admin.app import create_app
 from src.core.agent_identity import agent_identity_for_tenant_id
-from src.core.auth_middleware import UnifiedAuthMiddleware
+from src.core.auth_middleware import McpCredentialGate, UnifiedAuthMiddleware, challenge_for_code
 from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
 from src.core.domain_routing import route_landing_page
 from src.core.errors.issues import issues_from_validation_error
@@ -122,8 +122,14 @@ app = FastAPI(
     lifespan=combine_lifespans(app_lifespan, mcp_app.lifespan),
 )
 
-# Mount MCP at /mcp
-app.mount("/mcp", mcp_app)
+# Mount MCP at /mcp, behind the credential gate.
+#
+# The gate answers an anonymous call to an auth-required tool itself, with 401 +
+# WWW-Authenticate, without calling the app. It has to sit in FRONT rather than inside
+# because streamable-HTTP sends the response status before the tool is ever dispatched --
+# see McpCredentialGate. Wrapping the sub-app (rather than adding app-level middleware)
+# keeps it off every other route: REST and A2A render their own refusals.
+app.mount("/mcp", McpCredentialGate(mcp_app))
 
 
 # ---------------------------------------------------------------------------
@@ -164,9 +170,18 @@ def _envelope_response(request: Request, exc: AdCPSalesAgentError, *, log_as: Ex
     record_boundary_error(
         "rest", request.url.path, log_as if log_as is not None else exc, tenant_id=tenant_id, principal_id=principal_id
     )
+    # A 401 MUST name a scheme the caller can authenticate with (RFC 7235; graded by the
+    # storyboard's security_baseline, which requires WWW-Authenticate on any 401). Attaching
+    # it to the response the handler already builds is FastAPI's own pattern -- its security
+    # classes raise HTTPException(401, headers=...) for exactly this -- so there is no new
+    # machinery here and nothing below the boundary needs to know about HTTP.
+    #
+    # challenge_for_code returns None for every non-auth code, so this is inert for the rest.
+    challenge = challenge_for_code(exc.error_code)
     return JSONResponse(
         status_code=exc.status_code,
         content=build_two_layer_error_envelope(exc),
+        headers={"WWW-Authenticate": challenge} if challenge else None,
     )
 
 
@@ -373,6 +388,22 @@ async def tool_error_handler(request: Request, exc: ToolError) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
+def _a2a_error_code(body: object) -> str | None:
+    """The AdCP error code inside a JSON-RPC error body, or None if there isn't one.
+
+    Every level is type-checked rather than assumed. ``error`` is not always an object:
+    a bare JSON-RPC failure can carry a STRING there, and the obvious
+    ``(body.get("error") or {}).get("data")`` blows up on it -- a non-empty string is
+    truthy, so the ``or {}`` never fires and ``.get`` lands on a str. That is not
+    hypothetical; it broke two of this file's own regression tests.
+    """
+    error = body.get("error") if isinstance(body, dict) else None
+    data = error.get("data") if isinstance(error, dict) else None
+    adcp_error = data.get("adcp_error") if isinstance(data, dict) else None
+    code = adcp_error.get("code") if isinstance(adcp_error, dict) else None
+    return code if isinstance(code, str) else None
+
+
 def _restore_a2a_wire_integers(
     endpoint: Callable[[Request], Awaitable[Response]],
 ) -> Callable[[Request], Awaitable[Response]]:
@@ -388,6 +419,15 @@ def _restore_a2a_wire_integers(
     integer-typed AdCP fields before it reaches the client -- see
     ``restore_a2a_integer_types`` for the shared coercion logic and the
     field list's spec citations.
+
+    Being that one point, it is also where a REFUSED CREDENTIAL becomes a 401. A2A frames
+    every failure as a JSON-RPC error inside an HTTP 200, which is right for an application
+    answer and wrong for this one: a caller with no identity cannot read an AdCP envelope to
+    learn how to authenticate, and the storyboard's security_baseline grades the HTTP
+    handshake. The body is fully buffered here -- it is already being parsed and re-emitted
+    -- so the status is simply set on the response being built, with no side channel and no
+    ordering hazard. AUTH_INVALID reaches this point too, because A2A validates the token
+    before answering; MCP cannot say the same (see the pre-dispatch gate).
     """
 
     async def _wrapped(request: Request) -> Response:
@@ -395,7 +435,11 @@ def _restore_a2a_wire_integers(
         if isinstance(response, JSONResponse) and response.body:
             fixed = restore_a2a_integer_types(json.loads(bytes(response.body)))
             headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
-            return JSONResponse(fixed, status_code=response.status_code, headers=headers)
+            status_code = response.status_code
+            if challenge := challenge_for_code(_a2a_error_code(fixed)):
+                status_code = 401
+                headers["WWW-Authenticate"] = challenge
+            return JSONResponse(fixed, status_code=status_code, headers=headers)
         return response
 
     # Marker for test_guards_a2a_integer_restoration.py -- lets the structural

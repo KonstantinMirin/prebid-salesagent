@@ -106,13 +106,13 @@ def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
     AUTH_MISSING suggestion so the REST 401 envelope tells the buyer how to
     recover (parity with require_identity on the _impl path; AdCP POST-F3).
     """
-    from src.core.exceptions import AdCPAuthRequiredError
-
-    if not auth_ctx.auth_token:
-        raise AdCPAuthRequiredError()
-
     from src.core.resolved_identity import resolve_identity
 
+    # No presence guard here. resolve_identity raises AdCPAuthRequiredError (AUTH_MISSING)
+    # for an absent credential and AdCPAuthenticationError (AUTH_INVALID) for one that is
+    # presented and does not resolve, keyed on presence exactly as the v3.1.1 enum is.
+    # REST, A2A and MCP each used to answer that question themselves and did not agree; the
+    # app's exception handler turns whichever is raised into 401 + WWW-Authenticate.
     identity = resolve_identity(
         headers=dict(auth_ctx.headers),
         auth_token=auth_ctx.auth_token,
@@ -120,19 +120,13 @@ def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
         protocol="rest",
     )
 
-    if not identity.principal_id:
-        # AUTH_INVALID, not AUTH_MISSING: the spec keys these on HEADER PRESENCE, and by this
-        # line a credential WAS presented -- the `not auth_ctx.auth_token` guard above is the
-        # one that owns the absent case. This raised AdCPAuthRequiredError (AUTH_MISSING),
-        # justified as "defensive/unreachable ... kept AUTH_MISSING-shaped for parity with the
-        # guard above". Parity with the wrong guard: the two branches answer different
-        # questions, so shaping the second like the first is what makes it wrong. A branch
-        # believed unreachable is exactly the one to shape correctly, because if it ever fires
-        # it will be telling a buyer who DID send a credential that they sent none, and they
-        # will retry the same way.
-        from src.core.exceptions import AdCPAuthenticationError
-
-        raise AdCPAuthenticationError()
+    # The `not identity.principal_id` backstop that stood here is gone with the guard it
+    # backstopped. Its reasoning was right and is preserved where the decision now lives:
+    # the spec keys AUTH_MISSING and AUTH_INVALID on whether a credential was PRESENTED, so
+    # the two answer different questions and must not be shaped alike. resolve_identity
+    # makes both calls on that same signal, and its postcondition — with
+    # require_valid_token set it returns a resolved principal or raises — is what makes a
+    # backstop here unreachable rather than merely unlikely.
 
     # Set tenant ContextVar at the REST transport boundary
     if identity.tenant:

@@ -152,19 +152,57 @@ def resolve_identity(
         ResolvedIdentity with all fields resolved
 
     Raises:
-        AdCPAuthenticationError: If token is present but invalid and require_valid_token=True
+        AdCPAuthRequiredError: No credential was presented and require_valid_token=True
+            (AUTH_MISSING).
+        AdCPAuthenticationError: A credential was presented and did not resolve, and
+            require_valid_token=True (AUTH_INVALID).
+
+    POSTCONDITION, relied on by every caller: when ``require_valid_token`` is True this
+    either returns an identity with a resolved ``principal_id`` or raises. Callers do not
+    need their own "no token" or "no principal" guards, and the ones that had them have
+    been removed -- they were three transports answering one question three ways.
+
+    Both errors are typed only. Rendering them as HTTP -- 401 and a ``WWW-Authenticate``
+    challenge -- is the transport's job, in its own framework's terms.
     """
     # Import here to avoid circular dependency (auth_utils imports from database)
     from src.core.auth_utils import get_principal_from_token
 
-    # Step 1: Detect tenant from headers
-    tenant_id, tenant_context = _detect_tenant(headers)
-
-    # Step 2: Extract auth token if not pre-provided
+    # Step 1: Extract auth token if not pre-provided
     if auth_token is None:
         auth_token, _ = _extract_auth_token(headers)
 
-    # Step 3: Validate token → principal_id (and discover tenant from token if needed)
+    # Step 2: NO credential presented, on a surface that requires one.
+    #
+    # AUTH_MISSING, not AUTH_INVALID: the v3.1.1 enum keys the split on whether a credential
+    # was PRESENTED. Nothing was. A credential that is presented and fails to resolve is
+    # AUTH_INVALID, raised in step 4.
+    #
+    # Before tenant detection, which is three DB lookups an anonymous caller has not earned.
+    # Both transports that had this check ran it in this order for that reason; it is here
+    # so that all of them get it, MCP included -- MCP had none, carried a principal-less
+    # identity into the tool, and _impl code grew its own AdCPAuthRequiredError raises to
+    # compensate.
+    #
+    # ``require_valid_token`` is the TOOL's declaration (``ToolSpec.auth``) travelling down
+    # from the boundary, never a transport's own opinion. A discovery tool passes False and
+    # still resolves anonymously.
+    #
+    # This function raises TYPED errors and knows nothing about HTTP. Turning AUTH_MISSING
+    # into a 401 with a challenge is each transport's own job, done with its framework's
+    # mechanism -- see the REST exception handler, the A2A route wrapper and the MCP
+    # pre-dispatch gate. An earlier attempt had this function reach forward to the ASGI
+    # response instead; it could not work, because MCP sends its response status before the
+    # tool is ever dispatched.
+    if require_valid_token and not auth_token:
+        from src.core.exceptions import AdCPAuthRequiredError
+
+        raise AdCPAuthRequiredError()
+
+    # Step 3: Detect tenant from headers
+    tenant_id, tenant_context = _detect_tenant(headers)
+
+    # Step 4: Validate token → principal_id (and discover tenant from token if needed)
     principal_id = None
     if auth_token:
         principal_id, token_tenant = get_principal_from_token(auth_token, tenant_id)

@@ -208,20 +208,24 @@ class TestRequireAuthDepBehavior:
 
         from src.core.auth_context import AuthContext, _require_auth_dep
         from src.core.exceptions import AdCPSalesAgentError, build_two_layer_error_envelope
-        from tests.factories.principal import PrincipalFactory
         from tests.helpers import assert_envelope_shape
 
         auth_ctx = AuthContext(auth_token="presented-token", headers={"x-adcp-auth": "presented-token"})
-        principal_less = PrincipalFactory.make_identity(
-            principal_id=None,
-            tenant_id="default",
-            auth_token="presented-token",
-            protocol="rest",
-        )
 
-        with patch("src.core.resolved_identity.resolve_identity", return_value=principal_less):
-            with pytest.raises(AdCPSalesAgentError) as exc_info:
-                _require_auth_dep(auth_ctx)
+        # Patches the DATABASE, not the thing under test. This used to patch
+        # ``resolve_identity`` itself and grade a backstop inside the dependency — so it
+        # proved the backstop's shape, not the behaviour. The backstop is gone (with the
+        # presence guard it backstopped: resolve_identity owns both calls now, for every
+        # transport), and the obligation it stood for is graded here against the real path:
+        # a credential IS presented, the lookup resolves nobody, and the answer must be
+        # AUTH_INVALID — never AUTH_MISSING, which would tell a buyer who did send a
+        # credential that they sent none, and they would retry the same way.
+        with (
+            patch("src.core.resolved_identity._detect_tenant", return_value=(None, None)),
+            patch("src.core.auth_utils.get_principal_from_token", return_value=(None, None)),
+            pytest.raises(AdCPSalesAgentError) as exc_info,
+        ):
+            _require_auth_dep(auth_ctx)
 
         assert_envelope_shape(build_two_layer_error_envelope(exc_info.value), "AUTH_INVALID", recovery="terminal")
 

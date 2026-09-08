@@ -337,11 +337,9 @@ class AdCPRequestHandler(RequestHandler):
         auth_ctx = context.state.get(AUTH_CONTEXT_STATE_KEY) if context is not None else None
         headers = auth_ctx.headers if auth_ctx else {}
 
-        if require_valid_token and not auth_token:
-            raise InvalidRequestError(
-                message="Missing authentication token",
-                data=build_two_layer_error_envelope(AdCPAuthRequiredError()),
-            )
+        # No presence guard here either: resolve_identity raises AdCPAuthRequiredError for an
+        # absent credential when require_valid_token is set, and the handler below renders it.
+        # This one and the caller's were the two places A2A answered that question itself.
 
         # Extract testing context from A2A request headers (same as MCP does)
         testing_context = AdCPTestContext.from_headers(headers)
@@ -364,13 +362,12 @@ class AdCPRequestHandler(RequestHandler):
             raise InvalidRequestError(message=str(e), data=build_two_layer_error_envelope(e)) from e
 
         if require_valid_token:
-            if not identity.principal_id:
-                # No principal_id at all -> AUTH_MISSING per v3.1.1
-                # error-code.json.
-                raise InvalidRequestError(
-                    message="Authentication token is invalid or expired.",
-                    data=build_two_layer_error_envelope(AdCPAuthRequiredError()),
-                )
+            # The `not identity.principal_id` branch that stood here is gone: with
+            # require_valid_token set, resolve_identity either returns a resolved principal
+            # or raises, so this could only ever have fired if that postcondition broke --
+            # and then it answered AUTH_MISSING for a credential that may well have been
+            # presented, which is the wrong code. Its own comment cited the v3.1.1 split
+            # while contradicting it.
 
             if not identity.tenant:
                 # DEFER: tenant-axis, out of scope for the AUTH_MISSING/
@@ -536,39 +533,35 @@ class AdCPRequestHandler(RequestHandler):
                 requested_skills = {inv["skill"] for inv in skill_invocations}
                 requires_auth = any(s not in TOOLS or TOOLS[s].auth == "required" for s in requested_skills)
 
-            # Require authentication for non-public skills. Stay a JSON-RPC
-            # InvalidRequestError (protocol-level rejection, top-level error), but
-            # carry the two-layer envelope in ``data`` so the buyer-facing
-            # AUTH_MISSING code + suggestion reach the A2A wire — matching
-            # REST's no-identity envelope (auth_context.py), which the bare
-            # A2AError previously dropped. (#1417; split to AUTH_MISSING per
-            # v3.1.1 error-code.json — )
-            if requires_auth and not auth_token:
-                raise InvalidRequestError(
-                    message="Missing authentication token - Bearer token required in Authorization header",
-                    data=build_two_layer_error_envelope(AdCPAuthRequiredError()),
-                )
-
             # ── Transport boundary: resolve identity ONCE ──
-            # Like REST's _resolve_auth(), identity is resolved here and passed
-            # to all downstream handlers. No handler should call resolve_identity().
-            # Its `= None` initialisation used to live HERE, which is why a failure
-            # in the push-config gate above reached the error handler with the name
-            # unbound; it now sits before the `try` so every branch can read it.
-            if auth_token:
-                # A PRESENTED token must always be validated, regardless of
-                # whether the requested skill itself requires auth — absent
-                # token -> proceed anonymous (fine); presented-but-invalid
-                # token -> must reject with AUTH_INVALID (terminal), even on
-                # a public/discovery-only skill request. Previously this
-                # reused `requires_auth` (skill-based) here, so an invalid
-                # token on a discovery-only request was silently swallowed as
-                # anonymous by resolve_identity()'s require_valid_token=False
-                # path instead of being rejected.
-                identity = self._resolve_a2a_identity(auth_token, require_valid_token=True, context=context)
-            elif not requires_auth:
-                # Unauthenticated discovery request — resolve tenant from headers only
-                identity = self._resolve_a2a_identity(None, require_valid_token=False, context=context)
+            # Like REST's _resolve_auth(), identity is resolved here and passed to all
+            # downstream handlers. No handler should call resolve_identity().
+            # Its `= None` initialisation used to live HERE, which is why a failure in the
+            # push-config gate above reached the error handler with the name unbound; it now
+            # sits before the `try` so every branch can read it.
+            #
+            # ONE call, where there used to be a hand-rolled `requires_auth and not
+            # auth_token` refusal followed by a two-branch resolve. The three outcomes are
+            # unchanged, and the flag says exactly which is which:
+            #
+            #   token presented          -> strict, WHATEVER the skill needs. A presented
+            #                               credential is always validated, so an invalid
+            #                               token on a discovery-only request is still
+            #                               AUTH_INVALID rather than silently anonymous.
+            #   absent, skill requires   -> strict, and resolve_identity answers AUTH_MISSING.
+            #   absent, discovery only   -> lenient, resolves anonymously from headers.
+            #
+            # The refusal that used to be written out here is gone because it was A2A
+            # deciding, on its own, a question every transport answers: resolve_identity owns
+            # presence and validity now, and returns an identity with a principal or raises.
+            # The `except AdCPAuthenticationError` below renders whichever it raises --
+            # AdCPAuthRequiredError subclasses it, so one branch covers both codes, and each
+            # carries its own code into the envelope.
+            identity = self._resolve_a2a_identity(
+                auth_token,
+                require_valid_token=bool(auth_token) or requires_auth,
+                context=context,
+            )
 
             # Route: Handle explicit skill invocations first, then natural language fallback
             if skill_invocations:

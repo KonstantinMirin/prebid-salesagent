@@ -204,14 +204,32 @@ class TestA2AAuthContract:
 
     @pytest.mark.parametrize("skill", AUTH_REQUIRED_SKILLS)
     def test_auth_required_skills_reject_no_auth(self, client, no_auth_headers, skill):
-        """Auth-required skills MUST reject requests without token."""
+        """Auth-required skills MUST reject an unauthenticated request, as AUTH_MISSING.
+
+        Graded on the CODE, not on words in the message. It used to grep the message for
+        "auth" or "token", which passed only while A2A hand-wrote its own refusal sentence
+        ("Missing authentication token - Bearer token required..."). That sentence is gone:
+        the refusal comes from ``resolve_identity`` now, like every other transport's, and
+        its text is CODE_TABLE's -- "No credentials were presented" -- which contains
+        neither word. The buyer-facing sentence is a function of the code by design
+        (ADR-010), so a test that pins the prose grades the wrong thing and breaks whenever
+        the canonical text is improved.
+
+        Also asserts the HTTP status, which is the half A2A was missing entirely: a rejected
+        credential now leaves as 401 with a WWW-Authenticate challenge rather than buried in
+        a 200, because a caller with no identity cannot read a JSON-RPC envelope to learn
+        how to authenticate.
+        """
         payload = _build_jsonrpc(skill, {})
         response = client.post("/a2a", json=payload, headers=no_auth_headers)
         body = response.json()
         assert "error" in body, f"Auth-required skill '{skill}' should return error without token"
-        error_msg = body["error"].get("message", "").lower()
-        assert "auth" in error_msg or "token" in error_msg, (
-            f"Error for '{skill}' should mention auth/token: {body['error']['message']}"
+
+        code = ((body["error"].get("data") or {}).get("adcp_error") or {}).get("code")
+        assert code == "AUTH_MISSING", f"Error for '{skill}' should carry AUTH_MISSING, got {code!r}: {body['error']}"
+        assert response.status_code == 401, f"'{skill}' unauthenticated should be HTTP 401, got {response.status_code}"
+        assert response.headers.get("www-authenticate") == "Bearer", (
+            f"'{skill}' 401 must name the scheme; got {response.headers.get('www-authenticate')!r}"
         )
 
 
