@@ -60,10 +60,9 @@ if TYPE_CHECKING:
 #   - ``wire_error_envelope`` carries REAL wire bytes or None — NEVER an
 #     envelope the harness rebuilt from the exception it just caught. A
 #     scenario asserting on that field would otherwise grade the rebuild, which
-#     passes whether or not production emitted anything at all. A transport
-#     that genuinely has no wire says so through ``has_wire=False`` and offers
-#     ``_synthesized_error_envelope`` under its own name, as ImplDispatcher
-#     does below.
+#     passes whether or not production emitted anything at all. Every dispatcher
+#     below has a real wire, so None is the honest answer when nothing crossed
+#     it and there is no second field to fall back to.
 #   - ``has_wire`` is declared PER CONSTRUCTION SITE (required and keyword-only
 #     on TransportResult), True only downstream of an actual send/receive; a
 #     catch-all branch that may fire before anything was sent declares False.

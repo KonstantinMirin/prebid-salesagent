@@ -3,7 +3,7 @@
 import pytest
 
 from src.core.exceptions import AdCPAuthenticationError
-from src.core.tools.creatives import _sync_creatives_impl
+from src.core.tools.creatives._sync import _sync_creatives_impl
 from tests.helpers.creative_test_helpers import creative_payload, sync_creatives_request
 
 

@@ -46,7 +46,7 @@ class TestSyncCreativesCreativeIdsFilter:
     def test_sync_creatives_filters_by_creative_ids(self, mock_uow_cls, mock_tenant):
         """Test _sync_creatives_impl filters creatives by creative_ids."""
         from src.core.resolved_identity import ResolvedIdentity
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         identity = ResolvedIdentity(
             principal_id="principal_1",

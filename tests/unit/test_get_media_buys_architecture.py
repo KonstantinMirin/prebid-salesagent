@@ -40,7 +40,7 @@ class TestGetMediaBuysImplAcceptsResolvedIdentity:
         )
 
 
-class TestGetMediaBuysImplRaisesAdCPError:
+class TestGetMediaBuysImplRaisesAdCPSalesAgentError:
     """Violation 2: _get_media_buys_impl must raise AdCPSalesAgentError, not ToolError."""
 
     def test_none_identity_raises_adcp_error(self):

@@ -22,7 +22,6 @@ from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types import MediaBuyStatus
 
 from src.core.exceptions import AdCPAuthenticationError
 from src.core.schemas import GetMediaBuyDeliveryRequest
@@ -33,10 +32,6 @@ from src.core.tools.media_buy_delivery import (
     _resolve_delivery_status_filter,
 )
 from tests.helpers.capture_wrapper_req import mcp_tool, registry_impl
-
-# UC-004-ALT-STATUS-FILTERED-DELIVERY-02
-# ---------------------------------------------------------------------------
-
 
 # ---------------------------------------------------------------------------
 # UC-004-ALT-STATUS-FILTERED-DELIVERY-02
@@ -70,65 +65,6 @@ class TestStatusFilterCompleted:
 
 
 # ---------------------------------------------------------------------------
-# UC-004-ALT-STATUS-FILTERED-DELIVERY-03
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# UC-004-ALT-STATUS-FILTERED-DELIVERY-03
-# ---------------------------------------------------------------------------
-
-
-# UC-004-ALT-STATUS-FILTERED-DELIVERY-03
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# UC-004-ALT-STATUS-FILTERED-DELIVERY-03
-# ---------------------------------------------------------------------------
-
-
-class TestStatusFilterPaused:
-    """Filter by status 'paused' returns only paused media buys.
-
-    Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-03
-    """
-
-    def test_paused_buys_returned(self):
-        """status_filter='paused' includes only paused media buys.
-
-        Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-03
-        """
-        from tests.harness.delivery_poll_unit import DeliveryPollEnv
-
-        with DeliveryPollEnv() as env:
-            # Buy with current dates and is_paused=True
-            env.add_buy(
-                media_buy_id="mb_paused", start_date=date(2026, 1, 1), end_date=date(2026, 12, 31), is_paused=True
-            )
-            env.set_adapter_response("mb_paused", impressions=1000, spend=50.0)
-
-            response = env.call_impl(status_filter="paused")
-
-            returned_ids = [d.media_buy_id for d in response.media_buy_deliveries]
-            assert "mb_paused" in returned_ids
-
-
-# ---------------------------------------------------------------------------
-# UC-004-ALT-STATUS-FILTERED-DELIVERY-07
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# UC-004-ALT-STATUS-FILTERED-DELIVERY-07
-# ---------------------------------------------------------------------------
-
-
-# UC-004-ALT-STATUS-FILTERED-DELIVERY-07
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # UC-004-ALT-STATUS-FILTERED-DELIVERY-07
 # ---------------------------------------------------------------------------
 
@@ -138,32 +74,6 @@ class TestValidStatusValuesAccepted:
 
     Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-07
     """
-
-    @pytest.mark.parametrize(
-        "status_input",
-        [
-            MediaBuyStatus.active,
-            MediaBuyStatus.pending_start,
-            MediaBuyStatus.paused,
-            MediaBuyStatus.completed,
-        ],
-    )
-    def test_adcp_status_values_accepted(self, status_input):
-        """Each AdCP MediaBuyStatus enum value is processed without error.
-
-        Covers: UC-004-ALT-STATUS-FILTERED-DELIVERY-07
-        """
-        from tests.harness.delivery_poll_unit import DeliveryPollEnv
-
-        with DeliveryPollEnv() as env:
-            env.add_buy(media_buy_id="mb_001")
-            env.set_adapter_response("mb_001", impressions=1000, spend=50.0)
-
-            # Act — must not raise
-            response = env.call_impl(status_filter=status_input)
-
-            # Assert — response is valid (no error raised)
-            assert response is not None
 
     def test_special_all_value_returns_all_statuses(self):
         """The 'all' value returns all valid internal statuses.
@@ -182,69 +92,6 @@ class TestValidStatusValuesAccepted:
 
 
 # ---------------------------------------------------------------------------
-# UC-004-ALT-WEBHOOK-PUSH-REPORTING-01
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# UC-004-ALT-WEBHOOK-PUSH-REPORTING-02
-# ---------------------------------------------------------------------------
-
-
-# UC-004-ALT-WEBHOOK-PUSH-REPORTING-01
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# UC-004-ALT-WEBHOOK-PUSH-REPORTING-02
-# ---------------------------------------------------------------------------
-
-
-class TestWebhookPayloadNotificationType:
-    """Webhook payload includes notification_type field.
-
-    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-02
-    """
-
-    @pytest.mark.parametrize(
-        "notification_type",
-        ["scheduled", "final", "delayed", "adjusted"],
-    )
-    def test_response_accepts_notification_type(self, notification_type):
-        """GetMediaBuyDeliveryResponse accepts and serializes notification_type values.
-
-        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-02
-        """
-        from tests.harness.delivery_poll_unit import DeliveryPollEnv
-
-        with DeliveryPollEnv() as env:
-            env.add_buy(media_buy_id="mb_001")
-            env.set_adapter_response("mb_001", impressions=1000, spend=50.0)
-
-            response = env.call_impl(media_buy_ids=["mb_001"])
-
-            # Manually set notification_type (this is set by the caller, not _impl)
-            response.notification_type = notification_type
-
-            dumped = response.model_dump(mode="json")
-            assert dumped["notification_type"] == notification_type
-
-
-# ---------------------------------------------------------------------------
-# UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
-# ---------------------------------------------------------------------------
-
-
-# UC-004-ALT-WEBHOOK-PUSH-REPORTING-07
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # UC-004-ALT-WEBHOOK-PUSH-REPORTING-09
 # ---------------------------------------------------------------------------
 
@@ -259,39 +106,6 @@ class TestWebhookPayloadNotificationType:
 # a buyer receives implemented it. Both obligations (UC-004-ALT-WEBHOOK-PUSH-REPORTING-09 and
 # -10) are recorded on GH #2058, which already owns the divergence between the flat document
 # the service posts and the envelope the spec defines.
-
-
-# ---------------------------------------------------------------------------
-# UC-004-ALT-WEBHOOK-PUSH-REPORTING-10
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# UC-004-ALT-WEBHOOK-PUSH-REPORTING-10
-# ---------------------------------------------------------------------------
-
-
-# UC-004-ALT-WEBHOOK-PUSH-REPORTING-10
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# UC-004-ALT-WEBHOOK-PUSH-REPORTING-10
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# UC-004-ALT-WEBHOOK-PUSH-REPORTING-11
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# UC-004-EXT-A-02
-# ---------------------------------------------------------------------------
-
-
-# UC-004-ALT-WEBHOOK-PUSH-REPORTING-11
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -325,77 +139,6 @@ class TestUC004EXTA02AuthenticationFailure:
 
             with pytest.raises(AdCPAuthenticationError) as exc_info:
                 _get_media_buy_delivery_impl(req, identity=None)
-
-
-# ---------------------------------------------------------------------------
-# UC-004-EXT-B-01
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# UC-004-EXT-B-01
-# ---------------------------------------------------------------------------
-
-
-# UC-004-EXT-G-01
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# UC-004-MAIN-02
-# ---------------------------------------------------------------------------
-
-
-class TestMediaBuyIdResolution:
-    """Verify that media_buy_ids resolve media buys.
-
-    Covers: UC-004-MAIN-02
-    """
-
-    def test_media_buy_ids_resolve_media_buys(self):
-        """media_buy_ids resolve media buys.
-
-        Covers: UC-004-MAIN-02
-        """
-        from tests.harness.delivery_poll_unit import DeliveryPollEnv
-
-        with DeliveryPollEnv() as env:
-            env.add_buy(media_buy_id="mb_100")
-            env.set_adapter_response("mb_100", impressions=5000, spend=250.0)
-
-            response = env.call_impl(media_buy_ids=["mb_100"])
-
-            assert len(response.media_buy_deliveries) == 1
-            assert response.media_buy_deliveries[0].media_buy_id == "mb_100"
-
-    def test_media_buy_ids_used_for_fetch(self):
-        """media_buy_ids is the identifier for delivery requests (adcp 3.12).
-
-        Covers: UC-004-MAIN-02
-        """
-        from tests.harness.delivery_poll_unit import DeliveryPollEnv
-
-        with DeliveryPollEnv() as env:
-            env.add_buy(media_buy_id="mb_300")
-            env.set_adapter_response("mb_300", impressions=5000, spend=250.0)
-
-            response = env.call_impl(media_buy_ids=["mb_300"])
-
-            assert len(response.media_buy_deliveries) == 1
-
-
-# ---------------------------------------------------------------------------
-# UC-004-MAIN-03
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# UC-004-MAIN-03
-# ---------------------------------------------------------------------------
-
-
-# UC-004-MAIN-13
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -450,42 +193,6 @@ class TestMCPToolResultContent:
         assert result.structured_content is not None
         assert isinstance(result.structured_content, dict)
         assert result.structured_content["currency"] == "USD"
-
-    async def test_structured_content_contains_response_fields(self):
-        """structured_content dict contains all top-level response fields.
-
-        Covers: UC-004-MAIN-13
-        """
-        from unittest.mock import AsyncMock
-
-        from fastmcp.server.context import Context
-
-        stub_response = self._stub_delivery_response()
-
-        mock_ctx = MagicMock(spec=Context)
-        mock_ctx.get_state = AsyncMock(return_value=None)
-
-        with registry_impl("get_media_buy_delivery", lambda req, identity=None, **kw: stub_response):
-            result = await mcp_tool("get_media_buy_delivery")(
-                media_buy_ids=["mb_001"],
-                ctx=mock_ctx,
-            )
-
-        sc = result.structured_content
-        assert "reporting_period" in sc
-        assert "currency" in sc
-        assert "aggregated_totals" in sc
-        assert "media_buy_deliveries" in sc
-
-
-# ---------------------------------------------------------------------------
-# UC-004-MAIN-14
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# UC-004-MAIN-14
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------

@@ -1,22 +1,16 @@
 """The one place a tool's WIRING is declared: which transports reach it, and what runs it.
 
-A tool is declared between three and four times today -- ``_register_tool`` in
+A tool used to be declared between three and four times -- ``_register_tool`` in
 ``src/core/main.py``, an ``AgentSkill`` literal plus a ``skill_handlers`` row in the A2A
 server, and a ``@router.post``/``@router.put`` decorator in ``src/routes/api_v1.py`` -- and
-each declaration can disagree with the others. :data:`TOOLS` is the single declaration those
-three become derived from; ``docs/design/one-tool-registry.md`` is the design, and its
-"Migration order" is the sequence: this module is step 1 and changes no behaviour, because
-registration still lives where it always did. Steps 6-8 delete the three hand-written
-declarations and generate them from here.
+each declaration could disagree with the others. :data:`TOOLS` is the single declaration all
+of them are now derived from; ``docs/design/one-tool-registry.md`` is the design.
 
 These rows are hand-written and therefore capable of being wrong. What makes them right is
-that the three transports are GENERATED from them: MCP registration loops this mapping, the
-A2A card is ``_derived_skills()`` over it, and the REST router adds a route per ``rest``
+that the transports are GENERATED from them: MCP registration loops this mapping, the A2A
+card is ``_derived_skills()`` over it, A2A dispatch is ``_dispatch_skill`` validating a
+parameter bag into ``TOOLS[name].dto``, and the REST router adds a route per ``rest``
 binding. A row cannot disagree with a registration that is built from it.
-
-The one place that is still not true is A2A DISPATCH, which resolves a hand-written
-``_handle_<tool>_skill`` method and silently declines a row that has none -- see
-``docs/design/one-tool-registry-remaining.md`` R1.
 
 :class:`ToolSpec` says where a tool is reachable and what runs it. It says nothing about the
 tool's SHAPE -- the DTO says that itself, which is why ``dto`` is a reference to a model and

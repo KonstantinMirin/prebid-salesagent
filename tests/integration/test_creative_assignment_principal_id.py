@@ -230,11 +230,11 @@ class TestCreativeAssignmentPrincipalIdManualApproval:
 
         # The result should succeed (submitted for approval)
         assert result.status in ("submitted", "completed"), f"Unexpected status: {result.status}"
-        assert result.response is not None
+        assert result is not None
 
         # Spec 3.1.1: the submitted response carries task_id, not media_buy_id —
         # resolve the persisted buy via the workflow mapping (PR #1567 round-2 item 2).
-        media_buy_id = resolve_media_buy_id_from_task(result.response.task_id)
+        media_buy_id = resolve_media_buy_id_from_task(result.task_id)
 
         # Verify creative_assignment rows have principal_id populated
         assignments = _query_assignments(ca_tenant_with_approval["tenant_id"], media_buy_id)
@@ -285,9 +285,9 @@ class TestCreativeAssignmentPrincipalIdAutoApprove:
 
         # Auto-approve should succeed
         assert result.status in ("completed", "submitted"), f"Unexpected status: {result.status}"
-        assert result.response is not None
+        assert result is not None
 
-        media_buy_id = getattr(result.response, "media_buy_id", None)
+        media_buy_id = getattr(result, "media_buy_id", None)
         assert media_buy_id is not None, "Response should contain media_buy_id"
 
         # Verify creative_assignment rows have principal_id populated
@@ -338,7 +338,7 @@ class TestCreativeAssignmentPrincipalIdUpdate:
 
         create_result = await _create_media_buy_impl(req=create_req, identity=ca_identity)
         assert create_result.status in ("completed", "submitted"), f"Create failed with status: {create_result.status}"
-        media_buy_id = getattr(create_result.response, "media_buy_id", None)
+        media_buy_id = getattr(create_result, "media_buy_id", None)
         assert media_buy_id is not None
 
         # We need to get the package_id that was created
@@ -370,7 +370,7 @@ class TestCreativeAssignmentPrincipalIdUpdate:
         # Update should succeed (not return error)
         from src.core.schemas import UpdateMediaBuyError
 
-        assert not isinstance(update_result.response, UpdateMediaBuyError), f"Update failed: {update_result}"
+        assert not isinstance(update_result, UpdateMediaBuyError), f"Update failed: {update_result}"
 
         # Verify creative_assignment rows have principal_id populated
         assignments = _query_assignments(ca_tenant["tenant_id"], media_buy_id)

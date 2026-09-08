@@ -467,7 +467,6 @@ class _FieldPolicy:
 #: exactly what the BR-UC-011 scenarios had to spell as a disjunction).
 FailureClass = Literal[
     "unsupported_field",
-    "invalid_domain",
     "billing_not_supported",
     "sandbox_not_supported",
     "notification_config_invalid",
@@ -480,7 +479,6 @@ FailureClass = Literal[
 #: discovered when some gate happens to fire at runtime.
 _FAILURE_CLASS_TO_CODE: dict[FailureClass, ErrorCodeT] = {
     "unsupported_field": ErrorCode.UNSUPPORTED_FEATURE,
-    "invalid_domain": ErrorCode.VALIDATION_ERROR,
     "billing_not_supported": ErrorCode.BILLING_NOT_SUPPORTED,
     "sandbox_not_supported": ErrorCode.UNSUPPORTED_FEATURE,
     "notification_config_invalid": ErrorCode.VALIDATION_ERROR,
@@ -821,7 +819,6 @@ def _first_gate_failure(gates: Iterable[Callable[[], list[GateFailure] | None]])
 
 def _provisioning_gates(
     *,
-    brand_domain: str,
     billing_val: str | None,
     identity: ResolvedIdentity,
     sandbox: bool | None,
@@ -830,9 +827,14 @@ def _provisioning_gates(
     entry: SyncEntry,
     proof_failures: dict[int, list[GateFailure]],
 ) -> list[Callable[[], list[GateFailure] | None]]:
-    """The provisioning branch's gate list, in order: domain validity (reserved
-    TLDs) -> billing policy (BR-RULE-059) -> sandbox capability (BR-RULE-209
-    INV-6) -> notification_configs. The first failure short-circuits the rest.
+    """The provisioning branch's gate list, in order: billing policy (BR-RULE-059) ->
+    sandbox capability (BR-RULE-209 INV-6) -> notification_configs. The first failure
+    short-circuits the rest.
+
+    ``brand.domain`` is NOT gated here. It is an identifier -- a lookup key for the
+    account relationship, never dereferenced -- so ``core/brand-ref.json``'s hostname
+    pattern is the whole rule, and the request model already enforces it. See
+    ``_sync_accounts_impl``'s callers for why: nothing resolves a brand domain.
 
     A module-level function, not a per-entry closure defined inside the sync
     loop: the returned lambdas close over ITS OWN parameters (fresh on every
@@ -840,7 +842,6 @@ def _provisioning_gates(
     no ruff B023 loop-variable-closure warning (#1721 M1).
     """
     return [
-        lambda: _check_domain_validity(brand_domain),
         lambda: _check_billing_policy(billing_val, identity),
         lambda: _check_sandbox_capability(sandbox, tenant),
         lambda: _notification_configs_gate(entry, proof_failures.get(index)),
@@ -866,28 +867,6 @@ def _build_setup_for_approval(mode: str, tenant_id: str) -> "Setup | None":
         return Setup(
             message="Account requires legal review before activation. Our team will review your application.",
         )
-    return None
-
-
-def _check_domain_validity(brand_domain: str) -> list[GateFailure] | None:
-    """Check if the brand domain is valid for account provisioning.
-
-    Returns a list of Error objects if invalid, None if valid.
-    Reserved TLDs (.test, .invalid, .example, .localhost) are rejected.
-    """
-    # RESERVED_TLDS moved verbatim into the egress package when GH #1802 deleted
-    # url_validator.py; policy.py is where host classification is owned now, and
-    # its comment names THIS function as the single source's other consumer.
-    from src.core.security.egress.policy import RESERVED_TLDS
-
-    for tld in RESERVED_TLDS:
-        if brand_domain.endswith(tld):
-            return [
-                GateFailure(
-                    failure_class="invalid_domain",
-                    field="brand.domain",
-                )
-            ]
     return None
 
 
@@ -963,8 +942,8 @@ def _check_sandbox_capability(
 ) -> list[GateFailure] | None:
     """Reject sandbox provisioning when the seller has not declared account.sandbox support.
 
-    Mirrors the ``_check_domain_validity``/``_check_billing_policy`` per-entry
-    gate shape. BR-RULE-209 INV-6: only a seller with ``account.sandbox: true``
+    Mirrors the ``_check_billing_policy`` per-entry gate shape.
+    BR-RULE-209 INV-6: only a seller with ``account.sandbox: true``
     (Tenant.account_sandbox) supports sandbox provisioning.
 
     The posture comes from :func:`resolve_account_sandbox`, the SAME resolver the
@@ -995,7 +974,7 @@ _MEDIA_BUY_ANCHORED_EVENT_TYPES = frozenset({"scheduled", "final", "delayed", "a
 def _check_notification_configs(configs: Iterable[NotificationConfig] | None) -> list[GateFailure] | None:
     """Validate a submitted notification_configs array; None when it is acceptable.
 
-    Same per-entry gate shape as ``_check_domain_validity`` / ``_check_billing_policy``
+    Same per-entry gate shape as ``_check_billing_policy``
     / ``_check_sandbox_capability``, and called from BOTH entry handlers so the two
     branches cannot drift.
 
@@ -1565,7 +1544,6 @@ async def _sync_accounts_impl(
 
             gate_errors = _first_gate_failure(
                 _provisioning_gates(
-                    brand_domain=brand_domain,
                     billing_val=billing_val,
                     identity=identity,
                     sandbox=sandbox,

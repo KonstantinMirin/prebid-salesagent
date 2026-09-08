@@ -59,12 +59,12 @@ def _handler_catches_outbound_error(handler: ast.ExceptHandler) -> bool:
     if handler.type is None:
         return True  # bare `except:` — catches everything, no laundering possible
     names: list[ast.expr] = list(handler.type.elts) if isinstance(handler.type, ast.Tuple) else [handler.type]
-    # Matches `OutboundError` / `outbound_http.OutboundError` / `AdCPError` (an
+    # Matches `OutboundError` / `outbound_http.OutboundError` / `AdCPSalesAgentError` (an
     # ancestor typed branch ahead of the generic one is equally safe). Deliberately
     # does NOT match `Exception`/`BaseException` — a handler catching those IS
     # the generic catch-all this guard is looking for, not a safe narrower one;
     # see `_handler_is_generic_exception` for that check.
-    safe_names = {"OutboundError", "AdCPError"}
+    safe_names = {"OutboundError", "AdCPSalesAgentError"}
     for n in names:
         if isinstance(n, ast.Name) and n.id in safe_names:
             return True

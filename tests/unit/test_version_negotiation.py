@@ -10,8 +10,11 @@ Pins the CORE behavior from the refined implementation plan, steps 1-4:
 2. ``negotiate_adcp_version()`` raises the new ``AdCPVersionUnsupportedError``
    (-> wire code ``VERSION_UNSUPPORTED``) for a version pin outside
    ``SUPPORTED_ADCP_VERSIONS``, and is a no-op for a supported pin / None.
-3. ``_get_adcp_capabilities_impl`` calls negotiation FIRST and lets the error
-   propagate for a bad ``adcp_version`` pin, even on the no-tenant path.
+3. Negotiation runs at the BOUNDARY, so it covers every tool and stays
+   un-tenant-gated. It used to run inside ``_get_adcp_capabilities_impl``,
+   which left every other tool serving a buyer whose pin this build cannot
+   speak. The wire-level grading across transports lives in
+   ``tests/integration/test_version_negotiation_wire.py``.
 4. The DRY ``_build_adcp_block()`` helper derives ``supported_versions`` from
    the single-sourced constant on BOTH the minimal (no-tenant) and full
    (tenant-resolved) response paths -- no literal duplication.
@@ -91,24 +94,99 @@ class TestNegotiateAdcpVersion:
         # Buyer sent no version/major pin at all -- must not raise.
         assert negotiate_adcp_version(None, None) is None
 
+    def test_a_supported_major_does_not_excuse_an_unsupported_release(self):
+        """The pins are constraints, not alternatives.
 
-class TestCapabilitiesImplVersionNegotiation:
-    """Plan step 2: _get_adcp_capabilities_impl negotiates FIRST, before the
-    no-tenant branch, and lets AdCPVersionUnsupportedError propagate.
+        Read as alternatives, a request pinning an unsupported RELEASE alongside a
+        supported MAJOR was accepted -- the major check returned before the release was
+        ever judged.
+        """
+        from src.core.exceptions import AdCPVersionUnsupportedError
+        from src.core.version_negotiation import SUPPORTED_ADCP_MAJORS, negotiate_adcp_version
+
+        with pytest.raises(AdCPVersionUnsupportedError):
+            negotiate_adcp_version("99.0", SUPPORTED_ADCP_MAJORS[0])
+
+    def test_a_supported_release_does_not_excuse_an_unsupported_major(self):
+        from src.core.exceptions import AdCPVersionUnsupportedError
+        from src.core.version_negotiation import SUPPORTED_ADCP_VERSIONS, negotiate_adcp_version
+
+        with pytest.raises(AdCPVersionUnsupportedError):
+            negotiate_adcp_version(SUPPORTED_ADCP_VERSIONS[0], 99)
+
+    def test_the_refusal_names_the_supported_majors(self):
+        """A buyer refused on a MAJOR needs the majors, not only the releases."""
+        from src.core.exceptions import AdCPVersionUnsupportedError
+        from src.core.version_negotiation import (
+            SUPPORTED_ADCP_MAJORS,
+            SUPPORTED_ADCP_VERSIONS,
+            negotiate_adcp_version,
+        )
+
+        with pytest.raises(AdCPVersionUnsupportedError) as exc_info:
+            negotiate_adcp_version(None, 99)
+
+        details = exc_info.value.details
+        assert details.supported_versions == SUPPORTED_ADCP_VERSIONS
+        assert details.supported_majors == SUPPORTED_ADCP_MAJORS
+        assert details.adcp_major_version == 99
+
+    def test_pins_naming_different_majors_are_refused(self, monkeypatch):
+        """Two individually-supported pins can still contradict each other.
+
+        Unreachable while this seller speaks one release -- a supported release and a
+        supported major necessarily agree -- so the supported set is widened here to reach
+        the branch. It becomes reachable for real the moment a second major is served,
+        which is exactly when nobody would think to add the rule.
+        """
+        from src.core import version_negotiation
+        from src.core.exceptions import AdCPVersionUnsupportedError
+
+        monkeypatch.setattr(version_negotiation, "SUPPORTED_ADCP_VERSIONS", ["3.1", "4.0"])
+        monkeypatch.setattr(version_negotiation, "SUPPORTED_ADCP_MAJORS", [3, 4])
+
+        # Each pin is supported on its own; together they name no release that exists.
+        with pytest.raises(AdCPVersionUnsupportedError):
+            version_negotiation.negotiate_adcp_version("3.1", 4)
+
+        # The aligned pairs stay acceptable.
+        assert version_negotiation.negotiate_adcp_version("3.1", 3) is None
+        assert version_negotiation.negotiate_adcp_version("4.0", 4) is None
+
+
+class TestBoundaryNegotiatesForEveryTool:
+    """Plan step 3: negotiation is the boundary's, so no tool can skip it.
+
+    ``_get_adcp_capabilities_impl`` no longer negotiates. Asserting the raise against
+    that function would now grade nothing -- these drive ``invoke_tool``, the single path
+    every transport takes.
     """
 
-    def test_bad_version_pin_raises_even_without_tenant(self):
+    async def test_bad_version_pin_raises_even_without_tenant(self):
         from src.core.config_loader import current_tenant
         from src.core.exceptions import AdCPVersionUnsupportedError
-        from src.core.tools.capabilities import (
-            _get_adcp_capabilities_impl,
-        )
+        from src.core.tools._boundary import invoke_tool
 
         current_tenant.set(None)
         req = GetAdcpCapabilitiesRequest(adcp_version="0.1")
 
         with pytest.raises(AdCPVersionUnsupportedError):
-            _get_adcp_capabilities_impl(req, None)
+            await invoke_tool("get_adcp_capabilities", req, None)
+
+    async def test_capabilities_impl_no_longer_negotiates_on_its_own(self):
+        """The call site MOVED; it was not duplicated.
+
+        Two negotiators would drift, and the boundary's is the one every tool crosses.
+        """
+        from src.core.config_loader import current_tenant
+        from src.core.tools.capabilities import _get_adcp_capabilities_impl
+
+        current_tenant.set(None)
+        req = GetAdcpCapabilitiesRequest(adcp_version="0.1")
+
+        # Reached directly, past the boundary, the implementation just answers.
+        response = _get_adcp_capabilities_impl(req, None)
+        assert response.adcp.supported_versions is not None
 
 
 class TestBuildAdcpBlockDry:

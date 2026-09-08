@@ -132,8 +132,12 @@ T-UC-004-missing-scope :: given a package for media buy "<>" with a missing_metr
 # T-UC-004-missing-window-exclusion  (test_uc004_deliver_media_buy_metrics.py)
 T-UC-004-missing-window-exclusion :: given a package for media buy "<>" with a committed metric not yet measurable for the current measurement_window
 
-# T-UC-004-package-commercial-fields  (test_uc004_deliver_media_buy_metrics.py)
-T-UC-004-package-commercial-fields :: given package "<>" uses pricing_model "<>" with rate <n>.<n> and currency "<>"
+# Graduated: T-UC-004-package-commercial-fields — the Given is wired
+# (given_package_pricing, tests/bdd/steps/domain/uc004_delivery.py), the three
+# commercial-field Thens read by_package off the wire by value, and the scenario passes on
+# a2a/mcp/rest. Its `effective_rate` Then was retired in the same change: no such property
+# exists at AdCP 3.1.1, and the auction reading it meant is graded by
+# T-UC-004-package-auction-effective-rate.
 
 # T-UC-004-package-daily-breakdown-off  (test_uc004_deliver_media_buy_metrics.py)
 T-UC-004-package-daily-breakdown-off :: then the response packages should NOT include "<>" arrays

@@ -629,14 +629,15 @@ def then_response_no_errors_field(ctx: dict) -> None:
 
 
 @then('the response should have an "errors" array')
+@then('the response should contain an "errors" array')
 def then_response_has_errors_array(ctx: dict) -> None:
-    """Assert the response contains a non-empty errors array."""
-    error_response = ctx.get("error_response")
-    assert error_response is not None, (
-        "Expected error_response in ctx (dispatch promotes errors from CreateMediaBuyError)"
-    )
-    errors = getattr(error_response, "errors", None)
-    assert errors and len(errors) > 0, f"Expected non-empty errors array, got: {errors}"
+    """Assert the wire rejection carries a non-empty, conformant errors array.
+
+    The helper asserts the array is non-empty and validates every entry against pinned
+    ``core/error.json``, which subsumes the per-entry code-and-message checks the two
+    hand-rolled versions of this step used to spell out.
+    """
+    ctx["result"].assert_wire_error_is_schema_conformant()
 
 
 @then("the response should NOT have success fields (media_buy_id, packages)")
@@ -648,19 +649,15 @@ def then_response_no_success_fields(ctx: dict) -> None:
     legitimately has {errors, context, ext}; everything else from
     CreateMediaBuySuccess (media_buy_id, buyer_campaign_ref, account,
     creative_deadline, packages, planned_delivery, sandbox, workflow_step_id)
-    must be absent or falsy on the error response.
-    """
-    # On error path, ctx["response"] is deleted by dispatch — only ctx["error_response"] remains
-    resp = payload_or_none(ctx)
-    assert resp is None, f"Expected no success response on error path, but ctx['response'] is present: {resp!r}"
-    error_response = ctx.get("error_response")
-    assert error_response is not None, (
-        "Expected ctx['error_response'] for the error path — dispatch should promote "
-        "CreateMediaBuyError into ctx['error_response']"
-    )
+    must be absent from the envelope the buyer received.
 
-    # Enumerate success-only fields (CreateMediaBuySuccess minus CreateMediaBuyError fields).
-    # These MUST NOT appear as truthy values on the error response.
+    Graded on that envelope. The previous version read success fields off a typed model
+    the harness had rebuilt and then re-serialized it, so it proved the model and its
+    serializer agreed with each other — which is true however wrong the wire is.
+    """
+    envelope = ctx["result"].error_envelope()
+
+    # Success-only fields (CreateMediaBuySuccess minus CreateMediaBuyError's own).
     disallowed_fields = (
         "media_buy_id",
         "buyer_campaign_ref",
@@ -671,38 +668,26 @@ def then_response_no_success_fields(ctx: dict) -> None:
         "sandbox",
         "workflow_step_id",
     )
-    leaked = {}
-    for field in disallowed_fields:
-        value = getattr(error_response, field, None)
-        if value:  # truthy: non-empty string/list/dict, non-None id
-            leaked[field] = value
+    leaked = {field: envelope[field] for field in disallowed_fields if field in envelope}
     assert not leaked, (
-        f"Error response leaked success-only fields: {leaked}. "
+        f"Error envelope leaked success-only fields: {leaked}. "
         f"Per BR-RULE-018 INV-2, an error response must carry errors only — "
         f"no media_buy_id, packages, or other success payload."
     )
 
-    # Serialized shape must also exclude these fields (verifies model_dump drops them,
-    # not just attribute absence — MCP/A2A/REST all serialize via model_dump).
-    if hasattr(error_response, "model_dump"):
-        dumped = error_response.model_dump(exclude_none=True, exclude_defaults=True)
-        leaked_serialized = {k: v for k, v in dumped.items() if k in disallowed_fields and v}
-        assert not leaked_serialized, (
-            f"Error response serialization leaked success-only fields: {leaked_serialized}. "
-            f"The wire payload must not carry success fields on the error path."
-        )
-
 
 @then('each error should include "suggestion" field')
 def then_each_error_has_suggestion(ctx: dict) -> None:
-    """Assert every error in the errors array includes a suggestion field."""
-    error_response = ctx.get("error_response")
-    assert error_response is not None, "Expected error_response in ctx"
-    errors = getattr(error_response, "errors", [])
-    assert errors, "Expected non-empty errors array"
-    for i, err in enumerate(errors):
-        suggestion = getattr(err, "suggestion", None)
-        assert suggestion, f"Error[{i}] missing 'suggestion' field: {err}"
+    """Assert every error on the wire carries a non-empty suggestion.
+
+    ``each`` is what separates this from the singular
+    ``the error should include a "suggestion" field`` in then_error.py: that one grades
+    ``errors[0]``, this one grades the whole array.
+    """
+    errors = ctx["result"].wire_error_objects()
+    assert errors, "Expected a non-empty errors array on the wire"
+    for index, err in enumerate(errors):
+        assert err.get("suggestion"), f"errors[{index}] carries no 'suggestion': {err}"
 
 
 def _retry_after_from_error_object(error_object: dict) -> tuple[object, str] | None:
@@ -772,7 +757,7 @@ def _retry_after_from_wire(result: object) -> tuple[object, str] | None:
 def _retry_after_from_exception(error: object) -> tuple[object, str] | None:
     """Read ``retry_after`` off a reconstructed exception — the IMPL / no-wire path.
 
-    ``AdCPError`` has a first-class ``retry_after`` attribute that serializes to
+    ``AdCPSalesAgentError`` has a first-class ``retry_after`` attribute that serializes to
     the envelope's top level, so that attribute is read first here for the same
     reason the wire top level is read first above.
     """
@@ -830,14 +815,12 @@ def then_error_has_retry_after(ctx: dict) -> None:
             f"both errors[0].retry_after and the legacy errors[0].details slot: {envelope!r}"
         )
     else:
-        # IMPL / no-wire: there is no envelope by definition, so the raised error IS
-        # the product. Check both error keys to match the dispatch contract used by
-        # the other error steps.
-        error = ctx.get("error") or ctx.get("error_response")
+        # No envelope: an MCP dispatch can fail with a ToolError that is genuinely not an
+        # AdCP envelope, and then the raised error IS the product.
+        error = ctx.get("error")
         assert error is not None, (
-            "No error recorded in ctx (checked the result's error envelope, 'error' and "
-            "'error_response') — step claims error should include retry_after but no error "
-            "was captured"
+            "No error recorded in ctx (checked the result's error envelope and 'error') — "
+            "step claims error should include retry_after but no error was captured"
         )
         found = _retry_after_from_exception(error)
         assert found is not None, (

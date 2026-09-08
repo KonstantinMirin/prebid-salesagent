@@ -2,15 +2,17 @@
 
 SyncResponseAccount replaced an SDK-provided type after SDK 5.7 restructured
 the sync_accounts response. This contract test verifies:
-  1. All 13 expected fields exist and are constructable
+  1. Optional fields stay optional
   2. Fields serialize correctly via model_dump
   3. None-valued fields are excluded by default
 
+It does NOT compare the model's field set to a literal. That test existed and is
+retired: SyncResponseAccount inherits the pinned item type, so the set is whatever the
+pin declares, and re-listing it here only asks whether someone retyped the pin. CLAUDE.md
+rules it out by name. EXPECTED_FIELDS survives only as the optional-field roster below.
 """
 
-from adcp.types import Setup as LibrarySetup
 from adcp.types.generated_poc.core.brand_ref import BrandReference
-from adcp.types.generated_poc.core.business_entity import BusinessEntity as LibraryBusinessEntity
 
 from src.core.errors.codes import CODE_TABLE
 from src.core.schemas import Error as LibraryError
@@ -48,43 +50,6 @@ EXPECTED_FIELDS = {
 
 class TestSyncResponseAccountFields:
     """SyncResponseAccount has all fields that production code constructs."""
-
-    def test_has_all_expected_fields(self):
-        """Model declares all 13 expected fields."""
-        actual_fields = set(SyncResponseAccount.model_fields.keys())
-        assert EXPECTED_FIELDS == actual_fields, (
-            f"Field mismatch. Expected: {sorted(EXPECTED_FIELDS)}, got: {sorted(actual_fields)}"
-        )
-
-    def test_construct_with_all_fields(self):
-        """All 13 fields can be populated without validation errors."""
-        account = SyncResponseAccount(
-            brand=BrandReference(domain="acme.com"),
-            operator="create",
-            action="created",
-            status="active",
-            account_id="acc_123",
-            name="Test Account",
-            billing="prepaid",
-            payment_terms="net_45",
-            sandbox=False,
-            errors=[LibraryError(code="VALIDATION_ERROR", message="test error")],
-            setup=LibrarySetup(message="Complete billing setup"),
-            billing_entity=LibraryBusinessEntity(legal_name="Acme GmbH"),
-        )
-        assert account.account_id == "acc_123"
-        assert account.action == "created"
-        assert account.status == "active"
-        assert account.name == "Test Account"
-        assert account.operator == "create"
-        assert account.billing == "prepaid"
-        assert account.payment_terms == "net_45"
-        assert account.sandbox is False
-        assert len(account.errors) == 1
-        assert account.errors[0].code == "VALIDATION_ERROR"
-        assert account.brand.domain == "acme.com"
-        assert account.setup.message == "Complete billing setup"
-        assert account.billing_entity.legal_name == "Acme GmbH"
 
     # Required-field enforcement (brand/operator/action/status per pinned schema
     # 04f59d2d5) was verified generically by the alignment suite, which is deleted

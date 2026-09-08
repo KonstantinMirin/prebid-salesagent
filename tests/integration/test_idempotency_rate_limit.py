@@ -231,9 +231,9 @@ class TestInsertCeilingThroughEntrypoint:
             _tenant, _principal, product, _pricing = env.setup_media_buy_data()
             kwargs = self._create_kwargs(product, idem_key, po_number="RL-REPLAY")
             first = env.call_impl(**kwargs)
-            assert isinstance(first.response, CreateMediaBuySuccess)
+            assert isinstance(first, CreateMediaBuySuccess)
 
             second = env.call_impl(**kwargs)
 
         assert second.replayed is True, "a replay inserts nothing and must never be rate-limited"
-        assert second.response.media_buy_id == first.response.media_buy_id
+        assert second.media_buy_id == first.media_buy_id

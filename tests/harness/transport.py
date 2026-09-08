@@ -93,39 +93,6 @@ def extract_wire_suggestion(envelope: dict | None) -> str | None:
     return errors[0].get("suggestion") or adcp_error.get("suggestion")
 
 
-def _envelope_from_adcp_error(exc: Exception) -> dict[str, Any] | None:
-    """Build a SYNTHESIZED envelope from an AdCPError instance.
-
-    Used by ImplDispatcher (``tests/harness/dispatchers.py``) to populate the
-    separate ``synthesized_error_envelope`` field — IMPL has no wire by
-    definition and ``wire_error_envelope`` is reserved for real wire bytes
-    captured by REST/MCP/A2A. Production code uses the same
-    ``build_two_layer_error_envelope`` helper at the boundary, so the
-    synthesized envelope matches what production would emit for the same
-    exception. It does NOT verify that a regression in
-    ``build_two_layer_error_envelope`` actually reaches the wire.
-
-    ImplDispatcher is its ONLY caller, and deliberately so: no other transport
-    may hand a rebuilt envelope to a test. It lives here rather than in
-    ``dispatchers.py`` because this module is the dispatch-core both
-    ``dispatchers.py`` and ``client.py`` import from; housing it in either would
-    force the other to reach back across that boundary, which is exactly the
-    mutual-lazy-import cycle this module breaks.
-
-    A2A and REST tests asserting on ``result.wire_error_envelope`` see
-    REAL wire bytes:
-        - A2A: the artifact DataPart, carried VERBATIM on the ``WireError``
-          that ``tests.harness._base`` raises, read back off ``.envelope``.
-        - REST: the HTTP response body, captured directly by RestDispatcher.
-        - MCP: the JSON string in ``ToolError``, parsed by McpDispatcher.
-    """
-    from src.core.exceptions import AdCPError, build_two_layer_error_envelope
-
-    if isinstance(exc, AdCPError):
-        return build_two_layer_error_envelope(exc)
-    return None
-
-
 def _wire_envelope_from_exception(exc: Exception) -> dict[str, Any] | None:
     """The REAL wire envelope stashed by the harness, or None. NEVER synthesized.
 
@@ -139,20 +106,18 @@ def _wire_envelope_from_exception(exc: Exception) -> dict[str, Any] | None:
     producer left and reading it returns ``None`` on every real A2A and MCP
     error.
 
-    It used to fall back to ``_envelope_from_adcp_error`` above, the same builder
-    production calls, and return the result under ``wire_error_envelope`` — the
-    field named for what actually crossed the wire. A scenario asserting on that
-    field then graded the harness rebuilding an envelope from the exception it
-    had just caught, which passes whether or not production emitted anything at
-    all. Making the synthesized field private did not close
-    that channel: the laundered copy arrives under the name of the thing it is
-    impersonating.
+    It used to fall back to a synthesizing builder — the same one production calls —
+    and return the result under ``wire_error_envelope``, the field named for what
+    actually crossed the wire. A scenario asserting on that field then graded the
+    harness rebuilding an envelope from the exception it had just caught, which
+    passes whether or not production emitted anything at all. Making the synthesized
+    field private did not close that channel: the laundered copy arrives under the
+    name of the thing it is impersonating. Both the builder and the field are gone.
 
-    ``None`` is the honest answer when nothing crossed the wire. A transport that
-    genuinely has no wire says so through ``has_wire=False`` and offers
-    ``_synthesized_error_envelope`` under its OWN name, as ImplDispatcher does.
-    Do not reintroduce the fallback here; pinned by
-    ``tests/unit/test_harness_mcp_never_synthesizes.py``.
+    ``None`` is the honest answer when nothing crossed the wire. Every ``Transport``
+    member dispatches over a real one, so there is no transport left that could offer
+    a synthesized envelope under any name. Do not reintroduce the fallback here;
+    pinned by ``tests/unit/test_harness_mcp_never_synthesizes.py``.
     """
     real_wire = getattr(exc, "envelope", None)
     return real_wire if isinstance(real_wire, dict) else None
@@ -357,17 +322,6 @@ class TransportResult:
             wire-presence needs its own per-site declaration; that is not this
             lane's, and inventing one here would be the same identity-inference
             mistake in a new spelling.
-        _synthesized_error_envelope: Two-layer envelope produced by
-            ``build_two_layer_error_envelope`` against the IMPL-caught
-            ``AdCPError`` — what production WOULD emit at the boundary.
-            ``None`` on success and on REST/MCP/A2A (those expose the real
-            wire envelope above instead). PRIVATE: read it through
-            :meth:`error_envelope`, which is the only place allowed to decide
-            that this value may stand in for a wire. A test that reads it
-            directly verifies the envelope-builder contract against itself —
-            production and the harness compute it from the same in-memory
-            exception — so a regression in the boundary translator cannot be
-            caught that way. Use REST/MCP/A2A for wire-shape regressions.
     """
 
     payload: BaseModel | None = None
@@ -404,6 +358,18 @@ class TransportResult:
         from tests.helpers import locate_envelope_error
 
         return locate_envelope_error(self.wire_error_envelope)
+
+    def wire_error_objects(self) -> list[dict[str, Any]]:
+        """Every payload-layer error object from the captured wire, in order.
+
+        The plural of :meth:`wire_error_object`, for the steps whose obligation covers
+        ALL entries rather than the first. Same locator, so the two cannot disagree.
+
+        Tolerant: an empty list when no wire envelope was captured.
+        """
+        from tests.helpers import locate_envelope_errors
+
+        return locate_envelope_errors(self.wire_error_envelope)
 
     def error_code(self) -> str | None:
         """The error code for THIS result, whatever transport produced it.

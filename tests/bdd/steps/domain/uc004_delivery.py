@@ -19,7 +19,14 @@ import pytest
 from adcp.types import AuthenticationScheme
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import error_envelope_or_none, payload_or_none, require_payload
+from tests.bdd.steps._outcome_helpers import (
+    error_envelope_or_none,
+    payload_or_none,
+    require_payload,
+    wire_advisory_errors,
+    wire_entry,
+    wire_field,
+)
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
@@ -172,6 +179,45 @@ def given_media_buy_with_status(ctx: dict, mb_id: str, owner: str, status: str) 
     _ensure_media_buy_in_db(ctx, mb_id, owner, status)
 
 
+@given(
+    parsers.parse(
+        'package "{pkg_id}" uses pricing_model "{pricing_model}" with rate {rate:g} and currency "{currency}"'
+    )
+)
+def given_package_pricing(ctx: dict, pkg_id: str, pricing_model: str, rate: float, currency: str) -> None:
+    """The most recently seeded buy carries ONE package bought on these terms.
+
+    Rewrites the buy's persisted request to name *pkg_id* and stores the matching
+    ``MediaPackage`` row, both through the fixture machinery: the request package comes
+    from ``request_package`` (bound to ``PackageRequest``), the option is named by
+    ``synthetic_pricing_option_id``, and the row's ``pricing_info`` is the same projection
+    production writes. Nothing here restates a shape.
+
+    Fixed-rate terms. The auction Given below is separate because auction pricing carries
+    a bid and the rate the buyer is owed is derived, not agreed.
+    """
+    _seed_package_terms(ctx, pkg_id, pricing_model=pricing_model, rate=rate, currency=currency, is_fixed=True)
+
+
+@given(
+    parsers.parse(
+        'package "{pkg_id}" is bought at auction on pricing_model "{pricing_model}" '
+        'with bid_price {bid_price:g} and currency "{currency}"'
+    )
+)
+def given_package_auction_pricing(ctx: dict, pkg_id: str, pricing_model: str, bid_price: float, currency: str) -> None:
+    """The most recently seeded buy carries ONE package bought at AUCTION.
+
+    An auction package has a bid, not an agreed rate: ``get-media-buy-delivery-response.json``
+    says of ``by_package[].rate`` that "For auction-based pricing, this represents the
+    effective rate based on actual delivery" — so the rate the buyer is owed is computed
+    from what delivered, and no rate is stored for it up front.
+    """
+    _seed_package_terms(
+        ctx, pkg_id, pricing_model=pricing_model, rate=None, currency=currency, is_fixed=False, bid_price=bid_price
+    )
+
+
 @given(parsers.parse('a media buy "{mb_id}" owned by "{owner}" with status "{status}" and reach_unit "{reach_unit}"'))
 def given_media_buy_with_status_and_reach_unit(ctx: dict, mb_id: str, owner: str, status: str, reach_unit: str) -> None:
     """Create a media buy with a status and a reach_unit (v3.1 BR-RULE-224).
@@ -322,6 +368,23 @@ def given_adapter_has_data(ctx: dict, mb_id: str) -> None:
     """Configure adapter mock to return delivery data for the media buy."""
     env = ctx["env"]
     env.set_adapter_response(media_buy_id=mb_id)
+
+
+@given(parsers.parse('the ad server adapter reports {impressions:d} impressions and {spend:g} spend for "{pkg_id}"'))
+def given_adapter_package_metrics(ctx: dict, impressions: int, spend: float, pkg_id: str) -> None:
+    """The adapter reports exactly these metrics for *pkg_id* of the seeded buy.
+
+    Per-package, because an effective rate is a ratio of what THIS package delivered; a
+    buy-level total would not pin it.
+    """
+    mb_id = next(reversed(ctx.get("media_buys", {})), None)
+    assert mb_id, "adapter metrics need a media buy — the scenario must seed one first"
+    ctx["env"].set_adapter_response(
+        media_buy_id=mb_id,
+        impressions=impressions,
+        spend=spend,
+        packages=[{"package_id": pkg_id, "impressions": impressions, "spend": spend}],
+    )
 
 
 @given("the ad server adapter has delivery data for both media buys")
@@ -1612,15 +1675,22 @@ def then_aggregated_spend(ctx: dict) -> None:
 
 @then(parsers.parse('the response should not include an error for "{mb_id}"'))
 def then_no_error_for_mb(ctx: dict, mb_id: str) -> None:
-    """Assert no error for a specific media buy — checks both global ctx and per-delivery errors."""
-    assert "error" not in ctx, f"Expected no error for '{mb_id}' but got: {ctx.get('error')}"
-    resp = payload_or_none(ctx)
-    if resp is not None:
-        deliveries = getattr(resp, "media_buy_deliveries", None) or []
-        for d in deliveries:
-            if getattr(d, "media_buy_id", None) == mb_id:
-                per_delivery_errors = getattr(d, "errors", None) or []
-                assert not per_delivery_errors, f"Delivery '{mb_id}' has errors: {per_delivery_errors}"
+    """No entry in the response's ``errors[]`` names *mb_id*.
+
+    The buyer-facing side of the advisory contract its twin
+    (``the response errors include code ... for media buy ...``) grades: the delivery
+    verb answers about EVERY id it was asked about, naming an unresolved one in
+    ``errors[]`` — "Task-specific errors and warnings (e.g., missing delivery data,
+    reporting platform issues)", ``get-media-buy-delivery-response.json`` — and saying
+    nothing there about the ones it delivered.
+
+    Read BY VALUE off the wire array (through the sanctioned reader), not off
+    ``ctx["error"]``: the sibling step promotes the entry it matched into ``ctx``, so a
+    ctx-presence check would report a failure for THIS id whenever another id in the
+    same response had one.
+    """
+    named = [err for err in wire_advisory_errors(ctx) if (err.get("details") or {}).get("media_buy_id") == mb_id]
+    assert not named, f"Response errors[] names media buy {mb_id!r}: {named}"
 
 
 @then(parsers.re(r'the response errors include code "(?P<code>[^"]+)" for media buy "(?P<mb_id>[^"]+)"$'))
@@ -2639,6 +2709,56 @@ def then_packages_include_field(ctx: dict, field: str) -> None:
     assert checked >= 1, "Response has no packages to check"
 
 
+def _wire_package(ctx: dict, pkg_id: str) -> dict:
+    """The ``by_package`` entry for *pkg_id*, off the serialized wire body.
+
+    Two hops, because ``by_package`` sits inside a list element and ``wire_lookup``'s
+    dotted path deliberately does not index lists. The delivery is located by the
+    sanctioned ``wire_entry`` primitive with the count pinned, as its docstring requires
+    for an index-located entry; the package is then found by value within it. Sole
+    implementation, so the three commercial-field Thens cannot drift apart.
+    """
+    deliveries = wire_field(ctx, "media_buy_deliveries")
+    assert len(deliveries) == 1, f"expected one delivery to read {pkg_id!r} from, got {len(deliveries)}"
+    delivery = wire_entry(ctx, "media_buy_deliveries", index=0)
+    packages = delivery.get("by_package") or []
+    named = [pkg for pkg in packages if pkg.get("package_id") == pkg_id]
+    assert named, f"no by_package entry for {pkg_id!r}; wire carried {[p.get('package_id') for p in packages]}"
+    return named[0]
+
+
+@then(parsers.parse('the response packages should include pricing_model "{expected}" for "{pkg_id}"'))
+def then_package_pricing_model(ctx: dict, expected: str, pkg_id: str) -> None:
+    """The package's pricing_model on the wire is *expected*.
+
+    Required on every ``by_package`` entry by get-media-buy-delivery-response.json and
+    typed as the ``enums/pricing-model.json`` enum — read off the wire, not the typed
+    payload, because a serialized enum member is what the buyer actually receives.
+    """
+    actual = _wire_package(ctx, pkg_id).get("pricing_model")
+    assert actual == expected, f"package {pkg_id!r} pricing_model is {actual!r}, expected {expected!r}"
+
+
+@then(parsers.parse('the response packages should include rate {expected:g} for "{pkg_id}"'))
+def then_package_rate(ctx: dict, expected: float, pkg_id: str) -> None:
+    """The package's rate on the wire is *expected*.
+
+    get-media-buy-delivery-response.json: "For fixed-rate pricing, this is the agreed rate
+    ... For auction-based pricing, this represents the effective rate based on actual
+    delivery." One step grades both readings — which value is owed is the scenario's
+    business, and it says so by the number it passes.
+    """
+    actual = _wire_package(ctx, pkg_id).get("rate")
+    assert actual == expected, f"package {pkg_id!r} rate is {actual!r}, expected {expected!r}"
+
+
+@then(parsers.parse('the response packages should include currency "{expected}" for "{pkg_id}"'))
+def then_package_currency(ctx: dict, expected: str, pkg_id: str) -> None:
+    """The package's currency on the wire is *expected* (required on every entry)."""
+    actual = _wire_package(ctx, pkg_id).get("currency")
+    assert actual == expected, f"package {pkg_id!r} currency is {actual!r}, expected {expected!r}"
+
+
 @then(parsers.parse('the response packages should include "{f1}" and "{f2}" breakdowns'))
 def then_packages_include_two(ctx: dict, f1: str, f2: str) -> None:
     """Assert every package has both named breakdown fields as non-empty lists."""
@@ -3389,6 +3509,63 @@ def _ensure_media_buy_in_db(
         mb_kwargs["end_date"] = _date.fromisoformat(end_date)
 
     MediaBuyFactory(**mb_kwargs)
+
+
+def _seed_package_terms(
+    ctx: dict,
+    pkg_id: str,
+    *,
+    pricing_model: str,
+    rate: float | None,
+    currency: str,
+    is_fixed: bool,
+    bid_price: float | None = None,
+) -> None:
+    """Give the buy seeded by the preceding Given exactly one package on these terms.
+
+    Both halves of a package's identity move together, which is the whole point: the
+    persisted request names *pkg_id* and the option, and the ``MediaPackage`` row carries
+    the matching ``pricing_info``. The delivery path joins them by ``package_id``, so
+    seeding one without the other grades nothing.
+    """
+    env = ctx["env"]
+    if env is None or not hasattr(env, "_session"):
+        return
+
+    from decimal import Decimal
+
+    from sqlalchemy import select
+    from sqlalchemy.orm import attributes
+
+    from src.core.database.models import MediaBuy
+    from src.core.helpers.pricing_helpers import pricing_info_for, synthetic_pricing_option_id
+    from tests.factories import MediaPackageFactory, PricingOptionFactory
+    from tests.factories.media_buy import request_package
+
+    option = PricingOptionFactory.build(
+        pricing_model=pricing_model,
+        currency=currency,
+        is_fixed=is_fixed,
+        rate=Decimal(str(rate)) if rate is not None else None,
+    )
+    package = request_package(package_id=pkg_id, pricing_option_id=synthetic_pricing_option_id(option))
+    if bid_price is not None:
+        package["bid_price"] = bid_price
+
+    mb_id = next(reversed(ctx.get("media_buys", {})), None)
+    assert mb_id, "package terms need a media buy — the scenario must seed one first"
+    session = env._session
+    buy = session.scalars(select(MediaBuy).filter_by(media_buy_id=mb_id)).first()
+    assert buy is not None, f"media buy {mb_id!r} was not seeded into the database"
+
+    buy.raw_request = {**(buy.raw_request or {}), "packages": [package]}
+    attributes.flag_modified(buy, "raw_request")
+    MediaPackageFactory(
+        media_buy=buy,
+        package_id=pkg_id,
+        package_config={**package, "pricing_info": pricing_info_for(option, bid_price=bid_price)},
+    )
+    session.commit()
 
 
 def _parse_request_params(params_str: str) -> dict[str, Any]:

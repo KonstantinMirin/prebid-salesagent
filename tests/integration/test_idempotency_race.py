@@ -146,7 +146,7 @@ class TestDegradedReplayImpossibleState:
 
     def test_no_same_key_buy_rejects_terminal(self, integration_db):
         """No buy carries the key ⇒ CONFIGURATION_ERROR + terminal, not the transient sibling."""
-        from src.core.exceptions import AdCPError
+        from src.core.exceptions import AdCPSalesAgentError
         from src.core.tools.media_buy_create import _raise_degraded_replay_outcome
         from tests.factories import PrincipalFactory, TenantFactory
 
@@ -160,7 +160,7 @@ class TestDegradedReplayImpossibleState:
             # Deliberately NO MediaBuy carrying idem_key.
             env.get_session()  # commit factory data
 
-        with pytest.raises(AdCPError) as exc_info:
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
             _raise_degraded_replay_outcome(
                 tenant_id,
                 idem_key,
@@ -385,8 +385,8 @@ class TestRaceSeamThroughEntrypoint:
                 "idempotency_key": idem_key,
             }
             first = env.call_impl(**call_kwargs)
-            assert isinstance(first.response, CreateMediaBuySuccess)
-            winner_id = first.response.media_buy_id
+            assert isinstance(first, CreateMediaBuySuccess)
+            winner_id = first.media_buy_id
 
             # Lose the cache row (TTL expiry / lost write) while the MediaBuy
             # survives — the race-loser state. expire_old with a far-future
@@ -459,8 +459,8 @@ class TestDegradedFallbackScopeRules:
         with MediaBuyCreateEnv() as env:
             _tenant, _principal, product, _pricing = env.setup_media_buy_data()
             first = env.call_impl(**self._create_kwargs(product, idem_key, po_number="DEG-1"))
-            assert isinstance(first.response, CreateMediaBuySuccess)
-            winner_id = first.response.media_buy_id
+            assert isinstance(first, CreateMediaBuySuccess)
+            winner_id = first.media_buy_id
 
             with MediaBuyUoW(env._tenant_id) as uow:
                 assert uow.idempotency_attempts is not None
@@ -539,9 +539,9 @@ class TestDegradedFallbackScopeRules:
             first = env.call_impl(account={"account_id": "acct_a"}, **kwargs)
             second = env.call_impl(account={"account_id": "acct_b"}, **kwargs)
 
-        assert isinstance(first.response, CreateMediaBuySuccess)
-        assert isinstance(second.response, CreateMediaBuySuccess)
-        assert second.response.media_buy_id != first.response.media_buy_id
+        assert isinstance(first, CreateMediaBuySuccess)
+        assert isinstance(second, CreateMediaBuySuccess)
+        assert second.media_buy_id != first.media_buy_id
         assert second.replayed is False, "a different account is an independent request, never a replay"
 
 

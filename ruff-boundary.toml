@@ -1,0 +1,66 @@
+# Tool-implementation import bans for the shipped tree (salesagent-83pmq).
+#
+# Run as its own quality line: `uv run ruff check --config ruff-boundary.toml
+# --no-respect-gitignore src/ scripts/` (see Makefile `quality` / `quality-ci`).
+#
+# ## What this bans, and why the ban is the fix
+#
+# `src/core/tools/_boundary.py`'s `invoke()` is where a tool's obligations happen --
+# account enrichment, idempotency scoping, replay lookup, success caching, version
+# stamping. Its docstring states the invariant: an implementation is called with the
+# request and the caller, and nothing else. A service that imports an `_impl` and calls
+# it gives a tool a SECOND entry point, so the invariant holds for one of them and every
+# obligation added to `invoke()` from then on silently does not apply to the other.
+#
+# The cure is making the call unavailable, not listing offenders --
+# `docs/design/one-tool-registry.md` § "Why this needs no guards", and the precedent of
+# `_register_tool`, which REFUSES a tool with no DTO rather than reporting one. Python
+# cannot make a module-level function unimportable (`registry.py` must import all
+# fourteen to build `TOOLS`), so the ban fires on the IMPORT: a service reaching for an
+# impl fails the build where it reaches, not at review.
+#
+# ## Scope
+#
+# `src/` and `scripts/` -- the code this repo ships and operates with, matching
+# `ruff-egress.toml`. `tests/` is deliberately out, and this is why the bans live in
+# their own config rather than in `pyproject.toml`'s repo-wide table: a direct
+# `_impl` call is SANCTIONED in tests (`tests/CLAUDE.md`: the harness's
+# `env.call_impl(...)`, and `pytest.raises` against the error class, are the oracle
+# where the obligation is about what `_impl` returns or raises). `tests/unit/
+# test_architecture_bdd_no_direct_call_impl.py` governs the one place it is not.
+#
+# Unlike the egress line, this one runs WITHOUT `--ignore-noqa`: an import that cannot
+# be cleaned takes a line-scoped `# noqa: TID251` with a reason beside it. There are
+# none today, and a new one is a review conversation.
+#
+# ## Reaching an implementation legitimately
+#
+# `invoke_tool(name, req, identity)` from a transport; `TOOLS[name].impl` when you need
+# the function object. A caller with no buyer and no request envelope wants a SERVICE,
+# not the tool -- `delivery_for_media_buy` is the worked example.
+
+[lint]
+select = ["TID251"]
+
+[lint.per-file-ignores]
+# The registry must import all fourteen to build TOOLS. It is the ONLY exemption:
+# every other importer is the disease this table exists to prevent.
+"src/core/tools/registry.py" = ["TID251"]
+
+[lint.flake8-tidy-imports.banned-api]
+"src.core.tools.accounts._list_accounts_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.accounts._sync_accounts_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.capabilities._get_adcp_capabilities_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.creative_formats._list_creative_formats_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.creatives._sync._sync_creatives_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly. The SERVICE sync_creatives() is what another tool calls (critical pattern #5) (salesagent-83pmq)."
+"src.core.tools.creatives._sync_creatives_impl".msg = "The package-level re-export is deleted; reach a tool through invoke_tool() / TOOLS[name].impl, or import the service sync_creatives() (salesagent-83pmq)."
+"src.core.tools.creatives.listing._list_creatives_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.creatives._list_creatives_impl".msg = "The package-level re-export is deleted; reach a tool through invoke_tool() / TOOLS[name].impl (salesagent-83pmq)."
+"src.core.tools.media_buy_create._create_media_buy_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.media_buy_delivery._get_media_buy_delivery_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl. A server-initiated read wants the service: delivery_for_media_buy() in the same module (salesagent-83pmq)."
+"src.core.tools.media_buy_list._get_media_buys_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.media_buy_update._update_media_buy_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.products._get_products_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.task_management._complete_task_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.task_management._get_task_status_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+"src.core.tools.task_management._list_tasks_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."

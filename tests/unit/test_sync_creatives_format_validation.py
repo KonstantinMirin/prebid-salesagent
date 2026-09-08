@@ -10,7 +10,7 @@ import pytest
 
 from src.core.errors.details import AdapterFailureDetails
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.tools.creatives import _sync_creatives_impl
+from src.core.tools.creatives._sync import _sync_creatives_impl
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.helpers.creative_test_helpers import (
     make_creative_dict,

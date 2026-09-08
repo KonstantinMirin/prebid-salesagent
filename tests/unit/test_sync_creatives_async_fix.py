@@ -14,7 +14,7 @@ import pytest
 from adcp.types import FormatId
 
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.tools.creatives import _sync_creatives_impl
+from src.core.tools.creatives._sync import _sync_creatives_impl
 from src.core.validation_helpers import run_async_in_sync_context
 from tests.factories.creative_asset import build_assets, image_spec, text_spec
 from tests.harness import make_mock_uow

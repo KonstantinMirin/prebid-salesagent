@@ -113,7 +113,7 @@ def test_create_dry_run_wire_carries_media_buy_status_pending_start(integration_
         result = env.call_impl(**_create_kwargs(product, domain="status-wire-dry.example.com"))
 
     envelope = result.model_dump(mode="json")
-    response_envelope = result.response.model_dump(mode="json")
+    response_envelope = result.model_dump(mode="json")
 
     # Branch-proof: only the dry-run branch mints a "dry_run_"-prefixed
     # media_buy_id (no adapter call, no persisted buy).

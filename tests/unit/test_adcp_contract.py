@@ -52,7 +52,7 @@ from src.core.schemas import (
     Product as ProductSchema,
 )
 from tests.factories.creative_asset import build_assets, image_spec, url_spec, video_spec
-from tests.helpers.delivery_pricing import package_pricing_fields
+from tests.factories.media_buy import package_pricing_fields
 
 
 class TestSchemaMatchesLibrary:
@@ -1739,6 +1739,7 @@ class TestAdCPContract:
 
         # Test error response (oneOf error branch)
         error_response = CreateMediaBuyError(
+            status="failed",
             errors=[{"code": "test_error", "message": "test error"}],
         )
         adcp_error = error_response.model_dump()
@@ -1757,6 +1758,7 @@ class TestAdCPContract:
             packages=[],
         )
         error_via_union: CreateMediaBuyResponse = CreateMediaBuyError(
+            status="failed",
             errors=[{"code": "test", "message": "test"}],
         )
 
@@ -1808,6 +1810,7 @@ class TestAdCPContract:
 
         # Test error response (oneOf error branch)
         error_response = UpdateMediaBuyError(
+            status="failed",
             errors=[{"code": "update_failed", "message": "Update operation failed"}],
         )
         adcp_error = error_response.model_dump()

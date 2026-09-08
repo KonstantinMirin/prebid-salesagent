@@ -54,6 +54,7 @@ from typing import Any
 
 import factory
 
+from src.core.schemas import PackageRequest
 from src.core.schemas.creative import CreativeAssetRequest
 from src.core.tools.registry import TOOLS
 
@@ -225,6 +226,38 @@ class CreativeAssetRequestFactory(_RequestFactory):
     assets = factory.LazyFunction(lambda: build_assets(image_spec("image")))
 
 
+class PackageRequestFactory(_RequestFactory):
+    """One package ITEM of a ``create_media_buy`` request, as the wire dict.
+
+    The sibling of ``CreativeAssetRequestFactory`` above, for the other collection a tool
+    request carries. It binds ``src.core.schemas.PackageRequest`` — the item model
+    ``CreateMediaBuyRequest.packages`` holds — so the package shape is DERIVED from the
+    accepted model rather than typed out. A literal here is bound to nothing: it carries
+    the fields whoever wrote it happened to think of, and a field the pin adds tomorrow
+    lands in no copy of it.
+
+    Only the three the model REQUIRES are declared (``product_id``, ``budget``,
+    ``pricing_option_id``); the other 31 fields are optional and a baseline that supplied
+    them would be stating decisions the buyer did not make. ``pricing_option_id`` is the
+    one that matters downstream: ``get_media_buy_delivery`` resolves the
+    ``pricing_model``/``rate``/``currency`` its response REQUIRES per package from the
+    option it names.
+
+    ``package_id`` is deliberately ABSENT and cannot be supplied through ``build()``: it
+    is not a ``PackageRequest`` field because the buyer does not send it. The seller mints
+    it and ``MediaBuyRepository.create_from_request`` injects it into the persisted
+    ``raw_request`` — which is why the ORM fixtures inject it there too
+    (``tests/factories/media_buy.py``), on the payload, not through the model.
+    """
+
+    class Meta:
+        model = PackageRequest
+
+    product_id = "prod-1"
+    budget = 5000.0
+    pricing_option_id = "cpm_usd_fixed"
+
+
 class CreateMediaBuyRequestFactory(_RequestFactory):
     """A create_media_buy request that conforms to ``media-buy/create-media-buy-request.json``.
 
@@ -253,9 +286,7 @@ class CreateMediaBuyRequestFactory(_RequestFactory):
     brand = factory.LazyFunction(lambda: {"domain": "testbrand.com"})
     start_time = factory.LazyFunction(lambda: _campaign_window()[0])
     end_time = factory.LazyFunction(lambda: _campaign_window()[1])
-    packages = factory.LazyFunction(
-        lambda: [{"product_id": "prod-1", "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}]
-    )
+    packages = factory.LazyFunction(lambda: [PackageRequestFactory.payload()])
 
 
 class SyncCreativesRequestFactory(_RequestFactory):

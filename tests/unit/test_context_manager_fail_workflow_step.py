@@ -172,7 +172,7 @@ class TestWireCodeAndRecoveryCannotContradictThePin:
     """origin/main #1858's sanitization obligation, at the layer that now enforces it.
 
     main's ``test_non_standard_wire_code_is_sanitized_with_the_pinned_recovery``
-    reached the helper's rewrite branch by constructing an ``AdCPError`` and
+    reached the helper's rewrite branch by constructing an ``AdCPSalesAgentError`` and
     ASSIGNING ``error_code = "TOTALLY_NON_STANDARD_CODE"``, then proved the
     substituted SERVICE_UNAVAILABLE carried the pin's ``transient`` instead of a
     hand-typed ``terminal``. Neither the assignment nor the rewrite is

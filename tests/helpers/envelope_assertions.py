@@ -54,11 +54,26 @@ def locate_envelope_error(target: Any) -> dict[str, Any] | None:
     body = target.envelope if hasattr(target, "envelope") else target
     if not isinstance(body, dict):
         return None
-    errors = body.get("errors")
-    if not errors:
-        return None
-    first = errors[0]
-    return first if isinstance(first, dict) else None
+    errors = locate_envelope_errors(target)
+    return errors[0] if errors else None
+
+
+def locate_envelope_errors(target: Any) -> list[dict[str, Any]]:
+    """Every payload-layer error object, in wire order.
+
+    The plural of :func:`locate_envelope_error`, for the steps whose obligation is about
+    ALL entries ("each error should include a suggestion") rather than the first. Sharing
+    the locator is the point: a step that walked ``envelope["errors"]`` itself would be a
+    second answer to "where does the spec put this?".
+
+    Tolerant on the same terms as the singular: an absent envelope is an empty list.
+    """
+    if target is None:
+        return []
+    body = target.envelope if hasattr(target, "envelope") else target
+    if not isinstance(body, dict):
+        return []
+    return [entry for entry in body.get("errors") or [] if isinstance(entry, dict)]
 
 
 def assert_no_raw_validation_leak(message: str) -> None:
