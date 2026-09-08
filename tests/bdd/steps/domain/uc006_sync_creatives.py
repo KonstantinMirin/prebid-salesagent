@@ -15,9 +15,9 @@ import json
 from unittest.mock import ANY
 
 import pytest
-from adcp.types import ErrorCode
 from pytest_bdd import given, parsers, then, when
 
+from src.core.errors.codes import ErrorCode
 from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps._outcome_helpers import is_e2e, payload_or_none, require_payload
 from tests.bdd.steps.generic._account_resolution import (
