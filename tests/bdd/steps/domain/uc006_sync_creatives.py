@@ -32,6 +32,7 @@ from tests.factories.creative_asset import (
     text_spec,
     url_spec,
 )
+from tests.factories.malformed import malformed
 from tests.factories.principal import PrincipalFactory
 from tests.harness.creative_sync import creative_fingerprint
 
@@ -2051,21 +2052,27 @@ def given_creative_with_known_format_no_media_url(ctx: dict) -> None:
 
     Production's preview-failure branch in _processing.py only fires when both
     ``creative.url`` and ``data["url"]`` are absent (see _processing.py:712-737).
-    To trigger that branch reliably we omit any url/asset entirely — assets are
-    optional on the request schema.
+    To trigger that branch reliably we omit any url/asset entirely, which the
+    pinned request model rejects — hence the ``malformed`` declaration below.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
 
     format_id = "display_300x250"
     creative_id = "creative-no-media-url-001"
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": "Creative Without media_url",
-        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        # Intentionally no "assets" and no "url" / "media_url" — triggers the
-        # has_media_url=False path in _processing.py preview branch.
-    }
+    creative_payload = malformed(
+        "absent_key",
+        "no 'assets' key and no url/media_url anywhere: the omission is deliberate, and it is "
+        "the only way to reach production's has_media_url=False preview-failure branch, which "
+        "requires BOTH creative.url and data['url'] to be absent. CreativeAssetRequest rejects "
+        "it with assets Field required [type=missing] — assets are NOT optional on the request "
+        "schema, contrary to what this step used to claim.",
+        {
+            "creative_id": creative_id,
+            "name": "Creative Without media_url",
+            "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
+        },
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
     ctx["creative_id"] = creative_id
@@ -2631,12 +2638,20 @@ def given_creative_with_name_no_format(ctx: dict, name: str) -> None:
     """Set up a creative payload with a name but no format_id — triggers CREATIVE_FORMAT_REQUIRED."""
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    creative_payload = {
-        "creative_id": f"creative-no-fmt-{name.lower().replace(' ', '-')}-001",
-        "name": name,
-        "format_id": None,
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = malformed(
+        "explicit_none",
+        "format_id is present and explicitly None — not omitted. The scenario exercises "
+        "CREATIVE_FORMAT_REQUIRED, so the key has to be on the wire carrying null; "
+        "CreativeAssetRequest rejects it with [type=oneOf] provide exactly one of format_id or "
+        "format_kind. The pin reports an omitted key identically, which is exactly why the kind "
+        "is declared here rather than derived from the value.",
+        {
+            "creative_id": f"creative-no-fmt-{name.lower().replace(' ', '-')}-001",
+            "name": name,
+            "format_id": None,
+            "assets": build_assets(image_spec("image")),
+        },
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
 
 
@@ -2664,12 +2679,20 @@ def given_creative_invalid_schema(ctx: dict) -> None:
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    creative_payload = {
-        "creative_id": "creative-invalid-schema-001",
-        "name": "Invalid Schema Creative",
-        "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": "not-a-valid-assets-structure",
-    }
+    creative_payload = malformed(
+        "wrong_type",
+        "assets is a str where the pin requires an object — CreativeAssetRequest rejects it "
+        "with assets Input should be a valid dictionary [type=dict_type]. format_id is valid on "
+        "purpose so the scenario grades CREATIVE_VALIDATION_FAILED and not "
+        "CREATIVE_FORMAT_REQUIRED; sending the wrong type is the scenario's whole subject, so "
+        "these exact bytes must reach the wire unrepaired.",
+        {
+            "creative_id": "creative-invalid-schema-001",
+            "name": "Invalid Schema Creative",
+            "format_id": {"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+            "assets": "not-a-valid-assets-structure",
+        },
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
 
 
@@ -4807,14 +4830,34 @@ def given_creative_with_known_http_format(ctx: dict) -> None:
 
 @given("a creative with no format_id")
 def given_creative_with_no_format_id(ctx: dict) -> None:
-    """Set up a creative payload with format_id omitted."""
+    """Set up a creative payload with format_id omitted.
+
+    BOUND, despite grepping like dead code. No feature file contains this step's
+    literal text; it is reached through Examples substitution, from
+    ``BR-UC-006-sync-creatives.feature``'s "Format validation — <partition>" outline
+    (``And a creative with <format_setup>``, row ``missing_format_id`` whose
+    ``format_setup`` is ``no format_id``). That renders to exactly this step name and
+    resolves here — confirmed against pytest-bdd's own registered parsers, not by
+    grep. It grades three nodeids, ``test_format_validation__partition``
+    ``[a2a|mcp|rest-missing_format_id-...]``, all xfail-dormant at SETUP on
+    "UC-006 harness not yet wired for non-account scenarios" — so deleting this step
+    would leave every count unchanged while removing the binding.
+    """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    creative_payload = {
-        "creative_id": "creative-no-fmt-001",
-        "name": "Creative Without Format",
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = malformed(
+        "absent_key",
+        "no 'format_id' key at all — the partition's subject is a request that never names a "
+        "format, so the key must be absent on the wire rather than null. CreativeAssetRequest "
+        "rejects it with [type=oneOf] provide exactly one of format_id or format_kind, the same "
+        "message an explicit None produces, which is why absent_key is declared rather than "
+        "inferred.",
+        {
+            "creative_id": "creative-no-fmt-001",
+            "name": "Creative Without Format",
+            "assets": build_assets(image_spec("image")),
+        },
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_no_format"] = True
 
@@ -6144,12 +6187,20 @@ def given_creative_with_invalid_format_id(ctx: dict) -> None:
 
     format_id = "invalid format!!!"
     creative_id = "creative-invalid-fmt-001"
-    creative_payload = {
-        "creative_id": creative_id,
-        "name": "Invalid Format Creative",
-        "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-        "assets": build_assets(image_spec("image")),
-    }
+    creative_payload = malformed(
+        "semantic",
+        "format_id is shaped correctly — a str in the id slot, alongside a real agent_url — but "
+        "its VALUE breaks FormatId.id's pattern: CreativeAssetRequest rejects it with "
+        "format_id.id String should match pattern '^[a-zA-Z0-9_-]+$' "
+        "[type=string_pattern_mismatch]. The scenario grades syntactic format-id validation, so "
+        "the spaces and '!!!' are the payload's point and must survive to the wire.",
+        {
+            "creative_id": creative_id,
+            "name": "Invalid Format Creative",
+            "format_id": {"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
+            "assets": build_assets(image_spec("image")),
+        },
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
 
