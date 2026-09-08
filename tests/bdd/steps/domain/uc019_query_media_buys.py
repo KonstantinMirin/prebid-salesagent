@@ -3161,10 +3161,18 @@ def then_media_buy_wire_field_degraded(ctx: dict, mb_id: str, field: str) -> Non
     )
 )
 def then_raw_request_advisory_code_and_recovery(ctx: dict, mb_id: str, field: str, code: str, recovery: str) -> None:
-    """Both halves, off the wire, and exactly one advisory in the whole document.
+    """Every half the sentence names, off the wire, and exactly one advisory in the document.
 
     The document-wide count is what grades "alone" here, for the same reason it does on
     the package rows: without it an implementation that degrades every blob value passes.
+
+    ``mb_id`` is graded too, which it was not: the sentence says "for media buy X" and the
+    step only substring-matched the FIELD half, so an advisory naming a different media buy
+    satisfied it. Production emits the pointer as
+    ``media_buys[<media_buy_id>].<field>`` (media_buy_list.py's ``field_path`` for the
+    raw_request blob rule), so both halves are on the wire and both are asserted. Membership
+    rather than exact-template equality: the identity is what the scenario names, and the
+    pointer's spelling is production's to change.
     """
     advisories = _wire_advisories(ctx)
 
@@ -3173,8 +3181,12 @@ def then_raw_request_advisory_code_and_recovery(ctx: dict, mb_id: str, field: st
         f"{field!r} must degrade that field ALONE — got {len(advisories)}: {advisories!r}"
     )
     advisory = advisories[0]
-    assert field in str(advisory.get("field", "")), (
-        f"expected the advisory to name field {field!r}; got {advisory.get('field')!r}"
+    pointer = str(advisory.get("field", ""))
+    assert field in pointer, f"expected the advisory to name field {field!r}; got {advisory.get('field')!r}"
+    assert mb_id in pointer, (
+        f"expected the advisory pointer to name media buy {mb_id!r} — the sentence grades the "
+        f"advisory raised FOR that buy, and one naming another buy is a different defect; "
+        f"got {advisory.get('field')!r}"
     )
     assert advisory.get("code") == code, (
         f"expected advisory code {code!r} for a defect in the seller's own store, got {advisory.get('code')!r}"
