@@ -22,7 +22,7 @@ from src.core.enum_helpers import enum_value
 if TYPE_CHECKING:
     from pydantic.fields import FieldInfo
 
-    from src.core.schemas.creative import Creative
+    from src.core.schemas.creative import CreativeAssetRequest
 
 from adcp import Error as _LibraryError
 from adcp.types import AccountReference as LibraryAccountReference
@@ -2136,9 +2136,29 @@ class PackageRequest(LibraryPackageRequest):
     impressions: float | None = Field(
         None, ge=0.0, description="Legacy: Impression goal (use budget instead)", exclude=True
     )
-    # Override creatives type: parent expects CreativeAsset, we use our extended Creative
-    # Pydantic validates at runtime but mypy sees type mismatch
-    creatives: list["Creative"] | None = Field(  # type: ignore[assignment]
+    # The item type the PIN declares. media-buy/package-request.json types creatives[] as
+    # core/creative-asset.json, and ``CreativeAssetRequest`` is this repo's one model of that
+    # schema -- the same type ``SyncCreativesRequest.creatives`` carries, because the two tools
+    # accept the same item.
+    #
+    # This used to point at ``Creative``, which extends the list_creatives RESPONSE model, so a
+    # REQUEST field was validated against a listing shape. That is strictly WIDER: the listing
+    # model types ``assets`` as an untyped dict, while the pin types it as a map of
+    # discriminated AssetVariant objects, so an assets value carrying no ``asset_type`` cleared
+    # the boundary and round-tripped unchanged. BR-UC-002 @T-UC-002-inv-015-6 (BR-RULE-015
+    # INV-6) says that payload must be refused with INVALID_REQUEST. The identical field on
+    # sync_creatives was corrected first; this was the remaining door, and it is why
+    # update_media_buy REJECTED such a creative through the strict AdCPPackageUpdate while
+    # create_media_buy accepted it.
+    #
+    # ``type: ignore[assignment]`` survives the correction and is not the same silence it was.
+    # ``adcp.types.CreativeAsset`` is a RootModel UNION over the two codegen branches of a
+    # oneOf; ``CreativeAssetRequest`` extends one branch (see its docstring for why the union
+    # cannot be extended: a failing branch puts ``CreativeAsset1`` -- a name absent from AdCP --
+    # into the buyer's error pointer). A branch subclass is not a static subtype of the union,
+    # so mypy reports the mismatch for any correct spelling of this field. Same ignore, same
+    # reason, on SyncCreativesRequest.creatives.
+    creatives: list["CreativeAssetRequest"] | None = Field(  # type: ignore[assignment]
         None,
         min_length=1,
         max_length=100,
