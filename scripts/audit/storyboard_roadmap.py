@@ -8,12 +8,13 @@ For every ON-PATH storyboard (from storyboard_coverage_map.build()), attaches:
   * the comply_test_controller divergence tag for the 20 storyboards triaged
     as deliberate (not a plain gap),
 
-Explicitly NOT joined here: scenario-level reconciliation (VERDICT/action)
-from storyboard_reconciliation.py. Its rows key by proposal-file slug
-(``uc003-creativefate``), not by T-UC-* scenario id, and there is no existing
-mapping between the two (40 proposals vs the current 21 tagged scenarios) --
-inventing one would violate the Core Invariant ("never re-derived/inferred").
-Run ``scripts/audit/storyboard_reconciliation.py`` directly for that data.
+Scenario-level reconciliation (VERDICT/action per re-grounding proposal) is NOT
+joined here and no longer exists as a report. ``storyboard_reconciliation.py``
+read 40 proposal files that lived in an agent working directory, and commit
+b09479143 deleted those on the ground that committed code reading an agent's
+working directory as data is a layering violation. This module was corrected in
+that commit; the reconciliation script was left behind, and is now deleted.
+tests/unit/test_architecture_audit_scripts_have_a_subject.py encodes the rule.
 
 Measured-status join key: the runner's ``tested_tracks[].scenarios[].
 scenario`` field is ``"<storyboard_stem>/<sub-scenario-name>"`` in the
@@ -340,9 +341,6 @@ def render(result: dict[str, Any]) -> str:
         "by real API sequencing instead) — and `UNTRIAGED` where that editorial call has "
         "not been made yet.",
         "",
-        "Scenario-level reconciliation (VERDICT/action per proposal) is a separate report — "
-        "run `scripts/audit/storyboard_reconciliation.py`; its rows key by proposal-file slug, "
-        "not by scenario id, so it is not joined into this table.",
         "",
         "| Storyboard | Citation | Scenario | Required tools | Checks | Status | Divergence | Ticket |",
         "|---|---|---|---|---|---|---|---|",
