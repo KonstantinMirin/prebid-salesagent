@@ -28,9 +28,13 @@ already require a live stack to collect.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
+import tarfile
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -114,6 +118,95 @@ def _webhook_port(protocol: str) -> str:
     """
     base = int(os.environ.get(_WEBHOOK_PORT_ENV, _DEFAULT_WEBHOOK_PORT))
     return str(base + _PROTOCOLS.index(protocol))
+
+
+# The pinned bundle is a release asset of the spec repo, not something this repo vendors.
+_BUNDLE_REPO = "adcontextprotocol/adcp"
+_BUNDLE_URL = "https://github.com/{repo}/releases/download/v{version}/{asset}"
+_BUNDLE_FETCH_TIMEOUT = 120
+
+
+def _materialize_bundle() -> str | None:
+    """Put the pinned compliance tree on disk, fetching the release asset if needed.
+
+    THE GRADING SUITE RESOLVES ITS OWN BUNDLE. It used to require that a separate step had
+    already downloaded and extracted the tree: ``adcp_home()`` looks for
+    ``tests/storyboard/runner/adcp-<version>/``, which is gitignored, and otherwise falls
+    through to ``~/projects/adcp`` -- one maintainer's personal clone. Any environment that
+    did not run ``.github/actions/_adcp-bundle`` first resolved to a path that has never
+    existed, every check de-collected, and the job exited 0 having graded nothing (measured:
+    run innet_080926_1118, storyboard.json summary {'passed': 1, 'skipped': 1}).
+
+    Three sources, first hit wins, so every environment lands somewhere:
+
+    1. The extracted tree. Nothing to do.
+    2. A tarball already beside the runner -- what the CI action leaves behind, and what a
+       second run in the same container reuses.
+    3. The pinned release asset, over plain https. The version comes from the installed SDK,
+       so the asset cannot disagree with the code under audit, and the archive is public: no
+       ``gh``, no token, no environment variable pointing anywhere.
+
+    The checksum is verified BEFORE extracting. A corrupt or truncated archive that unpacks
+    far enough to look like a tree would otherwise grade a buyer contract against whatever it
+    contained.
+
+    Returns a reason string when the tree cannot be produced, or None on success. Callers
+    treat that reason as a FAILURE, never a skip.
+    """
+    version = storyboard_spec.pinned_version(_REPO_ROOT)
+    target = _RUNNER_DIR / f"adcp-{version}"
+    if target.is_dir():
+        return None
+
+    archive = _RUNNER_DIR / f"{version}.tgz"
+    checksum = _RUNNER_DIR / f"{version}.tgz.sha256"
+    if not archive.is_file() or not checksum.is_file():
+        fetch_failure = _fetch_bundle(version, archive, checksum)
+        if fetch_failure is not None:
+            return fetch_failure
+
+    expected = checksum.read_text(encoding="utf-8").split()[0]
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    if digest != expected:
+        return f"bundle checksum mismatch for {archive}: expected {expected}, got {digest}"
+
+    with tarfile.open(archive, "r:gz") as tar:
+        _safe_extract(tar, _RUNNER_DIR)
+    if not target.is_dir():
+        return f"bundle extracted, but {target} is not a directory"
+    return None
+
+
+def _fetch_bundle(version: str, archive: Path, checksum: Path) -> str | None:
+    """Download the pinned release asset and its checksum. Returns a reason on failure."""
+    _RUNNER_DIR.mkdir(parents=True, exist_ok=True)
+    for path, asset in ((archive, archive.name), (checksum, checksum.name)):
+        url = _BUNDLE_URL.format(repo=_BUNDLE_REPO, version=version, asset=asset)
+        try:
+            with urllib.request.urlopen(url, timeout=_BUNDLE_FETCH_TIMEOUT) as response:  # noqa: S310 - fixed https URL
+                body = response.read()
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            return (
+                f"could not fetch {url}: {exc}. Run .github/actions/_adcp-bundle's two "
+                f"commands, or place {archive.name} beside the runner"
+            )
+        path.write_bytes(body)
+    return None
+
+
+def _safe_extract(tar: tarfile.TarFile, dest: Path) -> None:
+    """Extract *tar* under *dest*, refusing any member that escapes it.
+
+    The archive is a published artifact rather than buyer input, so this is not a defence
+    against an attacker. It keeps a malformed archive from scattering files across the repo,
+    which is the failure that is hard to diagnose afterwards.
+    """
+    root = dest.resolve()
+    for member in tar.getmembers():
+        if (root / member.name).resolve().is_relative_to(root):
+            continue
+        raise RuntimeError(f"refusing tar member outside {root}: {member.name}")
+    tar.extractall(dest)  # noqa: S202 - every member checked above
 
 
 def _unresolvable_bundle_paths() -> list[str]:
@@ -364,12 +457,33 @@ def _stale_ledger_entries(collected_ids: list[str]) -> list[str]:
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if "storyboard_check" not in metafunc.fixturenames:
         return
+    # Resolve our own bundle before deciding anything. The suite grades a buyer
+    # contract; it does not wait for a separate download step to have happened.
+    extraction_failure = _materialize_bundle()
+
     missing = _unresolvable_bundle_paths()
     if missing:
+        # FAIL, never skip. A run that grades zero conformance checks and exits 0 is
+        # indistinguishable from a clean one at a glance, which is how a bundle-path
+        # regression survives. There is no legitimate run in which grading nothing is a
+        # pass, so the absence is a failure and the reason names what could not resolve.
         detail = ", ".join(f"{name}={_bundle_path(name)}" for name in missing)
+        cause = f"{extraction_failure}; " if extraction_failure else ""
         metafunc.parametrize(
             "storyboard_check",
-            [{"status": "skip", "reason": f"pinned AdCP bundle not found: {detail}", "reason_kind": "config"}],
+            [
+                {
+                    "status": "fail",
+                    "reason": f"{cause}pinned AdCP bundle not found: {detail}",
+                    "reason_kind": "config",
+                    # The assertion message reads these; a synthetic check carries them so
+                    # the failure reads like every other one rather than as a KeyError.
+                    "protocol": "-",
+                    "track": "-",
+                    "storyboard_id": "bundle",
+                    "step_id": "not-present",
+                }
+            ],
             ids=["bundle-not-present"],
         )
         return
