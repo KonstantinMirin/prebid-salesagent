@@ -12,6 +12,7 @@ import json
 import os
 import sys
 from unittest.mock import MagicMock
+from urllib.parse import urlparse
 
 import pytest
 import requests
@@ -21,7 +22,16 @@ from adcp import get_adcp_spec_version
 # Add parent directories to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from src.app import _AGENT_CARD_PATHS  # noqa: E402  (after the sys.path bootstrap above)
 from src.core.tools.registry import TOOLS  # noqa: E402  (after the sys.path bootstrap above)
+
+# Read the declared set from production: a path added to (or dropped from)
+# `_AGENT_CARD_PATHS` must change what these tests grade. Sorted for a
+# deterministic parametrization order.
+AGENT_CARD_PATHS = sorted(_AGENT_CARD_PATHS)
+
+# The one path the a2a-sdk factory mounts today — the regression guard.
+CANONICAL_AGENT_CARD_PATH = "/.well-known/agent-card.json"
 
 
 class TestA2AEndpointsActual:
@@ -97,9 +107,19 @@ class TestA2AEndpointsActual:
             data = response.json()
             assert data["name"] == "Prebid Sales Agent"
 
-            # Same URL validation as well-known endpoint
-            url = data["url"]
+            # Same URL validation as the well-known endpoint. a2a-sdk 1.0
+            # (protobuf) puts the endpoint in supportedInterfaces, NOT top-level:
+            # `data["url"]` here was a dormant 0.3-era read that never ran, because
+            # /agent.json 404'd and this whole block sits behind a 200 check. Routing
+            # the path woke it into a KeyError, which is what a vacuous assertion
+            # does the moment it stops being vacuous.
+            assert "supportedInterfaces" in data, "Agent card must have supportedInterfaces"
+            interfaces = data["supportedInterfaces"]
+            assert len(interfaces) > 0
+            url = interfaces[0]["url"]
+
             assert not url.endswith("/"), f"Agent card URL should not have trailing slash: {url}"
+            assert url.endswith("/a2a"), f"Agent card URL should end with '/a2a': {url}"
 
     @pytest.mark.integration
     def test_a2a_endpoint_accessible(self, live_server):
@@ -137,6 +157,82 @@ class TestA2AEndpointsActual:
 
         # Should handle OPTIONS requests
         assert response.status_code in [200, 204], "OPTIONS request should be handled"
+
+
+class TestAgentCardDiscoveryPathsLive:
+    """Every declared agent-card path serves the same card on a LIVE server (#1440).
+
+    The live server runs under lifespan, where `_install_admin_mounts()`
+    re-appends the Flask catch-all `Mount("/")` last. That is the surface the
+    in-process TestClient probe in
+    tests/unit/test_a2a_transport_contract.py cannot reach: here a 200 also
+    proves the card routes are matched BEFORE the catch-all, not swallowed by it.
+    """
+
+    @pytest.mark.integration
+    @pytest.mark.parametrize("path", AGENT_CARD_PATHS)
+    def test_declared_card_path_is_served_live(self, live_server, path):
+        """GET on every path in _AGENT_CARD_PATHS returns 200 from the live server."""
+        response = requests.get(f"{live_server['a2a']}{path}", timeout=2)
+
+        assert response.status_code == 200, (
+            f"{path} is declared in _AGENT_CARD_PATHS but the live server returned "
+            f"{response.status_code}; every declared discovery path must be served"
+        )
+        assert response.headers["content-type"].startswith("application/json")
+
+    @pytest.mark.integration
+    def test_all_declared_card_paths_return_byte_identical_bodies_live(self, live_server):
+        """The live server serves one byte-identical card on every declared path.
+
+        Compares raw bytes, not the parsed dict: a caching fetcher keyed on bytes
+        treats a re-serialization difference as a different document.
+        """
+        bodies = {path: requests.get(f"{live_server['a2a']}{path}", timeout=2) for path in AGENT_CARD_PATHS}
+
+        for path, response in bodies.items():
+            assert response.status_code == 200, f"{path} returned {response.status_code}, expected 200"
+
+        canonical = bodies[CANONICAL_AGENT_CARD_PATH].content
+        for path, response in bodies.items():
+            assert response.content == canonical, (
+                f"{path} body differs from {CANONICAL_AGENT_CARD_PATH}; "
+                f"all declared paths must serve one byte-identical card"
+            )
+
+    @pytest.mark.integration
+    @pytest.mark.parametrize("path", AGENT_CARD_PATHS)
+    def test_host_derivation_applies_on_every_card_path_live(self, live_server, path):
+        """Apx-Incoming-Host drives supportedInterfaces[0].url on every path.
+
+        A path that returns 200 carrying the static fallback host is still broken:
+        it advertises the wrong A2A endpoint to every tenant. That is the failure
+        mode this grades, and the HOST is what discriminates it.
+
+        The SCHEME is deliberately not pinned here. Whatever X-Forwarded-Proto a
+        client sends, an edge proxy sets its own -- in-network our nginx terminates
+        plain HTTP and forwards `http`, so pinning `https` asserts a value the
+        deployment topology owns rather than anything the app decides. Trusting the
+        edge's header IS the documented behaviour (src/app.py's get_protocol). The
+        scheme logic is graded where the input is actually controllable, in
+        tests/unit/test_agent_card_scheme.py; do not restore an https pin here.
+        """
+        response = requests.get(
+            f"{live_server['a2a']}{path}",
+            headers={"Apx-Incoming-Host": "tenant.example.com"},
+            timeout=2,
+        )
+
+        assert response.status_code == 200, f"{path} returned {response.status_code}, expected 200"
+        card = response.json()
+        derived = urlparse(card["supportedInterfaces"][0]["url"])
+
+        assert derived.netloc == "tenant.example.com", (
+            f"{path} did not derive its URL from Apx-Incoming-Host: got {derived.geturl()!r}, "
+            f"which means it served the static fallback host to a tenant"
+        )
+        assert derived.path == "/a2a", f"{path} derived the wrong endpoint path: {derived.geturl()!r}"
+        assert derived.scheme in ("http", "https"), f"{path} derived a non-HTTP scheme: {derived.geturl()!r}"
 
 
 class TestA2AAgentCardCreation:

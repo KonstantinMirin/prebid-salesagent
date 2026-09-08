@@ -68,9 +68,12 @@ _DEFAULT_AGENT_URLS: dict[str, str] = {
     "a2a": "http://proxy:8000",
 }
 
-# Env vars the CI job (the storyboard-conformance job Implementation Plan step 6) must set. No defaults
-# for the compliance/schema paths — those come from a pinned GitHub release
-# asset (see .github/actions/_adcp-bundle), never guessed at.
+# Env vars the storyboard-conformance job MAY set. The compliance/schema paths
+# have no default LITERAL, but they are DERIVED when unset: _bundle_path() resolves
+# them through storyboard_spec.adcp_home(), whose second candidate is the pinned
+# GitHub release bundle that .github/actions/_adcp-bundle extracts in-tree. The CI
+# job therefore sets neither of them, and set-ness is NOT what decides whether a
+# session can run — resolvability is (see _bundle_gate).
 _AUTH_TOKEN_ENV = "STORYBOARD_AUTH_TOKEN"
 _COMPLIANCE_DIR_ENV = "STORYBOARD_COMPLIANCE_DIR"
 _SCHEMA_ROOT_ENV = "STORYBOARD_SCHEMA_ROOT"
@@ -220,17 +223,85 @@ def _unresolvable_bundle_paths() -> list[str]:
 
     This used to read ``os.environ.get(name)`` and call an absent var missing. tox.ini
     declares both as ``{env:NAME:}``, which sets them to the EMPTY STRING on every run, so
-    the check reported both missing every time, parametrized the single
-    ``environment-not-configured`` skip below, and returned before the derivation could run.
+    the check reported both missing every time, parametrized a single config skip, and
+    returned before the derivation could run.
     The branch :func:`_bundle_path` documents as "Unset: derive it" was therefore
     unreachable, and every storyboard run graded nothing -- 1 passed, 1 skipped, exit 0.
     That is the false green ``_no_graded_checks`` exists to refuse, arriving one layer above
     it where that guard cannot see it (measured: cassini run 097b0091, storyboard.json
     summary {'passed': 1, 'skipped': 1}).
 
-    A skip here now means the bundle is genuinely absent, and the reason names the path.
+    An empty list here means the bundle really is on disk; a non-empty one names the paths
+    that do not exist, and :func:`_bundle_gate` turns that into a failure.
     """
     return [name for name in (_COMPLIANCE_DIR_ENV, _SCHEMA_ROOT_ENV) if not Path(_bundle_path(name)).is_dir()]
+
+
+def _bundle_gate() -> tuple[str, dict[str, Any]] | None:
+    """The ``(test id, check)`` to grade when the pinned bundle cannot be used, or None.
+
+    Asks :func:`_bundle_path` -- the SAME resolver that builds the runner's
+    ``--compliance-dir``/``--schema-root`` arguments -- so the gate and the runner can
+    never disagree about where the bundle is. Set-ness of the two env vars is not the
+    question: they are overrides, and the derivation is the normal case.
+
+    Two dispositions, and what separates them is whether this environment could have
+    graded at all:
+
+    * **skip** -- the PIN itself does not resolve. ``pinned_version()`` reads
+      ``docs/adcp-spec-version.md`` and raises ``StoryboardAuditError`` when the doc has
+      drifted from the installed SDK (``OSError`` when the file is absent). A contributor
+      in a drifted or incomplete checkout has no version to fetch a bundle FOR, so there
+      is nothing to grade and nothing to blame -- a skip, never a collection error.
+    * **fail** -- the pin resolves, so the bundle is obtainable: already extracted, a
+      tarball beside the runner, or the pinned release asset (:func:`_materialize_bundle`).
+      If the paths still do not resolve after that, the run would grade zero conformance
+      checks and exit 0, which is indistinguishable from a clean run at a glance and is
+      how a bundle-path regression survives. There is no legitimate run in which grading
+      nothing is a pass, so the absence is a FAILURE whose reason names what was missing.
+
+    Each disposition keeps its own test id, and both are load-bearing:
+    ``environment-not-configured`` is the id the collection-gate and ledger-fitness
+    graders join on for the unconfigured-session case, and ``bundle-not-present`` names
+    the failure so a false green cannot hide behind a word meaning "skipped".
+    """
+    try:
+        storyboard_spec.pinned_version(_REPO_ROOT)
+    except (storyboard_spec.StoryboardAuditError, OSError) as exc:
+        return "environment-not-configured", _bundle_gate_check(
+            "skip",
+            f"pinned bundle could not be resolved: {type(exc).__name__}: {exc}",
+            "unresolvable-pin",
+        )
+    # Resolve our own bundle before deciding anything. The suite grades a buyer contract;
+    # it does not wait for a separate download step to have happened.
+    extraction_failure = _materialize_bundle()
+    unresolved = _unresolvable_bundle_paths()
+    if not unresolved:
+        return None
+    detail = ", ".join(f"{name}={_bundle_path(name)}" for name in unresolved)
+    cause = f"{extraction_failure}; " if extraction_failure else ""
+    return "bundle-not-present", _bundle_gate_check(
+        "fail", f"{cause}pinned AdCP bundle not found: {detail}", "not-present"
+    )
+
+
+def _bundle_gate_check(status: str, reason: str, step_id: str) -> dict[str, Any]:
+    """One synthetic check in the shape every other check has.
+
+    ``test_storyboard_check``'s assertion message reads the identity keys, so a synthetic
+    check carries them too and the failure reads like every other one rather than as a
+    ``KeyError``.
+    """
+    return {
+        "status": status,
+        "reason": reason,
+        "reason_kind": "config",
+        "protocol": "-",
+        "track": "-",
+        "storyboard_id": "bundle",
+        "step_id": step_id,
+    }
 
 
 def _bundle_path(env_name: str) -> str:
@@ -457,35 +528,10 @@ def _stale_ledger_entries(collected_ids: list[str]) -> list[str]:
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if "storyboard_check" not in metafunc.fixturenames:
         return
-    # Resolve our own bundle before deciding anything. The suite grades a buyer
-    # contract; it does not wait for a separate download step to have happened.
-    extraction_failure = _materialize_bundle()
-
-    missing = _unresolvable_bundle_paths()
-    if missing:
-        # FAIL, never skip. A run that grades zero conformance checks and exits 0 is
-        # indistinguishable from a clean one at a glance, which is how a bundle-path
-        # regression survives. There is no legitimate run in which grading nothing is a
-        # pass, so the absence is a failure and the reason names what could not resolve.
-        detail = ", ".join(f"{name}={_bundle_path(name)}" for name in missing)
-        cause = f"{extraction_failure}; " if extraction_failure else ""
-        metafunc.parametrize(
-            "storyboard_check",
-            [
-                {
-                    "status": "fail",
-                    "reason": f"{cause}pinned AdCP bundle not found: {detail}",
-                    "reason_kind": "config",
-                    # The assertion message reads these; a synthetic check carries them so
-                    # the failure reads like every other one rather than as a KeyError.
-                    "protocol": "-",
-                    "track": "-",
-                    "storyboard_id": "bundle",
-                    "step_id": "not-present",
-                }
-            ],
-            ids=["bundle-not-present"],
-        )
+    gate = _bundle_gate()
+    if gate is not None:
+        gate_id, check = gate
+        metafunc.parametrize("storyboard_check", [check], ids=[gate_id])
         return
     checks = [check for protocol in _PROTOCOLS for check in _collect_checks(protocol)]
     # Built through the shared grammar (scripts.audit.ledger.LedgerCheckId) so
