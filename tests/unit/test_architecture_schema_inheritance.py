@@ -404,6 +404,18 @@ class TestSchemaInheritance:
             ("GetMediaBuyDeliveryResponse", "media_buy_deliveries"),
             ("GetSignalsResponse", "signals"),
             ("ListCreativesResponse", "query_summary"),
+            # RESHAPED AXIS: item type. The parent types creatives[] as the SDK's
+            # ``CreativeAsset``, a RootModel union over the two codegen branches of
+            # core/creative-asset.json's oneOf; this declares ``list[CreativeAssetRequest]``,
+            # which extends ONE of those branches (see CreativeAssetRequest's docstring: the
+            # union cannot be extended without putting the codegen name ``CreativeAsset1``
+            # into the buyer's error pointer, which core/error.json forbids). Same reshape,
+            # same reason, as ("SyncCreativesRequest", "creatives") below -- the two tools
+            # accept the same item, so they carry the same type.
+            #
+            # NOT a weakening: this row previously covered ``list[Creative]``, the
+            # list_creatives RESPONSE model, which typed ``assets`` as an untyped dict and so
+            # admitted package creatives the pin refuses (salesagent-b341x.17).
             ("PackageRequest", "creatives"),
             # Mirror of PackageRequest.targeting_overlay for the update path —
             # makes collection_list typed at the request boundary instead of
