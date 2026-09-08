@@ -2353,6 +2353,20 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # T-UC-004-dim-geo-postal: resolved — by_geo now populated by _impl
             # T-UC-004-dim-multi: resolved — by_device_type now on PackageDelivery (#1376)
             # Partial-success Error model lacks suggestion field and rich messages
+            # SPEC-PRODUCTION GAP (#2229). get-media-buy-delivery-response.json says of
+            # by_package[].rate: "For auction-based pricing, this represents the effective
+            # rate based on actual delivery." _package_pricing derives nothing — it reads a
+            # STATIC rate from pricing_info / PricingOption. For an auction package there is
+            # no stored rate to read (an auction option's rate column is NULL, and
+            # _validate_pricing_model_selection stores rate=None with the bid in
+            # bid_price), so the report does not merely state a wrong number: it REFUSES,
+            # raising AdCPInternalError and dropping the buy from the response. Measured on
+            # this scenario: INTERNAL_ERROR on all three transports.
+            "T-UC-004-package-auction-rate": (
+                "auction by_package[].rate must be the effective rate from actual delivery; "
+                "production reads a static rate and refuses when none is stored (#2229)",
+                True,
+            ),
             "T-UC-004-ext-a": ("partial-success Error needs suggestion field + authentication in message", True),
             "T-UC-004-ext-b": ("partial-success Error model needs suggestion field — production enhancement", True),
             "T-UC-004-ext-c": ("partial-success Error model needs suggestion field — production enhancement", True),

@@ -1277,7 +1277,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # BR-RULE-223 INV-9: every committed metric due populated -> missing_metrics empty/absent (clean delivery)
 
   @T-UC-004-package-commercial-fields @main-flow @polling @v3-1
-  Scenario: Polling response includes per-package pricing_model, rate, currency, and effective_rate
+  Scenario: Polling response includes per-package pricing_model, rate and currency
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And package "pkg-1" uses pricing_model "cpm" with rate 12.50 and currency "USD"
     And the ad server adapter has delivery data for "mb-001"
@@ -1286,9 +1286,32 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the response packages should include pricing_model "cpm" for "pkg-1"
     And the response packages should include rate 12.50 for "pkg-1"
     And the response packages should include currency "USD" for "pkg-1"
-    And the response packages should include effective_rate for "pkg-1"
-    # v3.1: per-package pricing_model, rate, currency, effective_rate are required
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # v3.1: pricing_model, rate and currency are on by_package[]'s required set
+    # (get-media-buy-delivery-response.json). For FIXED pricing the rate is the agreed
+    # rate, which is what this grades.
+    #
+    # DIVERGENCE from the generated scenario, AdCP 3.1.1: it also demanded
+    # `effective_rate`, and no such property exists — not on the by_package item, not in
+    # core/delivery-metrics.json. The pin expresses the effective rate as the MEANING of
+    # `rate` under auction pricing, not as a second field, so that reading is graded by
+    # the auction scenario below rather than by asserting a field the spec never defines.
+    # The generated @source line cited get-media-buy-delivery-REQUEST.json for response
+    # fields; the response schema is the authority and is cited above.
+
+  @T-UC-004-package-auction-rate @main-flow @polling @v3-1
+  Scenario: Auction package reports the effective rate derived from actual delivery
+    Given a media buy "mb-001" owned by "buyer-001" with status "active"
+    And package "pkg-1" is bought at auction on pricing_model "cpm" with bid_price 8.00 and currency "USD"
+    And the ad server adapter reports 2000 impressions and 10.00 spend for "pkg-1"
+    When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response packages should include pricing_model "cpm" for "pkg-1"
+    And the response packages should include currency "USD" for "pkg-1"
+    And the response packages should include rate 5.00 for "pkg-1"
+    # get-media-buy-delivery-response.json, by_package[].rate: "For auction-based pricing,
+    # this represents the effective rate based on actual delivery." 10.00 spend over 2000
+    # impressions is a 5.00 effective CPM. Deliberately neither the bid (8.00) nor any
+    # stored rate, so a report that echoes a static number cannot pass.
 
   @T-UC-004-package-pacing-index @main-flow @polling @v3-1
   Scenario Outline: Polling response includes per-package pacing_index reflecting delivery pace
