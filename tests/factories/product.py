@@ -8,7 +8,9 @@ import factory
 from factory import LazyAttribute, Sequence, SubFactory
 
 from src.core.database.models import PricingOption, Product
+from src.core.schemas.pricing import PricingOption as PricingOptionSchema
 from tests.factories.core import TenantFactory
+from tests.factories.request import _RequestFactory
 
 
 class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -48,3 +50,41 @@ class PricingOptionFactory(factory.alchemy.SQLAlchemyModelFactory):
     rate = Decimal("5.00")
     currency = "USD"
     is_fixed = True
+
+
+class PricingOptionRequestFactory(_RequestFactory):
+    """One pricing option as the WIRE DICT, the payload-side counterpart to ``PricingOptionFactory``.
+
+    ``PricingOptionFactory`` above builds the ORM row; this builds the schema payload. The
+    ``Request`` infix is the disambiguator ``tests/factories/webhook.py`` already
+    established for exactly this ORM/payload pair, and the two are not interchangeable —
+    ``is_fixed`` is a DB column with no schema field, which is why feeding ORM kwargs to
+    the schema reports ``extra_forbidden``.
+
+    HONEST ABOUT ITS WEIGHT TODAY: it replaces ONE site, ``_DEFAULT_PRICING_OPTION`` in
+    ``tests/harness/product_unit.py``. It is declared now because ``GATED_ITEMS``
+    (``tests/factories/malformed.py``) already names ``PricingOption`` as a graded item
+    type, and because the fifteen pricing mutators that would make it earn its keep are
+    scheduled work that needs the name to exist first (salesagent-b341x.4).
+
+    IT BINDS A ``RootModel``. ``src.core.schemas.pricing.PricingOption.model_fields`` is
+    ``{'root': ...}`` — a nine-member discriminated union — so this factory works through
+    pydantic's ``RootModel(**data)`` kwargs path: ``build()`` returns the RootModel and
+    ``model_dump()`` returns the root dict. The declared attributes below are the CPM
+    member's fields; a ``pricing_model="cpc"`` variant selects a different member and
+    needs that member's own companion fields supplied at ``build()`` time.
+
+    ``payload()`` carries ``max_bid: False``, which the hand-written literal it replaces
+    did not. That is the pinned model's OWN default for the field surfaced by the dump
+    (``CpmPricingOption.max_bid`` defaults to ``False``, not to ``None``, so
+    ``exclude_none`` does not drop it), not a new value this factory invents.
+    """
+
+    class Meta:
+        model = PricingOptionSchema
+
+    pricing_option_id = "po_default"
+    pricing_model = "cpm"
+    currency = "USD"
+    # V3: the pre-V3 "rate" key is rejected by the local union members.
+    fixed_price = 5.0

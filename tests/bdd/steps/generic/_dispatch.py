@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
+from tests.factories.malformed import assert_declared_malformations
 from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
 
 if TYPE_CHECKING:
@@ -187,6 +188,18 @@ def dispatch_request(ctx: dict, *, identity: Any = NO_IDENTITY_OVERRIDE, **kwarg
     """
     if identity is not NO_IDENTITY_OVERRIDE:
         kwargs["identity"] = identity
+
+    # Grade the ITEMS against the pinned model before anything else touches them. This
+    # is the half that FINDS unmarked malformations, and it looks for validity, never
+    # for markers (tests/factories/malformed.py states the invariant).
+    #
+    # Placed here for two reasons, both load-carrying:
+    #   * BEFORE ``env.call_via`` -> ``json_safe``, which rebuilds every dict and so
+    #     drops the ``_Malformed`` subclass the declaration is carried by;
+    #   * BEFORE the ``try`` below, whose ``except Exception`` would otherwise swallow
+    #     the assertion into ``ctx["error"]`` and let the scenario grade the gate's own
+    #     failure as if it were the server's answer.
+    assert_declared_malformations(kwargs)
 
     env = ctx["env"]
     transport = _as_transport(ctx, "dispatch_request")

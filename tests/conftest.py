@@ -306,7 +306,6 @@ from tests.conftest_db import *  # noqa: F401,F403
 # See test_environment fixture below for configuration
 # Import fixtures modules
 from tests.fixtures import (
-    CreativeFactory,
     MediaBuyFactory,
     MockAdapter,
     MockDatabase,
@@ -447,12 +446,6 @@ def product_factory():
 def media_buy_factory():
     """Provide media buy factory."""
     return MediaBuyFactory
-
-
-@pytest.fixture
-def creative_factory():
-    """Provide creative factory."""
-    return CreativeFactory
 
 
 @pytest.fixture

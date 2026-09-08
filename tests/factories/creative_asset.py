@@ -65,10 +65,16 @@ def make_creative_asset_request(**extra: object) -> dict:
     Reuses make_creative_asset_minimal rather than restating its defaults. Returns a dict
     because that is what a transport hands the request DTO.
 
-    Use this wherever a test feeds SyncCreativesRequest. The per-file ``_make_creative``
-    helpers build the RESPONSE model (created_date, updated_date, principal_id); feeding one
-    of those to a request worked only while the request field wrongly pointed at the response
-    model, which is what left seven spec-legal fields unsendable and `inputs` unreachable.
+    PREFER ``CreativeAssetRequestFactory.payload()`` (tests/factories/request.py) for new
+    code: it binds ``CreativeAssetRequest`` — the REQUEST model — and carries the OMIT /
+    None override contract a negative path needs. This helper still builds the RESPONSE
+    model and dumps it, which is the confusion below; its 14 existing callers are
+    salesagent-b341x.10's to redirect.
+
+    The per-file ``_make_creative`` helpers build the RESPONSE model (created_date,
+    updated_date, principal_id); feeding one of those to a request worked only while the
+    request field wrongly pointed at the response model, which is what left seven
+    spec-legal fields unsendable and `inputs` unreachable.
     """
     return make_creative_asset_minimal(**extra).model_dump(exclude_none=True, mode="json")
 

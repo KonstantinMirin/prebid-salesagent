@@ -284,12 +284,15 @@ def make_test_creative(
     ``assets`` overrides the default single-banner slot map — pass
     ``build_assets(...)`` output (e.g. ``image_spec("banner").with_fields(alt_text=None)``)
     so asset shapes stay declared through AssetSpec rather than hand-rolled here.
+
+    ``variants`` is NOT passed. It is a pre-3.1.1 delivery-only field that the local
+    Creative validator pops unread (src/core/schemas/creative.py:267), so seeding it
+    changed no model and only kept the old shape visible for the next author to copy.
     """
     from src.core.schemas import Creative
 
     kwargs: dict = {
         "creative_id": creative_id,
-        "variants": [],
         "name": name,
         "format": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
         "assets": build_assets(image_spec("banner", url="https://example.com/banner.jpg"))
@@ -312,7 +315,6 @@ def make_test_creative_list(count: int = 3) -> list:
     return [
         Creative(
             creative_id=f"creative_{i}",
-            variants=[],
             name=f"Test Creative {i}",
             format={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
             assets=build_assets(image_spec("banner", url=f"https://example.com/banner{i}.jpg")),

@@ -78,6 +78,11 @@ def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
     if "request_kwargs" not in ctx:
         product = ctx.get("default_product")
         pricing_option = ctx.get("default_pricing_option")
+        # Whether the base dict was built against SEEDED rows or against placeholders is
+        # the fact ``harness_create_request_kwargs`` needs and cannot recover afterwards
+        # (the placeholder pricing id and the seeded one are the same string). Recorded
+        # here, at the only place that knows it.
+        ctx["request_kwargs_placeholder_ids"] = product is None or pricing_option is None
         build_create_request_kwargs(
             ctx,
             product_id=product.product_id if product else "guaranteed_display",
@@ -115,14 +120,27 @@ def harness_create_request_kwargs(ctx: dict) -> dict[str, Any]:
     UC-004 create branch seeded the harness data) would dispatch against the
     placeholder ids. Re-pinning the package to the harness product here is what
     both create-dispatching When steps share instead of each carrying a copy.
+
+    The re-pin is CONDITIONAL on that build having used placeholders, and the
+    condition is the whole point: written unconditionally it also overwrote package
+    ids a Given had deliberately chosen — an auction option, a EUR option, a second
+    product — and the scenario would then grade the default fixed option while
+    reading as if it graded what it asked for. No live caller hits that today
+    (measured: 18 executions across ``test_egress_ssrf_refusal`` and
+    ``test_uc004_deliver_media_buy_metrics``, every one a no-op with before ==
+    after), which is exactly why it would land silently.
     """
     kwargs = _ensure_request_defaults(ctx)
+    if not ctx.get("request_kwargs_placeholder_ids"):
+        return kwargs
     product = ctx.get("default_product")
     pricing_option = ctx.get("default_pricing_option")
-    if product is not None:
-        kwargs["packages"][0]["product_id"] = product.product_id
-    if pricing_option is not None:
-        kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(pricing_option)
+    if product is None or pricing_option is None:
+        # Still nothing to pin to; leave the flag set so a later call can do it.
+        return kwargs
+    kwargs["packages"][0]["product_id"] = product.product_id
+    kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(pricing_option)
+    ctx["request_kwargs_placeholder_ids"] = False
     return kwargs
 
 
@@ -1470,7 +1488,21 @@ def _set_min_spend(ctx: dict, *, product_min: float | None, tenant_min: float | 
     env = ctx["env"]
     kwargs = _ensure_request_defaults(ctx)
 
-    # Product-level minimum: update the default pricing option
+    # Product-level minimum: update the default pricing option IN PLACE.
+    #
+    # This is the one place that writes to the seeded ``default_pricing_option`` row
+    # rather than creating a sibling through ``PricingOptionFactory`` like every other
+    # pricing Given here, and the asymmetry is forced, not an oversight. A
+    # ``PricingOption`` has no id COLUMN: production derives its id as
+    # ``{pricing_model}_{currency}_{fixed|auction}`` and selects the FIRST row whose
+    # derived id matches (``media_buy_create._validate_pricing_model_selection``,
+    # mirrored by ``database/product_pricing.get_product_pricing_options``). A second
+    # cpm/USD/fixed row therefore carries the SAME id as the seeded one and is shadowed
+    # by it — the package would keep resolving to the row without ``min_spend_per_package``
+    # and the "budget below product min" examples would stop being exercised while
+    # staying green. Editing the identified row is the only way to say "the cpm/USD/fixed
+    # option now has a minimum". Safe because the row is this scenario's own: ``_harness_env``
+    # is function-scoped and seeds a fresh tenant/product/option per scenario.
     po = ctx["default_pricing_option"]
     po.min_spend_per_package = Decimal(str(product_min)) if product_min is not None else None
     env._commit_factory_data()
