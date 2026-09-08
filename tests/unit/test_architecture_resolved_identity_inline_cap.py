@@ -36,7 +36,7 @@ from tests.unit._architecture_helpers import iter_call_expressions
 # current state on substrate landing; can only shrink.
 RESOLVED_IDENTITY_PER_FILE_CAP: dict[str, int] = {
     "tests/bdd/steps/domain/uc004_delivery.py": 2,
-    "tests/bdd/steps/domain/uc011_accounts.py": 2,
+    "tests/bdd/steps/domain/uc011_accounts.py": 0,
     "tests/factories/principal.py": 1,
     "tests/integration/conftest.py": 1,
     "tests/integration/test_account_resolution_error_codes.py": 1,
