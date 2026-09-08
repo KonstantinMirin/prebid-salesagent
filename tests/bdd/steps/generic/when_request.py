@@ -125,48 +125,26 @@ def _call_raw(ctx: dict, **payload: Any) -> None:
     dispatch_request(ctx, **payload)
 
 
-# ── A2A transport ────────────────────────────────────────────────────
-
-
-@when("the Buyer Agent sends a list_creative_formats task via A2A with no filters")
-def when_send_a2a_no_filters(ctx: dict) -> None:
-    _call_via(ctx, "a2a")
-
-
-@when("the Buyer Agent sends a list_creative_formats task via A2A")
-def when_send_a2a(ctx: dict) -> None:
-    _call_via(ctx, "a2a")
-
-
-@when(parsers.parse('the Buyer Agent sends a list_creative_formats task via A2A with type filter "{type_filter}"'))
-def when_send_a2a_type_filter(ctx: dict, type_filter: str) -> None:
-    # type filter removed in adcp 3.12 — delegate to unfiltered
-    when_send_a2a_no_filters(ctx)
-
-
-@when(parsers.parse('the Buyer Agent sends a list_creative_formats task via A2A with type "{type_value}"'))
-def when_send_a2a_type_value(ctx: dict, type_value: str) -> None:
-    # type filter removed in adcp 3.12 — delegate to unfiltered
-    when_send_a2a_no_filters(ctx)
-
-
-# ── MCP transport ────────────────────────────────────────────────────
-
-
-@when("the Buyer Agent calls list_creative_formats MCP tool with no filters")
-def when_call_mcp_no_filters(ctx: dict) -> None:
-    _call_via(ctx, "mcp")
-
-
-@when("the Buyer Agent calls list_creative_formats MCP tool")
-def when_call_mcp(ctx: dict) -> None:
-    _call_via(ctx, "mcp")
-
-
-@when(parsers.parse('the Buyer Agent calls list_creative_formats MCP tool with type "{type_value}"'))
-def when_call_mcp_type(ctx: dict, type_value: str) -> None:
-    # type filter removed in adcp 3.12 — delegate to unfiltered
-    when_call_mcp_no_filters(ctx)
+# ── Transport-NAMING steps: deleted, and not to be re-added ──────────
+#
+# Seven ``@when`` steps lived here — four calling ``_call_via(ctx, "a2a"/"mcp")``
+# with a LITERAL transport and three delegating to those — under phrasings like
+# "the Buyer Agent sends a list_creative_formats task via A2A" and "... calls
+# list_creative_formats MCP tool". All seven bound ZERO scenarios: measured by
+# rendering every Scenario Outline Examples row of all 46 feature files through
+# pytest-bdd's own ``ScenarioTemplate.render`` and matching each of the 49531
+# resulting step lines with pytest-bdd's own ``StepParser.is_matching`` — 0 hits
+# for each of the seven, against two positive controls that both read BOUND
+# (one of them a sentence that exists only AFTER Examples substitution, so a
+# literal grep of the feature sources finds it 0 times).
+#
+# They were also the only callers that passed a transport differing in TYPE from
+# ``ctx["transport"]``, which is why deleting them matters beyond dead weight:
+# every surviving ``_call_via`` caller now passes what ``ctx["transport"]``
+# already holds. And per rule 1 of tests/CLAUDE.md's BDD authoring discipline, a
+# ``When`` that names a transport is a defect unless it grades a spec-cited
+# transport-specific behavior — these graded none; the harness parametrizes the
+# transport-neutral phrasings below over a2a/mcp/rest already.
 
 
 # ── Generic format request (transport-agnostic) ──────────────────────
