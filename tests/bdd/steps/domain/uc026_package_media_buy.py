@@ -290,7 +290,6 @@ def _create_media_buy_for_update(ctx: dict, **pkg_overrides: Any) -> None:
     # step's TransportResult in ctx, and require_payload/payload_or_none would
     # serve it as though this step had produced it.
     ctx.pop("result", None)
-    ctx.pop("self_dispatched_response", None)
     ctx.pop("error", None)
     # Reset request_kwargs for the update
     ctx.pop("request_kwargs", None)
@@ -1606,7 +1605,6 @@ def _promote_create_errors(ctx: dict) -> None:
         # read, or require_payload/payload_or_none hand the error payload straight
         # back and a success-path Then grades it as a success.
         ctx.pop("result", None)
-        ctx.pop("self_dispatched_response", None)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2269,11 +2267,8 @@ def then_existing_package(ctx: dict, pkg_id: str) -> None:
     """Assert response contains the existing package (dedup)."""
     pkgs = _assert_has_packages(ctx)
     # Use the actual existing_package_id from the Given step (pkg_id is a label)
-    actual_existing = ctx.get("expected_existing_package_id") or ctx.get("existing_package_id")
-    assert actual_existing, (
-        "expected_existing_package_id/existing_package_id missing from context — "
-        "Given step must record the existing package ID"
-    )
+    actual_existing = ctx.get("existing_package_id")
+    assert actual_existing, "existing_package_id missing from context — Given step must record the existing package ID"
     found = False
     for pkg in pkgs:
         if _pkg_field(pkg, "package_id") == actual_existing:
@@ -2310,8 +2305,7 @@ def then_new_pkg_in_mb(ctx: dict, mb_id: str) -> None:
         f"Expected a NEW package_id for '{mb_id}' but got the same as existing: '{pkg_id}'"
     )
     # Verify the response media_buy_id matches the target (different from original)
-    named_mb_ids = ctx.get("named_media_buy_ids", {})
-    original_mb_id = named_mb_ids.get("mb-A") or ctx.get("existing_media_buy_id")
+    original_mb_id = ctx.get("existing_media_buy_id")
     resp = payload_or_none(ctx)
     if resp is not None:
         inner = getattr(resp, "response", resp)

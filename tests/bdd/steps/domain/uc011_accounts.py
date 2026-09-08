@@ -306,7 +306,6 @@ def _sync_pre_create(ctx: dict, brand_domain: str, operator: str, billing: str, 
     # ctx["response"] is not popped — nothing writes it, so there is nothing to
     # clear, and pretending otherwise reads as live state management.)
     ctx.pop("result", None)
-    ctx.pop("self_dispatched_response", None)
     ctx.pop("error", None)
 
 
@@ -662,8 +661,10 @@ def when_list_accounts_with_cursor(ctx: dict) -> None:
 
     prev_response = require_payload(ctx)
     cursor = prev_response.pagination.cursor
-    # Use same max_results as before (stored in ctx or default)
-    max_results = ctx.get("last_max_results", 50)
+    # Production's default page size. This read ctx["last_max_results"] "or default"
+    # and no step has ever written that key, so the default was the only value it
+    # could ever take -- a configurable-looking read that was not configurable.
+    max_results = 50
     try:
         req = ListAccountsRequest(pagination=PaginationRequest(max_results=max_results, cursor=cursor))
         dispatch_request(ctx, req=req)
@@ -2581,7 +2582,6 @@ def _given_agent_synced(ctx: dict, agent_name: str, domain: str) -> None:
     # ctx["response"] is not popped — nothing writes it, so there is nothing to
     # clear, and pretending otherwise reads as live state management.)
     ctx.pop("result", None)
-    ctx.pop("self_dispatched_response", None)
     ctx.pop("error", None)
 
 

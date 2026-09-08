@@ -2478,7 +2478,7 @@ def then_assignment_processing_should_abort(ctx: dict) -> None:
     # salesagent-3dawm.14 is the table sentence and can never contain an id.
     result = ctx["result"]
     result.assert_wire_error("PACKAGE_NOT_FOUND")
-    bad_package = ctx.get("bad_package_id") or ctx.get("nonexistent_package_id", "")
+    bad_package = ctx.get("nonexistent_package_id", "")
     if bad_package:
         details = result.wire_error_details("PACKAGE_NOT_FOUND")
         assert bad_package in str(details.values()), (

@@ -2077,7 +2077,7 @@ def then_log_auth_rejection(ctx: dict) -> None:
     assert success is False, f"Expected webhook delivery to fail on auth rejection, got success={success!r}"
 
     # 2. Verify auth rejection was logged
-    log_records = getattr(env, "captured_logs", None) or ctx.get("captured_logs")
+    log_records = getattr(env, "captured_logs", None)
     assert log_records is not None, "CircuitBreakerEnv.captured_logs not available — harness must capture logs"
     found_auth_log = any("client error" in r.lower() or "401" in r or "unauthorized" in r.lower() for r in log_records)
     assert found_auth_log, (

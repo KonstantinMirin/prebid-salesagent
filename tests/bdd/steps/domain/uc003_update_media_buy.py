@@ -568,9 +568,9 @@ def given_placement_ids_valid(ctx: dict) -> None:
     assert isinstance(pids, list), f"Expected placement_ids to be a list, got {type(pids).__name__}"
     assert len(pids) > 0, "placement_ids list is empty — step claims placements are 'valid for the product'"
     # Step claims 'valid for the product' — product must be present to validate against
-    product = ctx.get("default_product") or ctx.get("existing_product")
+    product = ctx.get("default_product")
     assert product is not None, (
-        "No product in ctx (neither 'default_product' nor 'existing_product') — "
+        "No product in ctx under 'default_product' — "
         "step claims placements are 'valid for the product' but no product exists to validate against"
     )
     # Verify product does not have restrictive placement config that would reject these.
@@ -840,7 +840,6 @@ def _promote_update_errors(ctx: dict) -> None:
         # read, or require_payload/payload_or_none hand the error payload straight
         # back and a success-path Then grades it as a success.
         ctx.pop("result", None)
-        ctx.pop("self_dispatched_response", None)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1923,7 +1922,7 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
 
     # Handle "product unsupported" — configure product to not support placements
     if "product unsupported" in stripped:
-        product = ctx.get("default_product") or ctx.get("existing_product")
+        product = ctx.get("default_product")
         if product is None:
             # UC-003 harness doesn't store product in ctx — look up from existing package
             pkg_obj = ctx.get("existing_package")

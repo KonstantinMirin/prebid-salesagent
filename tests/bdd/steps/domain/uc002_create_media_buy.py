@@ -1022,21 +1022,18 @@ def _assert_pipeline_routing(ctx: dict, outcome: str) -> None:
     assert "error" not in ctx, (
         f"Expected request to route to '{expected_pipeline}' pipeline but got error: {ctx.get('error')}"
     )
-    resp = require_payload(ctx)
-    dispatched = ctx.get("dispatched_pipeline")
-    if dispatched is None:
-        pytest.xfail(
-            f"Harness does not yet expose dispatched pipeline "
-            f"(expected '{expected_pipeline}'). "
-            f"Add ctx['dispatched_pipeline'] to the When step."
-        )
-    assert dispatched == expected_pipeline, f"Expected dispatched pipeline '{expected_pipeline}', got '{dispatched}'"
-    if is_default:
-        explicit_mode = ctx.get("explicit_buying_mode")
-        assert explicit_mode is None, (
-            f"Expected default pipeline routing (no explicit buying_mode), "
-            f"but ctx['explicit_buying_mode'] = {explicit_mode!r}"
-        )
+    require_payload(ctx)
+    # UNCONDITIONAL xfail, because the guard it replaces always fired: this read
+    # ctx["dispatched_pipeline"], xfailed when it was None, and no step in
+    # tests/bdd has ever written it -- so the equality assert below it, and the
+    # ctx["explicit_buying_mode"] check under `is_default`, were unreachable.
+    # Production takes no buying-mode branch a Then can observe; closing this gap
+    # needs a When that records the pipeline it dispatched, not a ctx.get default.
+    pytest.xfail(
+        f"Harness does not expose the dispatched pipeline (expected {expected_pipeline!r}, "
+        f"default-routing scenario: {is_default}). A When step must record which "
+        "pipeline it dispatched before this can be graded."
+    )
 
 
 def _assert_workflow_outcome(ctx: dict, outcome: str) -> None:
@@ -1209,9 +1206,12 @@ def _assert_task_list_outcome(ctx: dict, outcome: str) -> None:
     elif outcome.startswith("tasks filtered to"):
         _assert_tasks_filtered(tasks, outcome)
     elif outcome.startswith("tasks of all") or outcome.startswith("tasks from all"):
-        seeded_count = ctx.get("seeded_task_count")
-        if seeded_count is not None:
-            assert len(tasks) >= seeded_count, f"Expected >= {seeded_count} tasks (unfiltered), got {len(tasks)}"
+        # "of all statuses / from all domains / of all types" IS the multi-value
+        # claim _assert_multi_value_filter already grades, so it grades it. This
+        # branch used to compare against ctx["seeded_task_count"], which no step
+        # writes -- the guard was `if seeded_count is not None`, so the whole
+        # branch asserted nothing at all.
+        _assert_multi_value_filter(tasks, outcome)
     elif outcome.startswith("defaults to"):
         if "created_at" in outcome and len(tasks) >= 2:
             values = [_get_task_field(t, "created_at") for t in tasks]
