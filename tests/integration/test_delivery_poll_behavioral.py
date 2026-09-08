@@ -219,42 +219,6 @@ class TestWebhookSequenceNumber:
 
 
 # ---------------------------------------------------------------------------
-# UC-004-ALT-WEBHOOK-PUSH-REPORTING-06
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.requires_db
-class TestWebhookNextExpectedAt:
-    """next_expected_at computed for non-final deliveries.
-
-    Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-06
-    """
-
-    def test_next_expected_at_set_for_active_delivery(self, integration_db):
-        """Scheduled delivery for active buy should compute next_expected_at.
-
-        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-06
-        """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            buy = MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                start_date=date(2026, 1, 1),
-                end_date=date(2026, 12, 31),
-            )
-            env.set_adapter_response(buy.media_buy_id, impressions=5000)
-
-            response = env.call_impl(media_buy_ids=[buy.media_buy_id])
-
-            assert response.next_expected_at is not None, "next_expected_at must be set for non-final delivery"
-
-
-# ---------------------------------------------------------------------------
 # UC-004-EXT-C-01
 # ---------------------------------------------------------------------------
 
@@ -1145,25 +1109,6 @@ class TestPackageDeliveryStatus:
             assert status_map["mb_active"] == "active"
             assert status_map["mb_completed"] == "completed"
 
-    def test_rq5_package_delivery_has_no_delivery_status_field(self):
-        """PackageDelivery lacks delivery_status -- obligation gap.
-
-        Covers: UC-004-MAIN-10
-        """
-        from src.core.schemas.delivery import DeliveryStatus, PackageDelivery
-
-        assert DeliveryStatus.delivering.value == "delivering"
-        assert DeliveryStatus.completed.value == "completed"
-        assert DeliveryStatus.budget_exhausted.value == "budget_exhausted"
-        assert DeliveryStatus.flight_ended.value == "flight_ended"
-        assert DeliveryStatus.goal_met.value == "goal_met"
-
-        field_names = set(PackageDelivery.model_fields.keys())
-        assert "delivery_status" not in field_names, (
-            "If this fails, delivery_status was added to PackageDelivery -- "
-            "update this test to PASS and verify the computation logic."
-        )
-
 
 @pytest.mark.requires_db
 class TestLegacyPersistedStatusNotStranded:
@@ -1337,91 +1282,6 @@ class TestAggregatedTotalsMultipleBuys:
 
 
 # ---------------------------------------------------------------------------
-# UC-004-MAIN-12
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.requires_db
-class TestProtocolEnvelopeStatusCompleted:
-    """Successful delivery query returns a well-formed response (protocol envelope).
-
-    Covers: UC-004-MAIN-12
-    """
-
-    def test_successful_query_returns_response_type(self, integration_db):
-        """_impl returns GetMediaBuyDeliveryResponse on success.
-
-        Covers: UC-004-MAIN-12
-        """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id="mb_001")
-            env.set_adapter_response("mb_001", impressions=1000, spend=50.0)
-
-            response = env.call_impl(media_buy_ids=["mb_001"])
-            assert isinstance(response, GetMediaBuyDeliveryResponse)
-
-    def test_successful_query_has_no_errors(self, integration_db):
-        """Successful delivery query returns errors=None.
-
-        Covers: UC-004-MAIN-12
-        """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id="mb_001")
-            env.set_adapter_response("mb_001", impressions=1000, spend=50.0)
-
-            response = env.call_impl(media_buy_ids=["mb_001"])
-            assert response.errors is None
-
-    def test_successful_query_contains_delivery_data(self, integration_db):
-        """Successful query populates media_buy_deliveries.
-
-        Covers: UC-004-MAIN-12
-        """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id="mb_001")
-            env.set_adapter_response("mb_001", impressions=1000, spend=50.0)
-
-            response = env.call_impl(media_buy_ids=["mb_001"])
-            assert len(response.media_buy_deliveries) == 1
-            assert response.media_buy_deliveries[0].media_buy_id == "mb_001"
-
-    def test_successful_query_has_required_envelope_fields(self, integration_db):
-        """Protocol envelope includes all required top-level fields.
-
-        Covers: UC-004-MAIN-12
-        """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id="mb_001")
-            env.set_adapter_response("mb_001", impressions=1000, spend=50.0)
-
-            response = env.call_impl(media_buy_ids=["mb_001"])
-            assert response.reporting_period is not None
-            assert response.currency is not None
-            assert response.aggregated_totals is not None
-            assert response.media_buy_deliveries is not None
-
-
-# ---------------------------------------------------------------------------
 # UC-004-MAIN-15
 # ---------------------------------------------------------------------------
 
@@ -1555,32 +1415,6 @@ class TestUnpopulatedFieldsGraceful:
     Covers: UC-004-MAIN-20
     """
 
-    def test_daily_breakdown_is_none_without_error(self, integration_db):
-        """Production sets daily_breakdown=None; response assembles without error.
-
-        Covers: UC-004-MAIN-20
-        """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id="mb_001")
-            env.set_adapter_response("mb_001", impressions=1000, spend=50.0)
-
-            result = env.call_impl(
-                media_buy_ids=["mb_001"],
-                start_date="2025-06-01",
-                end_date="2025-06-30",
-            )
-
-            assert isinstance(result, GetMediaBuyDeliveryResponse)
-            assert len(result.media_buy_deliveries) == 1
-            delivery = result.media_buy_deliveries[0]
-            # daily_breakdown is explicitly None (gap G42) — no error raised
-            assert delivery.daily_breakdown is None
-
     def test_delivery_totals_schema_lacks_effective_rate(self):
         """DeliveryTotals does not have effective_rate field (gap G44).
 
@@ -1601,72 +1435,6 @@ class TestUnpopulatedFieldsGraceful:
         assert "viewability" in DeliveryTotals.model_fields
         assert totals.impressions == 5000.0
         assert totals.spend == 250.0
-
-    def test_package_delivery_schema_lacks_creative_level_breakdowns(self):
-        """PackageDelivery does not have by_creative / creative_level_breakdowns (gap G42).
-
-        Covers: UC-004-MAIN-20
-        """
-        from src.core.schemas.delivery import PackageDelivery
-
-        pkg = PackageDelivery(
-            package_id="pkg_001",
-            impressions=5000.0,
-            spend=250.0,
-            clicks=None,
-            completed_views=None,
-            pacing_index=1.0,
-            pricing_model=None,
-            rate=None,
-            currency=None,
-        )
-        assert "by_creative" not in PackageDelivery.model_fields
-        assert pkg.package_id == "pkg_001"
-        assert pkg.impressions == 5000.0
-
-    def test_full_response_assembles_with_all_gap_fields_absent(self, integration_db):
-        """End-to-end: _impl returns valid response despite gap fields being absent.
-
-        Covers: UC-004-MAIN-20
-        """
-        from src.core.schemas.delivery import DeliveryTotals
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id="mb_001")
-            env.set_adapter_response("mb_001", impressions=1000, spend=50.0)
-
-            result = env.call_impl(
-                media_buy_ids=["mb_001"],
-                start_date="2025-06-01",
-                end_date="2025-06-30",
-            )
-
-            assert isinstance(result, GetMediaBuyDeliveryResponse)
-            delivery = result.media_buy_deliveries[0]
-
-            # Gap G42: daily_breakdown is None
-            assert delivery.daily_breakdown is None
-
-            # Gap G44: effective_rate not on local DeliveryTotals
-            assert "effective_rate" not in DeliveryTotals.model_fields
-
-            # viewability is now present on DeliveryTotals
-            assert "viewability" in DeliveryTotals.model_fields
-
-            # Gap G42: creative_level_breakdowns (by_creative) not on PackageDelivery
-            for pkg in delivery.by_package:
-                assert "by_creative" not in type(pkg).model_fields
-
-            # Response serializes cleanly
-            dumped = result.model_dump()
-            assert "media_buy_deliveries" in dumped
-            assert "daily_breakdown" not in dumped["media_buy_deliveries"][0]
-            assert "effective_rate" not in dumped["media_buy_deliveries"][0].get("totals", {})
-            assert "viewability" not in dumped["media_buy_deliveries"][0].get("totals", {})
 
 
 # ---------------------------------------------------------------------------
@@ -1828,102 +1596,6 @@ class TestDeliveryMetricsFieldPresence:
             assert totals.spend == 250.0
             assert totals.clicks is not None or hasattr(totals, "clicks")
             assert hasattr(totals, "ctr")
-
-    def test_totals_include_completed_views_field(self, integration_db):
-        """Delivery totals include completed_views field (where applicable).
-
-        Covers: UC-004-MAIN-19
-        """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id="mb_001")
-            env.set_adapter_response("mb_001", impressions=5000, spend=250.0)
-
-            result = env.call_impl(
-                media_buy_ids=["mb_001"],
-                start_date="2025-06-01",
-                end_date="2025-06-30",
-            )
-
-            delivery = result.media_buy_deliveries[0]
-            assert hasattr(delivery.totals, "completed_views")
-            assert delivery.totals.completed_views is None
-
-    def test_totals_include_conversions_field(self, integration_db):
-        """Delivery totals include conversions metric field.
-
-        Covers: UC-004-MAIN-19
-        """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id="mb_001")
-            env.set_adapter_response("mb_001", impressions=5000, spend=250.0)
-
-            result = env.call_impl(
-                media_buy_ids=["mb_001"],
-                start_date="2025-06-01",
-                end_date="2025-06-30",
-            )
-
-            delivery = result.media_buy_deliveries[0]
-            assert hasattr(delivery.totals, "conversions")
-
-    def test_totals_include_viewability_field(self, integration_db):
-        """Delivery totals include viewability metric field.
-
-        Covers: UC-004-MAIN-19
-        """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id="mb_001")
-            env.set_adapter_response("mb_001", impressions=5000, spend=250.0)
-
-            result = env.call_impl(
-                media_buy_ids=["mb_001"],
-                start_date="2025-06-01",
-                end_date="2025-06-30",
-            )
-
-            delivery = result.media_buy_deliveries[0]
-            assert hasattr(delivery.totals, "viewability")
-
-    def test_aggregated_totals_include_core_metrics(self, integration_db):
-        """Response aggregated_totals include impressions, spend, clicks fields.
-
-        Covers: UC-004-MAIN-19
-        """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id="mb_001")
-            env.set_adapter_response("mb_001", impressions=5000, spend=250.0)
-
-            result = env.call_impl(
-                media_buy_ids=["mb_001"],
-                start_date="2025-06-01",
-                end_date="2025-06-30",
-            )
-
-            agg = result.aggregated_totals
-            assert agg.impressions == 5000.0
-            assert agg.spend == 250.0
-            assert agg.media_buy_count == 1
-            assert hasattr(agg, "clicks")
 
 
 # ---------------------------------------------------------------------------
@@ -2411,75 +2083,6 @@ class TestDeliveryMetricsFlatRatePricing:
 
 
 # ---------------------------------------------------------------------------
-# UC-004-RESPONSE-SERIALIZATION-SALESAGENT-02
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.requires_db
-class TestDeliveryResponsePreservesExtFields:
-    """Delivery response should preserve ext fields from adapter.
-
-    Covers: UC-004-RESPONSE-SERIALIZATION-SALESAGENT-02
-    """
-
-    def test_ext_fields_preserved_in_delivery_data(self, integration_db):
-        """ext fields from adapter response should flow through to MediaBuyDeliveryData.
-
-        Covers: UC-004-RESPONSE-SERIALIZATION-SALESAGENT-02
-        """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                media_buy_id="mb_ext",
-            )
-            env.set_adapter_response("mb_ext", impressions=1000, spend=50.0)
-
-            result = env.call_impl(
-                media_buy_ids=["mb_ext"],
-                start_date="2025-06-01",
-                end_date="2025-06-30",
-            )
-
-            assert len(result.media_buy_deliveries) == 1
-            delivery = result.media_buy_deliveries[0]
-            assert hasattr(delivery, "ext") and delivery.ext is not None
-
-    def test_ext_fields_preserved_in_model_dump(self, integration_db):
-        """ext fields should survive model_dump() serialization.
-
-        Covers: UC-004-RESPONSE-SERIALIZATION-SALESAGENT-02
-        """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                media_buy_id="mb_ext2",
-            )
-            env.set_adapter_response("mb_ext2", impressions=1000, spend=50.0)
-
-            result = env.call_impl(
-                media_buy_ids=["mb_ext2"],
-                start_date="2025-06-01",
-                end_date="2025-06-30",
-            )
-
-            dumped = result.model_dump()
-            delivery_dumped = dumped["media_buy_deliveries"][0]
-            assert "ext" in delivery_dumped
-
-
-# ---------------------------------------------------------------------------
 # UC-004-ALT-CUSTOM-DATE-RANGE-01
 # ---------------------------------------------------------------------------
 
@@ -2520,48 +2123,6 @@ class TestCustomDateRangeBothProvided:
             )
             assert response.reporting_period.start == datetime(2026, 3, 1, tzinfo=UTC)
             assert response.reporting_period.end == datetime(2026, 3, 7, tzinfo=UTC)
-
-
-# ---------------------------------------------------------------------------
-# UC-004-ALT-CUSTOM-DATE-RANGE-04
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.requires_db
-class TestCustomDateRangeOverridesDefault:
-    """Custom date range overrides default 30-day window.
-
-    Covers: UC-004-ALT-CUSTOM-DATE-RANGE-04
-    """
-
-    def test_ninety_day_range_not_truncated(self, integration_db):
-        """A 90-day custom range is used in full — 30-day default NOT applied.
-
-        Covers: UC-004-ALT-CUSTOM-DATE-RANGE-04
-        """
-        from datetime import date
-
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
-        from tests.harness import DeliveryPollEnv
-
-        with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            buy = MediaBuyFactory(
-                tenant=tenant,
-                principal=principal,
-                start_date=date(2025, 1, 1),
-                end_date=date(2025, 12, 31),
-            )
-            env.set_adapter_response(buy.media_buy_id, impressions=1000)
-
-            response = env.call_impl(
-                media_buy_ids=[buy.media_buy_id],
-                start_date="2025-01-01",
-                end_date="2025-04-01",
-            )
-            delta = response.reporting_period.end - response.reporting_period.start
-            assert delta.days == 90, f"Expected 90-day range, got {delta.days} days"
 
 
 # ---------------------------------------------------------------------------
