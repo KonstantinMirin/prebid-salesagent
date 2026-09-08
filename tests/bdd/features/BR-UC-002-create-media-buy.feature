@@ -314,8 +314,15 @@ Feature: BR-UC-002 Create Media Buy
     And the creative format is not generative
     When the Buyer Agent sends the create_media_buy request
     Then the error is compliant with the AdCP error spec
-    And the operation should fail
-    And the error should include "suggestion" field
+    And the response contains error code INVALID_REQUEST
+    And the response error field is packages[0].creatives[0].assets.primary.AssetVariant.image.url
+    # The two Thens that stood here — "the operation should fail" and "the error should
+    # include \"suggestion\" field" — were satisfied by ANY error, so this scenario
+    # reported green while saying nothing about which refusal arrived. It stayed green
+    # through a repair that changed the refusal from union_tag_not_found to url_parsing.
+    # Code AND field now, so a request that dies for an unrelated reason fails here.
+    # The pointer carries pydantic's union-branch name (AssetVariant.image) rather than a
+    # pointer into the buyer's own request; that leak is real and separately filed.
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
