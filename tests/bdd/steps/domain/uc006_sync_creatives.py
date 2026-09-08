@@ -15,6 +15,7 @@ import json
 from unittest.mock import ANY
 
 import pytest
+from adcp.types import ErrorCode
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session
@@ -2078,7 +2079,7 @@ def given_creative_with_known_format_no_media_url(ctx: dict) -> None:
             # dropping this line is the exact repair the gate now reports.
             assets=OMIT,
         ),
-        pin_rejects=True,
+        obligation=ErrorCode.INVALID_REQUEST,
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -2659,7 +2660,7 @@ def given_creative_with_name_no_format(ctx: dict, name: str) -> None:
             # indistinguishable in the pin's error and distinguishable only here.
             format_id=None,
         ),
-        pin_rejects=True,
+        obligation=ErrorCode.INVALID_REQUEST,
     )
     ctx.setdefault("creatives", []).append(creative_payload)
 
@@ -2701,7 +2702,7 @@ def given_creative_invalid_schema(ctx: dict) -> None:
             format_id={"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
             assets="not-a-valid-assets-structure",
         ),
-        pin_rejects=True,
+        obligation=ErrorCode.INVALID_REQUEST,
     )
     ctx.setdefault("creatives", []).append(creative_payload)
 
@@ -4869,7 +4870,7 @@ def given_creative_with_no_format_id(ctx: dict) -> None:
             # default puts a valid format_id back — reported now, not silent.
             format_id=OMIT,
         ),
-        pin_rejects=True,
+        obligation=ErrorCode.INVALID_REQUEST,
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_no_format"] = True
@@ -6214,7 +6215,7 @@ def given_creative_with_invalid_format_id(ctx: dict) -> None:
         ),
         # semantic, and the pin REJECTS it. The kind says nothing about that: a different
         # semantic case — an unknown but well-formed format id — the pin ACCEPTS.
-        pin_rejects=True,
+        obligation=ErrorCode.INVALID_REQUEST,
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
