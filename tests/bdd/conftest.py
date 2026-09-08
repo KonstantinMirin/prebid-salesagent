@@ -5318,6 +5318,93 @@ _UC003_STORYBOARD_CLIENT_TAGS = frozenset(
 #:
 #: The rest stay on the catch-all with their blockers named in salesagent-lqm79. Adding
 #: an entry here GROWS the executing surface; it exempts nothing from grading.
+#: 27 UC-006 scenarios, blocker measured (salesagent-lqm79).
+_UC006_NO_STEP_DEFINITION = frozenset(
+    {
+        "T-UC-006-boundary-creative-status",
+        "T-UC-006-boundary-creative-status-response",
+        "T-UC-006-boundary-delete-missing",
+        "T-UC-006-boundary-sandbox",
+        "T-UC-006-creative-item-missing-content",
+        "T-UC-006-creative-item-multi-asset",
+        "T-UC-006-creative-item-text-array",
+        "T-UC-006-creative-variable-declared",
+        "T-UC-006-creative-variable-invalid-type",
+        "T-UC-006-creative-variable-required-flag",
+        "T-UC-006-daast-tracker-asset",
+        "T-UC-006-daast-tracker-no-non-linear-target",
+        "T-UC-006-error-details-conflict",
+        "T-UC-006-error-details-creative-rejected",
+        "T-UC-006-error-details-policy-violation",
+        "T-UC-006-main-async-submitted",
+        "T-UC-006-main-delete-missing-conflict",
+        "T-UC-006-partition-creative-status-terminal",
+        "T-UC-006-rule-039-inv5-lenient",
+        "T-UC-006-rule-093-inv1",
+        "T-UC-006-rule-093-inv3",
+        "T-UC-006-sandbox-errors-no-flag",
+        "T-UC-006-sandbox-happy",
+        "T-UC-006-sandbox-submitted-no-flag",
+        "T-UC-006-vast-tracker-asset",
+        "T-UC-006-vast-tracker-forbidden-event",
+        "T-UC-006-vast-tracker-progress-requires-offset",
+    }
+)
+
+#: 2 UC-006 scenarios, blocker measured (salesagent-lqm79).
+_UC006_STALE_XFAIL = frozenset(
+    {
+        "T-UC-006-boundary-format-id",
+        "T-UC-006-ext-a",
+    }
+)
+
+#: 2 UC-006 scenarios, blocker measured (salesagent-lqm79).
+_UC006_UNDECLARED_MALFORMATION = frozenset(
+    {
+        "T-UC-006-partition-assignment-fmt",
+        "T-UC-006-rule-094-inv2",
+    }
+)
+
+#: 1 UC-006 scenarios, blocker measured (salesagent-lqm79).
+_UC006_MISSING_HARNESS_SEAM = frozenset(
+    {
+        "T-UC-006-rule-037-inv4",
+    }
+)
+
+#: 3 UC-006 scenarios, blocker measured (salesagent-lqm79).
+_UC006_UNVERIFIED_FAILURE = frozenset(
+    {
+        "T-UC-006-rule-033-inv2",
+        "T-UC-006-rule-035-static",
+        "T-UC-006-rule-037-inv6",
+    }
+)
+
+#: 16 UC-006 scenarios, blocker measured (salesagent-lqm79).
+_UC006_OWN_XFAIL = frozenset(
+    {
+        "T-UC-006-ext-b",
+        "T-UC-006-ext-c",
+        "T-UC-006-ext-d",
+        "T-UC-006-ext-d-whitespace",
+        "T-UC-006-ext-e",
+        "T-UC-006-ext-f",
+        "T-UC-006-ext-g",
+        "T-UC-006-ext-h",
+        "T-UC-006-ext-i",
+        "T-UC-006-ext-k",
+        "T-UC-006-main-unchanged",
+        "T-UC-006-main-weight",
+        "T-UC-006-rule-035-inv2",
+        "T-UC-006-rule-039-inv2",
+        "T-UC-006-rule-039-inv4",
+        "T-UC-006-sandbox-validation",
+    }
+)
+
 _UC006_WIRED_SCENARIOS = frozenset(
     {
         # NOT here, and not parked either: T-UC-006-boundary-format-id and
@@ -5605,10 +5692,61 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
     ),
     EnvRoute(
-        tag="uc006-not-wired",
+        tag="uc006-stepless",
+        when=_uc("UC-006", lambda m, s=_UC006_NO_STEP_DEFINITION: bool(m & s)),
+        env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
+        xfail_reason=(
+            "UC-006 not wired: no step definition for one of its steps, so it grades nothing (salesagent-eii8n names the blocking sentence per scenario)"
+        ),
+    ),
+    EnvRoute(
+        tag="uc006-graduation",
+        when=_uc("UC-006", lambda m, s=_UC006_STALE_XFAIL: bool(m & s)),
+        env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
+        xfail_reason=(
+            "UC-006 not wired: it PASSES, and a pre-existing strict xfail turns that into XPASS(strict). The reason is stale and graduates one scenario at a time (.claude/rules/workflows/xpass-graduation.md), never by parking a passing row"
+        ),
+    ),
+    EnvRoute(
+        tag="uc006-malformation",
+        when=_uc("UC-006", lambda m, s=_UC006_UNDECLARED_MALFORMATION: bool(m & s)),
+        env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
+        xfail_reason=(
+            "UC-006 not wired: the dispatched payload is refused by the malformation gate and not declared. Fix the payload or declare it with the code the buyer must receive -- an xfail here would hide exactly what that gate exists to show"
+        ),
+    ),
+    EnvRoute(
+        tag="uc006-harness-seam",
+        when=_uc("UC-006", lambda m, s=_UC006_MISSING_HARNESS_SEAM: bool(m & s)),
+        env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
+        xfail_reason=(
+            "UC-006 not wired: CreativeSyncEnv lacks the seam this scenario asserts on. A harness gap, not a production one"
+        ),
+    ),
+    EnvRoute(
+        tag="uc006-unverified",
+        when=_uc("UC-006", lambda m, s=_UC006_UNVERIFIED_FAILURE: bool(m & s)),
+        env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
+        xfail_reason=(
+            "UC-006 not wired: fails for a reason that is none of the named test-side blockers and has NOT been individually diagnosed. Not filed as a production defect on a classifier's say-so"
+        ),
+    ),
+    EnvRoute(
+        tag="uc006-own-xfail",
+        when=_uc("UC-006", lambda m, s=_UC006_OWN_XFAIL: bool(m & s)),
+        env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
+        xfail_reason=(
+            "UC-006 not wired: already carries its own xfail for a named reason; this row keeps it off the unclassified path and adds nothing"
+        ),
+    ),
+    EnvRoute(
+        tag="uc006-unclassified",
         when=_uc("UC-006", lambda m: True),
         env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
-        xfail_reason="UC-006 harness not yet wired for non-account scenarios",
+        xfail_reason=(
+            "UC-006 UNCLASSIFIED: no row names this scenario, so nobody has decided what "
+            "blocks it. Wire it, or give it a row naming its blocker -- do not leave it here"
+        ),
     ),
     # ── UC-018 ──────────────────────────────────────────────────────────────
     EnvRoute(
