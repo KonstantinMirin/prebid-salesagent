@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ast
 import collections
+import functools
 import glob
 import html
 import pathlib
@@ -64,6 +65,159 @@ def snippet(lines: list[str], lineno: int, span: int = 7) -> str:
     return "\n".join(lines[start : start + span])
 
 
+# ── Assertion reachability: a THREE-STATE verdict, resolved by following the call ──
+#
+# The question a Then-step classifier must answer is "does this step grade anything",
+# and the only sound way to answer it is to FOLLOW THE CALL. This script used to ask
+# instead whether a callee's NAME began with assert_/require_/expect_/verify_/check_
+# — a proxy, and one wrong in the direction that inflates the finding. Measured on the
+# no-creative-literal half of the tree: 49 sites read as "grades nothing", 47 of them
+# reach an assertion through a helper whose name matches no prefix (``_expect_flag``,
+# ``wire_dict``, ``wire_field``, ``_assert_billing_party_array``), and the remaining 2
+# assert as well. The 337/174/65 headline set the scope of a whole epic on that basis
+# (salesagent-v03pe.4).
+#
+# So the verdict is resolved, and it has three states, never two:
+#
+#   GRADES        an assertion is reachable — the step raises or asserts itself, or a
+#                 callee resolved inside the scanned tree does, transitively.
+#   GRADES_NOTHING no assertion is reachable AND every callee on every path was
+#                 resolved. The absence is PROVEN, not assumed.
+#   UNDECIDABLE   no assertion was found, but at least one callee could not be resolved
+#                 (a name defined outside the scanned roots, a method on an object this
+#                 scanner does not type, or a path past the depth limit). Counted and
+#                 printed separately, NEVER folded into either side — an instrument that
+#                 quietly calls what it cannot evaluate "fine" is the same defect one
+#                 axis over (salesagent-b341x.18 established the convention).
+#
+# RESOLUTION RULES, stated so they can be argued with:
+#
+#   * A callee is looked up by BARE NAME across every function and method defined under
+#     ROOTS. Attribute calls (``result.assert_wire_error(...)``) resolve by method name,
+#     because this scanner does not infer receiver types; that is a deliberate widening,
+#     and its cost is recorded — an unresolvable name is UNDECIDABLE, not "grades nothing".
+#   * One name may map to several definitions. The step GRADES if ANY of them asserts.
+#     Conservative in the direction that avoids inflating the finding, which is the
+#     direction the old proxy got wrong.
+#   * Cycles are tracked and do not recurse. Exceeding MAX_DEPTH yields UNDECIDABLE
+#     rather than a negative verdict.
+#   * Builtins that cannot assert are not treated as unresolved; see _INERT.
+
+ROOTS = ("tests/bdd/steps/**/*.py", "tests/harness/**/*.py", "tests/helpers/**/*.py", "tests/factories/**/*.py")
+MAX_DEPTH = 6
+
+#: Callees that provably cannot assert, so an unresolved lookup of one is not a hole.
+#: Builtins and stdlib constructors only — anything project-defined must be resolved.
+_INERT = frozenset(
+    """len list dict set tuple str int float bool sorted any all zip range enumerate
+    getattr setattr hasattr isinstance issubclass type repr format join split strip lower upper
+    append extend add update get keys values items pop setdefault copy print min max sum abs round
+    startswith endswith replace splitlines encode decode dumps loads deepcopy fullmatch search match
+    group compile escape now utcnow isoformat fromisoformat timedelta Decimal UUID uuid4 hex""".split()
+)
+
+GRADES, GRADES_NOTHING, UNDECIDABLE = "GRADES", "GRADES_NOTHING", "UNDECIDABLE"
+
+
+@functools.lru_cache(maxsize=1)
+def _definitions() -> dict[str, list[ast.AST]]:
+    """Every function/method body in the scanned roots, keyed by bare name."""
+    defs: dict[str, list[ast.AST]] = collections.defaultdict(list)
+    for pattern in ROOTS:
+        for path in glob.glob(pattern, recursive=True):
+            try:
+                tree = ast.parse(pathlib.Path(path).read_text())
+            except (SyntaxError, OSError):
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    defs[node.name].append(node)
+    return defs
+
+
+def _callee_names(node: ast.AST) -> list[str]:
+    """Bare names of everything this body calls, attribute calls included."""
+    out = []
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call):
+            fn = sub.func
+            name = fn.id if isinstance(fn, ast.Name) else getattr(fn, "attr", "")
+            if name:
+                out.append(name)
+    return out
+
+
+def assertion_verdict(node: ast.AST, _seen: frozenset = frozenset(), _depth: int = 0) -> str:
+    """GRADES / GRADES_NOTHING / UNDECIDABLE for one function body."""
+    if any(isinstance(s, (ast.Assert, ast.Raise)) for s in ast.walk(node)):
+        return GRADES
+    if _depth >= MAX_DEPTH:
+        return UNDECIDABLE
+    defs = _definitions()
+    unresolved = False
+    for name in _callee_names(node):
+        if name in _INERT or name in _seen:
+            continue
+        bodies = defs.get(name)
+        if not bodies:
+            unresolved = True
+            continue
+        for body in bodies:
+            verdict = assertion_verdict(body, _seen | {name}, _depth + 1)
+            if verdict == GRADES:
+                return GRADES
+            if verdict == UNDECIDABLE:
+                unresolved = True
+    return UNDECIDABLE if unresolved else GRADES_NOTHING
+
+
+def _is_comparison(test: ast.AST) -> bool:
+    """Does this assert test COMPARE something, rather than check truthiness?
+
+    Walks the WHOLE test expression rather than matching its top node. A top-node match
+    was tried first and under-detected badly: ``assert any(kw in text for kw in KEYWORDS)``
+    is an ``ast.Call`` at its top node, so it read as truthiness even though the comparison
+    it performs is the entire point. Under-detecting here inflates the finding, which is the
+    direction this rewrite exists to stop.
+    """
+    for sub in ast.walk(test):
+        if isinstance(sub, ast.Compare):
+            return True
+        if isinstance(sub, ast.Call):
+            fn = sub.func.id if isinstance(sub.func, ast.Name) else getattr(sub.func, "attr", "")
+            if fn in ("isinstance", "issubclass"):
+                return True
+    return False
+
+
+def _callee_asserts(node: ast.AST) -> bool:
+    """Does anything this body CALLS assert, ignoring the body's own asserts?
+
+    Distinct from :func:`assertion_verdict`, which short-circuits on the caller's own
+    ``assert``. The presence-only class needs the other question — "is this step the
+    whole oracle, or does a helper grade for it" — and answering it with the first
+    function silently empties the class to zero, which is how this was caught.
+    """
+    defs = _definitions()
+    for name in _callee_names(node):
+        if name in _INERT:
+            continue
+        for body in defs.get(name, ()):
+            if assertion_verdict(body, frozenset({name}), 1) == GRADES:
+                return True
+    return False
+
+
+def _branch_asserts(branch: list) -> bool:
+    """Does any statement on this branch assert, raise, or call something that does?"""
+    for stmt in branch:
+        if any(isinstance(s, (ast.Assert, ast.Raise)) for s in ast.walk(stmt)):
+            return True
+        if assertion_verdict(stmt) == GRADES:
+            return True
+    return False
+
+
 DISPATCH = ("call_via", "dispatch_request", "call_raw", "_call")
 
 
@@ -77,13 +231,15 @@ def collect():
         dumped = ast.dump(node)
         has_assert = any(isinstance(s, ast.Assert) for s in ast.walk(node))
         has_raise = any(isinstance(s, ast.Raise) for s in ast.walk(node))
-        delegates = any(
-            c.startswith(("assert_", "require_", "expect_", "verify_", "check_")) or c.endswith("_compliant")
-            for c in calls
-        )
-
-        if "then" in kinds and not (has_assert or has_raise or delegates):
-            found["then-grades-nothing"].append((loc, snippet(lines, node.lineno)))
+        if "then" in kinds and not (has_assert or has_raise):
+            # Resolved, not guessed. The three states are kept apart on purpose: a step
+            # whose helper this scanner cannot follow is UNDECIDABLE, and saying so IS the
+            # finding — folding it into "grades nothing" is what produced the 65.
+            verdict = assertion_verdict(node)
+            if verdict == GRADES_NOTHING:
+                found["then-grades-nothing"].append((loc, snippet(lines, node.lineno)))
+            elif verdict == UNDECIDABLE:
+                found["then-undecidable"].append((loc, snippet(lines, node.lineno)))
 
         if "then" in kinds and any(d in calls for d in DISPATCH):
             found["then-dispatches"].append((loc, snippet(lines, node.lineno)))
@@ -114,10 +270,68 @@ def collect():
         if raw >= 8:
             found["raw-ctx-heavy"].append((f"{loc} — {raw} subscripts", snippet(lines, node.lineno)))
 
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.Assert) and isinstance(sub.test, (ast.Name, ast.Attribute)):
-                found["bare-truthiness"].append((loc, snippet(lines, node.lineno)))
-                break
+        # PRESENCE-ONLY GRADING, which is not "contains a bare assert".
+        #
+        # The old rule flagged any ``assert x``, and on the half of the tree audited by
+        # hand it was almost entirely ANTI-VACUITY GUARDS: ``assert accounts, "expected a
+        # non-empty array"`` standing in FRONT of ``assert returned == expected``. That
+        # guard is good practice — it stops an empty collection satisfying an all() — and
+        # counting it as a defect is what made this class 174 sites.
+        #
+        # A step grades by presence only when NOTHING in it compares: no comparison in any
+        # of its own asserts, no raise, and no CALLEE that asserts on its behalf. THEN
+        # steps only — a Given or When asserting ``account_id`` is a setup guard, and
+        # grading is not its job.
+        asserts = [s for s in ast.walk(node) if isinstance(s, ast.Assert)]
+        bare = [s for s in asserts if isinstance(s.test, (ast.Name, ast.Attribute))]
+        raises = any(isinstance(s, ast.Raise) for s in ast.walk(node))
+        if (
+            "then" in kinds
+            and bare
+            and not raises
+            and not any(_is_comparison(s.test) for s in asserts)
+            and not _callee_asserts(node)
+        ):
+            found["presence-only"].append((loc, snippet(lines, node.lineno)))
+
+        # ── The classes that actually found the defects in the audited half ──
+        # Added because the classes above found 5 real defects across 205 flagged sites
+        # there, and these two found most of those 5 (salesagent-v03pe.4).
+        if "then" in kinds:
+            params = [a.arg for a in node.args.args if a.arg not in ("ctx", "request", "env")]
+            if params:
+                graded = set()
+                for st in ast.walk(node):
+                    if isinstance(st, ast.Assert):
+                        graded |= {n.id for n in ast.walk(st.test) if isinstance(n, ast.Name)}
+                    elif isinstance(st, ast.Call):
+                        for arg in list(st.args) + [k.value for k in st.keywords]:
+                            graded |= {n.id for n in ast.walk(arg) if isinstance(n, ast.Name)}
+                    elif isinstance(st, (ast.Assign, ast.Return)) and getattr(st, "value", None) is not None:
+                        graded |= {n.id for n in ast.walk(st.value) if isinstance(n, ast.Name)}
+                    elif isinstance(st, (ast.If, ast.While)):
+                        graded |= {n.id for n in ast.walk(st.test) if isinstance(n, ast.Name)}
+                    elif isinstance(st, (ast.For, ast.comprehension)):
+                        graded |= {n.id for n in ast.walk(st.iter) if isinstance(n, ast.Name)}
+                ungraded = [p for p in params if p not in graded]
+                if ungraded:
+                    found["param-never-graded"].append(
+                        (f"{loc} — {', '.join(ungraded)}", snippet(lines, node.lineno))
+                    )
+
+            for sub in ast.walk(node):
+                if not isinstance(sub, ast.If):
+                    continue
+                hit = False
+                for branch in (sub.body, sub.orelse):
+                    if branch and isinstance(branch[-1], ast.Return) and not _branch_asserts(branch):
+                        found["vacuous-return-branch"].append(
+                            (f"{loc} — returns at line {branch[-1].lineno}", snippet(lines, node.lineno))
+                        )
+                        hit = True
+                        break
+                if hit:
+                    break
     return found
 
 
@@ -152,7 +366,7 @@ DECISIONS = [
     (
         "then-grades-nothing",
         "A Then that grades nothing",
-        "No assert, no raise, and no call to an asserting helper. The scenario says an obligation holds; the step checks nothing. These pass unconditionally and always will.",
+        "No assert, no raise, and — following every call transitively through tests/{bdd/steps,harness,helpers,factories} — no helper that asserts either. The absence is PROVEN: every callee on every path resolved. A step whose helper could NOT be resolved is not here; it is under 'Cannot be decided by this scanner'.",
         "Delete the step and the sentence, or write the assertion it implies? Each needs the scenario read to know which.",
     ),
     (
@@ -198,10 +412,28 @@ DECISIONS = [
         "Which of these keys are a real contract between steps, and which are incidental? The contract ones want a named accessor.",
     ),
     (
-        "bare-truthiness",
-        "assert on bare truthiness",
-        "`assert x` with no comparison. Passes for any non-empty value, so it grades presence rather than correctness — and a wrong value of the right shape sails through.",
-        "What is the actual expected value? A truthy check on a response field is nearly always a missed equality assertion.",
+        "presence-only",
+        "The step grades presence and nothing else",
+        "Every assertion in the step is `assert x` with no comparison anywhere, it raises nothing, and no callee asserts on its behalf — so a wrong value of the right shape sails through. This is NOT every bare assert: `assert accounts, 'expected a non-empty array'` in front of `assert returned == expected` is an anti-vacuity guard and good practice, and counting those is what made the predecessor class 174 sites.",
+        "What is the actual expected value? A truthy check that is the step's ONLY check is nearly always a missed equality assertion.",
+    ),
+    (
+        "then-undecidable",
+        "Cannot be decided by this scanner",
+        "The step has no assertion of its own and calls something this scanner could not resolve — a name defined outside tests/{bdd/steps,harness,helpers,factories}, a method on an object it does not type, or a path past the depth limit. It may grade perfectly well. It is reported because an instrument that quietly files what it cannot evaluate under 'fine' — or under 'broken' — is answering a question it cannot answer.",
+        "Read the call. If the helper asserts, nothing is wrong; if the resolution gap is systematic, widen ROOTS rather than guessing.",
+    ),
+    (
+        "param-never-graded",
+        "A value the scenario names that the step never grades",
+        "The sentence names a value — 'for media buy X', 'with status Y' — and the step takes it as a parameter, then never puts it in a comparison, a call, or a filter. Any value passes, so the scenario's own Examples column grades nothing.",
+        "Assert it, or take it out of the sentence. This class found the uc019 advisory defect, where 'exactly one advisory for media buy X' checked the field and never X.",
+    ),
+    (
+        "vacuous-return-branch",
+        "A path that returns having asserted nothing",
+        "One branch of the step returns without asserting, so whatever leads down that branch passes unconditionally. Legitimate for a genuinely tri-state oracle whose SENTENCE says so ('a PRESENT section should include ...'), which is why this is a question rather than a verdict.",
+        "Does the scenario's sentence admit the skipped case? This class found the UC-004 exclusion pair, where a request that 500ed satisfied 'the response should not include delivery data'.",
     ),
 ]
 
