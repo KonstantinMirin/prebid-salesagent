@@ -633,21 +633,153 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
     )
 
 
-# ── Suggestion content: seven steps deleted, nothing bound them ──
+# ── Suggestion content ───────────────────────────────────────────────
 #
-# `the suggestion should advise providing authentication credentials`, `... should provide
-# valid parameter values`, and five siblings advising a DisclosurePosition enum, positions,
-# duplicate removal, a FormatId, and agent_url+id. None of those sentences occurs in
-# tests/bdd/features — by literal grep of "the suggestion should advise" and of each full
-# sentence, and by matching each pattern against all 49534 sentences rendered from every
-# feature's Examples through pytest-bdd's own FeatureParser.
+# UNBOUND, AND KEPT DELIBERATELY. No feature carries any of the seven sentences below —
+# checked by literal grep and by matching each pattern against all 49534 sentences
+# rendered from every feature's Examples through pytest-bdd's own FeatureParser. They are
+# not dead weight, though, and deleting them would destroy the only record that these
+# remediations were ever identified: each one names a specific thing a rejection should
+# tell the buyer to DO, and no scenario grades any of them.
 #
-# They were also the wrong oracle for a live scenario to bind. Each searched the suggestion
-# TEXT for keywords, and core/error.json leaves `suggestion` free-form prose the seller may
-# reword; CODE_TABLE derives the sentence from the code, so an assertion on the code carries
-# the same obligation without pinning wording. `then_error_has_fix_suggestion` above keeps
-# the one general check that survives that argument. A scenario needing more should assert
-# the CODE, and say which code in the scenario where a reader can see it.
+# Measured against CODE_TABLE, which owns the suggestion text a code resolves to:
+#
+#   - `then_suggestion_auth` is the weak one. AUTH_MISSING's own entry reads "provide
+#     credentials via the auth header and retry", so its keyword test passes on the table
+#     text alone. Asserting the CODE is strictly stronger — it pins WHICH code as well —
+#     which is why nothing should bind this sentence as written.
+#   - The other six demand wording NO code's entry carries. INVALID_REQUEST resolves to
+#     "check request parameters and fix" and VALIDATION_ERROR to "review error details and
+#     fix field values"; neither says DisclosurePosition, positions, duplicates, FormatId,
+#     or agent_url. So those six record obligations production does not meet, which were
+#     never ledgered because no scenario reaches them.
+#
+# Writing those scenarios is filed separately. When they are written, the assertion should
+# be re-expressed against the CODE plus the sanctioned wire oracle rather than against
+# prose: core/error.json leaves `suggestion` free-form text the seller may reword, and
+# these keyword tests would grade one seller's phrasing.
+
+
+@then("the suggestion should advise providing authentication credentials")
+def then_suggestion_auth(ctx: dict) -> None:
+    """Assert suggestion mentions authentication credentials — wire-first, reconstructed fallback (ztl6.8)."""
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        suggestion = _get_error_dict(ctx.get("error")).get("suggestion") or ""
+    suggestion_lower = suggestion.lower()
+    assert "credential" in suggestion_lower or "auth" in suggestion_lower, f"Expected auth suggestion: {suggestion}"
+
+
+@then("the suggestion should provide valid parameter values")
+def then_suggestion_valid_values(ctx: dict) -> None:
+    """Assert suggestion provides valid parameter values — wire-first, reconstructed fallback (ztl6.8).
+
+    Must reference both validity AND values.
+    """
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        suggestion = _get_error_dict(ctx.get("error")).get("suggestion") or ""
+    assert suggestion, "Expected non-empty suggestion"
+    suggestion_lower = suggestion.lower()
+    # Must mention validity concept
+    assert any(kw in suggestion_lower for kw in ("valid", "allowed", "accepted", "supported")), (
+        f"Expected suggestion to indicate valid/allowed/accepted values, got: {suggestion}"
+    )
+    # Must mention values/options concept (not just "use valid X")
+    assert any(kw in suggestion_lower for kw in ("values", "options", ":", "'", '"', "[", ",")), (
+        f"Expected suggestion to enumerate or reference specific values, got: {suggestion}"
+    )
+
+
+@then("the suggestion should advise using valid DisclosurePosition enum values")
+def then_suggestion_disclosure_enum(ctx: dict) -> None:
+    """Assert suggestion mentions both DisclosurePosition AND valid values — wire-first (ztl6.8)."""
+    raw = _wire_suggestion(ctx)
+    if raw is None:
+        raw = _get_error_dict(ctx.get("error")).get("suggestion") or ""
+    suggestion = raw.lower()
+    # Gherkin requires both concepts: "DisclosurePosition" AND "valid enum values"
+    assert (
+        "disclosureposition" in suggestion or "disclosure_position" in suggestion or "disclosure position" in suggestion
+    ), f"Expected 'DisclosurePosition' in suggestion: {raw}"
+    assert "valid" in suggestion or "allowed" in suggestion or "enum" in suggestion, (
+        f"Expected valid/allowed/enum values language in suggestion: {raw}"
+    )
+
+
+@then("the suggestion should advise providing at least one position or omitting the filter")
+def then_suggestion_positions_or_omit(ctx: dict) -> None:
+    """Assert suggestion advises providing positions OR omitting the filter.
+
+    Gherkin describes two alternatives — the suggestion should mention at least
+    one alternative completely (position + provide/add, or omit/remove).
+    Wire-first, reconstructed fallback (ztl6.8).
+    """
+    raw = _wire_suggestion(ctx)
+    if raw is None:
+        raw = _get_error_dict(ctx.get("error")).get("suggestion") or ""
+    suggestion = raw.lower()
+    has_provide_position = "position" in suggestion and any(
+        w in suggestion for w in ("provide", "add", "include", "at least")
+    )
+    has_omit = "omit" in suggestion or "remove" in suggestion
+    assert has_provide_position or has_omit, (
+        f"Expected suggestion to advise providing positions or omitting filter: {raw}"
+    )
+
+
+@then("the suggestion should advise removing duplicate positions")
+def then_suggestion_remove_dupes(ctx: dict) -> None:
+    """Assert suggestion advises removing duplicates — wire-first, reconstructed fallback (ztl6.8).
+
+    Both concepts required.
+    """
+    raw = _wire_suggestion(ctx)
+    if raw is None:
+        raw = _get_error_dict(ctx.get("error")).get("suggestion") or ""
+    suggestion = raw.lower()
+    # Gherkin says "removing duplicate" — both concepts must appear
+    assert "duplicate" in suggestion, f"Expected 'duplicate' in suggestion: {raw}"
+    assert any(w in suggestion for w in ("remove", "deduplicate", "dedup", "eliminate")), (
+        f"Expected removal action in suggestion: {raw}"
+    )
+
+
+@then("the suggestion should advise providing at least one FormatId or omitting the filter")
+def then_suggestion_format_id_or_omit(ctx: dict) -> None:
+    """Assert suggestion advises providing FormatId OR omitting the filter.
+
+    Same pattern as positions_or_omit — one complete alternative required.
+    Wire-first, reconstructed fallback (ztl6.8).
+    """
+    raw = _wire_suggestion(ctx)
+    if raw is None:
+        raw = _get_error_dict(ctx.get("error")).get("suggestion") or ""
+    suggestion = raw.lower()
+    has_provide_format = ("formatid" in suggestion or "format_id" in suggestion or "format id" in suggestion) and any(
+        w in suggestion for w in ("provide", "add", "include", "at least")
+    )
+    has_omit = "omit" in suggestion or "remove" in suggestion
+    assert has_provide_format or has_omit, f"Expected suggestion to advise providing FormatId or omitting filter: {raw}"
+
+
+@then("the suggestion should advise including agent_url (URI) and id fields")
+def then_suggestion_agent_url_id(ctx: dict) -> None:
+    """Assert suggestion advises including both agent_url AND id fields — wire-first (ztl6.8)."""
+    import re
+
+    suggestion = _wire_suggestion(ctx)
+    if suggestion is None:
+        suggestion = _get_error_dict(ctx.get("error")).get("suggestion") or ""
+    assert suggestion, "Expected non-empty suggestion"
+    suggestion_lower = suggestion.lower()
+    assert "agent_url" in suggestion_lower or "uri" in suggestion_lower, (
+        f"Expected agent_url/URI in suggestion: {suggestion}"
+    )
+    # Use word-boundary match to avoid false positives on "invalid", "bidder", etc.
+    assert re.search(r"\bid\b", suggestion_lower), (
+        f"Expected standalone 'id' field reference in suggestion: {suggestion}"
+    )
 
 
 # ── No error raised ─────────────────────────────────────────────────

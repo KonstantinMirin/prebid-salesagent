@@ -353,6 +353,29 @@ def given_expired_token(ctx: dict) -> None:
     ctx["force_identity"] = ctx["env"].invalid_token_identity()
 
 
+# `the sync_accounts response schema uses oneOf` bound here and is deleted: no feature carries
+# the sentence, it asserted nothing at all, and its whole body was `ctx["schema_test"] = True`
+# — a key no surviving reader anywhere consumes. That is positive evidence of deadness rather
+# than an inference from the absence of a binding.
+#
+# THE OTHER 31 UNBOUND STEPS IN THIS MODULE ARE KEPT DELIBERATELY, and this note is the record
+# of why, so the next reader does not re-derive it. No feature binds them either — checked by
+# literal grep and by matching each pattern against all 49534 sentences rendered from every
+# feature's Examples through pytest-bdd's own FeatureParser. But "nothing binds it" is not
+# evidence of deadness on its own: most of them read ctx state that live steps still write
+# (`tenant`, `principal`, `last_account`, `original_field_values`) and assert real obligations
+# — per-agent account scoping, governance-agent persistence across a resync, DB-field
+# immutability, one access grant per domain. Those are obligations this project identified and
+# never wrote a scenario for; deleting the steps would destroy the only record that they were
+# identified at all.
+#
+# One of them proves the point concretely. `given_db_failure` writes ctx["simulate_db_failure"],
+# and a SURVIVING function in this module reads it — deleting the Given would have left a live
+# reader whose condition can never become true.
+#
+# The missing scenarios are filed. Write the scenario, then bind the step.
+
+
 @given("the seller system is experiencing an internal failure")
 def given_seller_internal_failure(ctx: dict) -> None:
     """Configure the seller to simulate an internal failure on sync."""
@@ -476,6 +499,24 @@ def given_existing_account(ctx: dict, domain: str, billing: str) -> None:
     _sync_pre_create(ctx, brand_domain=domain, operator=domain, billing=billing)
 
 
+@given(parsers.parse('an account for brand domain "{domain}" already exists with payment_terms "{pt}"'))
+def given_existing_account_payment_terms(ctx: dict, domain: str, pt: str) -> None:
+    """Pre-create an account with specific payment_terms via sync_accounts."""
+    _setup_tenant_and_principal(ctx)
+    _sync_pre_create(ctx, brand_domain=domain, operator=domain, billing="operator", payment_terms=pt)
+
+
+@given(
+    parsers.parse(
+        'an account for brand domain "{domain}" already exists with billing "{billing}" and payment_terms "{pt}"'
+    )
+)
+def given_existing_account_billing_and_pt(ctx: dict, domain: str, billing: str, pt: str) -> None:
+    """Pre-create an account with specific billing and payment_terms via sync_accounts."""
+    _setup_tenant_and_principal(ctx)
+    _sync_pre_create(ctx, brand_domain=domain, operator=domain, billing=billing, payment_terms=pt)
+
+
 @given(parsers.parse('the previously synced account for brand domain "{domain}" has no brand recorded'))
 def given_named_persisted_account_without_brand(ctx: dict, domain: str) -> None:
     """Clear ``brand`` on a NAMED already-synced account.
@@ -522,6 +563,19 @@ def given_persisted_account_without_brand(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 # WHEN steps — list_accounts requests
 # ═══════════════════════════════════════════════════════════════════════
+
+
+@when(parsers.parse("the Buyer Agent sends a list_accounts request via {transport}"))
+def when_list_accounts_via_transport(ctx: dict, transport: str | None = None) -> None:
+    """Send list_accounts request.
+
+    The transport arg is accepted but ignored — pytest_generate_tests
+    controls which transport is used for dispatch via ctx["transport"].
+    This step only matches the "via {transport}" variant from pre-compiled
+    feature files. The plain "sends a list_accounts request" is matched
+    by when_list_accounts_unfiltered.
+    """
+    dispatch_request(ctx)
 
 
 @when(
@@ -605,6 +659,12 @@ def when_list_accounts_with_cursor(ctx: dict) -> None:
         dispatch_request(ctx, req=req)
     except Exception as exc:
         ctx["error"] = exc
+
+
+@when(parsers.parse('the Buyer Agent sends a list_accounts request with cursor "{cursor}"'))
+def when_list_accounts_with_explicit_cursor(ctx: dict, cursor: str) -> None:
+    """Send list_accounts with a specific cursor string (e.g. malformed base64)."""
+    _list_raw(ctx, pagination={"cursor": cursor})
 
 
 @when(parsers.parse("the Buyer Agent sends a list_accounts request with sandbox equals {value}"))
@@ -773,6 +833,36 @@ def then_pagination_has_more(ctx: dict, has_more: str) -> None:
     assert resp.pagination is not None, "Expected pagination metadata"
     expected = as_bool(has_more)
     assert resp.pagination.has_more == expected, f"Expected has_more={expected}, got {resp.pagination.has_more}"
+
+
+@then("the response returns accounts starting from the first page")
+def then_accounts_from_first_page(ctx: dict) -> None:
+    """Assert the response returns accounts from offset 0 (first page).
+
+    Verifies that a malformed cursor was silently treated as offset 0 by
+    checking that the returned accounts match the first-page slice of the
+    full sorted expected set (offset 0 through page_size).
+    """
+    resp = require_payload(ctx)
+    error = ctx.get("error")
+    assert error is None, f"Expected success but got error: {error}"
+    assert resp is not None, "Expected a response"
+    accounts = resp.accounts  # AttributeError if field missing
+    expected_ids = sorted(ctx.get("expected_account_ids", set()))
+    assert expected_ids, "Test setup error: no expected_account_ids tracked by Given steps"
+    # Verify accounts are sorted by account_id (first-page ordering from offset 0)
+    account_ids = [a.account_id for a in accounts]
+    assert account_ids == sorted(account_ids), (
+        f"Accounts not sorted by account_id — cannot confirm first-page ordering: {account_ids}"
+    )
+    # The returned page must be exactly the first N elements of the sorted expected set,
+    # where N is the page size (number of returned accounts). This proves offset-0 semantics.
+    page_size = len(account_ids)
+    expected_first_page = expected_ids[:page_size]
+    assert account_ids == expected_first_page, (
+        f"First page should contain accounts {expected_first_page}, got {account_ids}. "
+        f"This indicates the malformed cursor was not treated as offset 0."
+    )
 
 
 @then("the response contains a validation error")
@@ -1232,6 +1322,33 @@ def when_sync_accounts_carrying_key_and_table(ctx: dict, key: str, datatable: An
     _dispatch_sync_table(ctx, datatable, idempotency_key=key)
 
 
+@when(parsers.parse('the Buyer Agent sends a sync_accounts request with governance_agents for brand "{domain}"'))
+def when_sync_with_governance_agents(ctx: dict, domain: str) -> None:
+    """Send sync_accounts with governance_agents for a brand domain.
+
+    Constructs a valid GovernanceAgent entry (url + authentication) and
+    dispatches through the standard transport pipeline.
+    """
+    from src.core.schemas.account import SyncAccountsRequest
+
+    governance_agents = [_make_governance_agent(url="https://governance.example.com/check")]
+    try:
+        req = SyncAccountsRequest(
+            idempotency_key=fresh_idempotency_key(),
+            accounts=[
+                {
+                    "brand": {"domain": domain},
+                    "operator": domain,
+                    "billing": "operator",
+                    "governance_agents": governance_agents,
+                }
+            ],
+        )
+        dispatch_request(ctx, req=req)
+    except Exception as exc:
+        ctx["error"] = exc
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # UC-011 sync settings-update / mode-exclusive wiring
 #
@@ -1679,6 +1796,16 @@ def then_agent_gate_details_clamped(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+@then(parsers.re(r"the response is a success variant(?:\s+with accounts array)?"))
+def then_success_with_accounts(ctx: dict) -> None:
+    """Assert the response is a success variant (optionally with accounts array)."""
+    error = ctx.get("error")
+    assert error is None, f"Expected success but got error: {error}"
+    resp = require_payload(ctx)
+    assert resp.accounts is not None, f"Response 'accounts' field is None: {type(resp)}"
+    assert isinstance(resp.accounts, list), f"accounts is not a list: {type(resp.accounts)}"
+
+
 @then(
     parsers.re(
         r'the account for brand domain "(?P<domain>[^"]+)" brand_id "(?P<bid>[^"]+)" has action "(?P<action>[^"]+)"'
@@ -1930,6 +2057,16 @@ def then_error_code(ctx: dict, code: str) -> None:
     assert actual == code, f"Expected error code '{code}', got '{actual}'"
 
 
+@then("the error message describes the authentication requirement")
+def then_error_message_auth(ctx: dict) -> None:
+    """Assert the error message is a substantive auth-related message."""
+    error = _get_error(ctx)
+    msg = str(error).lower()
+    auth_phrases = {"x-adcp-auth", "valid token", "authentication required", "auth", "token", "unauthorized"}
+    assert any(p in msg for p in auth_phrases), f"Expected auth-related message, got: {error}"
+    assert len(msg) > 20, f"Expected substantive auth error message (>20 chars), got: {repr(str(error))}"
+
+
 @then(parsers.parse('the error should include "suggestion" field with remediation guidance'))
 def then_error_has_suggestion(ctx: dict) -> None:
     """Assert the error carries a suggestion.
@@ -2059,6 +2196,15 @@ def then_no_operation_errors(ctx: dict) -> None:
     resp = require_payload(ctx)
     errors = getattr(resp, "errors", None)
     assert errors is None or len(errors) == 0, f"Unexpected errors: {errors}"
+
+
+@then("the response is the success variant of oneOf")
+def then_response_is_success_variant(ctx: dict) -> None:
+    """Assert the response is the success variant (has accounts, no exception)."""
+    assert ctx.get("error") is None, f"Expected success variant, got error: {ctx.get('error')}"
+    resp = require_payload(ctx)
+    accounts = resp.accounts  # AttributeError if field missing on non-success variant
+    assert isinstance(accounts, list), f"Success variant accounts must be a list: {type(accounts)}"
 
 
 @then("each error includes code and message")
@@ -3776,9 +3922,143 @@ def then_account_keeps_prior_notif_set(ctx: dict) -> None:
     )
 
 
+@then(parsers.parse('the governance_agents are stored for brand domain "{domain}"'))
+def then_governance_agents_stored(ctx: dict, domain: str) -> None:
+    """Assert governance_agents were persisted in the DB for the given brand domain."""
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    with get_db_session() as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        accounts = repo.list_by_principal(principal.principal_id)
+        matching = [a for a in accounts if a.brand and a.brand.domain == domain]
+        assert len(matching) == 1, f"Expected 1 account for {domain}, got {len(matching)}"
+        account = matching[0]
+        agents = account.governance_agents
+        assert agents is not None, f"Expected governance_agents to be stored for {domain}, got None"
+        # The When step sends exactly 1 governance agent with known URL and categories
+        assert len(agents) == 1, f"Expected 1 governance_agent for {domain}, got {len(agents)}"
+        agent = agents[0]
+        agent_url = agent.get("url") if isinstance(agent, dict) else getattr(agent, "url", None)
+        assert agent_url == "https://governance.example.com/check", (
+            f"Expected governance agent url 'https://governance.example.com/check', got '{agent_url}'"
+        )
+
+
+@then(parsers.parse('no accounts were actually modified for brand domain "{domain}"'))
+def then_no_modifications_for_domain(ctx: dict, domain: str) -> None:
+    """Assert a dry-run did not modify the existing account's billing in the DB.
+
+    Verifies that the pre-existing account retains its original billing value
+    despite the dry-run response reporting action='updated'.
+    """
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    with get_db_session() as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        accounts = repo.list_by_principal(principal.principal_id)
+        matching = [a for a in accounts if a.brand and a.brand.domain == domain]
+        assert len(matching) == 1, f"Expected 1 pre-existing account for {domain}, got {len(matching)}"
+        # The dry-run scenario syncs with billing='agent' but the pre-existing account
+        # was created with billing='operator'. If dry_run worked, DB still has 'operator'.
+        account = matching[0]
+        assert account.billing == "operator", (
+            f"Expected billing='operator' (unchanged by dry-run) for {domain}, "
+            f"got billing='{account.billing}' — dry_run failed to prevent DB writes"
+        )
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Hand-authored: Authorization boundary steps (PR #1170 review)
 # ═══════════════════════════════════════════════════════════════════════
+
+
+@given(parsers.parse('agent "{name}" has an authenticated connection with {count:d} accessible accounts'))
+def given_agent_with_n_accounts(ctx: dict, name: str, count: int) -> None:
+    """Create a named agent with N accessible accounts."""
+    _setup_tenant_and_principal(ctx)
+    agent = _create_agent(ctx, name)
+    from tests.factories.account import AccountFactory, AgentAccountAccessFactory
+
+    tenant = ctx["tenant"]
+    agent_account_ids: set[str] = set()
+    for _ in range(count):
+        account = AccountFactory(tenant=tenant, status="active")
+        AgentAccountAccessFactory(
+            tenant_id=tenant.tenant_id,
+            principal=agent,
+            account=account,
+        )
+        agent_account_ids.add(account.account_id)
+    ctx.setdefault("agent_account_ids", {})[name] = agent_account_ids
+
+
+@given(parsers.parse('agent "{name}" has {count:d} accessible accounts in the same tenant'))
+def given_agent_b_accounts_same_tenant(ctx: dict, name: str, count: int) -> None:
+    """Create a second agent with N accessible accounts in the same tenant."""
+    given_agent_with_n_accounts(ctx, name, count)
+
+
+@given("the Buyer Agent has a connection with tenant resolved but no principal_id")
+def given_connection_no_principal(ctx: dict) -> None:
+    """Set up identity with tenant_id but principal_id=None."""
+    _setup_tenant_and_principal(ctx)
+    ctx["override_identity_no_principal"] = True
+
+
+@when(parsers.parse('agent "{name}" sends a list_accounts request'))
+def when_agent_list_accounts(ctx: dict, name: str) -> None:
+    """Send list_accounts as a specific named agent."""
+    identity = _make_identity_for_agent(ctx, name)
+    dispatch_request(ctx, identity=identity)
+
+
+@when("the Buyer Agent sends a list_accounts request with no principal_id")
+def when_list_accounts_no_principal(ctx: dict) -> None:
+    """Send list_accounts with an identity that has tenant_id but no principal_id."""
+    from src.core.resolved_identity import ResolvedIdentity
+
+    tenant = ctx["tenant"]
+    broken_identity = ResolvedIdentity(
+        tenant_id=tenant.tenant_id,
+        principal_id=None,
+        protocol="mcp",
+    )
+    dispatch_request(ctx, identity=broken_identity)
+
+
+@when("the Buyer Agent sends a sync_accounts request with no principal_id and:")
+def when_sync_no_principal(ctx: dict, datatable: Any) -> None:
+    """Send sync_accounts with an identity that has tenant_id but no principal_id."""
+    from src.core.resolved_identity import ResolvedIdentity
+    from src.core.schemas.account import SyncAccountsRequest
+
+    tenant = ctx["tenant"]
+    broken_identity = ResolvedIdentity(
+        tenant_id=tenant.tenant_id,
+        principal_id=None,
+        protocol="mcp",
+    )
+    rows = table_rows(datatable)
+    accounts = _parse_sync_table(rows)
+    req = SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=accounts)
+    dispatch_request(ctx, req=req, identity=broken_identity)
+
+
+@then(parsers.parse('none of the returned accounts belong to agent "{name}"'))
+def then_none_belong_to_agent(ctx: dict, name: str) -> None:
+    """Assert no returned accounts are in the other agent's set."""
+    resp = require_payload(ctx)
+    other_ids = ctx.get("agent_account_ids", {}).get(name, set())
+    assert other_ids, f"Test setup error: no account IDs tracked for agent '{name}'"
+    returned_ids = {acct.account_id for acct in resp.accounts}
+    leaked = returned_ids & other_ids
+    assert not leaked, f"Cross-agent leak: accounts {leaked} belong to agent '{name}' but appeared in response"
 
 
 # ── Governance idempotency steps ────────────────────────────────────
@@ -3791,6 +4071,96 @@ def given_existing_account_with_governance(ctx: dict, domain: str) -> None:
     gov = [_make_governance_agent()]
     _sync_pre_create(ctx, brand_domain=domain, operator=domain, billing="operator", governance_agents=gov)
     ctx["governance_agents_fixture"] = gov
+
+
+@given(
+    parsers.parse(
+        'an account for brand domain "{domain}" exists with billing "{billing}", '
+        'payment_terms "{pt}", and governance_agents'
+    )
+)
+def given_existing_account_all_fields(ctx: dict, domain: str, billing: str, pt: str) -> None:
+    """Pre-create an account with all mutable fields populated."""
+    _setup_tenant_and_principal(ctx)
+    gov = [_make_governance_agent()]
+    _sync_pre_create(
+        ctx, brand_domain=domain, operator=domain, billing=billing, payment_terms=pt, governance_agents=gov
+    )
+    ctx["governance_agents_fixture"] = gov
+
+
+@when(parsers.parse('the Buyer Agent re-syncs with identical governance_agents for brand "{domain}"'))
+def when_resync_identical_governance(ctx: dict, domain: str) -> None:
+    """Re-sync with the same governance_agents that were used during creation."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    gov = ctx["governance_agents_fixture"]
+    req = SyncAccountsRequest(
+        idempotency_key=fresh_idempotency_key(),
+        accounts=[{"brand": {"domain": domain}, "operator": domain, "billing": "operator", "governance_agents": gov}],
+    )
+    dispatch_request(ctx, req=req)
+
+
+@when(parsers.parse('the Buyer Agent sends a sync with different governance_agents for brand "{domain}"'))
+def when_sync_different_governance(ctx: dict, domain: str) -> None:
+    """Sync with modified governance_agents."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    req = SyncAccountsRequest(
+        idempotency_key=fresh_idempotency_key(),
+        accounts=[
+            {
+                "brand": {"domain": domain},
+                "operator": domain,
+                "billing": "operator",
+                "governance_agents": [
+                    _make_governance_agent(
+                        url="https://new-bot.example.com/check",
+                    )
+                ],
+            }
+        ],
+    )
+    dispatch_request(ctx, req=req)
+
+
+@when(
+    parsers.parse(
+        'the Buyer Agent re-syncs with identical billing, payment_terms, and governance_agents for brand "{domain}"'
+    )
+)
+def when_resync_identical_all_fields(ctx: dict, domain: str) -> None:
+    """Re-sync with all fields identical to creation."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    gov = ctx["governance_agents_fixture"]
+    req = SyncAccountsRequest(
+        idempotency_key=fresh_idempotency_key(),
+        accounts=[
+            {
+                "brand": {"domain": domain},
+                "operator": domain,
+                "billing": "agent",
+                "payment_terms": "net_30",
+                "governance_agents": gov,
+            }
+        ],
+    )
+    dispatch_request(ctx, req=req)
+
+
+@then(parsers.parse('none of the returned accounts have brand domain "{domain}"'))
+def then_none_have_brand_domain(ctx: dict, domain: str) -> None:
+    """Assert no returned account has the specified brand domain."""
+    resp = require_payload(ctx)
+    leaked = [
+        a for a in resp.accounts if hasattr(a, "brand") and a.brand and getattr(a.brand, "domain", None) == domain
+    ]
+    assert not leaked, (
+        f"Cross-agent leak: account(s) {[a.account_id for a in leaked]} carry brand domain "
+        f"'{domain}' but should not be visible to this agent"
+    )
 
 
 # ── delete_missing semantics steps ──────────────────────────────────
@@ -3809,28 +4179,152 @@ def when_sync_dryrun_and_delete_missing(ctx: dict, datatable: Any) -> None:
     dispatch_request(ctx, req=req)
 
 
+@when(parsers.parse('agent "{name}" sends a sync_accounts request with delete_missing true and:'))
+def when_named_agent_sync_delete_missing(ctx: dict, name: str, datatable: Any) -> None:
+    """Send sync_accounts under a named agent's identity with delete_missing=True."""
+    from src.core.schemas.account import SyncAccountsRequest
+
+    identity = _make_identity_for_agent(ctx, name)
+    rows = table_rows(datatable)
+    accounts = _parse_sync_table(rows)
+    req = SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=accounts, delete_missing=True)
+    dispatch_request(ctx, req=req, identity=identity)
+
+
+@given(parsers.parse('agent "{name}" created account for brand domain "{domain}"'))
+def given_agent_created_account(ctx: dict, name: str, domain: str) -> None:
+    """Create an account under a specific agent's identity via sync."""
+    _given_agent_synced(ctx, name, domain)
+
+
+@given(parsers.parse('agent "{a}" was granted access to the account for brand domain "{domain}"'))
+def given_agent_granted_access(ctx: dict, a: str, domain: str) -> None:
+    """Grant agent A access to an existing account (created by another agent)."""
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
+    tenant = ctx["tenant"]
+    agent = _create_agent(ctx, a)
+    with get_db_session() as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        # Find the account by domain
+        from sqlalchemy import select
+
+        from src.core.database.models import Account
+
+        account = session.scalars(
+            select(Account).where(
+                Account.tenant_id == tenant.tenant_id,
+                Account.brand["domain"].as_string() == domain,
+            )
+        ).first()
+        assert account is not None, f"Account for domain {domain} not found"
+        repo.grant_access(agent.principal_id, account.account_id)
+        session.commit()
+
+
 # ── Field preservation + access persistence steps ───────────────────
 
 
-# ── 32 step definitions deleted here and above: nothing binds them ──
-#
-# Every sentence these carried is absent from tests/bdd/features — checked twice, by a
-# literal grep of the longest fixed fragment of each pattern (comment lines excluded) and
-# by matching each pattern against all 49534 sentences rendered from every feature's
-# Examples with pytest-bdd's own FeatureParser. That resolver is validated against the
-# control "a creative with no format_id", which greps zero times and binds at
-# BR-UC-006-sync-creatives.feature:866, so it does not under-render.
-#
-# This module is registered globally in conftest's pytest_plugins, so its steps were
-# offered to EVERY feature, not just the UC-011 ones — which is why the check had to be
-# against all features rather than the two UC-011 files.
-#
-# The largest group was an abandoned multi-agent sub-suite: per-agent account scoping,
-# governance-agent resync idempotency, and a transient-DB-failure path. Those obligations
-# are UNGRADED and were ungraded before this deletion — the steps existed, the scenarios
-# never did. Reviving any of them means writing the scenario first.
-#
-# No surviving function in this module referenced any of them, and no other module does.
+@then(parsers.parse("the account {field} in the database is unchanged from the original"))
+def then_db_field_unchanged(ctx: dict, field: str) -> None:
+    """Assert a DB field was not modified by sync — compare against captured original.
+
+    The preceding Given/When steps must have captured the original field value
+    into ctx["original_field_values"][field] before the sync ran. This step
+    re-fetches the account from the DB and asserts exact equality with the
+    captured original.
+    """
+    from src.core.database.database_session import get_db_session
+    from src.core.database.repositories.account import AccountRepository
+
+    acct = ctx.get("last_account")
+    assert acct is not None, "No last_account in ctx — need a preceding account action step"
+    tenant = ctx["tenant"]
+    with get_db_session() as session:
+        repo = AccountRepository(session, tenant.tenant_id)
+        # Find by brand domain from the last_account
+        domain = acct.brand.domain if hasattr(acct.brand, "domain") else str(acct.brand)
+        db_acct = repo.get_by_natural_key(operator=domain, brand_domain=domain)
+        assert db_acct is not None, f"Account for {domain} not found in DB"
+        db_val = getattr(db_acct, field, None)
+        # Compare against captured original value
+        original_values = ctx.get("original_field_values", {})
+        if field in original_values:
+            original_val = original_values[field]
+            assert db_val == original_val, (
+                f"Field '{field}' was modified by sync: original={original_val!r}, "
+                f"current={db_val!r} — expected unchanged"
+            )
+        else:
+            # No captured original — the preceding steps should have captured it.
+            # Fall back to asserting the DB has a meaningful value (non-None)
+            # to avoid silently passing when test setup is incomplete.
+            assert db_val is not None, (
+                f"Field '{field}' is None in DB and no original value was captured "
+                f"in ctx['original_field_values']. Test setup must capture the "
+                f"original value before sync."
+            )
+
+
+@then(parsers.parse('the agent has exactly one access grant for brand domain "{domain}"'))
+def then_one_access_grant(ctx: dict, domain: str) -> None:
+    """Assert exactly one AgentAccountAccess row for this agent + account."""
+    from sqlalchemy import func, select
+
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import Account, AgentAccountAccess
+
+    tenant = ctx["tenant"]
+    principal = ctx["principal"]
+    with get_db_session() as session:
+        # Find the account by domain
+        account = session.scalars(
+            select(Account).where(
+                Account.tenant_id == tenant.tenant_id,
+                Account.brand["domain"].as_string() == domain,
+            )
+        ).first()
+        assert account is not None, f"Account for {domain} not found"
+        count = session.scalar(
+            select(func.count())
+            .select_from(AgentAccountAccess)
+            .where(
+                AgentAccountAccess.tenant_id == tenant.tenant_id,
+                AgentAccountAccess.principal_id == principal.principal_id,
+                AgentAccountAccess.account_id == account.account_id,
+            )
+        )
+        assert count == 1, f"Expected 1 access grant for {domain}, got {count}"
+
+
+@given("the database is experiencing a transient failure")
+def given_db_failure(ctx: dict) -> None:
+    """Configure the harness to simulate a DB failure on the next query."""
+    ctx["simulate_db_failure"] = True
+
+
+@then(parsers.parse('the list includes an account with brand domain "{domain}"'))
+def then_list_includes_domain(ctx: dict, domain: str) -> None:
+    """Assert the list_accounts response contains an account with the given brand domain."""
+    resp = require_payload(ctx)
+    for acct in resp.accounts:
+        if hasattr(acct, "brand") and acct.brand and getattr(acct.brand, "domain", None) == domain:
+            return
+    domains = [getattr(a.brand, "domain", "?") for a in resp.accounts if hasattr(a, "brand") and a.brand]
+    raise AssertionError(f"Expected account with domain '{domain}' in list, got: {domains}")
+
+
+@then(parsers.parse('the response does not include a result for brand domain "{domain}"'))
+def then_no_result_for_domain(ctx: dict, domain: str) -> None:
+    """Assert the sync response has no account entry for the given domain."""
+    resp = require_payload(ctx)
+    for acct in resp.accounts:
+        acct_domain = acct.brand.domain if hasattr(acct, "brand") and acct.brand else None
+        assert acct_domain != domain, (
+            f"Expected no result for domain '{domain}' but found account "
+            f"{acct.account_id} with action={getattr(acct, 'action', '?')}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
