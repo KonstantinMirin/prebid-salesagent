@@ -2025,7 +2025,6 @@ def _resolve_idempotency_race_or_raise(
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
     identity: ResolvedIdentity | None = None,
-    context_id: str | None = None,
 ) -> CreateMediaBuyResult:
     """Create a media buy with the specified parameters.
 
@@ -2112,7 +2111,7 @@ async def _create_media_buy_impl(
     # Context management and workflow step creation - create workflow step FIRST
     # Skip for dry_run mode (no side effects, no database writes)
     ctx_manager = get_context_manager()
-    ctx_id = context_id  # Extracted at transport boundary, passed in
+    ctx_id = None
     persistent_ctx = None
     step = None
 
@@ -2129,7 +2128,7 @@ async def _create_media_buy_impl(
 
         # Create workflow step for tracking this operation
         # Pass model directly — ContextManager serializes at the DB boundary
-        workflow_metadata: dict[str, Any] = {"protocol": identity.protocol}
+        workflow_metadata: dict[str, Any] = {}
         if req.push_notification_config:
             # The VALUE's canonical dump, not the buyer's raw dict: what
             # context_manager reads back at delivery time is then gate-receipted
@@ -2186,10 +2185,6 @@ async def _create_media_buy_impl(
                     registration,
                     config_id=row_id,
                     principal_id=principal_id,
-                    # Recorded so a later delivery knows which dialect to speak.
-                    # The scheduler fires long after this request and has no
-                    # identity of its own (salesagent-pldmk.39).
-                    protocol=identity.protocol if identity else None,
                 )
                 logger.info(
                     "[MCP/A2A] Push notification config %s: %s",

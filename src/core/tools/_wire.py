@@ -30,5 +30,10 @@ def to_wire(response: ProtocolEnvelope) -> dict[str, Any]:
     IS the guarantee above. A plain pydantic model routed through here would type-check against
     the wider bound and produce a body with no envelope at all -- the same reasoning that binds
     ``mcp_result`` to ``AdCPBaseModel`` rather than to ``BaseModel``.
+
+    ``adcp_version`` is one of those declared envelope fields and needs no help here either.
+    It is set on the MODEL at the boundary (``_boundary.invoke``), which is the response-side
+    mirror of where the request is read, and it serializes from there like ``status`` or
+    ``message``.
     """
     return response.model_dump(mode="json")

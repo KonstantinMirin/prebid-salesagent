@@ -223,12 +223,7 @@ class TestSendWebhookEnhancedAuthBlockedSkip:
 
             env.set_http_response(200)
             service = env.get_service()
-            result = service._send_webhook_enhanced(
-                tenant_id="t1",
-                principal_id="p1",
-                media_buy_id="mb_001",
-                delivery_payload={"test": "data"},
-            )
+            result = env.call_send_enhanced({"test": "data"}, tenant_id="t1", principal_id="p1", media_buy_id="mb_001")
 
             assert result is False
             assert env.delivery_attempts == 0
@@ -278,12 +273,7 @@ class TestSendWebhookEnhancedHmacSigning:
 
             env.set_http_response(200)
             service = env.get_service()
-            result = service._send_webhook_enhanced(
-                tenant_id="t1",
-                principal_id="p1",
-                media_buy_id="mb_001",
-                delivery_payload={"impressions": 5000, "spend": 250.0},
-            )
+            result = env.call_send_enhanced({"impressions": 5000, "spend": 250.0})
 
             assert result is True
             assert env.delivery_attempts == 1
@@ -328,12 +318,7 @@ class TestSendWebhookEnhancedHmacSigning:
 
             env.set_http_response(200)
             service = env.get_service()
-            service._send_webhook_enhanced(
-                tenant_id="t1",
-                principal_id="p1",
-                media_buy_id="mb_001",
-                delivery_payload=payload,
-            )
+            env.call_send_enhanced(payload, tenant_id="t1", principal_id="p1", media_buy_id="mb_001")
 
             assert_signature_verifies_over_wire_body(env.last_delivery, secret)
 
@@ -379,11 +364,8 @@ class TestSendWebhookEnhancedBearerAuth:
 
             env.set_http_response(200)
             service = env.get_service()
-            result = service._send_webhook_enhanced(
-                tenant_id="t1",
-                principal_id="p1",
-                media_buy_id="mb_001",
-                delivery_payload={"impressions": 5000},
+            result = env.call_send_enhanced(
+                {"impressions": 5000}, tenant_id="t1", principal_id="p1", media_buy_id="mb_001"
             )
 
             assert result is True
@@ -429,17 +411,12 @@ class TestSendWebhookEnhancedHappyPath:
             env.set_http_response(200)
             service = env.get_service()
             payload = {"adcp_version": "2.3", "impressions": 5000, "spend": 250.0}
-            result = service._send_webhook_enhanced(
-                tenant_id="t1",
-                principal_id="p1",
-                media_buy_id="mb_001",
-                delivery_payload=payload,
-            )
+            result = env.call_send_enhanced(payload, tenant_id="t1", principal_id="p1", media_buy_id="mb_001")
 
             assert result is True
             assert env.delivery_attempts == 1
             assert env.last_delivery.path == "/webhook"
-            assert env.last_delivery.json() == payload
+            assert env.delivered_result(env.last_delivery) == payload
 
     def test_no_configs_returns_false(self, integration_db):
         """When no PushNotificationConfig exists, _send_webhook_enhanced returns False.
@@ -457,12 +434,7 @@ class TestSendWebhookEnhancedHappyPath:
             PrincipalFactory(tenant_id="t1", principal_id="p1")
 
             service = env.get_service()
-            result = service._send_webhook_enhanced(
-                tenant_id="t1",
-                principal_id="p1",
-                media_buy_id="mb_001",
-                delivery_payload={"test": "data"},
-            )
+            result = env.call_send_enhanced({"test": "data"}, tenant_id="t1", principal_id="p1", media_buy_id="mb_001")
 
             assert result is False
             assert env.delivery_attempts == 0
@@ -504,11 +476,8 @@ class TestDeliverWithBackoffSuccess:
 
             env.set_http_response(200)
             service = env.get_service()
-            result = service._send_webhook_enhanced(
-                tenant_id="t1",
-                principal_id="p1",
-                media_buy_id="mb_001",
-                delivery_payload={"impressions": 5000},
+            result = env.call_send_enhanced(
+                {"impressions": 5000}, tenant_id="t1", principal_id="p1", media_buy_id="mb_001"
             )
 
             assert result is True
@@ -556,11 +525,8 @@ class TestDeliverWithBackoffRetry:
 
             env.set_http_response(500)
             service = env.get_service()
-            result = service._send_webhook_enhanced(
-                tenant_id="t1",
-                principal_id="p1",
-                media_buy_id="mb_001",
-                delivery_payload={"impressions": 5000},
+            result = env.call_send_enhanced(
+                {"impressions": 5000}, tenant_id="t1", principal_id="p1", media_buy_id="mb_001"
             )
 
             assert result is False
@@ -623,11 +589,8 @@ class TestDeliverWithBackoffTransportFailure:
             env.set_http_error()
 
             service = env.get_service()
-            result = service._send_webhook_enhanced(
-                tenant_id="t1",
-                principal_id="p1",
-                media_buy_id="mb_001",
-                delivery_payload={"impressions": 5000},
+            result = env.call_send_enhanced(
+                {"impressions": 5000}, tenant_id="t1", principal_id="p1", media_buy_id="mb_001"
             )
 
             assert result is False
@@ -667,11 +630,8 @@ class TestDeliverWithBackoffTransportFailure:
             env.origin.delay(2.0)
 
             service = env.get_service()
-            result = service._send_webhook_enhanced(
-                tenant_id="t1",
-                principal_id="p1",
-                media_buy_id="mb_001",
-                delivery_payload={"impressions": 5000},
+            result = env.call_send_enhanced(
+                {"impressions": 5000}, tenant_id="t1", principal_id="p1", media_buy_id="mb_001"
             )
 
             assert result is False
@@ -735,11 +695,8 @@ class TestDeliverWithBackoffRefusedUrl:
             threshold = env.get_breaker().failure_threshold
 
             for _ in range(threshold):
-                result = service._send_webhook_enhanced(
-                    tenant_id="t1",
-                    principal_id="p1",
-                    media_buy_id="mb_001",
-                    delivery_payload={"impressions": 5000},
+                result = env.call_send_enhanced(
+                    {"impressions": 5000}, tenant_id="t1", principal_id="p1", media_buy_id="mb_001"
                 )
                 assert result is False
 
@@ -799,11 +756,8 @@ class TestDeliverWithBackoffRateLimited:
 
             env.set_http_response(429)
             service = env.get_service()
-            result = service._send_webhook_enhanced(
-                tenant_id="t1",
-                principal_id="p1",
-                media_buy_id="mb_001",
-                delivery_payload={"impressions": 5000},
+            result = env.call_send_enhanced(
+                {"impressions": 5000}, tenant_id="t1", principal_id="p1", media_buy_id="mb_001"
             )
 
             assert result is False
@@ -870,11 +824,8 @@ class TestDeliverWithBackoffClientError:
 
             env.set_http_response(404)
             service = env.get_service()
-            result = service._send_webhook_enhanced(
-                tenant_id="t1",
-                principal_id="p1",
-                media_buy_id="mb_001",
-                delivery_payload={"impressions": 5000},
+            result = env.call_send_enhanced(
+                {"impressions": 5000}, tenant_id="t1", principal_id="p1", media_buy_id="mb_001"
             )
 
             assert result is False
@@ -946,7 +897,7 @@ class TestIsAdjustedNotificationType:
             )
 
             assert result is True
-            sent_payload = env.last_delivery.json()
+            sent_payload = env.delivered_result(env.last_delivery)
             assert sent_payload["notification_type"] == "adjusted"
             assert sent_payload["is_adjusted"] is True
 
@@ -990,7 +941,7 @@ class TestIsAdjustedNotificationType:
             )
 
             assert result is True
-            sent_payload = env.last_delivery.json()
+            sent_payload = env.delivered_result(env.last_delivery)
             assert sent_payload["notification_type"] == "scheduled"
             assert sent_payload["is_adjusted"] is False
 
@@ -1056,7 +1007,7 @@ class TestDeliveredPayloadAdcpVersion:
             )
 
             assert result is True
-            sent_payload = env.last_delivery.json()
+            sent_payload = env.delivered_result(env.last_delivery)
             assert sent_payload["adcp_version"] == get_adcp_spec_version()
 
 
@@ -1179,7 +1130,9 @@ class TestSequenceNumberUnderConcurrency:
             assert sent_results == [True] * self.THREADS
             assert env.delivery_attempts == self.THREADS
 
-            delivered_sequence_numbers = sorted(request.json()["sequence_number"] for request in env.delivered_requests)
+            delivered_sequence_numbers = sorted(
+                env.delivered_result(request)["sequence_number"] for request in env.delivered_requests
+            )
             assert delivered_sequence_numbers == list(range(1, self.THREADS + 1)), (
                 f"{self.THREADS} concurrent reports for one media buy were numbered "
                 f"{delivered_sequence_numbers} — a repeated sequence_number makes one "
@@ -1231,12 +1184,7 @@ class TestQueueFullDropsWebhook:
             small_queue.enqueue({"dummy": "data"})  # Fill it
             service._queues[endpoint_key] = small_queue
 
-            result = service._send_webhook_enhanced(
-                tenant_id="t1",
-                principal_id="p1",
-                media_buy_id="mb_full",
-                delivery_payload={"test": "data"},
-            )
+            result = env.call_send_enhanced({"test": "data"}, tenant_id="t1", principal_id="p1", media_buy_id="mb_full")
 
             assert result is False
 
@@ -1299,12 +1247,7 @@ class TestShortSecretRefusesRatherThanSigning:
 
             env.set_http_response(200)
             service = env.get_service()
-            result = service._send_webhook_enhanced(
-                tenant_id="t1",
-                principal_id="p1",
-                media_buy_id="mb_weak",
-                delivery_payload={"test": "data"},
-            )
+            result = env.call_send_enhanced({"test": "data"}, tenant_id="t1", principal_id="p1", media_buy_id="mb_weak")
 
             assert result is False, "a non-conforming credential must not report a successful delivery"
             assert env.delivery_attempts == 0, (

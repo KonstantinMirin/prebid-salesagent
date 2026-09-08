@@ -858,60 +858,16 @@ _XFAIL_TAGS: dict[str, str] = {
     # rejects the entry with VALIDATION_ERROR at notification_configs[j].url and writes nothing,
     # so the prior array is untouched.
     #
-    # ── Delivery webhooks POST the result document with no protocol envelope ──
-    # All fourteen scenarios that assert "the webhook payload is compliant with the
-    # AdCP delivery webhook spec" fail on the ENVELOPE layer, because
-    # WebhookDeliveryService posts the delivery report bare.
+    # Graduated: the fourteen "the webhook payload is compliant with the AdCP delivery
+    # webhook spec" scenarios, ledgered as #2058 violation 2. They failed on the ENVELOPE
+    # layer because WebhookDeliveryService posted the delivery report bare -- the labelled
+    # counter-example at L3/webhooks.mdx :254. Both senders now build the body through
+    # ``build_webhook_envelope`` (src/core/webhooks/delivery.py), so there is one shape and
+    # it is the envelope. The UC-004 Then steps were re-grounded in the same change: report
+    # fields are read from ``result``, at the nesting
+    # media-buy-delivery-webhook-result.json declares, rather than from the top level where
+    # several of them had been looking and finding nothing.
     #
-    # THE SPEC IS THE AUTHORITY HERE, not #2058, and the prose is explicit:
-    #   webhooks.mdx:217  "Delivery-report content lives under `result`; it is not
-    #                      valid as the top-level POST body by itself."
-    #   webhooks.mdx:254  "This inner result object is valid delivery-report
-    #                      content, but it is not valid as the top-level webhook
-    #                      POST body:" — then prints the bare report as a LABELLED
-    #                      COUNTER-EXAMPLE, byte-for-byte what this seller sends.
-    # (#2058 cites the same passages at :198-200 and :237-248; the document has
-    # moved since. Both were read at the head that produced these line numbers.)
-    #
-    # The schema chain agrees: core/mcp-webhook-payload.json is the POST body, its
-    # `result` is $ref async-response-data.json, resolving per enums/task-type.json
-    # to media-buy/media-buy-delivery-webhook-result.json for media_buy_delivery.
-    #
-    # WHAT IS OPEN IS ONLY WHERE THE FIX GOES. Two builders disagree:
-    #   delivery_webhook_scheduler.py:332  -> create_mcp_webhook_payload(), wraps
-    #   webhook_delivery_service.py:302    -> the flat body, the counter-example
-    # The in-process BDD legs route through the second
-    # (CircuitBreakerEnv.call_deliver -> send_delivery_webhook,
-    # tests/harness/_mixins.py:1087), so either the sender wraps or the harness
-    # stops routing through a builder a live buyer never reaches. NEITHER makes the
-    # flat body conformant, so do not "fix" this by pointing the step at the
-    # scheduler — that hides the disagreement instead of settling it.
-    #
-    # THE COST IS REAL AND WAS UNDERSTATED TWICE. Six of these were live and
-    # PASSING; run a302146fbd0f4ea1975995cff0f7e724 found them as 24
-    # passed -> failed instances, the only regressions in 21377 shared tests. They
-    # were first reported as "already xfailed" on the strength of grepping each tag
-    # anywhere in this file, which matches comments and other tables. Membership in
-    # a dict is checked by asking the dict.
-    #
-    # Each graduates when #2058 lands, whichever way it is resolved.
-    # Graduated: T-UC-019-ext-e and T-UC-019-inv-293-2. They asserted the conformant
-    # behaviour and were ledgered against #2219; get_media_buys now accepts `account` and
-    # scopes the listing to it, so both grade live.
-    "T-UC-004-webhook-scheduled": "#2058 violation 2: WebhookDeliveryService posts the flat result document, not the envelope",
-    "T-UC-004-webhook-hmac": "#2058 violation 2: WebhookDeliveryService posts the flat result document, not the envelope",
-    "T-UC-004-webhook-bearer": "#2058 violation 2: WebhookDeliveryService posts the flat result document, not the envelope",
-    "T-UC-004-webhook-notification-type": "#2058 violation 2: WebhookDeliveryService posts the flat result document, not the envelope",
-    "T-UC-004-webhook-sequence": "#2058 violation 2: WebhookDeliveryService posts the flat result document, not the envelope",
-    "T-UC-004-webhook-no-aggregated": "#2058 violation 2: WebhookDeliveryService posts the flat result document, not the envelope",
-    "T-UC-004-webhook-retry-success": "#2058 violation 2: WebhookDeliveryService posts the flat result document, not the envelope",
-    "T-UC-004-webhook-window-update": "#2058 violation 2: WebhookDeliveryService posts the flat result document, not the envelope",
-    "T-UC-004-webhook-partial-data": "#2058 violation 2: WebhookDeliveryService posts the flat result document, not the envelope",
-    "T-UC-004-webhook-adjusted-resend": "#2058 violation 2: WebhookDeliveryService posts the flat result document, not the envelope",
-    "T-UC-004-window-first-report": "#2058 violation 2: WebhookDeliveryService posts the flat result document, not the envelope",
-    "T-UC-004-delayed-count-nonnegative": "#2058 violation 2: WebhookDeliveryService posts the flat result document, not the envelope",
-    "T-UC-004-delayed-no-false-complete": "#2058 violation 2: WebhookDeliveryService posts the flat result document, not the envelope",
-    "T-UC-004-delayed-all-available": "#2058 violation 2: WebhookDeliveryService posts the flat result document, not the envelope",
     # adcp#7338, whole-scenario form. These three are plain Scenarios, not Outlines: every
     # transport builds a success response and validates assets, so there is no passing row
     # to protect and the tag is the right granularity. The four Scenario OUTLINES affected
@@ -1608,11 +1564,44 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # is reachable from the Docker HTTP path (the origin listens on the
         # runner's loopback, not the container's). Remove when an E2E webhook
         # receiver or circuit-breaker introspection is available.
+        # Graduated (run innet_080926_0627, mutation; baselines innet_070926_1424 ->
+        # _1642): T-UC-004-webhook-notification-type, -sequence, -no-aggregated and
+        # -retry-success. The routing reason above was stale for these four — the
+        # in-process origin is no longer the endpoint under e2e_rest; the compose
+        # stack's long-lived webhook-capture service is (#1873), and
+        # LocalOriginMixin's realize_e2e accessors read the delivery back off it, so
+        # the POST body IS observable through the Docker HTTP path.
+        #
+        # Measured, not read off the green mark. Four mutations in
+        # src/services/webhook_delivery_service.py (bind-mounted into the `tests`
+        # container, so they reach the sender these scenarios drive), one run:
+        # notification_type pinned to "delayed"; sequence_number pinned to 1;
+        # aggregated_totals injected into the report; max_attempts 3 -> 1. Every one
+        # of the six graduated node ids flipped XPASS -> XFAIL with the message of
+        # its OWN assertion ("Expected notification_type='final', got 'delayed'";
+        # "sequence_number not ascending at index 1: 1 -> 1"; "the delivery report
+        # carries 'aggregated_totals'"; "Expected successful delivery (success=True),
+        # got success=False"). Exactly 8 of 2856 nodes changed outcome across the
+        # whole e2e leg — the six, plus retry-5xx (also on the mutated retry path)
+        # and the notification-type "delayed" row, which went XFAIL -> FAIL because
+        # production suddenly emitted the value its strict row demands. Nothing else
+        # moved, so attribution is per-assertion, not per-suite.
+        #
+        # These grade the IN-PROCESS sender (call_send constructs a
+        # WebhookDeliveryService in the test process, on every transport) reaching a
+        # real endpoint over real HTTP — NOT the deployed adcp-server, whose image
+        # these mutations never touched. That is the same reach the a2a/mcp/rest legs
+        # have; what e2e_rest adds here is the real socket, the real TLS front and
+        # the server-bound DB. The breaker rows below are a different case and stay.
+        #
+        # Verified un-routed in innet_080926_0638: all six report a plain PASS, the
+        # failure count is unchanged at 123, and the notification-type "delayed" row
+        # still XFAILs on its own strict row. In-process siblings re-run serially
+        # (slice 686e6861): retry-success PASSes on a2a/mcp/rest with the
+        # strengthened "remain healthy" Then.
         _UC004_E2E_WEBHOOK_INTERNAL_TAGS: set[str] = {
             "T-UC-004-webhook-bearer",
             "T-UC-004-webhook-hmac",
-            "T-UC-004-webhook-notification-type",
-            "T-UC-004-webhook-no-aggregated",
             # DEFERRED to prebid/salesagent#2060, which owns both halves of the
             # breaker's missing coverage. These two were briefly un-routed by
             # #2098's rewrite attempt; they are RESTORED here because #2060's
@@ -1627,14 +1616,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Re-run it yourself with `make mutation-check-breaker`.
             "T-UC-004-webhook-circuit-open",
             "T-UC-004-webhook-circuit-recovery",
-            "T-UC-004-webhook-retry-success",
-            # #1873: retry/sequence observability — assert on the requests the
-            # in-process origin received, not visible over the Docker HTTP path.
-            # #1873 is the webhook-capture service that makes them observable.
+            # #1873: retry observability — assert on the requests the endpoint
+            # received. -retry-success and -sequence graduated off this note (see
+            # above); these three still assert on things the capture service does not
+            # expose (the seam's process-local retry SCHEDULE via env.mock["sleep"],
+            # and a connection that is refused before any request exists to record).
             "T-UC-004-webhook-retry-5xx",
             "T-UC-004-webhook-retry-network",
             "T-UC-004-webhook-no-retry-4xx",
-            "T-UC-004-webhook-sequence",
         }
         if is_e2e_rest and (marker_names & _UC004_E2E_WEBHOOK_INTERNAL_TAGS):
             item.add_marker(
@@ -4282,6 +4271,10 @@ def _uc010_wired_tags() -> frozenset[str]:
             "T-UC-010-ext-d-invalid-value",
             "T-UC-010-ext-d-empty",
             "T-UC-010-v31-supported-versions",
+            # The other half of the same version-negotiation storyboard step: the
+            # advertisement rides in the body, the echo on the envelope. Wired with the
+            # sibling because it needs no setup the sibling does not already have.
+            "T-UC-010-v31-adcp-version-echo",
             "T-UC-010-v31-version-unsupported",
             "T-UC-010-v31-version-unsupported-major-fallback",
             "T-UC-010-v31-version-unsupported-build-version-advisory",
