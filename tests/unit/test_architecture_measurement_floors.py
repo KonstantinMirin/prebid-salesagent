@@ -51,6 +51,9 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "UC-GET-PRODUCTS",
         # literal ENV_ROUTES block
         "codes-declared-code-reaches-buyer",
+        # BR-PROTOCOL-001: inbound version negotiation, graded on a tool that is not
+        # get_adcp_capabilities. Pinned in the same change that registered the route.
+        "protocol-version-negotiation",
         "egress-create",
         "egress-get-products",
         "egress-sync",

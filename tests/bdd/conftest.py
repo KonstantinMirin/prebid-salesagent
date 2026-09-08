@@ -23,7 +23,7 @@ import functools
 import os
 import re
 import ssl
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,6 +84,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
+    "tests.bdd.steps.domain.protocol_version_negotiation",
 ]
 
 # ---------------------------------------------------------------------------
@@ -4140,45 +4141,39 @@ _ADMIN_TAG_PREFIX = "T-ADMIN-"
 # transport-specific (#1592).
 _CHANNEL_COLUMN_TAGS = {"T-UC-010-auth"}
 
-# UCs whose tool has no REST route — parametrize across A2A + MCP only (a REST
-# variant would 404).
-#
-# EMPTY, and it must stay that way. It held "T-UC-019-" because get_media_buys
-# genuinely had no REST route, which silently dropped 61 scenarios from REST
-# while the suite read as covering three transports. The tool now has one
-# (POST /api/v1/media-buys/query), so the entry is gone rather than the
-# exclusion being kept as documentation of a fixed gap.
-#
-# The repo invariant is that every _impl is wrapped by MCP, A2A and REST
-# (tests/CLAUDE.md). A missing wrapper is therefore a production gap to close,
-# not a parametrization to trim: dropping a transport here is INVISIBLE to both
-# escape-hatch detectors in test_architecture_e2e_rest_escape_hatches.py, which
-# walk xfail conditions and E2EUnsupportedSetup sites — neither sees a scenario
-# that was never parametrized. Add the route; do not re-add a prefix.
-_NO_REST_UC_TAG_PREFIXES: tuple[str, ...] = ()
-
 
 def _parametrize_ctx(
     metafunc: pytest.Metafunc,
-    base_transports: list[Any],
-    base_ids: list[str],
-    e2e_member: Any | None,
-    e2e_id: str | None,
+    base_transports: Sequence[Any],
+    e2e_members: Sequence[Any],
 ) -> None:
-    """Parametrize ``ctx`` over the in-process transports, plus the e2e one when enabled.
+    """Parametrize ``ctx`` over the in-process transports, plus the e2e ones when enabled.
 
     Extracted so the AdCP branch and the admin branch share ONE copy of the
     append-e2e-when-enabled tail. Duplicating it would be the
     same logical operation with substituted enum members — the R0801 shape the
     DRY invariant treats as a defect, against a duplication baseline that may
     only shrink.
+
+    A SEQUENCE of e2e members, not one. The single-member signature is why the suite
+    graded four transports rather than six: ``McpE2EDispatcher`` and ``A2AE2EDispatcher``
+    have been built and registered in ``DISPATCHERS`` since #1858, and nothing here could
+    name them, so ``E2E_MCP`` and ``E2E_A2A`` appeared nowhere under ``tests/bdd/``. The
+    limit was the parameter, not the harness. The admin branch passes a one-element
+    sequence and is unchanged in behaviour.
+
+    The pytest ids are DERIVED, not passed. Both transport enums are ``StrEnum``\\ s whose
+    value IS the id — ``Transport.E2E_MCP`` is ``"e2e_mcp"``, ``AdminTransport.E2E`` is
+    ``"e2e_admin"`` — so a parallel list of strings restated what the members already
+    carry and could disagree with them. That disagreement would not be cosmetic: the id is
+    what ``tox.ini``'s ``-k "e2e_rest or e2e_mcp or ..."`` matches on, so a typo'd or
+    forgotten id collects a transport that no env ever selects, which is precisely the
+    "dies dormant while CI stays green" failure that selector's own comment warns about.
     """
     transports = list(base_transports)
-    ids = list(base_ids)
-    if e2e_member is not None and os.environ.get("BDD_E2E_ENABLED") == "true":
-        transports.append(e2e_member)
-        ids.append(e2e_id)
-    metafunc.parametrize("ctx", transports, ids=ids, indirect=True)
+    if e2e_members and os.environ.get("BDD_E2E_ENABLED") == "true":
+        transports.extend(e2e_members)
+    metafunc.parametrize("ctx", transports, ids=[t.value for t in transports], indirect=True)
 
 
 #: Per-tag tracking issue for the dormant UC-010 scenarios.
@@ -4433,13 +4428,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         from tests.harness.admin_accounts import AdminTransport
 
-        _parametrize_ctx(
-            metafunc,
-            [AdminTransport.INTEGRATION],
-            [AdminTransport.INTEGRATION.value],
-            AdminTransport.E2E,
-            AdminTransport.E2E.value,
-        )
+        _parametrize_ctx(metafunc, [AdminTransport.INTEGRATION], [AdminTransport.E2E])
         return
 
     # IMPL-only scenarios: harness has no transport wrappers for this path
@@ -4449,34 +4438,29 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
             return
 
     # IMPL sunsetted: it adds no coverage the wire transports don't, and it has no
-    # wire envelope (so it can't participate in error-envelope assertions). The four
-    # truthful transports are a2a/mcp/rest + e2e_rest (added below when enabled).
+    # wire envelope (so it can't participate in error-envelope assertions). The six
+    # truthful transports are a2a/mcp/rest in process, plus e2e_rest/e2e_mcp/e2e_a2a
+    # over real HTTP (added below when enabled).
     transports = [Transport.A2A, Transport.MCP, Transport.REST]
-    ids = ["a2a", "mcp", "rest"]
 
-    # UCs without a REST endpoint are graded on the A2A + MCP wire transports only
-    # — including a REST variant would 404, on e2e_rest identically since it
-    # dispatches real HTTP to the live server. The set is EMPTY now: UC-019 was
-    # its only member and get_media_buys has a REST route again, so this branch
-    # is dormant by design (see the declaration's note before re-populating it).
-    no_rest_uc = any(t.startswith(_uc_prefix) for _uc_prefix in _NO_REST_UC_TAG_PREFIXES for t in marker_names)
-    if no_rest_uc:
-        transports = [Transport.A2A, Transport.MCP]
-        ids = ["a2a", "mcp"]
-
-    # The ONLY reason to withhold e2e_rest is a UC whose tool has no REST route
-    # at all (it would 404 there identically). The former in-process-only webhook
-    # exemption (_NO_E2E_REST_TAGS) is gone: a transport dropped at collection is
-    # exactly as ungraded as an xfail but invisible to both escape-hatch
-    # detectors, which is what
-    # tests/unit/test_e2e_rest_ssrf_blocked_scenario_collected.py now pins.
-    _parametrize_ctx(
-        metafunc,
-        transports,
-        ids,
-        None if no_rest_uc else Transport.E2E_REST,
-        None if no_rest_uc else "e2e_rest",
-    )
+    # EVERY tool is reachable on EVERY transport, so no scenario is withheld from one.
+    # There used to be a per-UC exclusion here for tools with no REST route, driven by a
+    # hand-maintained tag-prefix tuple. It is gone, and re-adding it would be a mistake in
+    # two ways at once.
+    #
+    # It cannot fire. A tool's reachability is the registry's answer, not a tag's: MCP
+    # registration, the A2A card and the REST route are all generated from the ToolSpec
+    # row, and all 14 rows carry a RestBinding. A tuple of tag prefixes restating that is
+    # a second declaration of a fact one place already owns, free to drift from it.
+    #
+    # And dropping a transport at collection is the worst way to express even a true gap:
+    # it is exactly as ungraded as an xfail, but INVISIBLE to both escape-hatch detectors
+    # in test_architecture_e2e_rest_escape_hatches.py, which walk xfail conditions and
+    # E2EUnsupportedSetup sites and never see a scenario that was never parametrized.
+    # That is what tests/unit/test_e2e_rest_ssrf_blocked_scenario_collected.py pins.
+    #
+    # A tool that genuinely lost a wrapper is a PRODUCTION gap. Add the route.
+    _parametrize_ctx(metafunc, transports, [Transport.E2E_REST, Transport.E2E_MCP, Transport.E2E_A2A])
 
 
 def _ssl_failure(exc: BaseException | None, depth: int = 0) -> ssl.SSLError | None:
@@ -5212,6 +5196,15 @@ ENV_ROUTES: list[EnvRoute] = [
         # BR-SECURITY-001 grades that an UNTYPED exception cannot leak internals to
         # the wire. It dispatches get_products, so it takes the UC-GET-PRODUCTS branch.
         when=lambda m: any(t.startswith("T-SECURITY-001") for t in m),
+        env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="protocol-version-negotiation",
+        # BR-PROTOCOL-001 grades that the BOUNDARY refuses a version pin this seller cannot
+        # serve, on a tool that is not get_adcp_capabilities — the tool whose own negotiation
+        # was the only one that ever ran. It dispatches get_products, so like BR-SECURITY-001
+        # it takes the UC-GET-PRODUCTS branch.
+        when=lambda m: any(t.startswith("T-PROTOCOL-001") for t in m),
         env_builder=_build_product_env,
     ),
     EnvRoute(
