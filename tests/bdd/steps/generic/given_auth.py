@@ -17,7 +17,8 @@ from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 # `a valid tenant context exists`, `the Buyer has tenant context` and `the Buyer has tenant
 # context via MCP session` bound here. None of the three occurs in tests/bdd/features, by
 # literal grep and by matching against all 49534 sentences rendered from every feature's
-# Examples. They set `ctx["has_tenant"]`, which no step anywhere reads. The MCP variant also
+# Examples. They set `ctx["has_tenant"]`, which no step anywhere read — the key is gone,
+# along with every other write-never-read flag in this tree. The MCP variant also
 # assigned `ctx["transport"] = "mcp"`, which would have overwritten the parametrized
 # transport the whole suite dispatches on — a live scenario binding it would have silently
 # run every transport's copy against MCP.
@@ -44,14 +45,25 @@ def given_buyer_no_auth(ctx: dict) -> None:
 
 @given("no hostname-based tenant resolution is possible")
 def given_no_hostname_tenant(ctx: dict) -> None:
-    """No tenant can be resolved from hostname."""
-    ctx["hostname_tenant"] = None
+    """No tenant can be resolved from hostname.
+
+    In process there is no hostname to resolve from: the tenant reaches the tool
+    through the identity, so "no hostname resolution" holds exactly when the
+    request carries no identity — which the preceding "the Buyer has no
+    authentication credentials" Given establishes. This step checks that pairing
+    rather than setting a ``hostname_tenant`` key no step read; the sentence used
+    to hold whether or not the scenario had actually removed the identity.
+    """
+    assert ctx.get("identity") is None, (
+        "Step claims no hostname-based tenant resolution is possible, but the "
+        "scenario still carries an identity that resolves one — the request would "
+        f"reach a tenant anyway: {ctx['identity']!r}"
+    )
 
 
 @given("no tenant can be resolved from the request context")
 def given_no_tenant_resolved(ctx: dict) -> None:
     """No tenant can be resolved from any source (MCP path)."""
-    ctx["has_tenant"] = False
     ctx["identity"] = None
 
 
@@ -76,8 +88,6 @@ def _seed_account_for_principal(ctx: dict, *, sandbox: bool) -> None:
     account = AccountFactory(tenant=ctx["tenant"], sandbox=sandbox)
     AgentAccountAccessFactory(tenant=ctx["tenant"], principal=ctx["principal"], account=account)
     env._commit_factory_data()
-    ctx["sandbox"] = sandbox
-    ctx["account"] = account
     ctx.setdefault("tenant_id", "sandbox_tenant" if sandbox else "prod_tenant")
 
 

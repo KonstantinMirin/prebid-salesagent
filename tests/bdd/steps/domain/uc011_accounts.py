@@ -428,7 +428,6 @@ def given_agent_passthrough_only(ctx: dict) -> None:
     e2e_rest-compatible.
     """
     _set_billing_policy(ctx, ["operator", "agent", "advertiser"])
-    ctx["agent_passthrough_only"] = True
 
 
 def _set_approval_mode(ctx: dict, mode: str) -> None:
@@ -478,8 +477,19 @@ def given_accounts_with_3_statuses(ctx: dict, s1: str, s2: str, s3: str) -> None
 
 @given("the agent has no accessible accounts")
 def given_no_accounts(ctx: dict) -> None:
-    """Agent has no accessible accounts (tenant + principal exist but no accounts)."""
+    """Agent has no accessible accounts (tenant + principal exist but no accounts).
+
+    Emptiness is the default -- accounts reach this agent only through
+    ``_create_accessible_account``, which records every one it grants. The
+    falsifiable half is the other direction: a scenario that granted an account
+    and then declares the agent has none is grading the opposite of its sentence.
+    """
     _setup_tenant_and_principal(ctx)
+    granted = ctx.get("expected_account_ids", set())
+    assert not granted, (
+        f"Step claims the agent has no accessible accounts, but this scenario "
+        f"already granted access to {sorted(granted)}."
+    )
 
 
 @given(parsers.parse("the agent has {count:d} accessible accounts"))
@@ -652,8 +662,10 @@ def when_list_accounts_with_cursor(ctx: dict) -> None:
 
     prev_response = require_payload(ctx)
     cursor = prev_response.pagination.cursor
-    # Use same max_results as before (stored in ctx or default)
-    max_results = ctx.get("last_max_results", 50)
+    # Production's default page size. This read ctx["last_max_results"] "or default"
+    # and no step has ever written that key, so the default was the only value it
+    # could ever take -- a configurable-looking read that was not configurable.
+    max_results = 50
     try:
         req = ListAccountsRequest(pagination=PaginationRequest(max_results=max_results, cursor=cursor))
         dispatch_request(ctx, req=req)
@@ -1106,7 +1118,6 @@ def given_scope_introspection(ctx: dict) -> None:
     flag records intent for the wired (currently-xfailing) authorization check.
     """
     _setup_tenant_and_principal(ctx)
-    ctx["scope_introspection"] = True
 
 
 @then('each returned account includes an authorization object with required key "allowed_tasks"')
@@ -1304,7 +1315,6 @@ def when_sync_accounts_with_key_and_table(ctx: dict, key: str, datatable: Any) -
     salesagent-9jiu. Dispatching a keyless request is therefore the faithful wire call;
     the key is retained on ctx only so a later step could reference it.
     """
-    ctx["sync_idempotency_key"] = key
     _dispatch_sync_table(ctx, datatable)
 
 
@@ -1318,7 +1328,6 @@ def when_sync_accounts_carrying_key_and_table(ctx: dict, key: str, datatable: An
     what gets graded (sync-accounts-request.json 3.1.1, /required +
     /properties/idempotency_key).
     """
-    ctx["sync_idempotency_key"] = key
     _dispatch_sync_table(ctx, datatable, idempotency_key=key)
 
 
@@ -2982,7 +2991,6 @@ def given_sandbox_supported(ctx: dict) -> None:
     """
     _setup_tenant_and_principal(ctx)
     ctx["env"].configure_tenant_field("account_sandbox", True)
-    ctx["sandbox_supported"] = True
 
 
 @given("both sandbox and production accounts exist for the Buyer")
@@ -3390,7 +3398,6 @@ def given_sandbox_not_supported(ctx: dict) -> None:
     env.configure_tenant_field("account_sandbox", False)
     ctx["tenant"] = tenant
     ctx["principal"] = principal
-    ctx["sandbox_supported"] = False
 
 
 # ── When: sandbox response-shape request items ─────────────────────────
@@ -3413,7 +3420,6 @@ def when_sync_sandbox_shape(ctx: dict, key: str, request_item: str) -> None:
     """
     from src.core.schemas.account import SyncAccountsRequest
 
-    ctx["sync_idempotency_key"] = key
     entry: dict[str, Any] = {
         "brand": {"domain": "acme-corp.com"},
         "operator": "acme-corp.com",
@@ -3903,7 +3909,6 @@ def given_proof_of_control_fails(ctx: dict, url: str) -> None:
     config"; #/properties/active — "Reactivation requires full SSRF validation with
     connect pinning plus proof-of-control".
     """
-    ctx["proof_fail_url"] = url
     ctx["env"].set_notification_proof_result(succeeds=False, url=url)
 
 
@@ -4045,7 +4050,6 @@ def given_agent_b_accounts_same_tenant(ctx: dict, name: str, count: int) -> None
 def given_connection_no_principal(ctx: dict) -> None:
     """Set up identity with tenant_id but principal_id=None."""
     _setup_tenant_and_principal(ctx)
-    ctx["override_identity_no_principal"] = True
 
 
 @when(parsers.parse('agent "{name}" sends a list_accounts request'))
@@ -4612,7 +4616,6 @@ def when_sync_provision_with_billing_entity(ctx: dict, domain: str, legal_name: 
     from tests.factories.account import BusinessEntityFactory
 
     _setup_tenant_and_principal(ctx)
-    ctx["billing_entity_domain"] = domain
     _dispatch_entry(
         ctx,
         {

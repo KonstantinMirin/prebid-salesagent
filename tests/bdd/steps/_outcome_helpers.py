@@ -464,7 +464,7 @@ def _require_error(ctx: dict) -> object:
     error = ctx.get("error")
     assert error is not None, (
         "Expected an error to be recorded in ctx but none found — the operation "
-        f"may have succeeded. Response: {ctx.get('response')!r}"
+        f"may have succeeded. Result: {ctx.get('result')!r}"
     )
     return error
 

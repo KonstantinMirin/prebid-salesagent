@@ -96,6 +96,26 @@ def _format_payload(ctx: dict, env: object) -> tuple[str, str, dict]:
     )
 
 
+def latest_creative_id(ctx: dict) -> str:
+    """The id of the creative the scenario most recently declared.
+
+    ONE spelling of one fact. ``ctx["creatives"]`` holds the payloads that go on
+    the wire, so the id inside the last one is the id production is about to see;
+    51 sites already read it that way.
+
+    ``ctx["creative_id"]`` was a scalar mirror, written by five Given steps
+    immediately after they appended that very payload, and five readers spelled
+    the choice ``ctx.get("creative_id") or ctx["creatives"][-1]["creative_id"]``.
+    The mirror won that ``or``, so a scenario that declared a SECOND creative
+    afterwards built its assignment against the FIRST one's id -- silently, and
+    only in the five places that consulted the mirror. Two representations of one
+    fact do not stay equal; the wire payload is the one that decides.
+    """
+    creatives = ctx["creatives"]
+    assert creatives, "No creative declared yet — a Given must append a creative payload first"
+    return creatives[-1]["creative_id"]
+
+
 def _product_format_entry(ctx: dict, env: object) -> dict[str, str]:
     """Return a single ``{"agent_url": ..., "id": ...}`` for ProductFactory.format_ids.
 
@@ -185,7 +205,6 @@ def given_account_is(ctx: dict, account_setup: str) -> None:
 
     if account_setup == "not provided":
         ctx["account_ref"] = None
-        ctx["account_absent"] = True
         return
 
     # Parse JSON account setup
@@ -194,7 +213,6 @@ def given_account_is(ctx: dict, account_setup: str) -> None:
     # Check for invalid oneOf: both account_id and brand present
     if "account_id" in config and "brand" in config:
         ctx["account_ref"] = None
-        ctx["account_invalid_both"] = True
         return
 
     if "account_id" in config:
@@ -448,7 +466,7 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
         )
     assert expected_principal, "Test setup error: no expected principal in ctx to verify account resolution"
 
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     from src.core.database.models import Creative as CreativeModel
 
     creative = env.get_one(
@@ -600,8 +618,6 @@ def given_tenant_approval_mode_creative(ctx: dict, approval_mode: str) -> None:
         given_tenant_approval_mode(ctx, approval_mode)
         return
 
-    ctx["approval_mode_expected"] = stripped if stripped not in ("not configured", "not set") else "require-human"
-
 
 def _set_tenant_approval_mode(ctx: dict, mode: str) -> None:
     """Shared helper to set approval_mode for BOTH auth paths.
@@ -752,7 +768,7 @@ def then_review_workflow_with_slack(ctx: dict) -> None:
         approval_mode="require-human",
         principal_id=ANY,
     )
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     notified_ids = {c.get("creative_id") for c in mock_notify.call_args.kwargs["creatives_needing_approval"]}
     assert creative_id in notified_ids, (
         f"INV-3: Slack notification should reference creative '{creative_id}', "
@@ -778,7 +794,7 @@ def then_review_workflow_with_ai(ctx: dict) -> None:
     )
     steps = _assert_workflow_steps(ctx["env"], expect_present=True)
     # Verify the workflow step references the synced creative
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     env = ctx["env"]
 
     from sqlalchemy import select
@@ -860,7 +876,6 @@ def given_creative_with_specific_format(ctx: dict, creative_format: str) -> None
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = creative_format
-    ctx["creative_id"] = creative_id
 
 
 @given(parsers.parse("assignments to a package with {product_setup}"))
@@ -910,7 +925,7 @@ def given_assignments_to_package_with_setup(ctx: dict, product_setup: str) -> No
     ctx["package"] = package
     ctx["product"] = product
     # assignments payload for _sync_creatives_impl: dict[creative_id -> list[package_id]]
-    creative_id = ctx.get("creative_id") or ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
 
 
@@ -959,7 +974,7 @@ def given_assignment_to_existing_package(ctx: dict) -> None:
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
     ctx["package"] = package
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
 
 
@@ -1028,7 +1043,7 @@ def given_assignment_to_missing_package(ctx: dict) -> None:
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     env._commit_factory_data()
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: ["pkg-does-not-exist-404"]}
     # Strict mode triggers AdCPNotFoundError with recovery='correctable'.
     ctx.setdefault("validation_mode", "strict")
@@ -1105,7 +1120,7 @@ def given_assignments_referencing_same_package(ctx: dict) -> None:
     dict to reference the same package_id for idempotent upsert.
     """
     package_id = ctx["idempotent_package_id"]
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package_id]}
 
 
@@ -1147,7 +1162,7 @@ def given_assignments_referencing_that_package(ctx: dict) -> None:
     Uses the package_id stored by 'a package exists in a different tenant'.
     """
     package_id = ctx["cross_tenant_package_id"]
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package_id]}
 
 
@@ -1158,7 +1173,6 @@ def given_assignments_referencing_that_package(ctx: dict) -> None:
 def given_no_assignments_field(ctx: dict) -> None:
     """Explicitly omit the assignments field from the request (absent path)."""
     ctx.pop("assignments", None)
-    ctx["assignments_absent"] = True
 
 
 @given("an empty assignments array")
@@ -1170,7 +1184,6 @@ def given_empty_assignments_array(ctx: dict) -> None:
     xfails with SPEC-PRODUCTION GAP reason when production does not raise.
     """
     ctx["assignments"] = {}
-    ctx["assignments_empty"] = True
 
 
 @given(parsers.parse('an assignment with creative_id "{creative_id}" and package_id "{package_id}"'))
@@ -1201,7 +1214,7 @@ def given_assignment_with_ids(ctx: dict, creative_id: str, package_id: str) -> N
     ctx["media_buy"] = media_buy
     ctx["package"] = package
     # Use the real creative_id from the payload (the "c1" label is symbolic).
-    real_creative_id = ctx["creatives"][-1]["creative_id"]
+    real_creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {real_creative_id: [package.package_id]}
 
 
@@ -1227,7 +1240,6 @@ def given_assignment_entry_missing_creative_id(ctx: dict) -> None:
     package = MediaPackageFactory(media_buy=media_buy)
     env._commit_factory_data()
     ctx["assignments"] = {"": [package.package_id]}
-    ctx["assignment_missing_creative_id"] = True
 
 
 @given("an assignment entry with only creative_id")
@@ -1239,9 +1251,8 @@ def given_assignment_entry_missing_package_id(ctx: dict) -> None:
     Spec requires error ``ASSIGNMENT_PACKAGE_ID_REQUIRED``. Marked as SPEC-
     PRODUCTION GAP in the Then step.
     """
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: []}
-    ctx["assignment_missing_package_id"] = True
 
 
 @given("an assignment with weight 0")
@@ -1268,9 +1279,8 @@ def given_assignment_with_weight_zero(ctx: dict) -> None:
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
     ctx["package"] = package
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
-    ctx["assignment_weight_zero"] = True
 
 
 @given('an assignment with placement_ids ["slot_a"]')
@@ -1296,9 +1306,8 @@ def given_assignment_with_placement_ids(ctx: dict) -> None:
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
     ctx["package"] = package
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
-    ctx["assignment_placement_ids"] = ["slot_a"]
 
 
 # --- 5o9e: assignment-basic Given steps (package_id+weight, multi-package, duplicate, missing fields) ---
@@ -1356,7 +1365,7 @@ def given_assignment_with_package_and_weight(ctx: dict, package_id: str, weight:
     ``ctx["assignment_requested_weight"]`` for the Then step to xfail on.
     """
     _media_buy, package = _setup_assignment_package(ctx, package_id=package_id)
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
     weight_stripped = weight.strip()
     if weight_stripped:
@@ -1372,7 +1381,7 @@ def given_assignment_with_package_no_weight(ctx: dict, package_id: str) -> None:
     Production hard-codes weight=100 so this is a SPEC-PRODUCTION GAP in Then.
     """
     _media_buy, package = _setup_assignment_package(ctx, package_id=package_id)
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
     ctx["assignment_requested_weight"] = None  # absent → equal rotation
 
@@ -1405,7 +1414,7 @@ def given_assignments_mapping_creative_to_valid_packages(ctx: dict) -> None:
     )
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [pkg1.package_id, pkg2.package_id]}
 
 
@@ -1441,7 +1450,7 @@ def given_assignments_mapping_creative_to_two_packages(ctx: dict, creative_id: s
     )
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
-    real_creative_id = ctx["creatives"][-1]["creative_id"]
+    real_creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {real_creative_id: [package1.package_id, package2.package_id]}
 
 
@@ -1449,11 +1458,10 @@ def given_assignments_mapping_creative_to_two_packages(ctx: dict, creative_id: s
 def given_two_assignment_entries_same_ids(ctx: dict) -> None:
     """Submit duplicate (creative_id, package_id) pair — spec expects idempotent upsert."""
     _media_buy, package = _setup_assignment_package(ctx)
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     # The assignments dict shape (creative_id → [pkg_ids]) naturally deduplicates,
     # so we store a flag for the When step to send the duplicate explicitly.
     ctx["assignments"] = {creative_id: [package.package_id, package.package_id]}
-    ctx["assignment_duplicate_pair"] = True
 
 
 @given(
@@ -1466,7 +1474,7 @@ def given_assignment_with_ids_and_weight(ctx: dict, creative_id: str, package_id
     Production cannot express per-assignment weight — SPEC-PRODUCTION GAP.
     """
     _media_buy, package = _setup_assignment_package(ctx, package_id=package_id)
-    real_creative_id = ctx["creatives"][-1]["creative_id"]
+    real_creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {real_creative_id: [package.package_id]}
     ctx["assignment_requested_weight"] = weight
 
@@ -1482,9 +1490,8 @@ def given_assignment_with_ids_and_placement(ctx: dict, creative_id: str, package
     Production's dict shape has no way to express placement_ids — SPEC-PRODUCTION GAP.
     """
     _media_buy, package = _setup_assignment_package(ctx, package_id=package_id)
-    real_creative_id = ctx["creatives"][-1]["creative_id"]
+    real_creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {real_creative_id: [package.package_id]}
-    ctx["assignment_placement_ids"] = json.loads(placement_ids)
 
 
 @given("an assignment entry missing creative_id")
@@ -1532,7 +1539,7 @@ def _get_assignment_from_db(ctx: dict) -> object:
 
     _xfail_if_e2e(ctx)
     tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     with db_session(ctx) as session:
         assignment = session.scalars(
             select(CreativeAssignment).filter_by(
@@ -1710,7 +1717,7 @@ def then_assignment_created_with_weight(ctx: dict, weight: int) -> None:
     from src.core.database.models import CreativeAssignment
 
     tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     with db_session(ctx) as session:
         assignment = session.scalars(
             select(CreativeAssignment).filter_by(
@@ -1771,7 +1778,7 @@ def then_existing_assignment_updated_not_duplicated(ctx: dict) -> None:
 
     assignment_id = ctx["existing_assignment_id"]
     tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     package_id = ctx["idempotent_package_id"]
     with db_session(ctx) as session:
         # Check no duplicate rows
@@ -1842,7 +1849,7 @@ def then_no_assignment_processing(ctx: dict) -> None:
     for r in resp.creatives:
         assigned = r.assigned_to or []
         assert not assigned, (
-            f"Expected no assignments processed (ctx.assignments_absent=True), "
+            f"Expected no assignments processed (the request omitted the assignments field), "
             f"but SyncCreativeResult({r.creative_id}).assigned_to={assigned}"
         )
 
@@ -2049,7 +2056,7 @@ def then_assignment_includes_placement(ctx: dict) -> None:
     # Check if placement_ids is supported on the assignment
     placement_ids = getattr(assignment, "placement_ids", None)
     if placement_ids is not None:
-        creative_id = ctx["creatives"][-1]["creative_id"]
+        creative_id = latest_creative_id(ctx)
         expected_pkg = ctx["package"].package_id
         assert placement_ids, (
             f"Assignment has placement_ids field but it is empty for creative={creative_id}, package={expected_pkg}"
@@ -2101,7 +2108,6 @@ def given_creative_with_known_format_no_media_url(ctx: dict) -> None:
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
-    ctx["creative_id"] = creative_id
 
 
 @given("the creative agent returns no preview URLs")
@@ -2258,9 +2264,8 @@ def given_assignments_to_package_only_accepts(ctx: dict, accepted_format: str) -
     ctx["media_buy"] = media_buy
     ctx["package"] = package
     ctx["product"] = product
-    creative_id = ctx.get("creative_id") or ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
-    ctx["product_only_accepts"] = accepted_format
 
 
 @given("assignments referencing a non-existent package_id")
@@ -2280,7 +2285,7 @@ def given_assignments_referencing_nonexistent_package(ctx: dict) -> None:
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     env._commit_factory_data()
-    creative_id = ctx.get("creative_id") or ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: ["pkg-nonexistent-ryv4-404"]}
 
 
@@ -2422,7 +2427,7 @@ def given_assignments_to_nonexistent_package(ctx: dict) -> None:
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     env._commit_factory_data()
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: ["pkg-nonexistent-lzhr-404"]}
 
 
@@ -2498,7 +2503,7 @@ def then_assignment_processing_should_abort(ctx: dict) -> None:
     # salesagent-3dawm.14 is the table sentence and can never contain an id.
     result = ctx["result"]
     result.assert_wire_error("PACKAGE_NOT_FOUND")
-    bad_package = ctx.get("bad_package_id") or ctx.get("nonexistent_package_id", "")
+    bad_package = ctx.get("nonexistent_package_id", "")
     if bad_package:
         details = result.wire_error_details("PACKAGE_NOT_FOUND")
         assert bad_package in str(details.values()), (
@@ -2542,7 +2547,7 @@ def then_no_assignments_created(ctx: dict) -> None:
     from src.core.database.models import CreativeAssignment
 
     tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     with db_session(ctx) as session:
         assignments = session.scalars(
             select(CreativeAssignment).filter_by(
@@ -3053,7 +3058,7 @@ def given_assignments_to_package_in_that_media_buy(ctx: dict) -> None:
     )
     env._commit_factory_data()
     ctx["package"] = package
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
 
 
@@ -3091,7 +3096,7 @@ def given_assignment_to_package_in_media_buy_with(ctx: dict, buy_state: str) -> 
     )
     env._commit_factory_data()
     ctx["package"] = package
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
 
 
@@ -3143,8 +3148,6 @@ def given_existing_assignment_in_media_buy(ctx: dict) -> None:
         weight=100,
     )
     env._commit_factory_data()
-    ctx["package_existing"] = package_1
-    ctx["creative_orm"] = creative
     # Start building the assignments dict with the existing package
     ctx["assignments"] = {creative_id: [package_1.package_id]}
 
@@ -3170,9 +3173,8 @@ def given_new_assignment_to_another_package(ctx: dict) -> None:
         package_config={"product_id": product.product_id, "budget": 500.0},
     )
     env._commit_factory_data()
-    ctx["package_new"] = package_2
     # Add the new package to the existing assignments dict
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"][creative_id].append(package_2.package_id)
 
 
@@ -3669,7 +3671,7 @@ def given_assignments_to_package_no_product_id(ctx: dict) -> None:
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
     ctx["package"] = package
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
 
 
@@ -3768,7 +3770,7 @@ def _setup_assignment_package_for_format(
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
     ctx["package"] = package
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
 
 
@@ -3897,7 +3899,6 @@ def given_creative_with_format_agent_url(ctx: dict, agent_url: str) -> None:
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
     ctx["creative_agent_url"] = agent_url
-    ctx["creative_id"] = creative_id
 
 
 @given(parsers.parse('a product with format agent_url "{agent_url}"'))
@@ -4326,7 +4327,6 @@ def given_creative_exists_for_principal(ctx: dict, creative_id: str, principal_i
     )
     env._commit_factory_data()
     ctx["pre_existing_creative_id"] = creative_id
-    ctx["pre_existing_creative"] = creative
 
 
 @when(parsers.parse('the Buyer Agent syncs creative "{creative_id}"'))
@@ -4575,7 +4575,6 @@ def given_creative_with_agent_url_and_format(ctx: dict, agent_url: str, format_i
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
     ctx["creative_agent_url"] = agent_url
-    ctx["creative_id"] = "creative-fmt-match-001"
 
 
 @given(parsers.parse('a product with format agent_url "{agent_url}" and format_id "{format_id}"'))
@@ -4600,7 +4599,7 @@ def given_product_with_agent_url_and_format(ctx: dict, agent_url: str, format_id
     ctx["media_buy"] = media_buy
     ctx["package"] = package
     ctx["product"] = product
-    creative_id = ctx.get("creative_id") or ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
 
 
@@ -4660,7 +4659,7 @@ def given_assignments_two_packages_one_valid_one_missing(ctx: dict) -> None:
     ctx["media_buy"] = media_buy
     ctx["valid_package"] = valid_package
     ctx["nonexistent_package_id"] = "pkg-nonexistent-two-mix-404"
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [valid_package.package_id, "pkg-nonexistent-two-mix-404"]}
 
 
@@ -4774,7 +4773,6 @@ def given_idempotency_key(ctx: dict, key_value: str | None, empty: str | None) -
     Some values use ]xN notation for length generation (e.g., "a]x254").
     """
     if key_value is None and empty is not None:
-        ctx["idempotency_key_absent"] = True
         return
 
     actual_value = key_value or ""
@@ -5610,7 +5608,7 @@ def then_creative_has_generated_content(ctx: dict) -> None:
 
     from src.core.database.models import Creative as CreativeModel
 
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     db_creative = session.scalars(
         select(CreativeModel).filter_by(
             creative_id=creative_id,
@@ -5702,7 +5700,7 @@ def then_existing_data_preserved(ctx: dict) -> None:
 
     from src.core.database.models import Creative as CreativeModel
 
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     db_creative = session.scalars(
         select(CreativeModel).filter_by(
             creative_id=creative_id,
@@ -5735,7 +5733,7 @@ def _stored_assets_for_last_creative(ctx: dict) -> dict:
     env = ctx["env"]
     session = env.get_session()
     assert session is not None, "Harness must provide a DB session for asset verification"
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     db_creative = session.scalars(
         select(CreativeModel).filter_by(creative_id=creative_id, tenant_id=env._tenant_id)
     ).first()
@@ -5913,7 +5911,7 @@ def given_assignments_two_packages_format_compat(ctx: dict) -> None:
     ctx["media_buy"] = media_buy
     ctx["compatible_package"] = compatible_package
     ctx["incompatible_package"] = incompatible_package
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {
         creative_id: [compatible_package.package_id, incompatible_package.package_id],
     }
@@ -5962,7 +5960,6 @@ def given_creative_exists_for_principal_same_tenant(ctx: dict, creative_id: str,
     gets its own get-or-create row, never overwriting ctx["principal"]).
     """
     given_creative_exists_for_principal(ctx, creative_id, principal_id)
-    ctx["pre_existing_principal_id"] = principal_id
 
 
 @then(parsers.parse('the created creative should be associated with principal "{principal_id}"'))
@@ -5984,7 +5981,7 @@ def then_creative_associated_with_principal(ctx: dict, principal_id: str) -> Non
         )
     resp = require_payload(ctx)
 
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     tenant_id = ctx["tenant"].tenant_id
     with db_session(ctx) as session:
         creative = session.scalars(
@@ -6073,7 +6070,6 @@ def when_sync_cross_principal_assignment(ctx: dict) -> None:
         format_id={"id": format_id, "agent_url": agent_url},
         assets=assets,
     )
-    ctx["own_creative_id"] = own_creative["creative_id"]
     dispatch_request(
         ctx,
         creatives=[own_creative],
@@ -6151,7 +6147,7 @@ def then_new_creative_created_for_principal(ctx: dict, principal_id: str) -> Non
     assert action_str == "created", f"Expected creative action 'created' for cross-principal sync, got '{action_str}'"
 
     # Assert DB creative has correct principal_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     tenant_id = ctx["tenant"].tenant_id
     with db_session(ctx) as session:
         creative = session.scalars(
@@ -6331,7 +6327,7 @@ def given_assignment_with_nonexistent_package(ctx: dict) -> None:
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     env._commit_factory_data()
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: ["pkg-nonexistent-yqpf-404"]}
 
 
@@ -6363,7 +6359,7 @@ def given_assignments_to_existing_package(ctx: dict) -> None:
     env._commit_factory_data()
     ctx["media_buy"] = media_buy
     ctx["package"] = package
-    creative_id = ctx.get("creative_id") or ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
 
 
@@ -6456,7 +6452,7 @@ def given_assignments_three_packages_mixed(ctx: dict) -> None:
     ctx["valid_packages"] = [valid_pkg_1, valid_pkg_2]
     nonexistent_pkg_id = "pkg-nonexistent-three-mix-404"
     ctx["nonexistent_package_id"] = nonexistent_pkg_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {
         creative_id: [valid_pkg_1.package_id, valid_pkg_2.package_id, nonexistent_pkg_id],
     }
@@ -6483,7 +6479,7 @@ def then_assignment_equal_rotation(ctx: dict) -> None:
     from src.core.database.models import CreativeAssignment
 
     tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     with db_session(ctx) as session:
         assignment = session.scalars(
             select(CreativeAssignment).filter_by(
@@ -6532,7 +6528,7 @@ def then_assignment_created_with_placement(ctx: dict) -> None:
     from src.core.database.models import CreativeAssignment
 
     tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     with db_session(ctx) as session:
         assignment = session.scalars(
             select(CreativeAssignment).filter_by(
@@ -6570,7 +6566,7 @@ def then_second_is_idempotent_upsert(ctx: dict) -> None:
     resp = require_payload(ctx)
 
     tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     package_id = ctx["package"].package_id
     with db_session(ctx) as session:
         all_rows = session.scalars(
@@ -6606,7 +6602,7 @@ def then_assignment_created_as_paused_no_delivery(ctx: dict) -> None:
     # Verify the DB row exists
     _xfail_if_e2e(ctx)
     tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     with db_session(ctx) as session:
         assignment = session.scalars(
             select(CreativeAssignment).filter_by(
@@ -6668,7 +6664,7 @@ def then_assignment_created_with_specified_weight(ctx: dict) -> None:
     from src.core.database.models import CreativeAssignment
 
     tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     with db_session(ctx) as session:
         assignment = session.scalars(
             select(CreativeAssignment).filter_by(
@@ -6911,7 +6907,7 @@ def then_assignment_skipped_with_warning(ctx: dict) -> None:
 
     # The non-existent package should NOT be in assigned_to
     assigned = first.assigned_to or []
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     nonexistent_pkgs = ctx["assignments"][creative_id]
     for pkg_id in nonexistent_pkgs:
         assert pkg_id not in assigned, (
@@ -6960,7 +6956,7 @@ def then_creative_equal_rotation_with_unweighted(ctx: dict) -> None:
     assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
 
     tenant_id = ctx["tenant"].tenant_id
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     with db_session(ctx) as session:
         assignment = session.scalars(
             select(CreativeAssignment).filter_by(
@@ -6997,7 +6993,7 @@ def then_assignment_results_list_assigned_packages(ctx: dict) -> None:
     assigned = first.assigned_to or []
 
     # Get the expected package_ids from the Given step's assignments
-    creative_id = ctx["creatives"][-1]["creative_id"]
+    creative_id = latest_creative_id(ctx)
     expected_pkgs = ctx["assignments"][creative_id]
     for pkg_id in expected_pkgs:
         assert pkg_id in assigned, f"Expected package {pkg_id!r} in assigned_to, got {assigned}"
@@ -7098,7 +7094,6 @@ def _build_creative_scope_payload(ctx: dict, creative_id: str) -> dict:
         format_id={"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
     )
     ctx.setdefault("creatives", []).append(creative_payload)
-    ctx["creative_id"] = creative_id
     return creative_payload
 
 
@@ -7142,7 +7137,6 @@ def _preseed_creative_for_principal(ctx: dict, creative_id: str, principal_id: s
     )
     env._commit_factory_data()
     ctx["pre_existing_creative_id"] = creative_id
-    ctx["pre_existing_principal_id"] = principal_id
 
     # Build the creative payload for the sync request
     _build_creative_scope_payload(ctx, creative_id)
@@ -7234,7 +7228,7 @@ def then_new_creative_created_for_principal_scope(ctx: dict, principal_id: str) 
 
     from src.core.database.models import Creative
 
-    creative_id = getattr(result, "creative_id", None) or ctx.get("creative_id")
+    creative_id = getattr(result, "creative_id", None) or latest_creative_id(ctx)
     assert creative_id is not None, "No creative_id found in result or ctx"
 
     env = ctx["env"]

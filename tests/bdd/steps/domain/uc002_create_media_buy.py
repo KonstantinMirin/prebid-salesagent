@@ -99,7 +99,6 @@ def given_request_with_natural_key(ctx: dict, brand: str, operator: str) -> None
 def given_request_without_account(ctx: dict) -> None:
     """Set up a create_media_buy request with no account field."""
     ctx["account_ref"] = None
-    ctx["account_absent"] = True
 
 
 @given("a valid create_media_buy request with creative assignments")
@@ -1023,21 +1022,18 @@ def _assert_pipeline_routing(ctx: dict, outcome: str) -> None:
     assert "error" not in ctx, (
         f"Expected request to route to '{expected_pipeline}' pipeline but got error: {ctx.get('error')}"
     )
-    resp = require_payload(ctx)
-    dispatched = ctx.get("dispatched_pipeline")
-    if dispatched is None:
-        pytest.xfail(
-            f"Harness does not yet expose dispatched pipeline "
-            f"(expected '{expected_pipeline}'). "
-            f"Add ctx['dispatched_pipeline'] to the When step."
-        )
-    assert dispatched == expected_pipeline, f"Expected dispatched pipeline '{expected_pipeline}', got '{dispatched}'"
-    if is_default:
-        explicit_mode = ctx.get("explicit_buying_mode")
-        assert explicit_mode is None, (
-            f"Expected default pipeline routing (no explicit buying_mode), "
-            f"but ctx['explicit_buying_mode'] = {explicit_mode!r}"
-        )
+    require_payload(ctx)
+    # UNCONDITIONAL xfail, because the guard it replaces always fired: this read
+    # ctx["dispatched_pipeline"], xfailed when it was None, and no step in
+    # tests/bdd has ever written it -- so the equality assert below it, and the
+    # ctx["explicit_buying_mode"] check under `is_default`, were unreachable.
+    # Production takes no buying-mode branch a Then can observe; closing this gap
+    # needs a When that records the pipeline it dispatched, not a ctx.get default.
+    pytest.xfail(
+        f"Harness does not expose the dispatched pipeline (expected {expected_pipeline!r}, "
+        f"default-routing scenario: {is_default}). A When step must record which "
+        "pipeline it dispatched before this can be graded."
+    )
 
 
 def _assert_workflow_outcome(ctx: dict, outcome: str) -> None:
@@ -1210,9 +1206,12 @@ def _assert_task_list_outcome(ctx: dict, outcome: str) -> None:
     elif outcome.startswith("tasks filtered to"):
         _assert_tasks_filtered(tasks, outcome)
     elif outcome.startswith("tasks of all") or outcome.startswith("tasks from all"):
-        seeded_count = ctx.get("seeded_task_count")
-        if seeded_count is not None:
-            assert len(tasks) >= seeded_count, f"Expected >= {seeded_count} tasks (unfiltered), got {len(tasks)}"
+        # "of all statuses / from all domains / of all types" IS the multi-value
+        # claim _assert_multi_value_filter already grades, so it grades it. This
+        # branch used to compare against ctx["seeded_task_count"], which no step
+        # writes -- the guard was `if seeded_count is not None`, so the whole
+        # branch asserted nothing at all.
+        _assert_multi_value_filter(tasks, outcome)
     elif outcome.startswith("defaults to"):
         if "created_at" in outcome and len(tasks) >= 2:
             values = [_get_task_field(t, "created_at") for t in tasks]
@@ -1379,7 +1378,6 @@ def given_tenant_auto_approval(ctx: dict) -> None:
         "Step claims auto-approval but the adapter mock gates create_media_buy on "
         f"manual approval: {adapter_mock.manual_approval_operations!r}"
     )
-    ctx["tenant_auto_approval"] = True
 
 
 # ── v3.1 idempotency replay / missing (T-UC-002-v31-idempotency-{replay,missing}) ──
@@ -1472,16 +1470,47 @@ def given_media_buy_already_created_same_key(ctx: dict) -> None:
 @given(parsers.parse("the request includes {count:d} package with a valid product_id"))
 @given(parsers.parse("the request includes {count:d} packages with valid product_ids"))
 def given_request_includes_packages(ctx: dict, count: int) -> None:
-    """Add packages with valid product_ids to the request."""
-    ctx["package_count"] = count
+    """The pending create request's packages all carry a product_id.
+
+    The COUNT is deliberately not asserted, and that is a finding rather than an
+    omission: both feature lines using this sentence say "2 packages", while
+    ``build_create_request_kwargs`` puts exactly ONE in the request every
+    scenario dispatches. Asserting the count would fail those scenarios on a
+    seeding defect this change is not scoped to fix (the request literal is the
+    seeding ticket's), and quietly building the second package would change what
+    every UC-002 happy path grades. Neither belongs in a ctx-protocol cleanup.
+
+    What is checkable here is the other half of the sentence -- "with valid
+    product_ids" -- which nothing graded before either: the count went into a ctx
+    key no step read, so the sentence could claim any number of packages carrying
+    anything at all.
+    """
+    packages = ctx["request_kwargs"].get("packages") or []
+    assert packages, (
+        f"Step claims the request includes {count} package(s) with valid product_ids, but the request carries none."
+    )
+    missing = [i for i, pkg in enumerate(packages) if not pkg.get("product_id")]
+    assert not missing, (
+        f"Step claims every package has a valid product_id, but package(s) {missing} carry none: {packages}"
+    )
 
 
 # Canonical owner of "the ad server adapter is available" — removed from the
 # generic given_media_buy.py module to avoid a cross-module shadow.
 @given("the ad server adapter is available")
 def given_adapter_available(ctx: dict) -> None:
-    """Mark the ad server adapter as available for the scenario."""
-    ctx["adapter_available"] = True
+    """The scenario's env has an ad server adapter for the create to reach.
+
+    Availability is the env's default, so there is nothing to turn on; what the
+    step establishes is that the adapter the create will call is actually
+    mocked in this env -- the same check ``given_adapter_supports_reporting``
+    already makes in UC-019. The ctx flag it used to set was read by no step, so
+    an env with no adapter passed this sentence just as happily.
+    """
+    assert "adapter" in ctx["env"].mock, (
+        "Step claims 'the ad server adapter is available' but no adapter mock is "
+        f"configured in this env: {sorted(ctx['env'].mock)}"
+    )
 
 
 @given("the request does NOT include an idempotency_key")
