@@ -881,6 +881,140 @@ _XFAIL_TAGS: dict[str, str] = {
 # some examples exercise unimplemented features. Each entry: (tag, node_id
 # substrings that should xfail, reason).
 _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
+    # ── UC-006 ROUTE PARTITION (salesagent-lqm79) ──
+    # These 16 Scenario Outlines disagree ROW TO ROW, which is why they are here and not
+    # in _UC006_WIRED_SCENARIOS: a route matches on a scenario's markers and cannot say
+    # "these Examples rows, not those". Wiring them wakes 128 passing nodes; these 70 are
+    # the rows that do not pass, parked one row at a time.
+    #
+    # MEASURED, not inferred from the group. The uc006 catch-all's xfail_reason was set to
+    # None locally and the file run against a real Postgres (410 passed / 209 failed /
+    # 85 xfailed over its 617 catch-all nodes); each row below carries ITS OWN blocker,
+    # and a row is parked only if a node of that row actually failed. A row whose siblings
+    # fail is not parked -- that is a row nobody looked at.
+    #
+    # The reasons are BLOCKER CATEGORIES, deliberately. 81% of what wiring reveals is
+    # test-side (missing step definitions, steps that do not cover their own Examples rows,
+    # payloads the malformation gate refuses), so "production behaviour not implemented"
+    # would reproduce the catch-all's own mislabelling one level finer. Where the blocker
+    # is unverified this says so rather than guessing.
+    #
+    # strict=True is the consumer's default here, so a parked row that starts passing
+    # becomes XPASS(strict) and fails -- the list cannot rot quietly.
+    (
+        "T-UC-006-boundary-approval",
+        {
+            '-ai-powered-"ai-powered"-a review workflow should be created with AI review]',
+            '[rest-auto-approve-"auto-approve"-the creative status should be set to approved immediately]',
+        },
+        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+    ),
+    (
+        "T-UC-006-boundary-assignment-weight",
+        {
+            "-weight = -1 (min - 1)--1-the error should be INVALID_REQUEST with suggestion]",
+            "-weight = 101 (max + 1)-101-the error should be INVALID_REQUEST with suggestion]",
+        },
+        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+    ),
+    (
+        "T-UC-006-boundary-assignments-structure",
+        {
+            "-entry missing creative_id-an assignment entry with only package_id-the error should be INVALID_REQUEST]",
+            "-entry missing package_id-an assignment entry with only creative_id-the error should be INVALID_REQUEST]",
+            "[rest-duplicate (creative_id, package_id) pair-two assignment entries with same creative_id and package_id-the second should be an idempotent upsert]",
+        },
+        "uc006 route partition (salesagent-lqm79): no step definition for one of its steps; unverified: not one of the named test-side blockers",
+    ),
+    (
+        "T-UC-006-boundary-generative",
+        {
+            '-generative, no GEMINI_API_KEY-a creative with a generative format but GEMINI_API_KEY not configured-the error should include "suggestion" field]',
+        },
+        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+    ),
+    (
+        "T-UC-006-boundary-provenance",
+        {
+            "-provenance present + no provenance policy-a creative with provenance metadata-no product with provenance_required-the creative should be processed without warning]",
+            "-provenance present + policy requires provenance-a creative with provenance metadata-a product with creative_policy.provenance_required = true-the creative should be processed without warning]",
+        },
+        "uc006 route partition (salesagent-lqm79): the dispatched payload is refused by the malformation gate and undeclared",
+    ),
+    (
+        "T-UC-006-boundary-validation-mode",
+        {
+            '-unknown value-"partial"-the system should reject with INVALID_REQUEST]',
+        },
+        "uc006 route partition (salesagent-lqm79): no step definition for one of its steps",
+    ),
+    (
+        "T-UC-006-main-lenient-warnings",
+        {
+            "[rest]",
+        },
+        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+    ),
+    (
+        "T-UC-006-partition-assignment-pkg",
+        {},
+        "uc006 route partition (salesagent-lqm79): ",
+    ),
+    (
+        "T-UC-006-partition-assignment-weight",
+        {
+            "-weight_above_max-101-the error should be INVALID_REQUEST with suggestion]",
+            "-weight_below_min--1-the error should be INVALID_REQUEST with suggestion]",
+        },
+        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+    ),
+    (
+        "T-UC-006-partition-assignments-structure",
+        {
+            "-missing_creative_id-an assignment entry missing creative_id-the error should be INVALID_REQUEST with suggestion]",
+            '-with_placement_targeting-an assignment with creative_id "c1", package_id "p1", and placement_ids ["slot_a"]-the assignment should be created with placement targeting]',
+        },
+        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+    ),
+    (
+        "T-UC-006-partition-format-id",
+        {
+            "-agent_unreachable-a format_id whose agent is unreachable-AGENT_UNREACHABLE]",
+            "-empty_name-an empty name and a known format_id-INVALID_REQUEST]",
+            "-missing_format_id-no format_id-INVALID_REQUEST]",
+            "-unknown_format-a format_id unknown to all agents-REFERENCE_NOT_FOUND]",
+        },
+        "uc006 route partition (salesagent-lqm79): the Then step does not handle this row's outcome string",
+    ),
+    (
+        "T-UC-006-partition-generative",
+        {
+            "-generative_no_gemini_key-output_format_ids present-message asset but no GEMINI_API_KEY-CONFIGURATION_ERROR]",
+        },
+        "uc006 route partition (salesagent-lqm79): the Then step does not handle this row's outcome string",
+    ),
+    (
+        "T-UC-006-partition-idempotency-key",
+        {
+            '-boundary_min-"12345678"-the request should proceed normally]',
+        },
+        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+    ),
+    (
+        "T-UC-006-partition-provenance",
+        {
+            "-provenance_present_not_required-a creative with provenance metadata-no product with provenance_required-the creative should be processed without warning]",
+            "-provenance_present_required-a creative with provenance metadata-a product with creative_policy.provenance_required = true-the creative should be processed without warning]",
+        },
+        "uc006 route partition (salesagent-lqm79): the dispatched payload is refused by the malformation gate and undeclared",
+    ),
+    (
+        "T-UC-006-partition-validation-mode",
+        {
+            "-unknown_value-partial-rejected with INVALID_REQUEST]",
+        },
+        "uc006 route partition (salesagent-lqm79): the Then step does not handle this row's outcome string",
+    ),
     # ── UPSTREAM SPEC BUG: adcontextprotocol/adcp#7338 ──
     # Row-level, not tag-level, and that distinction was MEASURED. Only the "-valid" rows
     # build a success response and therefore validate assets against the pinned schema; the
@@ -5186,6 +5320,32 @@ _UC003_STORYBOARD_CLIENT_TAGS = frozenset(
 #: an entry here GROWS the executing surface; it exempts nothing from grading.
 _UC006_WIRED_SCENARIOS = frozenset(
     {
+        # NOT here, and not parked either: T-UC-006-boundary-format-id and
+        # T-UC-006-ext-a PASS once wired, and a pre-existing strict xfail then turns
+        # that pass into XPASS(strict) -- a FAILURE. For boundary-format-id it is
+        # _UC006_VALIDATION_XFAIL's "SPEC-PRODUCTION GAP: _SyntheticError lacks
+        # suggestion field"; production emits the field now, so the reason is stale.
+        # A stale xfail is graduated one scenario at a time
+        # (.claude/rules/workflows/xpass-graduation.md), never parked under a second
+        # marker -- parking a passing row is how a route silences working behaviour.
+        # The 15 Scenario Outlines whose Examples rows disagree: wired here so their
+        # passing rows execute, with the non-passing rows parked per row in
+        # _SELECTIVE_XFAIL. A route cannot express row-level disagreement.
+        "T-UC-006-boundary-approval",
+        "T-UC-006-boundary-assignment-weight",
+        "T-UC-006-boundary-assignments-structure",
+        "T-UC-006-boundary-generative",
+        "T-UC-006-boundary-provenance",
+        "T-UC-006-boundary-validation-mode",
+        "T-UC-006-main-lenient-warnings",
+        "T-UC-006-partition-assignment-pkg",
+        "T-UC-006-partition-assignment-weight",
+        "T-UC-006-partition-assignments-structure",
+        "T-UC-006-partition-format-id",
+        "T-UC-006-partition-generative",
+        "T-UC-006-partition-idempotency-key",
+        "T-UC-006-partition-provenance",
+        "T-UC-006-partition-validation-mode",
         "T-UC-006-boundary-assignment-format",
         "T-UC-006-boundary-assignment-package",
         "T-UC-006-boundary-creative-scope",
