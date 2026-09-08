@@ -333,6 +333,63 @@ def collect():
     return found
 
 
+# ── Where a step module is REGISTERED, which decides whether a shadow competes ──
+#
+# "The same sentence is defined in two modules" is not by itself a hazard, and treating
+# it as one made this class 11 sites of which ZERO were real. Whether two definitions
+# compete depends on where each module is REGISTERED:
+#
+#   GLOBAL   listed in tests/bdd/conftest.py's ``pytest_plugins`` — in scope for every
+#            feature in the suite.
+#   LOCAL    star-imported by one test module, which scopes it to that module's
+#            scenarios. uc019 does this deliberately and says why in its own docstring:
+#            it redefines generic step texts and a global registration "would override
+#            the generic versions for every other UC".
+#   NOWHERE  neither. then_media_buy.py is in this state on purpose — its steps are
+#            re-exported one at a time by registered modules — so its definitions cannot
+#            compete with anything.
+#
+# Measured on this tree: of 11 shadowed sentences, 6 involve then_media_buy.py (registered
+# NOWHERE) and 5 involve uc019 (LOCAL, deliberate scoped override). None is a same-scope
+# collision. Reporting all 11 as "which one runs depends on plugin registration order"
+# was answering a question the detector had not asked.
+
+_CONFTEST = "tests/bdd/conftest.py"
+
+
+@functools.lru_cache(maxsize=1)
+def _registration_scopes() -> dict[str, frozenset[str]]:
+    """Module basename -> the scopes it is registered in ("GLOBAL", or a test module)."""
+    scopes: dict[str, set[str]] = collections.defaultdict(set)
+    try:
+        tree = ast.parse(pathlib.Path(_CONFTEST).read_text())
+    except OSError:
+        return {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "pytest_plugins" for t in node.targets):
+            for element in getattr(node.value, "elts", []):
+                if isinstance(element, ast.Constant):
+                    scopes[element.value.split(".")[-1] + ".py"].add("GLOBAL")
+    for path in glob.glob("tests/bdd/test_*.py"):
+        text = pathlib.Path(path).read_text()
+        for match in re.finditer(r"from tests\.bdd\.steps[.\w]*\.(\w+) import \*", text):
+            scopes[match.group(1) + ".py"].add(pathlib.Path(path).name)
+    return {name: frozenset(where) for name, where in scopes.items()}
+
+
+def classify_shadow(modules: list[str]) -> str:
+    """COMPETING / SCOPED_OVERRIDE / NOT_REGISTERED for one shadowed sentence."""
+    scopes = _registration_scopes()
+    where = [scopes.get(module, frozenset()) for module in modules]
+    if any(not w for w in where):
+        return "NOT_REGISTERED"
+    for i, a in enumerate(where):
+        for b in where[i + 1 :]:
+            if a & b:
+                return "COMPETING"
+    return "SCOPED_OVERRIDE"
+
+
 def shadowed():
     """Sentences bound in more than one module, with the bodies that compete."""
     reg = collections.defaultdict(list)
@@ -370,8 +427,20 @@ DECISIONS = [
     (
         "shadowed",
         "One sentence, two competing bodies",
-        "The same sentence is registered in two modules with DIFFERENT normalized bodies. Which one runs depends on plugin registration order, and pytest-bdd does not warn. Same class as the duplicate-scenario-name trap.",
+        "The same sentence is defined in two modules that are BOTH registered in the SAME scope, with different normalized bodies. Which one runs depends on registration order, and pytest-bdd does not warn. Same class as the duplicate-scenario-name trap.",
         "For each: is one body correct and the other dead, or do they mean different things and need two sentences? Three of seven reviewed had the first opinion objected to.",
+    ),
+    (
+        "shadowed-scoped-override",
+        "One sentence, deliberately overridden in one module's scope",
+        "The same sentence is defined in a GLOBAL module and in one star-imported by a single test module. That is a deliberate scoped override, not a collision: uc019 does it so its redefinitions of generic step texts apply to UC-019 scenarios only, and says so in its own docstring. Listed so the arrangement stays visible, not because it is wrong.",
+        "Is the override still wanted, and does its module docstring still say why? Nothing to fix while both are true.",
+    ),
+    (
+        "shadowed-not-registered",
+        "One sentence, but one definition can never run",
+        "The same sentence is defined in two modules, at least one of which is registered NOWHERE — not in conftest's pytest_plugins and not star-imported by any test module. Its definition cannot compete, so registration order decides nothing. then_media_buy.py is in this state deliberately; registered modules re-export its steps one at a time.",
+        "Nothing to decide unless the unregistered module is meant to be live. Reported so the state is visible rather than inferred.",
     ),
     (
         "then-dispatches",
@@ -472,14 +541,23 @@ def main() -> int:
     out = pathlib.Path(sys.argv[1])
     found = collect()
     sh = shadowed()
-    found["shadowed"] = [
-        (
-            f"@{kw} {s}",
-            "\n".join(f"{m}::{fn}" for m, fn, _ in v)
-            + f"\n\n# {len({b for _, _, b in v})} distinct bodies compete for this sentence",
+    key_for = {
+        "COMPETING": "shadowed",
+        "SCOPED_OVERRIDE": "shadowed-scoped-override",
+        "NOT_REGISTERED": "shadowed-not-registered",
+    }
+    for (kw, sentence), v in sorted(sh.items()):
+        modules = sorted({m for m, _, _ in v})
+        verdict = classify_shadow(modules)
+        scopes = _registration_scopes()
+        found[key_for[verdict]].append(
+            (
+                f"@{kw} {sentence}",
+                "\n".join(f"{m}::{fn}" for m, fn, _ in v)
+                + f"\n\n# {len({b for _, _, b in v})} distinct bodies"
+                + "".join(f"\n# {m}: registered {sorted(scopes.get(m, [])) or 'NOWHERE'}" for m in modules),
+            )
         )
-        for (kw, s), v in sorted(sh.items())
-    ]
 
     rows = "".join(
         f'<tr><td><a href="#{k}">{html.escape(t)}</a></td><td class="n">{len(found.get(k, []))}</td></tr>'

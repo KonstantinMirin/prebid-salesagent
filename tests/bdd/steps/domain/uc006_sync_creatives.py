@@ -2185,9 +2185,14 @@ def then_creative_action_failed(ctx: dict) -> None:
         f"Expected creative action 'failed', got '{action_str}' (errors={getattr(first, 'errors', None)})"
     )
 
+    # Only the promotion, which the docstring above describes and which
+    # ctx["error"]'s 226 readers consume. The two writes that stood here —
+    # ctx["failed_creative_result"] and ctx["failed_creative_errors"] — had ZERO
+    # readers anywhere in tests/, by both a reader scan and a literal grep: each
+    # name occurred exactly once in the tree, at its own assignment. A Then that
+    # writes state nothing reads makes later steps depend on assertion order for
+    # nothing in return.
     errs = getattr(first, "errors", None) or []
-    ctx["failed_creative_result"] = first
-    ctx["failed_creative_errors"] = errs
     _promote_creative_errors_to_ctx(ctx, errs)
 
 

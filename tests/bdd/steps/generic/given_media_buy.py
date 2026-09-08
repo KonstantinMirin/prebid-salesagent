@@ -14,6 +14,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from adcp.types import ErrorCode
 from pytest_bdd import given, parsers
 
 from tests.bdd.steps.generic._create_request import (
@@ -27,6 +28,7 @@ from tests.factories import (
     ProductFactory,
 )
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.malformed import malformed
 from tests.factories.mint import mint
 from tests.factories.request import CreativeAssetRequestFactory
 from tests.helpers.adcp_factories import valid_reporting_webhook
@@ -2318,27 +2320,45 @@ def given_inline_creative_missing_url(ctx: dict) -> None:
     ``assets.primary.AssetVariant.image.url Input should be a valid URL, input is
     empty [type=url_parsing]``. So T-UC-002-ext-g grades an INVALID_REQUEST from
     the boundary and never gets as far as the reference-creative URL check its
-    sentence names. It passes anyway because its Then steps ask only that the
-    operation failed and that the error carries a suggestion — any error satisfies
-    them. That assertion gap is UC-002's to close (salesagent-b341x.7); recorded
-    here so the next reader is not misled by the sentence.
+    sentence names.
 
-    This docstring previously asserted the opposite — "keeps the asset structurally
-    valid so it syncs to the library" — and that was never true. Until the
-    ``asset_type`` fix in ``_add_inline_creatives``, the asset was refused one step
-    earlier still, for ``union_tag_not_found``, so the empty URL was not even the
-    reason the request died.
+    That is a real obligation and the scenario now asserts it BY CODE AND FIELD
+    (salesagent-b9hi1.2). It used to pass on any error whatsoever, because its two
+    Thens asked only that the operation failed and that the error carried a
+    suggestion — so it reported green while saying nothing about which refusal
+    arrived. It stayed green through the ``asset_type`` repair, when the request was
+    dying one step earlier still for ``union_tag_not_found`` and the empty URL was
+    not even the reason.
+
+    WHAT REMAINS UNGRADED, and is not this scenario's to fix: production's
+    reference-creative URL check, which no request reaching the boundary with an
+    empty url can exercise. Closing that needs a payload the pinned model ACCEPTS
+    and production refuses — a different scenario, filed rather than faked here.
     """
     kwargs = _ensure_request_defaults(ctx)
     pkg = kwargs["packages"][0]
     creatives = pkg.get("creatives")
     assert creatives, "No inline creatives on package — wire the inline-creatives Given first"
+    declared = []
     for creative in creatives:
         primary = creative.get("assets", {}).get("primary")
         assert primary is not None, "Inline creative has no primary asset to clear the URL on"
         # Empty, not absent: an absent url would fail as a MISSING field, and the
         # scenario is about a URL the buyer supplied and left blank.
         primary["url"] = ""
+        declared.append(
+            malformed(
+                "empty_string",
+                "url='' on the primary asset is the scenario's whole subject: a URL the buyer "
+                "supplied and left blank, not one they omitted. CreativeAssetRequest refuses the "
+                "bytes themselves — assets.primary.AssetVariant.image.url 'Input should be a valid "
+                "URL, input is empty' [type=url_parsing] — so the obligation is INVALID_REQUEST "
+                "from the request boundary, not VALIDATION_ERROR from a seller rule.",
+                creative,
+                obligation=ErrorCode.INVALID_REQUEST,
+            )
+        )
+    pkg["creatives"] = declared
 
 
 @given("the creative format is not generative")

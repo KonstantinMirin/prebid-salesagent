@@ -907,8 +907,14 @@ def given_device_type_under_limit(ctx: dict) -> None:
 
 @when(parsers.re(r"the Buyer Agent requests delivery metrics for media_buy_ids (?P<ids_json>\[.+?\])"))
 def when_request_by_ids(ctx: dict, ids_json: str) -> None:
-    """Request delivery metrics by media_buy_ids."""
+    """Request delivery metrics by media_buy_ids, recording the ids it sent.
+
+    ``ctx["requested_media_buy_ids"]`` is the request as sent, and the non-disclosure
+    Then needs it: it used to look for ``target_media_buy_id`` or ``media_buy_id``,
+    neither of which any step writes (salesagent-b9hi1.1).
+    """
     media_buy_ids = _parse_json_list(ids_json)
+    ctx["requested_media_buy_ids"] = media_buy_ids
     dispatch_request(ctx, media_buy_ids=media_buy_ids)
 
 
@@ -1221,7 +1227,8 @@ def when_request_with_dimensions(ctx: dict, mb_id: str, dims_json: str) -> None:
 
 
 def _request_single_mb(ctx: dict, mb_id: str) -> None:
-    """Shared: request delivery for a single media buy."""
+    """Shared: request delivery for a single media buy, recording the id it sent."""
+    ctx["requested_media_buy_ids"] = [mb_id]
     dispatch_request(ctx, media_buy_ids=[mb_id])
 
 
@@ -1245,8 +1252,17 @@ def when_request_no_attribution(ctx: dict, mb_id: str) -> None:
     )
 )
 def when_request_with_attribution(ctx: dict, mb_id: str, aw_json: str) -> None:
-    """Request with attribution window."""
+    """Request with attribution window, recording what was sent for the echo Then.
+
+    ``ctx["request_attribution"]`` is the REQUEST AS SENT, and it is written here
+    because this is the only step that knows it. ``then_attribution_echo`` read that
+    key with hardcoded fallbacks (``7`` / ``"days"``) and nothing wrote it, so it
+    compared the response against constants that happened to match this scenario's
+    Examples — a seller that ignored the buyer's window entirely and always answered
+    7 days would have passed (salesagent-b9hi1.1).
+    """
     aw = json.loads(aw_json)
+    ctx["request_attribution"] = aw
     dispatch_request(ctx, media_buy_ids=[mb_id], attribution_window=aw)
 
 
@@ -2517,16 +2533,35 @@ def then_no_deliveries_field(ctx: dict) -> None:
 
 @then(parsers.parse("the error should NOT reveal that the media buy exists"))
 def then_error_no_reveal(ctx: dict) -> None:
-    """Assert error does not leak existence information via message content or ID echoing."""
+    """Assert the refusal leaks no existence information — in the message OR by echoing.
+
+    BOTH halves run. The id-echo half used to be gated on
+    ``ctx.get("target_media_buy_id") or ctx.get("media_buy_id")``, and NO step writes
+    either key, so ``mb_id`` was always ``""`` and the half was skipped every time it
+    ran — the scenario named a security obligation and graded half of it
+    (salesagent-b9hi1.1). It now reads the request as sent, and FAILS if that is
+    missing rather than skipping.
+
+    @T-UC-004-ext-d is the non-disclosure scenario: a non-owner asking about someone
+    else's media buy must get media_buy_not_found, worded so it cannot be told apart
+    from a buy that never existed. Echoing the requested id ONCE is normal — "no media
+    buy found for X" repeats what the buyer sent and reveals nothing — so the bound is
+    on repetition, which is the shape that starts to read like confirmation.
+    """
     error = ctx.get("error")
     assert error is not None, "Expected an error"
     msg = _get_error_message(error).lower()
     leaking_phrases = ["exists", "belongs to", "owned by", "not authorized for", "access denied"]
     for phrase in leaking_phrases:
         assert phrase not in msg, f"Error leaks existence info via phrase {phrase!r}: {error}"
-    # The media_buy_id should not be echoed back in a way that confirms existence
-    mb_id = ctx.get("target_media_buy_id") or ctx.get("media_buy_id") or ""
-    if mb_id:
+
+    requested = ctx.get("requested_media_buy_ids")
+    assert requested, (
+        "No requested_media_buy_ids recorded — the When that dispatched must record what it "
+        "sent, or the id-echo half of this non-disclosure check grades nothing"
+    )
+    for label in requested:
+        mb_id = _resolve_media_buy_id(ctx, label)
         assert msg.count(mb_id.lower()) <= 1, (
             f"Error repeatedly echoes media_buy_id {mb_id!r}, which may reveal existence: {error}"
         )
@@ -2876,11 +2911,19 @@ def then_attribution_model(ctx: dict, model: str) -> None:
 
 @then("the attribution_window should echo the applied post_click window")
 def then_attribution_echo(ctx: dict) -> None:
-    """Assert attribution window echoes the buyer's requested post_click values.
+    """Assert attribution_window echoes the post_click window THE BUYER SENT.
 
-    The production code echoes the buyer-requested post_click window
-    (preserving unit and interval).  This step verifies the echoed values
-    match the request — not merely that they are non-None.
+    Reads the request as dispatched, with NO default. It used to read
+    ``ctx["request_attribution"]`` — a key no step wrote — and fall back to
+    ``interval=7`` / ``unit="days"``, so it compared the response against two
+    constants. They happened to equal this scenario's Examples, which is why it
+    passed; a seller that ignored the requested window entirely and always answered
+    7 days would have passed identically, and the docstring claimed the opposite of
+    what the code did (salesagent-b9hi1.1).
+
+    The absent-key branch now FAILS instead of defaulting. A Then that cannot find
+    what the buyer asked for cannot grade an echo, and saying so is the whole repair:
+    the defect was not a weak comparison, it was a comparison against a constant.
     """
     assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
     resp = require_payload(ctx)
@@ -2894,18 +2937,25 @@ def then_attribution_echo(ctx: dict) -> None:
         "attribution_window.post_click is None — buyer requested a post_click window which should be echoed"
     )
 
-    # Read the buyer-requested values from ctx (set by the When step)
-    requested = ctx.get("request_attribution", {})
-    req_interval = requested.get("post_click_interval", 7)
-    req_unit = requested.get("post_click_unit", "days")
+    # The request as sent, written by the When that sent it. Required, not defaulted.
+    requested = ctx.get("request_attribution")
+    assert requested is not None, (
+        "No request_attribution recorded — the When that sends attribution_window must "
+        "record it, or this step is comparing the response against nothing"
+    )
+    requested_pc = requested.get("post_click")
+    assert requested_pc is not None, (
+        f"The request carried no post_click window, so there is no echo to grade: {requested!r}"
+    )
+    req_interval = requested_pc["interval"]
+    req_unit = requested_pc["unit"]
 
-    # Assert the echoed values match the request
     assert pc.interval == req_interval, (
-        f"attribution_window.post_click.interval should echo request value {req_interval}, got {pc.interval}"
+        f"attribution_window.post_click.interval should echo the requested {req_interval}, got {pc.interval}"
     )
     pc_unit = pc.unit.value if hasattr(pc.unit, "value") else str(pc.unit)
     assert pc_unit == req_unit, (
-        f"attribution_window.post_click.unit should echo request value {req_unit!r}, got {pc_unit!r}"
+        f"attribution_window.post_click.unit should echo the requested {req_unit!r}, got {pc_unit!r}"
     )
 
 
