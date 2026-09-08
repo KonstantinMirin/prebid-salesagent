@@ -60,6 +60,7 @@ from tests.unit._architecture_helpers import (
     assert_guard_subject_resolves,
     assert_scanned_paths_exist,
     assert_violations_match_allowlist,
+    call_callee_name,
     iter_call_expressions,
     repo_root,
     safe_parse,
@@ -67,6 +68,12 @@ from tests.unit._architecture_helpers import (
 )
 
 MARKER_NAME = "malformed"
+
+#: The one function carrying the two obligations a dispatch owes before its payload
+#: reaches a transport (``tests/bdd/steps/generic/_dispatch.py``). A step that reaches a
+#: transport calls THIS, not ``assert_declared_malformations`` on its own: the pair
+#: travelling together is what stopped the gate covering one entry of three.
+GATE_ENTRY = "gate_and_record"
 
 # Census sites that dispatch a payload the pinned model rejects and carry no
 # declaration yet. Keyed by (relative_path, enclosing_function). MUST ONLY SHRINK.
@@ -151,6 +158,51 @@ def find_unauditable_markers(tree: ast.Module) -> list[int]:
 
 
 # ---------------------------------------------------------------------------
+# Detector: does every path that reaches a transport gate first?
+# ---------------------------------------------------------------------------
+
+
+def _reaches_a_transport(call: ast.Call) -> bool:
+    """Is *call* one of the two APIs that put a BDD payload on a transport?
+
+    ``env.call_via(...)`` and ``AdCPTestClient.call(...)``. ``.call`` alone is far too
+    common a method name to key on, so the receiver has to name a client — which is
+    what both real sites spell (``client.call``), and what a third would spell too.
+    """
+    func = call.func
+    if not isinstance(func, ast.Attribute):
+        return False
+    if func.attr == "call_via":
+        return True
+    return func.attr == "call" and "client" in ast.unparse(func.value)
+
+
+def find_ungated_transport_calls(tree: ast.Module) -> list[int]:
+    """Line numbers of transport calls their enclosing function never gates ahead of.
+
+    BEFORE, not merely present: a gate below the dispatch grades bytes that already
+    crossed the wire. Order is checked by line number, which is exact for the shape
+    every real site has (a straight-line step function) and is why the detector's
+    positive controls include a gate-after-dispatch snippet.
+    """
+    gates: dict[str, list[int]] = {}
+    dispatches: dict[str, list[int]] = {}
+    for node, func in walk_with_enclosing_function(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if call_callee_name(node) == GATE_ENTRY:
+            gates.setdefault(func, []).append(node.lineno)
+        elif _reaches_a_transport(node):
+            dispatches.setdefault(func, []).append(node.lineno)
+    return sorted(
+        lineno
+        for func, linenos in dispatches.items()
+        for lineno in linenos
+        if not any(gate < lineno for gate in gates.get(func, []))
+    )
+
+
+# ---------------------------------------------------------------------------
 # Site census (shared with the audit script)
 # ---------------------------------------------------------------------------
 
@@ -219,6 +271,42 @@ def test_every_declaration_is_auditable() -> None:
         f"{len(violations)} malformed(...) call(s) cannot be audited. The kind must be a "
         f"literal from {sorted(MALFORMATION_KINDS)} and the reason a non-empty literal — "
         "a bare or indirect marker is an opt-out, not a justification:\n" + "\n".join(violations)
+    )
+
+
+@pytest.mark.arch_guard
+def test_every_path_to_a_transport_gates_first() -> None:
+    """No BDD payload reaches a transport without being graded and recorded first.
+
+    The gate shipped with ONE call site while THREE step-level entries reached a
+    transport, so a malformed payload on either of the other two was never checked and
+    a declared malformation silently repaired on them was never reported
+    (salesagent-99w2t). ``when_request._call_via`` was then folded into
+    ``dispatch_request``, ``dispatch_via_client`` gained the gate in place (it cannot be
+    folded — ``AccountListDispatchMixin.is_list_request`` discriminates on
+    ``isinstance``), and the two read-backs that legitimately bypass both entries — they
+    must not clobber the ``ctx["result"]`` the scenario is grading — call
+    ``gate_and_record`` themselves.
+
+    A LIST OF FOUR SITES IS NOT THE INVARIANT; this test is. The recurring failure this
+    repo names is a canonical helper whose call sites drift away from it one commit at a
+    time, and the fix for that is a check that fails on the FOURTH site rather than a
+    comment asking the next author to remember.
+    """
+    ungated: list[str] = []
+    for path in sorted((repo_root() / "tests" / "bdd").rglob("*.py")):
+        if "__pycache__" in str(path):
+            continue
+        tree = safe_parse(path)
+        if tree is None:
+            continue
+        rel_path = str(path.relative_to(repo_root()))
+        ungated.extend(f"  {rel_path}:{lineno}" for lineno in find_ungated_transport_calls(tree))
+    assert not ungated, (
+        f"{len(ungated)} call(s) put a payload on a transport without calling "
+        f"{GATE_ENTRY}() first. Route the dispatch through dispatch_request / "
+        f"dispatch_via_client, or — if it is a read-back that must not overwrite "
+        f"ctx['result'] — call {GATE_ENTRY}(payload) immediately above it:\n" + "\n".join(ungated)
     )
 
 
@@ -335,6 +423,31 @@ def test_positive_control_static_detector_catches_unauditable_markers() -> None:
 
 
 @pytest.mark.arch_guard
+def test_positive_control_ungated_dispatch_detector_catches_every_shape() -> None:
+    """The coverage detector flags each way a transport call can escape the gate."""
+    assert_detector_catches_ast_snippets(
+        find_ungated_transport_calls,
+        snippets={
+            "call-via-with-no-gate": "def step(ctx):\n    return ctx['env'].call_via(t, **kwargs)\n",
+            "client-call-with-no-gate": "def step(ctx):\n    return ctx['client'].call('x', {}, t)\n",
+            "gate-in-a-different-function": (
+                "def other(p):\n    gate_and_record(p)\n\ndef step(ctx):\n    return ctx['env'].call_via(t)\n"
+            ),
+            "gate-AFTER-the-dispatch": (
+                "def step(ctx):\n    r = ctx['env'].call_via(t, **kw)\n    gate_and_record(kw)\n    return r\n"
+            ),
+        },
+    )
+
+
+@pytest.mark.arch_guard
+def test_negative_control_gated_dispatch_not_flagged() -> None:
+    """A transport call preceded by the gate in the same function is left alone."""
+    source = "def step(ctx):\n    gate_and_record(kwargs)\n    return ctx['env'].call_via(t, **kwargs)\n"
+    assert find_ungated_transport_calls(ast.parse(source, filename="<known-good>")) == []
+
+
+@pytest.mark.arch_guard
 def test_negative_control_conformant_declaration_not_flagged() -> None:
     """A well-formed declaration — positional or keyword — is left alone."""
     source = (
@@ -370,34 +483,88 @@ def test_negative_control_runtime_gate_passes_a_conformant_literal() -> None:
     assert malformation_problems({"creatives": [_CONFORMANT_CREATIVE]}) == []
 
 
-@pytest.mark.arch_guard
-def test_scenario_level_control_dispatch_request_refuses_an_unmarked_malformation() -> None:
-    """The gate is wired into the dispatch seam, ahead of the try/except that would eat it.
-
-    The scenario-level equivalent of the controls above: a step that hands
-    ``dispatch_request`` an undeclared malformation fails the scenario, and the same
-    payload declared reaches the transport untouched.
-    """
-    from tests.bdd.steps.generic._dispatch import dispatch_request
+def _stub_dispatch_ctx(dispatched: list[dict[str, Any]]) -> dict[str, Any]:
+    """A ctx whose env and client record the bag instead of putting it on a wire."""
     from tests.harness.transport import Transport
 
-    dispatched: list[Any] = []
-
     def call_via(transport: Any, **kwargs: Any) -> SimpleNamespace:
-        dispatched.append(kwargs["creatives"])
+        dispatched.append(kwargs)
         return SimpleNamespace(is_error=False, wire_response=None)
 
-    ctx: dict[str, Any] = {"env": SimpleNamespace(call_via=call_via), "transport": Transport.MCP}
+    def client_call(tool: str, payload: dict[str, Any], transport: Any, **_: Any) -> SimpleNamespace:
+        dispatched.append(payload)
+        return SimpleNamespace(is_error=False, wire_response=None)
 
-    payload = _rejected_creative()
-    with pytest.raises(AssertionError, match="not declared malformed"):
-        dispatch_request(ctx, creatives=[payload])
+    return {
+        "env": SimpleNamespace(call_via=call_via),
+        "client": SimpleNamespace(call=client_call),
+        "transport": Transport.MCP,
+    }
+
+
+def _via_dispatch_request(ctx: dict[str, Any], bag: dict[str, Any]) -> None:
+    from tests.bdd.steps.generic._dispatch import dispatch_request
+
+    dispatch_request(ctx, **bag)
+
+
+def _via_dispatch_via_client(ctx: dict[str, Any], bag: dict[str, Any]) -> None:
+    from tests.bdd.steps.generic._dispatch import dispatch_via_client
+
+    dispatch_via_client(ctx, "sync_creatives", bag)
+
+
+def _via_call_via(ctx: dict[str, Any], bag: dict[str, Any]) -> None:
+    from tests.bdd.steps.generic.when_request import _call_via
+
+    _call_via(ctx, ctx["transport"], **bag)
+
+
+#: EVERY step-level entry that reaches a transport, each one exercised below. The gate
+#: shipped covering ONE of these while all three were live (salesagent-99w2t); a list
+#: this test walks is the difference between "the other two are gated" as a claim and as
+#: an observation. ``_call_via`` is an adapter over ``dispatch_request`` today, and it is
+#: still exercised as an ENTRY: what a caller must not be able to do is reach a wire
+#: through it ungated, whichever way it is implemented underneath.
+_DISPATCH_ENTRIES = {
+    "dispatch_request": _via_dispatch_request,
+    "dispatch_via_client": _via_dispatch_via_client,
+    "when_request._call_via": _via_call_via,
+}
+
+
+@pytest.mark.arch_guard
+@pytest.mark.parametrize("entry", list(_DISPATCH_ENTRIES), ids=list(_DISPATCH_ENTRIES))
+@pytest.mark.parametrize("position", ["top-level", "nested"])
+def test_scenario_level_control_every_dispatch_entry_refuses_an_unmarked_malformation(
+    entry: str, position: str
+) -> None:
+    """Each entry, at each position: an undeclared malformation fails before the wire.
+
+    The scenario-level equivalent of the pure-function controls above — and the one
+    that would have caught the original defect, where two of the three entries reached
+    a transport with nothing grading the payload.
+
+    The second half matters as much as the first: the same bytes DECLARED must reach
+    the transport untouched, or the gate would be quietly rewriting the payloads these
+    scenarios exist to send.
+    """
+    payload = _rejected_creative(f"creative-meta-entry-{position}-001")
+    bag = _nested(payload) if position == "nested" else {"creatives": [payload]}
+    expected_site = r"packages\[0\]\.creatives\[0\]" if position == "nested" else r"creatives\[0\]"
+
+    dispatched: list[dict[str, Any]] = []
+    ctx = _stub_dispatch_ctx(dispatched)
+    with pytest.raises(AssertionError, match=expected_site):
+        _DISPATCH_ENTRIES[entry](ctx, bag)
     assert dispatched == [], "the gate must refuse BEFORE anything reaches the transport"
 
     declared = malformed("absent_key", "no assets key: exercises the preview-failure branch", payload, pin_rejects=True)
-    dispatch_request(ctx, creatives=[declared])
-    assert dispatched == [[declared]]
-    assert dict(dispatched[0][0]) == payload
+    declared_bag = _nested(declared) if position == "nested" else {"creatives": [declared]}
+    _DISPATCH_ENTRIES[entry](ctx, declared_bag)
+    assert len(dispatched) == 1, "the declared form must reach the transport"
+    sent = dispatched[0]["packages"][0]["creatives"][0] if position == "nested" else dispatched[0]["creatives"][0]
+    assert dict(sent) == payload, "the declaration must not alter what reaches the wire"
 
 
 # ---------------------------------------------------------------------------
@@ -468,31 +635,11 @@ def test_nested_declaration_is_graded_against_the_pins_actual_verdict() -> None:
 
 
 @pytest.mark.arch_guard
-def test_scenario_level_control_dispatch_request_refuses_a_nested_malformation() -> None:
-    """The nested reach is wired into the dispatch seam, not only into the pure function."""
-    from tests.bdd.steps.generic._dispatch import dispatch_request
-    from tests.harness.transport import Transport
-
-    dispatched: list[Any] = []
-
-    def call_via(transport: Any, **kwargs: Any) -> SimpleNamespace:
-        dispatched.append(kwargs["packages"])
-        return SimpleNamespace(is_error=False, wire_response=None)
-
-    ctx: dict[str, Any] = {"env": SimpleNamespace(call_via=call_via), "transport": Transport.MCP}
-
-    bag = _nested(_rejected_creative("creative-meta-nested-dispatch-001"))
-    with pytest.raises(AssertionError, match=r"packages\[0\]\.creatives\[0\]"):
-        dispatch_request(ctx, **bag)
-    assert dispatched == [], "the gate must refuse BEFORE anything reaches the transport"
-
-
-@pytest.mark.arch_guard
 def test_an_object_that_is_not_a_dict_or_list_is_not_walked_into() -> None:
     """The walk descends dicts and lists ONLY, and this is the boundary that says so.
 
     ``dispatch_request`` bags routinely carry ``req=<a typed request model>``. That
-    object came from a builder the pin has already run, and the gate's subject is the
+    object came from a builder the pin already ran, and the gate's subject is the
     hand-built inline LITERAL — so reaching through attributes would grade the builder
     and would do it on every dispatch. The control uses a bare namespace rather than a
     real DTO because a DTO cannot be constructed around a rejected creative at all,
