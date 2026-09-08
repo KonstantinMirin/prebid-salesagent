@@ -19,7 +19,12 @@ import pytest
 from adcp.types import AuthenticationScheme
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import error_envelope_or_none, payload_or_none, require_payload
+from tests.bdd.steps._outcome_helpers import (
+    error_envelope_or_none,
+    payload_or_none,
+    require_payload,
+    wire_advisory_errors,
+)
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
@@ -1610,15 +1615,22 @@ def then_aggregated_spend(ctx: dict) -> None:
 
 @then(parsers.parse('the response should not include an error for "{mb_id}"'))
 def then_no_error_for_mb(ctx: dict, mb_id: str) -> None:
-    """Assert no error for a specific media buy — checks both global ctx and per-delivery errors."""
-    assert "error" not in ctx, f"Expected no error for '{mb_id}' but got: {ctx.get('error')}"
-    resp = payload_or_none(ctx)
-    if resp is not None:
-        deliveries = getattr(resp, "media_buy_deliveries", None) or []
-        for d in deliveries:
-            if getattr(d, "media_buy_id", None) == mb_id:
-                per_delivery_errors = getattr(d, "errors", None) or []
-                assert not per_delivery_errors, f"Delivery '{mb_id}' has errors: {per_delivery_errors}"
+    """No entry in the response's ``errors[]`` names *mb_id*.
+
+    The buyer-facing side of the advisory contract its twin
+    (``the response errors include code ... for media buy ...``) grades: the delivery
+    verb answers about EVERY id it was asked about, naming an unresolved one in
+    ``errors[]`` — "Task-specific errors and warnings (e.g., missing delivery data,
+    reporting platform issues)", ``get-media-buy-delivery-response.json`` — and saying
+    nothing there about the ones it delivered.
+
+    Read BY VALUE off the wire array (through the sanctioned reader), not off
+    ``ctx["error"]``: the sibling step promotes the entry it matched into ``ctx``, so a
+    ctx-presence check would report a failure for THIS id whenever another id in the
+    same response had one.
+    """
+    named = [err for err in wire_advisory_errors(ctx) if (err.get("details") or {}).get("media_buy_id") == mb_id]
+    assert not named, f"Response errors[] names media buy {mb_id!r}: {named}"
 
 
 @then(parsers.re(r'the response errors include code "(?P<code>[^"]+)" for media buy "(?P<mb_id>[^"]+)"$'))

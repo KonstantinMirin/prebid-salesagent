@@ -25,6 +25,7 @@ from src.core.database.models import (
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
+from tests.factories.media_buy import synthetic_pricing_option_id
 
 
 def _create_test_tenant_and_principal(ad_server: str | None = None) -> tuple[str, str]:
@@ -89,6 +90,9 @@ def _create_basic_media_buy_with_webhook(
             format_ids=[],
             targeting_template={},
             delivery_type="",
+            # ck_product_properties_xor: a product states EITHER properties OR
+            # property_tags, never neither.
+            property_tags=["all_inventory"],
         )
 
         pricing_option = PricingOption(
@@ -113,7 +117,17 @@ def _create_basic_media_buy_with_webhook(
             end_date=end_date,
             status="active",
             raw_request={
-                "packages": [{"product_id": product.product_id, "pricing_option_id": pricing_option.id}],
+                "packages": [
+                    {
+                        "package_id": "pkg_integration",
+                        "product_id": product.product_id,
+                        # The option's synthetic id, not its integer primary key: the
+                        # delivery report resolves the package's required
+                        # pricing_model/rate/currency by rebuilding this string from the
+                        # row's columns, and a PK never matches it.
+                        "pricing_option_id": synthetic_pricing_option_id(pricing_option),
+                    }
+                ],
                 "reporting_webhook": {
                     "url": "https://example.com/webhook",  # outbound HTTP will be mocked
                     "reporting_frequency": "daily",
@@ -121,8 +135,11 @@ def _create_basic_media_buy_with_webhook(
             },
         )
 
-        # session.add(product)
-        # session.add(pricing_option)
+        # The product and its pricing option are persisted, not just constructed: the
+        # option is the buy's only pricing source, and an unflushed one resolves to
+        # nothing when the delivery report asks what the package cost.
+        session.add(product)
+        session.add(pricing_option)
         session.add(media_buy)
         session.commit()
 

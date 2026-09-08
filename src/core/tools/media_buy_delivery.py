@@ -86,6 +86,7 @@ from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.database.repositories.delivery import POLL_SEQUENCE_TASK_TYPE, DeliveryRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.helpers.adapter_helpers import get_adapter
+from src.core.helpers.pricing_helpers import synthetic_pricing_option_id
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AggregatedTotals,
@@ -1104,8 +1105,7 @@ def _get_pricing_options(
     all_options = product_repo.get_all_pricing_options()
     result: dict[str, PricingOption] = {}
     for po in all_options:
-        fixed_str = "fixed" if po.is_fixed else "auction"
-        synthetic_id = f"{po.pricing_model}_{po.currency.lower()}_{fixed_str}"
+        synthetic_id = synthetic_pricing_option_id(po)
         if synthetic_id in string_ids:
             result[synthetic_id] = po
     return result

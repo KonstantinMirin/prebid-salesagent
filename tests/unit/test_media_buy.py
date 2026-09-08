@@ -59,6 +59,8 @@ from src.core.schemas import (
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools._boundary import invoke_tool
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
+from tests.factories.media_buy import default_request_packages, pricing_options_for, request_package
+from tests.factories.product import PricingOptionFactory
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -189,7 +191,7 @@ def _mock_media_buy(
     buy.end_time = None
     buy.created_at = datetime.now(UTC)
     buy.updated_at = datetime.now(UTC)
-    buy.raw_request = {"packages": [{"product_id": "prod_1", "package_id": "pkg_1"}]}
+    buy.raw_request = {"packages": default_request_packages()}
     buy.status = "active"
     return buy
 
@@ -3320,7 +3322,7 @@ class TestDeliveryImplSingleBuy:
         Ported from test_delivery_behavioral.py::test_single_buy_returns_complete_response
         """
         buy = _mock_media_buy(start_date=date.today() - timedelta(days=5))
-        buy.raw_request = {"packages": [{"package_id": "pkg_1", "product_id": "prod_1"}]}
+        buy.raw_request = {"packages": [request_package(package_id="pkg_1", product_id="prod_1")]}
 
         adapter_response = AdapterGetMediaBuyDeliveryResponse(
             media_buy_id="mb_1",
@@ -3339,7 +3341,9 @@ class TestDeliveryImplSingleBuy:
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
-            patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3372,7 +3376,7 @@ class TestDeliveryImplSingleBuy:
         Source: UC-004 main flow, BR-RULE-030
         """
         buy = _mock_media_buy(media_buy_id="mb_1")
-        buy.raw_request = {"packages": [{"package_id": "pkg_1", "product_id": "prod_1"}]}
+        buy.raw_request = {"packages": [request_package(package_id="pkg_1", product_id="prod_1")]}
 
         adapter_response = AdapterGetMediaBuyDeliveryResponse(
             media_buy_id="mb_1",
@@ -3391,7 +3395,9 @@ class TestDeliveryImplSingleBuy:
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
-            patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3422,9 +3428,9 @@ class TestDeliveryImplSingleBuy:
         Source: UC-004 main flow
         """
         buy1 = _mock_media_buy(media_buy_id="mb_1", start_date=date.today() - timedelta(days=5))
-        buy1.raw_request = {"packages": [{"package_id": "pkg_1", "product_id": "prod_1"}]}
+        buy1.raw_request = {"packages": [request_package(package_id="pkg_1", product_id="prod_1")]}
         buy2 = _mock_media_buy(media_buy_id="mb_2", start_date=date.today() - timedelta(days=3))
-        buy2.raw_request = {"packages": [{"package_id": "pkg_2", "product_id": "prod_2"}]}
+        buy2.raw_request = {"packages": [request_package(package_id="pkg_2", product_id="prod_2")]}
 
         adapter_resp1 = AdapterGetMediaBuyDeliveryResponse(
             media_buy_id="mb_1",
@@ -3453,7 +3459,9 @@ class TestDeliveryImplSingleBuy:
                 f"{_PATCH}._get_target_media_buys",
                 return_value=[("mb_1", buy1), ("mb_2", buy2)],
             ),
-            patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3486,9 +3494,9 @@ class TestDeliveryImplSingleBuy:
         Source: UC-004 main flow, BR-RULE-030
         """
         buy1 = _mock_media_buy(media_buy_id="mb_1", start_date=date.today() - timedelta(days=5))
-        buy1.raw_request = {"packages": [{"package_id": "pkg_1", "product_id": "prod_1"}]}
+        buy1.raw_request = {"packages": [request_package(package_id="pkg_1", product_id="prod_1")]}
         buy2 = _mock_media_buy(media_buy_id="mb_2", start_date=date.today() - timedelta(days=3))
-        buy2.raw_request = {"packages": [{"package_id": "pkg_2", "product_id": "prod_2"}]}
+        buy2.raw_request = {"packages": [request_package(package_id="pkg_2", product_id="prod_2")]}
 
         adapter_resp1 = AdapterGetMediaBuyDeliveryResponse(
             media_buy_id="mb_1",
@@ -3517,7 +3525,9 @@ class TestDeliveryImplSingleBuy:
                 f"{_PATCH}._get_target_media_buys",
                 return_value=[("mb_1", buy1), ("mb_2", buy2)],
             ),
-            patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3556,7 +3566,9 @@ class TestDeliveryImplStatusFilter:
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]) as mock_get_buys,
-            patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3598,7 +3610,9 @@ class TestDeliveryImplStatusFilter:
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             # No buys match the status filter — returns empty, not error
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
-            patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3639,7 +3653,9 @@ class TestDeliveryImplDateRange:
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
-            patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3682,7 +3698,9 @@ class TestDeliveryImplDateRange:
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
-            patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3774,7 +3792,7 @@ class TestDeliveryImplErrors:
         Source: UC-004 ext-f
         """
         buy = _mock_media_buy(media_buy_id="mb_1", start_date=date.today() - timedelta(days=5))
-        buy.raw_request = {"packages": [{"package_id": "pkg_1", "product_id": "prod_1"}]}
+        buy.raw_request = {"packages": [request_package(package_id="pkg_1", product_id="prod_1")]}
 
         identity = _make_identity()
         adapter_mock = MagicMock()
@@ -3785,7 +3803,9 @@ class TestDeliveryImplErrors:
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
-            patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3821,7 +3841,9 @@ class TestDeliveryImplErrors:
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
-            patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="different_principal")
@@ -3857,20 +3879,19 @@ class TestDeliveryImplPricingLookup:
         """
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
-        mock_po = MagicMock()
-        mock_po.id = 42
-        mock_po.pricing_model = "cpm"
-        mock_po.currency = "USD"
-        mock_po.is_fixed = True
-        mock_po.tenant_id = "test_tenant"
+        # A real (unpersisted) row. A bare MagicMock fabricates every attribute it is
+        # asked for, ``root`` included — so the RootModel unwrap production performs
+        # returns a child mock and the id is built from Mock repr, not from these values.
+        pricing_option = PricingOptionFactory.build(id=42, pricing_model="cpm", currency="USD", is_fixed=True)
+        pricing_option.tenant_id = "test_tenant"
 
         mock_repo = MagicMock()
-        mock_repo.get_all_pricing_options.return_value = [mock_po]
+        mock_repo.get_all_pricing_options.return_value = [pricing_option]
 
         result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant", product_repo=mock_repo)
 
         assert "cpm_usd_fixed" in result
-        assert result["cpm_usd_fixed"] == mock_po
+        assert result["cpm_usd_fixed"] == pricing_option
 
     def test_delivery_spend_with_correct_pricing(self):
         """UC-004-PL02: spend computed from rate and impressions.
@@ -3881,7 +3902,9 @@ class TestDeliveryImplPricingLookup:
         Source: UC-004,
         """
         buy = _mock_media_buy(media_buy_id="mb_1", start_date=date.today() - timedelta(days=5))
-        buy.raw_request = {"packages": [{"package_id": "pkg_1", "product_id": "prod_1", "pricing_option_id": "42"}]}
+        buy.raw_request = {
+            "packages": [request_package(package_id="pkg_1", product_id="prod_1", pricing_option_id="42")]
+        }
 
         adapter_resp = AdapterGetMediaBuyDeliveryResponse(
             media_buy_id="mb_1",
@@ -3891,11 +3914,9 @@ class TestDeliveryImplPricingLookup:
             currency="USD",
         )
 
-        # Mock pricing option with rate
-        mock_po = MagicMock()
-        mock_po.id = 42
-        mock_po.pricing_model = "cpm"
-        mock_po.rate = Decimal("5.00")
+        # A real (unpersisted) row, not a MagicMock: every by_package entry must state
+        # currency, and a MagicMock attribute is not a string.
+        pricing_option = PricingOptionFactory.build(id=42, pricing_model="cpm", rate=Decimal("5.00"))
 
         identity = _make_identity()
         adapter_mock = MagicMock()
@@ -3906,7 +3927,7 @@ class TestDeliveryImplPricingLookup:
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
-            patch(f"{_PATCH}._get_pricing_options", return_value={"42": mock_po}),
+            patch(f"{_PATCH}._get_pricing_options", return_value={"42": pricing_option}),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3973,10 +3994,17 @@ class TestDeliveryResponseSerialization:
                     status="active",
                     totals=DeliveryTotals(impressions=1000, spend=50.0),
                     by_package=[
+                        # pricing_model, rate and currency are on the pinned by_package
+                        # item's required set (get-media-buy-delivery-response.json), so
+                        # a hand-built entry that omits them is not a document a buyer
+                        # can receive.
                         PackageDelivery(
                             package_id="pkg_1",
                             impressions=1000.0,
                             spend=50.0,
+                            pricing_model="cpm",
+                            rate=5.0,
+                            currency="USD",
                         )
                     ],
                 )
@@ -4380,7 +4408,9 @@ class TestBRRule043ContextEcho:
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
-            patch(f"{_PATCH}._get_pricing_options", return_value={}),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")

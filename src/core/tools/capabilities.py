@@ -64,7 +64,6 @@ from src.core.schemas.capability_declarations import (
     DEFAULT_SUPPORTED_PROTOCOLS,
     CapabilityDeclarations,
 )
-from src.core.version_negotiation import negotiate_adcp_version
 from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
@@ -313,10 +312,10 @@ def _get_adcp_capabilities_impl(
     Returns:
         GetAdcpCapabilitiesResponse containing agent capabilities
     """
-    # Negotiate FIRST -- a bad version pin is rejected even with no tenant
-    # context (salesagent-rldj: version negotiation is not tenant-gated).
-    if req:
-        negotiate_adcp_version(req.adcp_version, req.adcp_major_version)
+    # Version negotiation is NOT here. It runs at the boundary, before this or any other
+    # implementation is called, so every tool answers a bad pin the same way and none of them
+    # can forget to ask. It stays un-tenant-gated by construction: the boundary rejects before
+    # an identity is enriched, let alone a tenant read.
 
     # Extract tenant from resolved identity
     tenant = identity.tenant if identity else None

@@ -92,8 +92,14 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001", "mb-999"]
     Then the response is compliant with the get_media_buy_delivery spec
     And the response should include delivery data for "mb-001" only
-    And the response should not include an error for "mb-999"
-    # BR-RULE-030 INV-5: partial resolution, missing silently omitted
+    And the response errors include code "MEDIA_BUY_NOT_FOUND" for media buy "mb-999"
+    And the response should not include an error for "mb-001"
+    # BR-RULE-030 INV-5: partial resolution is ADVISORY PER ID — the resolved buy is
+    # reported and the unresolved id is named in errors[], which
+    # get-media-buy-delivery-response.json (AdCP 3.1.1) declares for exactly this:
+    # "Task-specific errors and warnings (e.g., missing delivery data, reporting
+    # platform issues)". A buyer that asked about an id gets an answer about it, and
+    # the ids that did deliver carry no advisory of their own.
 
   @T-UC-004-identify-zero @invariant @BR-RULE-030 @identification
   Scenario: Zero resolution - all IDs invalid returns empty array
@@ -115,7 +121,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # BR-RULE-030 INV-4 counter-example: neither provided, no buys -> empty
 
   @T-UC-004-identify-batch-ownership @invariant @ownership @BR-RULE-030 @identification
-  Scenario: Batch request with mixed ownership - non-owned silently omitted
+  Scenario: Batch request with mixed ownership - non-owned reported as not found
     Given a media buy "mb-001" owned by "buyer-001"
     And a media buy "mb-other" owned by "other-buyer"
     And the ad server adapter has delivery data for "mb-001"
@@ -123,8 +129,13 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And the response should include delivery data for "mb-001" only
     And the response should NOT include delivery data for "mb-other"
-    And no error should be returned for "mb-other"
-    # PRE-BIZ3 (ownership) + BR-RULE-030 INV-5: non-owned treated as not-found, partial results
+    And the response errors include code "MEDIA_BUY_NOT_FOUND" for media buy "mb-other"
+    And the response should not include an error for "mb-001"
+    # PRE-BIZ3 (ownership) + BR-RULE-030 INV-5: a non-owned id is answered the same way a
+    # nonexistent one is — no delivery data, and MEDIA_BUY_NOT_FOUND in the errors[] that
+    # get-media-buy-delivery-response.json (AdCP 3.1.1) declares for "missing delivery
+    # data". One code for both cases is what keeps the response from disclosing that
+    # someone else's buy exists.
 
   @T-UC-004-identify-empty @invariant @BR-RULE-030 @error @boundary
   Scenario: Empty array provided - schema rejects request

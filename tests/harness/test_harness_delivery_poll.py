@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 from src.core.schemas import GetMediaBuyDeliveryResponse
+from tests.factories.media_buy import DEFAULT_PRICING_OPTION_ID
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
 #: adcp_version / adcp_major_version / ext are the version-envelope trio every request
@@ -28,6 +29,24 @@ class TestDeliveryPollEnvContract:
             response = env.call_impl(media_buy_ids=["mb_001"])
 
             assert isinstance(response, GetMediaBuyDeliveryResponse)
+
+    def test_default_env_reports_an_active_buy_as_active(self):
+        """An env that says nothing about the circuit breaker runs with it CLOSED.
+
+        Pins the default in ``_configure_mocks``. ``_is_circuit_breaker_open`` is patched,
+        and an unconfigured MagicMock returns a TRUTHY Mock — so without the default every
+        test in this env polls with the breaker OPEN and reads "reporting_delayed" for a
+        serving buy. Nothing else grades that: a test about degraded reporting sets the
+        state itself (``set_circuit_open``), which is exactly what makes it blind to what
+        the unset default does.
+        """
+        with DeliveryPollEnv() as env:
+            env.add_buy(media_buy_id="mb_default", status="active")
+            env.set_adapter_response("mb_default", impressions=5000)
+
+            response = env.call_impl(media_buy_ids=["mb_default"])
+
+            assert response.media_buy_deliveries[0].status == "active"
 
     def test_add_buy_visible_to_impl(self):
         """A buy added via add_buy appears in media_buy_deliveries."""
@@ -149,8 +168,18 @@ class TestDeliveryPollEnvContract:
                 media_buy_id="mb_multi",
                 raw_request={
                     "packages": [
-                        {"package_id": "pkg_A", "product_id": "prod_001"},
-                        {"package_id": "pkg_B", "product_id": "prod_002"},
+                        # Each package names its pricing option: the delivery report states
+                        # pricing_model/rate/currency per package, and refuses to guess.
+                        {
+                            "package_id": "pkg_A",
+                            "product_id": "prod_001",
+                            "pricing_option_id": DEFAULT_PRICING_OPTION_ID,
+                        },
+                        {
+                            "package_id": "pkg_B",
+                            "product_id": "prod_002",
+                            "pricing_option_id": DEFAULT_PRICING_OPTION_ID,
+                        },
                     ],
                 },
             )

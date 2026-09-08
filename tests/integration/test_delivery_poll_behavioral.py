@@ -24,6 +24,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.schemas import GetMediaBuyDeliveryResponse
+from tests.factories.media_buy import request_package
 
 # ---------------------------------------------------------------------------
 # UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
@@ -764,8 +765,8 @@ class TestPackageLevelBreakdowns:
                 end_date=date(2025, 3, 31),
                 raw_request={
                     "packages": [
-                        {"package_id": "pkg_A", "product_id": "prod_A"},
-                        {"package_id": "pkg_B", "product_id": "prod_B"},
+                        request_package(package_id="pkg_A", product_id="prod_A"),
+                        request_package(package_id="pkg_B", product_id="prod_B"),
                     ],
                 },
             )
@@ -819,8 +820,8 @@ class TestPackageLevelBreakdowns:
                 end_date=date(2025, 12, 31),
                 raw_request={
                     "packages": [
-                        {"package_id": "pkg_X", "product_id": "prod_X"},
-                        {"package_id": "pkg_Y", "product_id": "prod_Y"},
+                        request_package(package_id="pkg_X", product_id="prod_X"),
+                        request_package(package_id="pkg_Y", product_id="prod_Y"),
                     ],
                 },
             )
@@ -864,8 +865,8 @@ class TestPackageLevelBreakdowns:
                 end_date=date(2025, 4, 30),
                 raw_request={
                     "packages": [
-                        {"package_id": "pkg_1", "product_id": "prod_1"},
-                        {"package_id": "pkg_2", "product_id": "prod_2"},
+                        request_package(package_id="pkg_1", product_id="prod_1"),
+                        request_package(package_id="pkg_2", product_id="prod_2"),
                     ],
                 },
             )
@@ -1798,13 +1799,13 @@ class TestEndToEndDeliveryMetricsCpmPricing:
 
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-03
         """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+        from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            MediaBuyFactory(
+            buy = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_cpm2",
@@ -1816,6 +1817,15 @@ class TestEndToEndDeliveryMetricsCpmPricing:
                             "pricing_option_id": "cpm_usd_fixed",
                         }
                     ],
+                },
+            )
+            MediaPackageFactory(
+                media_buy=buy,
+                package_id="pkg_cpm2",
+                package_config={
+                    "package_id": "pkg_cpm2",
+                    "product_id": "prod_cpm2",
+                    "pricing_info": {"pricing_model": "cpm", "rate": 2.50, "currency": "USD"},
                 },
             )
             env.set_adapter_response(
@@ -1831,11 +1841,11 @@ class TestEndToEndDeliveryMetricsCpmPricing:
                 end_date="2025-06-30",
             )
 
-            delivery = result.media_buy_deliveries[0]
-            assert hasattr(delivery, "pricing_options") or any(
-                hasattr(pkg, "pricing_option_id") and pkg.pricing_option_id == "cpm_usd_fixed"
-                for pkg in delivery.by_package
-            )
+            # The pinned by_package item identifies a package's pricing option by its
+            # TERMS: get-media-buy-delivery-response.json requires pricing_model, rate and
+            # currency on every entry and declares no pricing_option_id to echo.
+            package = result.media_buy_deliveries[0].by_package[0]
+            assert (package.pricing_model, package.rate, package.currency) == ("cpm", 2.50, "USD")
 
 
 # ---------------------------------------------------------------------------
@@ -1922,13 +1932,13 @@ class TestEndToEndDeliveryMetricsCpcPricing:
 
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-04
         """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+        from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            MediaBuyFactory(
+            buy = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_cpc2",
@@ -1937,9 +1947,21 @@ class TestEndToEndDeliveryMetricsCpcPricing:
                         {
                             "package_id": "pkg_cpc2",
                             "product_id": "prod_cpc2",
-                            "pricing_option_id": "cpc_usd_standard",
+                            # Synthetic ids are {model}_{currency}_{fixed|auction}
+                            # (_get_pricing_options); "standard" is not in that vocabulary
+                            # and names no option a seller could resolve.
+                            "pricing_option_id": "cpc_usd_fixed",
                         }
                     ],
+                },
+            )
+            MediaPackageFactory(
+                media_buy=buy,
+                package_id="pkg_cpc2",
+                package_config={
+                    "package_id": "pkg_cpc2",
+                    "product_id": "prod_cpc2",
+                    "pricing_info": {"pricing_model": "cpc", "rate": 0.50, "currency": "USD"},
                 },
             )
             env.set_adapter_response(
@@ -1955,11 +1977,11 @@ class TestEndToEndDeliveryMetricsCpcPricing:
                 end_date="2025-06-30",
             )
 
-            delivery = result.media_buy_deliveries[0]
-            assert hasattr(delivery, "pricing_options") or any(
-                hasattr(pkg, "pricing_option_id") and pkg.pricing_option_id == "cpc_usd_standard"
-                for pkg in delivery.by_package
-            )
+            # The pinned by_package item identifies a package's pricing option by its
+            # TERMS: get-media-buy-delivery-response.json requires pricing_model, rate and
+            # currency on every entry and declares no pricing_option_id to echo.
+            package = result.media_buy_deliveries[0].by_package[0]
+            assert (package.pricing_model, package.rate, package.currency) == ("cpc", 0.50, "USD")
 
 
 # ---------------------------------------------------------------------------
@@ -1999,7 +2021,9 @@ class TestDeliveryMetricsFlatRatePricing:
                         {
                             "package_id": "pkg_flat",
                             "product_id": "prod_flat",
-                            "pricing_option_id": "flat_rate_5k",
+                            # Synthetic ids are {model}_{currency}_{fixed|auction}; the
+                            # package's own rate is stated on the row below.
+                            "pricing_option_id": "flat_rate_usd_fixed",
                         }
                     ],
                 },
@@ -2042,13 +2066,13 @@ class TestDeliveryMetricsFlatRatePricing:
 
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-05
         """
-        from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
+        from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            MediaBuyFactory(
+            buy = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_flat2",
@@ -2057,9 +2081,21 @@ class TestDeliveryMetricsFlatRatePricing:
                         {
                             "package_id": "pkg_flat2",
                             "product_id": "prod_flat2",
-                            "pricing_option_id": "flat_rate_premium",
+                            # Synthetic ids are {model}_{currency}_{fixed|auction}
+                            # (_get_pricing_options); "premium" is not in that vocabulary
+                            # and names no option a seller could resolve.
+                            "pricing_option_id": "flat_rate_usd_fixed",
                         }
                     ],
+                },
+            )
+            MediaPackageFactory(
+                media_buy=buy,
+                package_id="pkg_flat2",
+                package_config={
+                    "package_id": "pkg_flat2",
+                    "product_id": "prod_flat2",
+                    "pricing_info": {"pricing_model": "flat_rate", "rate": 5000.0, "currency": "USD"},
                 },
             )
             env.set_adapter_response(
@@ -2075,11 +2111,11 @@ class TestDeliveryMetricsFlatRatePricing:
                 end_date="2025-06-30",
             )
 
-            delivery = result.media_buy_deliveries[0]
-            assert hasattr(delivery, "pricing_options") or any(
-                hasattr(pkg, "pricing_option_id") and pkg.pricing_option_id == "flat_rate_premium"
-                for pkg in delivery.by_package
-            )
+            # The pinned by_package item identifies a package's pricing option by its
+            # TERMS: get-media-buy-delivery-response.json requires pricing_model, rate and
+            # currency on every entry and declares no pricing_option_id to echo.
+            package = result.media_buy_deliveries[0].by_package[0]
+            assert (package.pricing_model, package.rate, package.currency) == ("flat_rate", 5000.0, "USD")
 
 
 # ---------------------------------------------------------------------------

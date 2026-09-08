@@ -76,13 +76,14 @@ class TestCircuitBreakerOpensAfterRetriesExhausted:
             assert cb.can_attempt() is False
 
     def test_delivery_marked_reporting_delayed_when_circuit_open(self):
-        """Delivery should be marked reporting_delayed when circuit breaker is open.
+        """An OPEN reporting circuit marks an active buy's delivery reporting_delayed.
 
         Covers: UC-004-EXT-G-03
         """
         from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
         with DeliveryPollEnv() as env:
+            env.set_circuit_open(True)
             env.add_buy(media_buy_id="mb_001")
             env.set_adapter_response("mb_001", impressions=5000, spend=250.0)
 
@@ -94,6 +95,31 @@ class TestCircuitBreakerOpensAfterRetriesExhausted:
 
             assert len(response.media_buy_deliveries) == 1
             assert response.media_buy_deliveries[0].status == "reporting_delayed"
+
+    def test_delivery_keeps_active_status_when_circuit_closed(self):
+        """The same buy, circuit CLOSED, stays "active".
+
+        The control for the test above: without it, "reporting_delayed" could be the
+        status this fixture produces for any circuit state, and the assertion would grade
+        nothing about the breaker.
+
+        Covers: UC-004-EXT-G-03
+        """
+        from tests.harness.delivery_poll_unit import DeliveryPollEnv
+
+        with DeliveryPollEnv() as env:
+            env.set_circuit_open(False)
+            env.add_buy(media_buy_id="mb_001")
+            env.set_adapter_response("mb_001", impressions=5000, spend=250.0)
+
+            response = env.call_impl(
+                media_buy_ids=["mb_001"],
+                start_date="2025-01-01",
+                end_date="2025-06-30",
+            )
+
+            assert len(response.media_buy_deliveries) == 1
+            assert response.media_buy_deliveries[0].status == "active"
 
 
 # ---------------------------------------------------------------------------

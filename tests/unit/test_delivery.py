@@ -47,6 +47,8 @@ from src.core.schemas import (
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.services.webhook_delivery_service import CircuitBreaker, CircuitState, WebhookDeliveryService
+from tests.factories.media_buy import default_request_packages, pricing_options_for, request_package
+from tests.factories.product import PricingOptionFactory
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
 # ---------------------------------------------------------------------------
@@ -100,11 +102,7 @@ def _make_mock_media_buy(
     buy.principal_id = principal_id
     buy.tenant_id = tenant_id
     buy.is_paused = False
-    buy.raw_request = raw_request or {
-        "packages": [
-            {"package_id": "pkg_001", "product_id": "prod_1"},
-        ]
-    }
+    buy.raw_request = raw_request or {"packages": default_request_packages()}
     return buy
 
 
@@ -185,9 +183,15 @@ def _standard_patches(
             f"{_PATCH_PREFIX}._get_target_media_buys",
             return_value=target_buys,
         ),
+        # Answers about the ids production asked for, derived the way the real lookup
+        # derives them, unless the caller pins its own map. The delivery report REQUIRES
+        # pricing_model/rate/currency per package (get-media-buy-delivery-response.json)
+        # and these mock buys have no MediaPackage row, so this is their pricing source.
         "pricing_options": patch(
             f"{_PATCH_PREFIX}._get_pricing_options",
-            return_value=pricing_options or {},
+            side_effect=lambda option_ids, **_: (
+                pricing_options if pricing_options is not None else pricing_options_for(option_ids)
+            ),
         ),
         "uow": patch(
             f"{_PATCH_PREFIX}.MediaBuyUoW",
@@ -255,7 +259,7 @@ class TestDeliveryPollingSingleBuy:
             budget=10000.0,
             start_date=date(2025, 1, 1),
             end_date=date(2025, 12, 31),
-            raw_request={"packages": [{"package_id": "pkg_a", "product_id": "prod_1"}]},
+            raw_request={"packages": [request_package(package_id="pkg_a", product_id="prod_1")]},
         )
 
         mock_adapter = MagicMock()
@@ -334,14 +338,14 @@ class TestDeliveryPollingMultiBuy:
             budget=5000.0,
             start_date=date(2025, 1, 1),
             end_date=date(2025, 12, 31),
-            raw_request={"packages": [{"package_id": "pkg_1a", "product_id": "prod_1"}]},
+            raw_request={"packages": [request_package(package_id="pkg_1a", product_id="prod_1")]},
         )
         buy2 = _make_mock_media_buy(
             media_buy_id="mb_agg_2",
             budget=8000.0,
             start_date=date(2025, 3, 1),
             end_date=date(2025, 12, 31),
-            raw_request={"packages": [{"package_id": "pkg_2a", "product_id": "prod_2"}]},
+            raw_request={"packages": [request_package(package_id="pkg_2a", product_id="prod_2")]},
         )
 
         mock_adapter = MagicMock()
@@ -885,16 +889,16 @@ class TestDeliveryPricingOptionLookup:
         """
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
-        mock_po1 = MagicMock()
-        mock_po1.id = 42
-        mock_po1.pricing_model = "cpm"
-        mock_po1.currency = "USD"
-        mock_po1.is_fixed = True
-        mock_po1.rate = Decimal("5.00")
-        mock_po1.tenant_id = "test_tenant"
+        # A real (unpersisted) row. A bare MagicMock fabricates every attribute it is
+        # asked for, ``root`` included — so the RootModel unwrap production performs
+        # returns a child mock and the id is built from Mock repr, not from these values.
+        pricing_option = PricingOptionFactory.build(
+            id=42, pricing_model="cpm", currency="USD", is_fixed=True, rate=Decimal("5.00")
+        )
+        pricing_option.tenant_id = "test_tenant"
 
         mock_repo = MagicMock()
-        mock_repo.get_all_pricing_options.return_value = [mock_po1]
+        mock_repo.get_all_pricing_options.return_value = [pricing_option]
 
         result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant", product_repo=mock_repo)
 
@@ -912,13 +916,14 @@ class TestDeliveryPricingOptionLookup:
         buy = _make_mock_media_buy(
             media_buy_id="mb_cpm",
             budget=10000.0,
-            raw_request={"packages": [{"package_id": "pkg_cpm", "product_id": "prod_1", "pricing_option_id": "1"}]},
+            raw_request={
+                "packages": [request_package(package_id="pkg_cpm", product_id="prod_1", pricing_option_id="1")]
+            },
         )
 
-        mock_po = MagicMock()
-        mock_po.id = 1
-        mock_po.pricing_model = PricingModel.cpm
-        mock_po.rate = Decimal("5.00")
+        # A real (unpersisted) row, not a MagicMock: every by_package entry must state
+        # currency, and a MagicMock attribute is not a string.
+        pricing_option = PricingOptionFactory.build(id=1, pricing_model=PricingModel.cpm, rate=Decimal("5.00"))
 
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
@@ -938,7 +943,7 @@ class TestDeliveryPricingOptionLookup:
             req,
             adapter=mock_adapter,
             target_buys=[("mb_cpm", buy)],
-            pricing_options={"1": mock_po},
+            pricing_options={"1": pricing_option},
         )
 
         assert response.aggregated_totals.impressions == 10000.0
@@ -957,13 +962,16 @@ class TestDeliveryPricingOptionLookup:
         buy = _make_mock_media_buy(
             media_buy_id="mb_cpc",
             budget=5000.0,
-            raw_request={"packages": [{"package_id": "pkg_cpc", "product_id": "prod_1", "pricing_option_id": "2"}]},
+            raw_request={
+                "packages": [request_package(package_id="pkg_cpc", product_id="prod_1", pricing_option_id="2")]
+            },
         )
 
-        mock_po = MagicMock()
-        mock_po.id = 2
-        mock_po.pricing_model = "cpc"  # DB stores string, not enum
-        mock_po.rate = Decimal("0.50")
+        pricing_option = PricingOptionFactory.build(
+            id=2,
+            pricing_model="cpc",  # DB stores string, not enum
+            rate=Decimal("0.50"),
+        )
 
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
@@ -984,7 +992,7 @@ class TestDeliveryPricingOptionLookup:
             req,
             adapter=mock_adapter,
             target_buys=[("mb_cpc", buy)],
-            pricing_options={"2": mock_po},
+            pricing_options={"2": pricing_option},
         )
 
         delivery = response.media_buy_deliveries[0]
@@ -1003,13 +1011,12 @@ class TestDeliveryPricingOptionLookup:
         buy = _make_mock_media_buy(
             media_buy_id="mb_flat",
             budget=5000.0,
-            raw_request={"packages": [{"package_id": "pkg_flat", "product_id": "prod_1", "pricing_option_id": "3"}]},
+            raw_request={
+                "packages": [request_package(package_id="pkg_flat", product_id="prod_1", pricing_option_id="3")]
+            },
         )
 
-        mock_po = MagicMock()
-        mock_po.id = 3
-        mock_po.pricing_model = PricingModel.flat_rate
-        mock_po.rate = Decimal("5000.00")
+        pricing_option = PricingOptionFactory.build(id=3, pricing_model=PricingModel.flat_rate, rate=Decimal("5000.00"))
 
         mock_adapter = MagicMock()
         mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
@@ -1030,7 +1037,7 @@ class TestDeliveryPricingOptionLookup:
             req,
             adapter=mock_adapter,
             target_buys=[("mb_flat", buy)],
-            pricing_options={"3": mock_po},
+            pricing_options={"3": pricing_option},
         )
 
         delivery = response.media_buy_deliveries[0]

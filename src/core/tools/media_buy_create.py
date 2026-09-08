@@ -131,6 +131,7 @@ from src.core.helpers.creative_helpers import (
     extract_media_url_and_dimensions,
     process_and_upload_package_creatives,
 )
+from src.core.helpers.pricing_helpers import pricing_info_for, synthetic_pricing_option_id
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -1072,14 +1073,9 @@ def execute_approved_media_buy(
                         # Use the stored pricing_info which has the correct bid_price
                         package_pricing_info[package_id] = pricing_info_from_config
                     elif package_id:
-                        # Fallback for old media buys without pricing_info
-                        package_pricing_info[package_id] = {
-                            "pricing_model": pricing_option_inner.pricing_model,
-                            "currency": pricing_option_inner.currency,
-                            "is_fixed": pricing_option_inner.is_fixed,
-                            "rate": float(pricing_option_inner.rate) if pricing_option_inner.rate else None,
-                            "bid_price": None,
-                        }
+                        # Fallback for buys stored without pricing_info: the option's terms
+                        # with no bid_price, because the package that bid one is not on hand.
+                        package_pricing_info[package_id] = pricing_info_for(pricing_option_inner)
 
                     # Get targeting_overlay from package_config if present
                     # Fallback to "targeting" key for data written before fix.
@@ -1641,22 +1637,18 @@ def _validate_pricing_model_selection(
     # If neither specified, use first pricing option from product
     if not pricing_option_id and not pricing_model_fallback:
         first_option = unwrap_option(product.pricing_options[0])
-        return {
-            "pricing_model": first_option.pricing_model,
-            "rate": float(first_option.rate) if first_option.rate else None,
-            "currency": first_option.currency or campaign_currency or "USD",
-            "is_fixed": first_option.is_fixed,
-            "bid_price": float(package.bid_price) if package.bid_price else None,
+        # The option's own terms, plus the one field it cannot supply: a currency-less
+        # option falls back to the campaign's, which is a property of this request.
+        return pricing_info_for(first_option, bid_price=float(package.bid_price) if package.bid_price else None) | {
+            "currency": first_option.currency or campaign_currency or "USD"
         }
 
     # Find matching pricing option
     selected_option = None
     for option in product.pricing_options:
         opt_inner = unwrap_option(option)
-        # Construct pricing_option_id in same format as get_products returns
-        # Format: {pricing_model}_{currency}_{fixed|auction}
-        fixed_str = "fixed" if opt_inner.is_fixed else "auction"
-        option_id = f"{opt_inner.pricing_model}_{opt_inner.currency.lower()}_{fixed_str}"
+        # The same id get_products announces and _get_pricing_options resolves.
+        option_id = synthetic_pricing_option_id(opt_inner)
 
         # Try matching by pricing_option_id first (AdCP spec)
         if pricing_option_id and pricing_option_id.lower() == option_id.lower():
@@ -1674,7 +1666,7 @@ def _validate_pricing_model_selection(
     if not selected_option:
         # Show available options in same format as matching logic expects
         available_options = [
-            f"{unwrap_option(opt).pricing_model}_{unwrap_option(opt).currency.lower()}_{'fixed' if unwrap_option(opt).is_fixed else 'auction'} ({unwrap_option(opt).pricing_model} - {unwrap_option(opt).currency})"
+            f"{synthetic_pricing_option_id(opt)} ({unwrap_option(opt).pricing_model} - {unwrap_option(opt).currency})"
             for opt in product.pricing_options
         ]
         # The four accumulated branches used to build a sentence; each branch's VALUE is
@@ -1744,13 +1736,7 @@ def _validate_pricing_model_selection(
             )
 
     # Return validated pricing information
-    return {
-        "pricing_model": selected_option.pricing_model,
-        "rate": float(selected_option.rate) if selected_option.rate else None,
-        "currency": selected_option.currency,
-        "is_fixed": selected_option.is_fixed,
-        "bid_price": float(package.bid_price) if package.bid_price else None,
-    }
+    return pricing_info_for(selected_option, bid_price=float(package.bid_price) if package.bid_price else None)
 
 
 async def _validate_and_convert_format_ids(

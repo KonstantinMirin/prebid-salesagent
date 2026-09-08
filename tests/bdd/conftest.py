@@ -2357,8 +2357,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-004-ext-b": ("partial-success Error model needs suggestion field — production enhancement", True),
             "T-UC-004-ext-c": ("partial-success Error model needs suggestion field — production enhancement", True),
             "T-UC-004-ext-d": ("partial-success Error model needs suggestion field — production enhancement", True),
-            # Graduated: T-UC-004-identify-partial, T-UC-004-identify-batch-ownership
-            # (merge from main fixed _impl to silently omit missing/non-owned IDs per BR-RULE-030 INV-5)
+            # Graduated: T-UC-004-identify-partial, T-UC-004-identify-batch-ownership.
+            # Both grade BR-RULE-030 INV-5 as ADVISORY PER ID: an id that resolves to no
+            # buy the caller owns gets no delivery data and a MEDIA_BUY_NOT_FOUND entry in
+            # the response's errors[], which get-media-buy-delivery-response.json declares
+            # for "missing delivery data".
             # Adapter error: message text + suggestion not wired in partial-success response
             # Graduated (subdl): T-UC-004-ext-f — the reason was "needs suggestion field
             # and message refinement". The suggestion field was never missing: every one
