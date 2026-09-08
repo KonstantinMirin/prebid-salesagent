@@ -27,6 +27,7 @@ from src.core.schemas import AdapterGetMediaBuyDeliveryResponse
 from tests.harness._base import BaseTestEnv
 from tests.harness._mixins import DeliveryPollMixin
 from tests.harness._mock_uow import make_mock_uow
+from tests.helpers.delivery_pricing import delivery_packages, delivery_pricing_options
 
 
 class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
@@ -75,8 +76,11 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
         # Adapter: default happy path (from mixin)
         self._configure_adapter_mock()
 
-        # Pricing: default empty
-        self.mock["pricing"].return_value = {}
+        # Pricing: the option ``add_buy``'s packages name. NOT empty — the pin REQUIRES
+        # pricing_model/rate/currency on every by_package entry, so a buy whose option
+        # resolves to nothing is a buy the impl cannot report on, and every test here
+        # would crash on a pricing gap it was not written to exercise.
+        self.mock["pricing"].return_value = delivery_pricing_options()
 
     def add_buy(
         self,
@@ -108,9 +112,9 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
         buy.currency = currency
         buy.is_paused = is_paused
         buy.status = status
-        buy.raw_request = raw_request or {
-            "packages": [{"package_id": "pkg_001", "product_id": "prod_001"}],
-        }
+        # Packages name a pricing option, because ``package-request.json`` REQUIRES one on
+        # every package — a buy without it is a shape ``create_media_buy`` cannot store.
+        buy.raw_request = raw_request or {"packages": delivery_packages()}
         self._buys.append(buy)
 
         # Update repo mock

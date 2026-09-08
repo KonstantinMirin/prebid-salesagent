@@ -50,6 +50,7 @@ from src.core.tools._boundary import invoke_tool
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.services.webhook_delivery_service import CircuitBreaker, CircuitState, WebhookDeliveryService
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
+from tests.helpers.delivery_pricing import delivery_package, delivery_pricing_options
 
 # ---------------------------------------------------------------------------
 # Fixtures (shared across all test classes)
@@ -1135,6 +1136,49 @@ class TestDeliveryPricingOptionLookup:
         # FLAT_RATE: no click computation (clicks should be None)
         pkg = delivery.by_package[0]
         assert pkg.clicks is None
+
+    def test_by_package_carries_the_resolved_pricing_options_terms(self):
+        """The three pin-REQUIRED pricing fields on by_package come from the resolved option.
+
+        Spec: get-media-buy-delivery-response.json (AdCP 3.1, the pinned version) lists
+        ``pricing_model``, ``rate`` and ``currency`` in the by_package item's ``required``
+        set and types all three non-nullable (rate {type: number, minimum: 0}, currency
+        {type: string, pattern: ^[A-Z]{3}$}).
+
+        This grades the VALUES, which nothing else did: the sibling cases above assert
+        clicks and spend, and the failure mode this pins -- ``_package_pricing`` refusing a
+        package whose buy names no pricing option -- reaches every one of them as a crash,
+        so a green suite never proved the writer put the right numbers on the wire.
+
+        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
+        """
+        buy = _make_mock_media_buy(
+            media_buy_id="mb_terms",
+            raw_request={"packages": [delivery_package(package_id="pkg_terms")]},
+        )
+
+        mock_adapter = MagicMock()
+        mock_adapter.get_media_buy_delivery.return_value = _make_adapter_response(
+            media_buy_id="mb_terms",
+            impressions=20000,
+            spend=100.0,
+            packages=[{"package_id": "pkg_terms", "impressions": 20000, "spend": 100.0}],
+        )
+
+        response = _run_impl_with_patches(
+            GetMediaBuyDeliveryRequest(media_buy_ids=["mb_terms"]),
+            adapter=mock_adapter,
+            target_buys=[("mb_terms", buy)],
+            pricing_options=delivery_pricing_options(pricing_model="cpm", rate="5.00", currency="USD"),
+        )
+
+        pkg = response.media_buy_deliveries[0].by_package[0]
+        assert (pkg.pricing_model, pkg.rate, pkg.currency) == (PricingModel.cpm, 5.0, "USD")
+        # ...and they SURVIVE serialization. The SDK base dumps with exclude_none=True, so
+        # an unset one is dropped rather than emitted as null, which is how a delivery
+        # response went schema-invalid without any model complaining (GH #2130).
+        dumped = response.model_dump()["media_buy_deliveries"][0]["by_package"][0]
+        assert {"pricing_model", "rate", "currency"} <= dumped.keys()
 
 
 # ===========================================================================
