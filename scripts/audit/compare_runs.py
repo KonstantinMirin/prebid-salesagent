@@ -60,8 +60,20 @@ derivable, so it is derived: a removed nodeid whose base id (everything before
 an unpaired removal is a disappearance. Measured against innet_080926_0943 vs
 innet_080926_1145, that accounts for 19 of 19.
 
+CLEAN REQUIRES THAT SOMETHING WAS COMPARED. Zero suites accounted for, or zero
+PRE-EXISTING nodeids among the suites that were, is NOT MEASURED and fatal --
+the same defect one level down, since the SCOPE line said "0 of 0 suites, 0
+shared nodeids" quite honestly while the verdict word and the exit status, which
+are what a caller reads, said pass. Pointing this at two paths that do not
+resolve is the ordinary way in: ``test-results/`` is gitignored and exists in
+one worktree, so a relative path invoked from another finds nothing, and both
+directories were wrong at once. That case is diagnosed by name before anything
+else, because an absent directory and a run that produced nothing leave
+identical evidence.
+
 Exit status is 1 when any pre-existing test changed outcome, when any nodeid
-genuinely disappeared, or when any suite went NOT MEASURED -- so this can gate.
+genuinely disappeared, or when any suite went NOT MEASURED; 2 when a run
+directory does not exist -- so this can gate.
 
     python3 scripts/audit/compare_runs.py <baseline-dir> <new-dir> [suite.json ...]
 """
@@ -285,11 +297,29 @@ def _print_header(baseline: pathlib.Path, new: pathlib.Path, sides: dict, suites
     print(f"  suites to account for: {len(suites)}")
 
 
+def _unreadable(runs: dict[str, pathlib.Path]) -> list[str]:
+    """Run directories that are not there, named by side and path.
+
+    Checked before anything else because a path that does not resolve produces
+    the same evidence as a run that produced nothing -- no manifest, no reports
+    -- and the two want different words. ``test-results/`` is gitignored and
+    lives in one worktree, so a relative path invoked from another resolves to
+    nothing at all; that is how both directories came to be wrong at once.
+    """
+    return [f"{label} directory does not exist: {path}" for label, path in runs.items() if not path.is_dir()]
+
+
 def main() -> int:
     if len(sys.argv) < 3:
         print(__doc__)
         return 2
     baseline, new = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+    absent = _unreadable({"baseline": baseline, "new": new})
+    if absent:
+        print("NOT MEASURED: nothing could be read.")
+        for problem in absent:
+            print(f"    {problem}")
+        return 2
     sides = {
         "baseline": (declared_suites(baseline), present_suites(baseline)),
         "new": (declared_suites(new), present_suites(new)),
@@ -343,9 +373,25 @@ def _report(
         for suite, reason in uncomparable:
             print(f"    {suite}: {reason}")
 
+    # CLEAN has to mean something was compared. The SCOPE line above is honest
+    # about "0 of 0 suites, 0 shared nodeids" — but the verdict word and the
+    # exit status are what a caller reads, and `if compare_runs; then ok` read
+    # a pass. Nothing graded is the same defect one level down from a vanished
+    # suite: not measured reading as fine.
+    nothing_graded = not compared or shared == 0
     regressed = [c.suite for c in compared if c.regressed]
     if regressed:
         print(f"\nREGRESSION over the {len(compared)} of {total} suites compared: {', '.join(regressed)}")
+    elif not compared:
+        print(
+            f"\nNOT MEASURED: no suite could be compared at all — 0 of {total} accounted for. "
+            "Check the run directories; this is an absent run, not a clean one."
+        )
+    elif nothing_graded:
+        print(
+            f"\nNOT MEASURED: {len(compared)} of {total} suites compared and not one PRE-EXISTING "
+            "nodeid among them. The safety claim would be vacuous, so it is not made."
+        )
     elif unmeasured:
         print(
             f"\nNO REGRESSION in the {len(compared)} of {total} suites compared — and this says NOTHING about the other {len(unmeasured)}."
@@ -355,7 +401,7 @@ def _report(
             f"\nCLEAN over {len(compared)} of {total} suites, {shared} shared nodeids: no pre-existing test changed outcome."
         )
 
-    return 1 if (regressed or unmeasured) else 0
+    return 1 if (regressed or unmeasured or nothing_graded) else 0
 
 
 if __name__ == "__main__":

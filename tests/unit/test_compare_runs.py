@@ -219,8 +219,20 @@ def test_transport_reparametrization_is_reported_as_such_not_as_a_defect(
     ``[transport-example]`` suffix -- so it is derived, not tolerated by count.
     """
     base = "tests/bdd/test_uc010.py::test_sections_absent"
-    _write_run(tmp_path / "old", {"bdd_inprocess": {f"{base}[rest-full]": "passed"}}, declared=["bdd_inprocess"])
-    _write_run(tmp_path / "new", {"bdd_inprocess": {f"{base}[mcp-full]": "passed"}}, declared=["bdd_inprocess"])
+    # Shaped like the real suite -- 8163 stable nodeids around 19 that flap --
+    # rather than a bare pair, which would grade zero pre-existing tests and be
+    # refused as an absent run on those grounds instead of these.
+    stable = {f"tests/bdd/test_uc010.py::test_stable_{i}[rest-full]": "passed" for i in range(5)}
+    _write_run(
+        tmp_path / "old",
+        {"bdd_inprocess": {**stable, f"{base}[rest-full]": "passed"}},
+        declared=["bdd_inprocess"],
+    )
+    _write_run(
+        tmp_path / "new",
+        {"bdd_inprocess": {**stable, f"{base}[mcp-full]": "passed"}},
+        declared=["bdd_inprocess"],
+    )
 
     status, out = _run(tmp_path, capsys)
 
@@ -248,3 +260,63 @@ def test_a_genuinely_disappeared_nodeid_is_still_a_defect(
 
     assert status != 0, f"a removed nodeid with no same-base replacement is a defect:\n{out}"
     assert "test_gone" in out, out
+
+
+# --------------------------------------------------------------------------
+# CLEAN must require that something was actually compared.
+#
+# The denominator work above made the SCOPE line honest -- it said "0 of 0
+# suites, 0 shared nodeids" quite correctly. But the verdict word and the exit
+# code are what a caller reads, and `if compare_runs; then ok` saw a pass. That
+# is the same defect one level down: not-measured reading as fine.
+#
+# The way in is mundane. A typo, a run id that never produced a directory, or
+# running the tool from a worktree where the relative path resolves to nothing
+# -- test-results/ is gitignored and exists in one worktree only. BOTH
+# directories were wrong and it said CLEAN.
+# --------------------------------------------------------------------------
+
+
+def test_directories_that_do_not_exist_refuse(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Neither path exists, so nothing was measured and nothing may be claimed."""
+    status, out = _run(tmp_path, capsys)
+
+    assert status != 0, f"a comparison of two absent directories must not pass:\n{out}"
+    assert "CLEAN" not in out, f"nothing may print CLEAN having compared nothing:\n{out}"
+    assert "does not exist" in out, f"the tool must say WHICH path it could not read:\n{out}"
+
+
+def test_one_directory_that_does_not_exist_refuses(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_run(tmp_path / "old", {"unit": {"tests/unit/test_a.py::test_one": "passed"}}, declared=["unit"])
+
+    status, out = _run(tmp_path, capsys)
+
+    assert status != 0, out
+    assert "CLEAN" not in out, out
+
+
+def test_run_directories_holding_no_reports_refuse(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The directories exist and are empty: zero suites accounted for."""
+    (tmp_path / "old").mkdir()
+    (tmp_path / "new").mkdir()
+
+    status, out = _run(tmp_path, capsys)
+
+    assert status != 0, f"zero suites accounted for is not a clean run:\n{out}"
+    assert "CLEAN" not in out, out
+    assert "NOT MEASURED" in out, out
+
+
+def test_reports_that_share_no_nodeids_refuse(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """A suite compared on both sides, and nothing in it was graded.
+
+    Suites can be accounted for while the comparison still measures nothing --
+    two empty reports compare successfully and grade zero nodeids.
+    """
+    _write_run(tmp_path / "old", {"unit": {}}, declared=["unit"])
+    _write_run(tmp_path / "new", {"unit": {}}, declared=["unit"])
+
+    status, out = _run(tmp_path, capsys)
+
+    assert status != 0, f"zero shared nodeids graded is not a clean run:\n{out}"
+    assert "CLEAN" not in out, out
