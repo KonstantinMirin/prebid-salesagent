@@ -290,34 +290,12 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         return client.put(endpoint, json=body, headers=headers)
 
     def _parse_update_rest_response(self, data: dict[str, Any]) -> Any:
-        from src.core.schemas._base import (
-            UpdateMediaBuyError,
-            UpdateMediaBuyResult,
-            UpdateMediaBuySubmitted,
-            UpdateMediaBuySuccess,
-        )
+        """Rebuild an update_media_buy wire body as the branch the buyer received.
 
-        # Harness-side union discrimination for the REST/synthesized wires, wrapped
-        # back into the UpdateMediaBuyResult envelope the _impl path returns (so all
-        # transports hand steps the same shape). Submitted first (status="submitted"
-        # + task_id, no applied media_buy_id — a submitted envelope must not be
-        # mis-reconstructed as Success, whose status is Literal completed), then
-        # success (has media_buy_id; may carry NON-FATAL advisory errors, so an
-        # errors-first check would misclassify it), else error. The submitted branch
-        # serves the REST wire and the harness-synthesized A2A submitted dict —
-        # production A2A has NO submitted reconstruction (Task early-return;
-        # PR #1567 round-2 follow-up). The reconstructed union member is wrapped in
-        # the UpdateMediaBuyResult task envelope carrying the top-level wire status
-        # (#1417).
-        status = data.pop("status", "completed")
-        response: UpdateMediaBuySubmitted | UpdateMediaBuySuccess | UpdateMediaBuyError
-        if status == "submitted":
-            response = UpdateMediaBuySubmitted(status=status, **data)
-        elif "media_buy_id" in data:
-            # Bare construction on purpose, not carrier(): this reconstructs a response
-            # FROM THE WIRE, so a missing spec-required `revision` must raise here rather
-            # than be filled in with a placeholder that hides the gap.
-            response = UpdateMediaBuySuccess(**data)
-        else:
-            response = UpdateMediaBuyError(**data)
-        return UpdateMediaBuyResult(response=response, status=status)
+        ``UpdateMediaBuyResult.revive`` is production's own discrimination, so every
+        transport hands steps the branch production would resolve rather than a
+        harness copy of that rule which can disagree with it.
+        """
+        from src.core.schemas._base import UpdateMediaBuyResult
+
+        return UpdateMediaBuyResult.revive(data)

@@ -568,7 +568,7 @@ class TestSyncCreativesAuth:
         Existing: test_sync_creatives_auth.py::test_sync_creatives_requires_authentication
         Covers: UC-006-EXT-A-01
         """
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         with pytest.raises(AdCPAuthenticationError):
             _sync_creatives_impl(req=sync_creatives_request(creatives=[creative_payload(creative_id="c1")]))
@@ -579,7 +579,7 @@ class TestSyncCreativesAuth:
         Spec: UNSPECIFIED (implementation-defined security boundary).
         Covers: UC-006-EXT-A-01
         """
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         identity = PrincipalFactory.make_identity(
             principal_id=None,
@@ -597,7 +597,7 @@ class TestSyncCreativesAuth:
         Spec: UNSPECIFIED (implementation-defined security boundary).
         Covers: UC-006-EXT-B-01
         """
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         identity = PrincipalFactory.make_identity(
             principal_id="p1",
@@ -620,7 +620,7 @@ class TestSyncCreativesAuth:
 
         Covers: UC-006-EXT-A-02
         """
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         # Multiple creatives -- none should be processed
         # Spec-legal items. They were {"creative_id", "name", "assets": {}} stubs, which
@@ -642,7 +642,7 @@ class TestSyncCreativesAuth:
 
         Covers: UC-006-EXT-B-02
         """
-        from src.core.tools.creatives import _sync_creatives_impl
+        from src.core.tools.creatives._sync import _sync_creatives_impl
 
         identity = PrincipalFactory.make_identity(
             principal_id="p1",

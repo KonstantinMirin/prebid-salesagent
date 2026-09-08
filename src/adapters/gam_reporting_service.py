@@ -431,8 +431,7 @@ class GAMReportingService:
             # branch's migration off `raise Exception(...)` buys nothing
             # observable: the buyer sees the same relabelled string either way,
             # minus `attempts`, `last_status` and the operator-endpoint terminal
-            # classification. (AdCPSalesAgentError is this branch's name for the
-            # base class origin/main spelled AdCPError.)
+            # classification.
             raise
 
         except Exception as e:

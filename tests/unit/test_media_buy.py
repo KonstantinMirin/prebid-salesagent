@@ -59,7 +59,14 @@ from src.core.schemas import (
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools._boundary import invoke_tool
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
-from tests.helpers.delivery_pricing import delivery_packages, delivery_pricing_options, package_pricing_fields
+from tests.factories.media_buy import (
+    default_request_packages,
+    package_pricing_fields,
+    pricing_options_for,
+    pricing_options_named,
+    request_package,
+)
+from tests.factories.product import PricingOptionFactory
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -190,10 +197,7 @@ def _mock_media_buy(
     buy.end_time = None
     buy.created_at = datetime.now(UTC)
     buy.updated_at = datetime.now(UTC)
-    # The package names a pricing option, because ``package-request.json`` REQUIRES one —
-    # a buy without it is a shape ``create_media_buy`` cannot store, and delivery rightly
-    # refuses to report on a package it cannot price.
-    buy.raw_request = {"packages": delivery_packages("pkg_1")}
+    buy.raw_request = {"packages": default_request_packages()}
     buy.status = "active"
     return buy
 
@@ -316,7 +320,7 @@ class TestCreateMediaBuyResponseShapes:
         """
         from src.core.schemas import Error
 
-        resp = CreateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="msg")])
+        resp = CreateMediaBuyError(status="failed", errors=[Error(code="VALIDATION_ERROR", message="msg")])
         assert resp.errors is not None
         assert len(resp.errors) == 1
 
@@ -334,58 +338,30 @@ class TestCreateMediaBuyResponseShapes:
         dumped = resp.model_dump()
         assert "workflow_step_id" not in dumped
 
-    def test_result_wrapper_supports_tuple_unpacking(self):
-        """UC-002-R04: CreateMediaBuyResult supports (response, status) unpacking.
+    def test_body_carries_status_beside_the_domain_fields(self):
+        """The buyer receives ONE flat document: envelope fields at the root, not nested.
 
-        Spec: UNSPECIFIED (implementation-defined result wrapper pattern)
+        Spec: create-media-buy-response.json composes core/protocol-envelope.json at its root
+        via ``allOf``, so ``status`` is a sibling of ``media_buy_id``, not a wrapper around it.
         Covers: UC-002-MAIN-21
         """
-        success = _make_success(media_buy_id="mb_1")
-        result = CreateMediaBuyResult(status="completed", response=success)
-        response, status = result
-        assert status == "completed"
-        assert response.media_buy_id == "mb_1"
-
-    def test_result_serializes_with_status_field(self):
-        """UC-002-R05: CreateMediaBuyResult.model_dump includes status at top level.
-
-        Spec: UNSPECIFIED (implementation-defined result wrapper serialization)
-        Covers: UC-002-MAIN-21
-        """
-        success = _make_success(media_buy_id="mb_1")
-        result = CreateMediaBuyResult(status="completed", response=success)
-        dumped = result.model_dump()
+        dumped = _make_success(media_buy_id="mb_1").model_dump()
         assert dumped["status"] == "completed"
         assert dumped["media_buy_id"] == "mb_1"
 
-    def test_result_serializes_replayed_marker_when_set(self):
-        """`replayed=True` surfaces as a top-level boolean; omitted when False.
+    def test_replayed_marks_a_replay_and_is_false_on_a_fresh_response(self):
+        """``replayed`` distinguishes a cached answer from a fresh one.
 
-        Spec: AdCP 3.0.1 idempotency — a replayed cached success carries a
-        top-level ``replayed: true`` envelope marker; fresh responses omit it
-        so they stay byte-identical. Injected at response time via
-        CreateMediaBuyResult._serialize, never stored in the cached body.
+        Spec: core/protocol-envelope.json — "Set to true when this response was returned from
+        the idempotency cache rather than from a fresh execution. Set to false (or omitted)
+        when the request was executed fresh." This seller emits ``false``, the same as its
+        other thirteen tools.
         """
-        success = _make_success(media_buy_id="mb_1")
+        assert _make_success(media_buy_id="mb_1").model_dump()["replayed"] is False
 
-        # Fresh (default): no replayed key on the wire.
-        fresh = CreateMediaBuyResult(status="completed", response=success).model_dump()
-        assert "replayed" not in fresh
-
-        # Replay: top-level replayed=True alongside status and the payload fields.
-        replay = CreateMediaBuyResult(status="completed", response=success, replayed=True).model_dump()
-        assert replay["replayed"] is True
-        assert replay["status"] == "completed"
-        assert replay["media_buy_id"] == "mb_1"
-
-    def test_replayed_defaults_false_and_preserves_unpacking(self):
-        """replayed defaults False and does not disturb (response, status) unpacking."""
-        success = _make_success(media_buy_id="mb_1")
-        result = CreateMediaBuyResult(status="completed", response=success)
-        assert result.replayed is False
-        response, status = result
-        assert status == "completed"
-        assert response.media_buy_id == "mb_1"
+        replay = _make_success(media_buy_id="mb_1")
+        replay.replayed = True
+        assert replay.model_dump()["replayed"] is True
 
 
 class TestCreateMediaBuyValidation:
@@ -1477,8 +1453,8 @@ class TestCreateMediaBuyIdempotency:
             result = await invoke_tool("create_media_buy", req, identity)
 
         assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result.response, CreateMediaBuySuccess)
-        assert result.response.media_buy_id == "mb_original_123"
+        assert isinstance(result, CreateMediaBuySuccess)
+        assert result.media_buy_id == "mb_original_123"
         assert result.status == "completed"
         assert result.replayed is True  # spec replay marker, injected at replay time (never stored)
         mock_attempts.find_by_key.assert_called_once_with(
@@ -1577,7 +1553,9 @@ class TestCreateMediaBuyAdapterInteraction:
         from src.core.schemas import Error
         from src.core.tools.media_buy_create import _execute_adapter_media_buy_creation
 
-        error_response = CreateMediaBuyError(errors=[Error(code="BUDGET_EXCEEDED", message="Budget too high")])
+        error_response = CreateMediaBuyError(
+            status="failed", errors=[Error(code="BUDGET_EXCEEDED", message="Budget too high")]
+        )
 
         mock_adapter = MagicMock()
         mock_adapter.create_media_buy.return_value = error_response
@@ -1743,7 +1721,7 @@ class TestCreateMediaBuyAdapterInteraction:
 
             # Should return a simulated success without calling adapter
             assert result is not None
-            response, status = result
+            response, status = result, result.status
             assert status == "completed"
             assert response.media_buy_id is not None
             assert response.media_buy_id.startswith("dry_run_")
@@ -1890,7 +1868,7 @@ class TestUpdateMediaBuyResponseShapes:
         """
         from src.core.schemas import Error
 
-        resp = UpdateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="fail")])
+        resp = UpdateMediaBuyError(status="failed", errors=[Error(code="VALIDATION_ERROR", message="fail")])
         dumped = resp.model_dump()
         assert "errors" in dumped
         # success fields should not be present or should be None
@@ -1994,8 +1972,8 @@ class TestUpdateMediaBuyMainFlow:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuySuccess)
-        assert result.response.media_buy_id == "mb_resolved"
+        assert isinstance(result, UpdateMediaBuySuccess)
+        assert result.media_buy_id == "mb_resolved"
 
     def test_partial_update_omitted_fields_unchanged(self):
         """UC-003-MF03: only specified fields update, rest preserved.
@@ -2085,7 +2063,7 @@ class TestUpdateMediaBuyPauseResume:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert isinstance(result, UpdateMediaBuySuccess)
         # Adapter should be called with pause action
         adapter.update_media_buy.assert_called_once_with(
             media_buy_id=ANY, action="pause_media_buy", package_id=ANY, budget=ANY, today=ANY
@@ -2151,7 +2129,7 @@ class TestUpdateMediaBuyPauseResume:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert isinstance(result, UpdateMediaBuySuccess)
         adapter.update_media_buy.assert_called_once_with(
             media_buy_id=ANY, action="resume_media_buy", package_id=ANY, budget=ANY, today=ANY
         )
@@ -2217,7 +2195,7 @@ class TestUpdateMediaBuyPauseResume:
             # Should succeed without any CurrencyLimit lookups
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert isinstance(result, UpdateMediaBuySuccess)
         # The key assertion: session.scalars should NOT be called for currency limit
         # because pause doesn't change budget or dates
         # (adapter is called directly for pause action)
@@ -2503,9 +2481,9 @@ class TestUpdateMediaBuyCreativeIds:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuySuccess)
-        assert result.response.affected_packages is not None
-        assert len(result.response.affected_packages) >= 1
+        assert isinstance(result, UpdateMediaBuySuccess)
+        assert result.affected_packages is not None
+        assert len(result.affected_packages) >= 1
         # The old assignment should have been deleted (replacement semantics)
         uow_session.delete.assert_called_with(mock_existing_assignment)
 
@@ -2865,7 +2843,7 @@ class TestUpdateMediaBuyCreativeIds:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuySuccess)
+        assert isinstance(result, UpdateMediaBuySuccess)
         # c1 and c3 should be deleted (removed)
         deleted_ids = {call.args[0].creative_id for call in uow_session.delete.call_args_list}
         assert "c1" in deleted_ids
@@ -3099,10 +3077,10 @@ class TestUpdateMediaBuyManualApproval:
         # + task_id), not a completed success (which would falsely claim the update was
         # applied), carried in the UpdateMediaBuyResult protocol envelope (#1417). The
         # workflow step is marked requires_approval.
-        assert isinstance(result.response, UpdateMediaBuySubmitted)
+        assert isinstance(result, UpdateMediaBuySubmitted)
         assert result.status == "submitted"
-        assert result.response.status == "submitted"
-        assert result.response.task_id == "step_1"
+        assert result.status == "submitted"
+        assert result.task_id == "step_1"
         ctx_mgr.audit_workflow_step_result.assert_called_once_with(
             ANY, ANY, status="requires_approval", request_obj=ANY, add_comment=ANY
         )
@@ -3171,7 +3149,7 @@ class TestUpdateMediaBuyManualApproval:
         # Spec 3.1.1: a pending-approval update is the SUBMITTED variant, carried in the
         # UpdateMediaBuyResult protocol envelope (#1417). implementation_date is not part
         # of that envelope (the update is not yet applied), so it is absent/None.
-        assert isinstance(result.response, UpdateMediaBuySubmitted)
+        assert isinstance(result, UpdateMediaBuySubmitted)
         assert result.status == "submitted"
         dumped = result.model_dump()
         assert dumped["status"] == "submitted"
@@ -3200,6 +3178,7 @@ class TestUpdateMediaBuyAdapterFailure:
         identity = _make_identity()
 
         adapter_error = UpdateMediaBuyError(
+            status="failed",
             errors=[Error(code="ACTIVATION_WORKFLOW_FAILED", message="Network timeout")],
         )
 
@@ -3241,8 +3220,8 @@ class TestUpdateMediaBuyAdapterFailure:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuyError)
-        assert len(result.response.errors) >= 1
+        assert isinstance(result, UpdateMediaBuyError)
+        assert len(result.errors) >= 1
 
     def test_no_db_changes_on_adapter_failure(self):
         """UC-003-AF02: adapter failure means no DB records updated.
@@ -3282,6 +3261,7 @@ class TestUpdateMediaBuyAdapterFailure:
         # and the adapter's own diagnostic reaches the operator through the
         # exception and the logs, not through a hand-built buyer-facing advisory.
         adapter_error = UpdateMediaBuyError(
+            status="failed",
             errors=[Error(code="SERVICE_UNAVAILABLE", details={"adapter": "gam"})],
         )
 
@@ -3326,7 +3306,7 @@ class TestUpdateMediaBuyAdapterFailure:
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result.response, UpdateMediaBuyError)
+        assert isinstance(result, UpdateMediaBuyError)
         ctx_mgr.audit_workflow_step_result.assert_called_once_with(
             "step_1", ANY, status="failed", error_message=CODE_TABLE["SERVICE_UNAVAILABLE"].message
         )
@@ -3348,6 +3328,7 @@ class TestDeliveryImplSingleBuy:
         Ported from test_delivery_behavioral.py::test_single_buy_returns_complete_response
         """
         buy = _mock_media_buy(start_date=date.today() - timedelta(days=5))
+        buy.raw_request = {"packages": [request_package(package_id="pkg_1", product_id="prod_1")]}
 
         adapter_response = AdapterGetMediaBuyDeliveryResponse(
             media_buy_id="mb_1",
@@ -3366,7 +3347,9 @@ class TestDeliveryImplSingleBuy:
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
-            patch(f"{_PATCH}._get_pricing_options", return_value=delivery_pricing_options()),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3399,6 +3382,7 @@ class TestDeliveryImplSingleBuy:
         Source: UC-004 main flow, BR-RULE-030
         """
         buy = _mock_media_buy(media_buy_id="mb_1")
+        buy.raw_request = {"packages": [request_package(package_id="pkg_1", product_id="prod_1")]}
 
         adapter_response = AdapterGetMediaBuyDeliveryResponse(
             media_buy_id="mb_1",
@@ -3417,7 +3401,9 @@ class TestDeliveryImplSingleBuy:
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
-            patch(f"{_PATCH}._get_pricing_options", return_value=delivery_pricing_options()),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3448,9 +3434,9 @@ class TestDeliveryImplSingleBuy:
         Source: UC-004 main flow
         """
         buy1 = _mock_media_buy(media_buy_id="mb_1", start_date=date.today() - timedelta(days=5))
-        buy1.raw_request = {"packages": delivery_packages("pkg_1")}
+        buy1.raw_request = {"packages": [request_package(package_id="pkg_1", product_id="prod_1")]}
         buy2 = _mock_media_buy(media_buy_id="mb_2", start_date=date.today() - timedelta(days=3))
-        buy2.raw_request = {"packages": delivery_packages("pkg_2")}
+        buy2.raw_request = {"packages": [request_package(package_id="pkg_2", product_id="prod_2")]}
 
         adapter_resp1 = AdapterGetMediaBuyDeliveryResponse(
             media_buy_id="mb_1",
@@ -3479,7 +3465,9 @@ class TestDeliveryImplSingleBuy:
                 f"{_PATCH}._get_target_media_buys",
                 return_value=[("mb_1", buy1), ("mb_2", buy2)],
             ),
-            patch(f"{_PATCH}._get_pricing_options", return_value=delivery_pricing_options()),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3512,9 +3500,9 @@ class TestDeliveryImplSingleBuy:
         Source: UC-004 main flow, BR-RULE-030
         """
         buy1 = _mock_media_buy(media_buy_id="mb_1", start_date=date.today() - timedelta(days=5))
-        buy1.raw_request = {"packages": delivery_packages("pkg_1")}
+        buy1.raw_request = {"packages": [request_package(package_id="pkg_1", product_id="prod_1")]}
         buy2 = _mock_media_buy(media_buy_id="mb_2", start_date=date.today() - timedelta(days=3))
-        buy2.raw_request = {"packages": delivery_packages("pkg_2")}
+        buy2.raw_request = {"packages": [request_package(package_id="pkg_2", product_id="prod_2")]}
 
         adapter_resp1 = AdapterGetMediaBuyDeliveryResponse(
             media_buy_id="mb_1",
@@ -3543,7 +3531,9 @@ class TestDeliveryImplSingleBuy:
                 f"{_PATCH}._get_target_media_buys",
                 return_value=[("mb_1", buy1), ("mb_2", buy2)],
             ),
-            patch(f"{_PATCH}._get_pricing_options", return_value=delivery_pricing_options()),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3566,134 +3556,6 @@ class TestDeliveryImplSingleBuy:
 class TestDeliveryImplStatusFilter:
     """UC-004 alt-filtered: status-based delivery filtering."""
 
-    def test_filter_active(self):
-        """UC-004-SF01: active filter returns only active buys.
-
-        Spec: CONFIRMED -- get-media-buy-delivery-request.json has status_filter property
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/get-media-buy-delivery-request.json
-        Priority: P1
-        Type: unit
-        Source: UC-004 alt-filtered
-        """
-        from adcp.types import MediaBuyStatus
-
-        # Only the active buy should appear, not the completed one
-        active_buy = _mock_media_buy(media_buy_id="mb_active", start_date=date.today() - timedelta(days=5))
-        active_buy.raw_request = {"packages": delivery_packages("pkg_1")}
-
-        adapter_resp = AdapterGetMediaBuyDeliveryResponse(
-            media_buy_id="mb_active",
-            reporting_period=ReportingPeriod(start=datetime.now(UTC) - timedelta(days=5), end=datetime.now(UTC)),
-            totals=DeliveryTotals(impressions=500, spend=25.0),
-            by_package=[AdapterPackageDelivery(package_id="pkg_1", impressions=500, spend=25.0)],
-            currency="USD",
-        )
-
-        identity = _make_identity()
-        adapter_mock = MagicMock()
-        adapter_mock.get_media_buy_delivery.return_value = adapter_resp
-
-        _PATCH = "src.core.tools.media_buy_delivery"
-        with (
-            patch("src.core.auth.get_principal_object") as mock_principal,
-            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
-            patch(
-                f"{_PATCH}._get_target_media_buys",
-                return_value=[("mb_active", active_buy)],
-            ) as mock_get_buys,
-            patch(f"{_PATCH}._get_pricing_options", return_value=delivery_pricing_options()),
-            patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
-        ):
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
-            mock_uow_inst = MagicMock()
-            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
-            mock_uow_inst.__exit__ = MagicMock(return_value=False)
-            mock_uow_inst.media_buys = MagicMock()
-            mock_uow_cls.return_value = mock_uow_inst
-
-            req = GetMediaBuyDeliveryRequest(
-                status_filter=MediaBuyStatus.active,
-                start_date="2025-01-01",
-                end_date="2025-06-30",
-            )
-            resp = _get_media_buy_delivery_impl(req, identity)
-
-            assert isinstance(resp, GetMediaBuyDeliveryResponse)
-            # _get_target_media_buys handles filtering; verify it was called with the right request
-            call_args = mock_get_buys.call_args
-            passed_req = call_args[0][0]
-            assert passed_req.status_filter == MediaBuyStatus.active
-            assert len(resp.media_buy_deliveries) == 1
-
-    def test_filter_all(self):
-        """UC-004-SF02: 'all' returns all statuses.
-
-        Spec: CONFIRMED -- get-media-buy-delivery-request.json status_filter uses media-buy-status enum
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/get-media-buy-delivery-request.json
-        Priority: P2
-        Type: unit
-        Source: UC-004 alt-filtered
-        """
-        # Two buys: one active, one completed
-        active_buy = _mock_media_buy(media_buy_id="mb_active", start_date=date.today() - timedelta(days=5))
-        active_buy.raw_request = {"packages": delivery_packages("pkg_1")}
-        completed_buy = _mock_media_buy(
-            media_buy_id="mb_done",
-            start_date=date.today() - timedelta(days=60),
-            end_date=date.today() - timedelta(days=30),
-        )
-        completed_buy.raw_request = {"packages": delivery_packages("pkg_2")}
-
-        adapter_resp1 = AdapterGetMediaBuyDeliveryResponse(
-            media_buy_id="mb_active",
-            reporting_period=ReportingPeriod(start=datetime.now(UTC) - timedelta(days=5), end=datetime.now(UTC)),
-            totals=DeliveryTotals(impressions=500, spend=25.0),
-            by_package=[AdapterPackageDelivery(package_id="pkg_1", impressions=500, spend=25.0)],
-            currency="USD",
-        )
-        adapter_resp2 = AdapterGetMediaBuyDeliveryResponse(
-            media_buy_id="mb_done",
-            reporting_period=ReportingPeriod(start=datetime.now(UTC) - timedelta(days=60), end=datetime.now(UTC)),
-            totals=DeliveryTotals(impressions=2000, spend=100.0),
-            by_package=[AdapterPackageDelivery(package_id="pkg_2", impressions=2000, spend=100.0)],
-            currency="USD",
-        )
-
-        identity = _make_identity()
-        adapter_mock = MagicMock()
-        adapter_mock.get_media_buy_delivery.side_effect = [adapter_resp1, adapter_resp2]
-
-        _PATCH = "src.core.tools.media_buy_delivery"
-        with (
-            patch("src.core.auth.get_principal_object") as mock_principal,
-            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
-            patch(
-                f"{_PATCH}._get_target_media_buys",
-                return_value=[("mb_active", active_buy), ("mb_done", completed_buy)],
-            ) as mock_get_buys,
-            patch(f"{_PATCH}._get_pricing_options", return_value=delivery_pricing_options()),
-            patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
-        ):
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
-            mock_uow_inst = MagicMock()
-            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
-            mock_uow_inst.__exit__ = MagicMock(return_value=False)
-            mock_uow_inst.media_buys = MagicMock()
-            mock_uow_cls.return_value = mock_uow_inst
-
-            from adcp.types import MediaBuyStatus as MBS
-
-            # "all" is not a valid enum value; use a list of all statuses
-            req = GetMediaBuyDeliveryRequest(
-                status_filter=[MBS.active, MBS.completed, MBS.pending_start, MBS.paused],
-                start_date="2025-01-01",
-                end_date="2025-06-30",
-            )
-            resp = _get_media_buy_delivery_impl(req, identity)
-
-            assert isinstance(resp, GetMediaBuyDeliveryResponse)
-            assert len(resp.media_buy_deliveries) == 2
-
     def test_default_filter_is_active(self):
         """UC-004-SF03: no status_filter defaults to active only.
 
@@ -3710,7 +3572,9 @@ class TestDeliveryImplStatusFilter:
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]) as mock_get_buys,
-            patch(f"{_PATCH}._get_pricing_options", return_value=delivery_pricing_options()),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3752,7 +3616,9 @@ class TestDeliveryImplStatusFilter:
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             # No buys match the status filter — returns empty, not error
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
-            patch(f"{_PATCH}._get_pricing_options", return_value=delivery_pricing_options()),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3793,7 +3659,9 @@ class TestDeliveryImplDateRange:
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
-            patch(f"{_PATCH}._get_pricing_options", return_value=delivery_pricing_options()),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3836,7 +3704,9 @@ class TestDeliveryImplDateRange:
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
-            patch(f"{_PATCH}._get_pricing_options", return_value=delivery_pricing_options()),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3928,6 +3798,7 @@ class TestDeliveryImplErrors:
         Source: UC-004 ext-f
         """
         buy = _mock_media_buy(media_buy_id="mb_1", start_date=date.today() - timedelta(days=5))
+        buy.raw_request = {"packages": [request_package(package_id="pkg_1", product_id="prod_1")]}
 
         identity = _make_identity()
         adapter_mock = MagicMock()
@@ -3938,7 +3809,9 @@ class TestDeliveryImplErrors:
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
-            patch(f"{_PATCH}._get_pricing_options", return_value=delivery_pricing_options()),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -3974,7 +3847,9 @@ class TestDeliveryImplErrors:
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
-            patch(f"{_PATCH}._get_pricing_options", return_value=delivery_pricing_options()),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="different_principal")
@@ -4010,20 +3885,19 @@ class TestDeliveryImplPricingLookup:
         """
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
-        mock_po = MagicMock()
-        mock_po.id = 42
-        mock_po.pricing_model = "cpm"
-        mock_po.currency = "USD"
-        mock_po.is_fixed = True
-        mock_po.tenant_id = "test_tenant"
+        # A real (unpersisted) row. A bare MagicMock fabricates every attribute it is
+        # asked for, ``root`` included — so the RootModel unwrap production performs
+        # returns a child mock and the id is built from Mock repr, not from these values.
+        pricing_option = PricingOptionFactory.build(id=42, pricing_model="cpm", currency="USD", is_fixed=True)
+        pricing_option.tenant_id = "test_tenant"
 
         mock_repo = MagicMock()
-        mock_repo.get_all_pricing_options.return_value = [mock_po]
+        mock_repo.get_all_pricing_options.return_value = [pricing_option]
 
         result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant", product_repo=mock_repo)
 
         assert "cpm_usd_fixed" in result
-        assert result["cpm_usd_fixed"] == mock_po
+        assert result["cpm_usd_fixed"] == pricing_option
 
     def test_delivery_spend_with_correct_pricing(self):
         """UC-004-PL02: spend computed from rate and impressions.
@@ -4034,7 +3908,7 @@ class TestDeliveryImplPricingLookup:
         Source: UC-004,
         """
         buy = _mock_media_buy(media_buy_id="mb_1", start_date=date.today() - timedelta(days=5))
-        buy.raw_request = {"packages": delivery_packages("pkg_1", pricing_option_id="po_42")}
+        buy.raw_request = {"packages": [request_package(package_id="pkg_1", product_id="prod_1")]}
 
         adapter_resp = AdapterGetMediaBuyDeliveryResponse(
             media_buy_id="mb_1",
@@ -4053,10 +3927,7 @@ class TestDeliveryImplPricingLookup:
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
-            patch(
-                f"{_PATCH}._get_pricing_options",
-                return_value=delivery_pricing_options("po_42", pricing_model="cpm", rate="5.00"),
-            ),
+            patch(f"{_PATCH}._get_pricing_options", return_value=pricing_options_named(rate="5.00")),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")
@@ -4123,6 +3994,10 @@ class TestDeliveryResponseSerialization:
                     status="active",
                     totals=DeliveryTotals(impressions=1000, spend=50.0),
                     by_package=[
+                        # pricing_model, rate and currency are on the pinned by_package
+                        # item's required set (get-media-buy-delivery-response.json), so
+                        # a hand-built entry that omits them is not a document a buyer
+                        # can receive.
                         PackageDelivery(
                             package_id="pkg_1",
                             impressions=1000.0,
@@ -4444,7 +4319,7 @@ class TestBRRule018AtomicResponse:
         """
         from src.core.schemas import Error
 
-        resp = CreateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="fail")])
+        resp = CreateMediaBuyError(status="failed", errors=[Error(code="VALIDATION_ERROR", message="fail")])
         dumped = resp.model_dump()
         # media_buy_id should not be set or should be None
         assert dumped.get("media_buy_id") is None
@@ -4469,7 +4344,7 @@ class TestBRRule018AtomicResponse:
         """
         from src.core.schemas import Error
 
-        resp = UpdateMediaBuyError(errors=[Error(code="VALIDATION_ERROR", message="fail")])
+        resp = UpdateMediaBuyError(status="failed", errors=[Error(code="VALIDATION_ERROR", message="fail")])
         dumped = resp.model_dump()
         assert dumped.get("affected_packages") is None
 
@@ -4506,6 +4381,7 @@ class TestBRRule043ContextEcho:
         from src.core.schemas import Error
 
         err_resp = CreateMediaBuyError(
+            status="failed",
             errors=[Error(code="VALIDATION_ERROR", message="fail")],
             context=context_obj,
         )
@@ -4533,7 +4409,9 @@ class TestBRRule043ContextEcho:
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
-            patch(f"{_PATCH}._get_pricing_options", return_value=delivery_pricing_options()),
+            patch(
+                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+            ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
             mock_principal.return_value = MagicMock(principal_id="test_principal")

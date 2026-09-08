@@ -18,7 +18,7 @@ from src.core.schemas import (
     GetProductsRequest,
     ReportingPeriod,
 )
-from tests.helpers.delivery_pricing import delivery_packages, delivery_pricing_options
+from tests.factories.media_buy import pricing_options_for, request_package
 
 
 class TestDeliveryLoopErrorHandling:
@@ -62,7 +62,9 @@ class TestDeliveryLoopErrorHandling:
         good_buy.start_date = date.today() - timedelta(days=5)
         good_buy.end_date = date.today() + timedelta(days=5)
         good_buy.budget = "1000.00"
-        good_buy.raw_request = {"packages": delivery_packages("pkg1")}
+        good_buy.raw_request = {
+            "packages": [request_package(package_id="pkg1", product_id="prod1")],
+        }
 
         bad_buy = MagicMock()
         # This will raise when accessed in the loop (e.g., start_date raises)
@@ -75,10 +77,9 @@ class TestDeliveryLoopErrorHandling:
 
         target_buys = [("mb_good", good_buy), ("mb_bad", bad_buy)]
 
-        # A REAL adapter response, for the same reason bad_buy carries a real status: a bare
-        # MagicMock makes `totals.viewability` a MagicMock, DeliveryTotals rejects it, and
-        # BOTH buys land in the error path — so the test passes or fails on mock leakage
-        # rather than on the corruption it is about.
+        # A real adapter document, not a bare MagicMock: every metric the response model
+        # reads off it is typed, and a MagicMock attribute fails that validation — which
+        # would fail the GOOD buy too and make this test green for the wrong reason.
         adapter = MagicMock()
         adapter.get_media_buy_delivery.return_value = AdapterGetMediaBuyDeliveryResponse(
             media_buy_id="mb_good",
@@ -90,6 +91,7 @@ class TestDeliveryLoopErrorHandling:
 
         mock_repo = MagicMock()
         mock_repo.get_packages.return_value = []
+        mock_repo.get_packages_for_ids.return_value = {}
 
         mock_uow = MagicMock()
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
@@ -103,7 +105,7 @@ class TestDeliveryLoopErrorHandling:
             patch("src.core.tools.media_buy_delivery._get_target_media_buys", return_value=target_buys),
             patch(
                 "src.core.tools.media_buy_delivery._get_pricing_options",
-                return_value=delivery_pricing_options(),
+                side_effect=lambda option_ids, **_: pricing_options_for(option_ids),
             ),
         ):
             response = _get_media_buy_delivery_impl(req, identity)

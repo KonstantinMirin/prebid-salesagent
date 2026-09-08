@@ -586,7 +586,8 @@ def _update_media_buy_impl(
                     errors=property_list_unsupported_advisories(req.packages, adapter),
                 )
 
-                return UpdateMediaBuyResult(response=dry_run_response, status=AdcpTaskStatus.completed.value)
+                dry_run_response.status = AdcpTaskStatus.completed
+                return dry_run_response
 
             # Type narrowing: after dry_run early return, step and persistent_ctx are guaranteed to exist
             assert step is not None, "step should be created when not in dry_run mode"
@@ -632,7 +633,8 @@ def _update_media_buy_impl(
                 )
                 session.add(mapping)
 
-                return UpdateMediaBuyResult(response=approval_response, status=AdcpTaskStatus.submitted.value)
+                approval_response.status = AdcpTaskStatus.submitted
+                return approval_response
 
             # Validate currency limits if flight dates or budget changes
             # This prevents workarounds where buyers extend flight to bypass daily max
@@ -719,6 +721,7 @@ def _update_media_buy_impl(
                 if isinstance(result, UpdateMediaBuyError) and result.errors:
                     error_response = UpdateMediaBuyError(
                         errors=result.errors,
+                        status=AdcpTaskStatus.failed,
                         message=f"Media buy update encountered {len(result.errors)} error(s)."
                         if result.errors
                         else "Media buy update failed.",
@@ -729,7 +732,7 @@ def _update_media_buy_impl(
                         status="failed",
                         error_message=result.errors[0].message if result.errors else "Pause/resume failed",
                     )
-                    return UpdateMediaBuyResult(response=error_response, status=AdcpTaskStatus.failed.value)
+                    return error_response
                 else:
                     # UpdateMediaBuySuccess extends adcp v1.2.1 with internal fields
                     # Use getattr to safely access discriminated union fields
@@ -780,7 +783,8 @@ def _update_media_buy_impl(
                         },
                     )
                     ctx_manager.audit_workflow_step_result(step.step_id, success_response)
-                    return UpdateMediaBuyResult(response=success_response, status=AdcpTaskStatus.completed.value)
+                    success_response.status = AdcpTaskStatus.completed
+                    return success_response
 
             # Handle package-level updates
             if req.packages:
@@ -808,6 +812,7 @@ def _update_media_buy_impl(
                             )
                             response_data = UpdateMediaBuyError(
                                 errors=result.errors,
+                                status=AdcpTaskStatus.failed,
                                 message=f"Media buy update encountered {len(result.errors)} error(s)."
                                 if result.errors
                                 else "Media buy update failed.",
@@ -818,7 +823,7 @@ def _update_media_buy_impl(
                                 status="failed",
                                 error_message=error_message,
                             )
-                            return UpdateMediaBuyResult(response=response_data, status=AdcpTaskStatus.failed.value)
+                            return response_data
 
                     # Handle budget updates
                     if pkg_update.budget is not None:
@@ -900,6 +905,7 @@ def _update_media_buy_impl(
                             )
                             response_data = UpdateMediaBuyError(
                                 errors=result.errors,
+                                status=AdcpTaskStatus.failed,
                                 message=f"Media buy update encountered {len(result.errors)} error(s)."
                                 if result.errors
                                 else "Media buy update failed.",
@@ -910,7 +916,7 @@ def _update_media_buy_impl(
                                 status="failed",
                                 error_message=error_message,
                             )
-                            return UpdateMediaBuyResult(response=response_data, status=AdcpTaskStatus.failed.value)
+                            return response_data
 
                         # Track budget update in affected_packages
                         # At this point, pkg_update.package_id is guaranteed to be str (checked above)
@@ -1429,7 +1435,8 @@ def _update_media_buy_impl(
             # Use mode="json" to ensure enums are serialized as strings for JSONB storage
             ctx_manager.audit_workflow_step_result(step.step_id, final_response)
 
-        return UpdateMediaBuyResult(response=final_response, status=AdcpTaskStatus.completed.value)
+        final_response.status = AdcpTaskStatus.completed
+        return final_response
 
 
 def _normalize_pacing(pacing: str | None) -> Literal["even", "asap", "daily_budget"]:

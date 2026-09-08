@@ -73,7 +73,7 @@ class TestIdempotencyWireMatrix:
             assert first.payload.replayed is False
             assert second.payload.replayed is True
             # Verbatim: same buy, same protocol status.
-            assert second.payload.response.media_buy_id == first.payload.response.media_buy_id
+            assert second.payload.media_buy_id == first.payload.media_buy_id
             assert second.payload.status == first.payload.status
             # The handler was NOT re-invoked for the replay (storyboard's
             # no-duplicate-side-effects invariant).
@@ -89,7 +89,7 @@ class TestIdempotencyWireMatrix:
                     key, env._principal_id, account_id=DEFAULT_TEST_ACCOUNT_ID
                 )
                 assert existing is not None
-                assert existing.media_buy_id == first.payload.response.media_buy_id
+                assert existing.media_buy_id == first.payload.media_buy_id
 
             if transport is Transport.REST:
                 # Byte-level wire check: the replay body is the original body
@@ -140,7 +140,7 @@ class TestIdempotencyWireMatrix:
             assert second.is_success, f"fresh-key create failed on {transport.value}: {second.error}"
 
         assert second.payload.replayed is False, "a fresh key must never replay"
-        assert second.payload.response.media_buy_id != first.payload.response.media_buy_id
+        assert second.payload.media_buy_id != first.payload.media_buy_id
 
     def test_expired_replay_window_rejects(self, integration_db, transport):
         """A retry after the replay window has expired rejects with
@@ -220,7 +220,7 @@ class TestA2ADefaultsDoNotBreakReplay:
             second = env.call_via(Transport.A2A, **dict(kwargs))
             assert second.is_success, f"identical A2A retry must replay, got: {second.error}"
             assert second.payload.replayed is True
-            assert second.payload.response.media_buy_id == first.payload.response.media_buy_id
+            assert second.payload.media_buy_id == first.payload.media_buy_id
 
 
 @pytest.mark.parametrize("transport", [Transport.A2A, Transport.MCP], ids=lambda t: t.value)
@@ -284,7 +284,7 @@ class TestCaptureUniformity:
             "identical payload dicts must hash equal across transports -- "
             "a transport-specific capture point (normalized vs raw) breaks this"
         )
-        assert second.payload.response.media_buy_id == first.payload.response.media_buy_id
+        assert second.payload.media_buy_id == first.payload.media_buy_id
 
 
 class TestHashInputIsTheValidatedRequest:
@@ -348,7 +348,7 @@ class TestHashInputIsTheValidatedRequest:
             "the digest is taken after validation, so the two spellings are one payload -- "
             "see this class's docstring for the divergence from the strict wire reading"
         )
-        assert second.payload.response.media_buy_id == first.payload.response.media_buy_id
+        assert second.payload.media_buy_id == first.payload.media_buy_id
 
     def test_a_genuinely_different_payload_still_conflicts(self, integration_db):
         """The permissive reading is about ENCODING only -- a real field change still conflicts.

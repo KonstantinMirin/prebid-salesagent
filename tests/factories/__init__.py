@@ -43,6 +43,7 @@ from tests.factories.request import (
     CreativeAssetRequestFactory,
     ListAccountsRequestFactory,
     ListCreativeFormatsRequestFactory,
+    PackageRequestFactory,
     SyncAccountsRequestFactory,
     SyncCreativesRequestFactory,
 )
@@ -108,6 +109,7 @@ __all__ = [
     "FormatPerformanceMetricsFactory",
     "MediaBuyFactory",
     "MediaPackageFactory",
+    "PackageRequestFactory",
     "PricingOptionFactory",
     "PricingOptionRequestFactory",
     "PrincipalFactory",

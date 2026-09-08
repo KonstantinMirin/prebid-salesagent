@@ -155,7 +155,7 @@ def test_update_media_buy_with_database_persisted_buy(test_tenant_setup):
 
     # Verify response
     assert isinstance(result, UpdateMediaBuyResult)
-    response = result.response  # _impl returns UpdateMediaBuyResult; domain response is on .response
+    response = result  # _impl returns UpdateMediaBuyResult; domain response is on .response
     assert isinstance(response, UpdateMediaBuyResponse)
     assert response.media_buy_id == media_buy_id
 

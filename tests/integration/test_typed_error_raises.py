@@ -27,12 +27,10 @@ import pytest
 
 from src.core.exceptions import (
     AdCPBudgetTooLowError,
-    AdCPCapabilityNotSupportedError,
     AdCPMediaBuyNotFoundError,
 )
-from src.core.schemas import CreateMediaBuyRequest, GetMediaBuysRequest, UpdateMediaBuyRequest
+from src.core.schemas import CreateMediaBuyRequest, UpdateMediaBuyRequest
 from src.core.tools.media_buy_create import _create_media_buy_impl
-from src.core.tools.media_buy_list import _get_media_buys_impl
 from src.core.tools.media_buy_update import _update_media_buy_impl
 from tests.helpers.adcp_factories import create_test_package_request_dict
 from tests.integration.conftest import seed_error_test_tenant
@@ -126,30 +124,7 @@ class TestTypedAdCPErrorRaises:
         # AdCPMediaBuyNotFoundError overrides AdCPNotFoundError's terminal default
         # because the buyer can correct by supplying the right media_buy_id.
 
-    def test_account_filter_unsupported_raises_typed_subclass(self):
-        """``_get_media_buys_impl`` raises ``AdCPCapabilityNotSupportedError``.
-
-        Pins the specific subclass so the wire code is
-        ``UNSUPPORTED_FEATURE`` (not the generic ``VALIDATION_ERROR``).
-        Recovery is ``correctable`` per the documented spec divergence
-        (the buyer can drop the unsupported parameter).
-        """
-        # No DB setup needed — the unsupported-feature check fires before any DB access.
-        from tests.factories import PrincipalFactory
-
-        identity = PrincipalFactory.make_identity(
-            tenant_id="any_tenant",
-            principal_id="any_principal",
-            protocol="mcp",
-        )
-        # ``account``, not the deleted ``account_id``: b490a5aa1 removed the non-spec field,
-        # and media_buy_list.py:168 has always guarded on ``req.account``. The old spelling
-        # made this test die on extra_forbidden before it could reach the guard it grades.
-        req = GetMediaBuysRequest(account={"account_id": "acc_123"})
-
-        with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
-            _get_media_buys_impl(req, identity=identity)
-
-        assert exc_info.value.error_code == "UNSUPPORTED_FEATURE"
-        # Intentional spec divergence (see exceptions.py:484) — we emit
-        # correctable because the buyer can drop the unsupported parameter.
+    # test_account_filter_unsupported_raises_typed_subclass is RETIRED. It pinned the
+    # UNSUPPORTED_FEATURE refusal that 29ed12d94 removed, because
+    # get-media-buys-request.json declares ``account`` as a legal filter; e7b7d68fc
+    # retired its sibling and missed this one.

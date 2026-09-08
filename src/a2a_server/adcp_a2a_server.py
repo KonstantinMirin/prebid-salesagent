@@ -1128,8 +1128,9 @@ class AdCPRequestHandler(RequestHandler):
         ``_coerce_wire_object`` returns ``None`` for a non-dict, so where MCP and REST raised,
         A2A silently dropped -- and for the seven tools whose ``account`` is optional the
         request then proceeded with NO account scope, meaning no authorization against that
-        account and a different idempotency scope. The genuine wire-compatibility rewrites
-        moved to ``ToolSpec.validate``, the one seam every transport shares.
+        account and a different idempotency scope. What survives of that work is the
+        accepted-shape strip, and it moved onto ``BuyerRequest`` itself
+        (``src/core/schemas/_base.py``) so every transport gets it by constructing the DTO.
 
         That normalizer runs HERE rather than in ``_handle_explicit_skill``, so the two natural
         language entry points take the same steps as an explicit skill invocation. This is A2A's

@@ -315,9 +315,7 @@ def collect():
                         graded |= {n.id for n in ast.walk(st.iter) if isinstance(n, ast.Name)}
                 ungraded = [p for p in params if p not in graded]
                 if ungraded:
-                    found["param-never-graded"].append(
-                        (f"{loc} — {', '.join(ungraded)}", snippet(lines, node.lineno))
-                    )
+                    found["param-never-graded"].append((f"{loc} — {', '.join(ungraded)}", snippet(lines, node.lineno)))
 
             for sub in ast.walk(node):
                 if not isinstance(sub, ast.If):

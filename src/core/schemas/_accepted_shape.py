@@ -4,12 +4,14 @@ THE POLICY. A field our models do not declare never reaches an implementation. I
 it is a hard rejection, so a spec field we have not implemented is loud rather than silent; in
 production it is dropped, so a newer buyer is served instead of refused.
 
-WHERE IT RUNS. ``ToolSpec.validate`` -- the one seam every transport passes a parameter bag
-through. It ran in the MCP middleware alone before, which is why the same bytes had three
-meanings: dropped on MCP, rejected on A2A/REST inside an ``additionalProperties: false``
-object, and KEPT and passed to the implementation inside one that allows extras. The last of
-those also reached the idempotency digest, so a retry carrying an unknown key inside ``ext``
-was answered IDEMPOTENCY_CONFLICT instead of being replayed.
+WHERE IT RUNS. A ``mode="before"`` validator on ``BuyerRequest`` (``_base.py``), so every
+transport gets it by CONSTRUCTING the DTO and there is no call to forget. It ran in the MCP
+middleware alone before, which is why the same bytes had three meanings: dropped on MCP,
+rejected on A2A/REST inside an ``additionalProperties: false`` object, and KEPT and passed to
+the implementation inside one that allows extras. The last of those also reached the
+idempotency digest, so a retry carrying an unknown key inside ``ext`` was answered
+IDEMPOTENCY_CONFLICT instead of being replayed. Its intermediate home was
+``ToolSpec.validate``, which only A2A ever reached -- see the validator's own docstring.
 
 WHY A SCHEMA WALK AND NOT ``model_config``. Two other approaches were built and thrown away.
 Walking the DATA against the model tree meant reimplementing union resolution, ``RootModel``
@@ -31,27 +33,6 @@ import logging
 from typing import Any
 
 logger = logging.getLogger(__name__)
-
-
-def strip_unknown_params(
-    params: dict[str, Any],
-    known_params: set[str],
-) -> tuple[dict[str, Any], list[str]]:
-    """Remove fields not in known_params set.
-
-    Args:
-        params: Request parameters dict (already normalized).
-        known_params: Set of parameter names the tool function accepts.
-            Typically from tool.parameters["properties"].keys().
-
-    Returns:
-        Tuple of (cleaned dict with only known keys, sorted list of stripped key names).
-    """
-    unknown = params.keys() - known_params
-    if not unknown:
-        return params, []
-    cleaned = {k: v for k, v in params.items() if k in known_params}
-    return cleaned, sorted(unknown)
 
 
 def deep_strip_to_schema(

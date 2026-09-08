@@ -214,6 +214,19 @@ def wire_entry(ctx: dict, collection: str, *, index: int | None = None, **match:
     return _locate_entry(ctx, collection, index, match)
 
 
+def _errors_array(errors: Any, what: str) -> list:
+    """One ``errors[]`` array read off the wire, with the derived ``message`` stripped.
+
+    Sole implementation behind :func:`wire_entry_errors` and
+    :func:`wire_advisory_errors` — the strip is the reason both are GUARD-SANCTIONED
+    readers, and two copies of it would be free to drift apart.
+    """
+    assert isinstance(errors, list), f"{what} is not a JSON array on the wire: {errors!r}"
+    return [
+        {k: v for k, v in error.items() if k != "message"} if isinstance(error, dict) else error for error in errors
+    ]
+
+
 def wire_entry_errors(ctx: dict, collection: str, *, index: int | None = None, **match: Any) -> list:
     """The per-entry ``errors[]`` array of one entry, located on the wire.
 
@@ -223,18 +236,31 @@ def wire_entry_errors(ctx: dict, collection: str, *, index: int | None = None, *
     a missing-wire defect.
 
     RESTRICTED: the buyer-facing ``message`` is stripped from every entry before it is
-    returned. This is the one GUARD-SANCTIONED per-entry reader (it is blessed in the wire
+    returned. This is a GUARD-SANCTIONED per-entry reader (it is blessed in the wire
     discipline guard's ``_PRIMITIVE_FUNCTIONS``), so handing back the sentence would make it
-    the single blessed door through which a step could assert prose — the exact class this
+    a blessed door through which a step could assert prose — the exact class this
     reader is sanctioned to replace. The sentence is a function of the entry's CODE through
     CODE_TABLE, so nothing is lost: assert ``code``, ``recovery``, ``field`` or ``details``.
     """
     entry = _locate_entry(ctx, collection, index, match)
-    errors = entry.get("errors") or []
-    assert isinstance(errors, list), f"{collection} entry errors is not a JSON array on the wire: {errors!r}"
-    return [
-        {k: v for k, v in error.items() if k != "message"} if isinstance(error, dict) else error for error in errors
-    ]
+    return _errors_array(entry.get("errors") or [], f"{collection} entry errors")
+
+
+def wire_advisory_errors(ctx: dict) -> list:
+    """The response's TOP-LEVEL ``errors[]`` — the task-level advisory channel.
+
+    A successful document that still has something to report about part of what was
+    asked: ``get-media-buy-delivery-response.json`` declares the array for exactly this
+    ("Task-specific errors and warnings (e.g., missing delivery data, reporting platform
+    issues)"). Distinct from :func:`wire_entry_errors`, which reads the errors of ONE
+    entry inside a collection, and from ``assert_wire_error``, which grades a REFUSAL —
+    a response carrying advisories is not a refusal and has no error envelope at all.
+
+    Defaults to ``[]``: a request where nothing went wrong carries none, and that
+    absence is an outcome to assert on rather than a missing wire. ``message`` is
+    stripped for the same reason it is stripped per entry.
+    """
+    return _errors_array(_wire_body(ctx).get("errors") or [], "response errors")
 
 
 def wire_absent(ctx: dict, path: str) -> None:

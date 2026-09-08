@@ -581,8 +581,9 @@ class TestRestStatusCodeRoundtrip:
 #     now a TypeError, not a weaker assertion;
 #   * per-class HTTP statuses — ``AdCPAdapterError`` answers 503, not the 502
 #     origin/main asserted, because the status belongs to SERVICE_UNAVAILABLE;
-#   * ``to_dict()`` and ``AdCPError("...")`` — the method is gone and the name is
-#     an alias for the abstract base, which cannot be constructed without a code;
+#   * ``to_dict()`` and ``AdCPError("...")`` — the method is gone and the name with
+#     it; ``AdCPSalesAgentError`` is the abstract base, which cannot be constructed
+#     without a code;
 #   * ``ToolError("AUTH_REQUIRED")`` — that code is not in the merged CODE_TABLE.
 #     PERMISSION_DENIED is the code the merged mapping actually emits for the
 #     condition, and 403 is still the status being graded.

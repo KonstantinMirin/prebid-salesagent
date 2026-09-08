@@ -86,6 +86,7 @@ from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.database.repositories.delivery import POLL_SEQUENCE_TASK_TYPE, DeliveryRepository
 from src.core.database.repositories.product import ProductRepository
 from src.core.helpers.adapter_helpers import get_adapter
+from src.core.helpers.pricing_helpers import synthetic_pricing_option_id
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AggregatedTotals,
@@ -99,6 +100,7 @@ from src.core.schemas import (
     PackageDelivery,
     PlacementBreakdown,
     PricingModel,
+    Principal,
 )
 from src.core.schemas import (
     ReportingPeriod as MediaBuyReportingPeriod,
@@ -152,12 +154,11 @@ def _is_circuit_breaker_open(tenant_id: str) -> bool:
 def _get_media_buy_delivery_impl(
     req: GetMediaBuyDeliveryRequest, identity: ResolvedIdentity | None
 ) -> GetMediaBuyDeliveryResponse:
-    """Get delivery data for one or more media buys.
+    """Establish who is asking, then delegate to :func:`get_media_buy_delivery`.
 
-    AdCP-compliant implementation that handles start_date/end_date parameters
-    and returns spec-compliant response format.
+    A controller (critical pattern #5): it resolves the caller and validates what only a
+    BUYER request can get wrong, and asks nothing about how delivery is gathered.
     """
-
     # Validate identity is provided
     identity = require_identity(identity, context=req.context)
 
@@ -166,17 +167,65 @@ def _get_media_buy_delivery_impl(
     # After require_identity so an unauthenticated caller gets AUTH_REQUIRED first.
     _validate_attribution_window(req.attribution_window)
 
-    # Extract testing context for time simulation and event jumping
-    testing_ctx = identity.testing_context or AdCPTestContext()
-
     principal_id = require_principal_id(identity, context=req.context)
 
-    # Get the Principal object
-    principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
+    return get_media_buy_delivery(
+        req,
+        principal=resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context),
+        principal_id=principal_id,
+        # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+        tenant=require_tenant(identity, context=req.context),
+        testing_ctx=identity.testing_context or AdCPTestContext(),
+    )
 
-    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    tenant = require_tenant(identity, context=req.context)
 
+def delivery_for_media_buy(
+    media_buy: MediaBuy,
+    *,
+    start_date: str,
+    end_date: str,
+) -> GetMediaBuyDeliveryResponse:
+    """Delivery for ONE media buy over one window, for a SERVER-initiated read.
+
+    The entry point for callers with no buyer and no request envelope -- the delivery
+    webhook scheduler is the one today. They ask a domain question and this answers it;
+    they neither build a buyer request nor re-enter through ``_get_media_buy_delivery_impl``,
+    which would re-run an auth check that no server-initiated read can pass and skip every
+    obligation the boundary performs for the calls that do.
+
+    Statuses are active + completed: the caller has already selected serving buys from the
+    database, so an ended campaign must still report rather than come back "not found".
+    ``pending_start`` is excluded -- a future-dated buy has no delivery to report.
+    """
+    return get_media_buy_delivery(
+        GetMediaBuyDeliveryRequest(
+            media_buy_ids=[media_buy.media_buy_id],
+            status_filter=[MediaBuyStatus.active, MediaBuyStatus.completed],
+            start_date=start_date,
+            end_date=end_date,
+            context=None,
+        ),
+        principal=resolve_principal_or_raise(media_buy.principal_id, tenant_id=media_buy.tenant_id),
+        principal_id=media_buy.principal_id,
+        tenant={"tenant_id": media_buy.tenant_id},
+        testing_ctx=AdCPTestContext(),
+    )
+
+
+def get_media_buy_delivery(
+    req: GetMediaBuyDeliveryRequest,
+    *,
+    principal: "Principal",
+    principal_id: str,
+    tenant: dict[str, Any],
+    testing_ctx: AdCPTestContext,
+) -> GetMediaBuyDeliveryResponse:
+    """Gather delivery for the buys *req* names, for an already-resolved caller.
+
+    The service half of :func:`_get_media_buy_delivery_impl`. It asks nothing about
+    transports, auth or idempotency, so a server-initiated read can reach it through
+    :func:`delivery_for_media_buy` without the front door.
+    """
     # Get the appropriate adapter
     # Use testing_ctx.dry_run if in testing mode, otherwise False
     adapter = get_adapter(
@@ -1056,8 +1105,7 @@ def _get_pricing_options(
     all_options = product_repo.get_all_pricing_options()
     result: dict[str, PricingOption] = {}
     for po in all_options:
-        fixed_str = "fixed" if po.is_fixed else "auction"
-        synthetic_id = f"{po.pricing_model}_{po.currency.lower()}_{fixed_str}"
+        synthetic_id = synthetic_pricing_option_id(po)
         if synthetic_id in string_ids:
             result[synthetic_id] = po
     return result

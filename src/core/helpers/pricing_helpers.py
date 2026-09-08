@@ -1,9 +1,50 @@
 """Pricing option helper utilities.
 
-Handles the RootModel wrapper pattern used by adcp 2.14.0+ for discriminated unions.
+Handles the RootModel wrapper pattern used by adcp 2.14.0+ for discriminated unions,
+and owns the two projections of a pricing option that several callers need: the
+synthetic id a package names it by, and the ``pricing_info`` a package row stores.
 """
 
 from typing import Any
+
+
+def synthetic_pricing_option_id(pricing_option: Any) -> str:
+    """The id a package names *pricing_option* by: ``{model}_{currency}_{fixed|auction}``.
+
+    The ``pricing_options`` table has no id column, so this string IS the identifier:
+    ``get_products`` announces it, a ``PackageRequest`` names it, and
+    ``_get_pricing_options`` resolves it by rebuilding the same string from each row. Four
+    call sites built it independently and a fifth compared against them; a grammar spelled
+    five times is one edit away from a package naming an option no reader can resolve.
+
+    Accepts a RootModel-wrapped option or a bare row/model.
+    """
+    option = getattr(pricing_option, "root", pricing_option)
+    fixed_str = "fixed" if option.is_fixed else "auction"
+    return f"{option.pricing_model}_{option.currency.lower()}_{fixed_str}"
+
+
+def pricing_info_for(pricing_option: Any, *, bid_price: float | None = None) -> dict[str, Any]:
+    """The ``pricing_info`` that ``MediaPackage.package_config`` stores for a package.
+
+    NOT a spec shape: ``pricing_info`` appears in no pinned schema and is never received
+    from a buyer — ``package_config`` is an internal JSON column. What makes the shape
+    binding is its READERS: the GAM order manager and ``src/adapters/utils/pricing.py``
+    take a package's rate from ``pricing_info["bid_price"]``, so a writer that omits a key
+    silently sends every auction package down a ``.get()`` default.
+
+    ``bid_price`` is not a property of the option — it is what THIS package bid — so it is
+    supplied by the caller rather than projected. Everything else is the option's own
+    terms, unwrapped for the RootModel members adcp 2.14.0+ uses.
+    """
+    option = getattr(pricing_option, "root", pricing_option)
+    return {
+        "pricing_model": option.pricing_model,
+        "rate": float(option.rate) if option.rate else None,
+        "currency": option.currency,
+        "is_fixed": option.is_fixed,
+        "bid_price": bid_price,
+    }
 
 
 def pricing_option_has_rate(pricing_option: Any) -> bool:

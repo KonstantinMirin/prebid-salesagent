@@ -220,25 +220,10 @@ class TestA2AReRegistrationUpsertsOneRowPerUrl:
                 f"re-registering one webhook accumulates rows forever"
             )
 
-    def test_the_buyer_supplied_id_is_not_honoured(self, integration_db):
-        """The other half: a buyer naming a row must NOT get that row.
-
-        Without this, the test above would pass just as well if we HAD honoured the id --
-        one row either way. This is what makes the assertion above grade the URL key
-        specifically rather than 'some key'.
-        """
-        with MediaBuyPushRegistrationEnv() as env:
-            config = _webhook_url_of(env, _registration(row_id=BUYER_ROW_ID))
-            seeded = _seed(env)
-
-            _register_over_a2a(env, seeded, config)
-
-            rows = env.persisted_config_rows()
-            assert [r.id for r in rows] != [BUYER_ROW_ID], (
-                f"the buyer's id reached the stored row ({[r.id for r in rows]}) -- "
-                f"push-notification-config.json declares no id property, so honouring one "
-                f"means reading a field the schema does not define"
-            )
+    # test_the_buyer_supplied_id_is_not_honoured is RETIRED. It was a control for the
+    # raw-dict A2A forwarding path, and that path no longer exists: the key is refused
+    # (development) or stripped (production) before any row is written, so the control
+    # can no longer distinguish honouring the id from ignoring it.
 
 
 class TestMultiSchemeIsRefusedAtIngestAndAtRehydration:

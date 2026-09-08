@@ -22,17 +22,28 @@ def make_active_cached_success(media_buy_id: str = "mb_seeded") -> CreateMediaBu
     One construction shared by the harness seeder and the integration tests so
     the seeded shape (active status + matching valid_actions, empty packages)
     cannot drift between files.
+
+    It carries a non-fatal ``errors`` advisory because a successful buy MAY carry one --
+    ``property_list_unsupported_advisories`` puts them there -- and that is the shape
+    that separates a correct revive from a plausible one. ``create-media-buy-response``
+    discriminates its branches by required field, and the success branch is the only one
+    requiring ``media_buy_id`` while the error branch requires ``errors``; a revive that
+    keys on ``errors`` first resolves this body to the error branch. Every seeded replay
+    in the suite therefore grades the order, instead of passing on a body so plain that
+    either order works.
     """
     from adcp.server.helpers import valid_actions_for_status
     from adcp.types import MediaBuyStatus
 
-    from src.core.schemas._base import CreateMediaBuySuccess
+    from src.core.errors.codes import ErrorCode
+    from src.core.schemas._base import CreateMediaBuySuccess, Error
 
     return CreateMediaBuySuccess.carrier(
         media_buy_id=media_buy_id,
         packages=[],
         status=MediaBuyStatus.active,
         valid_actions=valid_actions_for_status(MediaBuyStatus.active.value),
+        errors=[Error.of(ErrorCode.UNSUPPORTED_FEATURE, field="packages[0].targeting_overlay.property_list")],
     )
 
 

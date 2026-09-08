@@ -22,8 +22,8 @@ from src.core.database.models import PersistedMediaBuyStatus, WebhookDeliveryLog
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import MediaBuyRepository
 from src.core.exceptions import AdCPValidationError
-from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
-from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
+from src.core.schemas import GetMediaBuyDeliveryResponse
+from src.core.tools.media_buy_delivery import delivery_for_media_buy
 from src.core.utils import utc_flight_start
 from src.core.webhooks.delivery import WebhookTaskContext
 from src.core.webhooks.registration import accept_push_notification_config
@@ -209,34 +209,11 @@ class DeliveryWebhookScheduler:
                     )
                     return
 
-            # Fetch delivery metrics
-            # Create a ResolvedIdentity for the delivery call
-            from src.core.resolved_identity import ResolvedIdentity
-
-            identity = ResolvedIdentity(
-                principal_id=media_buy.principal_id,
-                tenant_id=media_buy.tenant_id,
-                tenant={"tenant_id": media_buy.tenant_id},
-                protocol="rest",
-            )
-
-            # Include active + completed statuses: the scheduler already filters
-            # by DB status (active/approved) at query time, so the delivery impl
-            # should include ended campaigns (dynamic status=completed) rather
-            # than filtering them out and reporting "not found" errors.
-            # We exclude "pending_start" (ready) to avoid returning delivery
-            # data for future-dated campaigns that haven't started yet.
-            from adcp.types import MediaBuyStatus
-
-            req = GetMediaBuyDeliveryRequest(
-                media_buy_ids=[media_buy.media_buy_id],
-                status_filter=[MediaBuyStatus.active, MediaBuyStatus.completed],
+            delivery_response = delivery_for_media_buy(
+                media_buy,
                 start_date=start_date_obj.strftime("%Y-%m-%d"),
                 end_date=end_date_obj.strftime("%Y-%m-%d"),
-                context=None,
             )
-
-            delivery_response = _get_media_buy_delivery_impl(req, identity)
 
             if not isinstance(delivery_response, GetMediaBuyDeliveryResponse):
                 logger.warning(

@@ -626,13 +626,14 @@ Feature: BR-UC-011 Manage Accounts
   @T-UC-011-ext-b-partial @sync @partial-failure @invariant @partition @boundary
   Scenario: Sync partial_failure -- success_partial_failure with action=failed (action=failed with errors)
     Given the Buyer is authenticated
+    And the seller does not support "advertiser" billing
     When the Buyer Agent sends a sync_accounts request with:
-    | brand.domain        | operator            | billing  |
-    | acme-corp.com       | acme-corp.com       | operator |
-    | invalid-brand.test  | invalid-brand.test  | operator |
+    | brand.domain        | operator            | billing    |
+    | acme-corp.com       | acme-corp.com       | operator   |
+    | nova-motors.com     | nova-motors.com     | advertiser |
     Then the response is compliant with the sync_accounts success spec
     And the account for brand domain "acme-corp.com" has action "created"
-    And the account for brand domain "invalid-brand.test" has action "failed"
+    And the account for brand domain "nova-motors.com" has action "failed"
     And the failed account includes a per-account errors array
     And the response does not contain an operation-level errors field
 

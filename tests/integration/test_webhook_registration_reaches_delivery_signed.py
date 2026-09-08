@@ -187,7 +187,7 @@ class TestUpdateMediaBuyRegistrationDeliversSigned:
             env.set_http_status(200)
 
             env.call_mcp(
-                req=_bare_update_req(created.response.media_buy_id),
+                req=_bare_update_req(created.media_buy_id),
                 push_notification_config={
                     "url": env.webhook_url,
                     "authentication": _tool_auth_block(),
@@ -206,7 +206,7 @@ class TestUpdateMediaBuyRegistrationDeliversSigned:
             env.set_http_status(200)
 
             env.call_mcp(
-                req=_bare_update_req(created.response.media_buy_id),
+                req=_bare_update_req(created.media_buy_id),
                 push_notification_config={
                     "url": env.webhook_url,
                     "authentication": _tool_auth_block(),
