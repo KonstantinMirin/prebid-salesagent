@@ -107,6 +107,7 @@ from typing import Any
 from adcp.types import ErrorCode
 from pydantic import BaseModel, ValidationError
 
+from scripts.audit.creative_literal_sites import EXTRA_FORBIDDEN
 from src.core.schemas.creative import CreativeAssetRequest
 from src.core.schemas.pricing import PricingOption
 
@@ -119,11 +120,18 @@ from src.core.schemas.pricing import PricingOption
 #: a malformation, and :func:`malformation_problems` refuses a declaration on one.
 MALFORMATION_OBLIGATIONS: frozenset[ErrorCode] = frozenset({ErrorCode.INVALID_REQUEST, ErrorCode.VALIDATION_ERROR})
 
-#: The pydantic error type that means "the pin refused this key, not these bytes". The
-#: ONE place the discriminator is spelled; it is read from ``ValidationError.errors()``,
-#: which has carried it all along — the previous gate computed it and threw it away into
-#: a message string.
-_UNDECLARED_KEY = "extra_forbidden"
+#: The pydantic error type that means "the pin refused this KEY, not these bytes",
+#: IMPORTED from the census rather than spelled a second time here. It is read from
+#: ``ValidationError.errors()``, which has carried it all along — the previous gate
+#: computed it and threw it away into a message string.
+#:
+#: The census (``scripts/audit/creative_literal_sites.py``) reaches the same verdict
+#: statically that this gate reaches at dispatch, off this discriminator and the same
+#: dominance rule: a reason set of exactly ``{extra_forbidden}`` is the field-dropped
+#: guarantee, and ANY other reason dominates. Two copies of that is the two instruments
+#: disagreeing about what "invalid" means, which is the disease both tickets were filed
+#: against; the guard takes ``scan``/``SCOPES`` from the same module for the same reason.
+#: Pinned by ``test_the_gate_and_the_census_share_one_discriminator``.
 
 #: The closed vocabulary of SHAPES. Every member is expressible AND distinguishable at a
 #: call site, and every member is purely syntactic: none of them says anything about
@@ -308,7 +316,7 @@ def _obligation_of(rejection: ValidationError | None) -> ErrorCode | None:
     if rejection is None:
         return ErrorCode.VALIDATION_ERROR
     reasons = {error["type"] for error in rejection.errors()}
-    if reasons <= {_UNDECLARED_KEY}:
+    if reasons <= {EXTRA_FORBIDDEN}:
         return None
     return ErrorCode.INVALID_REQUEST
 

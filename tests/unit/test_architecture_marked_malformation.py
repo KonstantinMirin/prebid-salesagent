@@ -49,6 +49,8 @@ import pytest
 from adcp.types import ErrorCode
 from pydantic import ValidationError
 
+import scripts.audit.creative_literal_sites as census_module
+import tests.factories.malformed as malformed_module
 from scripts.audit.creative_literal_sites import SCOPES, scan
 from tests.factories.malformed import (
     GATED_ITEMS,
@@ -505,6 +507,49 @@ def test_the_obligation_reads_the_whole_error_set_not_the_first_error(order: tup
     )
     assert [error["type"] for error in rejection.errors()] == list(order), "the control lost control of the order"
     assert _obligation_of(rejection) is ErrorCode.INVALID_REQUEST
+
+
+@pytest.mark.arch_guard
+def test_the_gate_and_the_census_share_one_discriminator() -> None:
+    """The runtime gate and the static census read the SAME constant, not two copies.
+
+    Both instruments answer "did the pin refuse these bytes, or only this key", and both
+    answer it off ``extra_forbidden`` with the same dominance rule: a reason set of
+    exactly ``{extra_forbidden}`` is the field-dropped guarantee, and any other reason
+    dominates. Two spellings of that is the two instruments disagreeing about what
+    "invalid" means — which is the disease both salesagent-b341x.26 and
+    salesagent-b341x.18 were filed against, and the reason the ticket required them to
+    land in this order.
+
+    Checked STRUCTURALLY, on the import, and not by comparing the two values. The first
+    version of this test asserted ``malformed.EXTRA_FORBIDDEN is census.EXTRA_FORBIDDEN``
+    and passed with the constant re-declared locally — CPython interns
+    ``"extra_forbidden"``, so a second copy is the same object and ``is`` cannot tell
+    them apart. Observed: the deliberate break went green. Where the constant COMES FROM
+    is the property; equality of two copies is the thing that stops being true later.
+    """
+    tree = safe_parse(repo_root() / "tests" / "factories" / "malformed.py")
+    assert tree is not None
+    imported = any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == census_module.__name__
+        and any(alias.name == "EXTRA_FORBIDDEN" for alias in node.names)
+        for node in ast.walk(tree)
+    )
+    redefined = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "EXTRA_FORBIDDEN" for target in node.targets)
+    ]
+    assert imported and not redefined, (
+        "tests/factories/malformed.py must IMPORT EXTRA_FORBIDDEN from "
+        f"{census_module.__name__}, not define its own "
+        f"(imported={imported}, local definitions at {redefined}). Two spellings of the "
+        "same discriminator is the gate and the census disagreeing about what 'invalid' "
+        "means."
+    )
+    assert malformed_module.EXTRA_FORBIDDEN == census_module.EXTRA_FORBIDDEN
 
 
 @pytest.mark.arch_guard
