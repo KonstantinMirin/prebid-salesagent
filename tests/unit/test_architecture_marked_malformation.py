@@ -131,12 +131,6 @@ KNOWN_VIOLATIONS: set[tuple[str, str]] = set()
 #: is not listed here; a list entry that never matches would go stale by construction.
 EXEMPT_BY_IDENTITY: dict[tuple[str, str], str] = {
     (
-        "tests/bdd/steps/generic/given_entities.py",
-        "given_seller_creative_agent_various_assets",
-    ): "ctx['creative_agent_formats'] entries are FORMAT descriptors, not creatives; "
-    "the name+assets key overlap is what the heuristic sees. Validating a format "
-    "descriptor against a creative request is a category error.",
-    (
         "tests/bdd/steps/domain/uc026_package_media_buy.py",
         "given_product_with_pricing",
     ): "_LABEL_SPEC rows are spread as ORM kwargs into PricingOptionFactory(...). "

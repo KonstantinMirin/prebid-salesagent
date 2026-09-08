@@ -679,11 +679,19 @@ def given_package_creative_ref_nonexistent(ctx: dict, pkg_id: str, creative_id: 
 def given_no_snapshot_for_package(ctx: dict, pkg_id: str) -> None:
     """Establish that no snapshot data exists for a package.
 
-    The default state in the harness is no snapshot data — the adapter mock
-    (when present) returns no data unless explicitly configured. Record the
-    expectation in ctx so Then steps can verify the correct unavailable_reason.
+    Absence is the harness default — the adapter mock returns no data unless a
+    Given configures some. The falsifiable half is the other direction: a
+    scenario that configured snapshot data for this package and then declares it
+    unavailable is grading the opposite of what it says. The ctx set this
+    replaced was written for "Then steps to verify the unavailable_reason" and
+    no Then ever read it.
     """
-    ctx.setdefault("snapshot_unavailable_packages", set()).add(pkg_id)
+    configured = ctx.get("adapter_snapshot_data", {})
+    seeded_for_pkg = [mb_id for mb_id, pkgs in configured.items() if pkg_id in pkgs]
+    assert not seeded_for_pkg, (
+        f"Step claims no snapshot data is available for package {pkg_id!r}, but a "
+        f"prior Given configured snapshot data for it under media buy(s) {seeded_for_pkg}."
+    )
 
 
 @given("the ad platform adapter supports realtime reporting")
@@ -694,7 +702,6 @@ def given_adapter_supports_reporting(ctx: dict) -> None:
     configuration, this step should also set up mock reporting endpoints that
     return test data (impressions, spend, etc.).
     """
-    ctx["adapter_supports_reporting"] = True
     env = ctx["env"]
     assert "adapter" in env.mock, (
         "Step claims 'the ad platform adapter supports realtime reporting' "
@@ -707,7 +714,6 @@ def given_adapter_supports_reporting(ctx: dict) -> None:
 @given("the ad platform adapter does not support realtime reporting")
 def given_adapter_no_reporting(ctx: dict) -> None:
     """Configure the adapter to NOT support realtime reporting."""
-    ctx["adapter_supports_reporting"] = False
     env = ctx["env"]
     assert "adapter" in env.mock, (
         "Step claims 'the ad platform adapter does not support realtime reporting' "
@@ -734,7 +740,6 @@ def given_adapter_reporting_with_data(ctx: dict) -> None:
     whose get_packages_snapshot returns realistic snapshot data keyed by the
     packages created in earlier Given steps.
     """
-    ctx["adapter_supports_reporting"] = True
 
     snapshot_data: dict[str, dict] = {}
     seeded = ctx.get("seeded_media_buys", {})
@@ -761,7 +766,6 @@ def given_adapter_reporting_no_data(ctx: dict, pkg_id: str) -> None:
     snapshot dict for the media buy owning ``pkg_id``, so the package has no
     snapshot data available.
     """
-    ctx["adapter_supports_reporting"] = True
 
     # Build snapshot_data with the target package's media buy present but
     # with NO entry for the specific pkg_id — simulating "no data for X".
@@ -792,7 +796,6 @@ def given_adapter_reporting_all_data(ctx: dict) -> None:
     Builds snapshot entries for all packages across all seeded media buys,
     so every package has data available when include_snapshot is requested.
     """
-    ctx["adapter_supports_reporting"] = True
 
     snapshot_data: dict[str, dict] = {}
     seeded = ctx.get("seeded_media_buys", {})
@@ -819,7 +822,6 @@ def given_adapter_reporting_mixed(ctx: dict, pkg1: str, pkg2: str) -> None:
     Configures adapter mock so ``pkg1`` has snapshot data and ``pkg2`` does not.
     The snapshot dict includes an entry for pkg1 but omits pkg2.
     """
-    ctx["adapter_supports_reporting"] = True
 
     snapshot_data: dict[str, dict] = {}
     seeded = ctx.get("seeded_media_buys", {})
@@ -858,8 +860,6 @@ def given_adapter_no_realtime(ctx: dict) -> None:
     which has no EXTERNAL_PATCHES.
     """
     from unittest.mock import MagicMock, patch
-
-    ctx["adapter_supports_reporting"] = False
 
     adapter_mock = MagicMock()
     adapter_mock.capabilities.supports_realtime_reporting = False
@@ -939,7 +939,6 @@ def given_principal_owns_single_mb(ctx: dict, principal_id: str, mb_id: str) -> 
     )
     env._commit_factory_data()
     _register_media_buy(ctx, mb_id, mb)
-    ctx.setdefault("principals", {})[principal_id] = principal
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}"'))

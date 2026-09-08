@@ -207,8 +207,14 @@ def given_creative_supports_compliance(ctx: dict) -> None:
 
 
 @given("the adapter is unavailable")
+@given("a tenant is resolvable but adapter is unavailable")
 def given_adapter_unavailable(ctx: dict) -> None:
-    """Adapter factory raises — production degrades to the [display] default channel."""
+    """Adapter factory raises — production degrades to the [display] default channel.
+
+    Owns both spellings. The "a tenant is resolvable but ..." one was a second
+    function with the same body plus a ``has_tenant`` flag no step read; tenant
+    resolvability is the env's default, so the two sentences name the same state.
+    """
     ctx["env"].make_adapter_unavailable()
 
 
@@ -230,7 +236,6 @@ def given_publisher_partnerships(ctx: dict, domains: str) -> None:
     parsed = _quoted_list(domains)
     for domain in parsed:
         PublisherPartnerFactory(tenant=ctx["tenant"], publisher_domain=domain)
-    ctx["publisher_domains"] = parsed
 
 
 @given("the adapter provides targeting capabilities including geo")
@@ -299,7 +304,6 @@ def given_adapter_targeting_config(ctx: dict, config: str) -> None:
 
     from src.adapters.base import TargetingCapabilities
 
-    ctx["targeting_config"] = config
     if "adapter unavailable" in config:
         ctx["env"].make_adapter_unavailable()
         return
@@ -332,28 +336,18 @@ def given_adapter_targeting_config(ctx: dict, config: str) -> None:
 @given("a tenant is resolvable and adapter and DB are available with all features")
 def given_full_degradation_baseline(ctx: dict) -> None:
     """full_response degradation row: happy path (default env — adapter + DB up)."""
-    ctx["has_tenant"] = True
     _config(ctx)["full"] = True
-
-
-@given("a tenant is resolvable but adapter is unavailable")
-def given_tenant_adapter_unavailable(ctx: dict) -> None:
-    """adapter_fail row: tenant resolves, adapter factory raises → [display] default."""
-    ctx["has_tenant"] = True
-    ctx["env"].make_adapter_unavailable()
 
 
 @given("a tenant is resolvable but database query fails")
 def given_tenant_db_fails(ctx: dict) -> None:
     """db_fail row: tenant resolves, publisher-partner DB read fails → placeholder domain."""
-    ctx["has_tenant"] = True
     ctx["env"].break_tenant_config_db()
 
 
 @given("a tenant is resolvable but both adapter and DB fail")
 def given_tenant_adapter_and_db_fail(ctx: dict) -> None:
     """adapter_and_db_fail row: both degrade — [display] channels + placeholder domain."""
-    ctx["has_tenant"] = True
     ctx["env"].make_adapter_unavailable()
     ctx["env"].break_tenant_config_db()
 
@@ -363,7 +357,6 @@ def given_tenant_no_principal(ctx: dict) -> None:
     """no_principal row: tenant resolves, caller is principal-less (anonymous identity).
     Per INV-4 the adapter is tenant-only/principal-free, so adapter-derived channels
     are NOT degraded by the missing principal — the [display] expectation is the gap."""
-    ctx["has_tenant"] = True
     ctx["identity"] = ctx["env"].anonymous_identity()
 
 
@@ -377,7 +370,6 @@ def given_tenant_section_absent(ctx: dict, capability: str) -> None:
     """audience_targeting_absent / conversion_tracking_absent rows: model the
     'adapter unavailable' leg (the capabilities builder never emits these blocks
     regardless, so they are absent on the wire)."""
-    ctx["has_tenant"] = True
     ctx["env"].make_adapter_unavailable()
     _config(ctx)[capability.replace(" ", "_")] = False
 
@@ -386,7 +378,6 @@ def given_tenant_section_absent(ctx: dict, capability: str) -> None:
 def given_tenant_creative_absent(ctx: dict) -> None:
     """creative_absent row: production advertises only the media_buy protocol, so
     the creative section is never emitted."""
-    ctx["has_tenant"] = True
     _config(ctx)["supported_protocols"] = ["media_buy"]
 
 
@@ -472,7 +463,6 @@ def given_no_account_financials(ctx: dict) -> None:
 
 @given("a tenant is resolvable with partial account config")
 def given_partial_account_config(ctx: dict) -> None:
-    ctx["has_tenant"] = True
     _config(ctx)["partial_account"] = True
 
 
@@ -488,7 +478,6 @@ def given_empty_billing_policy(ctx: dict) -> None:
     (supported_billing is required on the block AND minItems 1), and the block
     must be omitted whole.
     """
-    ctx["has_tenant"] = True
     ctx["env"].configure_tenant_field("supported_billing", [])
     _config(ctx)["supported_billing"] = []
 
@@ -586,7 +575,6 @@ def when_call_with_protocols(ctx: dict, protocols: str) -> None:
 @when(parsers.parse("the Buyer Agent calls get_adcp_capabilities with context {context}"))
 def when_call_with_context(ctx: dict, context: str) -> None:
     request_context = json.loads(context)
-    ctx["request_context"] = request_context
     _call_capabilities(ctx, context=request_context)
 
 

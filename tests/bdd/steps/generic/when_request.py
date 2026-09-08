@@ -704,13 +704,11 @@ def _partition_agent_type(ctx: dict, partition: str) -> None:
     SUCCESS: dispatch unfiltered via the wire (_call) and let production emit the
     real result. #1417.
     """
-    ctx["filter_under_test"] = "creative_agent_format_type"
     _call(ctx)
 
 
 def _partition_agent_asset_types(ctx: dict, partition: str) -> None:
     """Creative agent asset type filter — maps to asset_types on ListCreativeFormatsRequest."""
-    ctx["filter_under_test"] = "creative_agent_asset_type"
     if partition in ("not_provided", "omitted"):
         _call(ctx)
     elif partition == "unknown_value":
@@ -738,7 +736,6 @@ def when_query_agent_asset_types(ctx: dict, partition: str) -> None:
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats at type boundary "{boundary_point}"'))
 def when_boundary_agent_type(ctx: dict, boundary_point: str) -> None:
-    ctx["filter_under_test"] = "creative_agent_format_type"
     mapping = {
         "audio (first enum value)": "audio",
         "dooh (last enum value)": "dooh",
@@ -750,7 +747,6 @@ def when_boundary_agent_type(ctx: dict, boundary_point: str) -> None:
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats at asset_types boundary "{boundary_point}"'))
 def when_boundary_agent_asset_types(ctx: dict, boundary_point: str) -> None:
-    ctx["filter_under_test"] = "creative_agent_asset_type"
     mapping = {
         "image (first enum value)": "image",
         "url (last enum value)": "url",
