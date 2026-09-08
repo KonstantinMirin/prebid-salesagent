@@ -401,6 +401,108 @@ def test_scenario_level_control_dispatch_request_refuses_an_unmarked_malformatio
 
 
 # ---------------------------------------------------------------------------
+# The gate reaches the item WHEREVER it sits, not only at the top level
+# ---------------------------------------------------------------------------
+#
+# WHY THE NESTED POSITION IS NOT A CORNER CASE. Measured on the baseline payload
+# artifact (test-results/innet_080926_1859/, 8182 collected / 8182 payload rows):
+# 158 creative items were dispatched at the top level and the pin rejected 0 of them;
+# 6 arrived under ``packages[0].creatives`` and the pin rejected 3. The unwatched
+# position carried 3 of the 3 pin rejections in the whole corpus, two of which were
+# real ``asset_type`` defects — found by validating the census, because the gate whose
+# job that is could not see them (salesagent-b341x.15).
+#
+# The DTOs are why the position matters rather than merely differing:
+# ``AdCPPackageUpdate.creatives`` is ``list[adcp ... CreativeAsset]`` (strict) while
+# ``PackageRequest.creatives`` is ``list[src ... Creative]`` (permissive), so on the
+# CREATE path an item the pinned request model rejects passes the DTO untouched and
+# reaches production as a raw dict. The gate grades the ITEM against the pinned item
+# model at every position, which is the one verdict that does not depend on which DTO
+# happens to hold it.
+
+
+def _nested(creative: dict[str, Any]) -> dict[str, Any]:
+    """*creative* in the position ``update_media_buy`` puts it in."""
+    return {"media_buy_id": "mb_001", "packages": [{"package_id": "pkg_001", "creatives": [creative]}]}
+
+
+@pytest.mark.arch_guard
+def test_positive_control_runtime_gate_flags_unmarked_nested_malformation() -> None:
+    """An undeclared malformation under ``packages[].creatives`` is reported, with its path."""
+    problems = malformation_problems(_nested(_rejected_creative("creative-meta-nested-001")))
+    assert len(problems) == 1, problems
+    assert "packages[0].creatives[0]" in problems[0], (
+        "the report must name the POSITION, or nobody can find the payload it is about:\n" + problems[0]
+    )
+    assert "creative-meta-nested-001" in problems[0]
+
+
+@pytest.mark.arch_guard
+def test_positive_control_runtime_gate_accepts_the_marked_nested_form() -> None:
+    """The same nested bytes, declared, pass — and reach the wire unaltered."""
+    payload = _rejected_creative("creative-meta-nested-declared-001")
+    declared = malformed("absent_key", "no assets key on an inline package creative", payload, pin_rejects=True)
+    assert malformation_problems(_nested(declared)) == []
+    assert dict(declared) == payload, "the declaration must not alter what reaches the wire"
+
+
+@pytest.mark.arch_guard
+def test_negative_control_runtime_gate_passes_a_conformant_nested_literal() -> None:
+    """A conformant nested creative is NOT flagged — the gate asks the model, not for markers."""
+    assert malformation_problems(_nested(_CONFORMANT_CREATIVE)) == []
+
+
+@pytest.mark.arch_guard
+def test_nested_declaration_is_graded_against_the_pins_actual_verdict() -> None:
+    """A REPAIRED declaration is reported in the nested position too, not only at the top."""
+    declared = malformed(
+        "absent_key",
+        "declares the assets key absent — these bytes carry it, which is what a factory default does",
+        {**_CONFORMANT_CREATIVE, "creative_id": "creative-meta-nested-repaired-001"},
+        pin_rejects=True,
+    )
+    problems = malformation_problems(_nested(declared))
+    assert len(problems) == 1, problems
+    assert "packages[0].creatives[0]" in problems[0]
+    assert "REPAIRED" in problems[0]
+
+
+@pytest.mark.arch_guard
+def test_scenario_level_control_dispatch_request_refuses_a_nested_malformation() -> None:
+    """The nested reach is wired into the dispatch seam, not only into the pure function."""
+    from tests.bdd.steps.generic._dispatch import dispatch_request
+    from tests.harness.transport import Transport
+
+    dispatched: list[Any] = []
+
+    def call_via(transport: Any, **kwargs: Any) -> SimpleNamespace:
+        dispatched.append(kwargs["packages"])
+        return SimpleNamespace(is_error=False, wire_response=None)
+
+    ctx: dict[str, Any] = {"env": SimpleNamespace(call_via=call_via), "transport": Transport.MCP}
+
+    bag = _nested(_rejected_creative("creative-meta-nested-dispatch-001"))
+    with pytest.raises(AssertionError, match=r"packages\[0\]\.creatives\[0\]"):
+        dispatch_request(ctx, **bag)
+    assert dispatched == [], "the gate must refuse BEFORE anything reaches the transport"
+
+
+@pytest.mark.arch_guard
+def test_an_object_that_is_not_a_dict_or_list_is_not_walked_into() -> None:
+    """The walk descends dicts and lists ONLY, and this is the boundary that says so.
+
+    ``dispatch_request`` bags routinely carry ``req=<a typed request model>``. That
+    object came from a builder the pin has already run, and the gate's subject is the
+    hand-built inline LITERAL — so reaching through attributes would grade the builder
+    and would do it on every dispatch. The control uses a bare namespace rather than a
+    real DTO because a DTO cannot be constructed around a rejected creative at all,
+    which would make the assertion vacuous.
+    """
+    carrier = SimpleNamespace(creatives=[_rejected_creative("creative-meta-attribute-001")])
+    assert malformation_problems({"req": carrier}) == []
+
+
+# ---------------------------------------------------------------------------
 # The declaration is graded against the pin's ACTUAL verdict — both directions
 # ---------------------------------------------------------------------------
 #

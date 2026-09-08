@@ -63,6 +63,7 @@ Enforced by ``tests/unit/test_architecture_marked_malformation.py``.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
@@ -153,6 +154,24 @@ def malformed(kind: str, why: str, payload: dict[str, Any], *, pin_rejects: bool
 
 #: Request fields whose ITEMS are graded, and the identifier each item carries.
 #:
+#: A FIELD NAME, matched WHEREVER IT SITS in the request bag — not a top-level key.
+#: ``creatives`` appears at the top level of ``sync_creatives`` and nested under
+#: ``packages[].creatives`` on the media-buy verbs, and for a long time only the first
+#: was graded. Measured on the baseline payload artifact
+#: (``test-results/innet_080926_1859/``, 8182 collected / 8182 payload rows): 158 items
+#: dispatched at the top level, 0 rejected by the pin; 6 dispatched under
+#: ``packages[0].creatives``, 3 REJECTED. The position nobody watched carried 3 of the
+#: 3 pin rejections in the entire corpus, and two of those were real ``asset_type``
+#: defects that had to be found by validating the census instead (salesagent-b341x.15).
+#:
+#: The ITEM model is the same at every position, which is the point rather than a
+#: simplification: the DTOs disagree about the nested slot —
+#: ``AdCPPackageUpdate.creatives`` is ``list[adcp ... CreativeAsset]`` (strict) while
+#: ``PackageRequest.creatives`` is ``list[src ... Creative]`` (permissive), so an item
+#: the pinned request model rejects passes the CREATE-path DTO untouched and reaches
+#: production as a raw dict. Grading the item against the pinned item model is the one
+#: verdict that does not depend on which DTO happens to be holding it.
+#:
 #: ITEMS, never the whole DTO: a whole-DTO gate fires on every negative-path scenario
 #: that deliberately omits ``idempotency_key`` or ``account`` — scenarios that are
 #: correct as written and are not this gate's subject.
@@ -195,6 +214,35 @@ def _pin_rejection(model: type[BaseModel], item: dict[str, Any]) -> ValidationEr
     return None
 
 
+def _gated_items(node: Any, path: str = "") -> Iterator[tuple[str, type[BaseModel], dict[str, Any]]]:
+    """Every gated item in *node*, as ``(site, model, item)``, at whatever depth it sits.
+
+    DICTS AND LISTS ONLY. A ``dispatch_request`` bag routinely carries ``req=<a typed
+    request model>``; that object came from a builder the pin has already run, and the
+    gate's subject is the hand-built inline LITERAL, so reaching through attributes
+    would grade the builder on every dispatch. Items inside a gated list are yielded,
+    never descended into, so one item cannot be reported twice.
+
+    *path* accumulates the position so the report can name it: ``creatives[0]`` at the
+    top level, ``packages[0].creatives[0]`` nested — the same rendering a reader would
+    use to subscript their way back to the payload.
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            child = f"{path}.{key}" if path else key
+            entry = GATED_ITEMS.get(key)
+            if entry is not None and isinstance(value, list):
+                model, id_key = entry
+                for index, item in enumerate(value):
+                    if isinstance(item, dict):
+                        yield f"{child}[{index}] ({id_key}={item.get(id_key)!r})", model, item
+            else:
+                yield from _gated_items(value, child)
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            yield from _gated_items(item, f"{path}[{index}]")
+
+
 def malformation_problems(kwargs: dict[str, Any]) -> list[str]:
     """One message per dispatched item whose real verdict and declaration disagree.
 
@@ -214,36 +262,27 @@ def malformation_problems(kwargs: dict[str, Any]) -> list[str]:
     and feeding one here would grade the builder rather than the literal.
     """
     problems: list[str] = []
-    for field, (model, id_key) in GATED_ITEMS.items():
-        items = kwargs.get(field)
-        if not isinstance(items, list):
-            continue
-        for index, item in enumerate(items):
-            if not isinstance(item, dict):
-                continue
-            site = f"{field}[{index}] ({id_key}={item.get(id_key)!r})"
-            rejection = _pin_rejection(model, item)
-            if not isinstance(item, _Malformed):
-                if rejection is not None:
-                    problems.append(
-                        f"{site} is rejected by {model.__name__} but is not declared malformed:\n{rejection}"
-                    )
-            elif item.pin_rejects and rejection is None:
-                problems.append(
-                    f"{site} is declared malformed({item.kind!r}, pin_rejects=True) but {model.__name__} "
-                    "ACCEPTS it — the malformation was REPAIRED and the scenario now grades a conformant "
-                    "payload. Something supplied what the declaration says is wrong: a factory default is "
-                    "the usual culprit, so express the malformation as a payload() OVERRIDE (assets=OMIT, "
-                    "format_id=None, ...) rather than relying on the baseline to leave it out.\n"
-                    f"declared because: {item.why}"
-                )
-            elif not item.pin_rejects and rejection is not None:
-                problems.append(
-                    f"{site} is declared malformed({item.kind!r}, pin_rejects=False) but {model.__name__} "
-                    "REJECTS it — the declaration is MIS-DECLARED. Either the bytes changed, or "
-                    "pin_rejects was guessed rather than measured; the pin's own reason follows.\n"
-                    f"{rejection}"
-                )
+    for site, model, item in _gated_items(kwargs):
+        rejection = _pin_rejection(model, item)
+        if not isinstance(item, _Malformed):
+            if rejection is not None:
+                problems.append(f"{site} is rejected by {model.__name__} but is not declared malformed:\n{rejection}")
+        elif item.pin_rejects and rejection is None:
+            problems.append(
+                f"{site} is declared malformed({item.kind!r}, pin_rejects=True) but {model.__name__} "
+                "ACCEPTS it — the malformation was REPAIRED and the scenario now grades a conformant "
+                "payload. Something supplied what the declaration says is wrong: a factory default is "
+                "the usual culprit, so express the malformation as a payload() OVERRIDE (assets=OMIT, "
+                "format_id=None, ...) rather than relying on the baseline to leave it out.\n"
+                f"declared because: {item.why}"
+            )
+        elif not item.pin_rejects and rejection is not None:
+            problems.append(
+                f"{site} is declared malformed({item.kind!r}, pin_rejects=False) but {model.__name__} "
+                "REJECTS it — the declaration is MIS-DECLARED. Either the bytes changed, or "
+                "pin_rejects was guessed rather than measured; the pin's own reason follows.\n"
+                f"{rejection}"
+            )
     return problems
 
 
