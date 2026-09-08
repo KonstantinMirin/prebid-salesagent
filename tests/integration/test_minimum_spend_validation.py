@@ -420,7 +420,7 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        response = await _create_media_buy_impl(req=req, identity=identity)
 
         # Should succeed - verify we got a media_buy_id
         assert response.media_buy_id is not None
@@ -453,7 +453,7 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        response = await _create_media_buy_impl(req=req, identity=identity)
 
         # Should succeed - verify we got a media_buy_id
         assert response.media_buy_id is not None
@@ -566,7 +566,7 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        response = await _create_media_buy_impl(req=req, identity=identity)
 
         # Should succeed - verify we got a media_buy_id
         assert response.media_buy_id is not None

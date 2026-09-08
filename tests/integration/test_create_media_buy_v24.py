@@ -252,7 +252,7 @@ class TestCreateMediaBuyV24Format:
             po_number="TEST-V24-001",
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        response = await _create_media_buy_impl(req=req, identity=identity)
 
         # Verify response structure
         if not hasattr(response, "media_buy_id"):
@@ -317,7 +317,7 @@ class TestCreateMediaBuyV24Format:
             po_number="TEST-V24-002",
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        response = await _create_media_buy_impl(req=req, identity=identity)
 
         # Verify response structure
         if not hasattr(response, "media_buy_id"):
@@ -394,7 +394,7 @@ class TestCreateMediaBuyV24Format:
             po_number="TEST-V24-003",
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        response = await _create_media_buy_impl(req=req, identity=identity)
 
         # Verify all packages serialized correctly
         assert response.media_buy_id
@@ -439,7 +439,7 @@ class TestCreateMediaBuyV24Format:
             po_number="TEST-V24-A2A-001",
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        response = await _create_media_buy_impl(req=req, identity=identity)
 
         # Verify response structure (same as MCP)
         assert response.media_buy_id
@@ -485,7 +485,7 @@ class TestCreateMediaBuyV24Format:
             po_number="TEST-STANDARD-001",
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        response = await _create_media_buy_impl(req=req, identity=identity)
 
         # Verify response
         assert response.media_buy_id
