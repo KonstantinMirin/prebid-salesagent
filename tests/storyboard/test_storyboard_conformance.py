@@ -37,6 +37,7 @@ from typing import Any
 import pytest
 
 from scripts.audit import ledger, storyboard_spec
+from tests.storyboard import collected
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RUNNER_DIR = Path(__file__).parent / "runner"
@@ -409,6 +410,15 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
             }
         )
         ids.append("ledger::fitness::ledger_fitness::stale_entries")
+
+    # PUBLISH WHAT THIS SESSION COLLECTED. `checks` here is the exact set the run will
+    # grade, which storyboard_check_index otherwise has to INFER from the failure
+    # ledger (salesagent-v03pe.3). Stashed rather than written here because
+    # pytest_generate_tests runs once per parametrized function, not once per session;
+    # tests/storyboard/conftest.py writes it at sessionfinish. Deliberately set only on
+    # this path -- the bundle-missing return above collects one synthetic skip, and
+    # publishing that would claim a run that never started.
+    setattr(metafunc.config, collected.STASH_ATTR, list(checks))
 
     metafunc.parametrize("storyboard_check", checks, ids=ids)
 
