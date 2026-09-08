@@ -42,11 +42,9 @@ class WireCtx(TypedDict, total=False):
     reconstruction — which is how a self-grading transport stayed green — and the
     key had three writers with three meanings. Steps read the dispatch's own
     ``TransportResult`` through ``tests/bdd/steps/_outcome_helpers.py``'s
-    ``require_payload`` / ``payload_or_none``, and that is now the ONE source: the
-    second named one those accessors used to know by name
-    (``ctx["self_dispatched_response"]``, for modules whose When called production
-    directly) has no writer left in tests/bdd, so the branch reading it could only
-    return None and has been removed with it. Enforced by
+    ``require_payload`` / ``payload_or_none``; modules whose When calls production
+    directly stash under the explicitly-named ``ctx["self_dispatched_response"]``,
+    which those accessors know by name. Enforced by
     ``test_architecture_bdd_wire_discipline``'s Check D (empty allowlist).
     """
 

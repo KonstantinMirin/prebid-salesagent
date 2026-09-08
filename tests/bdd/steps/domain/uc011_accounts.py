@@ -306,6 +306,7 @@ def _sync_pre_create(ctx: dict, brand_domain: str, operator: str, billing: str, 
     # ctx["response"] is not popped — nothing writes it, so there is nothing to
     # clear, and pretending otherwise reads as live state management.)
     ctx.pop("result", None)
+    ctx.pop("self_dispatched_response", None)
     ctx.pop("error", None)
 
 
@@ -2582,6 +2583,7 @@ def _given_agent_synced(ctx: dict, agent_name: str, domain: str) -> None:
     # ctx["response"] is not popped — nothing writes it, so there is nothing to
     # clear, and pretending otherwise reads as live state management.)
     ctx.pop("result", None)
+    ctx.pop("self_dispatched_response", None)
     ctx.pop("error", None)
 
 

@@ -290,6 +290,7 @@ def _create_media_buy_for_update(ctx: dict, **pkg_overrides: Any) -> None:
     # step's TransportResult in ctx, and require_payload/payload_or_none would
     # serve it as though this step had produced it.
     ctx.pop("result", None)
+    ctx.pop("self_dispatched_response", None)
     ctx.pop("error", None)
     # Reset request_kwargs for the update
     ctx.pop("request_kwargs", None)
@@ -1605,6 +1606,7 @@ def _promote_create_errors(ctx: dict) -> None:
         # read, or require_payload/payload_or_none hand the error payload straight
         # back and a success-path Then grades it as a success.
         ctx.pop("result", None)
+        ctx.pop("self_dispatched_response", None)
 
 
 # ═══════════════════════════════════════════════════════════════════════

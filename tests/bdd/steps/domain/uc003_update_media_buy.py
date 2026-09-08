@@ -840,6 +840,7 @@ def _promote_update_errors(ctx: dict) -> None:
         # read, or require_payload/payload_or_none hand the error payload straight
         # back and a success-path Then grades it as a success.
         ctx.pop("result", None)
+        ctx.pop("self_dispatched_response", None)
 
 
 # ═══════════════════════════════════════════════════════════════════════

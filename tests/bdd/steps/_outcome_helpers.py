@@ -385,7 +385,7 @@ def payload_or_none(ctx: dict) -> object | None:
     """
     result = ctx.get("result")
     if not isinstance(result, TransportResult):
-        return None
+        return ctx.get("self_dispatched_response")
     return result.payload
 
 
@@ -401,14 +401,16 @@ def require_payload(ctx: dict) -> object:
     """
     result = ctx.get("result")
     if not isinstance(result, TransportResult):
-        # ``ctx["result"]`` is now the ONE source. There used to be a second named
-        # one for modules whose When called production directly
-        # (``ctx["self_dispatched_response"]``), kept until "the pinned modules
-        # migrate" -- they have: no step in tests/bdd writes that key any more, so
-        # the branch could only ever return None and the reads below already handle
-        # that case with a diagnostic. A fallback nothing can reach is not a
-        # fallback, it is a second answer to "where is the payload" that the next
-        # reader has to rule out.
+        # Second NAMED source: modules whose When still calls production directly
+        # (uc011's _list_accounts_impl) stash under ctx["self_dispatched_response"],
+        # and the GENERIC Then steps are shared with them. Both sources are explicit
+        # keys, which is the point — the removed ctx["response"] was written by
+        # dispatch AND by self-dispatching modules AND (in one case) held a REQUEST,
+        # so a reader could not tell what it had. These two can always be told apart,
+        # and when the pinned modules migrate the branch simply disappears.
+        self_dispatched = ctx.get("self_dispatched_response")
+        if self_dispatched is not None:
+            return self_dispatched
         failure = ctx.get("error")
         if failure is not None:
             raise AssertionError(

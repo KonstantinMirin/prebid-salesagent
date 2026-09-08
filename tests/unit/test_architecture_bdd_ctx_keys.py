@@ -44,7 +44,8 @@ from pathlib import Path
 
 import pytest
 
-_BDD_DIR = Path(__file__).resolve().parents[1] / "bdd"
+_TESTS_DIR = Path(__file__).resolve().parents[1]
+_BDD_DIR = _TESTS_DIR / "bdd"
 
 #: Methods whose receiver is mutated, never read. ``ctx.setdefault(k, []).append(x)``
 #: writes; ``x = ctx.setdefault(k, {})`` then ``x[a]`` reads.
@@ -64,19 +65,49 @@ class _Op:
 class _Scan:
     writes: list[_Op] = field(default_factory=list)
     reads: list[_Op] = field(default_factory=list)
-    #: read expressions the resolver could not turn into a literal or a prefix
-    unresolved: list[tuple[str, int, str]] = field(default_factory=list)
+    #: key expressions the resolver could not turn into a literal or a prefix,
+    #: as (kind, file, line, source)
+    unresolved: list[tuple[str, str, int, str]] = field(default_factory=list)
     #: dynamic read prefixes, e.g. "db_principal_"
     read_prefixes: set[str] = field(default_factory=set)
 
 
+def _is_step_driver(source: str) -> bool:
+    """A module outside tests/bdd that drives BDD step functions directly.
+
+    Unit and integration tests build a ``ctx`` by hand and call a step to exercise
+    its assertion logic, so they are READERS of the ctx protocol even though they
+    are not steps. Missing them is not hypothetical: ``self_dispatched_response``
+    is written by five such drivers and by nothing under tests/bdd, and a scan
+    that stopped at tests/bdd called it writerless.
+    """
+    return "tests.bdd.steps" in source
+
+
 def _trees() -> dict[str, ast.Module]:
+    """Parse every module that participates in the ctx protocol.
+
+    WRITES are counted only from tests/bdd — the rule is about what a STEP leaves
+    behind. READS are counted from the step drivers too, because a unit test that
+    reads a key is as much a named consumer as a Then step is.
+    """
     out = {}
-    for p in sorted(_BDD_DIR.rglob("*.py")):
+    for p in sorted(_TESTS_DIR.rglob("*.py")):
         if "__pycache__" in str(p):
             continue
-        out[str(p.relative_to(_BDD_DIR.parent))] = ast.parse(p.read_text(), filename=str(p))
+        try:
+            source = p.read_text()
+        except OSError:
+            continue
+        rel = str(p.relative_to(_TESTS_DIR.parent))
+        if not (_BDD_DIR in p.parents or _is_step_driver(source)):
+            continue
+        out[rel] = ast.parse(source, filename=str(p))
     return out
+
+
+def _is_step_file(rel: str) -> bool:
+    return rel.startswith("tests/bdd/")
 
 
 def _module_constants(tree: ast.Module) -> dict[str, str]:
@@ -199,13 +230,23 @@ class _Visitor(ast.NodeVisitor):
             if kind == "read":
                 self.scan.read_prefixes.add(pre)
         if not ok:
-            self.scan.unresolved.append((self.file, at.lineno, ast.unparse(node)))
+            self.scan.unresolved.append((kind, self.file, at.lineno, ast.unparse(node)))
 
     def _is_ctx(self, node: ast.expr) -> bool:
         return isinstance(node, ast.Name) and node.id in self.names
 
     # -- statements ----------------------------------------------------
     def visit_Assign(self, node: ast.Assign) -> None:
+        # ``ctx = {...}`` builds a scenario context by hand. That is exactly how the
+        # step DRIVERS in tests/unit and tests/integration do it -- and missing it is
+        # why self_dispatched_response looked writerless: its five writers are local
+        # dict literals named ctx, not parameters.
+        if isinstance(node.value, (ast.Dict, ast.DictComp)) or (
+            isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name) and node.value.func.id == "dict"
+        ):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == "ctx":
+                    self._add_alias(t.id)
         for t in node.targets:
             self._store_target(t, node)
             # local f-string key variables: principal_key = f"db_principal_{owner}"
@@ -278,8 +319,8 @@ class _Visitor(ast.NodeVisitor):
                 if self._setdefault_value_is_consumed(node):
                     self._record("read", node.args[0], node)
             elif method == "update":
-                # never used on ctx in this corpus; refuse rather than mis-read
-                self.scan.unresolved.append((self.file, node.lineno, ast.unparse(node)))
+                # bulk write whose keys cannot be enumerated -- refuse rather than mis-read
+                self.scan.unresolved.append(("write", self.file, node.lineno, ast.unparse(node)))
 
         if name in self.shared.placeholder_helpers and len(node.args) > 1:
             self._record("read", node.args[1], node)
@@ -326,7 +367,7 @@ def _scan() -> _Scan:
                 continue
             params = [a.arg for a in n.args.posonlyargs + n.args.args + n.args.kwonlyargs]
             names = {p for p in params if p == "ctx"}
-            if rel == "bdd/conftest.py" and n.name == "ctx":
+            if rel == "tests/bdd/conftest.py" and n.name == "ctx":
                 names.add("d")  # the fixture builds the dict under a local name
             deferred = frozenset(helpers.get(n.name, ()))
             # converge the alias set, then record once
@@ -348,6 +389,8 @@ def _write_never_read(scan: _Scan) -> dict[str, list[_Op]]:
     prefixes = tuple(sorted(scan.read_prefixes))
     orphans: dict[str, list[_Op]] = defaultdict(list)
     for op in scan.writes:
+        if not _is_step_file(op.file):
+            continue  # only a STEP's writes are the rule's subject
         if op.dynamic or op.key in read_keys or op.key.startswith(prefixes):
             continue
         orphans[op.key].append(op)
@@ -389,9 +432,14 @@ def test_every_dynamic_ctx_key_is_resolvable(ctx_scan: _Scan) -> None:
     So an unrecognised form fails HERE, where the fix is to teach the resolver,
     rather than silently widening what counts as unread.
     """
-    assert not ctx_scan.unresolved, (
+    # Every unresolvable READ matters wherever it is: it could be the reader that
+    # keeps a key alive. An unresolvable WRITE only matters in a step file, because
+    # only a step's writes are the rule's subject -- a driver doing
+    # ``ctx.update(seeded_ctx)`` to set up a fixture writes nothing this rule judges.
+    blocking = [u for u in ctx_scan.unresolved if u[0] == "read" or _is_step_file(u[1])]
+    assert not blocking, (
         "ctx is keyed by expression(s) this guard cannot resolve:\n"
-        + "\n".join(f"  {f}:{line}  {src}" for f, line, src in ctx_scan.unresolved)
+        + "\n".join(f"  [{kind}] {f}:{line}  {src}" for kind, f, line, src in blocking)
         + "\n\nFix: use a literal key, an f-string with a literal prefix, or a module "
         "constant — or teach _Visitor._keys the new form. Do not leave it unresolved: "
         "an unreadable key expression makes live keys look dead."
