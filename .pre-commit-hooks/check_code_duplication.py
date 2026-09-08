@@ -17,6 +17,7 @@ prelude, and JSON baseline codec; this module owns the pylint count method only.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -53,6 +54,21 @@ def _pylint_finished(stdout: str) -> str | None:
     return None
 
 
+#: A pylint message line: ``path:line:col: R0801: Similar lines in N files``. Anchored on
+#: the CODE FIELD, not on the bare id, because pylint echoes the duplicated source under
+#: each message — so a duplicated block that itself mentions R0801 (this tree has 15 such
+#: literals, in comments explaining the DRY ratchet) would be tallied as extra duplication
+#: by a substring count. Measured at the time of the change: substring and message counts
+#: agree exactly, 29/29 on src and 61/61 on tests, which is what makes replacing the
+#: method provably baseline-neutral rather than a silent re-scoping (salesagent-b341x.19).
+_R0801_MESSAGE = re.compile(r"^.*?:\d+:\d+: R0801:", re.MULTILINE)
+
+
+def _count_r0801_messages(stdout: str) -> int:
+    """Count pylint R0801 MESSAGES, not occurrences of the string "R0801"."""
+    return len(_R0801_MESSAGE.findall(stdout))
+
+
 def count_duplications(directory: str) -> int:
     """Count pylint R0801 violations in a directory, or refuse to return a number."""
     # Similarity tuning (min-similarity-lines, ignore-imports, etc.) lives in
@@ -72,7 +88,7 @@ def count_duplications(directory: str) -> int:
         accepts_returncode=COMPLETE_RETURNCODES.__contains__,
         completion_marker=_pylint_finished,
     )
-    return (result.stdout or "").count("R0801")
+    return _count_r0801_messages(result.stdout or "")
 
 
 def main() -> int:
