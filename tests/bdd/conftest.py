@@ -3958,6 +3958,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # representative even when a2a ALSO carries the strict marker (pure
         # runtime-reduction opt-out, not a correctness requirement — see the
         # a2a-strict-marker check below for the correctness half).
+        #
+        # An opted-in scenario keeps ALL of its mcp/rest siblings, not one of
+        # them. It used to keep the first one walked, and `items` order is
+        # shuffled by pytest-randomly with a fresh seed every run (bdd_inprocess
+        # does not pass -p no:randomly), so WHICH transport the scenario graded
+        # changed run to run with no code change: measured over the UC-010
+        # module, a2a 196 on every seed but mcp/rest 183/166, 171/178, 174/175
+        # on seeds 1/2/3 (salesagent-1iidr). The skipped transport was ungraded
+        # and the skip was invisible — it presents as ~19 removed / ~19 added
+        # nodeids, the shape scripts/audit/compare_runs.py documents as benign
+        # transport-parameter noise, so every nodeid-set diff read CLEAN.
+        # A stable pick would only make the omission reproducible; all-or-none
+        # leaves no sibling to pick between. Pinned by
+        # tests/unit/test_bdd_transport_collection_is_seed_independent.py and by
+        # the order-independence tests in
+        # tests/unit/test_guards_bdd_strict_xfail_representative.py.
         _REPRESENTATIVE_UC_PREFIXES = ("T-UC-010-",)
         _transport_param = re.compile(r"^(?P<head>.*?\[)(?:impl|a2a|mcp|rest)(?P<tail>[-\]].*)$")
 
@@ -3984,8 +4000,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             for base in [_scenario_base(i.nodeid)]
             if base is not None
         }
-        kept_representatives: set[str] = set()
-
         deselected: list[pytest.Item] = []
         remaining: list[pytest.Item] = []
         # Collected rather than raised in-loop: an exception escaping
@@ -4027,10 +4041,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             opted_in = any(t.startswith(_REPRESENTATIVE_UC_PREFIXES) for t in item_markers) or (
                 base is not None and base not in a2a_strict_bases
             )
-            if opted_in and base is not None and base not in impl_bases and base not in kept_representatives:
-                # No impl sibling to catch the xpass — keep this variant as
-                # the scenario's single strict-xfail representative.
-                kept_representatives.add(base)
+            if opted_in and base is not None and base not in impl_bases:
+                # No impl sibling to catch the xpass — keep every wire variant
+                # of this scenario, so no per-run choice is made between them.
                 remaining.append(item)
             else:
                 deselected.append(item)
