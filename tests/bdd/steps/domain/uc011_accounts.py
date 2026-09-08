@@ -1840,14 +1840,20 @@ def then_account_status(ctx: dict, status: str) -> None:
 
 @then(parsers.parse('the account has action "{action}"'))
 def then_account_action_generic(ctx: dict, action: str) -> None:
-    """Assert the first/last referenced account has the expected action.
+    """Assert the referenced account carries the expected per-account ``action``.
 
-    For validation errors (no response), action='failed' is satisfied by
-    the presence of a caught exception — Pydantic rejects the request
-    before per-account processing, which is equivalent to all accounts failing.
+    ``action`` is a PER-ENTRY outcome inside the success variant of the response
+    (sync-accounts-response.json oneOf/0 → accounts[].action), so a request the
+    seller rejected wholesale has no account to carry one — the two oneOf branches
+    are alternatives, and a step that accepted either would grade neither.
+
+    The branch that did exactly that is gone: ``if action == "failed" and
+    ctx["error"] ...: return`` let a request-level rejection satisfy a per-account
+    claim. It was also unreachable — ``the account has action "created"`` is the
+    only rendering of this sentence in the whole feature set, so no scenario ever
+    took it. A scenario that genuinely wants a wholesale rejection asks for the
+    error envelope, which the error Thens grade.
     """
-    if action == "failed" and ctx.get("error") is not None and payload_or_none(ctx) is None:
-        return  # Request-level validation error ≡ per-account failure
     acct = ctx.get("last_account") or require_payload(ctx).accounts[0]
     actual = _action_str(acct.action)
     assert actual == action, f"Expected action '{action}', got '{actual}'"
@@ -2199,39 +2205,15 @@ def then_each_error_has_code_message(ctx: dict) -> None:
         _assert_error_has_code(err, i)
 
 
-@then("a response with both accounts and errors arrays is invalid")
-def then_both_invalid(ctx: dict) -> None:
-    """Verify the schema prohibits both accounts and errors coexisting.
-
-    SyncAccountsResponse is the success variant (has accounts, no errors field).
-    Constructing it with an errors array must raise ValidationError because
-    the success variant schema does not accept an errors field (oneOf union).
-    """
-    import pytest
-    from pydantic import ValidationError
-
-    from src.core.schemas.account import SyncAccountsResponse
-
-    with pytest.raises((ValidationError, TypeError)):
-        SyncAccountsResponse(
-            accounts=[],
-            errors=[{"code": "TEST", "message": "test"}],
-        )
-
-
-@then(parsers.parse("a response with neither_present is also invalid ({description})"))
-def then_neither_invalid(ctx: dict, description: str) -> None:
-    """Verify the schema requires either accounts or errors."""
-    from pydantic import ValidationError
-
-    from src.core.schemas.account import SyncAccountsResponse
-
-    # SyncAccountsResponse requires accounts field — omitting it is invalid
-    try:
-        SyncAccountsResponse()  # type: ignore[call-arg]
-        raise AssertionError("Expected ValidationError for missing accounts")
-    except (ValidationError, TypeError):
-        ctx.setdefault("schema_validated", []).append("neither_present")
+# Two steps used to sit here — "a response with both accounts and errors arrays is
+# invalid" and "a response with neither_present is also invalid (...)". Neither
+# sentence exists in any feature, by the Examples-rendering resolver and by literal
+# grep alike, so no scenario has ever run them. Neither dispatched, either: both
+# constructed a `SyncAccountsResponse` in the test process and graded pydantic's
+# refusal, which says nothing about what a seller puts on the wire — the DTO's
+# conformance to the pinned model is the subject of tests/unit/test_adcp_contract.py
+# and the schema-inheritance guard. The second also appended to
+# ctx["schema_validated"], a key nothing anywhere reads.
 
 
 @then(parsers.parse('all accounts have action "{action}"'))

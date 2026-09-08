@@ -2175,18 +2175,30 @@ def then_declaration_rejected(ctx: dict) -> None:
     ctx["result"].assert_wire_error("CONFIGURATION_ERROR", recovery="terminal")
 
 
-@then(parsers.parse('the rejection should name "{token}"'))
-def then_rejection_names(ctx: dict, token: str) -> None:
-    """The rejection identifies WHICH claim was unbacked.
+@then(parsers.parse('the rejection should name capability "{capability}" and rejected value "{value}"'))
+def then_rejection_names(ctx: dict, capability: str, value: str) -> None:
+    """The rejection identifies WHICH claim was unbacked, structurally.
 
     An operator who declared several blocks needs to know which one to remove; a
-    bare CONFIGURATION_ERROR would make them bisect their own config. Pins the
-    message content because ``core/error.json`` leaves ``message`` a free string,
-    so only production's actual wording can be asserted. Always follows
-    ``then_declaration_rejected`` in every scenario using this step, so the
-    code/recovery are the same CONFIGURATION_ERROR/terminal pair asserted there.
+    bare CONFIGURATION_ERROR would make them bisect their own config. Production
+    puts that identity in ``ConfigurationDetails`` — ``capability`` names the
+    declaration axis and ``rejected_value`` the value refused
+    (``src/core/schemas/capability_declarations.py`` ``_reject_unbacked``) — so
+    the assertion reads the structured pair at the protocol position
+    ``errors[0].details`` rather than substring-matching a message that
+    ``core/error.json`` leaves a free string the seller may reword.
+
+    Spec: core/error.json#/properties/details is an OPEN object, so the subset
+    check ``assert_wire_error(details=...)`` performs is the sanctioned oracle;
+    CONFIGURATION_ERROR/terminal comes from enums/error-code.json via CODE_TABLE
+    and is re-asserted here because a rejection naming the right value under the
+    wrong code is still the wrong rejection.
     """
-    ctx["result"].assert_wire_error("CONFIGURATION_ERROR", recovery="terminal")
+    ctx["result"].assert_wire_error(
+        "CONFIGURATION_ERROR",
+        recovery="terminal",
+        details={"capability": capability, "rejected_value": [value]},
+    )
 
 
 @then("each specialism should be a member of the 3.1.1 specialism enum")

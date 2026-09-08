@@ -196,8 +196,8 @@ def then_format_name(ctx: dict) -> None:
     """Every returned format carries a non-empty string name.
 
     The `type category` half of this step's predecessor is gone with the field: adcp 3.12
-    removed `type` from Format, so the valid_types set below grades a vocabulary the pin no
-    longer has.
+    removed `type` from Format, so the vocabulary that half graded is one the pin no longer
+    has. See the note below for the step that carried it.
     """
     formats = _get_formats(ctx)
     assert formats, "No formats in response -- cannot verify names"
@@ -207,26 +207,14 @@ def then_format_name(ctx: dict) -> None:
         assert isinstance(name, str), f"Format name is not a string: {type(name)}"
 
 
-@then("each format should include a name and type category")
-def then_format_name_type(ctx: dict) -> None:
-    valid_types = {
-        "audio",
-        "video",
-        "display",
-        "native",
-        "dooh",
-        "rich_media",
-        "universal",
-    }
-    for f in _get_formats(ctx):
-        name = _fmt_name(f)
-        assert name, f"Format missing name: {f}"
-        assert isinstance(name, str), f"Format name is not a string: {type(name)}"
-        type_str = _fmt_type_str(f)
-        assert type_str, f"Format missing type: {f}"
-        assert type_str in valid_types, (
-            f"Format '{name}' has invalid type category '{type_str}', expected one of {valid_types}"
-        )
+# ``each format should include a name and type category`` used to bind here — the second
+# of the two Thens @T-UC-005-main dropped when adcp 3.12 removed ``type`` from ``Format``
+# (BR-UC-005-discover-creative-formats.feature:36-37 names both). The only occurrence of
+# that sentence left in the feature sources is inside that comment, so nothing binds it.
+# Its body could not have graded the pin either way: the ``valid_types`` set is a
+# vocabulary 3.12 no longer defines, ``_fmt_type_str`` raises AttributeError on every row
+# at the pin, and with no formats in the response the loop asserted nothing at all.
+# ``then_format_name`` above keeps the half that survives the removal.
 
 
 @then("each format should include asset requirements with type and dimensions")
@@ -274,13 +262,14 @@ def then_format_assets(ctx: dict) -> None:
 # -- Sorting assertions --------------------------------------------------------
 
 
-@then("the results should be sorted by format type then name")
-def then_sorted_type_name(ctx: dict) -> None:
-    formats = _get_formats(ctx)
-    if len(formats) <= 1:
-        return
-    sort_keys = [(_fmt_type_str(f) or "", _fmt_name(f) or "") for f in formats]
-    assert sort_keys == sorted(sort_keys), f"Formats not sorted by type then name: {sort_keys}"
+# ``the results should be sorted by format type then name`` used to bind here. The
+# sentence was removed from @T-UC-005-main deliberately — adcp 3.12 dropped ``type``
+# from ``Format``, and the feature says so at BR-UC-005-discover-creative-formats.feature:36
+# — leaving a step no rendered sentence binds. It also could not have graded the
+# obligation it named: it returned a pass for a catalog of 0 or 1 formats, and on a
+# longer one ``_fmt_type_str`` raises AttributeError at the pin rather than failing an
+# assertion (see ``then_results_ordered`` below, which reads whatever columns the table
+# declares for exactly that reason).
 
 
 @then("the results should be ordered:")
