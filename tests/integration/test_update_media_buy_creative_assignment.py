@@ -597,9 +597,14 @@ def test_creative_assignments_with_weights(integration_db):
 
     # Verify response is successful (not an error)
     assert isinstance(result, UpdateMediaBuyResult)
-    response = result  # _impl returns UpdateMediaBuyResult; domain response is on .response
+    response = result
     assert isinstance(response, UpdateMediaBuyResponse)
-    assert not hasattr(response, "errors") or not response.errors
+    # `not hasattr(response, "errors")` stood here and was True by construction:
+    # UpdateMediaBuyResult declares no `errors` field, so it held for any object.
+    # adcp_error is the error channel that exists (salesagent-jnqab, same shape as the
+    # create_media_buy sites). The comment above it claimed "domain response is on
+    # .response", which stopped being true when 1210 removed the envelope wrapper.
+    assert response.adcp_error is None, f"update_media_buy failed: {response.adcp_error}"
 
     # Verify assignments were created in database with correct weights
     with get_db_session() as session:
@@ -759,9 +764,14 @@ def test_creative_assignments_replaces_all(integration_db):
 
     # Verify response is successful
     assert isinstance(result, UpdateMediaBuyResult)
-    response = result  # _impl returns UpdateMediaBuyResult; domain response is on .response
+    response = result
     assert isinstance(response, UpdateMediaBuyResponse)
-    assert not hasattr(response, "errors") or not response.errors
+    # `not hasattr(response, "errors")` stood here and was True by construction:
+    # UpdateMediaBuyResult declares no `errors` field, so it held for any object.
+    # adcp_error is the error channel that exists (salesagent-jnqab, same shape as the
+    # create_media_buy sites). The comment above it claimed "domain response is on
+    # .response", which stopped being true when 1210 removed the envelope wrapper.
+    assert response.adcp_error is None, f"update_media_buy failed: {response.adcp_error}"
 
     # Verify database: ONLY c2 and c3 remain (c1 was replaced/removed)
     with get_db_session() as session:
