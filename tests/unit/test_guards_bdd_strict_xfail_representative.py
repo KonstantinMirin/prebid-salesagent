@@ -50,19 +50,25 @@ class _FakeItem:
         self.own_markers.append(mark)
 
 
-def _make_items(tag: str):
-    """One scenario, 3 transport variants -- strict xfail on mcp/rest only.
+def _make_items(tag: str, transports: tuple[str, ...] = ("a2a", "mcp", "rest")):
+    """One scenario, one item per transport -- strict xfail on mcp/rest only.
 
     Mirrors the real-world shape found in tests/bdd/conftest.py (e.g. the
     T-UC-004-boundary-date-range ``_dr_invalid_fail`` predicate explicitly
     excludes a2a because "a2a now validates ... mcp/rest still don't").
+
+    *transports* is what ``pytest_generate_tests`` parametrized, so a
+    ``no_rest_uc`` scenario -- a UC whose tool has no REST route, legitimately
+    and stably graded on a2a + mcp -- is ``("a2a", "mcp")``.
     """
     tag_mark = pytest.Mark(tag, (), {})
     strict_xfail = pytest.mark.xfail(reason="mcp/rest validation gap", strict=True).mark
     items = [
-        _FakeItem("tests/bdd/test_fake.py::test_thing[a2a-row]", marks=[tag_mark]),
-        _FakeItem("tests/bdd/test_fake.py::test_thing[mcp-row]", marks=[tag_mark, strict_xfail]),
-        _FakeItem("tests/bdd/test_fake.py::test_thing[rest-row]", marks=[tag_mark, strict_xfail]),
+        _FakeItem(
+            f"tests/bdd/test_fake.py::test_thing[{transport}-row]",
+            marks=[tag_mark] if transport == "a2a" else [tag_mark, strict_xfail],
+        )
+        for transport in transports
     ]
     config = _FakeConfig()
     for item in items:
@@ -170,3 +176,24 @@ def test_an_opted_in_scenario_keeps_every_transport_not_one_of_them(monkeypatch)
         "tests/bdd/test_fake.py::test_thing[mcp-row]",
         "tests/bdd/test_fake.py::test_thing[rest-row]",
     }, f"an opted-in scenario kept a subset of its transports: {sorted(survivors)}"
+
+
+def test_a_declared_two_transport_scenario_keeps_both_of_them(monkeypatch):
+    """The legitimate two-transport case survives all-or-none unchanged.
+
+    A ``no_rest_uc`` scenario (a UC whose tool has no REST route) is
+    parametrized [a2a, mcp] by ``pytest_generate_tests`` -- declared at
+    parametrization and stable, which is the opposite of the emergent rotation
+    all-or-none removes. The deselection hook must not turn it into a2a alone:
+    with one redundant-transport item there was never a choice to make, and
+    there must still be none.
+    """
+    monkeypatch.delenv("BDD_ALL_TRANSPORTS", raising=False)
+    items, _ = _make_items("T-UC-010-fake", transports=("a2a", "mcp"))
+
+    survivors = _survivors(items)
+
+    assert survivors == {
+        "tests/bdd/test_fake.py::test_thing[a2a-row]",
+        "tests/bdd/test_fake.py::test_thing[mcp-row]",
+    }, f"a declared two-transport scenario lost a transport at collection: {sorted(survivors)}"
