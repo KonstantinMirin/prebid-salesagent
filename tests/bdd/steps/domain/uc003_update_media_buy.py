@@ -595,27 +595,32 @@ def given_placement_ids_valid(ctx: dict) -> None:
 def given_package_update_inline_creatives(ctx: dict) -> None:
     """Add inline creative objects to the first package update.
 
-    Uses the adcp CreativeAsset structure with minimal valid content.
+    The sentence promises VALID content, and the hand-built asset map did not
+    deliver it: ``{"primary": {url, width, height}}`` carries no ``asset_type``
+    discriminator, so ``AdCPPackageUpdate.creatives`` rejects the item with
+    ``assets.primary.AssetVariant Unable to extract tag using discriminator
+    'asset_type' [type=union_tag_not_found]`` and the update never reaches the
+    behaviour under test. Built through ``image_spec`` now, which is the same
+    correction ``uc003_ext_error_scenarios.given_package_update_inline_creatives_bare``
+    already carries with the same reasoning. The invalidity was never this
+    scenario's subject, so it is fixed rather than declared malformed.
     """
+    from tests.factories.creative_asset import build_assets, image_spec
+    from tests.factories.request import CreativeAssetRequestFactory
+
     kwargs = _ensure_update_defaults(ctx)
     if not kwargs.get("packages"):
         kwargs["packages"] = [{"package_id": "pkg_001"}]
     kwargs["packages"][0]["creatives"] = [
-        {
-            "creative_id": "inline-cr-001",
-            "name": "Inline Creative 1",
-            "format_id": {
+        CreativeAssetRequestFactory.payload(
+            creative_id="inline-cr-001",
+            name="Inline Creative 1",
+            format_id={
                 "agent_url": "https://creative.adcontextprotocol.org",
                 "id": "display_300x250",
             },
-            "assets": {
-                "primary": {
-                    "url": "https://example.com/banner-1.png",
-                    "width": 300,
-                    "height": 250,
-                }
-            },
-        }
+            assets=build_assets(image_spec("primary", url="https://example.com/banner-1.png")),
+        )
     ]
 
 

@@ -26,7 +26,9 @@ from tests.factories import (
     PricingOptionFactory,
     ProductFactory,
 )
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.factories.mint import mint
+from tests.factories.request import CreativeAssetRequestFactory
 from tests.helpers.adcp_factories import valid_reporting_webhook
 from tests.helpers.egress_hatches import UNDIALLED_PUBLIC_HTTPS_ORIGIN
 
@@ -2091,7 +2093,18 @@ def _create_approved_creative(
 def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x250") -> None:
     """Add inline creative dicts to the first package's 'creatives' field.
 
-    Builds minimal creative payloads matching the product's accepted format.
+    Builds creative payloads matching the product's accepted format, through
+    ``CreativeAssetRequestFactory`` so the item is the pinned request shape.
+
+    The asset map goes through ``image_spec`` rather than being typed out: the
+    hand-built ``{"primary": {url, width, height}}`` carried no ``asset_type``
+    discriminator, and ``PackageRequest.creatives`` rejects that with
+    ``assets.primary.AssetVariant Unable to extract tag using discriminator
+    'asset_type' [type=union_tag_not_found]`` — so every caller here was seeding a
+    package the request model refuses. Not a scenario subject anywhere (all six
+    callers ask for ordinary inline creatives), so it is fixed rather than declared
+    malformed. Same correction as ``uc003_update_media_buy`` and
+    ``uc003_ext_error_scenarios``.
     """
     kwargs = _ensure_request_defaults(ctx)
     if kwargs.get("packages"):
@@ -2099,21 +2112,15 @@ def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x
         creatives = pkg.get("creatives") or []
         for i in range(count):
             creatives.append(
-                {
-                    "creative_id": f"inline-cr-{i + 1:03d}",
-                    "name": f"Inline Creative {i + 1}",
-                    "format_id": {
+                CreativeAssetRequestFactory.payload(
+                    creative_id=f"inline-cr-{i + 1:03d}",
+                    name=f"Inline Creative {i + 1}",
+                    format_id={
                         "agent_url": "https://creative.adcontextprotocol.org",
                         "id": fmt_id,
                     },
-                    "assets": {
-                        "primary": {
-                            "url": f"https://example.com/banner-{i + 1}.png",
-                            "width": 300,
-                            "height": 250,
-                        }
-                    },
-                }
+                    assets=build_assets(image_spec("primary", url=f"https://example.com/banner-{i + 1}.png")),
+                )
             )
         pkg["creatives"] = creatives
 
@@ -2305,9 +2312,22 @@ def given_request_with_inline_creatives(ctx: dict) -> None:
 def given_inline_creative_missing_url(ctx: dict) -> None:
     """ext-g: strip the content URL from the inline creative's primary asset.
 
-    Production's reference-creative validation requires a content URL; without
-    it the create path rejects the creative and the wire error message names the
-    missing URL.
+    WHAT THIS ACTUALLY REACHES, measured rather than intended. The empty URL is
+    refused at the REQUEST BOUNDARY, not by production's reference-creative
+    validation: ``CreativeAssetRequest`` rejects ``url: ""`` with
+    ``assets.primary.AssetVariant.image.url Input should be a valid URL, input is
+    empty [type=url_parsing]``. So T-UC-002-ext-g grades an INVALID_REQUEST from
+    the boundary and never gets as far as the reference-creative URL check its
+    sentence names. It passes anyway because its Then steps ask only that the
+    operation failed and that the error carries a suggestion — any error satisfies
+    them. That assertion gap is UC-002's to close (salesagent-b341x.7); recorded
+    here so the next reader is not misled by the sentence.
+
+    This docstring previously asserted the opposite — "keeps the asset structurally
+    valid so it syncs to the library" — and that was never true. Until the
+    ``asset_type`` fix in ``_add_inline_creatives``, the asset was refused one step
+    earlier still, for ``union_tag_not_found``, so the empty URL was not even the
+    reason the request died.
     """
     kwargs = _ensure_request_defaults(ctx)
     pkg = kwargs["packages"][0]
@@ -2316,9 +2336,8 @@ def given_inline_creative_missing_url(ctx: dict) -> None:
     for creative in creatives:
         primary = creative.get("assets", {}).get("primary")
         assert primary is not None, "Inline creative has no primary asset to clear the URL on"
-        # Empty (not absent) URL keeps the asset structurally valid so it syncs to
-        # the library, then production's reference-creative URL validation rejects
-        # it with a message naming the missing URL (ext-g intent).
+        # Empty, not absent: an absent url would fail as a MISSING field, and the
+        # scenario is about a URL the buyer supplied and left blank.
         primary["url"] = ""
 
 
