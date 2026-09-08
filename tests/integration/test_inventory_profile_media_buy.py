@@ -122,12 +122,17 @@ async def test_create_media_buy_with_profile_based_product(sample_tenant):
             end_time=end_time,
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
-        response, task_status = await _create_media_buy_impl(req=req, identity=ctx)
+        response = await _create_media_buy_impl(req=req, identity=ctx)
 
         # Verify success
-        assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-            f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
-        )
+        # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
+        # that exist. `not hasattr(response, "errors")` stood here and could not tell the
+        # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
+        # check was True for every object it could be handed, including an error one. It
+        # was also unreachable — the call above unpacked the model into a (name, value)
+        # tuple, and a tuple has no .errors either (salesagent-jnqab).
+        assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
+        assert response.status == "completed", f"expected a completed create, got {response.status!r}"
         assert response.media_buy_id is not None
         assert response.packages is not None
         assert len(response.packages) >= 1
@@ -213,7 +218,7 @@ async def test_create_media_buy_with_profile_formats(sample_tenant):
                 end_time=end_time,
                 idempotency_key=f"int-key-{uuid.uuid4().hex}",
             )
-            response, _ = await _create_media_buy_impl(req=req, identity=ctx)
+            response = await _create_media_buy_impl(req=req, identity=ctx)
             # Either succeeds or returns structured error - both are valid
             assert response is not None
         except ValueError:
@@ -303,11 +308,16 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
             end_time=end_time,
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=ctx)
+        response = await _create_media_buy_impl(req=req, identity=ctx)
 
-        assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-            f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
-        )
+        # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
+        # that exist. `not hasattr(response, "errors")` stood here and could not tell the
+        # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
+        # check was True for every object it could be handed, including an error one. It
+        # was also unreachable — the call above unpacked the model into a (name, value)
+        # tuple, and a tuple has no .errors either (salesagent-jnqab).
+        assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
+        assert response.status == "completed", f"expected a completed create, got {response.status!r}"
         assert response.media_buy_id is not None
         assert response.packages is not None
         assert len(response.packages) == 3
@@ -410,9 +420,14 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
             end_time=end_time,
             idempotency_key=f"int-key-{uuid.uuid4().hex}",
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=ctx)
+        response = await _create_media_buy_impl(req=req, identity=ctx)
 
-        assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-            f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
-        )
+        # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
+        # that exist. `not hasattr(response, "errors")` stood here and could not tell the
+        # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
+        # check was True for every object it could be handed, including an error one. It
+        # was also unreachable — the call above unpacked the model into a (name, value)
+        # tuple, and a tuple has no .errors either (salesagent-jnqab).
+        assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
+        assert response.status == "completed", f"expected a completed create, got {response.status!r}"
         assert response.media_buy_id is not None
