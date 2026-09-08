@@ -14,20 +14,13 @@ from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 # ── Authenticated / tenant-present paths ────────────────────────────
 
 
-@given("a valid tenant context exists")
-@given("the Buyer has tenant context")
-def given_buyer_has_tenant_context(ctx: dict) -> None:
-    """Buyer has valid tenant context (happy path)."""
-    ctx["has_tenant"] = True
-    ctx.setdefault("tenant_id", "test_tenant")
-
-
-@given("the Buyer has tenant context via MCP session")
-def given_buyer_has_tenant_context_mcp(ctx: dict) -> None:
-    """Buyer has tenant context via MCP session."""
-    ctx["has_tenant"] = True
-    ctx["transport"] = "mcp"
-    ctx.setdefault("tenant_id", "test_tenant")
+# `a valid tenant context exists`, `the Buyer has tenant context` and `the Buyer has tenant
+# context via MCP session` bound here. None of the three occurs in tests/bdd/features, by
+# literal grep and by matching against all 49534 sentences rendered from every feature's
+# Examples. They set `ctx["has_tenant"]`, which no step anywhere reads. The MCP variant also
+# assigned `ctx["transport"] = "mcp"`, which would have overwritten the parametrized
+# transport the whole suite dispatches on — a live scenario binding it would have silently
+# run every transport's copy against MCP.
 
 
 # ── Missing-auth / missing-tenant paths ─────────────────────────────

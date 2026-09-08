@@ -256,22 +256,10 @@ def given_registry_formats_table(ctx: dict, datatable: Sequence[Sequence[object]
 # ── Formats from inline list ────────────────────────────────────────
 
 
-@given(parsers.parse('the registry has formats: "{name_a}" ({type_a}), "{name_b}" ({type_b}), "{name_c}" ({type_c})'))
-def given_registry_three_formats_inline(
-    ctx: dict, name_a: str, type_a: str, name_b: str, type_b: str, name_c: str, type_c: str
-) -> None:
-    """Register three formats from inline notation."""
-    for name, fmt_type in [(name_a, type_a), (name_b, type_b), (name_c, type_c)]:
-        _add_format(ctx, FormatFactory.build(name=name, type=CATEGORY_MAP.get(fmt_type)))
-    _sync_registry(ctx)
-
-
-@given(parsers.parse('the registry has formats: "{name_a}" ({type_a}), "{name_b}" ({type_b})'))
-def given_registry_two_formats_inline(ctx: dict, name_a: str, type_a: str, name_b: str, type_b: str) -> None:
-    """Register two formats from inline notation."""
-    for name, fmt_type in [(name_a, type_a), (name_b, type_b)]:
-        _add_format(ctx, FormatFactory.build(name=name, type=CATEGORY_MAP.get(fmt_type)))
-    _sync_registry(ctx)
+# Two INLINE `the registry has formats: "<name>" (<type>), ...` Givens bound here, neither
+# reachable: the only registry-formats sentence in any feature is the DATATABLE form at
+# BR-UC-005-discover-creative-formats.feature:106, which a different step serves. Both also
+# took a `(<type>)` column, and adcp 3.12 removed `type` from Format.
 
 
 @given(parsers.parse('the request includes a push_notification_config with url "{url}"'))
