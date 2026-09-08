@@ -1385,24 +1385,26 @@ def then_includes_delivery_data_only(ctx: dict, mb_id: str) -> None:
 
 @then(parsers.parse('the response should NOT include delivery data for "{mb_id}"'))
 def then_excludes_delivery_data(ctx: dict, mb_id: str) -> None:
-    """Assert response does NOT include delivery data for the media buy."""
-    resp = payload_or_none(ctx)
-    if resp is None:
-        return  # No response at all = not included
-    deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    mb_ids = [d.media_buy_id for d in deliveries]
-    assert mb_id not in mb_ids, f"Expected no delivery data for '{mb_id}', but found it"
+    """Assert the response arrived and carries no delivery row for *mb_id*.
 
+    ``require_payload``, not ``payload_or_none``: every scenario binding this
+    sentence asserts ``the response is compliant with the get_media_buy_delivery
+    spec`` first, so a dispatch that produced no payload is a failed request, not
+    an omission. The previous ``if resp is None: return`` graded that failure as
+    a pass — silent omission and total failure are the two outcomes this step
+    exists to tell apart (BR-RULE-030 INV-5: non-owned media buys are omitted
+    from a SUCCESSFUL partial result, never turned into a rejection).
 
-@then(parsers.parse('the response should not include delivery data for "{mb_id}"'))
-def then_no_delivery_data(ctx: dict, mb_id: str) -> None:
-    """Assert response does not include delivery data for the media buy."""
-    resp = payload_or_none(ctx)
-    if resp is None:
-        return
-    deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    mb_ids = [d.media_buy_id for d in deliveries]
-    assert mb_id not in mb_ids, f"Expected no delivery data for '{mb_id}'"
+    One definition, both spellings: ``parsers.parse`` matches case-insensitively,
+    so this binds the "should NOT" sentence of
+    @T-UC-004-identify-mixed-ownership and the "should not" sentence of
+    @T-UC-004-status-filter-multi alike. The verbatim second copy that used to
+    sit here (``then_no_delivery_data``) competed for both of them, and which one
+    ran was decided by plugin registration order.
+    """
+    resp = require_payload(ctx)
+    mb_ids = [d.media_buy_id for d in (getattr(resp, "media_buy_deliveries", None) or [])]
+    assert mb_id not in mb_ids, f"Expected no delivery data for '{mb_id}', got: {mb_ids}"
 
 
 @then("the response should have an empty media_buy_deliveries array")
