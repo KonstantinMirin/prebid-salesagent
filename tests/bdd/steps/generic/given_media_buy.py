@@ -26,7 +26,9 @@ from tests.factories import (
     PricingOptionFactory,
     ProductFactory,
 )
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.factories.mint import mint
+from tests.factories.request import CreativeAssetRequestFactory
 from tests.helpers.adcp_factories import valid_reporting_webhook
 from tests.helpers.egress_hatches import UNDIALLED_PUBLIC_HTTPS_ORIGIN
 
@@ -2091,7 +2093,18 @@ def _create_approved_creative(
 def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x250") -> None:
     """Add inline creative dicts to the first package's 'creatives' field.
 
-    Builds minimal creative payloads matching the product's accepted format.
+    Builds creative payloads matching the product's accepted format, through
+    ``CreativeAssetRequestFactory`` so the item is the pinned request shape.
+
+    The asset map goes through ``image_spec`` rather than being typed out: the
+    hand-built ``{"primary": {url, width, height}}`` carried no ``asset_type``
+    discriminator, and ``PackageRequest.creatives`` rejects that with
+    ``assets.primary.AssetVariant Unable to extract tag using discriminator
+    'asset_type' [type=union_tag_not_found]`` — so every caller here was seeding a
+    package the request model refuses. Not a scenario subject anywhere (all six
+    callers ask for ordinary inline creatives), so it is fixed rather than declared
+    malformed. Same correction as ``uc003_update_media_buy`` and
+    ``uc003_ext_error_scenarios``.
     """
     kwargs = _ensure_request_defaults(ctx)
     if kwargs.get("packages"):
@@ -2099,21 +2112,15 @@ def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x
         creatives = pkg.get("creatives") or []
         for i in range(count):
             creatives.append(
-                {
-                    "creative_id": f"inline-cr-{i + 1:03d}",
-                    "name": f"Inline Creative {i + 1}",
-                    "format_id": {
+                CreativeAssetRequestFactory.payload(
+                    creative_id=f"inline-cr-{i + 1:03d}",
+                    name=f"Inline Creative {i + 1}",
+                    format_id={
                         "agent_url": "https://creative.adcontextprotocol.org",
                         "id": fmt_id,
                     },
-                    "assets": {
-                        "primary": {
-                            "url": f"https://example.com/banner-{i + 1}.png",
-                            "width": 300,
-                            "height": 250,
-                        }
-                    },
-                }
+                    assets=build_assets(image_spec("primary", url=f"https://example.com/banner-{i + 1}.png")),
+                )
             )
         pkg["creatives"] = creatives
 

@@ -401,20 +401,24 @@ def given_package_update_inline_creatives_bare(ctx: dict) -> None:
     asset map.
     """
     from tests.factories.creative_asset import build_assets, image_spec
+    from tests.factories.request import CreativeAssetRequestFactory
 
     kwargs = _ensure_update_defaults(ctx)
     if not kwargs.get("packages"):
         kwargs["packages"] = [{"package_id": "pkg_001"}]
     kwargs["packages"][0]["creatives"] = [
-        {
-            "creative_id": "inline-cr-ext-k",
-            "name": "Inline Creative for Sync Test",
-            "format_id": {
+        CreativeAssetRequestFactory.payload(
+            creative_id="inline-cr-ext-k",
+            name="Inline Creative for Sync Test",
+            # Stated rather than inherited: the factory's own default normalises
+            # AGENT_URL to a trailing slash, and this step names the un-normalised
+            # spelling the sibling inline-creative steps use.
+            format_id={
                 "agent_url": "https://creative.adcontextprotocol.org",
                 "id": "display_300x250",
             },
-            "assets": build_assets(image_spec("primary")),
-        }
+            assets=build_assets(image_spec("primary")),
+        )
     ]
 
 
