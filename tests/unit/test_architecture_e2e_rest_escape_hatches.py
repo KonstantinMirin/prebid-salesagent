@@ -34,6 +34,7 @@ precedent: #1498).
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -862,3 +863,153 @@ def test_append_expression_detector_catches_a_sneaky_call_site_drop() -> None:
     assert expressions == (
         "_parametrize_ctx(metafunc, transports, ids, None if quiet else Transport.E2E_REST, 'e2e_rest')",
     )
+
+
+# ---------------------------------------------------------------------------
+# Detector 5: env.mock reaches in the BDD step tree
+# ---------------------------------------------------------------------------
+
+_STEPS_DIR = _REPO_ROOT / "tests" / "bdd" / "steps"
+
+#: Matches the reach the census counts (``scripts/audit/build_bdd_decisions.py``'s
+#: ``step-reaches-env-mock``), so the two instruments cannot disagree about what a
+#: reach IS while disagreeing about how many there are.
+_ENV_MOCK_REACH = re.compile(r"env\.mock")
+
+
+def find_env_mock_reaches(tree: ast.Module, path: str) -> list[tuple[str, str]]:
+    """Every function in a step module whose body reaches ``env.mock``.
+
+    EVERY function, not only the decorated step ones. The census counts step bodies
+    and reports 37; this guard finds 44, because seven reaches sit in undecorated
+    helpers those steps call (``_assert_audit_logged_mock``, ``_inject_privilege_error``,
+    ``_configure_adapter_manual_approval``, ...). A reach relocated into a helper is
+    exactly as unroutable as one in the step body, and a detector that saw only
+    decorated functions would let the 45th site be added tomorrow by putting it in a
+    helper — the blind-to-part-of-its-domain failure this file's meta-tests exist to
+    prevent.
+    """
+    return [
+        (path, node.name)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _ENV_MOCK_REACH.search(ast.unparse(node))
+    ]
+
+
+def _env_mock_reach_sites() -> list[tuple[str, str]]:
+    """Every ``env.mock`` reach in ``tests/bdd/steps/``, as (path, function)."""
+    sites: list[tuple[str, str]] = []
+    for path in sorted(_STEPS_DIR.rglob("*.py")):
+        rel = path.relative_to(_REPO_ROOT).as_posix()
+        sites.extend(find_env_mock_reaches(ast.parse(path.read_text()), rel))
+    return sites
+
+
+#: THE FIFTH ROUTE OUT OF LIVE GRADING, and the one route 3 cannot cover.
+#:
+#: ``E2EUnsupportedSetup`` is how this repo declares a setup unrealizable against a live
+#: server — but the declaration mechanism lives in ``tests/harness/`` and detector 4's
+#: scan is HARNESS-ONLY. A step body that reaches into ``env.mock[...]`` bypasses the
+#: realization seam without being declarable anywhere: it silently works in-process and
+#: silently cannot work on e2e_rest, which is the same ungraded-but-unmarked outcome the
+#: other four routes are locked against. Until a reach is routed through a named harness
+#: method it is invisible to every existing lock, and a 45th could be added with nothing
+#: going red.
+#:
+#: EXACT SET, NOT SHRINK-ONLY, and deliberately so. The task that filed this asked for a
+#: shrink-only tuple; this file's own doctrine is the opposite and gives the reason at the
+#: top — "the exact-set comparison already fails in both directions, and a ceiling derived
+#: from the pin can never fail independently". A shrink is also a reviewable event here,
+#: which the record proves: this population was 41 step-body reaches when the task was
+#: filed and is 37 now, because four gemini Givens in uc006 were routed through a real
+#: ``env.set_gemini_api_key()`` seam. That is the direction of travel this pin exists to
+#: encourage, and it should cost one line of pin update, not pass unnoticed under a
+#: ceiling with headroom.
+EXPECTED_ENV_MOCK_REACHES: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("tests/bdd/steps/_outcome_helpers.py", "_assert_audit_adapter_mock"),
+        ("tests/bdd/steps/_outcome_helpers.py", "_assert_audit_approval_mock"),
+        ("tests/bdd/steps/_outcome_helpers.py", "_assert_audit_logged_mock"),
+        ("tests/bdd/steps/domain/codes_open_vocabulary.py", "given_seller_will_reject"),
+        ("tests/bdd/steps/domain/uc002_create_media_buy.py", "given_media_buy_already_created_same_key"),
+        ("tests/bdd/steps/domain/uc002_create_media_buy.py", "given_tenant_auto_approval"),
+        ("tests/bdd/steps/domain/uc002_create_media_buy.py", "then_slack_notification_sent"),
+        ("tests/bdd/steps/domain/uc002_nfr.py", "given_observe_high_value_alerts"),
+        ("tests/bdd/steps/domain/uc002_nfr.py", "then_auth_before_business_logic"),
+        ("tests/bdd/steps/domain/uc002_nfr.py", "then_no_adapter_calls"),
+        ("tests/bdd/steps/domain/uc002_nfr.py", "then_response_within_sla"),
+        ("tests/bdd/steps/domain/uc003_ext_error_scenarios.py", "_inject_privilege_error"),
+        ("tests/bdd/steps/domain/uc003_ext_error_scenarios.py", "given_adapter_error_during_update"),
+        ("tests/bdd/steps/domain/uc003_ext_error_scenarios.py", "given_creative_sync_fails"),
+        ("tests/bdd/steps/domain/uc003_ext_error_scenarios.py", "given_media_buy_uncancellable"),
+        ("tests/bdd/steps/domain/uc003_ext_error_scenarios.py", "given_update_requires_admin"),
+        ("tests/bdd/steps/domain/uc003_update_media_buy.py", "given_adapter_result"),
+        ("tests/bdd/steps/domain/uc003_update_media_buy.py", "given_tenant_approval_mode"),
+        ("tests/bdd/steps/domain/uc004_delivery.py", "then_no_billing"),
+        ("tests/bdd/steps/domain/uc004_delivery.py", "then_single_probe"),
+        ("tests/bdd/steps/domain/uc004_delivery.py", "then_webhook_skipped_no_post"),
+        ("tests/bdd/steps/domain/uc006_sync_creatives.py", "_assert_generative_build"),
+        ("tests/bdd/steps/domain/uc006_sync_creatives.py", "_assert_standard_processing"),
+        ("tests/bdd/steps/domain/uc006_sync_creatives.py", "given_creative_agent_is_reachable"),
+        ("tests/bdd/steps/domain/uc006_sync_creatives.py", "given_creative_agent_no_preview_urls"),
+        ("tests/bdd/steps/domain/uc006_sync_creatives.py", "given_creative_with_unknown_format"),
+        ("tests/bdd/steps/domain/uc006_sync_creatives.py", "given_creative_with_unreachable_agent"),
+        ("tests/bdd/steps/domain/uc006_sync_creatives.py", "then_creative_has_generated_content"),
+        ("tests/bdd/steps/domain/uc006_sync_creatives.py", "then_creative_validated_by_agent"),
+        ("tests/bdd/steps/domain/uc006_sync_creatives.py", "then_generative_build_skipped"),
+        ("tests/bdd/steps/domain/uc006_sync_creatives.py", "then_generative_build_uses_prompt"),
+        ("tests/bdd/steps/domain/uc006_sync_creatives.py", "then_invoke_generative_with_asset_prompt"),
+        ("tests/bdd/steps/domain/uc006_sync_creatives.py", "then_processed_as_generative"),
+        ("tests/bdd/steps/domain/uc019_query_media_buys.py", "given_adapter_exists"),
+        ("tests/bdd/steps/domain/uc019_query_media_buys.py", "given_adapter_no_realtime"),
+        ("tests/bdd/steps/domain/uc019_query_media_buys.py", "given_adapter_no_reporting"),
+        ("tests/bdd/steps/domain/uc019_query_media_buys.py", "given_adapter_supports_reporting"),
+        ("tests/bdd/steps/generic/given_media_buy.py", "_configure_adapter_manual_approval"),
+        ("tests/bdd/steps/generic/given_media_buy.py", "given_ad_server_rejects_creative_upload"),
+        ("tests/bdd/steps/generic/given_media_buy.py", "given_adapter_error"),
+        ("tests/bdd/steps/generic/given_media_buy.py", "given_adapter_success"),
+        ("tests/bdd/steps/generic/then_error.py", "then_no_new_ad_platform_order"),
+        ("tests/bdd/steps/generic/then_media_buy.py", "then_adapter_executed"),
+        ("tests/bdd/steps/generic/then_success.py", "then_no_real_api_calls"),
+    }
+)
+
+
+def test_env_mock_reaches_match_the_pin() -> None:
+    """Every ``env.mock`` reach in the step tree is pinned exactly."""
+    actual = frozenset(_env_mock_reach_sites())
+    added = actual - EXPECTED_ENV_MOCK_REACHES
+    removed = EXPECTED_ENV_MOCK_REACHES - actual
+    assert actual == EXPECTED_ENV_MOCK_REACHES, (
+        "env.mock reaches in tests/bdd/steps/ drifted from the pin.\n"
+        "A step reaching into the mock registry bypasses the realization seam: it works "
+        "in-process, cannot work on e2e_rest, and is declarable nowhere — E2EUnsupportedSetup "
+        "lives in tests/harness/ and this file's harness scan cannot see a step body.\n"
+        "ADDING one needs justification here. REMOVING one is the good direction — route it "
+        "through a named harness method, as uc006's gemini Givens were — and still updates the "
+        "pin in the same change.\n"
+        f"New reaches: {sorted(added)}\n"
+        f"Removed reaches: {sorted(removed)}"
+    )
+
+
+def test_env_mock_detector_sees_a_reach_in_an_undecorated_helper() -> None:
+    """The blindness this detector is shaped to avoid: a reach moved into a helper.
+
+    A detector keyed on the given/when/then decorators would return () here, and the
+    45th site could be added tomorrow by writing it as a helper.
+    """
+    source = (
+        "def _configure(env):\n"
+        "    env.mock['adapter'].return_value.create.side_effect = RuntimeError\n"
+        "\n"
+        "@then('it works')\n"
+        "def then_it_works(ctx):\n"
+        "    _configure(ctx['env'])\n"
+    )
+    assert find_env_mock_reaches(ast.parse(source), "x.py") == [("x.py", "_configure")]
+
+
+def test_env_mock_detector_ignores_a_step_that_does_not_reach() -> None:
+    source = "@then('it works')\ndef then_it_works(ctx):\n    assert ctx['env'].delivered_requests\n"
+    assert find_env_mock_reaches(ast.parse(source), "x.py") == []
