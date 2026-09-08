@@ -46,12 +46,16 @@ from types import SimpleNamespace
 from typing import Any, get_args
 
 import pytest
+from adcp.types import ErrorCode
+from pydantic import ValidationError
 
 from scripts.audit.creative_literal_sites import SCOPES, scan
 from tests.factories.malformed import (
     GATED_ITEMS,
     MALFORMATION_KINDS,
+    MALFORMATION_OBLIGATIONS,
     _Malformed,
+    _obligation_of,
     malformation_problems,
     malformed,
 )
@@ -448,6 +452,69 @@ def test_negative_control_gated_dispatch_not_flagged() -> None:
 
 
 @pytest.mark.arch_guard
+@pytest.mark.parametrize(
+    "obligation",
+    [
+        pytest.param(ErrorCode.CREATIVE_NOT_FOUND, id="an-ErrorCode-that-is-not-an-obligation"),
+        pytest.param("INVALID_REQUEST", id="the-name-as-a-string"),
+        pytest.param(True, id="the-boolean-this-axis-replaced"),
+        pytest.param(None, id="nothing"),
+    ],
+)
+def test_malformed_refuses_an_obligation_outside_the_vocabulary(obligation: Any) -> None:
+    """The axis is REFUSED at the call, not validated later — including the old boolean.
+
+    ``pin_rejects=True`` is the spelling every migrated site used to carry, and a call
+    that still passes ``True`` must not be silently read as "the pin rejects it": that
+    is the collapse this axis exists to end. It cannot reach the gate wearing the new
+    keyword.
+    """
+    with pytest.raises((ValueError, TypeError), match="obligation"):
+        malformed("wrong_type", "a real reason", {"a": 1}, obligation=obligation)
+
+
+@pytest.mark.arch_guard
+@pytest.mark.parametrize(
+    "order",
+    [
+        pytest.param(("extra_forbidden", "missing"), id="undeclared-key-emitted-FIRST"),
+        pytest.param(("missing", "extra_forbidden"), id="undeclared-key-emitted-last"),
+    ],
+)
+def test_the_obligation_reads_the_whole_error_set_not_the_first_error(order: tuple[str, str]) -> None:
+    """A payload wrong on the merits AND carrying an extra key is INVALID_REQUEST, either way round.
+
+    The errors are hand-built rather than provoked out of the real model, and that is
+    the point of the control. MEASURED: on ``CreativeAssetRequest`` pydantic emits
+    ``extra_forbidden`` LAST in every mixed case constructible against it, so replacing
+    the whole-set read with ``errors()[0]`` changes no answer and every other test in
+    this file stays green — the rule would be committed and never once exercised.
+    Controlling the order is the only way to grade it.
+
+    Emission order is not part of pydantic's contract. If it flipped, an
+    ``errors()[0]`` reading would start classifying a genuinely malformed payload as an
+    undeclared key and REFUSE its declaration, which is the noisiest possible way to be
+    wrong about the one distinction this axis exists to draw.
+    """
+    rejection = ValidationError.from_exception_data(
+        "CreativeAssetRequest",
+        [{"type": kind, "loc": (kind,), "input": "x"} for kind in order],
+    )
+    assert [error["type"] for error in rejection.errors()] == list(order), "the control lost control of the order"
+    assert _obligation_of(rejection) is ErrorCode.INVALID_REQUEST
+
+
+@pytest.mark.arch_guard
+def test_the_obligation_vocabulary_is_wire_codes_not_local_strings() -> None:
+    """Both members are ``adcp.types.ErrorCode``, so the axis names codes the wire knows."""
+    assert MALFORMATION_OBLIGATIONS == {ErrorCode.INVALID_REQUEST, ErrorCode.VALIDATION_ERROR}
+    assert all(isinstance(obligation, ErrorCode) for obligation in MALFORMATION_OBLIGATIONS), (
+        "a local string vocabulary can name a code the boundary never emits, which is the "
+        "one thing a scenario author must be able to trust here"
+    )
+
+
+@pytest.mark.arch_guard
 def test_negative_control_conformant_declaration_not_flagged() -> None:
     """A well-formed declaration — positional or keyword — is left alone."""
     source = (
@@ -471,7 +538,12 @@ def test_positive_control_runtime_gate_flags_unmarked_malformation() -> None:
 def test_positive_control_runtime_gate_accepts_the_marked_form() -> None:
     """The SAME rejected bytes, declared, pass — and stay byte-identical on the way."""
     payload = _rejected_creative()
-    declared = malformed("absent_key", "no assets key: exercises the preview-failure branch", payload, pin_rejects=True)
+    declared = malformed(
+        "absent_key",
+        "no assets key: exercises the preview-failure branch",
+        payload,
+        obligation=ErrorCode.INVALID_REQUEST,
+    )
     assert malformation_problems({"creatives": [declared]}) == []
     assert isinstance(declared, _Malformed)
     assert dict(declared) == payload, "the declaration must not alter what reaches the wire"
@@ -559,7 +631,12 @@ def test_scenario_level_control_every_dispatch_entry_refuses_an_unmarked_malform
         _DISPATCH_ENTRIES[entry](ctx, bag)
     assert dispatched == [], "the gate must refuse BEFORE anything reaches the transport"
 
-    declared = malformed("absent_key", "no assets key: exercises the preview-failure branch", payload, pin_rejects=True)
+    declared = malformed(
+        "absent_key",
+        "no assets key: exercises the preview-failure branch",
+        payload,
+        obligation=ErrorCode.INVALID_REQUEST,
+    )
     declared_bag = _nested(declared) if position == "nested" else {"creatives": [declared]}
     _DISPATCH_ENTRIES[entry](ctx, declared_bag)
     assert len(dispatched) == 1, "the declared form must reach the transport"
@@ -608,7 +685,9 @@ def test_positive_control_runtime_gate_flags_unmarked_nested_malformation() -> N
 def test_positive_control_runtime_gate_accepts_the_marked_nested_form() -> None:
     """The same nested bytes, declared, pass — and reach the wire unaltered."""
     payload = _rejected_creative("creative-meta-nested-declared-001")
-    declared = malformed("absent_key", "no assets key on an inline package creative", payload, pin_rejects=True)
+    declared = malformed(
+        "absent_key", "no assets key on an inline package creative", payload, obligation=ErrorCode.INVALID_REQUEST
+    )
     assert malformation_problems(_nested(declared)) == []
     assert dict(declared) == payload, "the declaration must not alter what reaches the wire"
 
@@ -626,7 +705,7 @@ def test_nested_declaration_is_graded_against_the_pins_actual_verdict() -> None:
         "absent_key",
         "declares the assets key absent — these bytes carry it, which is what a factory default does",
         {**_CONFORMANT_CREATIVE, "creative_id": "creative-meta-nested-repaired-001"},
-        pin_rejects=True,
+        obligation=ErrorCode.INVALID_REQUEST,
     )
     problems = malformation_problems(_nested(declared))
     assert len(problems) == 1, problems
@@ -653,18 +732,34 @@ def test_an_object_that_is_not_a_dict_or_list_is_not_walked_into() -> None:
 # The declaration is graded against the pin's ACTUAL verdict — both directions
 # ---------------------------------------------------------------------------
 #
-# ``kind`` is the SHAPE of the wrongness; whether the pinned model catches it is an
-# INDEPENDENT axis, which is why ``pin_rejects`` carries it rather than being derived
-# from a partition of kinds. Measured counterexample to any such partition:
+# ``kind`` is the SHAPE of the wrongness; what the SELLER OWES the buyer for those bytes
+# is an INDEPENDENT axis, which is why ``obligation`` carries it rather than being
+# derived from a partition of kinds. Measured counterexample to any such partition:
 # ``uc006_sync_creatives.py:6190`` is declared ``semantic`` and the pin REJECTS it
 # (format_id.id must match ``^[a-zA-Z0-9_-]+$``), while a DIFFERENT semantic case — an
-# unknown but well-formed format id — the pin ACCEPTS.
+# unknown but well-formed format id — the pin ACCEPTS and the seller's rules refuse.
 #
-#     pin_rejects=True  and the pin ACCEPTS   -> REPAIRED malformation. Report it,
-#                                                naming the site and the kind.
-#     pin_rejects=False and the pin REJECTS   -> MIS-DECLARED. Report it, quoting the
-#                                                pydantic error.
-#     the pin's verdict matches the declaration -> nothing to report.
+#     INVALID_REQUEST  and the pin ACCEPTS       -> REPAIRED malformation. Report it,
+#                                                   naming the site and the kind.
+#     VALIDATION_ERROR and the pin REJECTS       -> MIS-DECLARED. Report it, quoting the
+#                                                   pydantic error.
+#     either, and the pin's ONLY objection is an
+#     UNDECLARED KEY                             -> REFUSED. Not a malformation at all.
+#     the pin's verdict matches the declaration  -> nothing to report.
+#
+# THE AXIS USED TO BE A BOOLEAN, and one boolean spanned two obligations. MEASURED on
+# CreativeAssetRequest, reproduced in this file's own controls:
+#
+#     ENVIRONMENT=development  extra=forbid   extra key only -> REJECTED [extra_forbidden]
+#                                             missing assets -> REJECTED [missing]
+#     ENVIRONMENT=production   extra=ignore   extra key only -> ACCEPTED
+#                                             missing assets -> REJECTED [missing]
+#
+# So ``obligation=ErrorCode.INVALID_REQUEST`` meant one thing for bytes the model refuses on their MERITS and
+# another for bytes the boundary STRIPS, and a declaration on the second kind was honest
+# in development and reported itself REPAIRED in production, from the same literal. The
+# obligation names the wire code instead, which is both environment-independent and the
+# thing a Then step needs in order to be written at all.
 #
 # WHY IT IS NEEDED: the gate USED TO skip every declared item without validating it, so a
 # declaration that had stopped being true was invisible. Once a ``CreativeAssetRequest``
@@ -690,9 +785,9 @@ def test_an_object_that_is_not_a_dict_or_list_is_not_walked_into() -> None:
                 "declares the assets key absent — but these bytes carry it, which is exactly "
                 "what a factory default does to a malformation",
                 {**_CONFORMANT_CREATIVE, "creative_id": "creative-meta-repaired-001"},
-                pin_rejects=True,
+                obligation=ErrorCode.INVALID_REQUEST,
             ),
-            ("creatives[0]", "creative-meta-repaired-001", "absent_key"),
+            ("creatives[0]", "creative-meta-repaired-001", "absent_key", "REPAIRED"),
             id="repaired",
         ),
         pytest.param(
@@ -700,9 +795,9 @@ def test_an_object_that_is_not_a_dict_or_list_is_not_walked_into() -> None:
                 "absent_key",
                 "claims the pin tolerates a creative with no assets key; measured, it does not",
                 _rejected_creative("creative-meta-misdeclared-001"),
-                pin_rejects=False,
+                obligation=ErrorCode.VALIDATION_ERROR,
             ),
-            ("creatives[0]", "creative-meta-misdeclared-001", "Field required"),
+            ("creatives[0]", "creative-meta-misdeclared-001", "Field required", "MIS-DECLARED"),
             id="mis-declared",
         ),
         pytest.param(
@@ -710,7 +805,7 @@ def test_an_object_that_is_not_a_dict_or_list_is_not_walked_into() -> None:
                 "absent_key",
                 "no assets key: exercises the preview-failure branch",
                 _rejected_creative("creative-meta-honest-reject-001"),
-                pin_rejects=True,
+                obligation=ErrorCode.INVALID_REQUEST,
             ),
             (),
             id="honest-rejection",
@@ -720,26 +815,37 @@ def test_an_object_that_is_not_a_dict_or_list_is_not_walked_into() -> None:
                 "empty_string",
                 "an empty name is conformant to the pin and wrong downstream, which is the scenario's subject",
                 {**_CONFORMANT_CREATIVE, "creative_id": "creative-meta-honest-accept-001", "name": ""},
-                pin_rejects=False,
+                obligation=ErrorCode.VALIDATION_ERROR,
             ),
             (),
             id="honest-acceptance",
+        ),
+        pytest.param(
+            malformed(
+                "semantic",
+                "a pre-3.1.1 snippet key the schema never declared; the only thing wrong with these "
+                "bytes is a key the boundary strips, which is not a malformation",
+                {**_CONFORMANT_CREATIVE, "creative_id": "creative-meta-undeclared-key-001", "snippet": "<div/>"},
+                obligation=ErrorCode.INVALID_REQUEST,
+            ),
+            ("creatives[0]", "creative-meta-undeclared-key-001", "UNDECLARED KEY", "_accept_only_declared_fields"),
+            id="undeclared-key-is-refused",
         ),
     ],
 )
 def test_declaration_is_graded_against_the_pins_actual_verdict(
     declared: _Malformed, must_report: tuple[str, ...]
 ) -> None:
-    """A DECLARED item is validated rather than skipped, and both disagreements fail."""
+    """A DECLARED item is validated rather than skipped, and every disagreement fails."""
     problems = malformation_problems({"creatives": [declared]})
     if not must_report:
         assert problems == [], (
-            f"the declaration agrees with the pin (pin_rejects={declared.pin_rejects}), so the "
+            f"the declaration agrees with the pin (obligation={declared.obligation.name}), so the "
             "gate must stay silent:\n" + "\n".join(problems)
         )
         return
     assert len(problems) == 1, (
-        f"a declaration that disagrees with the pin (pin_rejects={declared.pin_rejects}) must be "
+        f"a declaration the pin disagrees with (obligation={declared.obligation.name}) must be "
         f"reported exactly once; got {len(problems)}. Skipping declared items is how a "
         "declaration that has stopped being true stays invisible:\n" + "\n".join(problems)
     )
