@@ -178,3 +178,42 @@ def test_the_live_tree_reports_no_class_it_cannot_defend(bdd):
         for loc, snippet in items:
             assert ":" in loc, f"{key} location is not file:line — {loc!r}"
             assert isinstance(snippet, str) and snippet, f"{key} carries no evidence at {loc}"
+
+
+# ── Shadow classification: a shadow only competes if both modules share a scope ──
+
+
+def test_two_globally_registered_modules_compete(bdd, monkeypatch):
+    """The real hazard: registration order decides which body runs."""
+    monkeypatch.setattr(
+        bdd, "_registration_scopes", lambda: {"a.py": frozenset({"GLOBAL"}), "b.py": frozenset({"GLOBAL"})}
+    )
+    assert bdd.classify_shadow(["a.py", "b.py"]) == "COMPETING"
+
+
+def test_a_global_and_a_locally_scoped_module_is_a_deliberate_override(bdd, monkeypatch):
+    """uc019's arrangement: it star-imports its steps into ONE test module so its
+    redefinitions apply to its own scenarios and no other UC's."""
+    monkeypatch.setattr(
+        bdd,
+        "_registration_scopes",
+        lambda: {"generic.py": frozenset({"GLOBAL"}), "uc.py": frozenset({"test_uc.py"})},
+    )
+    assert bdd.classify_shadow(["generic.py", "uc.py"]) == "SCOPED_OVERRIDE"
+
+
+def test_an_unregistered_module_cannot_compete(bdd, monkeypatch):
+    """then_media_buy.py is registered nowhere on purpose, so its definitions never run
+    and registration order decides nothing."""
+    monkeypatch.setattr(bdd, "_registration_scopes", lambda: {"live.py": frozenset({"GLOBAL"})})
+    assert bdd.classify_shadow(["live.py", "helper.py"]) == "NOT_REGISTERED"
+
+
+def test_two_modules_local_to_the_SAME_test_module_compete(bdd, monkeypatch):
+    """Scoping only helps when the scopes differ — same scope is the hazard again."""
+    monkeypatch.setattr(
+        bdd,
+        "_registration_scopes",
+        lambda: {"a.py": frozenset({"test_x.py"}), "b.py": frozenset({"test_x.py"})},
+    )
+    assert bdd.classify_shadow(["a.py", "b.py"]) == "COMPETING"
