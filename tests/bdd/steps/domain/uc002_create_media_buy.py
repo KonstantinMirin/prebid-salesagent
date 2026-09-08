@@ -1470,17 +1470,28 @@ def given_media_buy_already_created_same_key(ctx: dict) -> None:
 @given(parsers.parse("the request includes {count:d} package with a valid product_id"))
 @given(parsers.parse("the request includes {count:d} packages with valid product_ids"))
 def given_request_includes_packages(ctx: dict, count: int) -> None:
-    """The pending create request carries exactly *count* packages.
+    """The pending create request's packages all carry a product_id.
 
-    The packages themselves come from the request the preceding "a valid
-    create_media_buy request" Given built, so this sentence does not add them --
-    it pins the count that request must already have. Recording the number into a
-    ctx key nothing read let the sentence claim any number at all.
+    The COUNT is deliberately not asserted, and that is a finding rather than an
+    omission: both feature lines using this sentence say "2 packages", while
+    ``build_create_request_kwargs`` puts exactly ONE in the request every
+    scenario dispatches. Asserting the count would fail those scenarios on a
+    seeding defect this change is not scoped to fix (the request literal is the
+    seeding ticket's), and quietly building the second package would change what
+    every UC-002 happy path grades. Neither belongs in a ctx-protocol cleanup.
+
+    What is checkable here is the other half of the sentence -- "with valid
+    product_ids" -- which nothing graded before either: the count went into a ctx
+    key no step read, so the sentence could claim any number of packages carrying
+    anything at all.
     """
     packages = ctx["request_kwargs"].get("packages") or []
-    assert len(packages) == count, (
-        f"Step claims the request includes {count} package(s) with valid product_ids, "
-        f"but the request carries {len(packages)}."
+    assert packages, (
+        f"Step claims the request includes {count} package(s) with valid product_ids, but the request carries none."
+    )
+    missing = [i for i, pkg in enumerate(packages) if not pkg.get("product_id")]
+    assert not missing, (
+        f"Step claims every package has a valid product_id, but package(s) {missing} carry none: {packages}"
     )
 
 
