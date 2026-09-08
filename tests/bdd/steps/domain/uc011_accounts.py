@@ -1995,34 +1995,63 @@ def then_error_exists(ctx: dict) -> None:
 
 @then(parsers.re(r"no accounts were modified on the seller"))
 def then_no_accounts_modified(ctx: dict) -> None:
-    """Assert no accounts were created/modified/deleted by the failed request.
+    """Assert the refused sync left no account behind for the domains it named.
 
-    Queries the DB for the tenant's account set and verifies it matches
-    the pre-request baseline (zero accounts if none were pre-created, or
-    the exact set from ctx["pre_request_account_ids"] if captured).
+    ITS ONLY BINDING IS THE UNAUTHENTICATED ONE (@T-UC-011-ext-a-no-token), and that
+    is the branch this step used to skip entirely: with no ``tenant``/``principal`` in
+    ctx it fell to ``else: pass`` and asserted NOTHING, while its docstring claimed to
+    query the DB and compare against a baseline. The authenticated branch was no better
+    — it read ``ctx["pre_request_account_ids"]`` with a ``set()`` default and NO step
+    writes that key, so it asserted "no accounts EXIST", which is a different claim from
+    "none were modified" the moment a fixture seeds one (salesagent-b9hi1.1).
+
+    The unauthenticated branch now grades the real obligation against the request as
+    sent: an AUTH_MISSING refusal must not have created an account for any brand domain
+    the request named. That is what "system state unchanged" means for a caller who
+    could not be identified, and it needs no baseline — before the request, none of
+    those accounts could have been theirs.
     """
-    from src.core.database.database_session import get_db_session
-    from src.core.database.repositories.account import AccountRepository
-
     _get_error(ctx)  # Confirm an error occurred
     tenant = ctx.get("tenant")
     principal = ctx.get("principal")
+
     if tenant is not None and principal is not None:
-        with get_db_session() as session:
-            repo = AccountRepository(session, tenant.tenant_id)
-            current_accounts = repo.list_by_principal(principal.principal_id)
-            pre_request_ids = ctx.get("pre_request_account_ids", set())
-            current_ids = {a.account_id for a in current_accounts}
-            assert current_ids == pre_request_ids, (
-                f"Accounts were modified despite error. "
-                f"Before: {pre_request_ids}, After: {current_ids}. "
-                f"Created: {current_ids - pre_request_ids}, "
-                f"Deleted: {pre_request_ids - current_ids}"
-            )
-    else:
-        # Unauthenticated caller — no tenant context, so no accounts could have been created.
-        # The error itself proves no side effects occurred for this caller.
-        pass
+        # Authenticated: a real before/after comparison, and the baseline is REQUIRED.
+        # Defaulting it silently turns this into "no accounts exist", which passes for
+        # the wrong reason and fails for the wrong reason once a fixture seeds one.
+        pre_request_ids = ctx.get("pre_request_account_ids")
+        assert pre_request_ids is not None, (
+            "No pre_request_account_ids captured, so there is no baseline to compare against "
+            "and 'no accounts were modified' cannot be graded. Capture it before the When."
+        )
+        current_ids = {a["account_id"] for a in _persisted_accounts(ctx, principal.principal_id)}
+        assert current_ids == pre_request_ids, (
+            f"Accounts were modified despite error. "
+            f"Before: {pre_request_ids}, After: {current_ids}. "
+            f"Created: {current_ids - pre_request_ids}, "
+            f"Deleted: {pre_request_ids - current_ids}"
+        )
+        return
+
+    from src.core.database.models import Account
+    from src.core.helpers.brand_key import brand_key_parts
+
+    requested = ctx.get("last_sync_accounts")
+    assert requested, (
+        "No last_sync_accounts recorded — the When that dispatched the sync must record the "
+        "entries it sent, or this step cannot tell which accounts must not exist"
+    )
+    domains = {a["brand"]["domain"] for a in requested if (a.get("brand") or {}).get("domain")}
+    assert domains, f"The dispatched sync named no brand domain, so there is nothing to check: {requested!r}"
+
+    # Unscoped by tenant on purpose: the caller was never identified, so no tenant is
+    # theirs, and "created nothing anywhere" is the honest reading of the obligation.
+    existing = {brand_key_parts(row.brand)[0] for row in ctx["env"].query(Account) if row.brand}
+    leaked = domains & existing
+    assert not leaked, (
+        f"The refused sync created accounts for {sorted(leaked)} — an unauthenticated caller's "
+        f"request must leave system state unchanged (POST-F1)"
+    )
 
 
 @then(parsers.re(r"the errors array may contain multiple errors"))
