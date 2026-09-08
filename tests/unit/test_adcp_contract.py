@@ -52,6 +52,7 @@ from src.core.schemas import (
     Product as ProductSchema,
 )
 from tests.factories.creative_asset import build_assets, image_spec, url_spec, video_spec
+from tests.helpers.delivery_pricing import package_pricing_fields
 
 
 class TestSchemaMatchesLibrary:
@@ -1899,7 +1900,9 @@ class TestAdCPContract:
             PackageDelivery,
         )
 
-        # Create AdCP-compliant delivery data using new models
+        # Create AdCP-compliant delivery data using new models.
+        # pricing_model/rate/currency are in the by_package item's `required` set and are
+        # non-nullable, so a compliance fixture that omits them is not AdCP-compliant.
         package_delivery = PackageDelivery(
             package_id="pkg_123",
             impressions=25000.0,
@@ -1907,6 +1910,7 @@ class TestAdCPContract:
             clicks=125.0,
             completed_views=None,
             pacing_index=1.0,
+            **package_pricing_fields(rate=20.03),
         )
 
         daily_breakdown = DailyBreakdown(date="2025-01-15", impressions=1250.0, spend=25.05)
