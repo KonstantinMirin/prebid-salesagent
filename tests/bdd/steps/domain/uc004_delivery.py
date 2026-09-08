@@ -844,8 +844,14 @@ def given_device_type_under_limit(ctx: dict) -> None:
 
 @when(parsers.re(r"the Buyer Agent requests delivery metrics for media_buy_ids (?P<ids_json>\[.+?\])"))
 def when_request_by_ids(ctx: dict, ids_json: str) -> None:
-    """Request delivery metrics by media_buy_ids."""
+    """Request delivery metrics by media_buy_ids, recording the ids it sent.
+
+    ``ctx["requested_media_buy_ids"]`` is the request as sent, and the non-disclosure
+    Then needs it: it used to look for ``target_media_buy_id`` or ``media_buy_id``,
+    neither of which any step writes (salesagent-b9hi1.1).
+    """
     media_buy_ids = _parse_json_list(ids_json)
+    ctx["requested_media_buy_ids"] = media_buy_ids
     dispatch_request(ctx, media_buy_ids=media_buy_ids)
 
 
@@ -1158,7 +1164,8 @@ def when_request_with_dimensions(ctx: dict, mb_id: str, dims_json: str) -> None:
 
 
 def _request_single_mb(ctx: dict, mb_id: str) -> None:
-    """Shared: request delivery for a single media buy."""
+    """Shared: request delivery for a single media buy, recording the id it sent."""
+    ctx["requested_media_buy_ids"] = [mb_id]
     dispatch_request(ctx, media_buy_ids=[mb_id])
 
 
@@ -2456,16 +2463,35 @@ def then_no_deliveries_field(ctx: dict) -> None:
 
 @then(parsers.parse("the error should NOT reveal that the media buy exists"))
 def then_error_no_reveal(ctx: dict) -> None:
-    """Assert error does not leak existence information via message content or ID echoing."""
+    """Assert the refusal leaks no existence information — in the message OR by echoing.
+
+    BOTH halves run. The id-echo half used to be gated on
+    ``ctx.get("target_media_buy_id") or ctx.get("media_buy_id")``, and NO step writes
+    either key, so ``mb_id`` was always ``""`` and the half was skipped every time it
+    ran — the scenario named a security obligation and graded half of it
+    (salesagent-b9hi1.1). It now reads the request as sent, and FAILS if that is
+    missing rather than skipping.
+
+    @T-UC-004-ext-d is the non-disclosure scenario: a non-owner asking about someone
+    else's media buy must get media_buy_not_found, worded so it cannot be told apart
+    from a buy that never existed. Echoing the requested id ONCE is normal — "no media
+    buy found for X" repeats what the buyer sent and reveals nothing — so the bound is
+    on repetition, which is the shape that starts to read like confirmation.
+    """
     error = ctx.get("error")
     assert error is not None, "Expected an error"
     msg = _get_error_message(error).lower()
     leaking_phrases = ["exists", "belongs to", "owned by", "not authorized for", "access denied"]
     for phrase in leaking_phrases:
         assert phrase not in msg, f"Error leaks existence info via phrase {phrase!r}: {error}"
-    # The media_buy_id should not be echoed back in a way that confirms existence
-    mb_id = ctx.get("target_media_buy_id") or ctx.get("media_buy_id") or ""
-    if mb_id:
+
+    requested = ctx.get("requested_media_buy_ids")
+    assert requested, (
+        "No requested_media_buy_ids recorded — the When that dispatched must record what it "
+        "sent, or the id-echo half of this non-disclosure check grades nothing"
+    )
+    for label in requested:
+        mb_id = _resolve_media_buy_id(ctx, label)
         assert msg.count(mb_id.lower()) <= 1, (
             f"Error repeatedly echoes media_buy_id {mb_id!r}, which may reveal existence: {error}"
         )
