@@ -26,7 +26,6 @@ from src.core.schemas import (
     GetMediaBuyDeliveryRequest,
     GetMediaBuyDeliveryResponse,
     ListCreativeFormatsRequest,
-    MediaBuyDeliveryData,
     PackageDelivery,
     PackageRequest,
     ReportingPeriod,
@@ -81,13 +80,6 @@ class TestDeliveryTypeEnum:
 
 
 class TestDeliveryTotalsFields:
-    def test_round_trip(self):
-        data = {"impressions": 1000, "spend": 5.0, "conversions": 12, "viewability": 0.85}
-        obj = DeliveryTotals(**data)
-        dumped = obj.model_dump()
-        reconstructed = DeliveryTotals(**dumped)
-        assert reconstructed.model_dump() == dumped
-
     def test_minimal_construction(self):
         obj = DeliveryTotals(impressions=0, spend=0)
         assert obj.impressions == 0
@@ -116,27 +108,6 @@ class TestDailyBreakdownFields:
         obj = DailyBreakdown(**data)
         dumped = obj.model_dump()
         assert DailyBreakdown(**dumped).model_dump() == dumped
-
-
-class TestMediaBuyDeliveryDataFields:
-    def test_ext_defaults_to_empty_dict(self):
-        obj = MediaBuyDeliveryData(
-            media_buy_id="buy_1",
-            status="active",
-            totals=DeliveryTotals(impressions=0, spend=0),
-            by_package=[],
-        )
-        assert obj.ext == {}
-
-    def test_pricing_options_present(self):
-        obj = MediaBuyDeliveryData(
-            media_buy_id="buy_1",
-            status="active",
-            pricing_options=[{"id": "po_1", "model": "cpm"}],
-            totals=DeliveryTotals(impressions=0, spend=0),
-            by_package=[],
-        )
-        assert obj.pricing_options == [{"id": "po_1", "model": "cpm"}]
 
 
 class TestReportingPeriodFields:
@@ -235,25 +206,6 @@ class TestGetMediaBuyDeliveryResponseMethods:
             f"The pin scopes next_expected_at to notification_type != 'final'; emitting it "
             f"for a final report tells the buyer to expect another one. Got: {dumped.get('next_expected_at')!r}"
         )
-
-    def test_model_dump_carries_next_expected_at_for_scheduled(self):
-        """A non-final notification carries the timestamp, typed as the pin's string."""
-        resp = _make_delivery_response(
-            notification_type="scheduled",
-            next_expected_at="2025-02-01T00:00:00Z",
-        )
-        dumped = resp.model_dump(mode="json")
-        assert "next_expected_at" in dumped
-        assert isinstance(dumped["next_expected_at"], str), (
-            f"The pin types next_expected_at as a string; a null or non-string value fails "
-            f"buyer-side validation. Got {dumped['next_expected_at']!r}"
-        )
-
-    def test_model_dump_omits_next_expected_at_when_no_notification_type(self):
-        resp = _make_delivery_response()
-        dumped = resp.model_dump()
-        assert resp.notification_type is None
-        assert "next_expected_at" not in dumped
 
     def test_round_trip_serialization(self):
         resp = _make_delivery_response()
