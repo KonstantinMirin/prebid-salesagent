@@ -90,3 +90,31 @@ def delivery_pricing_options(
             is_fixed=True,
         )
     }
+
+
+def seed_delivery_pricing(
+    tenant: Any,
+    product_id: str = "prod_001",
+    pricing_model: str = "cpm",
+    rate: str | Decimal = "5.00",
+    currency: str = "USD",
+) -> str:
+    """PERSIST the Product + PricingOption rows a delivery-reporting buy needs; return the id.
+
+    The integration ``DeliveryPollEnv`` runs the REAL ``_get_pricing_options``, which reads
+    the tenant's ``pricing_options`` rows and reconstructs each synthetic id, so a package
+    naming an id no row produces resolves to nothing. Pass ``tenant`` (the object, not the
+    id: ``ProductFactory`` derives ``tenant_id`` from its ``tenant`` SubFactory, so an id
+    kwarg alone leaves the row on a freshly-minted tenant).
+    """
+    from tests.factories.product import ProductFactory
+
+    product = ProductFactory(tenant=tenant, product_id=product_id)
+    PricingOptionFactory(
+        product=product,
+        pricing_model=pricing_model,
+        rate=Decimal(str(rate)),
+        currency=currency,
+        is_fixed=True,
+    )
+    return f"{pricing_model}_{currency.lower()}_fixed"
