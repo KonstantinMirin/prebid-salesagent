@@ -15,6 +15,8 @@ from adcp import FormatId as LibraryFormatId
 from adcp.types import ValidationMode
 from pydantic import BaseModel, ValidationError
 
+from src.core.tenant_context import LazyTenantContext
+
 if TYPE_CHECKING:
     from adcp.types import AccountReference as LibraryAccountReference
     from adcp.types import ContextObject
@@ -522,7 +524,7 @@ def process_and_upload_package_creatives(
     account: "LibraryAccountReference | None" = None,
     adcp_context: "ContextObject | None" = None,
     principal_id: str,
-    tenant: dict,
+    tenant: LazyTenantContext,
 ) -> tuple[list["PackageRequest"], dict[str, list[str]]]:
     """Upload creatives from package.creatives arrays and return updated packages.
 

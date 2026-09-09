@@ -11,6 +11,7 @@ from src.core.database.repositories.uow import CreativeUoW, WorkflowUoW
 from src.core.exceptions import AdCPAdapterError, AdCPAuthRequiredError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum
+from src.core.tenant_context import LazyTenantContext
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 def _create_sync_workflow_steps(
     creatives_needing_approval: list[dict[str, Any]],
     principal_id: str,
-    tenant: dict[str, Any],
+    tenant: LazyTenantContext,
     approval_mode: str,
     push_notification_config: PushNotificationConfig | None,
     context: ContextObject | dict | None,
@@ -122,7 +123,7 @@ def _create_sync_workflow_steps(
 
 def _send_creative_notifications(
     creatives_needing_approval: list[dict[str, Any]],
-    tenant: dict[str, Any],
+    tenant: LazyTenantContext,
     approval_mode: str,
     principal_id: str | None,
 ) -> None:
@@ -178,7 +179,7 @@ def _send_creative_notifications(
 
 
 def _audit_log_sync(
-    tenant: dict[str, Any],
+    tenant: LazyTenantContext,
     principal_id: str | None,
     synced_creatives: list,
     failed_creatives: list[dict[str, Any]],

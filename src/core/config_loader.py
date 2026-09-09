@@ -285,7 +285,7 @@ def tenant_id_for(*, virtual_host: str | None = None, subdomain: str | None = No
         return None
     try:
         with get_db_session() as db_session:
-            filters = {"virtual_host": virtual_host} if virtual_host else {"subdomain": subdomain}
+            filters: dict[str, str] = {"virtual_host": virtual_host} if virtual_host else {"subdomain": subdomain or ""}
             stmt = select(Tenant.tenant_id).filter_by(is_active=True, **filters)
             return db_session.scalars(stmt).first()
     except Exception as e:

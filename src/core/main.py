@@ -428,6 +428,8 @@ class RegistryTool(Tool):
     """
 
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
+        from types import MappingProxyType
+
         from fastmcp.server.dependencies import get_context, get_http_headers
 
         from src.core.auth_context import AuthContext
@@ -443,7 +445,7 @@ class RegistryTool(Tool):
             # stash it on ctx state for this line to read; the boundary resolves now, so the
             # middleware is gone and MCP enters through invoke_tool like A2A and REST rather
             # than through the lower-level invoke() with spec.impl already selected.
-            credential = AuthContext(headers=get_http_headers(include_all=True) or {})
+            credential = AuthContext(headers=MappingProxyType(get_http_headers(include_all=True) or {}))
             return mcp_result(await invoke_tool(self.name, req, credential, "mcp"))
         except Exception as exc:
             # Records to the activity feed and audit log, then raises AdCPToolError carrying

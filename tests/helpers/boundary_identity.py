@@ -1,7 +1,7 @@
 """One seam for tests that must reach past identity resolution.
 
 Identity is resolved in exactly one place -- ``src/core/tools/_boundary.invoke_tool``, via
-``src.core.resolved_identity.resolve_identity``. Tests whose subject is something ELSE (the
+``src.core.resolved_identity._resolve_identity``. Tests whose subject is something ELSE (the
 exception-handler stack, a tool's own logic) previously reached past it with FastAPI's
 ``app.dependency_overrides[_resolve_auth_dep]``. That dependency is gone: the route has no
 identity dependency to override, because the route no longer resolves.
@@ -40,7 +40,7 @@ def resolved_as(identity: ResolvedIdentity | None = None) -> Iterator[ResolvedId
             tenant=TenantContext(tenant_id="test_tenant"),
             protocol="rest",
         )
-    with patch("src.core.resolved_identity.resolve_identity", return_value=identity):
+    with patch("src.core.resolved_identity._resolve_identity", return_value=identity):
         yield identity
 
 
@@ -57,5 +57,5 @@ def refused_as(error: Exception) -> Iterator[Exception]:
     and watch a downstream guard reject it. That state is now unconstructable: the tools
     declare auth="required", so resolution refuses first and nothing partial reaches them.
     """
-    with patch("src.core.resolved_identity.resolve_identity", side_effect=error):
+    with patch("src.core.resolved_identity._resolve_identity", side_effect=error):
         yield error
