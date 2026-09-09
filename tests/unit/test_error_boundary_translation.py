@@ -54,6 +54,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
+from src.core.auth_context import AuthContext
 from src.core.errors.codes import CODE_TABLE, Recovery
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -94,19 +95,15 @@ def _capabilities_response(side_effect: Exception):
     from starlette.testclient import TestClient
 
     from src.app import app
-    from src.core.auth_context import _resolve_auth_dep
+    from tests.helpers.boundary_identity import resolved_as
 
-    # The route's identity dependency reads the tenant out of Postgres, and the
-    # handler stack under test never looks at it. Overriding the dependency is
-    # FastAPI's own seam for that, so no part of identity resolution has to be
-    # faked to reach the exception handlers.
-    app.dependency_overrides[_resolve_auth_dep] = lambda: None
-    try:
-        with registry_impl("get_adcp_capabilities", AsyncMock(side_effect=side_effect)):
-            client = TestClient(app, raise_server_exceptions=False)
-            return client.post("/api/v1/capabilities", json={})
-    finally:
-        app.dependency_overrides.pop(_resolve_auth_dep, None)
+    # The boundary resolves identity from the database, and the handler stack under test
+    # never looks at it. This used to override the route's identity DEPENDENCY -- FastAPI's
+    # own seam -- but the route has no such dependency now: it hands a credential to the
+    # boundary, which resolves. One resolver means one patch point.
+    with resolved_as(), registry_impl("get_adcp_capabilities", AsyncMock(side_effect=side_effect)):
+        client = TestClient(app, raise_server_exceptions=False)
+        return client.post("/api/v1/capabilities", json={})
 
 
 # ---------------------------------------------------------------------------
@@ -734,7 +731,7 @@ class TestA2AExplicitSkillReraise:
 
         with patch.object(handler, "_dispatch_skill", mock_skill):
             with pytest.raises(AdCPValidationError) as exc_info:
-                await handler._handle_explicit_skill("get_products", {}, None)
+                await handler._handle_explicit_skill("get_products", {}, None, AuthContext())
 
         assert exc_info.value is raised
         assert exc_info.value.field == "packages[0].budget"
@@ -761,7 +758,7 @@ class TestA2AExplicitSkillReraise:
 
         with patch.object(handler, "_dispatch_skill", mock_skill):
             with pytest.raises(expected_cls) as exc_info:
-                await handler._handle_explicit_skill("get_products", {}, None)
+                await handler._handle_explicit_skill("get_products", {}, None, AuthContext())
 
         assert exc_info.value.error_code == expected_cls._code
         assert exc_info.value.__cause__ is raised
@@ -781,7 +778,7 @@ class TestA2AExplicitSkillReraise:
 
         with patch.object(handler, "_dispatch_skill", mock_skill):
             with pytest.raises(MethodNotFoundError) as exc_info:
-                await handler._handle_explicit_skill("get_products", {}, None)
+                await handler._handle_explicit_skill("get_products", {}, None, AuthContext())
 
         assert exc_info.value is raised
 
