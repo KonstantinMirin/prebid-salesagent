@@ -1,5 +1,4 @@
 # Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-032 Compliance Test Controller (Sandbox-Only)
   As a conformance Runner driving compliance tests against a seller's sandbox

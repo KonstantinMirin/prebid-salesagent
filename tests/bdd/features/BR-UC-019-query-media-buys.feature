@@ -1,5 +1,4 @@
 # Generated from adcp-req @ 5967bbda117667537ac193ba00aced716e4e0b7c on 2026-08-18T19:09:26Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-019 Query Media Buys
   As a Buyer (Human or AI Agent)
