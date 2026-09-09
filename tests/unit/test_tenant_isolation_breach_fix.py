@@ -51,7 +51,7 @@ def test_get_principal_from_context_uses_global_lookup_when_no_tenant_detected()
     context = Mock()
     context.meta = {
         "headers": {
-            "x-adcp-auth": "some-valid-token",
+            "Authorization": "Bearer some-valid-token",
             "host": "localhost",  # Not a valid subdomain for tenant detection
         }
     }

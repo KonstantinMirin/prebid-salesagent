@@ -18,7 +18,7 @@ class TestAuthRemovalChanges:
         context = Mock(spec=["meta"])  # Limit to only meta attribute
         context.meta = {}  # Empty meta, no headers
 
-        with patch("src.core.auth.get_http_headers", return_value={}):  # No x-adcp-auth header
+        with patch("src.core.auth.get_http_headers", return_value={}):  # No Authorization header
             principal_id, tenant = get_principal_from_context(context)
             assert principal_id is None
             assert tenant is None
@@ -32,7 +32,7 @@ class TestAuthRemovalChanges:
         # Must include Host header for tenant detection (security fix)
         context.meta = {
             "headers": {
-                "x-adcp-auth": "test-token",
+                "Authorization": "Bearer test-token",
                 "host": "test-tenant.sales-agent.example.com",  # Required for tenant detection
             }
         }
@@ -40,7 +40,7 @@ class TestAuthRemovalChanges:
         with patch(
             "src.core.auth.get_http_headers",
             return_value={
-                "x-adcp-auth": "test-token",
+                "Authorization": "Bearer test-token",
                 "host": "test-tenant.sales-agent.example.com",
             },
         ):

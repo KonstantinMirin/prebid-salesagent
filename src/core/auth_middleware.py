@@ -2,7 +2,7 @@
 
 Replaces the fragile 3-middleware chain (auth_context_middleware +
 a2a_auth_middleware + ordering dependency) with a single middleware that:
-- Extracts token from Authorization: Bearer or x-adcp-auth headers
+- Extracts token from the Authorization: Bearer header
 - Writes to scope["state"] (backs request.state)
 
 This is a pure ASGI class, NOT BaseHTTPMiddleware, avoiding ContextVar
@@ -26,8 +26,9 @@ logger = logging.getLogger(__name__)
 #:
 #: RFC 6750 §3: a bearer challenge names the scheme and, when a credential WAS presented and
 #: rejected, the ``invalid_token`` error code. Both credentials this seller accepts are
-#: bearer shaped -- ``Authorization: Bearer`` and the AdCP-conventional ``x-adcp-auth`` -- so
-#: ``Bearer`` is the scheme to name. No ``realm``: AdCP defines none for this, and RFC 7235
+#: carried in ``Authorization: Bearer`` -- the only header this seller reads a credential
+#: from -- so ``Bearer`` is the scheme to name. No ``realm``: AdCP defines none for this,
+#: and RFC 7235
 #: permits a challenge carrying the scheme alone.
 #:
 #: NOT the ``WWW-Authenticate: Signature error="..."`` family from L1/security.mdx's
@@ -225,17 +226,28 @@ class UnifiedAuthMiddleware:
             value = raw_value.decode("latin-1")
             headers[name] = value
 
-        # Token extraction: x-adcp-auth takes priority (AdCP convention),
-        # then Authorization: Bearer (case-insensitive per RFC 7235 §2.1).
+        # Token extraction: ``Authorization: Bearer`` only, case-insensitive per RFC 7235
+        # §2.1.
+        #
+        # The ``x-adcp-auth`` alias is GONE. Pinned 3.1.1
+        # L2/authentication.mdx:71 -- "The credential MUST be carried in the
+        # ``Authorization`` request header. Sellers MUST NOT require non-canonical aliases
+        # (e.g. ``x-adcp-auth``, which appeared in some early MCP-only deployments)" -- and
+        # :153 says it "is not recognized on the A2A surface" at all. Accepting it was
+        # optional ("a seller MAY accept such an alias as a transitional input"), so not
+        # accepting it is the compliant end state rather than a deviation.
+        #
+        # A caller that still sends only ``x-adcp-auth`` now presents NOTHING this seam can
+        # see, which is the correct reading: on a protected tool that is AUTH_MISSING
+        # (correctable -- send credentials and retry), never AUTH_INVALID, because nothing
+        # was presented to reject. Telling such a buyer their token is invalid would be a
+        # false diagnosis of a header problem. The pinned spec anticipates exactly this
+        # migration at :157.
         token: str | None = None
-        x_adcp = headers.get("x-adcp-auth", "").strip()
-        if x_adcp:
-            token = x_adcp
-        else:
-            auth_header = headers.get("authorization", "").strip()
-            if auth_header.lower().startswith("bearer "):
-                potential = auth_header[7:].strip()
-                token = potential or None
+        auth_header = headers.get("authorization", "").strip()
+        if auth_header.lower().startswith("bearer "):
+            potential = auth_header[7:].strip()
+            token = potential or None
 
         auth_ctx = AuthContext(auth_token=token, headers=MappingProxyType(headers))
 

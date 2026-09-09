@@ -819,7 +819,7 @@ class BaseTestEnv:
             from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 
             headers = {
-                "x-adcp-auth": auth_token,
+                "Authorization": f"Bearer {auth_token}",
                 "x-adcp-tenant": a2a_identity.tenant_id or "",
             }
             server_context = ServerCallContext(
@@ -1072,14 +1072,24 @@ class BaseTestEnv:
         One builder for both in-process wire transports: MCP patches
         ``get_http_headers`` to return it, REST sends it on the TestClient
         request. Shape is what production reads off the request
-        (``src/core/auth_middleware.py``: ``x-adcp-auth`` for the token,
-        ``x-adcp-tenant`` for tenant detection). Empty when no credential is
-        presented, so callers can splat it unconditionally.
+        (``src/core/auth_middleware.py``: ``Authorization: Bearer`` for the
+        token, ``x-adcp-tenant`` for tenant detection). Empty when no credential
+        is presented, so callers can splat it unconditionally.
+
+        ``Authorization``, not ``x-adcp-auth``. The alias is no longer accepted
+        anywhere in production (pinned 3.1.1 L2/authentication.mdx:71 and :153),
+        and while the harness still sent it, every transport's "invalid
+        credential" scenario was really testing an UNRECOGNIZED HEADER -- which
+        is why BR-UC-010 graded A2A as AUTH_INVALID where its sibling rows
+        graded success.
         """
         token = getattr(identity, "auth_token", None)
         if not token:
             return {}
-        return {"x-adcp-auth": token, "x-adcp-tenant": getattr(identity, "tenant_id", None) or ""}
+        return {
+            "Authorization": f"Bearer {token}",
+            "x-adcp-tenant": getattr(identity, "tenant_id", None) or "",
+        }
 
     @staticmethod
     def _presents_unresolvable_credential(identity: Any) -> bool:

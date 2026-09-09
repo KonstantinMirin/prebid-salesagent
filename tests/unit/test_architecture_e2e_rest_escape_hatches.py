@@ -355,7 +355,6 @@ EXPECTED_E2E_REST_EXCLUSION_POINTS: tuple[str, ...] = (
     "marker_names & _TRANSPORT_SPECIFIC_TAGS",
     # The UC-010 auth outline dispatches per-row via its own channel column and
     # has no e2e leg (#1592); it returns before any transport list is built.
-    "marker_names & _CHANNEL_COLUMN_TAGS",
     "single",
     "any((t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names))",
     "any((t.startswith(tag_prefix) for t in marker_names)) and required_tag in marker_names",

@@ -619,28 +619,23 @@ def when_call_unauthenticated(ctx: dict) -> None:
     _call_capabilities(ctx, identity=ctx["env"].anonymous_identity())
 
 
-@when(parsers.re(r"the Buyer Agent invokes get_adcp_capabilities via (?P<channel>MCP|A2A|REST)$"))
-def when_invoke_via_channel(ctx: dict, channel: str) -> None:
-    """Auth-outline dispatch: the <channel> column IS the transport (the
-    pytest-level parametrization is redundant for this outline by design)."""
-    ctx["transport"] = channel
+@when("the Buyer Agent invokes get_adcp_capabilities")
+def when_invoke_capabilities(ctx: dict) -> None:
+    """Auth-outline dispatch. Names NO transport, deliberately.
+
+    This used to match ``... via (MCP|A2A|REST)`` and assign ``ctx["transport"]`` from the
+    outline's own column, overriding the pytest-level parametrization -- its docstring
+    called that parametrization "redundant for this outline by design". It was not
+    redundant, it was the whole point: with the transport supplied as DATA, the Examples
+    table could grade A2A differently from MCP and REST, and it did. Taking the column away
+    hands the transport back to the shared parametrization, so one row runs on every
+    transport and a per-transport answer is unwritable here.
+    """
     identity = _identity_for_token_state(ctx)
     if identity is _DEFAULT:
         _call_capabilities(ctx)
     else:
         _call_capabilities(ctx, identity=identity)
-
-
-@when("the Buyer Agent calls get_adcp_capabilities via MCP with the token")
-def when_call_mcp_invalid_token(ctx: dict) -> None:
-    ctx["transport"] = "MCP"
-    _call_capabilities(ctx, identity=ctx["env"].invalid_token_identity())
-
-
-@when("the Buyer Agent sends a get_adcp_capabilities skill request via A2A with the token")
-def when_call_a2a_invalid_token(ctx: dict) -> None:
-    ctx["transport"] = "A2A"
-    _call_capabilities(ctx, identity=ctx["env"].invalid_token_identity())
 
 
 # ── Thens: adcp envelope ─────────────────────────────────────────────

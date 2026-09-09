@@ -42,7 +42,6 @@ SCAN_DIRS = (ROOT / "tests",)
 WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_a2a_tenant_detection_order.py", "test_a2a_delegates_to_resolve_identity"),
     ("tests/unit/test_a2a_testing_context_extraction.py", "test_dry_run_header_passed_to_resolve_identity"),
-    ("tests/unit/test_auth_bearer_header.py", "test_x_adcp_auth_takes_precedence_over_authorization_bearer"),
     ("tests/unit/test_creative.py", "test_webhook_delivered_on_approval"),
     ("tests/unit/test_creative_coverage_gaps.py", "test_slack_notification_for_rejected_creative"),
     ("tests/unit/test_creative_repository.py", "test_creates_and_flushes"),

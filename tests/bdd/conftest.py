@@ -4132,14 +4132,12 @@ _UC002_V31_SUCCESS_WIRED: set[str] = {
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
 
-# Scenario outlines whose <channel> column IS the transport: each Examples row
-# dispatches through its own channel inside the When step, so pytest-level
-# transport multiplication adds zero coverage (×3 identical in-process runs,
-# and an e2e_rest variant that never touches the live server — the channel
-# map has no e2e leg). Run once, like the @mcp/@a2a-tagged scenarios. The
-# UC-010 feature header declares the auth-policy rows deliberately
-# transport-specific (#1592).
-_CHANNEL_COLUMN_TAGS = {"T-UC-010-auth"}
+# (Deleted) A one-tag exemption, "T-UC-010-auth", held the capabilities auth outline out of
+# transport parametrization because its <channel> column supplied the transport instead.
+# That column is gone: an outline that takes the transport as DATA can grade one transport
+# differently from another, and that one did -- A2A AUTH_INVALID where MCP and REST said
+# success. The scenario names no transport now and is parametrized like every other, so a
+# per-transport answer is unwritable in it.
 
 
 def _parametrize_ctx(
@@ -4405,10 +4403,6 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     marker_names = {m.name for m in metafunc.definition.iter_markers()}
     if marker_names & _TRANSPORT_SPECIFIC_TAGS:
         # Transport-specific scenario — don't multiply
-        return
-
-    if marker_names & _CHANNEL_COLUMN_TAGS:
-        # Channel-column outline — each row dispatches via its own channel
         return
 
     # Single-transport scenarios still get a real (one-element) parametrization,

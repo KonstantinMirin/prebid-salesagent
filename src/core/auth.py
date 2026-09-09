@@ -77,7 +77,7 @@ def get_principal_from_context(
 ) -> tuple[str | None, dict | None]:
     """Extract principal ID and tenant context from the FastMCP context or ToolContext.
 
-    For FastMCP Context: Uses get_http_headers() to extract from x-adcp-auth header.
+    For FastMCP Context: Uses get_http_headers() to extract from the Authorization header.
     For ToolContext: Directly returns principal_id and tenant_id from the context object.
 
     Args:
@@ -218,12 +218,14 @@ def get_principal_from_context(
             logger.debug("No tenant detected from headers")
 
     # NOW check for auth token (after tenant resolution)
-    # Accept either x-adcp-auth (preferred) or Authorization: Bearer (standard HTTP/MCP)
-    # This ensures compatibility with MCP clients that only support Authorization header
-    auth_token = _get_header_case_insensitive(headers, "x-adcp-auth")
-    auth_source = "x-adcp-auth" if auth_token else None
+    # ``Authorization: Bearer`` only. The ``x-adcp-auth`` alias is gone -- pinned 3.1.1
+    # L2/authentication.mdx:71 requires the credential in ``Authorization`` and forbids
+    # requiring non-canonical aliases; :153 says the alias is unrecognized on A2A entirely.
+    # A caller sending only the alias presents nothing, so a protected tool answers
+    # AUTH_MISSING rather than AUTH_INVALID.
+    auth_token = None
+    auth_source = None
 
-    # If x-adcp-auth not present, try Authorization: Bearer (for Anthropic, standard MCP clients)
     if not auth_token:
         authorization_header = _get_header_case_insensitive(headers, "Authorization")
         if authorization_header:

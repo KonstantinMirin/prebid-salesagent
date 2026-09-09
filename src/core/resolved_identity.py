@@ -50,15 +50,19 @@ from src.core.http_utils import get_header_case_insensitive as _get_header_case_
 def _extract_auth_token(headers: dict) -> tuple[str | None, str | None]:
     """Extract auth token from headers.
 
-    Checks x-adcp-auth first, then Authorization: Bearer.
+    ``Authorization: Bearer`` only. The ``x-adcp-auth`` alias is gone: pinned 3.1.1
+    L2/authentication.mdx:71 says the credential MUST be carried in ``Authorization`` and
+    that sellers MUST NOT require non-canonical aliases, and :153 says the alias is not
+    recognized on the A2A surface at all. Accepting it was explicitly optional, so
+    declining to is the compliant end state.
+
+    A caller sending only the alias therefore presents nothing, which is the right reading:
+    a protected tool answers AUTH_MISSING (nothing was presented to reject), never
+    AUTH_INVALID.
 
     Returns:
-        (token, source) tuple — source is "x-adcp-auth" or "Authorization: Bearer"
+        (token, source) tuple — source is "Authorization: Bearer" or None
     """
-    token = _get_header_case_insensitive(headers, "x-adcp-auth")
-    if token:
-        return token, "x-adcp-auth"
-
     authorization = _get_header_case_insensitive(headers, "Authorization")
     if authorization and authorization.lower().startswith("bearer "):
         potential_token = authorization[7:].strip()
