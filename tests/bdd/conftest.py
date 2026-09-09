@@ -84,6 +84,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
+    "tests.bdd.steps.domain.security_tenant_isolation",
     "tests.bdd.steps.domain.protocol_version_negotiation",
 ]
 
@@ -5207,6 +5208,16 @@ ENV_ROUTES: list[EnvRoute] = [
         # BR-SECURITY-001 grades that an UNTYPED exception cannot leak internals to
         # the wire. It dispatches get_products, so it takes the UC-GET-PRODUCTS branch.
         when=lambda m: any(t.startswith("T-SECURITY-001") for t in m),
+        env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="security-tenant-isolation",
+        # BR-SECURITY-002 grades that a credential resolves to exactly one tenant and one
+        # principal. It dispatches get_products, so like BR-SECURITY-001 it takes the
+        # UC-GET-PRODUCTS branch -- but it seeds its OWN two tenants rather than relying on
+        # the branch's default one, because a single-tenant database cannot exhibit the leak
+        # it is looking for.
+        when=lambda m: any(t.startswith("T-SECURITY-002") for t in m),
         env_builder=_build_product_env,
     ),
     EnvRoute(

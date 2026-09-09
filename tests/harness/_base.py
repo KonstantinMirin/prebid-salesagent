@@ -827,19 +827,31 @@ class BaseTestEnv:
             )
         else:
             # _get_auth_token must return a non-None value when identity exists,
-            # otherwise the handler rejects the request before _resolve_a2a_identity
-            # is called. Use auth_token from identity, falling back to a sentinel.
-            handler._resolve_a2a_identity = lambda *args, **kw: a2a_identity  # type: ignore[assignment]
+            # otherwise the handler rejects the request before the boundary resolves.
+            # Use auth_token from identity, falling back to a sentinel.
+            #
+            # The sibling assignment to ``handler._resolve_a2a_identity`` is gone: that
+            # method is deleted, so assigning it created a fresh attribute nothing reads and
+            # left the harness looking like it still injected an identity when it did not.
             handler._get_auth_token = lambda *args, **kw: (  # type: ignore[assignment]
                 (a2a_identity.auth_token or "harness-test-token") if a2a_identity else None
             )
             server_context = ServerCallContext()
 
-        # Set tenant ContextVar so production code can read it
-        if a2a_identity and a2a_identity.tenant:
+        # Seed the ambient tenant ContextVar for production code that still reads it.
+        #
+        # ``getattr``, not attribute access: a scenario whose SUBJECT is tenant resolution
+        # dispatches a bare credential (a token/tenant pair), not a resolved identity, and
+        # must not have a tenant pushed here at all -- doing so would answer the question the
+        # scenario is asking, from the test's own belief rather than from the resolver.
+        #
+        # This block is the ambient channel salesagent-02rgd Phase 2 removes. Until then it
+        # stays for the readers that have not moved to identity.tenant.
+        ambient_tenant = getattr(a2a_identity, "tenant", None) if a2a_identity else None
+        if ambient_tenant is not None:
             from src.core.config_loader import set_current_tenant
 
-            set_current_tenant(a2a_identity.tenant)
+            set_current_tenant(ambient_tenant)
 
         message = create_a2a_message_with_skill(skill_name=skill_name, parameters=parameters)
         if protocol_push_config is None:
@@ -1775,23 +1787,25 @@ class IntegrationEnv(BaseTestEnv):
         return list(self.get_session().scalars(stmt).all())
 
     def get_rest_client(self) -> Any:
-        """Return FastAPI TestClient with default auth dep override.
+        """Return the FastAPI TestClient. NO auth dependency override.
 
-        The default dep override returns ``self.identity_for(Transport.REST)``.
-        ``_run_rest_request`` overrides this per-request for multi-agent and
-        no-auth scenarios. Direct callers of ``get_rest_client()`` get the
-        default identity.
+        There is nothing left to override. REST routes take a ``GetAuthContext`` and the
+        identity is resolved once, inside ``invoke_tool``, from the credential on the
+        request -- so this used to install ``dependency_overrides`` for ``_require_auth_dep``
+        and ``_resolve_auth_dep``, and both of those are deleted.
+
+        Removing it is what makes a REST scenario grade resolution rather than assume it.
+        With the override in place every REST request ran as a pre-built identity handed in
+        by the test, so the header -> ``_detect_tenant`` -> tenant-scoped principal lookup
+        chain never executed and a scenario could not tell a correct resolution from a broken
+        one. The request now carries a real credential (``_rest_request_headers``) and the
+        server resolves it, the same way MCP and A2A already did.
         """
         if self._rest_client is None:
             from starlette.testclient import TestClient
 
             from src.app import app
-            from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
-            from tests.harness.transport import Transport
 
-            rest_identity = self.identity_for(Transport.REST)
-            app.dependency_overrides[_require_auth_dep] = lambda: rest_identity
-            app.dependency_overrides[_resolve_auth_dep] = lambda: rest_identity
             self._rest_client = TestClient(app, raise_server_exceptions=self.REST_RAISE_SERVER_EXCEPTIONS)
 
         return self._rest_client
