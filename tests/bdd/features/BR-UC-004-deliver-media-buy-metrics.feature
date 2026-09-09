@@ -24,7 +24,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Background:
     Given a Seller Agent is operational and accepting requests
     And a tenant exists with completed setup checklist
-    And an authenticated Buyer with principal_id "buyer-001"
+    And the Buyer is authenticated
     And the principal "buyer-001" exists in the tenant database
 
 
@@ -461,7 +461,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
 
   @T-UC-004-ext-b @extension @ext-b @error
   Scenario: Principal not found in tenant database
-    Given an authenticated Buyer with principal_id "unknown-buyer"
+    Given the Buyer is authenticated
     And no principal "unknown-buyer" exists in the tenant database
     When the Buyer Agent requests delivery metrics
     Then the error is compliant with the AdCP error spec
@@ -490,7 +490,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   @T-UC-004-ext-d @extension @ext-d @error @invariant @ownership @nfr @nfr-001
   Scenario: Ownership mismatch - returns media_buy_not_found for security
     Given a media buy "mb-other" owned by "other-buyer"
-    And an authenticated Buyer with principal_id "buyer-001"
+    And the Buyer is authenticated
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-other"]
     Then the error is compliant with the AdCP error spec
     And the operation should fail

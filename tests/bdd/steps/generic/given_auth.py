@@ -155,23 +155,33 @@ def given_buyer_authenticated(
     named = tenant_id is not None or principal_id is not None
 
     # REFUSE rather than silently seed nothing. ensure_tenant_principal returns
-    # early when ctx already holds a tenant, so naming a principal/tenant AFTER a
-    # Background has authenticated would re-point the env at the named pair and
-    # seed nothing for it -- _resolve_auth_token then finds no Principal row and
-    # returns None, and the scenario runs UNAUTHENTICATED while its own sentence
-    # says otherwise. That is the quiet failure this repo forbids, and it is worse
-    # than a crash: the scenario still reports a result, just not the one it names.
+    # early when ctx already holds a tenant, so naming a DIFFERENT principal/tenant
+    # after one is established would re-point the env at the named pair and seed
+    # nothing for it -- _resolve_auth_token then finds no Principal row and returns
+    # None, and the scenario runs UNAUTHENTICATED while its own sentence says
+    # otherwise. That is the quiet failure this repo forbids, and it is worse than a
+    # crash: the scenario still reports a result, just not the one it names.
     #
-    # No caller hits this today (all 381 lines pass neither parameter), which is
-    # exactly why it is worth failing loudly now -- the first scenario to use the
-    # parameterized spelling would otherwise inherit a silent no-op.
+    # The refusal turns on the pair DIFFERING, not merely on ctx already holding a
+    # tenant. An env route may seed the identity before any Given runs -- UC-019's
+    # route seeds tenant + "buyer-001" and its Background then names "buyer-001" --
+    # and naming the pair that is already established is a no-op, not a conflict.
+    # Refusing it would reject the scenario for agreeing with its own seed.
     if named and "tenant" in ctx:
-        raise AssertionError(
-            f"this scenario already authenticated before naming principal={principal_id!r} "
-            f"tenant={tenant_id!r}, so the named pair would be switched to but never seeded, "
-            f"and the request would go out unauthenticated. Name the identity in the FIRST "
-            f"authentication step of the scenario (or its Background), not in a later one."
+        established = (
+            getattr(ctx.get("tenant"), "tenant_id", None),
+            getattr(ctx.get("principal"), "principal_id", None),
         )
+        wanted = (tenant_id or established[0], principal_id or established[1])
+        if wanted != established:
+            raise AssertionError(
+                f"this scenario already authenticated as {established} before naming "
+                f"principal={principal_id!r} tenant={tenant_id!r}, so the named pair would "
+                f"be switched to but never seeded, and the request would go out "
+                f"unauthenticated. Name the identity in the FIRST authentication step of "
+                f"the scenario (or its Background), not in a later one."
+            )
+        return
 
     if tenant_id is not None:
         env.switch_tenant(tenant_id)

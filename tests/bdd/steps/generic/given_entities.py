@@ -54,13 +54,6 @@ def given_tenant_setup_complete(ctx: dict) -> None:
     ctx.setdefault("tenant_id", "test_tenant")
 
 
-@given(parsers.parse('an authenticated Buyer with principal_id "{principal_id}"'))
-def given_authenticated_buyer(ctx: dict, principal_id: str) -> None:
-    """Buyer is authenticated with the given principal_id (Background)."""
-    ctx["principal_id"] = principal_id
-    ctx["has_auth"] = True
-
-
 @given(parsers.parse('the principal "{principal_id}" exists in the tenant database'))
 def given_principal_exists(ctx: dict, principal_id: str) -> None:
     """Principal exists in the tenant database (Background).
@@ -69,13 +62,6 @@ def given_principal_exists(ctx: dict, principal_id: str) -> None:
     This step records the principal_id for later use.
     """
     ctx.setdefault("principal_id", principal_id)
-
-
-@given(parsers.parse('an authenticated request with principal_id "{principal_id}"'))
-def given_authenticated_request(ctx: dict, principal_id: str) -> None:
-    """An authenticated request with a specific principal_id."""
-    ctx["principal_id"] = principal_id
-    ctx["has_auth"] = True
 
 
 @given("at least one creative agent is registered with format definitions")
