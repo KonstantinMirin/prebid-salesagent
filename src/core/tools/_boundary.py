@@ -214,11 +214,43 @@ async def invoke_tool(
     # and principal to scope it with -- REST from headers in its exception handler, MCP via
     # tool_error_logging. That is the same defect as the auth decision, in the observability
     # dimension: a value the caller already has, derived again somewhere else.
+    #
+    # TYPING lives here for the same reason recording does. ``adcp_error_for`` answers "what
+    # IS this failure" -- an untyped ValueError is a VALIDATION_ERROR, a PermissionError is a
+    # PERMISSION_DENIED, anything else is an INTERNAL_ERROR -- and that answer does not depend
+    # on who is asking. Three transports each reached it by their own route (MCP through
+    # ``_handle_tool_exception``, REST through registered exception handlers, A2A through
+    # ``_handle_explicit_skill`` AND ``_build_failed_skill_result``), which is four sites
+    # deciding one transport-agnostic question.
+    #
+    # What stays per-transport is RENDERING: a JSON-RPC error, an HTTP status, a ToolError.
+    # Those are genuinely different and belong where they are. A transport now receives an
+    # error whose identity is already settled and only has to write it down.
+    #
+    # The record is scoped with the TYPED error, so the code the buyer sees and the code the
+    # operator reads are the same object rather than two independent normalizations of one
+    # exception.
     try:
         return await _invoke_stamped(tool_name, spec.impl, req, identity)
     except Exception as exc:
+        from src.core.exceptions import adcp_error_for
         from src.core.tool_error_logging import record_boundary_error
 
+        # EVERY exception, including the catch-all to INTERNAL_ERROR. There is no escape
+        # hatch for "a transport's own error passing through", because no transport error can
+        # be here: an implementation raises AdCPSalesAgentError and nothing else
+        # (ruff-boundary.toml bans importing ToolError at all), fastmcp's ToolError is
+        # produced on the way OUT by tool_error_logging, and a2a's A2AError is raised by the
+        # A2A handler BEFORE dispatch. A version of this that made room for one anyway was
+        # accommodating a test fixture that injected a shape production forbids.
+        typed = adcp_error_for(exc)
+        # The ORIGINAL exception goes to the recorder, not the typed one. The recorder derives
+        # the code itself, and it logs with ``exc_info``, so handing it ``typed`` would erase
+        # the only place the fault's real identity is allowed to survive: the buyer-facing
+        # envelope deliberately carries no exception text (AdCP 3.1.1 transport-errors.mdx
+        # Security Considerations), which leaves the server-side record as the sole answer to
+        # "what actually broke". BR-SECURITY-001 pins exactly that, by exception TYPE rather
+        # than by a substring, and it is what caught this being passed the wrong way round.
         record_boundary_error(
             protocol,
             tool_name,
@@ -226,6 +258,10 @@ async def invoke_tool(
             tenant_id=identity.tenant_id,
             principal_id=identity.principal_id,
         )
+        # An already-typed error comes back as the SAME object, so the common path re-raises
+        # it with its traceback and its details intact.
+        if typed is not exc:
+            raise typed from exc
         raise
 
     # No ``set_current_tenant`` anywhere on this path, deliberately. The tenant travels on

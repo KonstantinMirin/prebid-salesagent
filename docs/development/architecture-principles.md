@@ -126,7 +126,7 @@ and emits the transport's error format — REST envelope + HTTP status, MCP
 **Consequence.** The error class *is* the wire code's identity, so a new error
 condition is a new subclass, not a string. Guards enforce both sides of the
 boundary: no `ToolError` in `_impl`
-(`tests/unit/test_no_toolerror_in_impl.py`), no `Error(code=...)` construction
+(`ruff-boundary.toml`'s TID251 ban on `fastmcp.exceptions.ToolError`), no `Error(code=...)` construction
 in business logic
 (`tests/unit/test_architecture_no_error_construction_in_impl.py`), no
 `error_code=` kwarg bypassing the hierarchy

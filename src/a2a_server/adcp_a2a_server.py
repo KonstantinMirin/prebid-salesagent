@@ -885,7 +885,20 @@ class AdCPRequestHandler(RequestHandler):
         artifact is that it has no integer type, and pydantic's non-strict mode already coerces
         ``2.0`` to an ``int`` field.
         """
-        response = await invoke_tool(skill_name, TOOLS[skill_name].dto.model_validate(parameters), credential, "a2a")
+        # PARSING is the transport's job, so a parse failure is typed here -- this is the one
+        # step that happens BEFORE the boundary and can therefore never be typed by it. Once
+        # the DTO exists, ``invoke_tool`` owns every failure and types it there
+        # (``named_adcp_error``), so nothing downstream re-decides what an error is.
+        try:
+            req = TOOLS[skill_name].dto.model_validate(parameters)
+        except ValueError as exc:
+            # ``ValueError`` alone: pydantic's ``ValidationError`` IS one, and
+            # ``adcp_error_for`` tells them apart itself -- a schema violation earns
+            # INVALID_REQUEST with the offending field, a plain ValueError VALIDATION_ERROR.
+            # Naming both here would state that distinction a second time.
+            raise adcp_error_for(exc) from exc
+
+        response = await invoke_tool(skill_name, req, credential, "a2a")
         return self._serialize_for_a2a(response)
 
     async def _handle_explicit_skill(
@@ -928,22 +941,18 @@ class AdCPRequestHandler(RequestHandler):
         # leniently and then dispatch a protected skill; with the decision per tool, the
         # boundary refuses before dispatch and this could never fire.
 
-        try:
-            return await self._dispatch_skill(skill_name, parameters, credential)
-        except A2AError:
-            # Re-raise A2AError as-is (already properly formatted)
-            raise
-        except (AdCPSalesAgentError, ValueError, PermissionError) as e:
-            # Normalize ValueError/PermissionError to typed AdCPSalesAgentError via the
-            # shared adcp_error_for() helper — same mapping the MCP
-            # and REST boundaries apply. The outer dispatcher's `except
-            # AdCPSalesAgentError` branch wraps the result into a failed Task with the
-            # two-layer envelope.
-            normalized = adcp_error_for(e)
-
-            if normalized is not e:
-                raise normalized from e
-            raise
+        # No normalization here any more. It read ``adcp_error_for`` on every failure coming
+        # out of dispatch, which was a fourth site deciding a question that does not depend on
+        # the transport asking it -- MCP answered it in ``_handle_tool_exception``, REST in its
+        # exception handlers, and A2A twice (here and in ``_build_failed_skill_result``).
+        #
+        # Both sources of failure are now typed at the point that owns them: a parse failure by
+        # ``_dispatch_skill``, because parsing is the transport's job and happens before the
+        # boundary exists; everything else by ``invoke_tool``, which holds the tool, the
+        # identity and the exception together. What arrives here is already an
+        # ``AdCPSalesAgentError``, and the outer dispatcher's ``except AdCPSalesAgentError``
+        # branch renders it -- rendering being the part that IS per-transport.
+        return await self._dispatch_skill(skill_name, parameters, credential)
         # Untyped exceptions fall through to the dispatcher's `except Exception`
         # at the call site, which routes them through `_build_failed_skill_result`
         # for uniform envelope shape. No catch-all here.

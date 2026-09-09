@@ -61,7 +61,7 @@ class TestGetMediaBuysImplRaisesAdCPSalesAgentError:
 
     # No issubclass test here: "errors raised by _impl are AdCPSalesAgentError, never
     # ToolError" is enforced for EVERY _impl by the AST guard
-    # test_no_toolerror_in_impl.py; asserting two class statements' inheritance
+    # the ruff-boundary.toml TID251 ban; asserting two class statements' inheritance
     # re-stated the source against itself.
 
 

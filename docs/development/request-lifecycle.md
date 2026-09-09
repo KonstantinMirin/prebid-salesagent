@@ -357,7 +357,7 @@ that point the transport's job is done and Critical Pattern #5
 Structural guards enforce this boundary
 ([structural-guards.md](structural-guards.md)):
 `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`,
-`test_no_toolerror_in_impl.py`, `test_architecture_boundary_completeness.py`.
+`ruff-boundary.toml`'s TID251 ban on `ToolError`, `test_architecture_boundary_completeness.py`.
 
 ## Where does my change go?
 

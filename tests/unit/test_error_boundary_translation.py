@@ -66,6 +66,7 @@ from src.core.exceptions import (
     AdCPGoneError,
     AdCPMediaBuyNotFoundError,
     AdCPNotFoundError,
+    AdCPProductNotFoundError,
     AdCPRateLimitError,
     AdCPSalesAgentError,
     AdCPServiceUnavailableError,
@@ -81,6 +82,7 @@ from src.core.tool_error_logging import (
     handle_tool_error,
     with_error_logging,
 )
+from tests.factories.principal import PrincipalFactory
 from tests.helpers import assert_envelope_shape
 from tests.helpers.capture_wrapper_req import registry_impl
 
@@ -702,11 +704,18 @@ class TestA2AExplicitSkillReraise:
     """``_handle_explicit_skill``'s except-clause: what reaches the outer dispatcher.
 
     Handler-internal, by design — the wire-level A2A envelope is graded in
-    ``tests/integration/test_a2a_error_responses.py``. What is graded here is
-    the branch that decides WHICH exception the dispatcher gets to wrap: a typed
-    error is re-raised as the identical object, an untyped one is replaced by
-    the ``adcp_error_for`` normalization, and an ``A2AError`` never enters the
-    normalizing clause at all.
+    ``tests/integration/test_a2a_error_responses.py``. What is graded here is what reaches
+    the outer dispatcher: a typed error arrives as the identical object, and an ``A2AError``
+    arrives untouched.
+
+    It no longer grades an untyped error being normalized here, because that no longer
+    happens here. ``_handle_explicit_skill`` used to call ``adcp_error_for`` on everything
+    coming out of dispatch — a fourth site answering a question that does not depend on which
+    transport asks it. Both sources are now typed by whoever owns them: a parse failure by
+    ``_dispatch_skill`` (graded below), everything else by ``invoke_tool`` (graded in
+    ``TestTheBoundaryNormalizesBeforeAnyTransportSeesIt``). These tests patch
+    ``_dispatch_skill``, so the boundary never runs in them — which is exactly why they could
+    not have caught the move on their own.
 
     ``get_products`` is used because it is in ``DISCOVERY_SKILLS``, so ``identity``
     may be ``None`` — which also keeps ``record_boundary_error`` off its
@@ -737,31 +746,26 @@ class TestA2AExplicitSkillReraise:
         assert exc_info.value.field == "packages[0].budget"
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("raised", "expected_cls"),
-        [
-            (ValueError("invalid input shape"), AdCPValidationError),
-            (PermissionError("access denied"), AdCPAuthorizationError),
-        ],
-        ids=["ValueError", "PermissionError"],
-    )
-    async def test_untyped_error_is_replaced_by_its_normalization(
-        self, raised: Exception, expected_cls: type[AdCPSalesAgentError]
-    ) -> None:
-        """A2A applies the same ``adcp_error_for`` mapping MCP and REST do."""
+    async def test_a_parameter_bag_that_does_not_validate_is_typed_by_the_dispatcher(self):
+        """The ONE failure A2A still types itself, because it happens before the boundary.
+
+        ``_dispatch_skill`` validates the parameter bag into the row's DTO and only then
+        calls ``invoke_tool``. A bag that does not validate never reaches the boundary, so
+        the boundary cannot be the thing that names it — parsing is the transport's job and
+        so is typing a parse failure. Every OTHER failure is typed at the boundary.
+        """
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
         handler = AdCPRequestHandler()
 
-        async def mock_skill(skill_name, parameters, credential):
-            raise raised
+        # An undeclared field: outside production the DTOs are extra="forbid", so this is a
+        # schema violation rather than a silently-ignored extra.
+        with pytest.raises(AdCPSalesAgentError) as exc_info:
+            await handler._dispatch_skill("get_products", {"no_such_field": "x"}, AuthContext())
 
-        with patch.object(handler, "_dispatch_skill", mock_skill):
-            with pytest.raises(expected_cls) as exc_info:
-                await handler._handle_explicit_skill("get_products", {}, AuthContext())
-
-        assert exc_info.value.error_code == expected_cls._code
-        assert exc_info.value.__cause__ is raised
+        assert exc_info.value._code.value in {"INVALID_REQUEST", "VALIDATION_ERROR"}, (
+            f"a parse failure reached the caller untyped or mis-typed: {exc_info.value._code.value}"
+        )
 
     @pytest.mark.asyncio
     async def test_a2a_error_passes_through_untouched(self):
@@ -937,25 +941,55 @@ class TestSynthesizedRestEnvelopeFollowsItsCode:
 class TestToolErrorHandlerIsRegisteredOnTheApp:
     """``handle_tool_error`` is only reachable because ``src/app.py`` registers it.
 
-    Every other test in this module calls the function directly. This is the one
-    that fails if the ``@app.exception_handler(ToolError)`` registration is
-    dropped — at which point a ``ToolError`` escaping a route becomes an
-    unhandled 500 with no envelope at all, and no direct-call test notices.
+    Every other test in this module calls the function directly, so none of them fails if the
+    ``@app.exception_handler(ToolError)`` registration is dropped. This one does.
+
+    It asserts the registration rather than driving a ``ToolError`` out of a tool, and the
+    change of method is the point. The earlier version raised one from an implementation, and
+    an implementation raising ``ToolError`` is a shape production forbids:
+    ``ruff-boundary.toml`` bans importing it at all, business logic raises
+    ``AdCPSalesAgentError``, and the only ``ToolError`` this system creates is minted by
+    ``tool_error_logging`` on the way OUT to MCP. So the old injection point exercised a path
+    that cannot occur, and when the boundary began typing every failure it raised the
+    question of whether production should carve out an exception for it. It should not — the
+    fixture was wrong, not the boundary.
+
+    What the handler is FOR is a ``ToolError`` raised outside the boundary entirely: by
+    fastmcp itself, or by middleware, where no ``_impl`` is involved. That is unreachable
+    from a unit test without faking the framework, so this pins the two halves that are
+    reachable — the handler is registered (here) and its body is correct (``TestHandleToolError``).
     """
 
-    def test_adcp_tool_error_reaches_the_wire_through_the_app(self):
-        source = AdCPMediaBuyNotFoundError()
+    def test_the_app_registers_a_handler_for_tool_error(self):
+        from fastmcp.exceptions import ToolError as FastMCPToolError
 
-        response = _capabilities_response(_synthetic_tool_error(source))
+        from src.app import app
 
-        assert response.status_code == 404
-        assert_envelope_shape(response.json(), "MEDIA_BUY_NOT_FOUND", recovery="correctable")
+        registered = app.exception_handlers.get(FastMCPToolError)
+        assert registered is not None, (
+            "src/app.py no longer registers an exception handler for ToolError. A ToolError "
+            "raised by fastmcp or by middleware now becomes an unhandled 500 with no AdCP "
+            "envelope, and every other test in this module still passes because they call "
+            "the handler directly."
+        )
+        # RUN the registered handler rather than reading its source. Source-scanning is banned
+        # in tests here (TID251) for the reason it deserves to be: it asserts that a string
+        # appears, not that a code path executes, so a handler that mentioned
+        # handle_tool_error in a comment would satisfy it. Calling it proves the envelope a
+        # buyer would actually receive.
+        import asyncio
 
-    def test_plain_tool_error_reaches_the_wire_through_the_app(self):
-        response = _capabilities_response(ToolError("VALIDATION_ERROR", "missing field"))
+        from starlette.requests import Request
 
-        assert response.status_code == 400
-        assert_envelope_shape(response.json(), "VALIDATION_ERROR", recovery="correctable")
+        scope = {"type": "http", "method": "POST", "path": "/api/v1/capabilities", "headers": []}
+        response = asyncio.run(registered(Request(scope), ToolError("VALIDATION_ERROR", "missing field")))
+
+        assert response.status_code == 400, (
+            f"the registered ToolError handler answered {response.status_code}, not the status "
+            "CODE_TABLE gives VALIDATION_ERROR — a plain ToolError is no longer resolved "
+            "through handle_tool_error."
+        )
+        assert_envelope_shape(json.loads(response.body), "VALIDATION_ERROR", recovery="correctable")
 
     def test_request_validation_error_is_not_shadowed_by_the_value_error_handler(self):
         """FastAPI's own 422 body for a malformed request must survive our handler.
@@ -969,3 +1003,58 @@ class TestToolErrorHandlerIsRegisteredOnTheApp:
         from fastapi.exceptions import RequestValidationError
 
         assert not issubclass(RequestValidationError, ValueError)
+
+
+class TestTheBoundaryNormalizesBeforeAnyTransportSeesIt:
+    """An untyped raise is typed ONCE, at the boundary, not three times downstream.
+
+    ``TestAdcpErrorForAtEveryBoundary`` above calls each transport's own helper directly, so
+    it grades that each transport RENDERS a typed error correctly. It cannot grade who did
+    the typing: it passes whether normalization happens at the boundary or in three separate
+    transports, which is exactly the question this class exists to answer.
+
+    Splitting it that way is deliberate. Normalization (untyped exception -> typed
+    AdCPSalesAgentError) is transport-agnostic and belongs at the one seam every transport
+    already enters. Rendering (a JSON-RPC error, an HTTP status, a ToolError) is not, and
+    stays where it is. Together the two classes pin the whole chain: the boundary types it,
+    the transport renders it, and the buyer-facing code is the same on all three.
+    """
+
+    async def _raise_through_boundary(self, exc: Exception):
+        """Drive ``invoke_tool`` with an implementation that raises *exc*."""
+        from src.core.auth_context import AuthContext
+        from src.core.schemas import GetProductsRequest
+        from src.core.tools._boundary import invoke_tool
+        from tests.helpers.boundary_identity import resolved_as
+        from tests.helpers.capture_wrapper_req import registry_impl
+
+        async def failing_impl(req=None, identity=None, **kwargs):
+            raise exc
+
+        identity = PrincipalFactory.make_identity(principal_id="p", tenant_id="t")
+        with registry_impl("get_products", failing_impl), resolved_as(identity):
+            with pytest.raises(AdCPSalesAgentError) as caught:
+                await invoke_tool("get_products", GetProductsRequest(brief="x"), AuthContext(), "mcp")
+        return caught.value
+
+    @pytest.mark.asyncio
+    async def test_value_error_is_typed_at_the_boundary(self):
+        typed = await self._raise_through_boundary(ValueError("invalid input shape"))
+        assert typed._code.value == "VALIDATION_ERROR", (
+            f"the boundary let an untyped ValueError past it; transports had to type it "
+            f"themselves. Got {type(typed).__name__} / {typed._code.value}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_permission_error_is_typed_at_the_boundary(self):
+        typed = await self._raise_through_boundary(PermissionError("access denied"))
+        assert typed._code.value == "PERMISSION_DENIED", (
+            f"the boundary let an untyped PermissionError past it. Got {type(typed).__name__} / {typed._code.value}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_already_typed_error_passes_through_as_the_same_object(self):
+        """Normalizing must not re-wrap. A typed error keeps its identity and its details."""
+        original = AdCPProductNotFoundError()
+        returned = await self._raise_through_boundary(original)
+        assert returned is original, "the boundary re-wrapped an already-typed error"

@@ -144,7 +144,7 @@ machinery. See [Add a guard](#add-a-guard).
 
 | Test file | What it enforces |
 |-----------|-----------------|
-| `test_no_toolerror_in_impl.py` | `_impl` functions raise `AdCPSalesAgentError`, never `ToolError` from FastMCP |
+| `ruff-boundary.toml` (TID251) | Nothing under `src/` imports `ToolError` except the two edge modules that mint and render it. Replaced an AST scan over a hand-written list of 14 files, which was blind to every module not on it. Proven live by `tests/unit/test_ruff_boundary_bans.py`. |
 | `test_transport_agnostic_impl.py` | `_impl` functions have zero transport imports (no fastmcp, a2a, starlette) |
 | `test_impl_resolved_identity.py` | `_impl` functions accept `ResolvedIdentity`, not `Context`/`ToolContext` |
 

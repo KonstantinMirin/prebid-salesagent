@@ -49,6 +49,12 @@ select = ["TID251"]
 # The boundary owns the resolver and the stamped entry; the resolver's module defines it.
 "src/core/tools/_boundary.py" = ["TID251"]
 "src/core/resolved_identity.py" = ["TID251"]
+# The two places a ToolError legitimately exists. ``tool_error_logging`` MINTS one, on the
+# way out to MCP, from an already-typed AdCPSalesAgentError; ``app.py`` registers the handler
+# that renders one. Both are the transport edge. Everything between them raises
+# AdCPSalesAgentError.
+"src/core/tool_error_logging.py" = ["TID251"]
+"src/app.py" = ["TID251"]
 
 [lint.flake8-tidy-imports.banned-api]
 "src.core.tools.accounts._list_accounts_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
@@ -83,3 +89,15 @@ select = ["TID251"]
 "src.core.resolved_identity._resolve_identity".msg = "Identity is resolved once, in src/core/tools/_boundary.invoke_tool. A transport hands over an AuthContext; it does not resolve (salesagent-02rgd)."
 "src.core.tools._boundary._resolve_identity".msg = "Identity is resolved once, in invoke_tool. Do not re-export or re-import the resolver (salesagent-02rgd)."
 "src.core.tools._boundary._invoke_stamped".msg = "invoke_tool is the only door: it reads the registry row for both the implementation and the auth declaration. _invoke_stamped takes an already-chosen impl and an already-resolved identity -- which is how a transport used to select both (salesagent-02rgd)."
+
+# fastmcp's ToolError is MCP's WIRE type, produced on the way out. Business logic raises
+# AdCPSalesAgentError and the boundary types whatever escapes; a ToolError travelling INWARDS
+# is a transport error smuggled into transport-agnostic code, and the boundary would have to
+# grow a carve-out to let it past -- which is exactly the accommodation this ban removes the
+# need for.
+#
+# This replaces tests/unit/test_no_toolerror_in_impl.py, which walked the AST of a
+# HAND-WRITTEN list of fourteen files. A fifteenth tool module was a silent hole in it. A
+# TID251 ban is global over src/ and scripts/ by construction, has no list to keep current,
+# and fails at lint time rather than at test time.
+"fastmcp.exceptions.ToolError".msg = "ToolError is MCP's wire type, minted on the way OUT by src/core/tool_error_logging.py. Business logic raises an AdCPSalesAgentError subclass; the boundary (src/core/tools/_boundary.invoke_tool) types anything untyped that escapes. Nothing in between may import it (salesagent-02rgd)."

@@ -296,7 +296,7 @@ async def list_tasks(
 
 This is tracked debt — functions should be split into `_list_tasks_impl` + transport wrappers.
 
-**Enforced by:** `review-architecture` (CP-5), `review-layering` (Transport → _impl leaks), `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`, `test_no_toolerror_in_impl.py`, `test_architecture_boundary_completeness.py`
+**Enforced by:** `review-architecture` (CP-5), `review-layering` (Transport → _impl leaks), `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`, `ruff-boundary.toml`'s TID251 ban on `ToolError`, `test_architecture_boundary_completeness.py`
 
 ## 7. Error hierarchy
 
@@ -338,7 +338,7 @@ raise ValueError(f"Media buy '{media_buy_id}' not found.")
 raise AdCPNotFoundError(f"Media buy '{media_buy_id}' not found.")
 ```
 
-**Enforced by:** `test_no_toolerror_in_impl.py`
+**Enforced by:** `ruff-boundary.toml`'s TID251 ban on `fastmcp.exceptions.ToolError`, proven live by `tests/unit/test_ruff_boundary_bans.py`
 
 ## 8. DRY — shared validation
 

@@ -48,7 +48,7 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | Guard | Enforces | Test file |
 |-------|----------|-----------|
 | Schema inheritance | Redeclarations are inherited unless reshaped or weakened | `test_architecture_schema_inheritance.py` |
-| No ToolError in _impl | `_impl` raises AdCPSalesAgentError, never ToolError | `test_no_toolerror_in_impl.py` |
+| No ToolError anywhere but the edge | Business logic raises AdCPSalesAgentError; ToolError is minted only on the way out | `ruff-boundary.toml` (TID251 over `src/` + `scripts/`, in `make quality`) + `test_ruff_boundary_bans.py` |
 | Transport-agnostic _impl | `_impl` has zero transport imports | `test_transport_agnostic_impl.py` |
 | ResolvedIdentity in _impl | `_impl` accepts ResolvedIdentity, not Context | `test_impl_resolved_identity.py` |
 | Boundary completeness | MCP/A2A wrappers pass all _impl parameters | `test_architecture_boundary_completeness.py` |
@@ -261,7 +261,7 @@ not before.
 attribute: `TOOLS` holds the function object, so `patch("...._x_impl")` renames something
 nothing consults. Use `tests/helpers/capture_wrapper_req.py` (`stub_impl`, `registry_impl`).
 
-**Enforced by:** `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`, `test_no_toolerror_in_impl.py`, `test_architecture_boundary_completeness.py`
+**Enforced by:** `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`, `ruff-boundary.toml`'s TID251 ban on `fastmcp.exceptions.ToolError`, `test_architecture_boundary_completeness.py`
 
 Worked transport-boundary and `_impl` examples: `.claude/rules/patterns/mcp-patterns.md` and [patterns-reference.md §6](docs/development/patterns-reference.md).
 
