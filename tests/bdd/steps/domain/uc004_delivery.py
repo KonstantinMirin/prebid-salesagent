@@ -2485,28 +2485,6 @@ def then_hmac_header(ctx: dict, header: str) -> None:
     assert re.match(r"^[0-9a-f]{1,}$", stripped), f"Header {header!r} is not a hex-encoded HMAC: {value!r}"
 
 
-@then("the request should carry no webhook authentication headers")
-def then_no_auth_headers(ctx: dict) -> None:
-    """Assert the delivery went out unsigned and unauthenticated.
-
-    Named against the SAME constants the signed steps assert presence through,
-    so a header rename cannot leave this passing vacuously against a name
-    nothing emits any more — the one way an absence assertion stops grading.
-
-    ``Authorization`` is checked alongside them because signing is gated by the
-    scheme: a registration with no authentication block must produce neither
-    the HMAC pair nor a bearer credential.
-    """
-    from tests.helpers import SIGNATURE_HEADER, TIMESTAMP_HEADER
-
-    headers = _get_last_webhook_headers(ctx)
-    present = [h for h in (SIGNATURE_HEADER, TIMESTAMP_HEADER, "Authorization") if h in headers]
-    assert not present, (
-        f"a registration with no authentication block was delivered carrying {present} — "
-        f"signing is gated by the scheme the buyer registered, not applied by default"
-    )
-
-
 @then(parsers.parse('the request should include header "{header}" with unix timestamp'))
 def then_timestamp_header(ctx: dict, header: str) -> None:
     """Assert timestamp header is present and contains a unix-seconds integer.
