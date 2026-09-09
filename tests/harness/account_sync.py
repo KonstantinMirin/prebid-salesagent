@@ -28,10 +28,11 @@ import asyncio
 from typing import Any
 from unittest.mock import MagicMock
 
+from src.core.errors.codes import AppErrorCode
 from src.core.schemas.account import ListAccountsResponse, SyncAccountsResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import AccountListDispatchMixin
-from tests.harness._realize import realize_e2e
+from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.transport import DeliverResult
 
 
@@ -148,6 +149,36 @@ class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
                 "before configuring billing policy / approval mode."
             )
         return tenant
+
+    @realize_e2e(e2e_unsupported("the live server exposes no fault-injection surface for sync_accounts"))
+    def fail_the_sync_internally(self) -> None:
+        """Make the seller's sync raise an unexpected error, so the BOUNDARY answers.
+
+        The obligation is that an internal failure reaches the buyer as a well-formed
+        INTERNAL_ERROR envelope. Grading that needs the seller to actually fail: the
+        step used to construct an ``AdCPSalesAgentError`` in the test process and return
+        without dispatching, so the scenario graded an object the test made and never
+        exercised the boundary's error translation at all.
+
+        The injection is at the repository, one layer below the impl, so everything
+        between it and the wire is real -- the impl, the boundary's exception handling,
+        and the per-transport envelope build.
+
+        ``force_error`` on ``AdCPTestContext`` is NOT the seam for this: it is honoured
+        only by the delivery simulator and the mock ad server, and no sync_accounts path
+        reads it. Over e2e there is no seam at all, which is declared rather than
+        silently no-oped.
+        """
+        from unittest.mock import patch
+
+        from src.core.exceptions import AdCPSalesAgentError
+
+        patcher = patch(
+            "src.core.tools.accounts.AccountRepository.mint_account_id",
+            side_effect=AdCPSalesAgentError(error_code=AppErrorCode.INTERNAL_ERROR),
+        )
+        patcher.start()
+        self._guard("patch:sync_internal_failure", patcher.stop)
 
     def set_billing_policy(self, supported: list[str]) -> None:
         """Configure which billing models this seller accepts (BR-RULE-059).

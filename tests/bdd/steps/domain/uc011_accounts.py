@@ -19,7 +19,6 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from src.core.billing_policy import BILLING_PARTY_VALUES
-from src.core.errors.codes import AppErrorCode
 from tests.bdd.steps._outcome_helpers import (
     payload_or_none,
     require_payload,
@@ -378,8 +377,14 @@ def given_expired_token(ctx: dict) -> None:
 
 @given("the seller system is experiencing an internal failure")
 def given_seller_internal_failure(ctx: dict) -> None:
-    """Configure the seller to simulate an internal failure on sync."""
-    ctx["force_internal_error"] = True
+    """Make the SELLER fail, through the env, so the request is still dispatched.
+
+    This used to set a ctx flag that the dispatcher read to manufacture an
+    ``AdCPSalesAgentError`` in the test process and return WITHOUT dispatching. The
+    scenario then graded an object the test had built, and the boundary's error
+    translation -- the thing the scenario exists to check -- never ran.
+    """
+    ctx["env"].fail_the_sync_internally()
 
 
 @given("the seller does not support any of the requested billing models")
@@ -1268,13 +1273,6 @@ def _dispatch_sync_table(ctx: dict, datatable: Any, *, idempotency_key: str | No
         kwargs["identity"] = ctx["force_identity"]
 
     # Handle forced internal error
-    if ctx.get("force_internal_error"):
-        from src.core.exceptions import AdCPSalesAgentError
-
-        err = AdCPSalesAgentError(error_code=AppErrorCode.INTERNAL_ERROR)
-        ctx["error"] = err
-        return
-
     # ONE dispatch shape for both branches. The idempotency branch already sent a raw
     # bag while the other built SyncAccountsRequest here, so the SAME step graded the
     # seller or the model depending only on whether the scenario happened to carry an
@@ -1967,16 +1965,23 @@ def _assert_error_has_code(err: Any, index: int) -> None:
     code through CODE_TABLE, so a present code guarantees a present sentence and
     asserting both checked the table against itself.
     """
-    code = err.code if hasattr(err, "code") else err.error_code
+    code = err.get("code") if isinstance(err, dict) else getattr(err, "code", None)
     assert isinstance(code, str) and code, f"Error [{index}] missing non-empty code: code={code!r}, error={err}"
 
 
-def _get_errors_collection(error: Exception) -> list[Any]:
-    """Get the errors collection from an error, falling back to a single-element list."""
-    errors_list = getattr(error, "errors", None)
-    if isinstance(errors_list, (list, tuple)) and errors_list:
-        return list(errors_list)
-    return [error]
+def _wire_errors(ctx: dict) -> list[Any]:
+    """The ``errors[]`` entries the BUYER received, off the wire envelope.
+
+    Reads the envelope rather than a reconstructed exception. ``result.error`` is a
+    ``WireError`` carrying the envelope verbatim -- deliberately NOT an
+    AdCPSalesAgentError subclass -- so ``err.error_code`` is an AttributeError, and any
+    assertion reaching for it grades the harness rather than the seller
+    (tests/CLAUDE.md, Error Verification Policy).
+    """
+    envelope = ctx["result"].error_envelope()
+    entries = envelope.get("errors")
+    assert isinstance(entries, list) and entries, f"the error envelope carries no errors[] to grade: {envelope!r}"
+    return entries
 
 
 @then("the response is an error variant with no accounts array")
@@ -2078,9 +2083,7 @@ def then_errors_array_may_contain_multiple(ctx: dict) -> None:
     Each entry must have code and message fields, proving the array is
     well-formed and could carry multiple errors.
     """
-    error = _get_error(ctx)
-    items = _get_errors_collection(error)
-    for i, err in enumerate(items):
+    for i, err in enumerate(_wire_errors(ctx)):
         _assert_error_has_code(err, i)
 
 
@@ -2262,9 +2265,7 @@ def then_each_error_has_code_message(ctx: dict) -> None:
     For each error, asserts the code/error_code is a non-empty string and the
     message attribute (not str()) is a non-empty string.
     """
-    error = _get_error(ctx)
-    items = _get_errors_collection(error)
-    for i, err in enumerate(items):
+    for i, err in enumerate(_wire_errors(ctx)):
         _assert_error_has_code(err, i)
 
 
@@ -3120,22 +3121,26 @@ def when_sync_invalid_field(ctx: dict, field: str, value: str) -> None:
 
 @when(parsers.parse("the Buyer Agent sends a sync_accounts request with {count:d} accounts"))
 def when_sync_n_accounts(ctx: dict, count: int) -> None:
-    """Send sync with N generated accounts for boundary testing."""
-    from pydantic import ValidationError
+    """Send sync with N generated accounts, so the SELLER decides whether N is legal.
 
-    from src.core.schemas.account import SyncAccountsRequest
+    The array bound is a boundary this scenario grades on the wire. Building a
+    ``SyncAccountsRequest`` here instead would put the bound back in the test process:
+    at 1001 entries the DTO refuses, the exception never leaves this function, and
+    ``dispatch_request`` is never reached -- so the wire-compliance Then below has no
+    ``TransportResult`` and the scenario reports on what the test did to itself.
 
+    Goes through ``_sync_raw``, the negative-path dispatch this verb already has, and
+    builds the entries from ``SyncAccountsRequestFactory.payload()`` so an entry carries
+    the fields the accepted model declares rather than a hand-typed triple.
+    """
+    from tests.factories.request import SyncAccountsRequestFactory
+
+    entry = SyncAccountsRequestFactory.payload()["accounts"][0]
     accounts = [
-        {"brand": {"domain": f"brand-{i:04d}.com"}, "operator": f"brand-{i:04d}.com", "billing": "operator"}
-        for i in range(count)
+        {**entry, "brand": {"domain": f"brand-{i:04d}.com"}, "operator": f"brand-{i:04d}.com"} for i in range(count)
     ]
     ctx["submitted_account_count"] = count
-
-    try:
-        req = SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=accounts)
-        dispatch_request(ctx, req=req)
-    except (ValidationError, Exception) as exc:
-        ctx["error"] = exc
+    _sync_raw(ctx, accounts=accounts)
 
 
 # ── Then: context echo assertions ──────────────────────────────────────
