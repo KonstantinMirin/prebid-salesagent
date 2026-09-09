@@ -1,5 +1,4 @@
 # Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 @analysis-2026-03-09 @schema-v3.1
 Feature: BR-UC-002 Create Media Buy
@@ -38,8 +37,8 @@ Feature: BR-UC-002 Create Media Buy
     | field          | value                        |
     | account        | account_id "acc-001"         |
     | brand          | domain "acme.com"            |
-    | start_time     | 2026-04-01T00:00:00Z         |
-    | end_time       | 2026-04-30T23:59:59Z         |
+    | start_time     | {1 day from now}             |
+    | end_time       | {30 days from now}           |
     And the request includes 2 packages with valid product_ids
     And each package has a positive budget meeting minimum spend
     And all packages use the same currency "USD"
@@ -246,7 +245,8 @@ Feature: BR-UC-002 Create Media Buy
 
   @T-UC-002-ext-e @extension @ext-e @error @post-f1 @post-f2 @post-f3
   Scenario: Duplicate product_id across packages
-    Given a valid create_media_buy request with 2 packages
+    Given a valid create_media_buy request
+    And the request includes 2 packages with valid product_ids
     And the account exists and is active
     But both packages reference the same product_id "prod-001"
     When the Buyer Agent sends the create_media_buy request

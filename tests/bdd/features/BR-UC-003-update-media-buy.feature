@@ -1,5 +1,4 @@
 # Generated from adcp-req @ cac2015cd7436b762053f469b952f94f262cf02f on 2026-08-31T20:30:38Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 @analysis-2026-03-09 @schema-v3.1
 Feature: BR-UC-003 Update Media Buy

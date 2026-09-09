@@ -19,11 +19,12 @@ from unittest.mock import ANY
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session as _db_session
-from tests.bdd.steps._outcome_helpers import _get_response_field, payload_or_none, require_payload
+from tests.bdd.steps._outcome_helpers import _get_response_field, payload_or_none, require_payload, wire_field
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal, seed_natural_key_matches
-from tests.bdd.steps.generic._create_request import build_create_request_kwargs
+from tests.bdd.steps.generic._create_request import build_create_request_kwargs, pricing_option_id
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.factories.mint import mint
+from tests.harness.create_request import build_request_packages
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — request setup and account state
@@ -1470,29 +1471,125 @@ def given_media_buy_already_created_same_key(ctx: dict) -> None:
 @given(parsers.parse("the request includes {count:d} package with a valid product_id"))
 @given(parsers.parse("the request includes {count:d} packages with valid product_ids"))
 def given_request_includes_packages(ctx: dict, count: int) -> None:
-    """The pending create request's packages all carry a product_id.
+    """The pending create request carries ``count`` packages, each naming a seeded product.
 
-    The COUNT is deliberately not asserted, and that is a finding rather than an
-    omission: both feature lines using this sentence say "2 packages", while
-    ``build_create_request_kwargs`` puts exactly ONE in the request every
-    scenario dispatches. Asserting the count would fail those scenarios on a
-    seeding defect this change is not scoped to fix (the request literal is the
-    seeding ticket's), and quietly building the second package would change what
-    every UC-002 happy path grades. Neither belongs in a ctx-protocol cleanup.
+    The COUNT IS NOW BUILT AND ASSERTED. It previously was neither, on the reasoning that
+    building the second package "would change what every UC-002 happy path grades" -- a
+    real worry, now measured and smaller than it looked: exactly TWO feature lines in the
+    corpus declare this sentence (``BR-UC-002-create-media-buy`` and
+    ``BR-UC-002-media-buy-status-dual-emit``), and only the second one executes. The base
+    request built by ``build_create_request_kwargs`` is untouched, so the ~148 scenarios
+    that go through it and never say this sentence keep their single package.
 
-    What is checkable here is the other half of the sentence -- "with valid
-    product_ids" -- which nothing graded before either: the count went into a ctx
-    key no step read, so the sentence could claim any number of packages carrying
-    anything at all.
+    WHY THE COUNT IS THE OBLIGATION rather than decoration (grounded in salesagent-9p7oe.2
+    against the 3.1.1 pin): four of this scenario's other Givens and both of its unique
+    Thens are universally quantified over packages -- "each package has a positive budget",
+    'all packages use the same currency "USD"', "each package has a valid
+    pricing_option_id", "the response should include packages with allocations", "each
+    package should include product_id, budget, and pricing details". A universal quantifier
+    over a singleton grades nothing: at count=1 a seller that echoes a constant product_id,
+    collapses N packages into one, or misallocates budget across them satisfies all of
+    them. The pin agrees -- create_media_buy.mdx L226 makes the per-package ``product_id``
+    echo a MUST, L266 states a CROSS-package currency rule, and its canonical Quick Start
+    (L67) sends two packages with two different product_ids.
+
+    Each package beyond the first gets its OWN Product and PricingOption. Pointing them all
+    at one product would leave the per-package obligations just as vacuous as count=1 did.
     """
-    packages = ctx["request_kwargs"].get("packages") or []
-    assert packages, (
-        f"Step claims the request includes {count} package(s) with valid product_ids, but the request carries none."
+    env = ctx["env"]
+    kwargs = ctx["request_kwargs"]
+
+    extras = [env.setup_product_chain(ctx["tenant"], product_id=f"prod_pkg_{index}") for index in range(1, count)]
+    env._commit_factory_data()
+    ctx["extra_products"] = extras
+
+    pairs = [(ctx["default_product"].product_id, pricing_option_id(ctx["default_pricing_option"]))]
+    pairs += [(product.product_id, pricing_option_id(option)) for product, option in extras]
+    kwargs["packages"] = build_request_packages(pairs)
+
+    packages = kwargs["packages"]
+    assert len(packages) == count, (
+        f"Step claims the request includes {count} package(s), but it carries {len(packages)}."
     )
     missing = [i for i, pkg in enumerate(packages) if not pkg.get("product_id")]
     assert not missing, (
         f"Step claims every package has a valid product_id, but package(s) {missing} carry none: {packages}"
     )
+
+
+def _wire_packages(ctx: dict) -> list[dict]:
+    """The response's ``packages`` array as the BUYER received it, one entry per request package.
+
+    Reads the WIRE, not ``result.payload``. A payload round-trip proves the serializer is
+    self-consistent with the model it just built; it cannot show what crossed the transport.
+
+    The length check lives here because both sentences below depend on it and neither is
+    meaningful without it: an echo assertion that iterates ``zip(request, response)``
+    silently passes when the seller returns FEWER packages than were asked for, which is
+    precisely the collapse-N-into-one defect these sentences exist to catch.
+    """
+    requested = ctx["request_kwargs"].get("packages") or []
+    packages = wire_field(ctx, "packages")
+    assert isinstance(packages, list), f"Response 'packages' is {type(packages).__name__}, expected a list."
+    assert len(packages) == len(requested), (
+        f"Request carried {len(requested)} package(s); response returned {len(packages)}. "
+        f"A seller MUST represent every requested package (AdCP 3.1.1 create_media_buy.mdx L226)."
+    )
+    return packages
+
+
+@then("the response should include packages with allocations")
+def then_response_has_packages(ctx: dict) -> None:
+    """Every response package is ALLOCATED to the product its request package named.
+
+    The obligation is an ECHO, and the pin states it as a MUST: "Sellers MUST echo it
+    [product_id] on every response package object representing the request" (AdCP 3.1.1,
+    create_media_buy.mdx L226). So the assertion compares the response's product_id to the
+    REQUEST's, per package, in order.
+
+    It previously asserted ``pkg.get("product_id")`` was truthy. That is green for a seller
+    that echoes a constant, allocates every package to the same product, or returns them in
+    a different order -- three real allocation defects, none detectable. The comparison is
+    only falsifiable because the scenario now sends two packages naming DIFFERENT products
+    (salesagent-9p7oe.2/.3); at one package, or two naming one product, truthiness and
+    equality grade the same thing, which is nothing.
+    """
+    requested = ctx["request_kwargs"]["packages"]
+    for index, (sent, got) in enumerate(zip(requested, _wire_packages(ctx), strict=True)):
+        assert got.get("product_id") == sent["product_id"], (
+            f"Package {index}: requested product_id {sent['product_id']!r}, response echoed {got.get('product_id')!r}."
+        )
+
+
+@then("each package should include product_id, budget, and pricing details")
+def then_packages_have_details(ctx: dict) -> None:
+    """Each response package carries the product, budget and pricing the buyer asked for.
+
+    Three VALUES compared against the request, not three presence checks. The previous
+    version asserted each field ``is not None`` and, for budget, that a dict had an
+    ``amount`` key -- all of which a seller passes by returning any number at all, including
+    another package's. Budgets differ per package by construction now, so an equality
+    assertion distinguishes correct allocation from a seller that splits the total evenly or
+    assigns one package's budget to all of them.
+
+    ``budget`` is compared through its amount because the wire may carry either a bare
+    number or the ``{amount, currency}`` object -- the pin allows both shapes, and which one
+    a seller sends is not what this sentence grades.
+    """
+    requested = ctx["request_kwargs"]["packages"]
+    for index, (sent, got) in enumerate(zip(requested, _wire_packages(ctx), strict=True)):
+        assert got.get("product_id") == sent["product_id"], (
+            f"Package {index}: requested product_id {sent['product_id']!r}, got {got.get('product_id')!r}."
+        )
+        budget = got.get("budget")
+        amount = budget.get("amount") if isinstance(budget, dict) else budget
+        assert amount == sent["budget"], (
+            f"Package {index}: requested budget {sent['budget']!r}, response carried {amount!r}."
+        )
+        assert got.get("pricing_option_id") == sent["pricing_option_id"], (
+            f"Package {index}: requested pricing_option_id {sent['pricing_option_id']!r}, "
+            f"response carried {got.get('pricing_option_id')!r}."
+        )
 
 
 # Canonical owner of "the ad server adapter is available" — removed from the

@@ -1,5 +1,4 @@
 # Generated from adcp-req @ cac2015cd7436b762053f469b952f94f262cf02f on 2026-08-20T12:03:24Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-011 Manage Accounts
   As a Buyer

@@ -1,5 +1,4 @@
 # Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 # Locally reconciled to AdCP 3.1.1 on 2026-07-13 per #1592 (P0 audit salesagent-y2vz).
 # Local edits survive semantic merge (project policy); true divergences to be mirrored upstream.
 # Spec authority: adcp tag v3.1.1 — dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json
