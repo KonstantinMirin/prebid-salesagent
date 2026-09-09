@@ -207,9 +207,14 @@ class TestA2AResponseDictConstruction:
                 f"{response_cls.__name__} inherits ProtocolEnvelope but declares no `message`"
             )
 
-        assert not issubclass(CreateMediaBuyError, ProtocolEnvelope), (
-            "CreateMediaBuyError gained a protocol envelope — it can carry a `message` now, "
-            "so it belongs in the list above rather than in this exception"
+        # CreateMediaBuyError IS a ProtocolEnvelope, via CreateMediaBuyResult ->
+        # AdcpResponse -> AdcpVersionEnvelope. It is held to the same bound as every
+        # sibling above rather than excepted from it.
+        assert issubclass(CreateMediaBuyError, ProtocolEnvelope), (
+            "CreateMediaBuyError does not inherit ProtocolEnvelope — to_wire's bound refuses it"
+        )
+        assert "message" in CreateMediaBuyError.model_fields, (
+            "CreateMediaBuyError inherits ProtocolEnvelope but declares no `message`"
         )
 
 

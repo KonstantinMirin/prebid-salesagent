@@ -160,13 +160,15 @@ class TestMultiFieldValidationErrors:
             ListCreativeFormatsRequest(
                 max_width="not_a_number",
                 min_height="also_invalid",
-                type="nonexistent_category",
+                wcag_level="nonexistent_level",
             )
 
         errors = exc_info.value.errors()
         # At least two distinct fields must be reported
         field_paths = {".".join(str(loc) for loc in e["loc"]) for e in errors}
-        invalid_fields_found = {p for p in field_paths if any(f in p for f in ("max_width", "min_height", "type"))}
+        invalid_fields_found = {
+            p for p in field_paths if any(f in p for f in ("max_width", "min_height", "wcag_level"))
+        }
         assert len(invalid_fields_found) >= 2, (
             f"Expected at least 2 distinct invalid fields, got: {invalid_fields_found}"
         )
@@ -201,7 +203,6 @@ class TestMultiFieldValidationErrors:
             ListCreativeFormatsRequest(
                 min_width="wide",
                 max_height="short",
-                type="invalid_type",
                 wcag_level="BOGUS",
             )
 

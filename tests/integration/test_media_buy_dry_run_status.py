@@ -136,10 +136,9 @@ def test_create_media_buy_dry_run_reports_completed(integration_db):
             ],
         )
 
-    response, _status = result
-
-    # Assert on the SERIALIZED inner Success envelope — the :3503 status default.
-    response_envelope = response.model_dump(mode="json")
+    # The impl returns ONE result, not a (response, status) pair — the envelope IS the
+    # response since 1d04b782c made the result types the union roots.
+    response_envelope = result.model_dump(mode="json")
     assert response_envelope["status"] == "completed", (
         f"dry_run create Success must preview completed, got {response_envelope['status']!r}"
     )
