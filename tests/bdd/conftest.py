@@ -1036,7 +1036,33 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # item_type/asset_type discriminator and still admits the same 15 while its asset-union
     # grows to 21. Refreshing the fixture or bumping the pin does not fix it.
     #
-    # Graduates when #7338 lands and the pin moves past it.
+    # Graduates when #7338 lands and the pin moves past it. NO PR IS PLANNED FROM HERE
+    # (decided 2026-09-09), so do not read this as work in flight — it graduates only if
+    # upstream fixes it independently. A local schema overlay was considered and rejected:
+    # tests/helpers/adcp_pinned_schema.py deliberately RAISES on a name present in both the
+    # pinned tree and schemas/, because two live definitions of one contract is the exact
+    # condition that tree exists to avoid, and a copied format.json would freeze the whole
+    # file behind the pin the way the old vendored fixture tree already did once.
+    #
+    # The fix shape is measured, so whoever picks this up upstream need not re-derive it:
+    #   - the reference asset matches 0 of the 16 existing oneOf branches, so adding one
+    #     introduces no ambiguity;
+    #   - a branch of allOf[baseIndividualAsset] + item_type/asset_type consts and NO
+    #     requirements $ref already validates it, because baseIndividualAsset does not set
+    #     additionalProperties:false, so event/method/requirements pass through
+    #     (IndividualZipAsset and IndividualBriefAsset are the existing ref-less precedent);
+    #   - five types need branches: pixel_tracker, vast_tracker, daast_tracker, card,
+    #     published_post.
+    # The underlying defect is that core/format.json HAND-COPIES the asset union instead of
+    # deriving from core/assets/asset-union.json. Five branches fix this instance; deriving
+    # is what stops the next drift.
+    #
+    # The storyboard does NOT provide a second opinion here. compliance/universal/
+    # schema-validation.yaml step list_formats_match carries `check: response_schema` against
+    # creative/list-creative-formats-response.json, which $refs the same core/format.json --
+    # but that storyboard is not selected for this agent (22 of the 198 shipped storyboards
+    # are; the step appears in neither storyboard_collected.json nor known_failures.txt).
+    # This BDD check is the only thing grading it.
     (
         "T-UC-005-partition-agent-type",
         {"-valid"},
