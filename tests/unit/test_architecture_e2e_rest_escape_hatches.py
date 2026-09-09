@@ -566,6 +566,18 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "set_adapter_error",
             "adapter fault-injection has no server surface; needs an ADCP_TESTING fault-injection control (#1418)",
         ),
+        # Same shape as set_adapter_error above, and noted against this pin's
+        # shrink-only direction of travel: the scenario grades what the buyer
+        # receives when the seller's OWN work fails, and the only way to make it
+        # fail is to break something inside the seller. In-process that is a patch
+        # on the account repository; over real HTTP the seller is another process
+        # with no fault-injection control (#1418 again). The obligation is a wire
+        # obligation and grades fully on the three in-process transports.
+        (
+            "tests/harness/account_sync.py",
+            "fail_the_sync_internally",
+            "the live server exposes no fault-injection surface for sync_accounts",
+        ),
         # #1802 replaces the old _NO_E2E_REST_TAGS silent
         # parametrize-drop (invisible to both detectors in this module) with a
         # reviewable, pinned declaration. then_webhook_skipped_no_post's other

@@ -1977,10 +1977,13 @@ def _wire_errors(ctx: dict) -> list[Any]:
     AdCPSalesAgentError subclass -- so ``err.error_code`` is an AttributeError, and any
     assertion reaching for it grades the harness rather than the seller
     (tests/CLAUDE.md, Error Verification Policy).
+
+    Through ``wire_error_objects``, which resolves the same single locator
+    ``assert_wire_error`` does: where the spec puts the array is the harness's
+    business, so a step re-deriving it would be a second answer to one question.
     """
-    envelope = ctx["result"].error_envelope()
-    entries = envelope.get("errors")
-    assert isinstance(entries, list) and entries, f"the error envelope carries no errors[] to grade: {envelope!r}"
+    entries = ctx["result"].wire_error_objects()
+    assert entries, f"the error envelope carries no errors[] to grade: {ctx['result'].error_envelope_or_none()!r}"
     return entries
 
 

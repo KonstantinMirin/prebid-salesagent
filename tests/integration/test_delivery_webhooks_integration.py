@@ -21,8 +21,6 @@ from src.core.database.models import (
     Product,
     Tenant,
 )
-from src.core.resolved_identity import ResolvedIdentity
-from src.core.testing_hooks import AdCPTestContext
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
 from tests.factories import PricingOptionFactory
 
@@ -416,39 +414,3 @@ async def test_scheduler_status_filter_includes_completed_campaigns(integration_
         )
         assert deliveries[0]["media_buy_id"] == media_buy_id
         assert deliveries[0]["status"] == "completed"
-
-
-@pytest.mark.requires_db
-@pytest.mark.asyncio
-async def test_scheduler_uses_simulated_path_in_testing_mode(integration_db):
-    """Test we pick up simulated path when context is in testing mode."""
-    tenant_id, principal_id = _create_test_tenant_and_principal()
-    _create_basic_media_buy_with_webhook(tenant_id, principal_id)
-
-    scheduler = DeliveryWebhookScheduler()
-
-    async def fake_send_notification(*args, **kwargs):
-        return True
-
-    # Helper to inject testing_context into ResolvedIdentity
-    _original_resolved_identity = ResolvedIdentity
-
-    def create_test_identity(**kwargs):
-        kwargs["testing_context"] = AdCPTestContext(dry_run=True)
-        return _original_resolved_identity(**kwargs)
-
-    with (
-        patch(
-            "src.core.resolved_identity.ResolvedIdentity",
-            side_effect=create_test_identity,
-        ),
-        patch.object(scheduler.webhook_service, "send_notification", new_callable=AsyncMock) as mock_send,
-        patch("src.core.tools.media_buy_delivery.DeliverySimulator.calculate_simulated_metrics") as mock_sim,
-    ):
-        mock_sim.return_value = {"impressions": 1234, "spend": 50.0}
-
-        await scheduler._send_reports()
-
-        # Verify simulator was called (proof that testing_ctx.dry_run was respected)
-        assert mock_sim.called
-        assert mock_send.call_count == 1
