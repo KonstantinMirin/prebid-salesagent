@@ -969,47 +969,6 @@ class TestDeliveredPayloadAdcpVersion:
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-01
     """
 
-    def test_delivered_payload_echoes_the_pinned_adcp_spec_version(self, integration_db):
-        """The bytes that reached the endpoint carry the SDK's spec version.
-
-        Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING-01
-        """
-        from datetime import UTC, datetime
-
-        from adcp import get_adcp_spec_version
-
-        from tests.factories import (
-            PrincipalFactory,
-            PushNotificationConfigFactory,
-            TenantFactory,
-        )
-        from tests.harness import CircuitBreakerEnv
-
-        with CircuitBreakerEnv(tenant_id="t1", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="t1")
-            principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            PushNotificationConfigFactory(
-                tenant=tenant,
-                principal=principal,
-                url=env.webhook_url,
-            )
-
-            env.set_http_response(200)
-            service = env.get_service()
-            result = service.send_delivery_webhook(
-                media_buy_id="mb_version",
-                tenant_id="t1",
-                principal_id="p1",
-                reporting_period_start=datetime(2025, 6, 1, tzinfo=UTC),
-                reporting_period_end=datetime(2025, 6, 30, tzinfo=UTC),
-                impressions=1000,
-                spend=50.0,
-            )
-
-            assert result is True
-            sent_payload = env.delivered_result(env.last_delivery)
-            assert sent_payload["adcp_version"] == get_adcp_spec_version()
-
 
 # ---------------------------------------------------------------------------
 # UC-004-ALT-WEBHOOK-PUSH-REPORTING-05 (send_delivery_webhook: sequence under

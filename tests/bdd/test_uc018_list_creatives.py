@@ -332,7 +332,6 @@ def given_creatives_grouped_under_concept(ctx: dict, concept_id: str) -> None:
 
     ctx["tenant"] = tenant
     ctx["principal"] = principal
-    ctx["concept_id"] = concept_id
     ctx["in_concept_creative_ids"] = in_concept_ids
 
 
@@ -355,7 +354,6 @@ def when_list_creatives_concept_ids(ctx: dict, concept_list: str) -> None:
 
     concept_ids = re.findall(r'"([^"]+)"', concept_list)
     assert concept_ids, f"no concept ids parsed from {concept_list!r}"
-    ctx["requested_concept_ids"] = concept_ids
     filters = CreativeFilters(concept_ids=concept_ids).model_dump(mode="json", exclude_none=True)
     _call_via(ctx, ctx.get("transport"), filters=filters)
 

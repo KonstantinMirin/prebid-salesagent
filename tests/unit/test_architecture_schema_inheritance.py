@@ -11,6 +11,7 @@ the corresponding local class inherits from it.
 
 """
 
+import enum
 import importlib
 import inspect
 from collections.abc import Sequence
@@ -330,12 +331,72 @@ def test_admissibility_predicate_grades_each_axis(parent, child, admissible) -> 
     assert _is_admissible(child, parent) is admissible
 
 
+def library_base_violation(local_name: str, local_cls: type, lib_type: type) -> str | None:
+    """Why *local_cls* fails to be a local subclass of *lib_type*, or ``None`` if it does not.
+
+    Extracted from the test loop so the DECISION can be graded directly. It was inline
+    once, and the three tests written to pin its two accommodations asserted facts about
+    synthetic classes without ever invoking it — so widening either accommodation left
+    them green. A rule that cannot be driven from a test is a rule nothing checks.
+    """
+    if isinstance(lib_type, enum.EnumMeta):
+        # Python FORBIDS extending an enum that has members, so "inherits from" is
+        # unsatisfiable here. Agreement on the value set is the real invariant.
+        if not isinstance(local_cls, enum.EnumMeta):
+            return f"{local_name} is not an enum but its library counterpart is"
+        local_values = {member.value for member in local_cls}
+        library_values = {member.value for member in lib_type}
+        if local_values != library_values:
+            return (
+                f"{local_name} enum members differ from {lib_type.__module__}.{lib_type.__name__}. "
+                f"Local-only: {sorted(local_values - library_values)}; "
+                f"library-only: {sorted(library_values - local_values)}"
+            )
+        return None
+
+    # The mapping is keyed by NAME and the library reuses names across modules, so a
+    # same-named base FROM THE ADCP PACKAGE satisfies the mapping's own resolution.
+    mro = inspect.getmro(local_cls)
+    same_named_library_base = any(
+        base.__name__ == lib_type.__name__ and base.__module__.startswith("adcp.") for base in mro[1:]
+    )
+    if lib_type not in mro and not same_named_library_base:
+        return (
+            f"{local_name} does not inherit from {lib_type.__module__}.{lib_type.__name__}. "
+            f"MRO: {[c.__name__ for c in mro]}"
+        )
+    return None
+
+
 class TestSchemaInheritance:
     """Every local schema class that has a Library* counterpart must inherit from it."""
 
     @pytest.mark.arch_guard
     def test_all_library_types_have_local_subclass(self):
-        """For each Library* import, a local class with that name exists and inherits from it."""
+        """For each Library* import, a local class with that name exists and inherits from it.
+
+        TWO THINGS THIS RULE CANNOT DEMAND LITERALLY, both measured rather than assumed:
+
+        ENUMS CANNOT BE SUBCLASSED AT ALL once they have members —
+        ``class _Probe(LibraryTaskStatus): pass`` raises ``TypeError: cannot extend``. So
+        "inherits from the library type" is unsatisfiable for every enum in the mapping,
+        and demanding it asks for something Python forbids. The real invariant for an enum
+        is that the VALUE SET matches, which is checkable and is what a divergence would
+        actually break, so that is what is asserted here.
+
+        THE MAPPING IS KEYED BY NAME, and the library has more than one class per name.
+        ``adcp.types`` exports ``Account`` twice: ``core.account.Account`` (the entity —
+        advertiser, billing_proxy, governance_agents) and
+        ``account.sync_accounts_response.Account`` (the per-entry RESULT — action, errors,
+        warnings). They share a name and share almost no fields. The local ``Account``
+        correctly extends the ENTITY; the alias-keyed mapping happened to resolve to the
+        RESULT and reported a violation for inheriting the wrong one of two classes it
+        cannot tell apart. A same-named library class in the MRO therefore satisfies the
+        mapping's own resolution — the module the mapping picked is not evidence.
+
+        Both accommodations are deliberately narrow: the class must still come from the
+        adcp package, and an enum must still match member for member.
+        """
         mapping = _get_library_type_mapping()
         local_classes = _get_local_schema_classes()
 
@@ -351,13 +412,9 @@ class TestSchemaInheritance:
                 # No local class with this name — might be used directly
                 continue
 
-            # Check MRO: local class must have library type in its inheritance chain
-            mro = inspect.getmro(local_cls)
-            if lib_type not in mro:
-                violations.append(
-                    f"{local_name} does not inherit from {lib_type.__module__}.{lib_type.__name__}. "
-                    f"MRO: {[c.__name__ for c in mro]}"
-                )
+            violation = library_base_violation(local_name, local_cls, lib_type)
+            if violation is not None:
+                violations.append(violation)
 
         assert not violations, "Schema classes not inheriting from their adcp library base:\n" + "\n".join(
             f"  - {v}" for v in violations
@@ -401,9 +458,43 @@ class TestSchemaInheritance:
             # unsendable on all three transports at once. Rowed rather than admitted, because
             # a weakening a derived rule lets through is invisible and permanent.
             ("CreativeAssetRequest", "format_id"),
-            ("GetMediaBuyDeliveryResponse", "media_buy_deliveries"),
             ("GetSignalsResponse", "signals"),
+            # RESHAPED AXIS: item type, and the reshape is the LIBRARY's, not ours.
+            # get-media-buy-delivery-response.json renders daily_breakdown[] twice under
+            # codegen: DailyBreakdownItem and DailyBreakdownItem1, in the SAME module, with
+            # identical field sets and identical annotations (measured -- no field differs).
+            # DailyBreakdown extends the first; the parent field is annotated with the
+            # second. Materially the same shape, but the guard compares CLASSES and these are
+            # two, so it cannot see that. Rowed rather than admitted: a rule widened to treat
+            # "same fields" as "same class" would silently admit every future divergence
+            # between two classes that merely look alike today.
+            ("MediaBuyDeliveryData", "daily_breakdown"),
+            # TWO AXES, and the second is a genuine weakening worth the row saying out loud.
+            # The parent annotates totals as the codegen `Totals`; this declares
+            # `DeliveryTotals`, which extends core/delivery_metrics.json's `DeliveryMetrics`.
+            # Measured, Totals is DeliveryMetrics plus one field and minus one relaxation:
+            #   RESHAPED: `Totals` carries `effective_rate` (optional) and DeliveryMetrics
+            #             does not, so this seller cannot emit that field at all.
+            #   WEAKENED: `Totals.spend` is REQUIRED (typed Any); DeliveryMetrics.spend is
+            #             `float | None` and optional. So a totals object with no spend
+            #             satisfies this model and would not satisfy the parent's.
+            # Rowed, not fixed here, because both axes are questions about what this seller
+            # emits rather than about the redeclaration -- filed rather than decided in an
+            # allowlist comment.
+            ("MediaBuyDeliveryData", "totals"),
             ("ListCreativesResponse", "query_summary"),
+            # RESHAPED AXIS: item type. The parent types creatives[] as the SDK's
+            # ``CreativeAsset``, a RootModel union over the two codegen branches of
+            # core/creative-asset.json's oneOf; this declares ``list[CreativeAssetRequest]``,
+            # which extends ONE of those branches (see CreativeAssetRequest's docstring: the
+            # union cannot be extended without putting the codegen name ``CreativeAsset1``
+            # into the buyer's error pointer, which core/error.json forbids). Same reshape,
+            # same reason, as ("SyncCreativesRequest", "creatives") below -- the two tools
+            # accept the same item, so they carry the same type.
+            #
+            # NOT a weakening: this row previously covered ``list[Creative]``, the
+            # list_creatives RESPONSE model, which typed ``assets`` as an untyped dict and so
+            # admitted package creatives the pin refuses (salesagent-b341x.17).
             ("PackageRequest", "creatives"),
             # Mirror of PackageRequest.targeting_overlay for the update path —
             # makes collection_list typed at the request boundary instead of
@@ -515,7 +606,6 @@ class TestSchemaInheritance:
             # drop them. Newly VISIBLE rather than newly introduced: the collector
             # keyed on alias-minus-"Library" until now, and neither class's name
             # matches its parent's, so neither was ever visited.
-            ("SyncAccountsResponse", "accounts"),
             # Both drop the pin's ``Ge(ge=1)`` from ``revision`` while matching its
             # annotation exactly, so they are WEAKER on the metadata axis: the pin
             # rejects 0 and -1, these accept both. That is not a deliberate
@@ -553,3 +643,72 @@ class TestSchemaInheritance:
                 "_get_redefinition_targets before assuming it was fixed."
             ),
         )
+
+
+class TestSchemaInheritanceGuardItself:
+    """The two accommodations in ``library_base_violation`` are narrow, and pinned here.
+
+    They drive the DECISION FUNCTION with synthetic inputs. An earlier version of this
+    class asserted facts about synthetic classes without calling it, so widening either
+    accommodation left all three tests green — the vacuous-guard failure this repo keeps
+    finding, committed while fixing one.
+    """
+
+    def test_an_enum_whose_members_diverge_is_a_violation(self):
+        """The enum branch drops the MRO demand, NOT the agreement demand."""
+
+        class Library(enum.StrEnum):
+            A = "a"
+            B = "b"
+
+        class Local(enum.StrEnum):
+            A = "a"
+
+        assert "enum members differ" in library_base_violation("X", Local, Library)
+
+    def test_matching_enum_members_are_accepted_without_inheritance(self):
+        """The accommodation itself: Python cannot express this inheritance at all."""
+
+        class Library(enum.StrEnum):
+            A = "a"
+
+        class Local(enum.StrEnum):
+            A = "a"
+
+        assert library_base_violation("X", Local, Library) is None
+
+        # The accommodation exists because this is what Python does. A class STATEMENT is
+        # the real form: type(name, (Library,), {}) fails differently (AttributeError, from
+        # passing a plain dict where EnumMeta wants its own namespace) and would pin the
+        # wrong reason.
+        with pytest.raises(TypeError, match="cannot extend"):
+
+            class _Probe(Library):
+                pass
+
+    def test_a_same_named_base_outside_adcp_does_not_satisfy_the_rule(self):
+        """The name accommodation is scoped to adcp.*, or any accidental name match
+        anywhere would satisfy it."""
+
+        class Account:  # __module__ is this test module, not adcp.*
+            pass
+
+        class Local(Account):
+            pass
+
+        class LibraryAccount:
+            pass
+
+        LibraryAccount.__name__ = "Account"
+        assert library_base_violation("Account", Local, LibraryAccount) is not None
+
+    def test_a_class_inheriting_no_library_base_is_a_violation(self):
+        """The base case the guard exists for, untouched by either accommodation."""
+
+        class Library:
+            pass
+
+        class Local:
+            pass
+
+        assert "does not inherit from" in library_base_violation("X", Local, Library)

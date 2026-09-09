@@ -208,9 +208,9 @@ class TestCreateMediaBuyCurrencyValidation:
         Tenant has CurrencyLimit for USD only. Creating with EUR product
         should fail validation.
         """
-        from src.core.database.models import PricingOption as PricingOptionModel
         from src.core.database.models import Product
         from src.core.tools.media_buy_create import _create_media_buy_impl
+        from tests.factories import PricingOptionFactory
 
         with get_db_session() as session:
             eur_product = Product(
@@ -228,7 +228,7 @@ class TestCreateMediaBuyCurrencyValidation:
             session.add(eur_product)
             session.commit()
 
-            eur_po = PricingOptionModel(
+            eur_po = PricingOptionFactory.build(
                 tenant_id=mb_tenant["tenant_id"],
                 product_id="eur_display",
                 pricing_model="cpm",
@@ -1091,21 +1091,18 @@ class TestUpdateMediaBuyMissingPackageId:
         G38 (docs/test-obligations/UC-003-update-media-buy.md): the update path does
         not support buyer_ref-based package identification.
 
-        The validator raises a PYDANTIC error, not a typed one: it runs inside pydantic,
-        which FastMCP drives through a TypeAdapter BEFORE the tool body, and a typed error
-        raised there reached the buyer as a masked prose ToolError with no envelope. The
-        typed AdCPInvalidRequestError is produced by the TRANSPORT BOUNDARY, one frame
-        above every construction site, so what is asserted here is the rejection itself and
-        the field path production derives from it -- the value that becomes error.field.
+        The rejection now happens EARLIER than the shape validator. ``buyer_ref`` is not a
+        declared property of the pinned ``package-update.json``, so the accepted-shape strip
+        on ``BuyerRequest`` refuses the request before ``_validate_package_update_shape``
+        ever runs, raising ``AdCPInvalidRequestError`` (wire INVALID_REQUEST). The gap this
+        documents is unchanged -- the update path still does not resolve a package by
+        buyer_ref -- and so is the buyer-visible outcome; only the layer that produces it
+        moved.
         """
+        from src.core.exceptions import AdCPInvalidRequestError
         from src.core.schemas import UpdateMediaBuyRequest
 
-        # Graded on the pydantic rejection and the FIELD PATH production derives from it.
-        # This used to open adcp_validation_boundary itself to reproduce what the transports
-        # did; they no longer do, so the wrapper simulated a frame that is gone. The typed
-        # error and its code are produced at the transport boundary and graded there
-        # (tests/unit/test_validation_error_at_the_boundary.py).
-        with pytest.raises(ValidationError):
+        with pytest.raises(AdCPInvalidRequestError):
             UpdateMediaBuyRequest(
                 account={"account_id": "acct_test"},
                 idempotency_key="test-idem-key-0001",

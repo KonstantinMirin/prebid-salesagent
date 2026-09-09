@@ -58,7 +58,7 @@ def _make_db_product(**overrides) -> ProductModel:
     }
     defaults.update(overrides)
     product = create_test_db_product(**defaults)
-    pricing = PricingOption(
+    pricing = PricingOption.create(
         tenant_id=defaults["tenant_id"],
         product_id=defaults["product_id"],
         pricing_model="cpm",

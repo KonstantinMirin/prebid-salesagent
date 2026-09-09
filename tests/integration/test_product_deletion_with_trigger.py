@@ -10,6 +10,7 @@ from sqlalchemy import select, text
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PricingOption, Product, Tenant
+from tests.factories import PricingOptionFactory
 from tests.helpers.adcp_factories import create_test_db_product
 
 
@@ -39,7 +40,7 @@ def test_product_deletion_cascades_pricing_options(integration_db):
         session.flush()
 
         # Create pricing option
-        pricing_option = PricingOption(
+        pricing_option = PricingOptionFactory.build(
             tenant_id="test_trigger",
             product_id="test_prod_001",
             pricing_model="cpm",
@@ -161,7 +162,7 @@ def test_trigger_still_blocks_manual_deletion_of_last_pricing_option(integration
         session.flush()
 
         # Create single pricing option
-        pricing_option = PricingOption(
+        pricing_option = PricingOptionFactory.build(
             tenant_id="test_trigger_2",
             product_id="test_prod_002",
             pricing_model="cpm",
@@ -231,7 +232,7 @@ def test_product_deletion_with_multiple_pricing_options(integration_db):
         session.flush()
 
         # Create multiple pricing options
-        pricing_option_1 = PricingOption(
+        pricing_option_1 = PricingOptionFactory.build(
             tenant_id="test_trigger_3",
             product_id="test_prod_003",
             pricing_model="cpm",
@@ -239,11 +240,12 @@ def test_product_deletion_with_multiple_pricing_options(integration_db):
             rate=15.0,
             is_fixed=True,
         )
-        pricing_option_2 = PricingOption(
+        pricing_option_2 = PricingOptionFactory.build(
             tenant_id="test_trigger_3",
             product_id="test_prod_003",
             pricing_model="vcpm",
             currency="USD",
+            rate=None,
             is_fixed=False,
             price_guidance={"floor": 10.0, "p50": 12.0},
         )

@@ -363,8 +363,9 @@ class AdminAccountEnv:
 
         from src.core.database.repositories.uow import AccountUoW
         from tests.factories.account import AccountFactory
+        from tests.factories.mint import mint
 
-        account_id = f"acc_{uuid.uuid4().hex[:12]}"
+        account_id = mint(f"acc_{uuid.uuid4().hex[:12]}")
 
         with AccountUoW(self._tenant_id) as uow:
             assert uow.accounts is not None

@@ -634,6 +634,30 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
 
 
 # ── Suggestion content ───────────────────────────────────────────────
+#
+# UNBOUND, AND KEPT DELIBERATELY. No feature carries any of the seven sentences below —
+# checked by literal grep and by matching each pattern against all 49534 sentences
+# rendered from every feature's Examples through pytest-bdd's own FeatureParser. They are
+# not dead weight, though, and deleting them would destroy the only record that these
+# remediations were ever identified: each one names a specific thing a rejection should
+# tell the buyer to DO, and no scenario grades any of them.
+#
+# Measured against CODE_TABLE, which owns the suggestion text a code resolves to:
+#
+#   - `then_suggestion_auth` is the weak one. AUTH_MISSING's own entry reads "provide
+#     credentials via the auth header and retry", so its keyword test passes on the table
+#     text alone. Asserting the CODE is strictly stronger — it pins WHICH code as well —
+#     which is why nothing should bind this sentence as written.
+#   - The other six demand wording NO code's entry carries. INVALID_REQUEST resolves to
+#     "check request parameters and fix" and VALIDATION_ERROR to "review error details and
+#     fix field values"; neither says DisclosurePosition, positions, duplicates, FormatId,
+#     or agent_url. So those six record obligations production does not meet, which were
+#     never ledgered because no scenario reaches them.
+#
+# Writing those scenarios is filed as salesagent-xighb. When they are written, the assertion should
+# be re-expressed against the CODE plus the sanctioned wire oracle rather than against
+# prose: core/error.json leaves `suggestion` free-form text the seller may reword, and
+# these keyword tests would grade one seller's phrasing.
 
 
 @then("the suggestion should advise providing authentication credentials")

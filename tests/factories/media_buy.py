@@ -7,18 +7,150 @@ Also holds the Pydantic factory for the ``get_media_buys`` RESPONSE item
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from typing import Any
 
 import factory
 from adcp.types import MediaBuyStatus
 from factory import LazyAttribute, Sequence, SubFactory
 
-from src.core.database.models import MediaBuy, MediaPackage, is_media_buy_seller_confirmed
+from src.core.database.models import MediaBuy, MediaPackage, PricingOption, is_media_buy_seller_confirmed
+from src.core.helpers.pricing_helpers import pricing_info_for
 from src.core.schemas import GetMediaBuysMediaBuy
 from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
 from tests.factories.core import TenantFactory
 from tests.factories.principal import PrincipalFactory
+from tests.factories.product import DEFAULT_PRICING_OPTION_ID, PricingOptionFactory
+from tests.factories.request import PackageRequestFactory
+
+#: The product a fixture package points at. Held here rather than taken from the request
+#: factory's ``prod-1`` because the ORM fixtures JOIN on it: seeding hooks create
+#: ``ProductFactory(product_id="prod_001")`` so format validation resolves the product
+#: instead of silently skipping (tests/integration/test_creative_sync_behavioral.py).
+FIXTURE_PRODUCT_ID = "prod_001"
+
+
+def request_package(index: int = 0, **overrides: Any) -> dict[str, Any]:
+    """One ``raw_request`` package: the DTO-bound payload with *overrides* applied.
+
+    Built by ``PackageRequestFactory``, which binds ``PackageRequest`` — so the fields a
+    fixture package carries are the ones the accepted model declares, not a list someone
+    typed. ``pricing_option_id`` is there because the model REQUIRES it, and it is what
+    ``get_media_buy_delivery`` resolves the ``pricing_model``/``rate``/``currency`` from
+    that ``get-media-buy-delivery-response.json`` requires on every ``by_package`` entry.
+
+    Two fields are set on the payload rather than taken from the model, each deliberately:
+
+    - ``product_id`` — the model's ``prod-1`` names no fixture product. The ORM fixtures
+      JOIN on ``prod_001``: seeding hooks create ``ProductFactory(product_id="prod_001")``
+      so format validation resolves the product instead of silently skipping
+      (tests/integration/test_creative_sync_behavioral.py).
+    - ``package_id`` — NOT a ``PackageRequest`` field, because the buyer does not send one.
+      The seller mints it and ``MediaBuyRepository.create_from_request`` injects it into
+      the persisted request from ``package_id_map``; injecting it here is the same move,
+      and it is what lets a ``MediaPackage`` row and its request entry share one identity
+      instead of minting two that join to nothing.
+    """
+    return PackageRequestFactory.payload(
+        **{"product_id": FIXTURE_PRODUCT_ID, "package_id": f"pkg_{index + 1:03d}", **overrides}
+    )
+
+
+def default_request_packages() -> list[dict[str, Any]]:
+    """The ``packages`` a conformant create request leaves on ``MediaBuy.raw_request``."""
+    return [request_package()]
+
+
+def pricing_option_for(pricing_option_id: str) -> PricingOption | None:
+    """The unpersisted ``PricingOption`` row a package naming *pricing_option_id* selects.
+
+    ``pricing_option_id`` is a stored column, so a row can carry any id its publisher
+    chose and this cannot invert an arbitrary one. What it inverts is the DEFAULT id
+    ``PricingOption.default_option_id`` assigns, which is what every fixture row carries:
+    the parts are read out of the id, a candidate row is built from them, and it is kept
+    only if the model agrees that row would be given that id back. An id outside the
+    default grammar returns ``None`` — a fixture wanting a custom id builds the row
+    itself and reads the id off it.
+    """
+    parts = pricing_option_id.rsplit("_", 2)
+    if len(parts) != 3:
+        return None
+    pricing_model, currency, fixed = parts
+    option = PricingOptionFactory.build(
+        pricing_model=pricing_model, currency=currency.upper(), is_fixed=fixed == "fixed"
+    )
+    return option if option.pricing_option_id == pricing_option_id else None
+
+
+def pricing_options_for(pricing_option_ids: Iterable[str]) -> dict[str, PricingOption]:
+    """The lookup result ``_get_pricing_options`` returns for *pricing_option_ids*.
+
+    For tests that mock that function: the mock answers about the ids production actually
+    asked for, so a fixture package and its pricing option cannot drift apart.
+    """
+    resolved = ((option_id, pricing_option_for(option_id)) for option_id in pricing_option_ids)
+    return {option_id: option for option_id, option in resolved if option is not None}
+
+
+def pricing_options_named(
+    pricing_model: str = "cpm",
+    rate: str | Decimal = "5.00",
+    currency: str = "USD",
+    is_fixed: bool = True,
+) -> dict[str, PricingOption]:
+    """``_get_pricing_options``'s result for ONE option with a caller-chosen *rate*.
+
+    The sibling of :func:`pricing_options_for`, for the tests that grade what a delivery
+    report says the rate WAS. ``rate`` is the one term the synthetic id does not encode —
+    the grammar is ``{model}_{currency}_{fixed|auction}`` — so it cannot be recovered by
+    inverting an id, and a test asserting a cpc buy billed 0.50 has to state it.
+
+    The KEY is READ OFF THE ROW, not computed here. ``pricing_option_id`` is a stored
+    column now, and the row the factory builds already carries the id
+    ``PricingOption.default_option_id`` assigned it — so this asks the row what it is
+    named instead of spelling the grammar a second time. That is the whole difference
+    from the helper this replaces, which took an arbitrary id (``"po_cpc"``) and
+    fabricated an option for it, so a package could name an id no reader resolves and
+    the fixture would still answer.
+    """
+    option = PricingOptionFactory.build(
+        pricing_model=pricing_model,
+        rate=Decimal(str(rate)),
+        currency=currency,
+        is_fixed=is_fixed,
+    )
+    return {option.pricing_option_id: option}
+
+
+def package_config_for(package: dict[str, Any]) -> dict[str, Any]:
+    """The ``MediaPackage.package_config`` a persisted request *package* carries.
+
+    ``pricing_info`` is built by ``pricing_info_for`` — the SAME projection
+    ``_validate_pricing_model_selection`` writes with, so the fixture cannot drift from
+    what the seller persists; it is a call, not a copy. ``bid_price`` travels with the
+    package because it is what that package bid, and the GAM order manager reads a
+    package's rate from it (``src/adapters/utils/pricing.py``).
+
+    ``get_media_buy_delivery`` resolves the pricing its response REQUIRES from this first,
+    falling back to the ``PricingOption`` the package names. A row with neither makes the
+    delivery report unbuildable, which is what ``_package_pricing`` refuses to paper over.
+    """
+    option_id = package.get("pricing_option_id")
+    option = pricing_option_for(option_id) if option_id else None
+    if option is None:
+        # A package with no ``pricing_option_id``, or one naming an id outside the
+        # synthetic grammar, names no option any reader can resolve — so the row this
+        # would build is one production cannot produce. ``pricing_option_id`` is REQUIRED
+        # on ``PackageRequest``, so a package that reaches here did not come from
+        # ``PackageRequestFactory``; completing it silently is how a fixture that is
+        # simply wrong buys a green.
+        raise ValueError(
+            f"package pricing option {option_id!r} resolves to no option — "
+            "build packages through PackageRequestFactory / request_package()"
+        )
+    return {**package, "pricing_info": pricing_info_for(option, bid_price=package.get("bid_price"))}
 
 
 class MediaBuyFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -117,10 +249,34 @@ class MediaBuyFactory(factory.alchemy.SQLAlchemyModelFactory):
     account_id = LazyAttribute(lambda o: _ensure_default_account(o.tenant_id))
     raw_request = LazyAttribute(
         lambda o: {
-            "packages": [{"package_id": "pkg_001", "product_id": "prod_001"}],
+            "packages": default_request_packages(),
             "account": {"account_id": DEFAULT_TEST_ACCOUNT_ID},
         }
     )
+
+    @factory.post_generation
+    def persisted_packages(obj, create, extracted, **kwargs):  # noqa: N805 — factory_boy hook signature
+        """Materialize the ``MediaPackage`` row each persisted request package names.
+
+        A buy production created always has them: ``create_media_buy`` writes one row per
+        package and injects that row's ``package_id`` back into ``raw_request``. A factory
+        buy without them is a shape production cannot produce, and ``get_media_buy_delivery``
+        cannot state the pricing its response REQUIRES for a package with no row and no
+        ``PricingOption`` — the same reason ``account_id`` above seeds a real Account row.
+
+        Only packages that NAME a ``package_id`` get a row, because that id is what the
+        repository injects when it persists them; a caller who supplies a ``raw_request``
+        whose packages carry none is describing a buy whose packages were never persisted,
+        and inventing rows for it would invent identities too.
+
+        Named ``persisted_packages`` rather than ``packages`` so the model's own
+        relationship stays reachable as a constructor kwarg.
+        """
+        if not create or MediaBuyFactory._meta.sqlalchemy_session is None:
+            return
+        for package in (obj.raw_request or {}).get("packages", []):
+            if package.get("package_id"):
+                MediaPackageFactory(media_buy=obj, package_id=package["package_id"])
 
 
 def _ensure_default_account(tenant_id: str) -> str:
@@ -149,23 +305,63 @@ def _ensure_default_account(tenant_id: str) -> str:
     return DEFAULT_TEST_ACCOUNT_ID
 
 
+def _request_packages(media_buy) -> list[dict[str, Any]]:
+    """The packages the buy's persisted request names."""
+    return (getattr(media_buy, "raw_request", None) or {}).get("packages") or []
+
+
+def _source_package(o) -> dict[str, Any]:
+    """The ``raw_request`` package this row is the persisted form of.
+
+    A ``MediaPackage`` row does not mint its own identity or terms: production writes the
+    row and the ``raw_request`` entry from the same request package, and every reader —
+    the delivery report above all — joins them by ``package_id``.
+    """
+    packages = _request_packages(o.media_buy)
+    named = [pkg for pkg in packages if pkg.get("package_id") == o.package_id]
+    return named[0] if named else (packages[0] if packages else {})
+
+
 class MediaPackageFactory(factory.alchemy.SQLAlchemyModelFactory):
     class Meta:
         model = MediaPackage
         sqlalchemy_session = None
         sqlalchemy_session_persistence = "commit"
 
+    # ``(media_buy_id, package_id)`` is the primary key, and ``MediaBuyFactory`` already
+    # materializes a row for every package its ``raw_request`` names. A caller naming one
+    # of those packages is asking for THAT row — inserting a second is an IntegrityError,
+    # not a second package — so the row is updated in place with whatever the caller
+    # states and returned.
+    @classmethod
+    def _create(cls, model_class, *args, **kwargs):
+        session = cls._meta.sqlalchemy_session
+        existing = session.get(model_class, (kwargs["media_buy_id"], kwargs["package_id"])) if session else None
+        if existing is None:
+            return super()._create(model_class, *args, **kwargs)
+        for field, value in kwargs.items():
+            setattr(existing, field, value)
+        session.commit()
+        return existing
+
     media_buy = SubFactory(MediaBuyFactory)
     media_buy_id = LazyAttribute(lambda o: o.media_buy.media_buy_id)
-    package_id = Sequence(lambda n: f"pkg_{n:04d}")
-    budget = Decimal("5000.00")
+    package_id = LazyAttribute(
+        lambda o: next(
+            (pkg["package_id"] for pkg in _request_packages(o.media_buy) if pkg.get("package_id")), "pkg_001"
+        )
+    )
+    budget = LazyAttribute(lambda o: Decimal(str(_source_package(o).get("budget", "5000.00"))))
     pacing = "even"
     package_config = LazyAttribute(
-        lambda o: {
-            "package_id": o.package_id,
-            "product_id": "prod_001",
-            "budget": float(o.budget),
-        }
+        lambda o: package_config_for(
+            {
+                **_source_package(o),
+                "package_id": o.package_id,
+                "product_id": _source_package(o).get("product_id", FIXTURE_PRODUCT_ID),
+                "budget": float(o.budget),
+            }
+        )
     )
 
 
@@ -193,3 +389,59 @@ class GetMediaBuysMediaBuyFactory(factory.Factory):
     # LazyFunction, not a bare ``[]``: a mutable class attribute would be the SAME
     # list object on every built item.
     packages = factory.LazyFunction(list)
+
+
+def package_pricing_fields(
+    pricing_model: str | None = None,
+    rate: float | None = None,
+    currency: str | None = None,
+) -> dict[str, Any]:
+    """The three pin-REQUIRED pricing kwargs, for a hand-built ``PackageDelivery``.
+
+    ``get-media-buy-delivery-response.json`` lists ``pricing_model``, ``rate`` and
+    ``currency`` in the ``required`` set of every ``by_package`` item and types all three
+    non-nullable, so a fixture that omits them is not building the object the pin
+    describes — it is building one the wire will reject.
+
+    Defaults are READ OFF the option the default request package names rather than
+    restated, so a fixture's hand-built delivery item cannot disagree with the package it
+    reports on.
+    """
+    option = pricing_option_for(DEFAULT_PRICING_OPTION_ID)
+    assert option is not None  # DEFAULT_PRICING_OPTION_ID is a default-grammar id by construction
+    return {
+        "pricing_model": pricing_model if pricing_model is not None else option.pricing_model,
+        "rate": rate if rate is not None else float(option.rate),
+        "currency": currency if currency is not None else option.currency,
+    }
+
+
+def seed_delivery_pricing(
+    tenant: Any,
+    product_id: str = FIXTURE_PRODUCT_ID,
+    pricing_model: str = "cpm",
+    rate: str | Decimal = "5.00",
+    currency: str = "USD",
+) -> str:
+    """PERSIST the Product + PricingOption rows a delivery-reporting buy needs; return the id.
+
+    The integration ``DeliveryPollEnv`` runs the REAL ``_get_pricing_options``, which reads
+    the tenant's ``pricing_options`` rows and reconstructs each synthetic id, so a package
+    naming an id no row produces resolves to nothing. The returned id is produced by
+    the row's own ``pricing_option_id`` column, read back rather than recomputed.
+
+    Pass ``tenant`` (the object, not the id: ``ProductFactory`` derives ``tenant_id`` from
+    its ``tenant`` SubFactory, so an id kwarg alone leaves the row on a freshly-minted
+    tenant).
+    """
+    from tests.factories.product import ProductFactory
+
+    product = ProductFactory(tenant=tenant, product_id=product_id)
+    option = PricingOptionFactory(
+        product=product,
+        pricing_model=pricing_model,
+        rate=Decimal(str(rate)),
+        currency=currency,
+        is_fixed=True,
+    )
+    return option.pricing_option_id

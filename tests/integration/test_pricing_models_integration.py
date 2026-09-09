@@ -15,6 +15,7 @@ from src.core.schemas import GetProductsRequest, PricingModel
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.products import _get_products_impl
+from tests.factories import PricingOptionFactory
 from tests.factories.principal import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_media_buy_request, create_test_package_request
 from tests.utils.database_helpers import create_tenant_with_timestamps
@@ -93,7 +94,7 @@ def setup_tenant_with_pricing_products(integration_db):
         session.add(product_cpm_fixed)
         session.flush()
 
-        pricing_cpm_fixed = PricingOption(
+        pricing_cpm_fixed = PricingOptionFactory.build(
             tenant_id="test_pricing_tenant",
             product_id="prod_cpm_fixed",
             pricing_model="cpm",
@@ -118,7 +119,7 @@ def setup_tenant_with_pricing_products(integration_db):
         session.add(product_cpm_auction)
         session.flush()
 
-        pricing_cpm_auction = PricingOption(
+        pricing_cpm_auction = PricingOptionFactory.build(
             tenant_id="test_pricing_tenant",
             product_id="prod_cpm_auction",
             pricing_model="cpm",
@@ -144,7 +145,7 @@ def setup_tenant_with_pricing_products(integration_db):
         session.add(product_cpcv)
         session.flush()
 
-        pricing_cpcv = PricingOption(
+        pricing_cpcv = PricingOptionFactory.build(
             tenant_id="test_pricing_tenant",
             product_id="prod_cpcv",
             pricing_model="cpcv",
@@ -174,7 +175,7 @@ def setup_tenant_with_pricing_products(integration_db):
         session.flush()
 
         # Add CPM option
-        pricing_multi_cpm = PricingOption(
+        pricing_multi_cpm = PricingOptionFactory.build(
             tenant_id="test_pricing_tenant",
             product_id="prod_multi",
             pricing_model="cpm",
@@ -185,7 +186,7 @@ def setup_tenant_with_pricing_products(integration_db):
         session.add(pricing_multi_cpm)
 
         # Add CPCV option
-        pricing_multi_cpcv = PricingOption(
+        pricing_multi_cpcv = PricingOptionFactory.build(
             tenant_id="test_pricing_tenant",
             product_id="prod_multi",
             pricing_model="cpcv",
@@ -196,7 +197,7 @@ def setup_tenant_with_pricing_products(integration_db):
         session.add(pricing_multi_cpcv)
 
         # Add CPP option with demographics
-        pricing_multi_cpp = PricingOption(
+        pricing_multi_cpp = PricingOptionFactory.build(
             tenant_id="test_pricing_tenant",
             product_id="prod_multi",
             pricing_model="cpp",
@@ -306,13 +307,16 @@ async def test_create_media_buy_with_cpm_fixed_pricing(setup_tenant_with_pricing
         protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
+    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
+    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
+    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
+    # check was True for every object it could be handed, including an error one. It
+    # was also unreachable — the call above unpacked the model into a (name, value)
+    # tuple, and a tuple has no .errors either (salesagent-jnqab).
+    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
+    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
     assert response.media_buy_id is not None
 
 
@@ -341,13 +345,16 @@ async def test_create_media_buy_with_cpm_auction_pricing(setup_tenant_with_prici
         protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
+    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
+    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
+    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
+    # check was True for every object it could be handed, including an error one. It
+    # was also unreachable — the call above unpacked the model into a (name, value)
+    # tuple, and a tuple has no .errors either (salesagent-jnqab).
+    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
+    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
     assert response.media_buy_id is not None
 
 
@@ -411,13 +418,16 @@ async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_prod
         protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
+    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
+    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
+    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
+    # check was True for every object it could be handed, including an error one. It
+    # was also unreachable — the call above unpacked the model into a (name, value)
+    # tuple, and a tuple has no .errors either (salesagent-jnqab).
+    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
+    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
     assert response.media_buy_id is not None
 
 
@@ -480,13 +490,16 @@ async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_prici
         protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
+    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
+    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
+    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
+    # check was True for every object it could be handed, including an error one. It
+    # was also unreachable — the call above unpacked the model into a (name, value)
+    # tuple, and a tuple has no .errors either (salesagent-jnqab).
+    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
+    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
     assert response.media_buy_id is not None
 
 

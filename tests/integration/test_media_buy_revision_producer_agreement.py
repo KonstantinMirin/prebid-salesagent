@@ -345,9 +345,7 @@ def test_dry_run_update_reports_the_current_revision_and_moves_nothing(integrati
         # A failed update returns UpdateMediaBuyError in the same envelope, which
         # carries no `revision` — assert the success branch explicitly so a refusal
         # fails as a refusal rather than as a KeyError three lines down.
-        assert isinstance(simulated.response, UpdateMediaBuySuccess), (
-            f"dry-run update did not succeed: {simulated.response!r}"
-        )
+        assert isinstance(simulated, UpdateMediaBuySuccess), f"dry-run update did not succeed: {simulated!r}"
         reported = simulated.model_dump(mode="json")["revision"]
         persisted = listed.model_dump(mode="json")["media_buys"][0]["revision"]
 

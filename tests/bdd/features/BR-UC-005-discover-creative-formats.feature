@@ -1,5 +1,4 @@
 # Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-005 Discover Creative Formats
   As a Buyer (Human or AI Agent)
@@ -1074,7 +1073,8 @@ Feature: BR-UC-005 Discover Creative Formats
 
   @T-UC-005-sandbox-happy @UC-005-MAIN-MCP-23 @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account receives simulated creative formats with sandbox flag
-    Given the request targets a sandbox account
+    Given the Buyer is authenticated
+    And the request targets a sandbox account
     When the Buyer Agent sends a list_creative_formats request
     Then the response is compliant with the list_creative_formats spec
     And the response status should be "completed"
@@ -1087,7 +1087,8 @@ Feature: BR-UC-005 Discover Creative Formats
 
   @T-UC-005-sandbox-production @UC-005-MAIN-MCP-23 @invariant @br-rule-209 @sandbox
   Scenario: Production account creative formats response does not include sandbox flag
-    Given the request targets a production account
+    Given the Buyer is authenticated
+    And the request targets a production account
     When the Buyer Agent sends a list_creative_formats request
     Then the response is compliant with the list_creative_formats spec
     And the response status should be "completed"
@@ -1097,7 +1098,8 @@ Feature: BR-UC-005 Discover Creative Formats
 
   @T-UC-005-sandbox-validation @UC-005-MAIN-MCP-23 @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account with invalid filter returns real validation error
-    Given the request targets a sandbox account
+    Given the Buyer is authenticated
+    And the request targets a sandbox account
     When the Buyer Agent sends a list_creative_formats request with invalid dimension filters
     Then the error is compliant with the AdCP error spec
     And the response should indicate a validation error
@@ -1153,7 +1155,8 @@ Feature: BR-UC-005 Discover Creative Formats
 
   @T-UC-005-v31-asset-registry-no-variant-siblings @main-flow @v3-1 @asset-registry @validation
   Scenario: asset_types filter rejects nested-variant discriminators (no sibling registry entries)
-    Given the request targets a production account
+    Given the Buyer is authenticated
+    And the request targets a production account
     When the Buyer Agent sends a list_creative_formats request with asset_types ["vast_url"]
     Then the error is compliant with the AdCP error spec
     And the response should indicate a validation error

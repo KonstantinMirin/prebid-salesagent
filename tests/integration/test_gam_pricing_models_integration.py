@@ -28,6 +28,7 @@ from src.core.database.models import (
     Tenant,
 )
 from src.core.testing_hooks import AdCPTestContext
+from tests.factories import PricingOptionFactory
 from tests.factories.principal import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_media_buy_request, create_test_package_request
 from tests.helpers.external_service import is_external_service_response_error
@@ -155,7 +156,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
         session.add(product_cpm)
         session.flush()
 
-        pricing_cpm = PricingOption(
+        pricing_cpm = PricingOptionFactory.build(
             tenant_id="test_gam_pricing_tenant",
             product_id="prod_gam_cpm_guaranteed",
             pricing_model="cpm",
@@ -220,7 +221,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
         session.add(product_cpc)
         session.flush()
 
-        pricing_cpc = PricingOption(
+        pricing_cpc = PricingOptionFactory.build(
             tenant_id="test_gam_pricing_tenant",
             product_id="prod_gam_cpc",
             pricing_model="cpc",
@@ -269,7 +270,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
         session.add(product_vcpm)
         session.flush()
 
-        pricing_vcpm = PricingOption(
+        pricing_vcpm = PricingOptionFactory.build(
             tenant_id="test_gam_pricing_tenant",
             product_id="prod_gam_vcpm",
             pricing_model="vcpm",
@@ -334,7 +335,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
         session.add(product_flat)
         session.flush()
 
-        pricing_flat = PricingOption(
+        pricing_flat = PricingOptionFactory.build(
             tenant_id="test_gam_pricing_tenant",
             product_id="prod_gam_flatrate",
             pricing_model="flat_rate",
@@ -398,17 +399,20 @@ async def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_wi
         protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
     # Skip if external creative agent is unavailable
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
+    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
+    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
+    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
+    # check was True for every object it could be handed, including an error one. It
+    # was also unreachable — the call above unpacked the model into a (name, value)
+    # tuple, and a tuple has no .errors either (salesagent-jnqab).
+    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
+    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
     assert response.media_buy_id is not None
 
     # In dry-run mode, the response should succeed
@@ -444,17 +448,20 @@ async def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_g
         protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
     # Skip if external creative agent is unavailable
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
+    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
+    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
+    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
+    # check was True for every object it could be handed, including an error one. It
+    # was also unreachable — the call above unpacked the model into a (name, value)
+    # tuple, and a tuple has no .errors either (salesagent-jnqab).
+    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
+    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
     assert response.media_buy_id is not None
 
     # In real GAM mode, line item would have:
@@ -491,17 +498,20 @@ async def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(set
         protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
     # Skip if external creative agent is unavailable
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
+    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
+    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
+    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
+    # check was True for every object it could be handed, including an error one. It
+    # was also unreachable — the call above unpacked the model into a (name, value)
+    # tuple, and a tuple has no .errors either (salesagent-jnqab).
+    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
+    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
     assert response.media_buy_id is not None
 
     # In real GAM mode, line item would have:
@@ -539,17 +549,20 @@ async def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_
         protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
     # Skip if external creative agent is unavailable
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
+    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
+    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
+    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
+    # check was True for every object it could be handed, including an error one. It
+    # was also unreachable — the call above unpacked the model into a (name, value)
+    # tuple, and a tuple has no .errors either (salesagent-jnqab).
+    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
+    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
     assert response.media_buy_id is not None
 
     # In real GAM mode, line item would have:
@@ -596,17 +609,20 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
         protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
     # Skip if external creative agent is unavailable
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
+    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
+    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
+    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
+    # check was True for every object it could be handed, including an error one. It
+    # was also unreachable — the call above unpacked the model into a (name, value)
+    # tuple, and a tuple has no .errors either (salesagent-jnqab).
+    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
+    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
     assert response.media_buy_id is not None
 
     # Each package should create a line item with correct pricing:
@@ -626,7 +642,7 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
 
     # Add auction CPC pricing option
     with get_db_session() as session:
-        pricing_auction = PricingOption(
+        pricing_auction = PricingOptionFactory.build(
             tenant_id="test_gam_pricing_tenant",
             product_id="prod_gam_cpc",
             pricing_model="cpc",
@@ -661,14 +677,19 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
         protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Auction CPC media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown'}"
-    )
+    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
+    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
+    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
+    # check was True for every object it could be handed, including an error one. It
+    # was also unreachable — the call above unpacked the model into a (name, value)
+    # tuple, and a tuple has no .errors either (salesagent-jnqab).
+    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
+    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
     assert response.media_buy_id is not None
 
     # Cleanup auction pricing option

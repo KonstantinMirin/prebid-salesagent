@@ -154,7 +154,7 @@ async def test_create_accepts_property_list_when_product_allows(property_targeti
         idempotency_key=f"int-key-{uuid.uuid4().hex}",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=_make_identity())
+    response = await _create_media_buy_impl(req=request, identity=_make_identity())
 
     # The validation rule must not fire for an allowing product. Separate
     # assertion gates the success branch — without it the compound
@@ -192,7 +192,7 @@ async def test_create_accepts_collection_list_without_property_list(property_tar
         idempotency_key=f"int-key-{uuid.uuid4().hex}",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=_make_identity())
+    response = await _create_media_buy_impl(req=request, identity=_make_identity())
 
     # Mirror the line-157 split for the sister test — the compound
     # ``isinstance(...) or all(...)`` short-circuits on success, leaving the

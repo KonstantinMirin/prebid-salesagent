@@ -16,6 +16,7 @@ from pytest_bdd import given, then, when
 from tests.bdd.steps._outcome_helpers import wire_error_dict
 from tests.bdd.steps.generic._dispatch import dispatch_via_client
 from tests.bdd.steps.generic.then_error import then_error_recovery
+from tests.factories.mint import mint
 from tests.harness.transport import DERIVED_STATUS_ADCP_ERROR, DERIVED_STATUS_TRANSPORT_FAULT
 
 
@@ -47,7 +48,7 @@ def _dispatch_update(ctx: dict, payload: dict) -> None:
     # is the row the seeder created, with this principal's access to it.
     payload = {
         "account": ctx["env"].default_account_reference().model_dump(mode="json"),
-        "idempotency_key": f"uc003-storyboard-{uuid4().hex}",
+        "idempotency_key": mint(f"uc003-storyboard-{uuid4().hex}"),
         **payload,
     }
     dispatch_via_client(ctx, "update_media_buy", payload)
@@ -56,7 +57,7 @@ def _dispatch_update(ctx: dict, payload: dict) -> None:
 @given("the buyer fabricates a media_buy_id that does not exist in the seller catalog")
 def given_fabricated_nonexistent_media_buy_id(ctx: dict) -> None:
     """Stash a guaranteed-nonexistent media_buy_id — nothing to seed against."""
-    ctx["fabricated_media_buy_id"] = f"mb_does_not_exist_{uuid4()}"
+    ctx["fabricated_media_buy_id"] = mint(f"mb_does_not_exist_{uuid4()}")
 
 
 @when("the Buyer Agent sends update_media_buy with the unknown media_buy_id and paused true")
@@ -68,7 +69,7 @@ def when_update_media_buy_with_unknown_id(ctx: dict) -> None:
     T-UC-003-storyboard-package-not-found, which reuses the correlation_id-echo
     Then step below, can graduate later without a rewrite.
     """
-    correlation_id = str(uuid4())
+    correlation_id = mint(str(uuid4()))
     ctx["correlation_id"] = correlation_id
     payload = {
         "media_buy_id": ctx["fabricated_media_buy_id"],
@@ -94,7 +95,7 @@ def when_update_media_buy_recancel(ctx: dict) -> None:
     the same contract the sibling storyboard When step uses, so the shared
     correlation-echo Then step below works unmodified.
     """
-    correlation_id = str(uuid4())
+    correlation_id = mint(str(uuid4()))
     ctx["correlation_id"] = correlation_id
     media_buy = ctx["existing_media_buy"]
     assert media_buy is not None, (

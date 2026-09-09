@@ -43,6 +43,7 @@ from src.core.database.models import (
     Tenant,
 )
 from src.core.testing_hooks import AdCPTestContext
+from tests.factories import PricingOptionFactory
 from tests.factories.principal import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_media_buy_request, create_test_package_request
 from tests.helpers.external_service import is_external_service_response_error
@@ -156,7 +157,7 @@ def setup_gam_tenant_with_non_cpm_product(integration_db):
         session.flush()
 
         # Add CPCV pricing option
-        pricing_cpcv = PricingOption(
+        pricing_cpcv = PricingOptionFactory.build(
             tenant_id="test_gam_tenant",
             product_id="prod_gam_cpcv",
             pricing_model="cpcv",
@@ -195,7 +196,7 @@ def setup_gam_tenant_with_non_cpm_product(integration_db):
         session.flush()
 
         # Add CPM pricing option
-        pricing_cpm = PricingOption(
+        pricing_cpm = PricingOptionFactory.build(
             tenant_id="test_gam_tenant",
             product_id="prod_gam_cpm",
             pricing_model="cpm",
@@ -243,7 +244,7 @@ def setup_gam_tenant_with_non_cpm_product(integration_db):
         session.flush()
 
         # Add CPM (supported)
-        pricing_multi_cpm = PricingOption(
+        pricing_multi_cpm = PricingOptionFactory.build(
             tenant_id="test_gam_tenant",
             product_id="prod_gam_multi",
             pricing_model="cpm",
@@ -257,7 +258,7 @@ def setup_gam_tenant_with_non_cpm_product(integration_db):
         session.add(pricing_multi_cpm)
 
         # Add CPP (not supported by GAM)
-        pricing_multi_cpp = PricingOption(
+        pricing_multi_cpp = PricingOptionFactory.build(
             tenant_id="test_gam_tenant",
             product_id="prod_gam_multi",
             pricing_model="cpp",
@@ -355,17 +356,20 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
     )
 
     # This should succeed
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
     # Skip if external creative agent is unavailable
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
+    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
+    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
+    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
+    # check was True for every object it could be handed, including an error one. It
+    # was also unreachable — the call above unpacked the model into a (name, value)
+    # tuple, and a tuple has no .errors either (salesagent-jnqab).
+    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
+    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
     assert response.media_buy_id is not None
 
 
@@ -429,15 +433,18 @@ async def test_gam_accepts_cpm_from_multi_pricing_product(setup_gam_tenant_with_
     )
 
     # This should succeed - buyer chose CPM from multi-option product
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Verify response is success (AdCP 2.4 compliant)
-    # Success response has media_buy_id, error response has errors field
     # Skip if external creative agent is unavailable
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")
 
-    assert not hasattr(response, "errors") or response.errors is None or response.errors == [], (
-        f"Media buy creation failed: {response.errors if hasattr(response, 'errors') else 'unknown error'}"
-    )
+    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
+    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
+    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
+    # check was True for every object it could be handed, including an error one. It
+    # was also unreachable — the call above unpacked the model into a (name, value)
+    # tuple, and a tuple has no .errors either (salesagent-jnqab).
+    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
+    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
     assert response.media_buy_id is not None

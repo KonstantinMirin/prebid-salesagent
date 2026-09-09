@@ -33,6 +33,7 @@ from src.core.database.models import (
 from src.core.schemas import CreateMediaBuyRequest, ListCreativesResponse, SyncCreativesRequest, SyncCreativesResponse
 from src.core.schemas.creative import ListCreativesRequest
 from src.core.testing_hooks import AdCPTestContext
+from tests.factories import PricingOptionFactory
 from tests.factories.creative_asset import asset_spec, build_assets, image_spec
 from tests.factories.principal import PrincipalFactory
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
@@ -225,7 +226,7 @@ class TestCreativeLifecycleMCP:
             session.commit()  # Commit media_buy first so foreign key exists
 
             # Create test media packages for creative assignments
-            from src.core.database.models import MediaPackage, PricingOption
+            from src.core.database.models import MediaPackage
             from src.core.database.models import Product as DBProduct
 
             package_1 = MediaPackage(
@@ -267,7 +268,7 @@ class TestCreativeLifecycleMCP:
             session.add(test_product)
 
             # Create pricing option for the product
-            pricing_option = PricingOption(
+            pricing_option = PricingOptionFactory.build(
                 tenant_id="creative_test",
                 product_id="prod_1",
                 pricing_model="cpm",

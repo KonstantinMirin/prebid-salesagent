@@ -439,7 +439,12 @@ def _exempted_envelope_get_ids(func: ast.FunctionDef | ast.AsyncFunctionDef) -> 
 #: reads the PER-ENTRY ``errors[]`` array inside a SUCCESS envelope (a partial-failure
 #: row), which is a different region from the envelope-level ``errors[0]`` Check C
 #: targets — and it is itself the sanctioned primitive for that region.
-_PRIMITIVE_FUNCTIONS = frozenset({"bdd/steps/_outcome_helpers.py wire_entry_errors"})
+_PRIMITIVE_FUNCTIONS = frozenset(
+    {
+        "bdd/steps/_outcome_helpers.py wire_entry_errors",
+        "bdd/steps/_outcome_helpers.py wire_advisory_errors",
+    }
+)
 
 #: Envelope keys whose location in the wire shape is the harness's business.
 _PROTOCOL_POSITION_KEYS = frozenset({"errors", "adcp_error"})

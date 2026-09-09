@@ -6,12 +6,19 @@ Each test exercises the actual code path to verify correct behavior.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.core.schemas import GetProductsRequest
+from src.core.schemas import (
+    AdapterGetMediaBuyDeliveryResponse,
+    AdapterPackageDelivery,
+    DeliveryTotals,
+    GetProductsRequest,
+    ReportingPeriod,
+)
+from tests.factories.media_buy import pricing_options_for, request_package
 from tests.factories.principal import PrincipalFactory
 
 
@@ -56,7 +63,7 @@ class TestDeliveryLoopErrorHandling:
         good_buy.end_date = date.today() + timedelta(days=5)
         good_buy.budget = "1000.00"
         good_buy.raw_request = {
-            "packages": [{"package_id": "pkg1", "product_id": "prod1"}],
+            "packages": [request_package(package_id="pkg1", product_id="prod1")],
         }
 
         bad_buy = MagicMock()
@@ -70,8 +77,21 @@ class TestDeliveryLoopErrorHandling:
 
         target_buys = [("mb_good", good_buy), ("mb_bad", bad_buy)]
 
+        # A real adapter document, not a bare MagicMock: every metric the response model
+        # reads off it is typed, and a MagicMock attribute fails that validation — which
+        # would fail the GOOD buy too and make this test green for the wrong reason.
+        adapter = MagicMock()
+        adapter.get_media_buy_delivery.return_value = AdapterGetMediaBuyDeliveryResponse(
+            media_buy_id="mb_good",
+            reporting_period=ReportingPeriod(start=datetime.now(UTC) - timedelta(days=5), end=datetime.now(UTC)),
+            totals=DeliveryTotals(impressions=1000, spend=50.0),
+            by_package=[AdapterPackageDelivery(package_id="pkg1", impressions=1000, spend=50.0)],
+            currency="USD",
+        )
+
         mock_repo = MagicMock()
         mock_repo.get_packages.return_value = []
+        mock_repo.get_packages_for_ids.return_value = {}
 
         mock_uow = MagicMock()
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
@@ -80,10 +100,13 @@ class TestDeliveryLoopErrorHandling:
 
         with (
             patch("src.core.auth.get_principal_object", return_value=MagicMock()),
-            patch("src.core.tools.media_buy_delivery.get_adapter", return_value=MagicMock()),
+            patch("src.core.tools.media_buy_delivery.get_adapter", return_value=adapter),
             patch("src.core.tools.media_buy_delivery.MediaBuyUoW", return_value=mock_uow),
             patch("src.core.tools.media_buy_delivery._get_target_media_buys", return_value=target_buys),
-            patch("src.core.tools.media_buy_delivery._get_pricing_options", return_value={}),
+            patch(
+                "src.core.tools.media_buy_delivery._get_pricing_options",
+                side_effect=lambda option_ids, **_: pricing_options_for(option_ids),
+            ),
         ):
             response = _get_media_buy_delivery_impl(req, identity)
 

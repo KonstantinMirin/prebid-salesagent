@@ -1,5 +1,4 @@
 # Generated from adcp-req @ a14db6e5894e781a8b2c577e86e1b136876e4915 on 2026-06-03T11:30:04Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-004 Deliver Media Buy Metrics
   As a Buyer (Human or AI Agent)
@@ -24,7 +23,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Background:
     Given a Seller Agent is operational and accepting requests
     And a tenant exists with completed setup checklist
-    And an authenticated Buyer with principal_id "buyer-001"
+    And the Buyer is authenticated
     And the principal "buyer-001" exists in the tenant database
 
 
@@ -92,8 +91,14 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001", "mb-999"]
     Then the response is compliant with the get_media_buy_delivery spec
     And the response should include delivery data for "mb-001" only
-    And the response should not include an error for "mb-999"
-    # BR-RULE-030 INV-5: partial resolution, missing silently omitted
+    And the response errors include code "MEDIA_BUY_NOT_FOUND" for media buy "mb-999"
+    And the response should not include an error for "mb-001"
+    # BR-RULE-030 INV-5: partial resolution is ADVISORY PER ID — the resolved buy is
+    # reported and the unresolved id is named in errors[], which
+    # get-media-buy-delivery-response.json (AdCP 3.1.1) declares for exactly this:
+    # "Task-specific errors and warnings (e.g., missing delivery data, reporting
+    # platform issues)". A buyer that asked about an id gets an answer about it, and
+    # the ids that did deliver carry no advisory of their own.
 
   @T-UC-004-identify-zero @invariant @BR-RULE-030 @identification
   Scenario: Zero resolution - all IDs invalid returns empty array
@@ -115,7 +120,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # BR-RULE-030 INV-4 counter-example: neither provided, no buys -> empty
 
   @T-UC-004-identify-batch-ownership @invariant @ownership @BR-RULE-030 @identification
-  Scenario: Batch request with mixed ownership - non-owned silently omitted
+  Scenario: Batch request with mixed ownership - non-owned reported as not found
     Given a media buy "mb-001" owned by "buyer-001"
     And a media buy "mb-other" owned by "other-buyer"
     And the ad server adapter has delivery data for "mb-001"
@@ -123,8 +128,13 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Then the response is compliant with the get_media_buy_delivery spec
     And the response should include delivery data for "mb-001" only
     And the response should NOT include delivery data for "mb-other"
-    And no error should be returned for "mb-other"
-    # PRE-BIZ3 (ownership) + BR-RULE-030 INV-5: non-owned treated as not-found, partial results
+    And the response errors include code "MEDIA_BUY_NOT_FOUND" for media buy "mb-other"
+    And the response should not include an error for "mb-001"
+    # PRE-BIZ3 (ownership) + BR-RULE-030 INV-5: a non-owned id is answered the same way a
+    # nonexistent one is — no delivery data, and MEDIA_BUY_NOT_FOUND in the errors[] that
+    # get-media-buy-delivery-response.json (AdCP 3.1.1) declares for "missing delivery
+    # data". One code for both cases is what keeps the response from disclosing that
+    # someone else's buy exists.
 
   @T-UC-004-identify-empty @invariant @BR-RULE-030 @error @boundary
   Scenario: Empty array provided - schema rejects request
@@ -450,7 +460,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
 
   @T-UC-004-ext-b @extension @ext-b @error
   Scenario: Principal not found in tenant database
-    Given an authenticated Buyer with principal_id "unknown-buyer"
+    Given the Buyer is authenticated
     And no principal "unknown-buyer" exists in the tenant database
     When the Buyer Agent requests delivery metrics
     Then the error is compliant with the AdCP error spec
@@ -479,7 +489,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   @T-UC-004-ext-d @extension @ext-d @error @invariant @ownership @nfr @nfr-001
   Scenario: Ownership mismatch - returns media_buy_not_found for security
     Given a media buy "mb-other" owned by "other-buyer"
-    And an authenticated Buyer with principal_id "buyer-001"
+    And the Buyer is authenticated
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-other"]
     Then the error is compliant with the AdCP error spec
     And the operation should fail
@@ -1266,7 +1276,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # BR-RULE-223 INV-9: every committed metric due populated -> missing_metrics empty/absent (clean delivery)
 
   @T-UC-004-package-commercial-fields @main-flow @polling @v3-1
-  Scenario: Polling response includes per-package pricing_model, rate, currency, and effective_rate
+  Scenario: Polling response includes per-package pricing_model, rate and currency
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And package "pkg-1" uses pricing_model "cpm" with rate 12.50 and currency "USD"
     And the ad server adapter has delivery data for "mb-001"
@@ -1275,9 +1285,32 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And the response packages should include pricing_model "cpm" for "pkg-1"
     And the response packages should include rate 12.50 for "pkg-1"
     And the response packages should include currency "USD" for "pkg-1"
-    And the response packages should include effective_rate for "pkg-1"
-    # v3.1: per-package pricing_model, rate, currency, effective_rate are required
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buy-delivery-request.json
+    # v3.1: pricing_model, rate and currency are on by_package[]'s required set
+    # (get-media-buy-delivery-response.json). For FIXED pricing the rate is the agreed
+    # rate, which is what this grades.
+    #
+    # DIVERGENCE from the generated scenario, AdCP 3.1.1: it also demanded
+    # `effective_rate`, and no such property exists — not on the by_package item, not in
+    # core/delivery-metrics.json. The pin expresses the effective rate as the MEANING of
+    # `rate` under auction pricing, not as a second field, so that reading is graded by
+    # the auction scenario below rather than by asserting a field the spec never defines.
+    # The generated @source line cited get-media-buy-delivery-REQUEST.json for response
+    # fields; the response schema is the authority and is cited above.
+
+  @T-UC-004-package-auction-rate @main-flow @polling @v3-1
+  Scenario: Auction package reports the effective rate derived from actual delivery
+    Given a media buy "mb-001" owned by "buyer-001" with status "active"
+    And package "pkg-1" is bought at auction on pricing_model "cpm" with bid_price 8.00 and currency "USD"
+    And the ad server adapter reports 2000 impressions and 10.00 spend for "pkg-1"
+    When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response packages should include pricing_model "cpm" for "pkg-1"
+    And the response packages should include currency "USD" for "pkg-1"
+    And the response packages should include rate 5.00 for "pkg-1"
+    # get-media-buy-delivery-response.json, by_package[].rate: "For auction-based pricing,
+    # this represents the effective rate based on actual delivery." 10.00 spend over 2000
+    # impressions is a 5.00 effective CPM. Deliberately neither the bid (8.00) nor any
+    # stored rate, so a report that echoes a static number cannot pass.
 
   @T-UC-004-package-pacing-index @main-flow @polling @v3-1
   Scenario Outline: Polling response includes per-package pacing_index reflecting delivery pace

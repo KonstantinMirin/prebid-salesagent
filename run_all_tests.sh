@@ -179,6 +179,8 @@ fi
 # different one and the results cannot be attributed to the run that produced
 # them ("no confirmed run identity to attribute local test-results/ to").
 RESULTS_DIR="test-results/innet_$(date -u +%d%m%y_%H%M)"
+# Kept in step with scripts/audit/compare_payloads.py's PAYLOAD_SUBDIR.
+PAYLOAD_SUBDIR="payloads"
 mkdir -p "$RESULTS_DIR"
 
 dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile runner "$@"; }
@@ -586,6 +588,27 @@ for _suite in ${SUITES//,/ }; do
         _missing_reports="$_missing_reports $_suite"
     fi
 done
+
+# The dispatched-request payload artifacts (tests/bdd/payload_capture.py), one per BDD
+# suite. They go in a SUBDIRECTORY, not beside the reports: compare_runs.py globs
+# "*.json" at this level and would read a payload artifact as a pytest report, whose
+# "tests" key is absent -- printing a phantom "baseline 0 new 0 ... CLEAN" row instead of
+# failing. Out of its glob is out of its way.
+#
+# A BDD suite that produced no payload artifact is treated exactly like a suite that
+# produced no report, for the reason stated above it: a suite that produced none was not
+# measured, and a gate whose "before" is silently absent reads every later run as CLEAN.
+mkdir -p "$RESULTS_DIR/$PAYLOAD_SUBDIR"
+for _suite in ${SUITES//,/ }; do
+    case "$_suite" in bdd*) ;; *) continue ;; esac
+    if [ -f ".tox/${_suite}_payloads.json" ]; then
+        cp ".tox/${_suite}_payloads.json" "$RESULTS_DIR/$PAYLOAD_SUBDIR/${_suite}.json" \
+            || _missing_reports="$_missing_reports ${_suite}(payload-copy-failed)"
+    else
+        _missing_reports="$_missing_reports ${_suite}(no-payload-artifact)"
+    fi
+done
+
 if [ -n "$_missing_reports" ]; then
     echo "ERROR: no JSON report for suite(s):$_missing_reports" >&2
     echo "       The suite ran but produced no report -- it died before writing one." >&2

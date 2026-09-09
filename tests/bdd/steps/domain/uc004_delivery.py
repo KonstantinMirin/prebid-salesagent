@@ -19,7 +19,14 @@ import pytest
 from adcp.types import AuthenticationScheme
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import error_envelope_or_none, payload_or_none, require_payload
+from tests.bdd.steps._outcome_helpers import (
+    error_envelope_or_none,
+    payload_or_none,
+    require_payload,
+    wire_advisory_errors,
+    wire_entry,
+    wire_field,
+)
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
@@ -31,15 +38,6 @@ from tests.helpers.egress_hatches import UNDIALLED_PUBLIC_HTTPS_ORIGIN
 from tests.helpers.hmac_assertions import assert_signature_verifies_over_wire_body
 
 # ── Helpers ──────────────────────────────────────────────────────────
-
-
-def _pending(ctx: dict, step: str) -> None:
-    """Mark a step as pending implementation (harness not yet wired for BDD).
-
-    Using this instead of bare ``pass`` avoids triggering the duplicate-body
-    structural guard while clearly documenting which steps need harness work.
-    """
-    ctx.setdefault("pending_steps", []).append(step)
 
 
 def _parse_json_list(text: str) -> list[str]:
@@ -172,6 +170,45 @@ def given_media_buy_with_status(ctx: dict, mb_id: str, owner: str, status: str) 
     _ensure_media_buy_in_db(ctx, mb_id, owner, status)
 
 
+@given(
+    parsers.parse(
+        'package "{pkg_id}" uses pricing_model "{pricing_model}" with rate {rate:g} and currency "{currency}"'
+    )
+)
+def given_package_pricing(ctx: dict, pkg_id: str, pricing_model: str, rate: float, currency: str) -> None:
+    """The most recently seeded buy carries ONE package bought on these terms.
+
+    Rewrites the buy's persisted request to name *pkg_id* and stores the matching
+    ``MediaPackage`` row, both through the fixture machinery: the request package comes
+    from ``request_package`` (bound to ``PackageRequest``), the option is named by
+    the option row's own ``pricing_option_id``, and its ``pricing_info`` is the same projection
+    production writes. Nothing here restates a shape.
+
+    Fixed-rate terms. The auction Given below is separate because auction pricing carries
+    a bid and the rate the buyer is owed is derived, not agreed.
+    """
+    _seed_package_terms(ctx, pkg_id, pricing_model=pricing_model, rate=rate, currency=currency, is_fixed=True)
+
+
+@given(
+    parsers.parse(
+        'package "{pkg_id}" is bought at auction on pricing_model "{pricing_model}" '
+        'with bid_price {bid_price:g} and currency "{currency}"'
+    )
+)
+def given_package_auction_pricing(ctx: dict, pkg_id: str, pricing_model: str, bid_price: float, currency: str) -> None:
+    """The most recently seeded buy carries ONE package bought at AUCTION.
+
+    An auction package has a bid, not an agreed rate: ``get-media-buy-delivery-response.json``
+    says of ``by_package[].rate`` that "For auction-based pricing, this represents the
+    effective rate based on actual delivery" — so the rate the buyer is owed is computed
+    from what delivered, and no rate is stored for it up front.
+    """
+    _seed_package_terms(
+        ctx, pkg_id, pricing_model=pricing_model, rate=None, currency=currency, is_fixed=False, bid_price=bid_price
+    )
+
+
 @given(parsers.parse('a media buy "{mb_id}" owned by "{owner}" with status "{status}" and reach_unit "{reach_unit}"'))
 def given_media_buy_with_status_and_reach_unit(ctx: dict, mb_id: str, owner: str, status: str, reach_unit: str) -> None:
     """Create a media buy with a status and a reach_unit (v3.1 BR-RULE-224).
@@ -189,7 +226,6 @@ def given_media_buy_with_status_and_reach_unit(ctx: dict, mb_id: str, owner: str
         "status": status,
         "reach_unit": reach_unit,
     }
-    ctx.setdefault("reach_units", {})[mb_id] = reach_unit
     _ensure_media_buy_in_db(ctx, mb_id, owner, status)
 
 
@@ -225,16 +261,31 @@ def given_media_buy_known_owner(ctx: dict, mb_id: str) -> None:
     _ensure_media_buy_in_db(ctx, mb_id, owner)
 
 
+def _assert_media_buy_unseeded(ctx: dict, mb_id: str) -> None:
+    """The scenario must not have seeded the media buy it calls nonexistent.
+
+    Absence is the default -- a UC-004 scenario creates every media buy it wants
+    through a Given, so anything unseeded does not exist. The falsifiable half is
+    the other direction: a scenario that seeds ``mb-001`` and then declares it
+    absent is testing nothing, and used to say so into a ctx list no step read.
+    """
+    seeded = ctx.get("media_buys", {})
+    assert mb_id not in seeded, (
+        f"Step claims no media buy exists with id {mb_id!r}, but this scenario seeded it. Seeded ids: {sorted(seeded)}"
+    )
+
+
 @given(parsers.parse('no media buy exists with id "{mb_id}"'))
 def given_no_media_buy(ctx: dict, mb_id: str) -> None:
     """Ensure no media buy with this ID exists."""
-    ctx.setdefault("nonexistent_media_buys", []).append(mb_id)
+    _assert_media_buy_unseeded(ctx, mb_id)
 
 
 @given(parsers.parse('no media buy exists with id "{mb_id1}" or "{mb_id2}"'))
 def given_no_media_buys(ctx: dict, mb_id1: str, mb_id2: str) -> None:
     """Ensure neither media buy exists."""
-    ctx.setdefault("nonexistent_media_buys", []).extend([mb_id1, mb_id2])
+    _assert_media_buy_unseeded(ctx, mb_id1)
+    _assert_media_buy_unseeded(ctx, mb_id2)
 
 
 @given(parsers.parse('the principal "{principal_id}" has no media buys'))
@@ -245,9 +296,19 @@ def given_principal_no_buys(ctx: dict, principal_id: str) -> None:
 
 @given(parsers.parse('no principal "{principal_id}" exists in the tenant database'))
 def given_no_principal(ctx: dict, principal_id: str) -> None:
-    """No principal with this ID exists."""
-    ctx["principal_exists"] = False
-    ctx["nonexistent_principal"] = principal_id
+    """No principal with this ID exists.
+
+    The harness seeds exactly one principal -- the authenticated one -- so any
+    other id is absent by construction. What this can establish is that the
+    scenario did not name THAT one: "no principal X exists" while X is the caller
+    would grade the opposite of what it says. The two ctx flags this replaced
+    were read by no step.
+    """
+    authenticated = ctx["env"]._principal_id
+    assert principal_id != authenticated, (
+        f"Step claims principal {principal_id!r} does not exist, but it is the "
+        "authenticated principal this scenario dispatches as."
+    )
 
 
 def _create_unique_media_buy(
@@ -322,6 +383,23 @@ def given_adapter_has_data(ctx: dict, mb_id: str) -> None:
     """Configure adapter mock to return delivery data for the media buy."""
     env = ctx["env"]
     env.set_adapter_response(media_buy_id=mb_id)
+
+
+@given(parsers.parse('the ad server adapter reports {impressions:d} impressions and {spend:g} spend for "{pkg_id}"'))
+def given_adapter_package_metrics(ctx: dict, impressions: int, spend: float, pkg_id: str) -> None:
+    """The adapter reports exactly these metrics for *pkg_id* of the seeded buy.
+
+    Per-package, because an effective rate is a ratio of what THIS package delivered; a
+    buy-level total would not pin it.
+    """
+    mb_id = next(reversed(ctx.get("media_buys", {})), None)
+    assert mb_id, "adapter metrics need a media buy — the scenario must seed one first"
+    ctx["env"].set_adapter_response(
+        media_buy_id=mb_id,
+        impressions=impressions,
+        spend=spend,
+        packages=[{"package_id": pkg_id, "impressions": impressions, "spend": spend}],
+    )
 
 
 @given("the ad server adapter has delivery data for both media buys")
@@ -567,22 +645,16 @@ def _persist_webhook_config_if_needed(ctx: dict, env: Any) -> None:
 
 
 @given(parsers.parse('a media buy "{mb_id}" with an active reporting_webhook configured'))
-def given_webhook_configured(ctx: dict, mb_id: str) -> None:
-    """Media buy has an active webhook endpoint configured."""
-    _set_active_webhook(ctx, mb_id)
-
-
 @given(parsers.parse('a media buy "{mb_id}" with an active reporting_webhook'))
-def given_webhook_active(ctx: dict, mb_id: str) -> None:
-    """Media buy has an active webhook (same as configured)."""
-    ctx.setdefault("webhook_variant", "active")
-    _set_active_webhook(ctx, mb_id)
-
-
 @given(parsers.parse('a media buy "{mb_id}" with webhook delivery configured'))
-def given_webhook_delivery_configured(ctx: dict, mb_id: str) -> None:
-    """Media buy has webhook delivery configured."""
-    ctx.setdefault("webhook_variant", "delivery")
+def given_webhook_configured(ctx: dict, mb_id: str) -> None:
+    """Media buy has an active webhook endpoint configured.
+
+    Three sentences, one precondition. They were three functions with the same
+    body plus a ``webhook_variant`` flag ("active" / "delivery") that no step
+    read -- so the variant was a distinction the scenarios could see in their
+    Gherkin and the harness could not act on. One owner, three spellings.
+    """
     _set_active_webhook(ctx, mb_id)
 
 
@@ -594,8 +666,22 @@ def given_no_webhook(ctx: dict, mb_id: str) -> None:
 
 @given(parsers.parse('the reporting_frequency is "{frequency}"'))
 def given_reporting_frequency(ctx: dict, frequency: str) -> None:
-    """Set the reporting frequency for webhook delivery."""
-    ctx["reporting_frequency"] = frequency
+    """The scenario's reporting webhook fires at this frequency.
+
+    Nothing on this path reaches a per-scenario frequency switch, so what the step
+    establishes is that the frequency the scenario names is one the pinned
+    ``ReportingWebhook.reporting_frequency`` enum admits. That is not ceremony:
+    ``tests/factories/webhook.py`` records the live bug where a webhook config
+    spelled this field ``frequency``, the model dropped the unknown key, and a
+    scenario that "configures daily reporting" configured nothing. The top-level
+    ctx flag this replaced was read by no step.
+    """
+    from adcp.types import ReportingFrequency
+
+    allowed = {m.value for m in ReportingFrequency}
+    assert frequency in allowed, (
+        f"reporting_frequency {frequency!r} is not in the pinned ReportingFrequency enum: {sorted(allowed)}"
+    )
 
 
 @given(parsers.parse('a media buy "{mb_id}" with webhook authentication scheme "{scheme}"'))
@@ -619,11 +705,12 @@ def given_webhook_auth_scheme(ctx: dict, mb_id: str, scheme: str) -> None:
 def given_shared_secret_valid(ctx: dict) -> None:
     """A valid shared secret for HMAC."""
     secret = "a" * 32
+    # ONE key. ``then_hmac_computation`` reproduces the signature from
+    # ``ctx['webhook_secret']`` -- the same value production uses to generate the
+    # header. A second ``signing_secret`` mirror used to be written here "so both
+    # keys stay in lockstep"; nothing ever read it, so it was a copy that could
+    # only ever drift.
     ctx["webhook_secret"] = secret
-    # ``then_hmac_computation`` reproduces the signature from
-    # ``ctx['signing_secret']`` (the production code uses the same value to
-    # generate the header). Mirror it here so both keys stay in lockstep.
-    ctx["signing_secret"] = secret
     env = ctx["env"]
     if getattr(env, "_session", None) is not None:
         _persist_webhook_config_if_needed(ctx, env)
@@ -713,7 +800,6 @@ def given_webhook_failed_n_times(ctx: dict, n: int) -> None:
     endpoint_key = f"{env._tenant_id}:{webhook_url}"
     env.seed_breaker_failures(endpoint_key, n)
     ctx["circuit_breaker_endpoint_key"] = endpoint_key
-    ctx["webhook_failure_count"] = n
 
 
 @given(parsers.parse('a media buy "{mb_id}" with circuit breaker in "{state}" state'))
@@ -723,7 +809,6 @@ def given_circuit_breaker_state(ctx: dict, mb_id: str, state: str) -> None:
     webhook_url = ctx.get("webhook_config", {}).get(mb_id, {}).get("url", _webhook_url(env))
     endpoint_key = f"{env._tenant_id}:{webhook_url}"
     env.set_breaker_state(endpoint_key, state)
-    ctx["circuit_breaker_state"] = state
     ctx["circuit_breaker_endpoint_key"] = endpoint_key
 
 
@@ -738,7 +823,6 @@ def given_circuit_breaker_timeout(ctx: dict) -> None:
     env = ctx["env"]
     endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
     env.elapse_breaker_timeout(endpoint_key)
-    ctx["circuit_breaker_timeout_elapsed"] = True
 
 
 @given("the webhook endpoint has recovered and returns 200")
@@ -758,16 +842,79 @@ def given_webhook_flaky(ctx: dict) -> None:
 # ── Reporting dimensions / attribution / seller capabilities ──────
 
 
+def _assert_wire_carries_dimension(dimension: str) -> None:
+    """The named reporting dimension must be one the delivery wire can carry.
+
+    Derived from ``PackageDelivery`` rather than a literal list, so the vocabulary
+    cannot drift from what a package breakdown can actually hold: a ``by_<dim>``
+    field IS the dimension's wire surface.
+
+    This is all a seller-capability sentence can establish here, and it is why the
+    positive and negative sentences check the same thing: production has NO
+    per-seller reporting-capability gate (there is no column, no adapter flag and
+    no capabilities field for it), so a dimension is never "unsupported" by a
+    seller -- it is either expressible on the wire or misspelled. Each of these
+    steps used to record a ctx flag instead, and no step anywhere read one.
+    """
+    from src.core.schemas.delivery import PackageDelivery
+
+    carried = {
+        name[3:] for name in PackageDelivery.model_fields if name.startswith("by_") and not name.endswith("_truncated")
+    }
+    assert dimension in carried, (
+        f"Step names reporting dimension {dimension!r}, which no PackageDelivery "
+        f"breakdown field can carry. Known dimensions: {sorted(carried)}"
+    )
+
+
+def _assert_wire_carries_metric(metric: str) -> None:
+    """The named delivery metric must be a field a breakdown entry can carry.
+
+    Same derivation and same reason as ``_assert_wire_carries_dimension``:
+    ``PlacementBreakdown`` is the pinned per-entry metric surface, and production
+    has no per-seller metric capability gate for either sentence to configure.
+    """
+    from src.core.schemas.delivery import PlacementBreakdown
+
+    assert metric in PlacementBreakdown.model_fields, (
+        f"Step names delivery metric {metric!r}, which is not a field on "
+        f"PlacementBreakdown -- no breakdown entry could ever report it."
+    )
+
+
+def _assert_attribution_window_has_no_seller_toggle() -> None:
+    """attribution_window is buyer-configurable, with no seller-side opt-out.
+
+    Both "the seller supports configurable attribution windows" and its negation
+    reduce to this one production fact, so both establish it: the buyer sends the
+    window on the request and nothing on the seller side can refuse it. What the
+    two scenarios then grade is production's actual echo behaviour, not a
+    precondition either sentence could set.
+    """
+    from src.core.schemas.delivery import GetMediaBuyDeliveryRequest
+
+    assert "attribution_window" in GetMediaBuyDeliveryRequest.model_fields, (
+        "Step claims attribution windows are configurable, but the delivery "
+        "request carries no attribution_window field."
+    )
+    toggles = [f for f in GetMediaBuyDeliveryRequest.model_fields if "attribution" in f and f != "attribution_window"]
+    assert not toggles, (
+        f"The request now carries an attribution capability toggle ({toggles}) -- "
+        "the supports/does-NOT-support sentences can finally differ, so they must "
+        "stop sharing this body."
+    )
+
+
 @given(parsers.parse('the seller supports reporting dimension "{dimension}"'))
 def given_seller_supports_dimension(ctx: dict, dimension: str) -> None:
     """Seller supports a specific reporting dimension."""
-    ctx.setdefault("supported_dimensions", []).append(dimension)
+    _assert_wire_carries_dimension(dimension)
 
 
 @given(parsers.parse('the seller does NOT support reporting dimension "{dimension}"'))
 def given_seller_no_dimension(ctx: dict, dimension: str) -> None:
     """Seller does not support a specific reporting dimension."""
-    ctx.setdefault("unsupported_dimensions", []).append(dimension)
+    _assert_wire_carries_dimension(dimension)
 
 
 @given(parsers.parse('the seller supports reporting dimensions "{dim1}" and "{dim2}"'))
@@ -777,7 +924,8 @@ def given_seller_supports_dimensions(ctx: dict, dim1: str, dim2: str) -> None:
     Also configures the adapter with simulated breakdown data so that
     multi-dimension requests (BR-RULE-091 INV-1) return non-empty arrays.
     """
-    ctx.setdefault("supported_dimensions", []).extend([dim1, dim2])
+    _assert_wire_carries_dimension(dim1)
+    _assert_wire_carries_dimension(dim2)
     env = ctx["env"]
     for mb_id in ctx.get("media_buys", {}):
         env.set_adapter_response(media_buy_id=mb_id)
@@ -785,32 +933,32 @@ def given_seller_supports_dimensions(ctx: dict, dim1: str, dim2: str) -> None:
 
 @given(parsers.parse('the seller does NOT support "{capability}"'))
 def given_seller_no_capability(ctx: dict, capability: str) -> None:
-    """Seller does not support a capability."""
-    ctx.setdefault("unsupported_capabilities", []).append(capability)
+    """Seller does not support a capability (used for reporting dimensions)."""
+    _assert_wire_carries_dimension(capability)
 
 
 @given("the seller supports configurable attribution windows")
 def given_seller_supports_attribution(ctx: dict) -> None:
     """Seller supports configurable attribution windows."""
-    ctx["supports_attribution_windows"] = True
+    _assert_attribution_window_has_no_seller_toggle()
 
 
 @given("the seller does NOT support configurable attribution windows")
 def given_seller_no_attribution(ctx: dict) -> None:
     """Seller does not support configurable attribution windows."""
-    ctx["supports_attribution_windows"] = False
+    _assert_attribution_window_has_no_seller_toggle()
 
 
 @given(parsers.parse('the seller does NOT report metric "{metric}"'))
 def given_seller_no_metric(ctx: dict, metric: str) -> None:
     """Seller does not report a specific metric."""
-    ctx.setdefault("unsupported_metrics", []).append(metric)
+    _assert_wire_carries_metric(metric)
 
 
 @given(parsers.parse('the seller reports metric "{metric}"'))
 def given_seller_reports_metric(ctx: dict, metric: str) -> None:
     """Seller reports a specific metric."""
-    ctx.setdefault("supported_metrics", []).append(metric)
+    _assert_wire_carries_metric(metric)
 
 
 @given("there are more geo breakdown entries than the requested limit")
@@ -844,8 +992,14 @@ def given_device_type_under_limit(ctx: dict) -> None:
 
 @when(parsers.re(r"the Buyer Agent requests delivery metrics for media_buy_ids (?P<ids_json>\[.+?\])"))
 def when_request_by_ids(ctx: dict, ids_json: str) -> None:
-    """Request delivery metrics by media_buy_ids."""
+    """Request delivery metrics by media_buy_ids, recording the ids it sent.
+
+    ``ctx["requested_media_buy_ids"]`` is the request as sent, and the non-disclosure
+    Then needs it: it used to look for ``target_media_buy_id`` or ``media_buy_id``,
+    neither of which any step writes (salesagent-b9hi1.1).
+    """
     media_buy_ids = _parse_json_list(ids_json)
+    ctx["requested_media_buy_ids"] = media_buy_ids
     dispatch_request(ctx, media_buy_ids=media_buy_ids)
 
 
@@ -1009,7 +1163,6 @@ def when_deliver_webhook(ctx: dict, mb_id: str) -> None:
 @when(parsers.parse('the system delivers a "{report_type}" webhook report for "{mb_id}"'))
 def when_deliver_typed_webhook(ctx: dict, report_type: str, mb_id: str) -> None:
     """System delivers a typed webhook report via WebhookDeliveryService."""
-    ctx["report_type"] = report_type
     try:
         result = _call_webhook_service(
             ctx,
@@ -1134,12 +1287,20 @@ def when_validate_webhook_config(ctx: dict) -> None:
 
 @when(parsers.parse('the webhook scheduler evaluates "{mb_id}"'))
 def when_webhook_evaluates(ctx: dict, mb_id: str) -> None:
-    """Webhook scheduler evaluates a media buy for delivery."""
-    wh = ctx.get("webhook_config", {}).get(mb_id, {})
-    if not wh.get("active"):
-        ctx["webhook_skipped"] = True
-    else:
-        ctx["webhook_evaluated"] = mb_id
+    """Webhook scheduler evaluates a media buy for delivery.
+
+    The evaluation itself is not driven from here -- nothing calls the scheduler --
+    so the two ctx flags this used to branch into ("skipped" / "evaluated") were
+    the harness recording its own verdict, and no step read either. The following
+    ``then_skip_no_webhook`` grades the real surface: whether a webhook POST was
+    made. What this step can honestly do is confirm the media buy it names is one
+    a Given actually configured a webhook state for.
+    """
+    configured = ctx.get("webhook_config", {})
+    assert mb_id in configured, (
+        f"The scheduler was asked to evaluate {mb_id!r}, but no Given configured a "
+        f"webhook state for it. Configured: {sorted(configured)}"
+    )
 
 
 # ── Reporting dimensions When steps ─────────────────────────────────
@@ -1158,20 +1319,23 @@ def when_request_with_dimensions(ctx: dict, mb_id: str, dims_json: str) -> None:
 
 
 def _request_single_mb(ctx: dict, mb_id: str) -> None:
-    """Shared: request delivery for a single media buy."""
+    """Shared: request delivery for a single media buy, recording the id it sent."""
+    ctx["requested_media_buy_ids"] = [mb_id]
     dispatch_request(ctx, media_buy_ids=[mb_id])
 
 
 @when(parsers.parse('the Buyer Agent requests delivery metrics for "{mb_id}"'))
+@when(parsers.parse('the Buyer Agent queries delivery metrics for media buy "{mb_id}"'))
+@when(parsers.re(r'the Buyer Agent requests delivery metrics for media_buy_ids \["(?P<mb_id>[^"]+)"\]$'))
 def when_request_single_mb(ctx: dict, mb_id: str) -> None:
-    """Request delivery metrics for a single media buy."""
-    _request_single_mb(ctx, mb_id)
+    """Request delivery metrics for a single media buy.
 
-
-@when(parsers.parse('the Buyer Agent requests delivery metrics for "{mb_id}" without attribution_window'))
-def when_request_no_attribution(ctx: dict, mb_id: str) -> None:
-    """Request without attribution window."""
-    ctx.setdefault("omitted_fields", []).append("attribution_window")
+    Three spellings of one dispatch -- "requests ... for", "queries ... for media
+    buy", and the quoted ``media_buy_ids [...]`` form. They were three functions
+    with the same body, each also stashing a flag naming its own spelling
+    (``query_variant``, ``id_format``) that no step read: the wire call is
+    identical, so there was nothing for a Then to tell apart.
+    """
     _request_single_mb(ctx, mb_id)
 
 
@@ -1182,8 +1346,17 @@ def when_request_no_attribution(ctx: dict, mb_id: str) -> None:
     )
 )
 def when_request_with_attribution(ctx: dict, mb_id: str, aw_json: str) -> None:
-    """Request with attribution window."""
+    """Request with attribution window, recording what was sent for the echo Then.
+
+    ``ctx["request_attribution"]`` is the REQUEST AS SENT, and it is written here
+    because this is the only step that knows it. ``then_attribution_echo`` read that
+    key with hardcoded fallbacks (``7`` / ``"days"``) and nothing wrote it, so it
+    compared the response against constants that happened to match this scenario's
+    Examples — a seller that ignored the buyer's window entirely and always answered
+    7 days would have passed (salesagent-b9hi1.1).
+    """
     aw = json.loads(aw_json)
+    ctx["request_attribution"] = aw
     dispatch_request(ctx, media_buy_ids=[mb_id], attribution_window=aw)
 
 
@@ -1318,24 +1491,10 @@ def when_boundary_sampling(ctx: dict, boundary_value: str) -> None:
     _dispatch_partition(ctx, "sampling_method", boundary_value)
 
 
-@when(parsers.parse('the Buyer Agent queries delivery metrics for media buy "{mb_id}"'))
-def when_query_single_mb(ctx: dict, mb_id: str) -> None:
-    """Query delivery metrics for a single media buy (sandbox scenarios)."""
-    ctx.setdefault("query_variant", True)
-    _request_single_mb(ctx, mb_id)
-
-
 @when("the Buyer Agent queries delivery metrics for a non-existent media buy")
 def when_query_nonexistent(ctx: dict) -> None:
     """Query delivery metrics for a non-existent media buy."""
     dispatch_request(ctx, media_buy_ids=["mb-nonexistent"])
-
-
-@when(parsers.re(r'the Buyer Agent requests delivery metrics for media_buy_ids \["(?P<mb_id>[^"]+)"\]$'))
-def when_request_single_id_quoted(ctx: dict, mb_id: str) -> None:
-    """Request for a single media buy ID (quoted format)."""
-    ctx.setdefault("id_format", "quoted")
-    _request_single_mb(ctx, mb_id)
 
 
 @when(
@@ -1345,8 +1504,25 @@ def when_request_single_id_quoted(ctx: dict, mb_id: str) -> None:
     )
 )
 def when_request_without_field(ctx: dict, mb_id: str, field: str) -> None:
-    """Request without a specific optional field (attribution_window etc)."""
-    ctx.setdefault("omitted_fields", []).append(field)
+    """Request without a specific optional field (attribution_window etc).
+
+    Also owns the "without attribution_window" sentence, which used to have its
+    own ``parsers.parse`` step shadowing this regex with an identical body plus
+    an ``omitted_fields`` list no step read.
+
+    Omitting a field is only meaningful if the request HAS one to omit, so the
+    named field must be real: "without frobnicator" would otherwise dispatch a
+    perfectly ordinary request and grade whatever came back.
+    """
+    from src.core.schemas.delivery import GetMediaBuyDeliveryRequest
+
+    assert field in GetMediaBuyDeliveryRequest.model_fields, (
+        f"Step omits {field!r} from the delivery request, but the request carries "
+        f"no such field: {sorted(GetMediaBuyDeliveryRequest.model_fields)}"
+    )
+    assert field not in (ctx.get("request_kwargs") or {}), (
+        f"Step claims the request goes out without {field!r}, but a prior step put it there."
+    )
     _request_single_mb(ctx, mb_id)
 
 
@@ -1385,24 +1561,26 @@ def then_includes_delivery_data_only(ctx: dict, mb_id: str) -> None:
 
 @then(parsers.parse('the response should NOT include delivery data for "{mb_id}"'))
 def then_excludes_delivery_data(ctx: dict, mb_id: str) -> None:
-    """Assert response does NOT include delivery data for the media buy."""
-    resp = payload_or_none(ctx)
-    if resp is None:
-        return  # No response at all = not included
-    deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    mb_ids = [d.media_buy_id for d in deliveries]
-    assert mb_id not in mb_ids, f"Expected no delivery data for '{mb_id}', but found it"
+    """Assert the response arrived and carries no delivery row for *mb_id*.
 
+    ``require_payload``, not ``payload_or_none``: every scenario binding this
+    sentence asserts ``the response is compliant with the get_media_buy_delivery
+    spec`` first, so a dispatch that produced no payload is a failed request, not
+    an omission. The previous ``if resp is None: return`` graded that failure as
+    a pass — silent omission and total failure are the two outcomes this step
+    exists to tell apart (BR-RULE-030 INV-5: non-owned media buys are omitted
+    from a SUCCESSFUL partial result, never turned into a rejection).
 
-@then(parsers.parse('the response should not include delivery data for "{mb_id}"'))
-def then_no_delivery_data(ctx: dict, mb_id: str) -> None:
-    """Assert response does not include delivery data for the media buy."""
-    resp = payload_or_none(ctx)
-    if resp is None:
-        return
-    deliveries = getattr(resp, "media_buy_deliveries", None) or []
-    mb_ids = [d.media_buy_id for d in deliveries]
-    assert mb_id not in mb_ids, f"Expected no delivery data for '{mb_id}'"
+    One definition, both spellings: ``parsers.parse`` matches case-insensitively,
+    so this binds the "should NOT" sentence of
+    @T-UC-004-identify-mixed-ownership and the "should not" sentence of
+    @T-UC-004-status-filter-multi alike. The verbatim second copy that used to
+    sit here (``then_no_delivery_data``) competed for both of them, and which one
+    ran was decided by plugin registration order.
+    """
+    resp = require_payload(ctx)
+    mb_ids = [d.media_buy_id for d in (getattr(resp, "media_buy_deliveries", None) or [])]
+    assert mb_id not in mb_ids, f"Expected no delivery data for '{mb_id}', got: {mb_ids}"
 
 
 @then("the response should have an empty media_buy_deliveries array")
@@ -1610,15 +1788,22 @@ def then_aggregated_spend(ctx: dict) -> None:
 
 @then(parsers.parse('the response should not include an error for "{mb_id}"'))
 def then_no_error_for_mb(ctx: dict, mb_id: str) -> None:
-    """Assert no error for a specific media buy — checks both global ctx and per-delivery errors."""
-    assert "error" not in ctx, f"Expected no error for '{mb_id}' but got: {ctx.get('error')}"
-    resp = payload_or_none(ctx)
-    if resp is not None:
-        deliveries = getattr(resp, "media_buy_deliveries", None) or []
-        for d in deliveries:
-            if getattr(d, "media_buy_id", None) == mb_id:
-                per_delivery_errors = getattr(d, "errors", None) or []
-                assert not per_delivery_errors, f"Delivery '{mb_id}' has errors: {per_delivery_errors}"
+    """No entry in the response's ``errors[]`` names *mb_id*.
+
+    The buyer-facing side of the advisory contract its twin
+    (``the response errors include code ... for media buy ...``) grades: the delivery
+    verb answers about EVERY id it was asked about, naming an unresolved one in
+    ``errors[]`` — "Task-specific errors and warnings (e.g., missing delivery data,
+    reporting platform issues)", ``get-media-buy-delivery-response.json`` — and saying
+    nothing there about the ones it delivered.
+
+    Read BY VALUE off the wire array (through the sanctioned reader), not off
+    ``ctx["error"]``: the sibling step promotes the entry it matched into ``ctx``, so a
+    ctx-presence check would report a failure for THIS id whenever another id in the
+    same response had one.
+    """
+    named = [err for err in wire_advisory_errors(ctx) if (err.get("details") or {}).get("media_buy_id") == mb_id]
+    assert not named, f"Response errors[] names media buy {mb_id!r}: {named}"
 
 
 @then(parsers.re(r'the response errors include code "(?P<code>[^"]+)" for media buy "(?P<mb_id>[^"]+)"$'))
@@ -1978,7 +2163,7 @@ def then_log_auth_rejection(ctx: dict) -> None:
     assert success is False, f"Expected webhook delivery to fail on auth rejection, got success={success!r}"
 
     # 2. Verify auth rejection was logged
-    log_records = getattr(env, "captured_logs", None) or ctx.get("captured_logs")
+    log_records = getattr(env, "captured_logs", None)
     assert log_records is not None, "CircuitBreakerEnv.captured_logs not available — harness must capture logs"
     found_auth_log = any("client error" in r.lower() or "401" in r or "unauthorized" in r.lower() for r in log_records)
     assert found_auth_log, (
@@ -2445,16 +2630,35 @@ def then_no_deliveries_field(ctx: dict) -> None:
 
 @then(parsers.parse("the error should NOT reveal that the media buy exists"))
 def then_error_no_reveal(ctx: dict) -> None:
-    """Assert error does not leak existence information via message content or ID echoing."""
+    """Assert the refusal leaks no existence information — in the message OR by echoing.
+
+    BOTH halves run. The id-echo half used to be gated on
+    ``ctx.get("target_media_buy_id") or ctx.get("media_buy_id")``, and NO step writes
+    either key, so ``mb_id`` was always ``""`` and the half was skipped every time it
+    ran — the scenario named a security obligation and graded half of it
+    (salesagent-b9hi1.1). It now reads the request as sent, and FAILS if that is
+    missing rather than skipping.
+
+    @T-UC-004-ext-d is the non-disclosure scenario: a non-owner asking about someone
+    else's media buy must get media_buy_not_found, worded so it cannot be told apart
+    from a buy that never existed. Echoing the requested id ONCE is normal — "no media
+    buy found for X" repeats what the buyer sent and reveals nothing — so the bound is
+    on repetition, which is the shape that starts to read like confirmation.
+    """
     error = ctx.get("error")
     assert error is not None, "Expected an error"
     msg = _get_error_message(error).lower()
     leaking_phrases = ["exists", "belongs to", "owned by", "not authorized for", "access denied"]
     for phrase in leaking_phrases:
         assert phrase not in msg, f"Error leaks existence info via phrase {phrase!r}: {error}"
-    # The media_buy_id should not be echoed back in a way that confirms existence
-    mb_id = ctx.get("target_media_buy_id") or ctx.get("media_buy_id") or ""
-    if mb_id:
+
+    requested = ctx.get("requested_media_buy_ids")
+    assert requested, (
+        "No requested_media_buy_ids recorded — the When that dispatched must record what it "
+        "sent, or the id-echo half of this non-disclosure check grades nothing"
+    )
+    for label in requested:
+        mb_id = _resolve_media_buy_id(ctx, label)
         assert msg.count(mb_id.lower()) <= 1, (
             f"Error repeatedly echoes media_buy_id {mb_id!r}, which may reveal existence: {error}"
         )
@@ -2637,6 +2841,56 @@ def then_packages_include_field(ctx: dict, field: str) -> None:
     assert checked >= 1, "Response has no packages to check"
 
 
+def _wire_package(ctx: dict, pkg_id: str) -> dict:
+    """The ``by_package`` entry for *pkg_id*, off the serialized wire body.
+
+    Two hops, because ``by_package`` sits inside a list element and ``wire_lookup``'s
+    dotted path deliberately does not index lists. The delivery is located by the
+    sanctioned ``wire_entry`` primitive with the count pinned, as its docstring requires
+    for an index-located entry; the package is then found by value within it. Sole
+    implementation, so the three commercial-field Thens cannot drift apart.
+    """
+    deliveries = wire_field(ctx, "media_buy_deliveries")
+    assert len(deliveries) == 1, f"expected one delivery to read {pkg_id!r} from, got {len(deliveries)}"
+    delivery = wire_entry(ctx, "media_buy_deliveries", index=0)
+    packages = delivery.get("by_package") or []
+    named = [pkg for pkg in packages if pkg.get("package_id") == pkg_id]
+    assert named, f"no by_package entry for {pkg_id!r}; wire carried {[p.get('package_id') for p in packages]}"
+    return named[0]
+
+
+@then(parsers.parse('the response packages should include pricing_model "{expected}" for "{pkg_id}"'))
+def then_package_pricing_model(ctx: dict, expected: str, pkg_id: str) -> None:
+    """The package's pricing_model on the wire is *expected*.
+
+    Required on every ``by_package`` entry by get-media-buy-delivery-response.json and
+    typed as the ``enums/pricing-model.json`` enum — read off the wire, not the typed
+    payload, because a serialized enum member is what the buyer actually receives.
+    """
+    actual = _wire_package(ctx, pkg_id).get("pricing_model")
+    assert actual == expected, f"package {pkg_id!r} pricing_model is {actual!r}, expected {expected!r}"
+
+
+@then(parsers.parse('the response packages should include rate {expected:g} for "{pkg_id}"'))
+def then_package_rate(ctx: dict, expected: float, pkg_id: str) -> None:
+    """The package's rate on the wire is *expected*.
+
+    get-media-buy-delivery-response.json: "For fixed-rate pricing, this is the agreed rate
+    ... For auction-based pricing, this represents the effective rate based on actual
+    delivery." One step grades both readings — which value is owed is the scenario's
+    business, and it says so by the number it passes.
+    """
+    actual = _wire_package(ctx, pkg_id).get("rate")
+    assert actual == expected, f"package {pkg_id!r} rate is {actual!r}, expected {expected!r}"
+
+
+@then(parsers.parse('the response packages should include currency "{expected}" for "{pkg_id}"'))
+def then_package_currency(ctx: dict, expected: str, pkg_id: str) -> None:
+    """The package's currency on the wire is *expected* (required on every entry)."""
+    actual = _wire_package(ctx, pkg_id).get("currency")
+    assert actual == expected, f"package {pkg_id!r} currency is {actual!r}, expected {expected!r}"
+
+
 @then(parsers.parse('the response packages should include "{f1}" and "{f2}" breakdowns'))
 def then_packages_include_two(ctx: dict, f1: str, f2: str) -> None:
     """Assert every package has both named breakdown fields as non-empty lists."""
@@ -2754,11 +3008,19 @@ def then_attribution_model(ctx: dict, model: str) -> None:
 
 @then("the attribution_window should echo the applied post_click window")
 def then_attribution_echo(ctx: dict) -> None:
-    """Assert attribution window echoes the buyer's requested post_click values.
+    """Assert attribution_window echoes the post_click window THE BUYER SENT.
 
-    The production code echoes the buyer-requested post_click window
-    (preserving unit and interval).  This step verifies the echoed values
-    match the request — not merely that they are non-None.
+    Reads the request as dispatched, with NO default. It used to read
+    ``ctx["request_attribution"]`` — a key no step wrote — and fall back to
+    ``interval=7`` / ``unit="days"``, so it compared the response against two
+    constants. They happened to equal this scenario's Examples, which is why it
+    passed; a seller that ignored the requested window entirely and always answered
+    7 days would have passed identically, and the docstring claimed the opposite of
+    what the code did (salesagent-b9hi1.1).
+
+    The absent-key branch now FAILS instead of defaulting. A Then that cannot find
+    what the buyer asked for cannot grade an echo, and saying so is the whole repair:
+    the defect was not a weak comparison, it was a comparison against a constant.
     """
     assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
     resp = require_payload(ctx)
@@ -2772,18 +3034,25 @@ def then_attribution_echo(ctx: dict) -> None:
         "attribution_window.post_click is None — buyer requested a post_click window which should be echoed"
     )
 
-    # Read the buyer-requested values from ctx (set by the When step)
-    requested = ctx.get("request_attribution", {})
-    req_interval = requested.get("post_click_interval", 7)
-    req_unit = requested.get("post_click_unit", "days")
+    # The request as sent, written by the When that sent it. Required, not defaulted.
+    requested = ctx.get("request_attribution")
+    assert requested is not None, (
+        "No request_attribution recorded — the When that sends attribution_window must "
+        "record it, or this step is comparing the response against nothing"
+    )
+    requested_pc = requested.get("post_click")
+    assert requested_pc is not None, (
+        f"The request carried no post_click window, so there is no echo to grade: {requested!r}"
+    )
+    req_interval = requested_pc["interval"]
+    req_unit = requested_pc["unit"]
 
-    # Assert the echoed values match the request
     assert pc.interval == req_interval, (
-        f"attribution_window.post_click.interval should echo request value {req_interval}, got {pc.interval}"
+        f"attribution_window.post_click.interval should echo the requested {req_interval}, got {pc.interval}"
     )
     pc_unit = pc.unit.value if hasattr(pc.unit, "value") else str(pc.unit)
     assert pc_unit == req_unit, (
-        f"attribution_window.post_click.unit should echo request value {req_unit!r}, got {pc_unit!r}"
+        f"attribution_window.post_click.unit should echo the requested {req_unit!r}, got {pc_unit!r}"
     )
 
 
@@ -3389,6 +3658,63 @@ def _ensure_media_buy_in_db(
     MediaBuyFactory(**mb_kwargs)
 
 
+def _seed_package_terms(
+    ctx: dict,
+    pkg_id: str,
+    *,
+    pricing_model: str,
+    rate: float | None,
+    currency: str,
+    is_fixed: bool,
+    bid_price: float | None = None,
+) -> None:
+    """Give the buy seeded by the preceding Given exactly one package on these terms.
+
+    Both halves of a package's identity move together, which is the whole point: the
+    persisted request names *pkg_id* and the option, and the ``MediaPackage`` row carries
+    the matching ``pricing_info``. The delivery path joins them by ``package_id``, so
+    seeding one without the other grades nothing.
+    """
+    env = ctx["env"]
+    if env is None or not hasattr(env, "_session"):
+        return
+
+    from decimal import Decimal
+
+    from sqlalchemy import select
+    from sqlalchemy.orm import attributes
+
+    from src.core.database.models import MediaBuy
+    from src.core.helpers.pricing_helpers import pricing_info_for
+    from tests.factories import MediaPackageFactory, PricingOptionFactory
+    from tests.factories.media_buy import request_package
+
+    option = PricingOptionFactory.build(
+        pricing_model=pricing_model,
+        currency=currency,
+        is_fixed=is_fixed,
+        rate=Decimal(str(rate)) if rate is not None else None,
+    )
+    package = request_package(package_id=pkg_id, pricing_option_id=option.pricing_option_id)
+    if bid_price is not None:
+        package["bid_price"] = bid_price
+
+    mb_id = next(reversed(ctx.get("media_buys", {})), None)
+    assert mb_id, "package terms need a media buy — the scenario must seed one first"
+    session = env._session
+    buy = session.scalars(select(MediaBuy).filter_by(media_buy_id=mb_id)).first()
+    assert buy is not None, f"media buy {mb_id!r} was not seeded into the database"
+
+    buy.raw_request = {**(buy.raw_request or {}), "packages": [package]}
+    attributes.flag_modified(buy, "raw_request")
+    MediaPackageFactory(
+        media_buy=buy,
+        package_id=pkg_id,
+        package_config={**package, "pricing_info": pricing_info_for(option, bid_price=bid_price)},
+    )
+    session.commit()
+
+
 def _parse_request_params(params_str: str) -> dict[str, Any]:
     """Parse request parameters from Gherkin table/string format.
 
@@ -3674,7 +4000,9 @@ def _generate_unique_id(label: str) -> str:
     """Generate a unique media_buy_id from a Gherkin label."""
     import uuid
 
-    return f"{label}-{uuid.uuid4().hex[:8]}"
+    from tests.factories.mint import mint
+
+    return mint(f"{label}-{uuid.uuid4().hex[:8]}")
 
 
 def _register_media_buy_label(ctx: dict, label: str, real_id: str) -> None:
@@ -3964,7 +4292,6 @@ def _dispatch_webhook_credentials(ctx: dict, value: str) -> None:
 
     try:
         WebhookVerifier(webhook_secret=secret)
-        ctx["webhook_validated"] = True
     except Exception as exc:
         ctx["error"] = exc
 

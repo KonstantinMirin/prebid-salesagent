@@ -1,9 +1,33 @@
 """Pricing option helper utilities.
 
-Handles the RootModel wrapper pattern used by adcp 2.14.0+ for discriminated unions.
+Handles the RootModel wrapper pattern used by adcp 2.14.0+ for discriminated unions,
+and owns the ``pricing_info`` projection a package row stores.
 """
 
 from typing import Any
+
+
+def pricing_info_for(pricing_option: Any, *, bid_price: float | None = None) -> dict[str, Any]:
+    """The ``pricing_info`` that ``MediaPackage.package_config`` stores for a package.
+
+    NOT a spec shape: ``pricing_info`` appears in no pinned schema and is never received
+    from a buyer — ``package_config`` is an internal JSON column. What makes the shape
+    binding is its READERS: the GAM order manager and ``src/adapters/utils/pricing.py``
+    take a package's rate from ``pricing_info["bid_price"]``, so a writer that omits a key
+    silently sends every auction package down a ``.get()`` default.
+
+    ``bid_price`` is not a property of the option — it is what THIS package bid — so it is
+    supplied by the caller rather than projected. Everything else is the option's own
+    terms, unwrapped for the RootModel members adcp 2.14.0+ uses.
+    """
+    option = getattr(pricing_option, "root", pricing_option)
+    return {
+        "pricing_model": option.pricing_model,
+        "rate": float(option.rate) if option.rate else None,
+        "currency": option.currency,
+        "is_fixed": option.is_fixed,
+        "bid_price": bid_price,
+    }
 
 
 def pricing_option_has_rate(pricing_option: Any) -> bool:

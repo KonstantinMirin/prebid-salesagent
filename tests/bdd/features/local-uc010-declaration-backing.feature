@@ -42,9 +42,12 @@ Feature: UC-010 get_adcp_capabilities — capability declarations must be implem
     When the Buyer Agent calls get_adcp_capabilities
     Then the error is compliant with the AdCP error spec
     And the capability declaration should be rejected as terminal misconfiguration
+    And the rejection should name capability "specialisms" and rejected value "creative-generative"
     # Nothing implements generative creative, and the AAO compliance runner grades
     # the claim, so echoing the declaration would be a false conformance claim.
     # Tracked by #1724.
+    # The operator must be told WHICH claim was refused: a bare CONFIGURATION_ERROR
+    # makes them bisect their own config.
 
   @T-UC-010-local-orphaned-specialism @v31 @invariant @error-path @boundary
   Scenario: a backed specialism without its parent protocol is rejected
@@ -53,6 +56,7 @@ Feature: UC-010 get_adcp_capabilities — capability declarations must be implem
     When the Buyer Agent calls get_adcp_capabilities
     Then the error is compliant with the AdCP error spec
     And the capability declaration should be rejected as terminal misconfiguration
+    And the rejection should name capability "specialisms" and rejected value "signal-owned (needs signals)"
     # Roll-up coherence: /properties/specialisms — "the runner rejects a specialism
     # claim whose parent protocol is missing". Boundary case for the backing rule:
     # the specialism IS backed, so only the roll-up check can catch this.
@@ -64,6 +68,7 @@ Feature: UC-010 get_adcp_capabilities — capability declarations must be implem
     When the Buyer Agent calls get_adcp_capabilities
     Then the error is compliant with the AdCP error spec
     And the capability declaration should be rejected as terminal misconfiguration
+    And the rejection should name capability "supported_protocols" and rejected value "creative"
     # A protocol claim commits the seller to that domain's required tool surface
     # (protocols/<p>/index.yaml#required_tools). Generative creative is unimplemented
     # here, so advertising `creative` would route buyer traffic to a domain that

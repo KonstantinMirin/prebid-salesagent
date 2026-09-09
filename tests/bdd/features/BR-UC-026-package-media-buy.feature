@@ -1,5 +1,4 @@
 # Generated from adcp-req @ render on 2026-06-04T09:53:13Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 @analysis-2026-03-10 @schema-v3.1
 Feature: BR-UC-026 Package Media Buy

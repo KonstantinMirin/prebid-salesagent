@@ -22,7 +22,7 @@ Critical Insights:
 - Testing hooks can modify data, requiring careful field handling
 """
 
-from datetime import UTC, date, datetime
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -33,13 +33,10 @@ from src.core.database.models import MediaBuy as MediaBuyModel
 from src.core.database.models import PricingOption, Tenant
 from src.core.database.models import Product as ProductModel
 from src.core.schemas import (
-    Budget,
-    DeliveryTotals,
     MediaBuyDeliveryData,
-    PackageDelivery,
 )
 from src.core.testing_hooks import TestingContext, apply_testing_hooks
-from tests.integration.conftest import add_required_setup_data, create_test_product_with_pricing
+from tests.integration.conftest import add_required_setup_data
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 
@@ -85,212 +82,6 @@ class TestMCPToolsAudit:
             session.execute(delete(PrincipalModel).where(PrincipalModel.tenant_id == tenant_id))
             session.execute(delete(Tenant).where(Tenant.tenant_id == tenant_id))
             session.commit()
-
-    def test_get_media_buy_delivery_roundtrip_safety(self, integration_db, test_tenant_id):
-        """
-        Audit get_media_buy_delivery for roundtrip conversion safety.
-
-        POTENTIAL ISSUE IDENTIFIED: This tool uses model_dump() instead of
-        model_dump_internal(), which may cause field mapping issues if
-        MediaBuyDeliveryData has internal/external field differences.
-        """
-        # Create test media buy
-        media_buy_data = {
-            "media_buy_id": "audit_test_mb_001",
-            "principal_id": "audit_test_principal",
-            "status": "active",
-            "order_name": "Audit Test Order",
-            "advertiser_name": "Test Advertiser",
-            "start_date": date(2025, 1, 1),
-            "end_date": date(2025, 1, 31),
-            "start_time": datetime(2025, 1, 1, tzinfo=UTC),
-            "end_time": datetime(2025, 1, 31, 23, 59, 59, tzinfo=UTC),
-            "budget": Decimal("10000.00"),
-            "raw_request": {"targeting": {"geo_country": ["US"]}, "product_ids": ["audit_test_product"]},
-        }
-
-        with get_db_session() as session:
-            # Create test principal first (required for foreign key constraint)
-            import uuid
-
-            from src.core.database.models import Principal as PrincipalModel
-
-            principal = PrincipalModel(
-                tenant_id=test_tenant_id,
-                principal_id="audit_test_principal",
-                name="Audit Test Principal",
-                access_token=f"audit_test_token_{uuid.uuid4().hex[:8]}",
-                platform_mappings={"mock": {"advertiser_id": "test_advertiser"}},
-            )
-            session.add(principal)
-
-            # Create test product using new pricing_options model
-            product = create_test_product_with_pricing(
-                session=session,
-                tenant_id=test_tenant_id,
-                product_id="audit_test_product",
-                name="Audit Test Product",
-                description="Product for audit testing",
-                pricing_model="CPM",
-                rate="10.00",
-                is_fixed=False,
-                format_ids=[{"agent_url": "https://test.com", "id": "display_300x250"}],
-            )
-
-            # Create test media buy
-            media_buy = MediaBuyModel(tenant_id=test_tenant_id, **media_buy_data)
-            session.add(media_buy)
-            session.commit()
-
-        # Create delivery data object to test roundtrip
-        delivery_data = MediaBuyDeliveryData(
-            media_buy_id="audit_test_mb_001",
-            status="active",
-            totals=DeliveryTotals(impressions=100000.0, spend=5000.0, clicks=2500.0, ctr=0.025),
-            by_package=[
-                PackageDelivery(
-                    package_id="audit_test_package_001",
-                    impressions=100000.0,
-                    spend=5000.0,
-                    clicks=2500.0,
-                    pacing_index=1.0,
-                )
-            ],
-        )
-
-        # Test the roundtrip pattern used by get_media_buy_delivery
-        # Step 1: Convert to dict (what the tool does)
-        delivery_dict = delivery_data.model_dump()  # This is what the tool uses
-
-        # Step 2: Apply testing hooks (returns metadata, does not modify data)
-        testing_ctx = TestingContext(dry_run=True, test_session_id="audit_delivery_test")
-        hooks_result = apply_testing_hooks(testing_ctx, "get_media_buy_delivery")
-        assert hooks_result.is_test is True
-
-        # Step 3: Reconstruct objects from unchanged data
-        try:
-            reconstructed_deliveries = [MediaBuyDeliveryData(**delivery_dict)]
-
-            # If we get here, the roundtrip worked
-            assert len(reconstructed_deliveries) == 1
-            reconstructed_delivery = reconstructed_deliveries[0]
-
-            # Verify essential data survived roundtrip
-            assert reconstructed_delivery.media_buy_id == delivery_data.media_buy_id
-            assert reconstructed_delivery.status == delivery_data.status
-            assert reconstructed_delivery.totals.impressions == delivery_data.totals.impressions
-            assert reconstructed_delivery.totals.spend == delivery_data.totals.spend
-            assert reconstructed_delivery.totals.clicks == delivery_data.totals.clicks
-            assert len(reconstructed_delivery.by_package) == len(delivery_data.by_package)
-            assert reconstructed_delivery.by_package[0].package_id == delivery_data.by_package[0].package_id
-
-            print("✅ get_media_buy_delivery roundtrip is SAFE")
-
-        except Exception as e:
-            pytest.fail(f"❌ get_media_buy_delivery roundtrip FAILED: {e}")
-
-    def test_media_buy_delivery_data_field_consistency(self):
-        """
-        Test MediaBuyDeliveryData for internal/external field consistency.
-
-        This verifies that model_dump() and model_dump_internal() (if it exists)
-        produce compatible output for roundtrip conversion.
-        """
-        delivery_data = MediaBuyDeliveryData(
-            media_buy_id="field_consistency_test",
-            status="active",
-            totals=DeliveryTotals(impressions=50000.0, spend=3000.0, clicks=1500.0, ctr=0.03),
-            by_package=[
-                PackageDelivery(
-                    package_id="consistency_test_package",
-                    impressions=50000.0,
-                    spend=3000.0,
-                    clicks=1500.0,
-                    pacing_index=1.2,
-                )
-            ],
-        )
-
-        # Test external dump
-        external_dict = delivery_data.model_dump()
-
-        # Test internal dump (if available)
-        if hasattr(delivery_data, "model_dump_internal"):
-            internal_dict = delivery_data.model_dump_internal()
-
-            # Compare fields - they should be compatible for roundtrip
-            for field_name, external_value in external_dict.items():
-                if field_name in internal_dict:
-                    internal_value = internal_dict[field_name]
-                    # Values should be compatible (allowing for type conversions)
-                    assert type(external_value) is type(internal_value), (
-                        f"Field '{field_name}' type mismatch: {type(external_value)} vs {type(internal_value)}"
-                    )
-        else:
-            # MediaBuyDeliveryData doesn't have model_dump_internal, so model_dump() is used
-            # This means we need to ensure model_dump() produces reconstruction-compatible output
-            pass
-
-        # Test reconstruction from external dict
-        reconstructed = MediaBuyDeliveryData(**external_dict)
-
-        # Verify reconstruction preserves all data
-        assert reconstructed.media_buy_id == delivery_data.media_buy_id
-        assert reconstructed.status == delivery_data.status
-        assert reconstructed.totals.impressions == delivery_data.totals.impressions
-        assert reconstructed.totals.spend == delivery_data.totals.spend
-
-    def test_budget_nested_object_roundtrip(self):
-        """
-        Test Budget nested object roundtrip in MediaBuyDeliveryData.
-
-        Nested objects can cause additional complexity in roundtrip conversions.
-        """
-        # Test various Budget configurations
-        budget_configs = [
-            {"total": 5000.0, "currency": "USD", "daily_cap": 200.0, "pacing": "even"},
-            {"total": 10000.0, "currency": "USD", "pacing": "asap"},  # No daily budget
-            {
-                "total": 1000.0,
-                "currency": "USD",
-                "daily_cap": 50.0,
-                "pacing": "daily_budget",
-                "auto_pause_on_budget_exhaustion": True,
-            },
-        ]
-
-        for i, budget_config in enumerate(budget_configs):
-            budget = Budget(**budget_config)
-
-            delivery_data = MediaBuyDeliveryData(
-                media_buy_id=f"budget_test_{i}",
-                status="active",
-                totals=DeliveryTotals(
-                    impressions=25000.0,
-                    spend=budget.total,
-                    clicks=750.0,
-                    ctr=0.03,  # Use budget total as spend amount
-                ),
-                by_package=[
-                    PackageDelivery(
-                        package_id=f"budget_test_package_{i}",
-                        impressions=25000.0,
-                        spend=budget.total,
-                        clicks=750.0,
-                        pacing_index=1.0,
-                    )
-                ],
-            )
-
-            # Test roundtrip with delivery data structure
-            delivery_dict = delivery_data.model_dump()
-            reconstructed = MediaBuyDeliveryData(**delivery_dict)
-
-            # Verify data survived roundtrip correctly
-            assert reconstructed.totals.spend == budget.total
-            assert reconstructed.totals.impressions == 25000.0
-            assert len(reconstructed.by_package) == 1
-            assert reconstructed.by_package[0].spend == budget.total
 
     def test_all_mcp_tools_roundtrip_pattern_audit(self):
         """

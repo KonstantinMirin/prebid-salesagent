@@ -22,18 +22,17 @@ for its lifetime); the domain envs supply production. Neither is re-derived.
 from __future__ import annotations
 
 import uuid
-from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
-from unittest.mock import patch
 
+from tests.factories.mint import mint
 from tests.factories.webhook import PushNotificationConfigRequestFactory
 from tests.harness._mixins import LocalOriginMixin
 from tests.harness.media_buy_dual import MediaBuyDualEnv
 from tests.helpers.adcp_factories import create_test_media_buy_request_dict
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    pass
 
 
 def _drop_registered_auth(stashed: Any) -> Any:
@@ -201,43 +200,21 @@ class MediaBuyPushRegistrationEnv(LocalOriginMixin, MediaBuyDualEnv):
             # Spread, not keywords: an ``overrides`` carrying ``start_time`` must
             # OVERRIDE it, not raise "got multiple values for keyword argument".
             **{
-                "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
-                "end_time": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
-                "idempotency_key": f"fo99-{uuid.uuid4().hex}",
+                "start_time": mint((datetime.now(UTC) + timedelta(days=1)).isoformat()),
+                "end_time": mint((datetime.now(UTC) + timedelta(days=30)).isoformat()),
+                "idempotency_key": mint(f"fo99-{uuid.uuid4().hex}"),
                 **overrides,
             },
         )
 
-    def widen_stashed_schemes(self, step: Any, schemes: list[str]) -> None:
-        """Rewrite the stash's ``authentication.schemes`` to *schemes* — a LEGACY row.
-
-        Not a mutation that damages anything: it manufactures the one shape a
-        pre-deploy row can already hold. A ``schemes`` array with more than one
-        entry is schema-invalid against the pin (``maxItems: 1``), so nothing
-        typed could ever have written it — but the untyped A2A tool path forwards
-        the buyer's raw dict, and ``schemes[0]`` accepted it silently, so rows
-        like this exist in the wild and their delivery behavior is already
-        decided. Asserts the stash held a single-entry list first: widening a
-        stash that carried no schemes at all would grade nothing.
-        """
-        stashed = self.stashed_push_config(step)
-        auth = stashed.get("authentication")
-        assert isinstance(auth, dict) and len(auth.get("schemes") or []) == 1, (
-            f"expected a single-scheme stash to widen, found authentication={auth!r} — "
-            f"this helper manufactures a legacy row, it cannot invent the credential half"
-        )
-        self.restash_authentication(step, {**auth, "schemes": list(schemes)})
-
     def restash_authentication(self, step: Any, authentication: dict[str, Any]) -> None:
-        """Rewrite the stash's ``authentication`` block wholesale — the general LEGACY row.
+        """Rewrite the stash's ``authentication`` block wholesale — a LEGACY row.
 
-        :meth:`widen_stashed_schemes` is the cardinality-only special case of this
-        and delegates here, so there is one place that knows how a stashed
-        registration is rewritten and committed. A row whose block names an
-        unrecognised scheme, or holds a credential under the pinned
-        ``minLength: 32``, is manufactured with this — both are shapes the untyped
-        A2A path really wrote (it forwards the buyer's raw dict), and both are
-        what Epic D lane C4 stops delivering.
+        One place knows how a stashed registration is rewritten and committed. A
+        row whose block names an unrecognised scheme, or holds a credential under
+        the pinned ``minLength: 32``, is manufactured with this — both are shapes
+        the untyped A2A path really wrote (it forwards the buyer's raw dict), and
+        both are what Epic D lane C4 stops delivering.
 
         Asserts the stash already carried a block: rewriting one that was never
         there would grade a document no producer writes.
@@ -252,35 +229,6 @@ class MediaBuyPushRegistrationEnv(LocalOriginMixin, MediaBuyDualEnv):
         step.request_data = request_data
         self.get_session().add(step)
         self.get_session().commit()
-
-    @contextmanager
-    def rehydration_refuses_multi_scheme(self) -> Iterator[None]:
-        """Make ``from_stash`` STRICT about scheme cardinality — the reverse-TDD mutation.
-
-        The alternative design the lane rejected: refuse a >1 ``schemes`` array
-        everywhere, rehydration included. Applying it here is what proves the
-        tolerance case is graded rather than merely green — with rehydration
-        strict, a legacy row's delivery must stop, because the delivery path
-        fails CLOSED on ``AdCPValidationError`` (``context_manager``'s per-webhook
-        ``continue``), which is the regression the case exists to catch.
-        """
-        from src.core.exceptions import AdCPValidationError
-        from src.core.webhooks.registration import ValidatedWebhookRegistration
-
-        original = ValidatedWebhookRegistration.from_stash.__func__  # type: ignore[attr-defined]
-
-        def _strict_from_stash(cls: Any, stashed: Any, **kwargs: Any) -> Any:
-            auth = stashed.get("authentication") if isinstance(stashed, dict) else None
-            schemes = (auth or {}).get("schemes") or [] if isinstance(auth, dict) else []
-            if len(schemes) > 1:
-                raise AdCPValidationError(
-                    "Invalid push_notification_config.authentication.schemes: exactly one scheme is allowed.",
-                    field="push_notification_config.authentication.schemes",
-                )
-            return original(cls, stashed, **kwargs)
-
-        with patch.object(ValidatedWebhookRegistration, "from_stash", classmethod(_strict_from_stash)):
-            yield
 
     def persisted_config_rows(self) -> list[Any]:
         """Every push-notification row this env's tenant currently holds."""

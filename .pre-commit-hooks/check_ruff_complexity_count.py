@@ -34,6 +34,25 @@ SRC_DIR = "src"
 MAIN_REF = "origin/main"
 RULES = ("C901", "PLR0912", "PLR0915", "F841")
 
+#: 0 = clean, 1 = violations found. 2 is a usage/IO error; negative is a signal.
+COMPLETE_RETURNCODES = frozenset({0, 1})
+
+
+def _ruff_emitted_a_whole_report(stdout: str) -> str | None:
+    """``--output-format=json`` writes one complete array, ``[]`` when clean.
+
+    A run that died partway leaves a truncated array, so "it parses" is this
+    tool's completion marker — the same job pylint's score line and mypy's
+    summary do for counters whose output is line-oriented.
+    """
+    try:
+        findings = json.loads(stdout.strip() or "")
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(findings, list):
+        return None
+    return f"{len(findings)} findings in a complete JSON report"
+
 
 def count_rule_violations(repo_root: Path, src_path: Path) -> dict[str, int]:
     """Count selected ruff violations under src/ (even if ignored in pyproject)."""
@@ -50,8 +69,9 @@ def count_rule_violations(repo_root: Path, src_path: Path) -> dict[str, int]:
     result = run_counting_tool(
         cmd,
         cwd=repo_root,
-        has_findings=lambda completed: bool((completed.stdout or "").strip()),
         label="ruff",
+        accepts_returncode=COMPLETE_RETURNCODES.__contains__,
+        completion_marker=_ruff_emitted_a_whole_report,
     )
 
     try:

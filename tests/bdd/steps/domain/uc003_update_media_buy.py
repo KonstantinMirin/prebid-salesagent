@@ -463,7 +463,6 @@ def given_daily_spend_ok(ctx: dict) -> None:
                         f"{max_daily} — step claims 'does not exceed max_daily_package_spend' "
                         "but existing packages violate the constraint"
                     )
-    ctx.setdefault("daily_spend_validated", True)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -569,9 +568,9 @@ def given_placement_ids_valid(ctx: dict) -> None:
     assert isinstance(pids, list), f"Expected placement_ids to be a list, got {type(pids).__name__}"
     assert len(pids) > 0, "placement_ids list is empty — step claims placements are 'valid for the product'"
     # Step claims 'valid for the product' — product must be present to validate against
-    product = ctx.get("default_product") or ctx.get("existing_product")
+    product = ctx.get("default_product")
     assert product is not None, (
-        "No product in ctx (neither 'default_product' nor 'existing_product') — "
+        "No product in ctx under 'default_product' — "
         "step claims placements are 'valid for the product' but no product exists to validate against"
     )
     # Verify product does not have restrictive placement config that would reject these.
@@ -588,34 +587,38 @@ def given_placement_ids_valid(ctx: dict) -> None:
     # When product has no placements restriction, all placements are
     # valid by definition — this is correct AdCP semantics (no restriction = all allowed).
     # Log which path was taken for debugging.
-    ctx.setdefault("placement_validation_path", "unrestricted" if allowed is None else "restricted")
 
 
 @given("the package update includes inline creatives with valid content")
 def given_package_update_inline_creatives(ctx: dict) -> None:
     """Add inline creative objects to the first package update.
 
-    Uses the adcp CreativeAsset structure with minimal valid content.
+    The sentence promises VALID content, and the hand-built asset map did not
+    deliver it: ``{"primary": {url, width, height}}`` carries no ``asset_type``
+    discriminator, so ``AdCPPackageUpdate.creatives`` rejects the item with
+    ``assets.primary.AssetVariant Unable to extract tag using discriminator
+    'asset_type' [type=union_tag_not_found]`` and the update never reaches the
+    behaviour under test. Built through ``image_spec`` now, which is the same
+    correction ``uc003_ext_error_scenarios.given_package_update_inline_creatives_bare``
+    already carries with the same reasoning. The invalidity was never this
+    scenario's subject, so it is fixed rather than declared malformed.
     """
+    from tests.factories.creative_asset import build_assets, image_spec
+    from tests.factories.request import CreativeAssetRequestFactory
+
     kwargs = _ensure_update_defaults(ctx)
     if not kwargs.get("packages"):
         kwargs["packages"] = [{"package_id": "pkg_001"}]
     kwargs["packages"][0]["creatives"] = [
-        {
-            "creative_id": "inline-cr-001",
-            "name": "Inline Creative 1",
-            "format_id": {
+        CreativeAssetRequestFactory.payload(
+            creative_id="inline-cr-001",
+            name="Inline Creative 1",
+            format_id={
                 "agent_url": "https://creative.adcontextprotocol.org",
                 "id": "display_300x250",
             },
-            "assets": {
-                "primary": {
-                    "url": "https://example.com/banner-1.png",
-                    "width": 300,
-                    "height": 250,
-                }
-            },
-        }
+            assets=build_assets(image_spec("primary", url="https://example.com/banner-1.png")),
+        )
     ]
 
 
@@ -643,7 +646,6 @@ def given_package_update_optimization_goals_default(ctx: dict) -> None:
     # Default: single metric goal (clicks) — representative for replacement semantics test.
     # The parameterized variant (with goals_value) handles scenario-specific goals.
     kwargs["packages"][0]["optimization_goals"] = json.loads('[{"kind": "metric", "metric": "clicks", "priority": 1}]')
-    ctx.setdefault("optimization_goals_source", "default_clicks")
 
 
 @given(parsers.parse("the package update includes optimization_goals: {goals_value}"))
@@ -667,7 +669,6 @@ def given_package_update_optimization_goals(ctx: dict, goals_value: str) -> None
         # Step text "includes optimization_goals: <not provided>" is a Scenario Outline
         # convention: the field slot exists in the template but this row omits the value.
         kwargs["packages"][0].pop("optimization_goals", None)
-        ctx["optimization_goals_omitted"] = True
         assert "optimization_goals" not in kwargs["packages"][0], (
             "optimization_goals should be absent after '<not provided>' — preservation test requires omission"
         )
@@ -1852,7 +1853,7 @@ def given_creative_assignments_with_placements(ctx: dict, placement_config: str)
 
     # Handle "product unsupported" — configure product to not support placements
     if "product unsupported" in stripped:
-        product = ctx.get("default_product") or ctx.get("existing_product")
+        product = ctx.get("default_product")
         if product is None:
             # UC-003 harness doesn't store product in ctx — look up from existing package
             pkg_obj = ctx.get("existing_package")

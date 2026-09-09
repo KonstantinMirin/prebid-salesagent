@@ -83,6 +83,13 @@ case "$*" in
     for _s in ${_envs//,/ }; do
       printf '%s' '{"summary": {"collected": 1, "total": 1, "passed": 1, "deselected": 0}, "exitcode": 0}' \\
         > ".tox/${_s}.json"
+      # A BDD suite now emits TWO artifacts: the pytest report and the dispatched-request
+      # payload capture (tests/bdd/payload_capture.py), and the runner fails a run whose
+      # BDD suite produced no payload artifact for the same reason it fails one that
+      # produced no report -- a suite that produced none was not measured. Emitting only
+      # the report here would simulate a stack whose BDD suites all died halfway, which
+      # is the failure this stub's comment above already warns against.
+      case "$_s" in bdd*) printf '%s' '{"run": {"collected": 1}, "nodes": {}}' > ".tox/${_s}_payloads.json" ;; esac
     done
     ;;
 esac

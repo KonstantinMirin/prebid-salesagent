@@ -47,7 +47,12 @@ def _generate_unique_id(label: str) -> str:
     """
     import uuid
 
-    return f"{label}-{uuid.uuid4().hex[:8]}"
+    from tests.factories.mint import mint
+
+    # A PINNED prefix with a GENERATED suffix ("mb-001-7a693ba8"): the one shape no
+    # value-shaped normalization rule classifies correctly, which is why the mint
+    # site records it instead (tests/factories/mint.py).
+    return mint(f"{label}-{uuid.uuid4().hex[:8]}")
 
 
 def _register_media_buy(ctx: dict, label: str, media_buy: Any) -> None:
@@ -674,11 +679,19 @@ def given_package_creative_ref_nonexistent(ctx: dict, pkg_id: str, creative_id: 
 def given_no_snapshot_for_package(ctx: dict, pkg_id: str) -> None:
     """Establish that no snapshot data exists for a package.
 
-    The default state in the harness is no snapshot data — the adapter mock
-    (when present) returns no data unless explicitly configured. Record the
-    expectation in ctx so Then steps can verify the correct unavailable_reason.
+    Absence is the harness default — the adapter mock returns no data unless a
+    Given configures some. The falsifiable half is the other direction: a
+    scenario that configured snapshot data for this package and then declares it
+    unavailable is grading the opposite of what it says. The ctx set this
+    replaced was written for "Then steps to verify the unavailable_reason" and
+    no Then ever read it.
     """
-    ctx.setdefault("snapshot_unavailable_packages", set()).add(pkg_id)
+    configured = ctx.get("adapter_snapshot_data", {})
+    seeded_for_pkg = [mb_id for mb_id, pkgs in configured.items() if pkg_id in pkgs]
+    assert not seeded_for_pkg, (
+        f"Step claims no snapshot data is available for package {pkg_id!r}, but a "
+        f"prior Given configured snapshot data for it under media buy(s) {seeded_for_pkg}."
+    )
 
 
 @given("the ad platform adapter supports realtime reporting")
@@ -689,7 +702,6 @@ def given_adapter_supports_reporting(ctx: dict) -> None:
     configuration, this step should also set up mock reporting endpoints that
     return test data (impressions, spend, etc.).
     """
-    ctx["adapter_supports_reporting"] = True
     env = ctx["env"]
     assert "adapter" in env.mock, (
         "Step claims 'the ad platform adapter supports realtime reporting' "
@@ -702,7 +714,6 @@ def given_adapter_supports_reporting(ctx: dict) -> None:
 @given("the ad platform adapter does not support realtime reporting")
 def given_adapter_no_reporting(ctx: dict) -> None:
     """Configure the adapter to NOT support realtime reporting."""
-    ctx["adapter_supports_reporting"] = False
     env = ctx["env"]
     assert "adapter" in env.mock, (
         "Step claims 'the ad platform adapter does not support realtime reporting' "
@@ -729,7 +740,6 @@ def given_adapter_reporting_with_data(ctx: dict) -> None:
     whose get_packages_snapshot returns realistic snapshot data keyed by the
     packages created in earlier Given steps.
     """
-    ctx["adapter_supports_reporting"] = True
 
     snapshot_data: dict[str, dict] = {}
     seeded = ctx.get("seeded_media_buys", {})
@@ -756,7 +766,6 @@ def given_adapter_reporting_no_data(ctx: dict, pkg_id: str) -> None:
     snapshot dict for the media buy owning ``pkg_id``, so the package has no
     snapshot data available.
     """
-    ctx["adapter_supports_reporting"] = True
 
     # Build snapshot_data with the target package's media buy present but
     # with NO entry for the specific pkg_id — simulating "no data for X".
@@ -787,7 +796,6 @@ def given_adapter_reporting_all_data(ctx: dict) -> None:
     Builds snapshot entries for all packages across all seeded media buys,
     so every package has data available when include_snapshot is requested.
     """
-    ctx["adapter_supports_reporting"] = True
 
     snapshot_data: dict[str, dict] = {}
     seeded = ctx.get("seeded_media_buys", {})
@@ -814,7 +822,6 @@ def given_adapter_reporting_mixed(ctx: dict, pkg1: str, pkg2: str) -> None:
     Configures adapter mock so ``pkg1`` has snapshot data and ``pkg2`` does not.
     The snapshot dict includes an entry for pkg1 but omits pkg2.
     """
-    ctx["adapter_supports_reporting"] = True
 
     snapshot_data: dict[str, dict] = {}
     seeded = ctx.get("seeded_media_buys", {})
@@ -853,8 +860,6 @@ def given_adapter_no_realtime(ctx: dict) -> None:
     which has no EXTERNAL_PATCHES.
     """
     from unittest.mock import MagicMock, patch
-
-    ctx["adapter_supports_reporting"] = False
 
     adapter_mock = MagicMock()
     adapter_mock.capabilities.supports_realtime_reporting = False
@@ -934,7 +939,6 @@ def given_principal_owns_single_mb(ctx: dict, principal_id: str, mb_id: str) -> 
     )
     env._commit_factory_data()
     _register_media_buy(ctx, mb_id, mb)
-    ctx.setdefault("principals", {})[principal_id] = principal
 
 
 @given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}"'))
@@ -1651,10 +1655,77 @@ def _assert_error_recovery(ctx: dict, expected: str) -> None:
     )
 
 
-@then(parsers.parse('the error should include a "recovery" field indicating terminal failure'))
-def then_error_recovery_terminal(ctx: dict) -> None:
-    """Assert error has terminal recovery classification."""
-    _assert_error_recovery(ctx, "terminal")
+# ── Unbound, and KEPT: obligations whose scenario was reworded or never written ──
+#
+# No feature binds the four steps below — checked by literal grep and by matching each
+# pattern against all 49534 sentences rendered from every feature's Examples through
+# pytest-bdd's own FeatureParser. They are kept anyway, because "nothing binds it" is not
+# evidence of deadness: each reads ctx state that live steps still write and asserts a real
+# obligation, so deleting them would destroy the only record that the obligation was
+# identified.
+#
+# The two empty-media_buys steps are the clearest case. @T-UC-019-boundary-principal DOES
+# carry the obligation, in three Examples rows, but the outcome column was reworded to
+# `empty media_buys with soft error code "AUTH_MISSING" message "..."` — which matches no
+# step definition, here or anywhere. Those three rows are additionally xfailed on transport
+# grounds ("principal_id=null/empty/ghost is unreachable — a valid token always resolves to
+# a real principal"), a DELIBERATE gap, so the rows are not silently dormant. If that gate is
+# ever lifted, these two are the implementations to re-point at the reworded sentence.
+#
+# `then_error_contains` and `then_error_invalid_status` grade the error MESSAGE by substring.
+# That is the wrong oracle to re-bind as written — CODE_TABLE derives the sentence from the
+# code, so a code assertion carries the same obligation without pinning one seller's wording
+# — but the obligation `then_error_invalid_status` names (the rejection identifies WHICH
+# value was invalid) is real and belongs on `errors[0].field` or `details`.
+#
+# `the error should include a "recovery" field indicating terminal failure` was deleted
+# rather than kept: it is a genuine duplicate. The bound refusal step derives the expected
+# recovery from `_pinned_recovery(code)`, so the terminal classification is already graded
+# from the pin wherever a terminal code is asserted — strictly stronger than restating it.
+
+
+@then(parsers.parse('the error message should contain "{fragment}"'))
+def then_error_contains(ctx: dict, fragment: str) -> None:
+    """Assert error message contains a specific fragment."""
+    error = ctx.get("error")
+    assert error is not None, "Expected an error"
+    msg = str(error).lower()
+    assert fragment.lower() in msg, f"Expected '{fragment}' in error: {error}"
+
+
+@then(parsers.parse('the error message should indicate "{text}" is not a valid MediaBuyStatus'))
+def then_error_invalid_status(ctx: dict, text: str) -> None:
+    """Assert error mentions the invalid status value."""
+    error = ctx.get("error")
+    assert error is not None, "Expected an error"
+    msg = str(error).lower()
+    # Step text requires BOTH: mention of the invalid value AND that it's about status
+    assert text.lower() in msg, f"Expected invalid value '{text}' to appear in error message, got: {error}"
+    assert "status" in msg, (
+        f"Expected 'status' to appear in error message (indicating this is a status validation error), got: {error}"
+    )
+
+
+@then(parsers.parse('the response should include an empty media_buys array with error "{code}"'))
+def then_empty_with_error(ctx: dict, code: str) -> None:
+    """Assert empty media_buys with specific error code in response."""
+    buys = _get_media_buys(ctx)
+    assert len(buys) == 0, f"Expected empty media_buys, got {len(buys)}"
+    resp = require_payload(ctx)
+    errors = getattr(resp, "errors", None) or []
+    codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
+    assert code in codes, f"Expected error '{code}' in errors, got {codes}"
+
+
+@then(parsers.parse('empty media_buys with error "{code}"'))
+def then_empty_buys_with_error(ctx: dict, code: str) -> None:
+    """Assert empty media_buys with error (boundary table shorthand)."""
+    buys = _get_media_buys(ctx)
+    assert len(buys) == 0, f"Expected empty, got {len(buys)}"
+    resp = require_payload(ctx)
+    errors = getattr(resp, "errors", None) or []
+    codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
+    assert code in codes, f"Expected '{code}' in response errors, got {codes}"
 
 
 def _current_suggestion(ctx: dict) -> str:
@@ -1750,15 +1821,6 @@ def then_error_has_suggestion(ctx: dict) -> None:
     _current_suggestion(ctx)
 
 
-@then(parsers.parse('the error message should contain "{fragment}"'))
-def then_error_contains(ctx: dict, fragment: str) -> None:
-    """Assert error message contains a specific fragment."""
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    msg = str(error).lower()
-    assert fragment.lower() in msg, f"Expected '{fragment}' in error: {error}"
-
-
 @then(parsers.parse('the response errors array should include error code "{code}"'))
 def then_response_errors_include(ctx: dict, code: str) -> None:
     """Assert response.errors contains the specified error code."""
@@ -1796,19 +1858,6 @@ def then_errors_name_omitted_media_buy(ctx: dict, mb_id: str) -> None:
         f"expected an advisory naming the omitted media buy {real_id!r} — in `details`, since "
         f"`message` is derived from the code table and cannot carry it; the response carried "
         f"{len(errors)} advisory/advisories: {haystacks}"
-    )
-
-
-@then(parsers.parse('the error message should indicate "{text}" is not a valid MediaBuyStatus'))
-def then_error_invalid_status(ctx: dict, text: str) -> None:
-    """Assert error mentions the invalid status value."""
-    error = ctx.get("error")
-    assert error is not None, "Expected an error"
-    msg = str(error).lower()
-    # Step text requires BOTH: mention of the invalid value AND that it's about status
-    assert text.lower() in msg, f"Expected invalid value '{text}' to appear in error message, got: {error}"
-    assert "status" in msg, (
-        f"Expected 'status' to appear in error message (indicating this is a status validation error), got: {error}"
     )
 
 
@@ -2319,28 +2368,6 @@ def then_any_status_returned(ctx: dict) -> None:
             f"All-status filter should return all media buys, but '{label}' (real_id={real_id}) is missing. "
             f"Returned: {returned_ids}"
         )
-
-
-@then(parsers.parse('the response should include an empty media_buys array with error "{code}"'))
-def then_empty_with_error(ctx: dict, code: str) -> None:
-    """Assert empty media_buys with specific error code in response."""
-    buys = _get_media_buys(ctx)
-    assert len(buys) == 0, f"Expected empty media_buys, got {len(buys)}"
-    resp = require_payload(ctx)
-    errors = getattr(resp, "errors", None) or []
-    codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
-    assert code in codes, f"Expected error '{code}' in errors, got {codes}"
-
-
-@then(parsers.parse('empty media_buys with error "{code}"'))
-def then_empty_buys_with_error(ctx: dict, code: str) -> None:
-    """Assert empty media_buys with error (boundary table shorthand)."""
-    buys = _get_media_buys(ctx)
-    assert len(buys) == 0, f"Expected empty, got {len(buys)}"
-    resp = require_payload(ctx)
-    errors = getattr(resp, "errors", None) or []
-    codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
-    assert code in codes, f"Expected '{code}' in response errors, got {codes}"
 
 
 @then(parsers.parse('error "{code}" with suggestion'))
@@ -3194,10 +3221,18 @@ def then_media_buy_wire_field_degraded(ctx: dict, mb_id: str, field: str) -> Non
     )
 )
 def then_raw_request_advisory_code_and_recovery(ctx: dict, mb_id: str, field: str, code: str, recovery: str) -> None:
-    """Both halves, off the wire, and exactly one advisory in the whole document.
+    """Every half the sentence names, off the wire, and exactly one advisory in the document.
 
     The document-wide count is what grades "alone" here, for the same reason it does on
     the package rows: without it an implementation that degrades every blob value passes.
+
+    ``mb_id`` is graded too, which it was not: the sentence says "for media buy X" and the
+    step only substring-matched the FIELD half, so an advisory naming a different media buy
+    satisfied it. Production emits the pointer as
+    ``media_buys[<media_buy_id>].<field>`` (media_buy_list.py's ``field_path`` for the
+    raw_request blob rule), so both halves are on the wire and both are asserted. Membership
+    rather than exact-template equality: the identity is what the scenario names, and the
+    pointer's spelling is production's to change.
     """
     advisories = _wire_advisories(ctx)
 
@@ -3206,8 +3241,12 @@ def then_raw_request_advisory_code_and_recovery(ctx: dict, mb_id: str, field: st
         f"{field!r} must degrade that field ALONE — got {len(advisories)}: {advisories!r}"
     )
     advisory = advisories[0]
-    assert field in str(advisory.get("field", "")), (
-        f"expected the advisory to name field {field!r}; got {advisory.get('field')!r}"
+    pointer = str(advisory.get("field", ""))
+    assert field in pointer, f"expected the advisory to name field {field!r}; got {advisory.get('field')!r}"
+    assert mb_id in pointer, (
+        f"expected the advisory pointer to name media buy {mb_id!r} — the sentence grades the "
+        f"advisory raised FOR that buy, and one naming another buy is a different defect; "
+        f"got {advisory.get('field')!r}"
     )
     assert advisory.get("code") == code, (
         f"expected advisory code {code!r} for a defect in the seller's own store, got {advisory.get('code')!r}"

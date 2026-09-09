@@ -51,20 +51,29 @@ class _SimpleClock:
     given_media_buy.py. No-op for scenarios that don't use date tokens.
     """
 
+    @staticmethod
+    def _iso(dt: Any) -> str:
+        # One formatter for all three accessors, minting what it produces: these are
+        # clock-derived, reach dispatched payloads, and differ on every run. See
+        # ``BaseTestEnv._ClockMixin._iso`` for the same reasoning and spelling.
+        from tests.factories.mint import mint
+
+        return mint(dt.isoformat().replace("+00:00", "Z"))
+
     def now_iso(self) -> str:
         from datetime import UTC, datetime
 
-        return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        return self._iso(datetime.now(UTC))
 
     def future_iso(self, days: int) -> str:
         from datetime import UTC, datetime, timedelta
 
-        return (datetime.now(UTC) + timedelta(days=days)).isoformat().replace("+00:00", "Z")
+        return self._iso(datetime.now(UTC) + timedelta(days=days))
 
     def past_iso(self, days: int) -> str:
         from datetime import UTC, datetime, timedelta
 
-        return (datetime.now(UTC) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+        return self._iso(datetime.now(UTC) - timedelta(days=days))
 
 
 class MediaBuyUpdateEnv(BaseTestEnv):

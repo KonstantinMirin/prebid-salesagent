@@ -744,3 +744,48 @@ federation contract; reusable by the `roundtrip-from-products` /
 | Full suite (all 5 envs) | `./run_all_tests.sh` |
 | BDD only | `tox -e bdd` |
 | Entity-scoped | `make test-entity ENTITY=delivery` |
+
+## Reading a Gate's Verdict
+
+A gate answers with an EXIT CODE. Three ways to lose that answer, all observed in one day's work,
+all of which report the opposite of the truth.
+
+### Never read a gate through a pipe
+
+```bash
+uv run python scripts/audit/compare_payloads.py before after | tail -5   # $? is tail's
+```
+
+`$?` is now `tail`'s status, which is 0 whatever the gate said. A gate that correctly REFUSED
+reads as a pass — and the mistake looks like diligence, because piping to `tail` is how you keep
+output short. Use `${PIPESTATUS[0]}`, or `set -o pipefail`, or just do not pipe.
+
+This is the mirror of the defect these gates were built to remove. We spent a day finding
+instruments that printed CLEAN over things they never measured; this one prints a refusal that
+nobody reads.
+
+### Never compare across environments
+
+The host/agent-db environment fails ~37% of `bdd_inprocess`; a box run of the same tree fails
+~4.5%. Diffing one against the other produces a wall of real differences that are entirely
+environment and say nothing about the change. That is not a weak comparison, it is not a
+comparison — and it cannot be rescued by tolerance, because the differences are genuine.
+
+BEFORE and AFTER must come from the same environment. If the box is unavailable, take both sides
+off-box and say so. Baselines under `test-results/` are BOX numbers; a local run of the same tree
+is a different population.
+
+### A green comparison over a dormant subject grades nothing
+
+`compare_payloads` reads a scenario that dispatches nothing as SAME, whatever the seeder does —
+its rows are empty on both sides. In a file where most scenarios are xfail-dormant, "the payload
+diff is clean" is therefore not a claim about that file.
+
+When the subject is dormant, add a second instrument that does not depend on dispatch: run each
+seeder directly against its pre-change self, DB and dispatch stubbed, and compare the produced
+dict byte for byte. That is what graded the riskiest sites of the creative-literal migration —
+all four of which turned out never to reach the wire at all.
+
+The general rule behind all three: **an instrument's silence is only evidence where the
+instrument could have spoken.** State the denominator, and state what the two sides have in
+common.

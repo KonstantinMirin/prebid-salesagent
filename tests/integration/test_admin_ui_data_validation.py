@@ -9,8 +9,6 @@ Data tests: "Does it show the right data?" (content validation)
 
 import pytest
 
-from src.core.database.models import PricingOption
-
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
@@ -32,6 +30,7 @@ class TestProductsDataValidation:
         Bug caught: https://github.com/your-org/repo/issues/XXX
         """
         from src.core.database.database_session import get_db_session
+        from tests.factories import PricingOptionFactory
         from tests.integration.conftest import create_test_product_with_pricing
 
         tenant_id = test_tenant_with_data["tenant_id"]
@@ -57,9 +56,12 @@ class TestProductsDataValidation:
 
             # Add 2 more pricing options (total of 3)
             for i in range(1, 3):
-                pricing = PricingOption(
+                pricing = PricingOptionFactory.build(
                     tenant_id=tenant_id,
                     product_id=product.product_id,
+                    # Three cpm/USD/fixed options on one product share a derived id and
+                    # collide on uq_pricing_options_option_id; the test needs them distinct.
+                    pricing_option_id=f"cpm_usd_fixed_{i}",
                     pricing_model="cpm",
                     rate=10.0 + i,
                     currency="USD",

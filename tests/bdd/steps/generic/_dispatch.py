@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
+from tests.bdd.payload_capture import record_dispatched_request
+from tests.factories.malformed import assert_declared_malformations
 from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
 
 if TYPE_CHECKING:
@@ -173,6 +175,30 @@ def _as_transport(ctx: dict, caller: str) -> Transport:
     raise RuntimeError(f"{caller}: ctx['transport'] is neither a Transport nor a str: {transport!r}")
 
 
+def gate_and_record(payload: dict[str, Any]) -> None:
+    """The two obligations every dispatch owes BEFORE its payload reaches a transport.
+
+    ONE function rather than two calls at each seam, because the seams are what
+    multiplied last time. ``assert_declared_malformations`` shipped with a single
+    call site while three step-level entries reached a transport, so a malformed
+    payload on either of the other two was never checked and a declared malformation
+    silently repaired on them was never reported (salesagent-99w2t). A pair of
+    obligations that must always travel together is one function, not a convention.
+
+    ORDER IS LOAD-BEARING, in both directions:
+
+    * the gate runs before ``json_safe`` (which ``env.call_via`` and the capture both
+      apply), because ``json_safe`` rebuilds every dict and so drops the ``_Malformed``
+      subclass the declaration is carried by;
+    * the capture runs before the transport, because the subject is the request AS
+      DISPATCHED, and any per-transport shaping downstream would make the same
+      scenario's payload unlike itself across a2a/mcp/rest and break the
+      transport-twin tolerance ``compare_payloads.py`` depends on.
+    """
+    assert_declared_malformations(payload)
+    record_dispatched_request(payload)
+
+
 def dispatch_request(ctx: dict, *, identity: Any = NO_IDENTITY_OVERRIDE, **kwargs: Any) -> None:
     """Dispatch a request through ctx['transport'] via ``env.call_via``.
 
@@ -188,17 +214,53 @@ def dispatch_request(ctx: dict, *, identity: Any = NO_IDENTITY_OVERRIDE, **kwarg
     if identity is not NO_IDENTITY_OVERRIDE:
         kwargs["identity"] = identity
 
+    # Grade the ITEMS against the pinned model before anything else touches them. This
+    # is the half that FINDS unmarked malformations, and it looks for validity, never
+    # for markers (tests/factories/malformed.py states the invariant).
+    #
+    # Placed BEFORE ``env.call_via`` -> ``json_safe``, which rebuilds every dict and so
+    # drops the ``_Malformed`` subclass the declaration is carried by.
+    #
+    # It used to also be placed before a ``try`` whose ``except Exception`` would have
+    # swallowed this assertion into ``ctx["error"]`` and let the scenario grade the
+    # gate's own failure as the server's answer. That except is gone (see below), so the
+    # gate is no longer one reordering away from being silenced — but the json_safe
+    # ordering above is still load-carrying and this call must stay above it.
+    gate_and_record(kwargs)
+
     env = ctx["env"]
     transport = _as_transport(ctx, "dispatch_request")
-    try:
-        result = env.call_via(transport, **kwargs)
-        _populate_ctx_from_result(cast("WireCtx", ctx), result)
-    except Exception as exc:
-        # NOT a wire rejection: env.call_via itself blew up, so nothing reached a
-        # transport and there is no envelope to publish. That is a genuinely different
-        # outcome from "the buyer received an error", which is why WireCtx has no
-        # `error` key of this type and this write lives outside it (salesagent-3dawm.15).
-        ctx["error"] = exc
+    # NO `except Exception: ctx["error"] = exc` HERE, and the third outcome it was
+    # defending is not lost — it never travelled as an exception in the first place.
+    #
+    # The old comment argued a real distinction: "env.call_via itself blew up, so
+    # nothing reached a transport and there is no envelope to publish" is genuinely
+    # different from "the buyer received an error" (salesagent-3dawm.15). True — but
+    # `except Exception` cannot tell that case from a CLIENT-SIDE request-construction
+    # error, where production never ran and the scenario then grades the model instead
+    # of the server. That is the defect the two sibling entries removed and documented
+    # (`when_request._call_via`, `dispatch_via_client`'s docstring); prkv.33 measured it
+    # at all 86 UC-005 instances recording dispatched=False.
+    #
+    # The distinction survives WITHOUT the blanket, because it is already carried on the
+    # return value. All three in-process dispatchers (tests/harness/dispatchers.py) wrap
+    # their own delivery in a catch-all and hand back an ERROR TransportResult declaring
+    # `has_wire=False` and `envelope["status"] == "transport_fault"`
+    # (`derive_error_status(None)`, tests/harness/transport.py) — a first-class "nothing
+    # crossed a wire" verdict a Then can read, rather than an exception a step had to
+    # hand-stash. Whatever still escapes `call_via` is by construction OUTSIDE every
+    # dispatcher's catch-all — identity resolution, a missing address, a missing
+    # tool_name, absent e2e_config — i.e. harness WIRING, which must fail loudly for the
+    # same reason `dispatch_via_client` lets NotImplementedError / NoAddressForTransport
+    # propagate.
+    #
+    # MEASURED before removal, not assumed (salesagent-ryzil.3): a full bdd_inprocess run
+    # with the blanket deleted, diffed per nodeid against the run before it, produced ZERO
+    # outcome changes and ZERO longrepr changes across all 8164 common nodeids — over a
+    # seam carrying 2509 dispatches / 2374 nodeids (salesagent-ryzil.2). The blanket
+    # caught nothing; it was dead weight standing where a real swallow could grow.
+    result = env.call_via(transport, **kwargs)
+    _populate_ctx_from_result(cast("WireCtx", ctx), result)
 
 
 def dispatch_via_client(ctx: dict, tool: str, payload: dict[str, Any], *, identity: Any = NO_IDENTITY_OVERRIDE) -> None:
@@ -212,8 +274,9 @@ def dispatch_via_client(ctx: dict, tool: str, payload: dict[str, Any], *, identi
     unmodified regardless of which entry point the When used.
 
     Deliberately does NOT wrap ``client.call()`` in a blanket
-    ``except Exception`` the way ``dispatch_request`` does for
-    ``env.call_via``: ``AdCPTestClient.call`` already converts ordinary
+    ``except Exception`` — and neither does :func:`dispatch_request` any more, so all
+    three step-level dispatch entries now agree on this. ``AdCPTestClient.call``
+    already converts ordinary
     transport errors into an error ``TransportResult`` internally, and
     re-raises ``NotImplementedError`` / lets ``NoAddressForTransport``
     propagate on purpose — a harness wiring gap must surface as a hard
@@ -223,6 +286,19 @@ def dispatch_via_client(ctx: dict, tool: str, payload: dict[str, Any], *, identi
     """
     client = ctx["client"]
     transport = _as_transport(ctx, "dispatch_via_client")
+    # This entry CANNOT be folded into :func:`dispatch_request`, so it is gated in
+    # place. ``AccountListDispatchMixin.is_list_request`` discriminates on
+    # ``isinstance(kwargs["req"], ListAccountsRequest)`` (uc011_accounts.py:112-121), so
+    # a raw list payload sent through ``env.call_via`` is MISROUTED to
+    # ``sync_accounts``. Two entries in one module is the achievable end state; both of
+    # them gate.
+    #
+    # ``payload`` only: ``identity`` travels beside the bag here rather than inside it,
+    # and the capture's identity token exists for the bag. Measured: every recorded
+    # ``dispatch_via_client`` dispatch took the no-identity branch (0 of 55 —
+    # salesagent-ryzil.2), so nothing is lost today; the day one does not, the
+    # difference to record is still whether auth was carried, not what it held.
+    gate_and_record(payload)
     if identity is not NO_IDENTITY_OVERRIDE:
         result = client.call(tool, payload, transport, identity=identity)
     else:

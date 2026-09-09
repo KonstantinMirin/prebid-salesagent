@@ -14,20 +14,14 @@ from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 # ── Authenticated / tenant-present paths ────────────────────────────
 
 
-@given("a valid tenant context exists")
-@given("the Buyer has tenant context")
-def given_buyer_has_tenant_context(ctx: dict) -> None:
-    """Buyer has valid tenant context (happy path)."""
-    ctx["has_tenant"] = True
-    ctx.setdefault("tenant_id", "test_tenant")
-
-
-@given("the Buyer has tenant context via MCP session")
-def given_buyer_has_tenant_context_mcp(ctx: dict) -> None:
-    """Buyer has tenant context via MCP session."""
-    ctx["has_tenant"] = True
-    ctx["transport"] = "mcp"
-    ctx.setdefault("tenant_id", "test_tenant")
+# `a valid tenant context exists`, `the Buyer has tenant context` and `the Buyer has tenant
+# context via MCP session` bound here. None of the three occurs in tests/bdd/features, by
+# literal grep and by matching against all 49534 sentences rendered from every feature's
+# Examples. They set `ctx["has_tenant"]`, which no step anywhere read — the key is gone,
+# along with every other write-never-read flag in this tree. The MCP variant also
+# assigned `ctx["transport"] = "mcp"`, which would have overwritten the parametrized
+# transport the whole suite dispatches on — a live scenario binding it would have silently
+# run every transport's copy against MCP.
 
 
 # ── Missing-auth / missing-tenant paths ─────────────────────────────
@@ -51,14 +45,25 @@ def given_buyer_no_auth(ctx: dict) -> None:
 
 @given("no hostname-based tenant resolution is possible")
 def given_no_hostname_tenant(ctx: dict) -> None:
-    """No tenant can be resolved from hostname."""
-    ctx["hostname_tenant"] = None
+    """No tenant can be resolved from hostname.
+
+    In process there is no hostname to resolve from: the tenant reaches the tool
+    through the identity, so "no hostname resolution" holds exactly when the
+    request carries no identity — which the preceding "the Buyer has no
+    authentication credentials" Given establishes. This step checks that pairing
+    rather than setting a ``hostname_tenant`` key no step read; the sentence used
+    to hold whether or not the scenario had actually removed the identity.
+    """
+    assert ctx.get("identity") is None, (
+        "Step claims no hostname-based tenant resolution is possible, but the "
+        "scenario still carries an identity that resolves one — the request would "
+        f"reach a tenant anyway: {ctx['identity']!r}"
+    )
 
 
 @given("no tenant can be resolved from the request context")
 def given_no_tenant_resolved(ctx: dict) -> None:
     """No tenant can be resolved from any source (MCP path)."""
-    ctx["has_tenant"] = False
     ctx["identity"] = None
 
 
@@ -83,8 +88,6 @@ def _seed_account_for_principal(ctx: dict, *, sandbox: bool) -> None:
     account = AccountFactory(tenant=ctx["tenant"], sandbox=sandbox)
     AgentAccountAccessFactory(tenant=ctx["tenant"], principal=ctx["principal"], account=account)
     env._commit_factory_data()
-    ctx["sandbox"] = sandbox
-    ctx["account"] = account
     ctx.setdefault("tenant_id", "sandbox_tenant" if sandbox else "prod_tenant")
 
 
@@ -152,23 +155,33 @@ def given_buyer_authenticated(
     named = tenant_id is not None or principal_id is not None
 
     # REFUSE rather than silently seed nothing. ensure_tenant_principal returns
-    # early when ctx already holds a tenant, so naming a principal/tenant AFTER a
-    # Background has authenticated would re-point the env at the named pair and
-    # seed nothing for it -- _resolve_auth_token then finds no Principal row and
-    # returns None, and the scenario runs UNAUTHENTICATED while its own sentence
-    # says otherwise. That is the quiet failure this repo forbids, and it is worse
-    # than a crash: the scenario still reports a result, just not the one it names.
+    # early when ctx already holds a tenant, so naming a DIFFERENT principal/tenant
+    # after one is established would re-point the env at the named pair and seed
+    # nothing for it -- _resolve_auth_token then finds no Principal row and returns
+    # None, and the scenario runs UNAUTHENTICATED while its own sentence says
+    # otherwise. That is the quiet failure this repo forbids, and it is worse than a
+    # crash: the scenario still reports a result, just not the one it names.
     #
-    # No caller hits this today (all 381 lines pass neither parameter), which is
-    # exactly why it is worth failing loudly now -- the first scenario to use the
-    # parameterized spelling would otherwise inherit a silent no-op.
+    # The refusal turns on the pair DIFFERING, not merely on ctx already holding a
+    # tenant. An env route may seed the identity before any Given runs -- UC-019's
+    # route seeds tenant + "buyer-001" and its Background then names "buyer-001" --
+    # and naming the pair that is already established is a no-op, not a conflict.
+    # Refusing it would reject the scenario for agreeing with its own seed.
     if named and "tenant" in ctx:
-        raise AssertionError(
-            f"this scenario already authenticated before naming principal={principal_id!r} "
-            f"tenant={tenant_id!r}, so the named pair would be switched to but never seeded, "
-            f"and the request would go out unauthenticated. Name the identity in the FIRST "
-            f"authentication step of the scenario (or its Background), not in a later one."
+        established = (
+            getattr(ctx.get("tenant"), "tenant_id", None),
+            getattr(ctx.get("principal"), "principal_id", None),
         )
+        wanted = (tenant_id or established[0], principal_id or established[1])
+        if wanted != established:
+            raise AssertionError(
+                f"this scenario already authenticated as {established} before naming "
+                f"principal={principal_id!r} tenant={tenant_id!r}, so the named pair would "
+                f"be switched to but never seeded, and the request would go out "
+                f"unauthenticated. Name the identity in the FIRST authentication step of "
+                f"the scenario (or its Background), not in a later one."
+            )
+        return
 
     if tenant_id is not None:
         env.switch_tenant(tenant_id)

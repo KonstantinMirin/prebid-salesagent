@@ -12,10 +12,13 @@ from __future__ import annotations
 import re as _re
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
+from adcp.types import ErrorCode
 from pytest_bdd import given, parsers
 
+from src.core.database.models import PricingOption
 from tests.bdd.steps.generic._create_request import (
     build_create_request_kwargs,
     pricing_option_id,
@@ -26,6 +29,10 @@ from tests.factories import (
     PricingOptionFactory,
     ProductFactory,
 )
+from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.malformed import malformed
+from tests.factories.mint import mint
+from tests.factories.request import CreativeAssetRequestFactory
 from tests.helpers.adcp_factories import valid_reporting_webhook
 from tests.helpers.egress_hatches import UNDIALLED_PUBLIC_HTTPS_ORIGIN
 
@@ -57,7 +64,7 @@ def _resolve_date_token(value: str, clock: Any) -> str:
 
 def _future(days: int = 1) -> datetime:
     """Return a timezone-aware datetime N days in the future."""
-    return datetime.now(UTC) + timedelta(days=days)
+    return mint(datetime.now(UTC) + timedelta(days=days))
 
 
 def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
@@ -78,6 +85,11 @@ def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
     if "request_kwargs" not in ctx:
         product = ctx.get("default_product")
         pricing_option = ctx.get("default_pricing_option")
+        # Whether the base dict was built against SEEDED rows or against placeholders is
+        # the fact ``harness_create_request_kwargs`` needs and cannot recover afterwards
+        # (the placeholder pricing id and the seeded one are the same string). Recorded
+        # here, at the only place that knows it.
+        ctx["request_kwargs_placeholder_ids"] = product is None or pricing_option is None
         build_create_request_kwargs(
             ctx,
             product_id=product.product_id if product else "guaranteed_display",
@@ -93,7 +105,7 @@ def _ensure_request_defaults(ctx: dict) -> dict[str, Any]:
     # whereas ``media_buy_create._ensure_idempotency_key`` mints a FRESH key per call
     # so ordinary dispatches create independent buys. Merging them would either make
     # every scenario replay or stop the replay scenarios replaying.
-    ctx["request_kwargs"].setdefault("idempotency_key", f"bdd-key-{uuid.uuid4().hex}")
+    ctx["request_kwargs"].setdefault("idempotency_key", mint(f"bdd-key-{uuid.uuid4().hex}"))
 
     # account is REQUIRED on CreateMediaBuyRequest too (create-media-buy-request.json
     # /required), and unlike the key it must RESOLVE: the transport boundary looks the
@@ -115,14 +127,27 @@ def harness_create_request_kwargs(ctx: dict) -> dict[str, Any]:
     UC-004 create branch seeded the harness data) would dispatch against the
     placeholder ids. Re-pinning the package to the harness product here is what
     both create-dispatching When steps share instead of each carrying a copy.
+
+    The re-pin is CONDITIONAL on that build having used placeholders, and the
+    condition is the whole point: written unconditionally it also overwrote package
+    ids a Given had deliberately chosen — an auction option, a EUR option, a second
+    product — and the scenario would then grade the default fixed option while
+    reading as if it graded what it asked for. No live caller hits that today
+    (measured: 18 executions across ``test_egress_ssrf_refusal`` and
+    ``test_uc004_deliver_media_buy_metrics``, every one a no-op with before ==
+    after), which is exactly why it would land silently.
     """
     kwargs = _ensure_request_defaults(ctx)
+    if not ctx.get("request_kwargs_placeholder_ids"):
+        return kwargs
     product = ctx.get("default_product")
     pricing_option = ctx.get("default_pricing_option")
-    if product is not None:
-        kwargs["packages"][0]["product_id"] = product.product_id
-    if pricing_option is not None:
-        kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(pricing_option)
+    if product is None or pricing_option is None:
+        # Still nothing to pin to; leave the flag set so a later call can do it.
+        return kwargs
+    kwargs["packages"][0]["product_id"] = product.product_id
+    kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(pricing_option)
+    ctx["request_kwargs_placeholder_ids"] = False
     return kwargs
 
 
@@ -554,8 +579,6 @@ def given_product_minimum_spend(ctx: dict, amount: int, currency: str) -> None:
     """
     import pytest
 
-    ctx["expected_min_budget"] = amount
-    ctx["expected_min_budget_currency"] = currency
     pytest.xfail(
         f"SPEC-PRODUCTION GAP: Per-product minimum spend ({amount} {currency}) "
         "not yet implemented. Production uses CurrencyLimit.min_package_budget "
@@ -568,35 +591,14 @@ def given_product_minimum_spend(ctx: dict, amount: int, currency: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given("the request includes 2 packages with valid product_ids")
-def given_request_2_packages(ctx: dict) -> None:
-    """Add 2 packages with valid product_ids to the request."""
-    kwargs = _ensure_request_defaults(ctx)
-    env = ctx["env"]
-    product2 = ProductFactory(
-        tenant=ctx["tenant"],
-        product_id="standard_video",
-        property_tags=["all_inventory"],
-    )
-    po2 = PricingOptionFactory(
-        product=product2,
-        pricing_model="cpm",
-        currency="USD",
-        is_fixed=True,
-    )
-    env._commit_factory_data()
-    kwargs["packages"] = [
-        {
-            "product_id": ctx["default_product"].product_id,
-            "budget": 5000.0,
-            "pricing_option_id": pricing_option_id(ctx["default_pricing_option"]),
-        },
-        {
-            "product_id": product2.product_id,
-            "budget": 3000.0,
-            "pricing_option_id": pricing_option_id(po2),
-        },
-    ]
+# "the request includes 2 packages with valid product_ids" is NOT defined here. It was —
+# hardcoded to 2, hand-writing the package dict — and it never ran: the parameterized
+# definition in uc002_create_media_buy.py shadowed it, because both modules are registered
+# in pytest_plugins and pytest takes the later-registered stepdef fixture. Deleted rather
+# than repaired, and deliberately not "fixed" by reordering pytest_plugins: that leaves two
+# definitions of one sentence and re-creates the shadow by a different route. The surviving
+# definition builds the array through ``build_request_packages`` (the DTO-bound factory), so
+# there is one owner of the package shape rather than the three there were.
 
 
 @given("each package has a positive budget meeting minimum spend")
@@ -619,21 +621,48 @@ def given_packages_same_currency(ctx: dict, currency: str) -> None:
     package's pricing_option_id to reference it. This is a Given step — it
     SETS state rather than merely asserting it.
     """
-    ctx["expected_currency"] = currency
     env = ctx["env"]
     kwargs = _ensure_request_defaults(ctx)
-    # Create a pricing option with the desired currency
-    po = PricingOptionFactory(
-        product=ctx["default_product"],
-        pricing_model="cpm",
-        currency=currency,
-        is_fixed=True,
-    )
-    env._commit_factory_data()
-    new_po_id = pricing_option_id(po)
-    # Update ALL packages to use this pricing option
+    # GET-OR-CREATE, not create. The sentence says the packages USE an option in this
+    # currency; it does not say a second one is minted. The env already seeds the product
+    # a cpm/USD/fixed option, and pricing_options now carries
+    # UNIQUE (tenant_id, product_id, pricing_option_id) -- so for the default currency an
+    # unconditional create is an IntegrityError, and before that constraint existed it was
+    # a SECOND row sharing one id, of which the reader's dict silently dropped one. Either
+    # way the step was establishing a state the seller cannot hold.
+    # PER PACKAGE'S OWN PRODUCT, not the default product for all of them. The sentence is a
+    # CROSS-package rule (3.1.1 create_media_buy.mdx L266: "Every package's selected pricing
+    # option must declare the media-buy currency"), so it has to hold for each package
+    # against the product that package actually names.
+    #
+    # Resolving every package off ctx["default_product"] happened to work only because
+    # PricingOption.default_option_id is "{model}_{currency}_{fixed|auction}"
+    # (src/core/database/models.py:531-544), so two different products' cpm/USD/fixed
+    # options carry the SAME id string. That is a coincidence of the default-id grammar,
+    # not a design: the moment a product's option is minted with a publisher-chosen id,
+    # the step names an id that product does not have. It is now correct by construction
+    # instead of by that coincidence.
+    by_product = {ctx["default_product"].product_id: ctx["default_product"]}
+    by_product.update({product.product_id: product for product, _ in ctx.get("extra_products") or []})
+
+    wanted = PricingOption.default_option_id("cpm", currency, True)
     for pkg in kwargs.get("packages", []):
-        pkg["pricing_option_id"] = new_po_id
+        product = by_product.get(pkg["product_id"])
+        assert product is not None, (
+            f"Package names product {pkg['product_id']!r}, which no Given seeded. Seeded: {sorted(by_product)}."
+        )
+        existing = next(
+            (po for po in getattr(product, "pricing_options", None) or [] if po.pricing_option_id == wanted),
+            None,
+        )
+        po = existing or PricingOptionFactory(
+            product=product,
+            pricing_model="cpm",
+            currency=currency,
+            is_fixed=True,
+        )
+        env._commit_factory_data()
+        pkg["pricing_option_id"] = pricing_option_id(po)
 
 
 @given("each package has a valid pricing_option_id")
@@ -680,38 +709,14 @@ def given_packages_valid_pricing(ctx: dict) -> None:
                 "Step claims 'valid pricing_option_id' but the ID does not reference "
                 "an existing PricingOption record."
             )
-    ctx["pricing_validated"] = True
 
 
-@given("a valid create_media_buy request with 2 packages")
-def given_request_2_packages_simple(ctx: dict) -> None:
-    """Set up request with 2 packages (for duplicate product testing)."""
-    kwargs = _ensure_request_defaults(ctx)
-    env = ctx["env"]
-    product2 = ProductFactory(
-        tenant=ctx["tenant"],
-        product_id="standard_video",
-        property_tags=["all_inventory"],
-    )
-    po2 = PricingOptionFactory(
-        product=product2,
-        pricing_model="cpm",
-        currency="USD",
-        is_fixed=True,
-    )
-    env._commit_factory_data()
-    kwargs["packages"] = [
-        {
-            "product_id": ctx["default_product"].product_id,
-            "budget": 5000.0,
-            "pricing_option_id": pricing_option_id(ctx["default_pricing_option"]),
-        },
-        {
-            "product_id": product2.product_id,
-            "budget": 3000.0,
-            "pricing_option_id": pricing_option_id(po2),
-        },
-    ]
+# "a valid create_media_buy request with 2 packages" is RETIRED. It was a sibling
+# spelling that did the work of the canonical pair -- "a valid create_media_buy request"
+# (94 scenarios) plus "the request includes {count:d} packages with valid product_ids" --
+# and its body was a FOURTH hand-written copy of the package dict. Its one binding
+# scenario, @T-UC-002-ext-e, now says both canonical sentences instead. One sibling
+# sentence retired, one step definition deleted, one copy of the shape gone.
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -957,6 +962,26 @@ def given_bid_below_floor(ctx: dict, bid: float, floor: float) -> None:
     )
     kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(auction_po)
     kwargs["packages"][0]["bid_price"] = bid
+
+
+@given(
+    parsers.parse("a package budget of {budget:g} against a pricing option requiring a minimum spend of {minimum:g}")
+)
+def given_budget_below_minimum_spend(ctx: dict, budget: float, minimum: float) -> None:
+    """Give the option the package ALREADY names a minimum spend, then underbid it.
+
+    The existing option is modified rather than a second one added: a new fixed CPM/USD
+    option on the same product would carry the same default pricing_option_id, which the
+    uniqueness constraint refuses — correctly, since a duplicate id names two rows.
+    """
+    env = ctx["env"]
+    option = ctx["default_pricing_option"]
+    option.min_spend_per_package = Decimal(str(minimum))
+    env._commit_factory_data()
+    kwargs = _ensure_request_defaults(ctx)
+    assert kwargs.get("packages"), "No packages in request — nothing to set a budget on"
+    kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(option)
+    kwargs["packages"][0]["budget"] = budget
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1470,7 +1495,21 @@ def _set_min_spend(ctx: dict, *, product_min: float | None, tenant_min: float | 
     env = ctx["env"]
     kwargs = _ensure_request_defaults(ctx)
 
-    # Product-level minimum: update the default pricing option
+    # Product-level minimum: update the default pricing option IN PLACE.
+    #
+    # This is the one place that writes to the seeded ``default_pricing_option`` row
+    # rather than creating a sibling through ``PricingOptionFactory`` like every other
+    # pricing Given here, and the asymmetry is forced, not an oversight. A
+    # ``PricingOption`` has no id COLUMN: production derives its id as
+    # ``{pricing_model}_{currency}_{fixed|auction}`` and selects the FIRST row whose
+    # derived id matches (``media_buy_create._validate_pricing_model_selection``,
+    # mirrored by ``database/product_pricing.get_product_pricing_options``). A second
+    # cpm/USD/fixed row therefore carries the SAME id as the seeded one and is shadowed
+    # by it — the package would keep resolving to the row without ``min_spend_per_package``
+    # and the "budget below product min" examples would stop being exercised while
+    # staying green. Editing the identified row is the only way to say "the cpm/USD/fixed
+    # option now has a minimum". Safe because the row is this scenario's own: ``_harness_env``
+    # is function-scoped and seeds a fresh tenant/product/option per scenario.
     po = ctx["default_pricing_option"]
     po.min_spend_per_package = Decimal(str(product_min)) if product_min is not None else None
     env._commit_factory_data()
@@ -2058,7 +2097,18 @@ def _create_approved_creative(
 def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x250") -> None:
     """Add inline creative dicts to the first package's 'creatives' field.
 
-    Builds minimal creative payloads matching the product's accepted format.
+    Builds creative payloads matching the product's accepted format, through
+    ``CreativeAssetRequestFactory`` so the item is the pinned request shape.
+
+    The asset map goes through ``image_spec`` rather than being typed out: the
+    hand-built ``{"primary": {url, width, height}}`` carried no ``asset_type``
+    discriminator, and ``PackageRequest.creatives`` rejects that with
+    ``assets.primary.AssetVariant Unable to extract tag using discriminator
+    'asset_type' [type=union_tag_not_found]`` — so every caller here was seeding a
+    package the request model refuses. Not a scenario subject anywhere (all six
+    callers ask for ordinary inline creatives), so it is fixed rather than declared
+    malformed. Same correction as ``uc003_update_media_buy`` and
+    ``uc003_ext_error_scenarios``.
     """
     kwargs = _ensure_request_defaults(ctx)
     if kwargs.get("packages"):
@@ -2066,21 +2116,15 @@ def _add_inline_creatives(ctx: dict, count: int = 1, fmt_id: str = "display_300x
         creatives = pkg.get("creatives") or []
         for i in range(count):
             creatives.append(
-                {
-                    "creative_id": f"inline-cr-{i + 1:03d}",
-                    "name": f"Inline Creative {i + 1}",
-                    "format_id": {
+                CreativeAssetRequestFactory.payload(
+                    creative_id=f"inline-cr-{i + 1:03d}",
+                    name=f"Inline Creative {i + 1}",
+                    format_id={
                         "agent_url": "https://creative.adcontextprotocol.org",
                         "id": fmt_id,
                     },
-                    "assets": {
-                        "primary": {
-                            "url": f"https://example.com/banner-{i + 1}.png",
-                            "width": 300,
-                            "height": 250,
-                        }
-                    },
-                }
+                    assets=build_assets(image_spec("primary", url=f"https://example.com/banner-{i + 1}.png")),
+                )
             )
         pkg["creatives"] = creatives
 
@@ -2198,14 +2242,12 @@ def given_creative_boundary(ctx: dict, config: str) -> None:
         # Weight=0 (paused) cannot be set at creation time — production always
         # assigns 100. Expected value reflects production reality, not the
         # boundary intent from the scenario name.
-        ctx["expected_creative_weight"] = 100
 
     elif config == "weight=100":
         # Creative reference — weight=100 (max rotation) is valid boundary
         creative = _create_approved_creative(ctx, "cr-w100")
         _add_creative_ids_to_package(ctx, [creative.creative_id])
         # Store the expected weight for boundary verification.
-        ctx["expected_creative_weight"] = 100
 
     elif config == "101 uploads":
         # 101 inline creatives — exceeds spec limit
@@ -2272,21 +2314,51 @@ def given_request_with_inline_creatives(ctx: dict) -> None:
 def given_inline_creative_missing_url(ctx: dict) -> None:
     """ext-g: strip the content URL from the inline creative's primary asset.
 
-    Production's reference-creative validation requires a content URL; without
-    it the create path rejects the creative and the wire error message names the
-    missing URL.
+    WHAT THIS ACTUALLY REACHES, measured rather than intended. The empty URL is
+    refused at the REQUEST BOUNDARY, not by production's reference-creative
+    validation: ``CreativeAssetRequest`` rejects ``url: ""`` with
+    ``assets.primary.AssetVariant.image.url Input should be a valid URL, input is
+    empty [type=url_parsing]``. So T-UC-002-ext-g grades an INVALID_REQUEST from
+    the boundary and never gets as far as the reference-creative URL check its
+    sentence names.
+
+    That is a real obligation and the scenario now asserts it BY CODE AND FIELD
+    (salesagent-b9hi1.2). It used to pass on any error whatsoever, because its two
+    Thens asked only that the operation failed and that the error carried a
+    suggestion — so it reported green while saying nothing about which refusal
+    arrived. It stayed green through the ``asset_type`` repair, when the request was
+    dying one step earlier still for ``union_tag_not_found`` and the empty URL was
+    not even the reason.
+
+    WHAT REMAINS UNGRADED, and is not this scenario's to fix: production's
+    reference-creative URL check, which no request reaching the boundary with an
+    empty url can exercise. Closing that needs a payload the pinned model ACCEPTS
+    and production refuses — a different scenario, filed rather than faked here.
     """
     kwargs = _ensure_request_defaults(ctx)
     pkg = kwargs["packages"][0]
     creatives = pkg.get("creatives")
     assert creatives, "No inline creatives on package — wire the inline-creatives Given first"
+    declared = []
     for creative in creatives:
         primary = creative.get("assets", {}).get("primary")
         assert primary is not None, "Inline creative has no primary asset to clear the URL on"
-        # Empty (not absent) URL keeps the asset structurally valid so it syncs to
-        # the library, then production's reference-creative URL validation rejects
-        # it with a message naming the missing URL (ext-g intent).
+        # Empty, not absent: an absent url would fail as a MISSING field, and the
+        # scenario is about a URL the buyer supplied and left blank.
         primary["url"] = ""
+        declared.append(
+            malformed(
+                "empty_string",
+                "url='' on the primary asset is the scenario's whole subject: a URL the buyer "
+                "supplied and left blank, not one they omitted. CreativeAssetRequest refuses the "
+                "bytes themselves — assets.primary.AssetVariant.image.url 'Input should be a valid "
+                "URL, input is empty' [type=url_parsing] — so the obligation is INVALID_REQUEST "
+                "from the request boundary, not VALIDATION_ERROR from a seller rule.",
+                creative,
+                obligation=ErrorCode.INVALID_REQUEST,
+            )
+        )
+    pkg["creatives"] = declared
 
 
 @given("the creative format is not generative")
@@ -2610,12 +2682,10 @@ def given_optimization_goal_partition(ctx: dict, partition: str) -> None:
     elif partition == "metric_not_supported_by_product":
         # Configure product to not support metric optimization
         _set_optimization_goals(ctx, [_metric_goal("viewability")])
-        ctx["product_lacks_metric_optimization"] = True
 
     elif partition == "event_not_supported_by_product":
         # Configure product to not support event/conversion tracking
         _set_optimization_goals(ctx, [_event_goal(event_sources=_simple_event_sources())])
-        ctx["product_lacks_conversion_tracking"] = True
 
     else:
         raise ValueError(f"Unknown optimization goal partition: {partition}")
@@ -2679,19 +2749,15 @@ def given_optimization_goals_boundary(ctx: dict, config: str) -> None:
 
     elif config == "metric capable":
         _set_optimization_goals(ctx, [_metric_goal("clicks")])
-        ctx["product_has_metric_optimization"] = True
 
     elif config == "no metric capability":
         _set_optimization_goals(ctx, [_metric_goal("clicks")])
-        ctx["product_lacks_metric_optimization"] = True
 
     elif config == "event capable":
         _set_optimization_goals(ctx, [_event_goal(event_sources=_simple_event_sources())])
-        ctx["product_has_conversion_tracking"] = True
 
     elif config == "no event capability":
         _set_optimization_goals(ctx, [_event_goal(event_sources=_simple_event_sources())])
-        ctx["product_lacks_conversion_tracking"] = True
 
     elif config == "freq min=1 max=3":
         _set_optimization_goals(
@@ -2759,7 +2825,7 @@ def given_request_with_proposal_id(ctx: dict, proposal_id: str) -> None:
 def given_request_with_proposal_and_budget(ctx: dict, amount: int) -> None:
     """Set up a create_media_buy request with proposal_id and total_budget."""
     kwargs = _ensure_request_defaults(ctx)
-    kwargs["proposal_id"] = f"prop-{uuid.uuid4().hex[:8]}"
+    kwargs["proposal_id"] = mint(f"prop-{uuid.uuid4().hex[:8]}")
     kwargs["total_budget"] = {"amount": float(amount), "currency": "USD"}
 
 
@@ -2772,11 +2838,10 @@ def given_request_proposal_mode(ctx: dict) -> None:
     from the proposal's product allocations.
     """
     kwargs = _ensure_request_defaults(ctx)
-    kwargs["proposal_id"] = f"prop-{uuid.uuid4().hex[:8]}"
+    kwargs["proposal_id"] = mint(f"prop-{uuid.uuid4().hex[:8]}")
     kwargs["total_budget"] = {"amount": 5000.0, "currency": "USD"}
     # Remove the packages array to signal proposal mode (seller derives packages)
     kwargs.pop("packages", None)
-    ctx["proposal_mode"] = True
 
 
 @given(parsers.parse('proposal "{proposal_id}" does not exist or has expired'))
@@ -2795,7 +2860,6 @@ def given_proposal_not_exists(ctx: dict, proposal_id: str) -> None:
     import pytest
 
     assert proposal_id, "proposal_id must be non-empty"
-    ctx["expected_proposal_missing"] = proposal_id
     pytest.xfail(
         "SPEC-PRODUCTION GAP: Production has no proposal store — cannot establish "
         f"'proposal \"{proposal_id}\" does not exist or has expired' precondition. "
@@ -2818,7 +2882,6 @@ def given_proposal_budget_guidance_min(ctx: dict, amount: int) -> None:
     import pytest
 
     assert amount >= 0, f"Budget guidance minimum must be non-negative, got {amount}"
-    ctx["expected_budget_guidance_min"] = amount
     pytest.xfail(
         "SPEC-PRODUCTION GAP: Production has no proposal budget guidance — cannot establish "
         f"'total_budget_guidance.min is {amount}' precondition. FIXME"
@@ -2920,7 +2983,6 @@ def given_legacy_mode_no_packages(ctx: dict) -> None:
     kwargs["total_budget"] = {"amount": total, "currency": "USD"}
     # Remove the packages array to signal legacy mode
     kwargs.pop("packages", None)
-    ctx["legacy_mode"] = True
 
 
 @given("the request supplies no buyer packages array")
@@ -3263,11 +3325,12 @@ def given_webhook_configured(ctx: dict) -> None:
     # ``notification-config`` (subscriber_id + event_types) is for. The
     # ``events: ["status_change"]`` this used to carry was accepted by the model and
     # dropped on the way out, so it selected nothing and nothing asserted on it.
-    # ONE writer for all three ctx keys. This used to set the config and
-    # request_kwargs but not push_notification_url, while given_config's sentence
-    # set the config and the url but not request_kwargs — so what a scenario ended
+    # ONE writer for both ctx keys. This used to set the config and request_kwargs
+    # but not the push_notification_url mirror, while given_config's sentence set
+    # the config and the mirror but not request_kwargs — so what a scenario ended
     # up holding depended on which sentence it used, and a Then reading the key its
     # sentence never wrote passed on a fallback instead of on the thing it names.
+    # The mirror is gone; the config is the one spelling of the fact.
     attach_push_notification_config(ctx, webhook_url)
 
 

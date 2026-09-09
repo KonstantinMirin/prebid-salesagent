@@ -50,7 +50,9 @@ from tests.bdd.steps.domain.uc006_sync_creatives import (
     when_sync_creative,
 )
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
+from tests.bdd.steps.generic._dispatch import gate_and_record
 from tests.factories.creative_asset import build_assets, image_spec, text_spec, url_spec, video_spec
+from tests.factories.request import CreativeAssetRequestFactory
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — provenance structural-rejection scenarios
@@ -181,27 +183,27 @@ def given_three_creatives_three_formats(ctx: dict) -> None:
     agent_url = env.DEFAULT_AGENT_URL
 
     creatives = [
-        {
-            "creative_id": "creative-bulk-display-001",
-            "name": "Bulk Display Creative",
-            "format_id": {"id": "display_300x250", "agent_url": agent_url},
-            "assets": build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
-        },
-        {
-            "creative_id": "creative-bulk-video-001",
-            "name": "Bulk Video Creative",
-            "format_id": {"id": "video_30s", "agent_url": agent_url},
-            "assets": build_assets(video_spec("video", url="https://example.com/video.mp4")),
-        },
-        {
-            "creative_id": "creative-bulk-native-001",
-            "name": "Bulk Native Creative",
-            "format_id": {"id": "native_content", "agent_url": agent_url},
-            "assets": build_assets(
+        CreativeAssetRequestFactory.payload(
+            creative_id="creative-bulk-display-001",
+            name="Bulk Display Creative",
+            format_id={"id": "display_300x250", "agent_url": agent_url},
+            assets=build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
+        ),
+        CreativeAssetRequestFactory.payload(
+            creative_id="creative-bulk-video-001",
+            name="Bulk Video Creative",
+            format_id={"id": "video_30s", "agent_url": agent_url},
+            assets=build_assets(video_spec("video", url="https://example.com/video.mp4")),
+        ),
+        CreativeAssetRequestFactory.payload(
+            creative_id="creative-bulk-native-001",
+            name="Bulk Native Creative",
+            format_id={"id": "native_content", "agent_url": agent_url},
+            assets=build_assets(
                 text_spec("headline", content="Discover something new"),
                 image_spec("main_image", url="https://example.com/native.png"),
             ),
-        },
+        ),
     ]
     ctx.setdefault("creatives", []).extend(creatives)
 
@@ -275,12 +277,15 @@ def when_sync_creative_with_captured_format_id(ctx: dict) -> None:
         )
     else:
         assets = build_assets(image_spec("banner_image", url="https://example.com/banner.png"))
-    creative_payload = {
-        "creative_id": "creative-format-roundtrip-001",
-        "name": "Format ID Roundtrip Creative",
-        "format_id": {"id": captured["id"], "agent_url": captured["agent_url"]},
-        "assets": assets,
-    }
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-format-roundtrip-001",
+        name="Format ID Roundtrip Creative",
+        # The CAPTURED object verbatim, which is the scenario's whole subject: a
+        # seller must accept back the format_id it handed out. Overrides reach the
+        # wire unmodified, so an un-normalised agent_url stays un-normalised here.
+        format_id={"id": captured["id"], "agent_url": captured["agent_url"]},
+        assets=assets,
+    )
     ctx.setdefault("creatives", []).append(creative_payload)
     when_sync_creative(ctx)
 
@@ -552,6 +557,11 @@ def then_format_id_roundtrips_verbatim(ctx: dict) -> None:
 
     # ── PRIMARY: read the creative back over the wire ──────────────────────
     client = ctx.get("client") or AdCPTestClient(env)
+    # A READ-BACK still reaches a transport, so it owes the same two obligations as
+    # any other dispatch. It does NOT go through ``dispatch_via_client``: that entry
+    # is the single writer of the ctx dispatch-result contract, and this read-back
+    # must not clobber the result the scenario is actually grading.
+    gate_and_record({})
     listed = client.call("list_creatives", {}, ctx["transport"])
     wire = listed.wire_response
     assert isinstance(wire, dict), (

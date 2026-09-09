@@ -54,6 +54,8 @@ from typing import Any
 
 import factory
 
+from src.core.schemas import PackageRequest
+from src.core.schemas.creative import CreativeAssetRequest
 from src.core.tools.registry import TOOLS
 
 
@@ -76,7 +78,8 @@ def dto(tool: str) -> type:
 
 
 from tests.factories.creative_asset import build_assets, image_spec
-from tests.factories.format import AGENT_URL
+from tests.factories.format import AGENT_URL, FormatIdFactory
+from tests.factories.mint import mint, mint_shared
 from tests.helpers.sample_account import SAMPLE_ACCOUNT
 
 
@@ -105,8 +108,13 @@ def fresh_idempotency_key() -> str:
     because a REUSED key replays the original response instead of performing the
     operation — a replay test wants one stable key for the whole scenario and
     should say so by overriding, which is a decision no default can make for it.
+
+    ``mint`` records what this GENERATED, so ``compare_payloads`` can tell this key
+    apart from the pinned literal ``"test-idem-key-0001"`` that 210 dispatched
+    events carry in the same field and that no value-shaped rule can distinguish
+    from it (tests/factories/mint.py).
     """
-    return f"idem-{uuid.uuid4().hex}"
+    return mint(f"idem-{uuid.uuid4().hex}")
 
 
 @cache
@@ -122,7 +130,11 @@ def _campaign_window() -> tuple[datetime, datetime]:
     read the clock.
     """
     anchor = datetime.now(UTC).replace(microsecond=0)
-    return anchor + timedelta(days=1), anchor + timedelta(days=30)
+    # mint_SHARED, not mint: the ``@cache`` above means this runs once per process and
+    # every later test reuses the same two datetimes without re-minting them. A
+    # per-test record would forget them after the test that warmed the cache, and
+    # ~200 dispatched ``start_time``/``end_time`` values would read CHANGED forever.
+    return mint_shared(anchor + timedelta(days=1)), mint_shared(anchor + timedelta(days=30))
 
 
 class _RequestFactory(factory.Factory):
@@ -146,6 +158,109 @@ class _RequestFactory(factory.Factory):
             else:
                 data[key] = value
         return data
+
+
+class CreativeAssetRequestFactory(_RequestFactory):
+    """One creative ITEM of a ``sync_creatives`` request, as the wire dict.
+
+    Not a tool factory: it binds ``src.core.schemas.creative.CreativeAssetRequest``, the
+    item model ``SyncCreativesRequest.creatives`` holds and the one the runtime
+    malformation gate validates every dispatched creative against
+    (``GATED_ITEMS``, ``tests/factories/malformed.py``). ``_RequestFactory`` is already
+    the base for sub-object payload factories — ``tests/factories/webhook.py`` binds
+    three ``adcp.types`` sub-objects the same way.
+
+    IT IS NAMED FOR THE REQUEST MODEL, and that is load-carrying. ``CreativeAssetFactory``
+    (``tests/factories/creative_asset.py``) builds the RESPONSE model, and feeding a
+    response-shaped creative to a request is a defect this repo has already had — see the
+    note in ``make_creative_asset_request``. So does ``make_test_banner_creative``, and so
+    do the per-file ``_make_creative*`` helpers. Reach for one of those by habit and the
+    confusion comes back.
+
+    Lives here rather than beside the concept in ``creative_asset.py`` because
+    ``request.py`` imports ``build_assets``/``image_spec`` from that module at line 78,
+    ABOVE ``_RequestFactory``: the reverse import is a cycle, reproduced as
+    ``ImportError: cannot import name 'build_assets'``.
+
+    OVERRIDE CONTRACT (all four measured against ``CreativeAssetRequest``)::
+
+        payload()                     the conformant baseline; the pin ACCEPTS it
+        payload(name="")              CHANGE a field   (still accepted — wrongness is downstream)
+        payload(provenance={...})     ADD a field      (provenance/inputs/tags/status/weight
+                                                        are real fields; extra="forbid" means a
+                                                        TYPO is caught by the runtime gate)
+        payload(assets=OMIT)          REMOVE the key entirely
+        payload(format_id=None)       key PRESENT carrying null
+
+    The last two are why ``OMIT`` matters here: the pin reports an ABSENT ``format_id``
+    and a NULL ``format_id`` identically (``[type=oneOf]``), so the call site is the only
+    place that can say which one the author meant — the same distinction ``malformed()``'s
+    ``kind`` carries.
+
+    A MALFORMATION IS ALWAYS A ``payload()`` OVERRIDE, NEVER A ``build()`` KWARG.
+    Overrides land after ``model_dump`` and reach the wire verbatim; ``build()`` routes
+    them through the model and raises in the test's own setup (measured:
+    ``build(format_id=None)`` raises ``[type=oneOf]``).
+
+    ``OMIT`` IS HONOURED AT THE TOP LEVEL ONLY. ``payload()`` loops over
+    ``overrides.items()``, so ``format_id={"id": X, "agent_url": OMIT}`` writes the
+    sentinel object into the nested dict verbatim. Express a nested omission by passing
+    the whole nested dict. A recursive walk would have to guess how deep the caller meant.
+
+    THE ``format_id`` DEFAULT IS FOR CTX-FREE CALLERS. It dumps through the model, so
+    ``AGENT_URL`` comes back NORMALISED with a trailing slash, and its HOST is
+    ``creative.adcontextprotocol.org`` while ``CreativeSyncEnv.DEFAULT_AGENT_URL`` is
+    ``creative.test.example.com``. A BDD step that adopts the default therefore changes
+    WHICH creative agent its payload names — a behaviour change, not a byte one — so BDD
+    callers pass ``format_id={"id": ..., "agent_url": env.DEFAULT_AGENT_URL}``. Overridden
+    values are passed through verbatim, which is what makes an un-normalised URL
+    expressible at all.
+    """
+
+    class Meta:
+        model = CreativeAssetRequest
+
+    creative_id = factory.Sequence(lambda n: f"creative-{n:03d}")
+    name = "Test Creative"
+    format_id = factory.SubFactory(FormatIdFactory, id="display_300x250")
+    assets = factory.LazyFunction(lambda: build_assets(image_spec("image")))
+
+
+class PackageRequestFactory(_RequestFactory):
+    """One package ITEM of a ``create_media_buy`` request, as the wire dict.
+
+    The sibling of ``CreativeAssetRequestFactory`` above, for the other collection a tool
+    request carries. It binds ``src.core.schemas.PackageRequest`` — the item model
+    ``CreateMediaBuyRequest.packages`` holds — so the package shape is DERIVED from the
+    accepted model rather than typed out. A literal here is bound to nothing: it carries
+    the fields whoever wrote it happened to think of, and a field the pin adds tomorrow
+    lands in no copy of it.
+
+    Only the three the model REQUIRES are declared (``product_id``, ``budget``,
+    ``pricing_option_id``); the other 31 fields are optional and a baseline that supplied
+    them would be stating decisions the buyer did not make. ``pricing_option_id`` is the
+    one that matters downstream: ``get_media_buy_delivery`` resolves the
+    ``pricing_model``/``rate``/``currency`` its response REQUIRES per package from the
+    option it names.
+
+    ``package_id`` is deliberately ABSENT and cannot be supplied through ``build()``: it
+    is not a ``PackageRequest`` field because the buyer does not send it. The seller mints
+    it and ``MediaBuyRepository.create_from_request`` injects it into the persisted
+    ``raw_request`` — which is why the ORM fixtures inject it there too
+    (``tests/factories/media_buy.py``), on the payload, not through the model.
+    """
+
+    class Meta:
+        model = PackageRequest
+
+    product_id = "prod-1"
+    budget = 5000.0
+    #: Read off ``PricingOptionFactory``'s own defaults, so a fixture package names the id
+    #: the fixture option row actually carries. Imported inside the lambda because
+    #: ``tests.factories.product`` imports ``_RequestFactory`` from this module.
+    pricing_option_id = factory.LazyFunction(
+        lambda: __import__("tests.factories.product", fromlist=["DEFAULT_PRICING_OPTION_ID"]).DEFAULT_PRICING_OPTION_ID
+    )
 
 
 class CreateMediaBuyRequestFactory(_RequestFactory):
@@ -176,9 +291,7 @@ class CreateMediaBuyRequestFactory(_RequestFactory):
     brand = factory.LazyFunction(lambda: {"domain": "testbrand.com"})
     start_time = factory.LazyFunction(lambda: _campaign_window()[0])
     end_time = factory.LazyFunction(lambda: _campaign_window()[1])
-    packages = factory.LazyFunction(
-        lambda: [{"product_id": "prod-1", "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}]
-    )
+    packages = factory.LazyFunction(lambda: [PackageRequestFactory.payload()])
 
 
 class SyncCreativesRequestFactory(_RequestFactory):
@@ -188,6 +301,11 @@ class SyncCreativesRequestFactory(_RequestFactory):
     literal dict, so the ``assets`` shape has the same single owner every other
     creative test uses. ``assets`` is on the pin's ``/required`` for a creative
     asset, which a hand-written ``{creative_id, name, format_id}`` triple misses.
+
+    The ITEM here is still a literal, and ``CreativeAssetRequestFactory`` above now owns
+    that shape. Routing this default through it would change the bytes of an existing
+    baseline (role ``banner`` vs ``image``, and the normalised ``agent_url``), so it is
+    left for the sweep that grades the dispatched wire payload (salesagent-b341x.11).
     """
 
     class Meta:

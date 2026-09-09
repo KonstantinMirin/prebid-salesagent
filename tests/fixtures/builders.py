@@ -251,7 +251,12 @@ class TargetingBuilder:
 
 
 class TestDataBuilder:
-    """Builder for complete test scenarios."""
+    """Builder for complete test scenarios.
+
+    There is no ``with_creatives``: the dict ``CreativeFactory`` it called emitted the
+    pre-3.1.1 creative shape and is deleted (see tests/fixtures/factories.py). Seed
+    creatives with the ORM ``CreativeFactory`` in ``tests/factories/creative.py``.
+    """
 
     def __init__(self):
         """Initialize test data builder."""
@@ -259,7 +264,6 @@ class TestDataBuilder:
         self.principal = None
         self.products = []
         self.media_buys = []
-        self.creatives = []
 
     def with_tenant(self, **kwargs):
         """Add tenant."""
@@ -297,17 +301,6 @@ class TestDataBuilder:
         self.media_buys.append(MediaBuyFactory.create(**kwargs))
         return self
 
-    def with_creatives(self, count: int = 2, **kwargs):
-        """Add creatives."""
-        from .factories import CreativeFactory
-
-        if self.tenant:
-            kwargs["tenant_id"] = self.tenant["tenant_id"]
-        if self.principal:
-            kwargs["principal_id"] = self.principal["principal_id"]
-        self.creatives = [CreativeFactory.create(**kwargs) for _ in range(count)]
-        return self
-
     def build(self) -> dict:
         """Build complete test scenario."""
         return {
@@ -315,7 +308,6 @@ class TestDataBuilder:
             "principal": self.principal,
             "products": self.products,
             "media_buys": self.media_buys,
-            "creatives": self.creatives,
         }
 
     def build_complete_scenario(self) -> dict:
@@ -325,7 +317,6 @@ class TestDataBuilder:
             .with_principal(name="Test Advertiser")
             .with_products(count=3)
             .with_media_buy(total_budget=10000.0)
-            .with_creatives(count=2)
             .build()
         )
 

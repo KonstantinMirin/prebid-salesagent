@@ -62,7 +62,7 @@ from src.core.exceptions import AdCPBudgetTooLowError, AdCPValidationError
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
-from tests.factories.principal import PrincipalFactory
+from tests.factories import PricingOptionFactory, PrincipalFactory
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.integration.conftest import create_test_product_with_pricing, get_pricing_option_id
 
@@ -169,9 +169,7 @@ class TestMinimumSpendValidation:
             )
 
             # Add EUR pricing option to prod_global (multi-currency support)
-            from src.core.database.models import PricingOption
-
-            eur_pricing = PricingOption(
+            eur_pricing = PricingOptionFactory.build(
                 tenant_id="test_minspend_tenant",
                 product_id="prod_global",
                 pricing_model="cpm",
@@ -420,7 +418,7 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        response = await _create_media_buy_impl(req=req, identity=identity)
 
         # Should succeed - verify we got a media_buy_id
         assert response.media_buy_id is not None
@@ -453,7 +451,7 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        response = await _create_media_buy_impl(req=req, identity=identity)
 
         # Should succeed - verify we got a media_buy_id
         assert response.media_buy_id is not None
@@ -566,7 +564,7 @@ class TestMinimumSpendValidation:
             start_time=start_time.isoformat(),
             end_time=end_time.isoformat(),
         )
-        response, _ = await _create_media_buy_impl(req=req, identity=identity)
+        response = await _create_media_buy_impl(req=req, identity=identity)
 
         # Should succeed - verify we got a media_buy_id
         assert response.media_buy_id is not None

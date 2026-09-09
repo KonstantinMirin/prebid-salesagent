@@ -1,5 +1,4 @@
 # Generated from adcp-req @ 5967bbda117667537ac193ba00aced716e4e0b7c on 2026-08-18T19:09:26Z (merge mode)
-# DO NOT EDIT -- re-run: python scripts/compile_bdd.py --merge
 
 Feature: BR-UC-019 Query Media Buys
   As a Buyer (Human or AI Agent)
@@ -19,7 +18,7 @@ Feature: BR-UC-019 Query Media Buys
 
   Background:
     Given a Seller Agent is operational and accepting requests
-    And an authenticated Buyer with principal_id "buyer-001"
+    And the Buyer is authenticated
     And the principal "buyer-001" exists in the tenant database
 
 
@@ -130,8 +129,7 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-ext-c @extension @ext-c @error
   Scenario: Principal not found - principal_id not in registry
-    Given an authenticated Buyer with principal_id "buyer-unknown"
-    And the principal "buyer-unknown" does not exist in the tenant database
+    Given an authenticated principal "buyer-unknown" not in registry
     When the Buyer Agent sends a get_media_buys request
     Then the response is compliant with the get_media_buys spec
     And the response should include an empty media_buys array
@@ -143,7 +141,7 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-ext-d @extension @ext-d @error
   Scenario: Request validation failed - invalid parameter values
-    Given an authenticated Buyer with principal_id "buyer-001"
+    Given the Buyer is authenticated
     When the Buyer Agent sends a get_media_buys request with invalid parameter types
     Then the error is compliant with the AdCP error spec
     And the operation should fail with error code "INVALID_REQUEST"
@@ -156,7 +154,7 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-ext-e @extension @ext-e
   Scenario: A request carrying an account is accepted and scoped to it
-    Given an authenticated Buyer with principal_id "buyer-001"
+    Given the Buyer is authenticated
     # The account must RESOLVE, or this scenario cannot grade what it names. The seller
     # resolves the account a request carries before running the tool, so an unseeded id
     # fails with ACCOUNT_NOT_FOUND -- a correct answer to a different question.
@@ -257,7 +255,7 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-partition-status-filter-invalid @partition @status_filter @error
   Scenario Outline: Invalid status filter values - <partition>
-    Given an authenticated Buyer with principal_id "buyer-001"
+    Given the Buyer is authenticated
     When the Buyer Agent sends a get_media_buys request with <invalid_filter>
     Then the error is compliant with the AdCP error spec
     And the operation should fail with error code "<error_code>"
@@ -493,7 +491,7 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-inv-151-4 @invariant @BR-RULE-151 @error
   Scenario: INV-4 violated - unknown status value rejected
-    Given an authenticated Buyer with principal_id "buyer-001"
+    Given the Buyer is authenticated
     When the Buyer Agent sends a get_media_buys request with status_filter "expired"
     Then the error is compliant with the AdCP error spec
     And the operation should fail with error code "INVALID_REQUEST"
@@ -1164,7 +1162,7 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-inv-293-2 @invariant @BR-RULE-293 @error @ext-e @schema-v3.1
   Scenario: INV-2 holds - v3.x account (AccountReference) triggers UNSUPPORTED_FEATURE before any DB read
-    Given an authenticated Buyer with principal_id "buyer-001"
+    Given the Buyer is authenticated
     When the Buyer Agent sends a get_media_buys request with account {brand:"brand-x", operator:"op-y"}
     Then the response is compliant with the get_media_buys spec
     And the response should succeed
@@ -1182,7 +1180,7 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-inv-293-5 @invariant @BR-RULE-293 @error @schema-v3.1
   Scenario: INV-5 holds - account-filter validation failure yields empty media_buys with no DB query
-    Given an authenticated Buyer with principal_id "buyer-001"
+    Given the Buyer is authenticated
     When the Buyer Agent sends a get_media_buys request with account_id "acc-001"
     Then the response is compliant with the get_media_buys spec
     And the response media_buys array should be empty

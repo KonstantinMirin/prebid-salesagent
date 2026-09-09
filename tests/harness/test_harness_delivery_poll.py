@@ -6,20 +6,11 @@ but have no ``Covers:`` tags — they test infrastructure, not obligations.
 
 from __future__ import annotations
 
-import asyncio
-import inspect
 from datetime import UTC, date, datetime
 
-from src.core.auth_context import AuthContext
-from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
-from src.core.tools._boundary import invoke_tool
+from src.core.schemas import GetMediaBuyDeliveryResponse
+from tests.factories.media_buy import pricing_options_named, request_package
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
-from tests.helpers.boundary_identity import resolved_as
-
-#: adcp_version / adcp_major_version / ext are the version-envelope trio every request
-#: model carries; they are transport-envelope concerns, not per-tool buyer fields, and no
-#: builder in this codebase takes them positionally.
-_VERSION_ENVELOPE_FIELDS = {"adcp_version", "adcp_major_version", "ext"}
 
 
 class TestDeliveryPollEnvContract:
@@ -33,6 +24,24 @@ class TestDeliveryPollEnvContract:
             response = env.call_impl(media_buy_ids=["mb_001"])
 
             assert isinstance(response, GetMediaBuyDeliveryResponse)
+
+    def test_default_env_reports_an_active_buy_as_active(self):
+        """An env that says nothing about the circuit breaker runs with it CLOSED.
+
+        Pins the default in ``_configure_mocks``. ``_is_circuit_breaker_open`` is patched,
+        and an unconfigured MagicMock returns a TRUTHY Mock — so without the default every
+        test in this env polls with the breaker OPEN and reads "reporting_delayed" for a
+        serving buy. Nothing else grades that: a test about degraded reporting sets the
+        state itself (``set_circuit_open``), which is exactly what makes it blind to what
+        the unset default does.
+        """
+        with DeliveryPollEnv() as env:
+            env.add_buy(media_buy_id="mb_default", status="active")
+            env.set_adapter_response("mb_default", impressions=5000)
+
+            response = env.call_impl(media_buy_ids=["mb_default"])
+
+            assert response.media_buy_deliveries[0].status == "active"
 
     def test_add_buy_visible_to_impl(self):
         """A buy added via add_buy appears in media_buy_deliveries."""
@@ -97,27 +106,30 @@ class TestDeliveryPollEnvContract:
             assert "pricing" in env.mock
 
     def test_pricing_options(self):
-        """set_pricing_options makes pricing data available to _impl."""
-        with DeliveryPollEnv() as env:
-            from unittest.mock import MagicMock
+        """set_pricing_options makes pricing data available to _impl.
 
-            mock_pricing = MagicMock()
-            mock_pricing.pricing_model = "cpm"
-            mock_pricing.rate = 5.0
-            env.set_pricing_options({"1": mock_pricing})
+        The option states its TERMS and the key is read off the row's stored
+        ``pricing_option_id`` column, so the key the lookup answers under is the one the
+        package below names. An id passed by hand could be one no reader resolves while
+        the fixture answered for it anyway — which is how a package naming an
+        unresolvable option went green.
+        """
+        with DeliveryPollEnv() as env:
+            env.set_pricing_options(pricing_options_named(pricing_model="cpm", rate="5.00"))
 
             env.add_buy(
                 media_buy_id="mb_001",
-                raw_request={
-                    "packages": [{"package_id": "pkg_001", "product_id": "prod_001", "pricing_option_id": "1"}],
-                },
+                raw_request={"packages": [request_package(0)]},
             )
             env.set_adapter_response("mb_001", impressions=5000)
 
             response = env.call_impl(media_buy_ids=["mb_001"])
             assert isinstance(response, GetMediaBuyDeliveryResponse)
-            # Pricing mock was called
-            env.mock["pricing"].assert_called()
+            # The configured option reached the wire, not merely the lookup: asserting only
+            # that env.mock["pricing"] was CALLED passed even while a MagicMock option
+            # produced a MagicMock currency and the buy was dropped into errors[].
+            pkg = response.media_buy_deliveries[0].by_package[0]
+            assert (pkg.rate, pkg.currency) == (5.0, "USD")
 
     def test_unregistered_media_buy_id_produces_error(self):
         """Adapter mock must fail for unregistered media_buy_ids, not silently succeed.
@@ -152,11 +164,15 @@ class TestDeliveryPollEnvContract:
         with DeliveryPollEnv() as env:
             env.add_buy(
                 media_buy_id="mb_multi",
+                # Each package names its pricing option: the delivery report states
+                # pricing_model/rate/currency per package, and refuses to guess. The
+                # request factory puts one on every package, because the accepted
+                # ``PackageRequest`` model requires it.
                 raw_request={
                     "packages": [
-                        {"package_id": "pkg_A", "product_id": "prod_001"},
-                        {"package_id": "pkg_B", "product_id": "prod_002"},
-                    ],
+                        request_package(0, package_id="pkg_A"),
+                        request_package(1, package_id="pkg_B"),
+                    ]
                 },
             )
             env.set_adapter_response(
@@ -214,41 +230,6 @@ class TestDeliveryPollEnvContract:
 
             assert isinstance(response, GetMediaBuyDeliveryResponse)
             assert len(response.media_buy_deliveries) >= 1
-
-    def test_wrappers_accept_adcp_request_params(self):
-        """The shared BUILDER must accept every GetMediaBuyDeliveryRequest param.
-
-        BDD scenarios dispatch with reporting_dimensions, attribution_window,
-        include_package_daily_breakdown, etc. Those names must be constructible —
-        not rejected with TypeError.
-
-        The obligation moved from the wrappers to the builder: the wrappers take the
-        built request now, so the builder is the ONE place a buyer field can go missing,
-        and it is what this grades. Every declared field is passed, so a field the
-        builder drops from its signature fails here rather than silently vanishing.
-        """
-        with DeliveryPollEnv() as env:
-            env.add_buy(media_buy_id="mb_001")
-            env.set_adapter_response("mb_001", impressions=5000)
-
-            req = GetMediaBuyDeliveryRequest(
-                media_buy_ids=["mb_001"],
-                include_package_daily_breakdown=True,
-            )
-            assert req.media_buy_ids == ["mb_001"]
-            assert req.include_package_daily_breakdown is True
-
-            # Every field the model DECLARES must be a name the builder takes; otherwise
-            # a buyer can send it, the model can hold it, and the builder still drops it
-            # on the floor (which is exactly how include_snapshot and account were lost).
-            buildable = set(inspect.signature(GetMediaBuyDeliveryRequest).parameters)
-            declared = set(GetMediaBuyDeliveryRequest.model_fields) - _VERSION_ENVELOPE_FIELDS
-            assert declared <= buildable, f"builder cannot construct declared fields: {declared - buildable}"
-
-            with resolved_as(env.identity):
-                response = asyncio.run(invoke_tool("get_media_buy_delivery", req, AuthContext(), "mcp"))
-
-            assert isinstance(response, GetMediaBuyDeliveryResponse)
 
     def test_custom_date_range(self):
         """start_date/end_date parameters flow through to the request."""

@@ -24,6 +24,7 @@ from src.core.database.models import (
     Tenant,
 )
 from src.core.tools.media_buy_create import ApprovalOutcome
+from tests.factories import PricingOptionFactory
 from tests.helpers.adcp_factories import create_test_db_product
 from tests.helpers.media_buy_approval import run_approval
 
@@ -206,7 +207,7 @@ class TestFormatConversionApproval:
             session.add(product)
 
             # Add pricing option
-            pricing = PricingOption(
+            pricing = PricingOptionFactory.build(
                 tenant_id=test_tenant,
                 product_id=product_id,
                 pricing_model="CPM",
@@ -307,7 +308,7 @@ class TestFormatConversionApproval:
             session.add(product)
 
             # Add pricing option
-            pricing = PricingOption(
+            pricing = PricingOptionFactory.build(
                 tenant_id=test_tenant,
                 product_id=product_id,
                 pricing_model="CPM",
@@ -408,7 +409,7 @@ class TestFormatConversionApproval:
             session.add(product)
 
             # Add pricing option
-            pricing = PricingOption(
+            pricing = PricingOptionFactory.build(
                 tenant_id=test_tenant,
                 product_id=product_id,
                 pricing_model="CPM",
@@ -508,7 +509,7 @@ class TestFormatConversionApproval:
             session.add(product)
 
             # Add pricing option
-            pricing = PricingOption(
+            pricing = PricingOptionFactory.build(
                 tenant_id=test_tenant,
                 product_id=product_id,
                 pricing_model="CPM",
@@ -611,7 +612,7 @@ class TestFormatConversionApproval:
             session.add(product)
 
             # Add pricing option
-            pricing = PricingOption(
+            pricing = PricingOptionFactory.build(
                 tenant_id=test_tenant,
                 product_id=product_id,
                 pricing_model="CPM",
@@ -712,7 +713,7 @@ class TestFormatConversionApproval:
             session.add(product)
 
             # Add pricing option
-            pricing = PricingOption(
+            pricing = PricingOptionFactory.build(
                 tenant_id=test_tenant,
                 product_id=product_id,
                 pricing_model="CPM",
@@ -811,7 +812,7 @@ class TestFormatConversionApproval:
             session.add(product)
 
             # Add pricing option
-            pricing = PricingOption(
+            pricing = PricingOptionFactory.build(
                 tenant_id=test_tenant,
                 product_id=product_id,
                 pricing_model="CPM",
@@ -906,7 +907,7 @@ class TestFormatConversionApproval:
             session.add(product)
 
             # Add pricing option
-            pricing = PricingOption(
+            pricing = PricingOptionFactory.build(
                 tenant_id=test_tenant,
                 product_id=product_id,
                 pricing_model="CPM",
@@ -1017,7 +1018,7 @@ class TestFormatConversionApproval:
             session.add(product)
 
             # Add pricing option
-            pricing = PricingOption(
+            pricing = PricingOptionFactory.build(
                 tenant_id=test_tenant,
                 product_id=product_id,
                 pricing_model="CPM",
@@ -1112,7 +1113,7 @@ class TestFormatConversionApproval:
             session.add(product)
 
             # Add pricing option
-            pricing = PricingOption(
+            pricing = PricingOptionFactory.build(
                 tenant_id=test_tenant,
                 product_id=product_id,
                 pricing_model="CPM",

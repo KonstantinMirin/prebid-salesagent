@@ -10,12 +10,12 @@ Steps store results in ctx:
 from __future__ import annotations
 
 import json
-from typing import Any, cast
+from typing import Any
 
 from pytest_bdd import given, parsers, when
 
 from src.core.schemas import FormatId, ListCreativeFormatsRequest
-from tests.bdd.steps.generic._dispatch import WireCtx, _populate_ctx_from_result, dispatch_request
+from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.harness.transport import Transport
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -42,42 +42,54 @@ def _call(ctx: dict, req: ListCreativeFormatsRequest | None = None) -> None:
 def _call_via(
     ctx: dict, transport: str | Transport, req: ListCreativeFormatsRequest | None = None, **extra: Any
 ) -> None:
-    """Call env.call_via for transport-specific dispatch.
+    """Dispatch through *transport* — an ADAPTER over :func:`dispatch_request`.
 
-    ``extra`` forwards additional flat tool kwargs (e.g. a structured ``filters``
-    dict for list_creatives) straight through to ``env.call_via``; existing
-    callers pass none and are unaffected.
+    The body that used to live here (its own transport map, its own per-transport
+    ``req`` shaping, its own call to ``env.call_via``) is gone. It was the second of
+    three step-level dispatch entries, and being a second entry is what let the
+    malformation gate cover one path of three (salesagent-99w2t) and what would have
+    let a payload capture measure a subset of the traffic. What remains is the
+    signature its six call sites use.
+
+    Three differences went with the fold; each was measured before it was made:
+
+    TRANSPORT. ``dispatch_request`` reads ``ctx['transport']`` through the single
+    normalizer ``_as_transport``, which casefolds and accepts every ``Transport``
+    member; this function took the transport as an ARGUMENT and mapped it with a
+    private, case-sensitive ``{"a2a","mcp","rest"}`` dict. Writing the argument into
+    ``ctx`` is not a translation, it is the truth: of 335 recorded dispatches through
+    this seam, the argument equalled ``ctx['transport']`` in 335, and the seven step
+    functions that passed a LITERAL transport were deleted as unbound in b59d4cbbc.
+    The one caller with no ``ctx['transport']`` at all
+    (``tests/integration/test_harness_wire_response.py``, which builds ``{"env": env}``)
+    means to dispatch through the transport it names, and now says so in the key the
+    normalizer reads.
+
+    ``req`` SHAPING. The MCP branch used to flatten ``req.model_dump(exclude_none=True)``
+    into the kwargs; ``dispatch_request`` forwards ``req=`` unchanged. That is
+    equivalent for both remaining ``req``-passing callers, because both dispatch on
+    ``CreativeFormatsEnv``, whose ``deliver_mcp`` override routes to ``_run_mcp_client``
+    — which pops ``req`` and performs the IDENTICAL ``model_dump(exclude_none=True)``
+    with the same "explicit kwargs win" precedence (tests/harness/_base.py). Deleting
+    the shaping is also what makes the capture transport-INDEPENDENT: with it, the same
+    scenario recorded ``format_ids[].agent_url`` on MCP and ``req.format_ids[].agent_url``
+    on a2a/rest — a different key path and a different value type for 335 events — and
+    ``compare_payloads.py``'s transport-twin tolerance would have been comparing unlike
+    with unlike. The equivalence is PINNED in both halves, because it does NOT hold for
+    an env on the base client-core path (which would send ``{"req": <model>}`` as the
+    MCP arguments): ``tests/unit/test_bdd_dispatch_seam.py`` pins that ``req`` travels
+    whole out of here, and ``tests/integration/test_bdd_dispatch_seam.py`` sends a real
+    ``format_ids`` filter through all three transports and requires the seller to honour
+    it — which it cannot if ``req`` stopped reaching the tool as arguments.
+
+    THE GATE AND THE CAPTURE now run here, which is the point. Predicted cost: zero new
+    failures — all 144 dispatches carrying a top-level ``creatives`` list already arrive
+    through ``dispatch_request`` (salesagent-ryzil.2).
     """
-    if isinstance(transport, Transport):
-        t = transport
-    else:
-        transport_map = {"a2a": Transport.A2A, "mcp": Transport.MCP, "rest": Transport.REST}
-        if transport not in transport_map:
-            raise RuntimeError(f"when_request._call_via: unrecognized wire transport {transport!r}")
-        t = transport_map[transport]
-    env = ctx["env"]
-
-    kwargs: dict[str, Any] = {}
+    ctx["transport"] = transport
     if req is not None:
-        if t == Transport.MCP:
-            kwargs.update(req.model_dump(exclude_none=True))
-        else:
-            kwargs["req"] = req
-    kwargs.update(extra)
-
-    # Route through the SHARED populator, which is the single owner of the
-    # ctx dispatch-result contract. The hand-rolled version here populated a
-    # subset of the six keys: it set error/response/wire_response but omitted
-    # the two error-envelope keys, and (before the secure-fetch branch patched
-    # it locally) ctx["result"] — the key with exactly one producer — which
-    # silently downgraded the wire-first Then steps to the lossy reconstructed
-    # ctx["error"] fallback. Both branches fixed that; delegating keeps ONE
-    # spelling of the contract instead of two that can drift apart again.
-    # The `except Exception: ctx["error"] = exc` that used to wrap this went
-    # with it: hand-stashing an exception is the antipattern the project's BDD
-    # rules forbid, and call_via already returns transport failures as a
-    # TransportResult carrying the real wire envelope.
-    _populate_ctx_from_result(cast("WireCtx", ctx), env.call_via(t, **kwargs))
+        extra["req"] = req
+    dispatch_request(ctx, **extra)
 
 
 def _call_raw(ctx: dict, **payload: Any) -> None:
@@ -125,48 +137,26 @@ def _call_raw(ctx: dict, **payload: Any) -> None:
     dispatch_request(ctx, **payload)
 
 
-# ── A2A transport ────────────────────────────────────────────────────
-
-
-@when("the Buyer Agent sends a list_creative_formats task via A2A with no filters")
-def when_send_a2a_no_filters(ctx: dict) -> None:
-    _call_via(ctx, "a2a")
-
-
-@when("the Buyer Agent sends a list_creative_formats task via A2A")
-def when_send_a2a(ctx: dict) -> None:
-    _call_via(ctx, "a2a")
-
-
-@when(parsers.parse('the Buyer Agent sends a list_creative_formats task via A2A with type filter "{type_filter}"'))
-def when_send_a2a_type_filter(ctx: dict, type_filter: str) -> None:
-    # type filter removed in adcp 3.12 — delegate to unfiltered
-    when_send_a2a_no_filters(ctx)
-
-
-@when(parsers.parse('the Buyer Agent sends a list_creative_formats task via A2A with type "{type_value}"'))
-def when_send_a2a_type_value(ctx: dict, type_value: str) -> None:
-    # type filter removed in adcp 3.12 — delegate to unfiltered
-    when_send_a2a_no_filters(ctx)
-
-
-# ── MCP transport ────────────────────────────────────────────────────
-
-
-@when("the Buyer Agent calls list_creative_formats MCP tool with no filters")
-def when_call_mcp_no_filters(ctx: dict) -> None:
-    _call_via(ctx, "mcp")
-
-
-@when("the Buyer Agent calls list_creative_formats MCP tool")
-def when_call_mcp(ctx: dict) -> None:
-    _call_via(ctx, "mcp")
-
-
-@when(parsers.parse('the Buyer Agent calls list_creative_formats MCP tool with type "{type_value}"'))
-def when_call_mcp_type(ctx: dict, type_value: str) -> None:
-    # type filter removed in adcp 3.12 — delegate to unfiltered
-    when_call_mcp_no_filters(ctx)
+# ── Transport-NAMING steps: deleted, and not to be re-added ──────────
+#
+# Seven ``@when`` steps lived here — four calling ``_call_via(ctx, "a2a"/"mcp")``
+# with a LITERAL transport and three delegating to those — under phrasings like
+# "the Buyer Agent sends a list_creative_formats task via A2A" and "... calls
+# list_creative_formats MCP tool". All seven bound ZERO scenarios: measured by
+# rendering every Scenario Outline Examples row of all 46 feature files through
+# pytest-bdd's own ``ScenarioTemplate.render`` and matching each of the 49531
+# resulting step lines with pytest-bdd's own ``StepParser.is_matching`` — 0 hits
+# for each of the seven, against two positive controls that both read BOUND
+# (one of them a sentence that exists only AFTER Examples substitution, so a
+# literal grep of the feature sources finds it 0 times).
+#
+# They were also the only callers that passed a transport differing in TYPE from
+# ``ctx["transport"]``, which is why deleting them matters beyond dead weight:
+# every surviving ``_call_via`` caller now passes what ``ctx["transport"]``
+# already holds. And per rule 1 of tests/CLAUDE.md's BDD authoring discipline, a
+# ``When`` that names a transport is a defect unless it grades a spec-cited
+# transport-specific behavior — these graded none; the harness parametrizes the
+# transport-neutral phrasings below over a2a/mcp/rest already.
 
 
 # ── Generic format request (transport-agnostic) ──────────────────────
@@ -714,13 +704,11 @@ def _partition_agent_type(ctx: dict, partition: str) -> None:
     SUCCESS: dispatch unfiltered via the wire (_call) and let production emit the
     real result. #1417.
     """
-    ctx["filter_under_test"] = "creative_agent_format_type"
     _call(ctx)
 
 
 def _partition_agent_asset_types(ctx: dict, partition: str) -> None:
     """Creative agent asset type filter — maps to asset_types on ListCreativeFormatsRequest."""
-    ctx["filter_under_test"] = "creative_agent_asset_type"
     if partition in ("not_provided", "omitted"):
         _call(ctx)
     elif partition == "unknown_value":
@@ -748,7 +736,6 @@ def when_query_agent_asset_types(ctx: dict, partition: str) -> None:
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats at type boundary "{boundary_point}"'))
 def when_boundary_agent_type(ctx: dict, boundary_point: str) -> None:
-    ctx["filter_under_test"] = "creative_agent_format_type"
     mapping = {
         "audio (first enum value)": "audio",
         "dooh (last enum value)": "dooh",
@@ -760,7 +747,6 @@ def when_boundary_agent_type(ctx: dict, boundary_point: str) -> None:
 
 @when(parsers.parse('the Buyer Agent queries creative agent formats at asset_types boundary "{boundary_point}"'))
 def when_boundary_agent_asset_types(ctx: dict, boundary_point: str) -> None:
-    ctx["filter_under_test"] = "creative_agent_asset_type"
     mapping = {
         "image (first enum value)": "image",
         "url (last enum value)": "url",

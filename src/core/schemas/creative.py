@@ -6,7 +6,7 @@ assignments, and admin approval workflows.
 """
 
 from datetime import UTC, datetime
-from enum import Enum, StrEnum
+from enum import Enum
 from typing import Any, ClassVar, Literal
 
 from adcp.types import CreativeStatus
@@ -48,6 +48,7 @@ from adcp.types.generated_poc.creative.list_creatives_response import (
 from adcp.types.generated_poc.creative.sync_creatives_response import (
     SyncCreativesResponse1 as LibrarySyncCreativesSuccess,
 )
+from adcp.types.generated_poc.enums.digital_source_type import DigitalSourceType as LibraryDigitalSourceType
 from adcp.types.generated_poc.media_buy.get_media_buys_response import (
     CreativeApproval as LibraryGetMediaBuysCreativeApproval,
 )
@@ -74,23 +75,26 @@ from src.core.schemas._base import (
     strip_none_deep,
 )
 
-
-class DigitalSourceType(StrEnum):
-    """IPTC Digital Source Type enumeration for AI provenance tracking.
-
-    Values from IPTC NewsCodes vocabulary for Digital Source Type,
-    relevant to EU AI Act Article 50 disclosure requirements.
-    """
-
-    digital_capture = "digital_capture"
-    digital_creation = "digital_creation"
-    composite_capture = "composite_capture"
-    composite_synthetic = "composite_synthetic"
-    composite_with_trained_model = "composite_with_trained_model"
-    trained_algorithmic_model = "trained_algorithmic_model"
-    algorithmic_media = "algorithmic_media"
-    human_edits = "human_edits"
-    minor_human_edits = "minor_human_edits"
+#: IPTC Digital Source Type, for AI provenance under EU AI Act Article 50.
+#:
+#: THE PINNED ENUM ITSELF, not a local copy of it. This was a hand-written ``StrEnum``
+#: duplicating the vocabulary, and it had DRIFTED: it still carried
+#: ``composite_with_trained_model``, ``trained_algorithmic_model`` and
+#: ``minor_human_edits``, while the pin renamed the first two to
+#: ``composite_with_trained_algorithmic_media`` / ``trained_algorithmic_media``, dropped
+#: the third, and added ``data_driven_media``.
+#:
+#: The drift was not cosmetic. ``Provenance.digital_source_type`` is typed with the
+#: LIBRARY enum, so every renamed member of the local copy was REFUSED by the very model
+#: it existed to populate — constructing a Provenance with one raised ValidationError.
+#: Nothing in ``src/`` used it (measured: one definition, zero other references), so the
+#: breakage lived only in tests, which is why it survived.
+#:
+#: An alias rather than a subclass because Python forbids extending an enum that has
+#: members — the same constraint ``library_base_violation`` had to be taught in
+#: ``tests/unit/test_architecture_schema_inheritance.py``. CLAUDE.md Pattern #1: use the
+#: library type, never duplicate it.
+DigitalSourceType = LibraryDigitalSourceType
 
 
 class Provenance(LibraryProvenance):

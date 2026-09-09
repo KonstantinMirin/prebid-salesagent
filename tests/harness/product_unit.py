@@ -30,15 +30,16 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from src.core.schemas import Product
+from tests.factories.product import PricingOptionRequestFactory
 from tests.harness._base import BaseTestEnv
 from tests.harness._mixins import ProductMixin
 
-_DEFAULT_PRICING_OPTION = {
-    "pricing_model": "cpm",
-    "fixed_price": 5.0,  # V3: the pre-V3 "rate" key is rejected by the local members
-    "currency": "USD",
-    "pricing_option_id": "po_default",
-}
+#: The factory's baseline, not a hand-written twin of it. The one delta against the
+#: literal this replaced is ``max_bid: False``, which is ``CpmPricingOption``'s OWN
+#: default surfaced by the dump (it defaults to ``False``, not ``None``, so
+#: ``exclude_none`` keeps it) — measured: the ``Product`` built from either dict
+#: round-trips identically.
+_DEFAULT_PRICING_OPTION = PricingOptionRequestFactory.payload()
 
 _DEFAULT_PUBLISHER_PROPERTY = {
     "selection_type": "all",

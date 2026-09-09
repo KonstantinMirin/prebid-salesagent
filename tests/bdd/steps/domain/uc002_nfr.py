@@ -16,6 +16,7 @@ from pytest_bdd import given, then
 
 from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.factories.mint import mint
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — NFR preconditions
@@ -237,7 +238,7 @@ def then_rate_limiting_enforced(ctx: dict) -> None:
     # rate-limit gate (when implemented) would surface as a RATE_LIMITED wire
     # envelope on a2a/mcp/rest.
     request_kwargs = deepcopy(ctx.get("request_kwargs", {}))
-    request_kwargs["idempotency_key"] = f"bdd-key-{uuid.uuid4().hex}"
+    request_kwargs["idempotency_key"] = mint(f"bdd-key-{uuid.uuid4().hex}")
     req = CreateMediaBuyRequest(**request_kwargs)
 
     rate_ctx: dict = {k: ctx[k] for k in ("env", "transport", "e2e_config") if k in ctx}
@@ -283,7 +284,7 @@ def then_payload_size_limits(ctx: dict) -> None:
     # the parametrized transport means a content-length / payload-size gate
     # (when implemented) would surface as a wire rejection on a2a/mcp/rest.
     request_kwargs = deepcopy(ctx.get("request_kwargs", {}))
-    request_kwargs["order_name"] = f"oversize-{uuid.uuid4().hex[:8]}-{'X' * (1024 * 1024)}"
+    request_kwargs["order_name"] = mint(f"oversize-{uuid.uuid4().hex[:8]}-{'X' * (1024 * 1024)}")
     req = CreateMediaBuyRequest(**request_kwargs)
 
     payload_ctx: dict = {k: ctx[k] for k in ("env", "transport", "e2e_config") if k in ctx}

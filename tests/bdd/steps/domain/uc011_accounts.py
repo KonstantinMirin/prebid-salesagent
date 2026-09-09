@@ -19,7 +19,6 @@ from typing import Any
 from pytest_bdd import given, parsers, then, when
 
 from src.core.billing_policy import BILLING_PARTY_VALUES
-from src.core.errors.codes import AppErrorCode
 from tests.bdd.steps._outcome_helpers import (
     payload_or_none,
     require_payload,
@@ -32,7 +31,7 @@ from tests.bdd.steps._outcome_helpers import (
     wire_field,
 )
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
-from tests.bdd.steps.generic._dispatch import dispatch_request, dispatch_via_client
+from tests.bdd.steps.generic._dispatch import dispatch_request, dispatch_via_client, gate_and_record
 from tests.bdd.steps.generic._table import as_bool
 from tests.bdd.steps.generic._table import rows as table_rows
 from tests.bdd.steps.generic.then_error import _wire_code
@@ -296,7 +295,7 @@ def _sync_pre_create(ctx: dict, brand_domain: str, operator: str, billing: str, 
             originals["payment_terms"] = extra["payment_terms"]
         # Capture DB-assigned fields from the response
         if hasattr(acct, "account_id"):
-            originals["account_id"] = acct.account_id
+            _capture_server_account_id(ctx, acct.account_id)
         if hasattr(acct, "status"):
             originals["status"] = _status_str(acct.status)
     # Clear response so the next When step's response is fresh
@@ -353,16 +352,39 @@ def given_expired_token(ctx: dict) -> None:
     ctx["force_identity"] = ctx["env"].invalid_token_identity()
 
 
-@given("the sync_accounts response schema uses oneOf")
-def given_schema_uses_oneof(ctx: dict) -> None:
-    """Acknowledge the sync_accounts response schema uses oneOf (success XOR error)."""
-    ctx["schema_test"] = True
+# `the sync_accounts response schema uses oneOf` bound here and is deleted: no feature carries
+# the sentence, it asserted nothing at all, and its whole body was `ctx["schema_test"] = True`
+# — a key no surviving reader anywhere consumes. That is positive evidence of deadness rather
+# than an inference from the absence of a binding.
+#
+# THE OTHER 31 UNBOUND STEPS IN THIS MODULE ARE KEPT DELIBERATELY, and this note is the record
+# of why, so the next reader does not re-derive it. No feature binds them either — checked by
+# literal grep and by matching each pattern against all 49534 sentences rendered from every
+# feature's Examples through pytest-bdd's own FeatureParser. But "nothing binds it" is not
+# evidence of deadness on its own: most of them read ctx state that live steps still write
+# (`tenant`, `principal`, `last_account`, `original_field_values`) and assert real obligations
+# — per-agent account scoping, governance-agent persistence across a resync, DB-field
+# immutability, one access grant per domain. Those are obligations this project identified and
+# never wrote a scenario for; deleting the steps would destroy the only record that they were
+# identified at all.
+#
+# One of them proves the point concretely. `given_db_failure` writes ctx["simulate_db_failure"],
+# and a SURVIVING function in this module reads it — deleting the Given would have left a live
+# reader whose condition can never become true.
+#
+# The missing scenarios are filed as salesagent-xighb. Write the scenario, then bind the step.
 
 
 @given("the seller system is experiencing an internal failure")
 def given_seller_internal_failure(ctx: dict) -> None:
-    """Configure the seller to simulate an internal failure on sync."""
-    ctx["force_internal_error"] = True
+    """Make the SELLER fail, through the env, so the request is still dispatched.
+
+    This used to set a ctx flag that the dispatcher read to manufacture an
+    ``AdCPSalesAgentError`` in the test process and return WITHOUT dispatching. The
+    scenario then graded an object the test had built, and the boundary's error
+    translation -- the thing the scenario exists to check -- never ran.
+    """
+    ctx["env"].fail_the_sync_internally()
 
 
 @given("the seller does not support any of the requested billing models")
@@ -411,7 +433,6 @@ def given_agent_passthrough_only(ctx: dict) -> None:
     e2e_rest-compatible.
     """
     _set_billing_policy(ctx, ["operator", "agent", "advertiser"])
-    ctx["agent_passthrough_only"] = True
 
 
 def _set_approval_mode(ctx: dict, mode: str) -> None:
@@ -461,8 +482,19 @@ def given_accounts_with_3_statuses(ctx: dict, s1: str, s2: str, s3: str) -> None
 
 @given("the agent has no accessible accounts")
 def given_no_accounts(ctx: dict) -> None:
-    """Agent has no accessible accounts (tenant + principal exist but no accounts)."""
+    """Agent has no accessible accounts (tenant + principal exist but no accounts).
+
+    Emptiness is the default -- accounts reach this agent only through
+    ``_create_accessible_account``, which records every one it grants. The
+    falsifiable half is the other direction: a scenario that granted an account
+    and then declares the agent has none is grading the opposite of its sentence.
+    """
     _setup_tenant_and_principal(ctx)
+    granted = ctx.get("expected_account_ids", set())
+    assert not granted, (
+        f"Step claims the agent has no accessible accounts, but this scenario "
+        f"already granted access to {sorted(granted)}."
+    )
 
 
 @given(parsers.parse("the agent has {count:d} accessible accounts"))
@@ -635,8 +667,10 @@ def when_list_accounts_with_cursor(ctx: dict) -> None:
 
     prev_response = require_payload(ctx)
     cursor = prev_response.pagination.cursor
-    # Use same max_results as before (stored in ctx or default)
-    max_results = ctx.get("last_max_results", 50)
+    # Production's default page size. This read ctx["last_max_results"] "or default"
+    # and no step has ever written that key, so the default was the only value it
+    # could ever take -- a configurable-looking read that was not configurable.
+    max_results = 50
     try:
         req = ListAccountsRequest(pagination=PaginationRequest(max_results=max_results, cursor=cursor))
         dispatch_request(ctx, req=req)
@@ -1089,7 +1123,6 @@ def given_scope_introspection(ctx: dict) -> None:
     flag records intent for the wired (currently-xfailing) authorization check.
     """
     _setup_tenant_and_principal(ctx)
-    ctx["scope_introspection"] = True
 
 
 @then('each returned account includes an authorization object with required key "allowed_tasks"')
@@ -1240,13 +1273,6 @@ def _dispatch_sync_table(ctx: dict, datatable: Any, *, idempotency_key: str | No
         kwargs["identity"] = ctx["force_identity"]
 
     # Handle forced internal error
-    if ctx.get("force_internal_error"):
-        from src.core.exceptions import AdCPSalesAgentError
-
-        err = AdCPSalesAgentError(error_code=AppErrorCode.INTERNAL_ERROR)
-        ctx["error"] = err
-        return
-
     # ONE dispatch shape for both branches. The idempotency branch already sent a raw
     # bag while the other built SyncAccountsRequest here, so the SAME step graded the
     # seller or the model depending only on whether the scenario happened to carry an
@@ -1287,7 +1313,6 @@ def when_sync_accounts_with_key_and_table(ctx: dict, key: str, datatable: Any) -
     salesagent-9jiu. Dispatching a keyless request is therefore the faithful wire call;
     the key is retained on ctx only so a later step could reference it.
     """
-    ctx["sync_idempotency_key"] = key
     _dispatch_sync_table(ctx, datatable)
 
 
@@ -1301,7 +1326,6 @@ def when_sync_accounts_carrying_key_and_table(ctx: dict, key: str, datatable: An
     what gets graded (sync-accounts-request.json 3.1.1, /required +
     /properties/idempotency_key).
     """
-    ctx["sync_idempotency_key"] = key
     _dispatch_sync_table(ctx, datatable, idempotency_key=key)
 
 
@@ -1840,14 +1864,20 @@ def then_account_status(ctx: dict, status: str) -> None:
 
 @then(parsers.parse('the account has action "{action}"'))
 def then_account_action_generic(ctx: dict, action: str) -> None:
-    """Assert the first/last referenced account has the expected action.
+    """Assert the referenced account carries the expected per-account ``action``.
 
-    For validation errors (no response), action='failed' is satisfied by
-    the presence of a caught exception — Pydantic rejects the request
-    before per-account processing, which is equivalent to all accounts failing.
+    ``action`` is a PER-ENTRY outcome inside the success variant of the response
+    (sync-accounts-response.json oneOf/0 → accounts[].action), so a request the
+    seller rejected wholesale has no account to carry one — the two oneOf branches
+    are alternatives, and a step that accepted either would grade neither.
+
+    The branch that did exactly that is gone: ``if action == "failed" and
+    ctx["error"] ...: return`` let a request-level rejection satisfy a per-account
+    claim. It was also unreachable — ``the account has action "created"`` is the
+    only rendering of this sentence in the whole feature set, so no scenario ever
+    took it. A scenario that genuinely wants a wholesale rejection asks for the
+    error envelope, which the error Thens grade.
     """
-    if action == "failed" and ctx.get("error") is not None and payload_or_none(ctx) is None:
-        return  # Request-level validation error ≡ per-account failure
     acct = ctx.get("last_account") or require_payload(ctx).accounts[0]
     actual = _action_str(acct.action)
     assert actual == action, f"Expected action '{action}', got '{actual}'"
@@ -1935,16 +1965,26 @@ def _assert_error_has_code(err: Any, index: int) -> None:
     code through CODE_TABLE, so a present code guarantees a present sentence and
     asserting both checked the table against itself.
     """
-    code = err.code if hasattr(err, "code") else err.error_code
+    code = err.get("code") if isinstance(err, dict) else getattr(err, "code", None)
     assert isinstance(code, str) and code, f"Error [{index}] missing non-empty code: code={code!r}, error={err}"
 
 
-def _get_errors_collection(error: Exception) -> list[Any]:
-    """Get the errors collection from an error, falling back to a single-element list."""
-    errors_list = getattr(error, "errors", None)
-    if isinstance(errors_list, (list, tuple)) and errors_list:
-        return list(errors_list)
-    return [error]
+def _wire_errors(ctx: dict) -> list[Any]:
+    """The ``errors[]`` entries the BUYER received, off the wire envelope.
+
+    Reads the envelope rather than a reconstructed exception. ``result.error`` is a
+    ``WireError`` carrying the envelope verbatim -- deliberately NOT an
+    AdCPSalesAgentError subclass -- so ``err.error_code`` is an AttributeError, and any
+    assertion reaching for it grades the harness rather than the seller
+    (tests/CLAUDE.md, Error Verification Policy).
+
+    Through ``wire_error_objects``, which resolves the same single locator
+    ``assert_wire_error`` does: where the spec puts the array is the harness's
+    business, so a step re-deriving it would be a second answer to one question.
+    """
+    entries = ctx["result"].wire_error_objects()
+    assert entries, f"the error envelope carries no errors[] to grade: {ctx['result'].error_envelope_or_none()!r}"
+    return entries
 
 
 @then("the response is an error variant with no accounts array")
@@ -1972,34 +2012,71 @@ def then_error_exists(ctx: dict) -> None:
 
 @then(parsers.re(r"no accounts were modified on the seller"))
 def then_no_accounts_modified(ctx: dict) -> None:
-    """Assert no accounts were created/modified/deleted by the failed request.
+    """Assert the refused sync left no account behind for the domains it named.
 
-    Queries the DB for the tenant's account set and verifies it matches
-    the pre-request baseline (zero accounts if none were pre-created, or
-    the exact set from ctx["pre_request_account_ids"] if captured).
+    ITS ONLY BINDING IS THE UNAUTHENTICATED ONE (@T-UC-011-ext-a-no-token), and that
+    is the branch this step used to skip entirely: with no ``tenant``/``principal`` in
+    ctx it fell to ``else: pass`` and asserted NOTHING, while its docstring claimed to
+    query the DB and compare against a baseline. The authenticated branch was no better
+    — it read ``ctx["pre_request_account_ids"]`` with a ``set()`` default and NO step
+    writes that key, so it asserted "no accounts EXIST", which is a different claim from
+    "none were modified" the moment a fixture seeds one (salesagent-b9hi1.1).
+
+    The unauthenticated branch now grades the real obligation against the request as
+    sent: an AUTH_MISSING refusal must not have created an account for any brand domain
+    the request named. That is what "system state unchanged" means for a caller who
+    could not be identified, and it needs no baseline — before the request, none of
+    those accounts could have been theirs.
     """
-    from src.core.database.database_session import get_db_session
-    from src.core.database.repositories.account import AccountRepository
-
     _get_error(ctx)  # Confirm an error occurred
     tenant = ctx.get("tenant")
     principal = ctx.get("principal")
+
     if tenant is not None and principal is not None:
-        with get_db_session() as session:
-            repo = AccountRepository(session, tenant.tenant_id)
-            current_accounts = repo.list_by_principal(principal.principal_id)
-            pre_request_ids = ctx.get("pre_request_account_ids", set())
-            current_ids = {a.account_id for a in current_accounts}
-            assert current_ids == pre_request_ids, (
-                f"Accounts were modified despite error. "
-                f"Before: {pre_request_ids}, After: {current_ids}. "
-                f"Created: {current_ids - pre_request_ids}, "
-                f"Deleted: {pre_request_ids - current_ids}"
-            )
-    else:
-        # Unauthenticated caller — no tenant context, so no accounts could have been created.
-        # The error itself proves no side effects occurred for this caller.
-        pass
+        # Authenticated: a real before/after comparison, and the baseline is REQUIRED.
+        # Defaulting it silently turns this into "no accounts exist", which passes for
+        # the wrong reason and fails for the wrong reason once a fixture seeds one.
+        pre_request_ids = ctx.get("pre_request_account_ids")
+        assert pre_request_ids is not None, (
+            "No pre_request_account_ids captured, so there is no baseline to compare against "
+            "and 'no accounts were modified' cannot be graded. Capture it before the When."
+        )
+        current_ids = {a["account_id"] for a in _persisted_accounts(ctx, principal.principal_id)}
+        assert current_ids == pre_request_ids, (
+            f"Accounts were modified despite error. "
+            f"Before: {pre_request_ids}, After: {current_ids}. "
+            f"Created: {current_ids - pre_request_ids}, "
+            f"Deleted: {pre_request_ids - current_ids}"
+        )
+        return
+
+    from src.core.database.models import Account
+    from src.core.helpers.brand_key import brand_key_parts
+
+    requested = ctx.get("last_sync_accounts")
+    assert requested, (
+        "No last_sync_accounts recorded — the When that dispatched the sync must record the "
+        "entries it sent, or this step cannot tell which accounts must not exist"
+    )
+    # Element-level, not `assert domains`: sync-accounts-request.json REQUIRES brand.domain
+    # on every entry, so an entry without one is not a case to skip — it means the When
+    # recorded something the pin would refuse, and the set built from it would silently be
+    # the wrong denominator for the leak check below.
+    missing = [i for i, a in enumerate(requested) if not (a.get("brand") or {}).get("domain")]
+    assert missing == [], (
+        f"Dispatched sync entries {missing} carry no brand.domain, which the pin requires — "
+        f"the recorded request is not one the seller could have accepted: {requested!r}"
+    )
+    domains = {a["brand"]["domain"] for a in requested}
+
+    # Unscoped by tenant on purpose: the caller was never identified, so no tenant is
+    # theirs, and "created nothing anywhere" is the honest reading of the obligation.
+    existing = {brand_key_parts(row.brand)[0] for row in ctx["env"].query(Account) if row.brand}
+    leaked = domains & existing
+    assert not leaked, (
+        f"The refused sync created accounts for {sorted(leaked)} — an unauthenticated caller's "
+        f"request must leave system state unchanged (POST-F1)"
+    )
 
 
 @then(parsers.re(r"the errors array may contain multiple errors"))
@@ -2009,9 +2086,7 @@ def then_errors_array_may_contain_multiple(ctx: dict) -> None:
     Each entry must have code and message fields, proving the array is
     well-formed and could carry multiple errors.
     """
-    error = _get_error(ctx)
-    items = _get_errors_collection(error)
-    for i, err in enumerate(items):
+    for i, err in enumerate(_wire_errors(ctx)):
         _assert_error_has_code(err, i)
 
 
@@ -2193,45 +2268,19 @@ def then_each_error_has_code_message(ctx: dict) -> None:
     For each error, asserts the code/error_code is a non-empty string and the
     message attribute (not str()) is a non-empty string.
     """
-    error = _get_error(ctx)
-    items = _get_errors_collection(error)
-    for i, err in enumerate(items):
+    for i, err in enumerate(_wire_errors(ctx)):
         _assert_error_has_code(err, i)
 
 
-@then("a response with both accounts and errors arrays is invalid")
-def then_both_invalid(ctx: dict) -> None:
-    """Verify the schema prohibits both accounts and errors coexisting.
-
-    SyncAccountsResponse is the success variant (has accounts, no errors field).
-    Constructing it with an errors array must raise ValidationError because
-    the success variant schema does not accept an errors field (oneOf union).
-    """
-    import pytest
-    from pydantic import ValidationError
-
-    from src.core.schemas.account import SyncAccountsResponse
-
-    with pytest.raises((ValidationError, TypeError)):
-        SyncAccountsResponse(
-            accounts=[],
-            errors=[{"code": "TEST", "message": "test"}],
-        )
-
-
-@then(parsers.parse("a response with neither_present is also invalid ({description})"))
-def then_neither_invalid(ctx: dict, description: str) -> None:
-    """Verify the schema requires either accounts or errors."""
-    from pydantic import ValidationError
-
-    from src.core.schemas.account import SyncAccountsResponse
-
-    # SyncAccountsResponse requires accounts field — omitting it is invalid
-    try:
-        SyncAccountsResponse()  # type: ignore[call-arg]
-        raise AssertionError("Expected ValidationError for missing accounts")
-    except (ValidationError, TypeError):
-        ctx.setdefault("schema_validated", []).append("neither_present")
+# Two steps used to sit here — "a response with both accounts and errors arrays is
+# invalid" and "a response with neither_present is also invalid (...)". Neither
+# sentence exists in any feature, by the Examples-rendering resolver and by literal
+# grep alike, so no scenario has ever run them. Neither dispatched, either: both
+# constructed a `SyncAccountsResponse` in the test process and graded pydantic's
+# refusal, which says nothing about what a seller puts on the wire — the DTO's
+# conformance to the pinned model is the subject of tests/unit/test_adcp_contract.py
+# and the schema-inheritance guard. The second also appended to
+# ctx["schema_validated"], a key nothing anywhere reads.
 
 
 @then(parsers.parse('all accounts have action "{action}"'))
@@ -2946,7 +2995,6 @@ def given_sandbox_supported(ctx: dict) -> None:
     """
     _setup_tenant_and_principal(ctx)
     ctx["env"].configure_tenant_field("account_sandbox", True)
-    ctx["sandbox_supported"] = True
 
 
 @given("both sandbox and production accounts exist for the Buyer")
@@ -3076,22 +3124,26 @@ def when_sync_invalid_field(ctx: dict, field: str, value: str) -> None:
 
 @when(parsers.parse("the Buyer Agent sends a sync_accounts request with {count:d} accounts"))
 def when_sync_n_accounts(ctx: dict, count: int) -> None:
-    """Send sync with N generated accounts for boundary testing."""
-    from pydantic import ValidationError
+    """Send sync with N generated accounts, so the SELLER decides whether N is legal.
 
-    from src.core.schemas.account import SyncAccountsRequest
+    The array bound is a boundary this scenario grades on the wire. Building a
+    ``SyncAccountsRequest`` here instead would put the bound back in the test process:
+    at 1001 entries the DTO refuses, the exception never leaves this function, and
+    ``dispatch_request`` is never reached -- so the wire-compliance Then below has no
+    ``TransportResult`` and the scenario reports on what the test did to itself.
 
+    Goes through ``_sync_raw``, the negative-path dispatch this verb already has, and
+    builds the entries from ``SyncAccountsRequestFactory.payload()`` so an entry carries
+    the fields the accepted model declares rather than a hand-typed triple.
+    """
+    from tests.factories.request import SyncAccountsRequestFactory
+
+    entry = SyncAccountsRequestFactory.payload()["accounts"][0]
     accounts = [
-        {"brand": {"domain": f"brand-{i:04d}.com"}, "operator": f"brand-{i:04d}.com", "billing": "operator"}
-        for i in range(count)
+        {**entry, "brand": {"domain": f"brand-{i:04d}.com"}, "operator": f"brand-{i:04d}.com"} for i in range(count)
     ]
     ctx["submitted_account_count"] = count
-
-    try:
-        req = SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=accounts)
-        dispatch_request(ctx, req=req)
-    except (ValidationError, Exception) as exc:
-        ctx["error"] = exc
+    _sync_raw(ctx, accounts=accounts)
 
 
 # ── Then: context echo assertions ──────────────────────────────────────
@@ -3354,7 +3406,6 @@ def given_sandbox_not_supported(ctx: dict) -> None:
     env.configure_tenant_field("account_sandbox", False)
     ctx["tenant"] = tenant
     ctx["principal"] = principal
-    ctx["sandbox_supported"] = False
 
 
 # ── When: sandbox response-shape request items ─────────────────────────
@@ -3377,7 +3428,6 @@ def when_sync_sandbox_shape(ctx: dict, key: str, request_item: str) -> None:
     """
     from src.core.schemas.account import SyncAccountsRequest
 
-    ctx["sync_idempotency_key"] = key
     entry: dict[str, Any] = {
         "brand": {"domain": "acme-corp.com"},
         "operator": "acme-corp.com",
@@ -3576,7 +3626,12 @@ def _persisted_subscribers(ctx: dict, domain: str | None = None) -> list[Any]:
     from src.core.schemas.account import ListAccountsRequest
 
     env = ctx["env"]
-    read_back = env.call_via(ctx["transport"], req=ListAccountsRequest())
+    # Gated and recorded in place, for the reason the docstring above already gives
+    # for not routing through ``dispatch_request``: a read-back reaches a transport
+    # like any other dispatch, but it must not overwrite ctx["result"].
+    read_back_kwargs = {"req": ListAccountsRequest()}
+    gate_and_record(read_back_kwargs)
+    read_back = env.call_via(ctx["transport"], **read_back_kwargs)
     assert read_back.is_success, f"list_accounts read-back failed: {read_back.error!r}"
     listed = read_back.payload
     if domain is not None:
@@ -3862,7 +3917,6 @@ def given_proof_of_control_fails(ctx: dict, url: str) -> None:
     config"; #/properties/active — "Reactivation requires full SSRF validation with
     connect pinning plus proof-of-control".
     """
-    ctx["proof_fail_url"] = url
     ctx["env"].set_notification_proof_result(succeeds=False, url=url)
 
 
@@ -4004,7 +4058,6 @@ def given_agent_b_accounts_same_tenant(ctx: dict, name: str, count: int) -> None
 def given_connection_no_principal(ctx: dict) -> None:
     """Set up identity with tenant_id but principal_id=None."""
     _setup_tenant_and_principal(ctx)
-    ctx["override_identity_no_principal"] = True
 
 
 @when(parsers.parse('agent "{name}" sends a list_accounts request'))
@@ -4017,10 +4070,10 @@ def when_agent_list_accounts(ctx: dict, name: str) -> None:
 @when("the Buyer Agent sends a list_accounts request with no principal_id")
 def when_list_accounts_no_principal(ctx: dict) -> None:
     """Send list_accounts with an identity that has tenant_id but no principal_id."""
-    from src.core.resolved_identity import ResolvedIdentity
+    from tests.factories.principal import PrincipalFactory
 
     tenant = ctx["tenant"]
-    broken_identity = ResolvedIdentity(
+    broken_identity = PrincipalFactory.make_identity(
         tenant_id=tenant.tenant_id,
         principal_id=None,
         protocol="mcp",
@@ -4031,11 +4084,11 @@ def when_list_accounts_no_principal(ctx: dict) -> None:
 @when("the Buyer Agent sends a sync_accounts request with no principal_id and:")
 def when_sync_no_principal(ctx: dict, datatable: Any) -> None:
     """Send sync_accounts with an identity that has tenant_id but no principal_id."""
-    from src.core.resolved_identity import ResolvedIdentity
     from src.core.schemas.account import SyncAccountsRequest
+    from tests.factories.principal import PrincipalFactory
 
     tenant = ctx["tenant"]
-    broken_identity = ResolvedIdentity(
+    broken_identity = PrincipalFactory.make_identity(
         tenant_id=tenant.tenant_id,
         principal_id=None,
         protocol="mcp",
@@ -4413,10 +4466,34 @@ def then_brandless_rejected_validation_error(ctx: dict) -> None:
 
 
 def _existing_account_id(ctx: dict) -> str:
-    """The account_id the ``already exists`` Given captured from its pre-create sync."""
+    """The account_id the ``already exists`` Given captured from its pre-create sync.
+
+    Recorded as run-variant at the CAPTURE sites (:func:`_capture_server_account_id`),
+    not here: four call sites read this id out of ``ctx["original_field_values"]`` and
+    two of them bypass this helper entirely, so minting here covered half the traffic —
+    measured, on the module's own before/after pair.
+    """
     account_id = ctx.get("original_field_values", {}).get("account_id")
     assert account_id, "Given must pre-create an account and capture its account_id in original_field_values"
     return account_id
+
+
+def _capture_server_account_id(ctx: dict, account_id: str) -> None:
+    """Stash a SERVER-GENERATED account_id for a later settings-update entry.
+
+    THE one place a production-minted id enters this module's ctx, which is why the mint
+    record is written here. ``AccountRepository`` generates it as
+    ``f"acc_{uuid4().hex[:12]}"`` (src/core/database/repositories/account.py), so it
+    differs on every run and no FACTORY recorded it — the mint registry's premise is
+    that factories record what they generate, and production is not a factory and must
+    not import a test module. The test-side capture is where the scenario chooses to
+    carry a server-generated value into a later request, so it is where the recording
+    belongs; recording at the READ sites instead missed the two that index
+    ``ctx["original_field_values"]`` directly.
+    """
+    from tests.factories.mint import mint
+
+    ctx.setdefault("original_field_values", {})["account_id"] = mint(account_id)
 
 
 def _dispatch_entry(ctx: dict, entry: dict[str, Any]) -> None:
@@ -4547,7 +4624,6 @@ def when_sync_provision_with_billing_entity(ctx: dict, domain: str, legal_name: 
     from tests.factories.account import BusinessEntityFactory
 
     _setup_tenant_and_principal(ctx)
-    ctx["billing_entity_domain"] = domain
     _dispatch_entry(
         ctx,
         {
@@ -4559,7 +4635,7 @@ def when_sync_provision_with_billing_entity(ctx: dict, domain: str, legal_name: 
     )
     resp = payload_or_none(ctx)
     if resp is not None and getattr(resp, "accounts", None):
-        ctx.setdefault("original_field_values", {})["account_id"] = resp.accounts[0].account_id
+        _capture_server_account_id(ctx, resp.accounts[0].account_id)
 
 
 @when(

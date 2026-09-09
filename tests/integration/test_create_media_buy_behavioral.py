@@ -68,6 +68,7 @@ from src.core.schemas import (
     PricingOption,
 )
 from src.core.testing_hooks import AdCPTestContext
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.factories.principal import PrincipalFactory
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 
@@ -476,8 +477,7 @@ class TestInlineCreativesProcessedBeforeApproval:
                                 "agent_url": "https://creative.example.com/",
                                 "id": "display_300x250_image",
                             },
-                            "assets": {"banner_image": {"url": "https://example.com/ad.png"}},
-                            "variants": [],  # Required in adcp 3.6.0
+                            "assets": build_assets(image_spec("banner_image")),
                         }
                     ],
                 },
@@ -1305,8 +1305,7 @@ class TestInlineCreativeObligations:
                             "creative_id": "inline_1",
                             "name": "Test Ad",
                             "format_id": {"agent_url": "https://creative.example.com/", "id": "display_300x250"},
-                            "assets": {"banner_image": {"url": "https://example.com/ad.png"}},
-                            "variants": [],
+                            "assets": build_assets(image_spec("banner_image")),
                         }
                     ],
                 },
@@ -1325,18 +1324,24 @@ class TestInlineCreativeObligations:
                 except Exception:
                     pass
 
-        # The three request fields the nested creative sync now needs are STATED, not left
-        # off: process_and_upload_package_creatives builds a real SyncCreativesRequest
-        # through the shared builder, and it can only do that if create_media_buy hands down
-        # its own account, client key and ContextObject. Naming them here is what would
-        # catch one being dropped -- ANY on the other three is pre-existing looseness.
+        # The request fields the nested creative sync needs are STATED, not left off:
+        # process_and_upload_package_creatives builds a real SyncCreativesRequest through
+        # the shared builder, and it can only do that if create_media_buy hands down its
+        # own account and ContextObject. Naming them here is what would catch one being
+        # dropped -- ANY on the rest is pre-existing looseness.
+        #
+        # idempotency_key is deliberately NOT among them. The call site says why
+        # (media_buy_create.py:2664): the nested sync calls the creative-sync SERVICE,
+        # which does no idempotency, so handing it this request's client key would give a
+        # key to a function with no business seeing it.
         mock_upload.assert_called_once_with(
             packages=ANY,
             context=ANY,
             testing_ctx=ANY,
             account=req.account,
-            idempotency_key=req.idempotency_key,
             adcp_context=req.context,
+            principal_id=ANY,
+            tenant=ANY,
         )
 
     @pytest.mark.asyncio
@@ -1968,13 +1973,9 @@ class TestPostconditionObligations:
 class TestUpgradeObligations:
     """3.6 upgrade boundary field propagation tests."""
 
-    def test_buyer_campaign_ref_rejected_in_strict_mode(self):
-        """buyer_campaign_ref is no longer in the AdCP spec (removed in 3.12).
-
-        Covers: UC-002-UPG-01
-        """
-        with pytest.raises(ValidationError, match="buyer_campaign_ref"):
-            _make_request(buyer_campaign_ref="CAMP-2024-Q1")
+    # test_buyer_campaign_ref_rejected_in_strict_mode is RETIRED:
+    # create-media-buy-request.json declares additionalProperties: true, so the test
+    # asserted a dev-only policy as if it were the spec.
 
     def test_ext_field_carries_custom_data(self):
         """ext field can carry buyer_campaign_ref as custom extension data.

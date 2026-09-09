@@ -273,7 +273,14 @@ class _TestClock:
 
     @staticmethod
     def _iso(dt: Any) -> str:
-        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # The ONE place all three accessors below format, so minting here records
+        # every clock-derived timestamp this mixin hands a scenario. They reach
+        # dispatched payloads as start_time/end_time, and a value read off the clock
+        # differs on every run — ``compare_payloads`` interns what the mint record
+        # names and diffs everything else verbatim (tests/factories/mint.py).
+        from tests.factories.mint import mint
+
+        return mint(dt.strftime("%Y-%m-%dT%H:%M:%SZ"))
 
     def now_iso(self) -> str:
         from datetime import UTC, datetime

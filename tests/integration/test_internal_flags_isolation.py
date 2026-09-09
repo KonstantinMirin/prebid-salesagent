@@ -8,8 +8,8 @@ Uses the CreativeListEnv harness for real DB integration testing.
 """
 
 import pytest
-from pydantic import ValidationError
 
+from src.core.exceptions import AdCPInvalidRequestError
 from src.core.schemas import GetMediaBuysRequest
 from tests.harness.creative_list import CreativeListEnv
 
@@ -22,14 +22,20 @@ class TestListCreativesInternalFlagsIsolation:
         """ListCreativesRequest schema must reject include_performance (not in AdCP spec)."""
         from src.core.schemas import ListCreativesRequest
 
-        with pytest.raises(ValidationError, match="include_performance"):
+        # include_performance is not a declared property of the pinned list-creatives-request,
+        # so the accepted-shape strip refuses it at the DTO boundary. The rejection is
+        # the obligation; which layer produces it moved, the obligation did not.
+        with pytest.raises(AdCPInvalidRequestError):
             ListCreativesRequest(include_performance=True)
 
     def test_request_object_rejects_include_sub_assets(self, integration_db):
         """ListCreativesRequest schema must reject include_sub_assets (not in AdCP spec)."""
         from src.core.schemas import ListCreativesRequest
 
-        with pytest.raises(ValidationError, match="include_sub_assets"):
+        # include_sub_assets is not a declared property of the pinned list-creatives-request,
+        # so the accepted-shape strip refuses it at the DTO boundary. The rejection is
+        # the obligation; which layer produces it moved, the obligation did not.
+        with pytest.raises(AdCPInvalidRequestError):
             ListCreativesRequest(include_sub_assets=True)
 
     def test_request_object_accepts_include_assignments(self, integration_db):

@@ -57,6 +57,7 @@ from uuid import uuid4
 from adcp.types import AccountReference
 
 from src.core.schemas import SyncCreativesRequest, SyncCreativesResponse
+from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.egress import EgressHatchMixin
@@ -539,7 +540,7 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         format_id: str = "display_gen",
         agent_url: str | None = None,
         build_result: dict[str, Any] | None = None,
-        gemini_api_key: str = "test-gemini-key",
+        gemini_api_key: str | None = "test-gemini-key",
     ) -> dict[str, str]:
         """Configure harness for generative creative testing.
 
@@ -582,10 +583,41 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         # Also configure get_format to return this format for validation
         registry.get_format = AsyncMock(return_value=mock_format)
 
-        # Set gemini API key
-        self.mock["config"].return_value.gemini_api_key = gemini_api_key
+        self.set_gemini_api_key(gemini_api_key)
 
         return {"agent_url": agent, "id": format_id}
+
+    @realize_e2e(
+        e2e_unsupported(
+            "GEMINI_API_KEY is read from the SERVER's own configuration, and e2e_rest talks to "
+            "a process this harness does not configure — there is no surface for setting or "
+            "clearing another process's env-derived config mid-scenario"
+        )
+    )
+    def set_gemini_api_key(self, value: str | None) -> None:
+        """Configure (or clear, with ``None``) the generative build's API key.
+
+        A named method rather than four step bodies reaching into
+        ``env.mock["config"].return_value``. "Is the key configured" is a state of
+        the ENVIRONMENT, so the environment should own it: a step that has to know
+        the mock's internal shape to express a precondition is one that breaks when
+        the harness reorganises, and it is invisible to the e2e-escape-hatch guard,
+        whose scan is harness-only (salesagent-b341x.9). Four reaches become zero
+        without moving any behaviour.
+
+        ``None`` is a real state, not a missing argument -- it is the
+        "GEMINI_API_KEY not configured" precondition BR-RULE-036 grades -- which is
+        why the type admits it and there is no default.
+
+        DECLARED UNSUPPORTED OVER e2e, which is the point of having moved it here.
+        The docstring above notes the reaches were "invisible to the e2e-escape-hatch
+        guard, whose scan is harness-only" -- routing them in made them visible, and
+        the guard immediately asked the question the step bodies had been dodging: a
+        mock-setter over e2e_rest silently no-ops, so a scenario would assert against
+        unconfigured server state. It cannot be realized (the key belongs to another
+        process's configuration), so it says so rather than pretending.
+        """
+        self.mock["config"].return_value.gemini_api_key = value
 
     def set_run_async_result(self, formats: list[Any]) -> None:
         """Configure run_async_in_sync_context to return *formats*.
@@ -609,7 +641,7 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
     #: is "use a fresh UUID v4 for each request", which is what a real buyer does per call.
     @property
     def DEFAULT_IDEMPOTENCY_KEY(self) -> str:  # noqa: N802 - kept as the documented name
-        return f"harness-idem-{uuid4().hex}"
+        return mint(f"harness-idem-{uuid4().hex}")
 
     def _with_required_request_fields(self, kwargs: dict, *, with_account: bool = True) -> dict:
         """Fill the spec-required fields a scenario has not set itself.

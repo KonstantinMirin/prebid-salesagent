@@ -499,8 +499,8 @@ def sample_account(integration_db, factory_session, sample_tenant, sample_princi
 def sample_products(integration_db, sample_tenant):
     """Create sample products that comply with AdCP protocol."""
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import PricingOption as PricingOptionModel
     from src.core.database.models import Product
+    from tests.factories import PricingOptionFactory
 
     with get_db_session() as session:
         products = [
@@ -578,9 +578,8 @@ def sample_products(integration_db, sample_tenant):
         session.commit()
 
         # Create pricing_options for each product (required per AdCP PR #88)
-        # Note: Database model uses auto-increment 'id', not 'pricing_option_id'
         pricing_options = [
-            PricingOptionModel(
+            PricingOptionFactory.build(
                 tenant_id=sample_tenant["tenant_id"],
                 product_id="guaranteed_display",
                 pricing_model="cpm",
@@ -589,7 +588,7 @@ def sample_products(integration_db, sample_tenant):
                 is_fixed=True,
                 price_guidance=None,  # Not used for fixed pricing
             ),
-            PricingOptionModel(
+            PricingOptionFactory.build(
                 tenant_id=sample_tenant["tenant_id"],
                 product_id="non_guaranteed_video",
                 pricing_model="cpm",
@@ -804,55 +803,12 @@ def authenticated_admin_client(test_admin_app):
         del os.environ["ADCP_AUTH_TEST_MODE"]
 
 
-@pytest.fixture
-def test_media_buy_workflow(populated_db):
-    """Provide complete media buy workflow test setup."""
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import Creative, MediaBuy
-    from tests.fixtures import CreativeFactory, MediaBuyFactory
-
-    data = populated_db
-
-    # Create media buy
-    media_buy_data = MediaBuyFactory.create(
-        tenant_id=data["tenant"]["tenant_id"],
-        principal_id=data["principal"]["principal_id"],
-        status="draft",
-    )
-
-    # Create creatives
-    creatives_data = CreativeFactory.create_batch(
-        2,
-        tenant_id=data["tenant"]["tenant_id"],
-        principal_id=data["principal"]["principal_id"],
-    )
-
-    # Insert into database using ORM
-    with get_db_session() as db_session:
-        media_buy = MediaBuy(
-            tenant_id=media_buy_data["tenant_id"],
-            media_buy_id=media_buy_data["media_buy_id"],
-            principal_id=media_buy_data["principal_id"],
-            status=media_buy_data["status"],
-            config=media_buy_data["config"],
-            total_budget=media_buy_data["total_budget"],
-        )
-        db_session.add(media_buy)
-
-        for creative_data in creatives_data:
-            creative = Creative(
-                tenant_id=creative_data["tenant_id"],
-                creative_id=creative_data["creative_id"],
-                principal_id=creative_data["principal_id"],
-                format_id=creative_data["format_id"],
-                status=creative_data["status"],
-                content=creative_data["content"],
-            )
-            db_session.add(creative)
-
-        db_session.commit()
-
-    return {**data, "media_buy": media_buy_data, "creatives": creatives_data}
+# ``test_media_buy_workflow`` was here and is DELETED along with the dict
+# ``CreativeFactory`` it seeded from (tests/fixtures/factories.py). It had zero consumers
+# and could not have run for any of them: ``CreativeFactory.create_batch`` was never
+# defined on that class, and the ORM ``Creative`` it then constructed has no ``format_id``
+# or ``content`` column (they are ``format`` / ``agent_url`` / ``data``). Seed a media buy
+# with ``MediaBuyFactory`` and creatives with ``CreativeFactory`` from tests/factories/.
 
 
 @pytest.fixture
@@ -985,7 +941,8 @@ def create_test_product_with_pricing(
     import uuid
     from decimal import Decimal
 
-    from src.core.database.models import PricingOption, Product
+    from src.core.database.models import Product
+    from tests.factories import PricingOptionFactory
 
     if product_id is None:
         product_id = f"test_product_{uuid.uuid4().hex[:8]}"
@@ -1067,7 +1024,7 @@ def create_test_product_with_pricing(
     session.flush()
 
     pricing_model_lower = pricing_model.lower() if isinstance(pricing_model, str) else pricing_model
-    pricing_option = PricingOption(
+    pricing_option = PricingOptionFactory.build(
         tenant_id=tenant_id,
         product_id=product_id,
         pricing_model=pricing_model_lower,

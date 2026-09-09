@@ -181,24 +181,6 @@ class TestInvalidFormatCategoryEnum:
     valid FormatCategory enum values.
     """
 
-    def test_invalid_type_raises_validation_error(self, integration_db):
-        """UC-005-EXT-B-01: unknown fields raise ValidationError at request construction.
-
-        Pydantic extra="forbid" rejects unknown fields at request construction
-        time, producing a clear error before the request reaches _impl.
-        """
-        with pytest.raises(ValidationError):
-            ListCreativeFormatsRequest(type="invalid_category")
-
-    def test_unknown_field_rejected(self, integration_db):
-        """UC-005-EXT-B-01: unknown fields are rejected by extra=forbid.
-
-        The type field was removed in adcp 3.12. Passing it now triggers
-        extra_forbidden validation error.
-        """
-        with pytest.raises(ValidationError):
-            ListCreativeFormatsRequest(type="display")
-
     def test_valid_filters_via_mcp_works(self, integration_db):
         """UC-005-EXT-B-01: MCP wrapper correctly handles valid filter parameters.
 

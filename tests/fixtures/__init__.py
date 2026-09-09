@@ -14,7 +14,6 @@ __all__ = [
     "PrincipalFactory",
     "ProductFactory",
     "MediaBuyFactory",
-    "CreativeFactory",
     # Mocks
     "MockDatabase",
     "MockCursor",

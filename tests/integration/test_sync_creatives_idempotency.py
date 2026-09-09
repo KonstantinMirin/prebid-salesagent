@@ -70,8 +70,15 @@ def test_a_retry_with_the_same_key_replays_instead_of_re_executing(synced):
         "a retry carrying the same idempotency_key must return the ORIGINAL result"
     )
     # The replay is served from the cache rather than re-run: a second execution would
-    # re-sync the creative, so the response bodies must be identical, not merely similar.
-    assert second.model_dump(mode="json") == first.model_dump(mode="json")
+    # re-sync the creative, so the response bodies must be identical, not merely similar --
+    # EXCEPT for `replayed`, which is the one field whose whole job is to differ. It is a
+    # declared ProtocolEnvelope field set by the boundary on a cache hit, so asserting the
+    # dumps are equal outright would demand the marker never work.
+    first_body = first.model_dump(mode="json")
+    second_body = second.model_dump(mode="json")
+    assert second_body.pop("replayed", None) is True, "the retry must be marked as a replay"
+    assert first_body.pop("replayed", None) is not True, "the first call is not a replay"
+    assert second_body == first_body
 
 
 @pytest.mark.requires_db

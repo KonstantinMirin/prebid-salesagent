@@ -14,12 +14,12 @@ import pytest
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import PricingOption as PricingOptionModel
 from src.core.database.models import Principal as PrincipalModel
 from src.core.database.models import Product as ProductModel
 from src.core.database.models import Tenant as TenantModel
 from src.core.schemas import Product as ProductSchema
 from src.core.tools.products import get_product_catalog
+from tests.factories import PricingOptionFactory
 
 
 @pytest.mark.requires_db
@@ -80,7 +80,7 @@ def test_get_product_catalog_loads_pricing_options(integration_db):
         session.flush()
 
         # Add pricing option (pricing_option_id auto-generated during conversion)
-        pricing_option = PricingOptionModel(
+        pricing_option = PricingOptionFactory.build(
             tenant_id=tenant.tenant_id,
             product_id=product.product_id,
             pricing_model="cpm",
@@ -143,7 +143,7 @@ def test_product_query_with_eager_loading(integration_db):
         session.flush()
 
         # Add pricing option
-        pricing_option = PricingOptionModel(
+        pricing_option = PricingOptionFactory.build(
             tenant_id=tenant.tenant_id,
             product_id=product.product_id,
             pricing_model="cpm",
@@ -220,7 +220,7 @@ def test_product_without_eager_loading_fails_validation(integration_db):
         session.flush()
 
         # Add pricing option
-        pricing_option = PricingOptionModel(
+        pricing_option = PricingOptionFactory.build(
             tenant_id=tenant.tenant_id,
             product_id=product.product_id,
             pricing_model="cpm",
@@ -376,7 +376,7 @@ def test_create_media_buy_loads_pricing_options(integration_db):
         session.flush()
 
         # Add pricing option with EUR currency
-        pricing_option = PricingOptionModel(
+        pricing_option = PricingOptionFactory.build(
             tenant_id=tenant.tenant_id,
             product_id=product.product_id,
             pricing_model="cpm",

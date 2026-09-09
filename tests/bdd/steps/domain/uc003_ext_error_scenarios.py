@@ -401,20 +401,24 @@ def given_package_update_inline_creatives_bare(ctx: dict) -> None:
     asset map.
     """
     from tests.factories.creative_asset import build_assets, image_spec
+    from tests.factories.request import CreativeAssetRequestFactory
 
     kwargs = _ensure_update_defaults(ctx)
     if not kwargs.get("packages"):
         kwargs["packages"] = [{"package_id": "pkg_001"}]
     kwargs["packages"][0]["creatives"] = [
-        {
-            "creative_id": "inline-cr-ext-k",
-            "name": "Inline Creative for Sync Test",
-            "format_id": {
+        CreativeAssetRequestFactory.payload(
+            creative_id="inline-cr-ext-k",
+            name="Inline Creative for Sync Test",
+            # Stated rather than inherited: the factory's own default normalises
+            # AGENT_URL to a trailing slash, and this step names the un-normalised
+            # spelling the sibling inline-creative steps use.
+            format_id={
                 "agent_url": "https://creative.adcontextprotocol.org",
                 "id": "display_300x250",
             },
-            "assets": build_assets(image_spec("primary")),
-        }
+            assets=build_assets(image_spec("primary")),
+        )
     ]
 
 
@@ -433,7 +437,7 @@ def given_creative_sync_fails(ctx: dict) -> None:
 
 def _get_product(ctx: dict) -> Any:
     """Get the product from ctx or from the DB (UC-003 doesn't set default_product in ctx)."""
-    product = ctx.get("default_product") or ctx.get("existing_product")
+    product = ctx.get("default_product")
     if product is not None:
         return product
     # UC-003: product was created by setup_product_chain but not stored in ctx.
@@ -664,7 +668,6 @@ def given_valid_actions_excludes(ctx: dict, action: str) -> None:
     must be a real valid-action name the gate would consult.
     """
     assert action, "valid_actions exclusion step requires a non-empty action name"
-    ctx.setdefault("excluded_valid_actions", set()).add(action)
 
 
 @given("the media buy has committed delivery that the seller cannot cancel mid-flight")
@@ -681,7 +684,6 @@ def given_media_buy_uncancellable(ctx: dict) -> None:
 
     kwargs = _ensure_update_defaults(ctx)
     kwargs["canceled"] = True
-    ctx["uncancellable"] = True
     # Branch the seller-side refusal at the update adapter with the canonical code.
     env = ctx["env"]
     mock_adapter = env.mock["update_adapter"].return_value
@@ -902,8 +904,6 @@ def given_seller_minimum_budget(ctx: dict, amount: int, currency: str) -> None:
     """
     import pytest
 
-    ctx["expected_min_budget"] = amount
-    ctx["expected_min_budget_currency"] = currency
     pytest.xfail(
         f"SPEC-PRODUCTION GAP: Seller minimum budget ({amount} {currency}) "
         "not carried in production. v3.1 BUDGET_TOO_LOW error details "
