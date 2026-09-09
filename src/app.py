@@ -37,7 +37,6 @@ from src.admin.app import create_app
 from src.core.agent_identity import agent_identity_for_tenant_id
 from src.core.auth_middleware import (
     AuthChallengeResponder,
-    McpCredentialGate,
     UnifiedAuthMiddleware,
     adcp_error_code_in,
     challenge_for_code,
@@ -128,7 +127,7 @@ async def app_lifespan(app: FastAPI):
 # no partial results), the tools are request/response, and MCP's streamable-HTTP transport
 # specifies JSON responses as a first-class alternative. The SSE handling that does exist
 # here is in the creative-agent CLIENT, consuming another agent's stream, and is untouched.
-mcp_app = mcp.http_app(path="/", json_response=True)
+mcp_app = mcp.http_app(path="/", json_response=True, stateless_http=True)
 
 # Create the root FastAPI app with combined lifespans so that both
 # the MCP schedulers (delivery webhooks, media-buy status) and any
@@ -140,14 +139,21 @@ app = FastAPI(
     lifespan=combine_lifespans(app_lifespan, mcp_app.lifespan),
 )
 
-# Mount MCP at /mcp, behind the credential gate.
+# Mount MCP at /mcp behind the shared response rule -- and behind NOTHING else.
 #
-# The gate answers an anonymous call to an auth-required tool itself, with 401 +
-# WWW-Authenticate, without calling the app. It has to sit in FRONT rather than inside
-# because streamable-HTTP sends the response status before the tool is ever dispatched --
-# see McpCredentialGate. Wrapping the sub-app (rather than adding app-level middleware)
-# keeps it off every other route: REST and A2A render their own refusals.
-app.mount("/mcp", McpCredentialGate(AuthChallengeResponder(mcp_app)))
+# There is deliberately no auth gate in front of this. A middleware here cannot know which
+# tool is being called: the name is inside the JSON-RPC body, and a middleware that parsed
+# it would be re-implementing a fragment of the transport's own parsing and reading
+# ToolSpec.auth a second time -- exactly the drift building-tools.md says the single
+# registry exists to prevent ("auth is a property of the tool, not of a transport ... what
+# makes 'MCP soft-returns where A2A hard-refuses' unrepresentable").
+#
+# So auth is decided where the tool IS known -- MCPAuthMiddleware.on_call_tool, which reads
+# context.message.name and passes ToolSpec.auth to resolve_identity, exactly as the A2A
+# dispatch and the REST dependency do. Only the RENDERING happens out here, and it needs no
+# knowledge of the tool at all: read the AdCP code off the outgoing envelope, and if it is
+# an auth refusal, set 401 and the challenge.
+app.mount("/mcp", AuthChallengeResponder(mcp_app))
 
 
 # ---------------------------------------------------------------------------
