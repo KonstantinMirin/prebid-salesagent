@@ -4,11 +4,12 @@ import asyncio
 import json
 import logging
 import uuid
+from decimal import Decimal
 
 from adcp.exceptions import ADCPConnectionError, ADCPError, ADCPTimeoutError
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import joinedload
 
 from src.admin.utils import require_tenant_access
@@ -204,15 +205,19 @@ def get_creative_formats(
     return formats_list
 
 
-def parse_pricing_options_from_form(form_data: dict) -> list[dict]:
-    """Parse pricing options from form data (AdCP PR #88).
+def parse_pricing_options_from_form(form_data: dict) -> list[PricingOption]:
+    """Parse pricing options from form data into unpersisted ``PricingOption`` rows.
 
     Form data uses indexed fields: pricing_model_0, pricing_model_1, etc.
     Indices may be non-contiguous if user removed and re-added pricing options.
 
-    Returns list of pricing option dicts ready for database insertion.
+    Returns rows, not dicts. A dict of the same seven fields is a second shape for a
+    thing the ORM model already types, and it cost three copies of the ``Decimal``
+    coercion plus a mapping step at every write site. ``tenant_id`` and ``product_id``
+    are left unset: on the create form the product does not exist yet when the form is
+    parsed, so the caller stamps them just before ``session.add``.
     """
-    pricing_options = []
+    pricing_options: list[PricingOption] = []
 
     # Find all pricing option indices by scanning form keys
     # This handles non-contiguous indices (e.g., 0 removed, only 1 exists)
@@ -328,21 +333,34 @@ def parse_pricing_options_from_form(form_data: dict) -> list[dict]:
                 except ValueError:
                     pass
 
-        # Build pricing option dict
-        pricing_option = {
-            "pricing_model": pricing_model,
-            "currency": currency,
-            "is_fixed": is_fixed,
-            "rate": rate,
-            "price_guidance": price_guidance,
-            "parameters": parameters,
-            "min_spend_per_package": min_spend,
-        }
-
-        pricing_options.append(pricing_option)
+        pricing_options.append(
+            PricingOption.create(
+                pricing_model=pricing_model,
+                currency=currency,
+                is_fixed=is_fixed,
+                rate=Decimal(str(rate)) if rate is not None else None,
+                price_guidance=price_guidance,
+                parameters=parameters,
+                min_spend_per_package=Decimal(str(min_spend)) if min_spend is not None else None,
+            )
+        )
         index += 1
 
     return pricing_options
+
+
+#: Which columns are IDENTITY rather than terms — the one judgement a program cannot
+#: derive. ``tenant_id``/``product_id`` say which product the row belongs to, and
+#: ``pricing_option_id`` is what a buyer's ``PackageRequest`` names, so re-pricing an
+#: option must not rename the entity that buyer selected.
+_IDENTITY_COLUMNS = frozenset({"id", "tenant_id", "product_id", "pricing_option_id"})
+
+#: Everything else the model declares. Read off the mapper so a column added to
+#: ``PricingOption`` is carried by the edit form without anyone remembering to list it
+#: here — a hand-written list of the same names silently stops covering the model.
+_FORM_OWNED_COLUMNS = tuple(
+    attr.key for attr in inspect(PricingOption).mapper.column_attrs if attr.key not in _IDENTITY_COLUMNS
+)
 
 
 def create_custom_key_inventory_mappings(db_session, tenant_id: str, product_id: str, custom_keys: dict) -> int:
@@ -809,7 +827,7 @@ def add_product(tenant_id):
                 if pricing_options_data and len(pricing_options_data) > 0:
                     first_option = pricing_options_data[0]
                     # Determine delivery_type based on is_fixed
-                    if first_option.get("is_fixed", True):
+                    if first_option.is_fixed:
                         delivery_type = "guaranteed"
                     else:
                         delivery_type = "non_guaranteed"
@@ -1011,16 +1029,14 @@ def add_product(tenant_id):
                     # Add pricing info to manifest if available
                     if pricing_options_data and len(pricing_options_data) > 0:
                         first_option = pricing_options_data[0]
-                        product_kwargs["product_card"]["manifest"]["pricing_model"] = first_option.get(
-                            "pricing_model", "CPM"
-                        )
-                        if first_option.get("is_fixed") and first_option.get("fixed_price"):
-                            product_kwargs["product_card"]["manifest"]["pricing_amount"] = str(
-                                first_option["fixed_price"]
-                            )
-                            product_kwargs["product_card"]["manifest"]["pricing_currency"] = first_option.get(
-                                "currency_code", "USD"
-                            )
+                        product_kwargs["product_card"]["manifest"]["pricing_model"] = first_option.pricing_model
+                        # ``fixed_price`` is what this branch used to read, and the form
+                        # parser has never produced that key — so a created product's card
+                        # never carried an amount. The column is ``rate``, as the edit path
+                        # below already read.
+                        if first_option.is_fixed and first_option.rate:
+                            product_kwargs["product_card"]["manifest"]["pricing_amount"] = str(first_option.rate)
+                            product_kwargs["product_card"]["manifest"]["pricing_currency"] = first_option.currency
 
                 # Handle property authorization (AdCP requirement)
                 # Default to empty property_tags if not specified (satisfies DB constraint)
@@ -1246,24 +1262,9 @@ def add_product(tenant_id):
                     logger.info(
                         f"Creating {len(pricing_options_data)} pricing options for product {product.product_id}"
                     )
-                    for option_data in pricing_options_data:
-                        from decimal import Decimal
-
-                        pricing_option = PricingOption(
-                            tenant_id=tenant_id,
-                            product_id=product.product_id,
-                            pricing_model=option_data["pricing_model"],
-                            rate=Decimal(str(option_data["rate"])) if option_data["rate"] is not None else None,
-                            currency=option_data["currency"],
-                            is_fixed=option_data["is_fixed"],
-                            price_guidance=option_data["price_guidance"],
-                            parameters=option_data["parameters"],
-                            min_spend_per_package=(
-                                Decimal(str(option_data["min_spend_per_package"]))
-                                if option_data["min_spend_per_package"] is not None
-                                else None
-                            ),
-                        )
+                    for pricing_option in pricing_options_data:
+                        pricing_option.tenant_id = tenant_id
+                        pricing_option.product_id = product.product_id
                         db_session.add(pricing_option)
 
                 # Create inventory mappings for GAM ad units and placements
@@ -1749,8 +1750,6 @@ def edit_product(tenant_id, product_id):
 
                 # Update pricing options (AdCP PR #88)
                 # Note: min_spend is now stored in pricing_options[].min_spend_per_package
-                from decimal import Decimal
-
                 # Parse pricing options from form FIRST
                 try:
                     pricing_options_data = parse_pricing_options_from_form(form_data)
@@ -1778,39 +1777,16 @@ def edit_product(tenant_id, product_id):
                 )
 
                 # Update existing options or create new ones
-                for idx, option_data in enumerate(pricing_options_data):
+                for idx, parsed in enumerate(pricing_options_data):
                     if idx < len(existing_options):
-                        # Update existing pricing option
+                        # Copy the TERMS onto the existing row and keep its identity.
                         po = existing_options[idx]
-                        po.pricing_model = option_data["pricing_model"]
-                        po.rate = Decimal(str(option_data["rate"])) if option_data["rate"] is not None else None
-                        po.currency = option_data["currency"]
-                        po.is_fixed = option_data["is_fixed"]
-                        po.price_guidance = option_data["price_guidance"]
-                        po.parameters = option_data["parameters"]
-                        po.min_spend_per_package = (
-                            Decimal(str(option_data["min_spend_per_package"]))
-                            if option_data["min_spend_per_package"] is not None
-                            else None
-                        )
+                        for column in _FORM_OWNED_COLUMNS:
+                            setattr(po, column, getattr(parsed, column))
                     else:
-                        # Create new pricing option
-                        pricing_option = PricingOption(
-                            tenant_id=tenant_id,
-                            product_id=product.product_id,
-                            pricing_model=option_data["pricing_model"],
-                            rate=Decimal(str(option_data["rate"])) if option_data["rate"] is not None else None,
-                            currency=option_data["currency"],
-                            is_fixed=option_data["is_fixed"],
-                            price_guidance=option_data["price_guidance"],
-                            parameters=option_data["parameters"],
-                            min_spend_per_package=(
-                                Decimal(str(option_data["min_spend_per_package"]))
-                                if option_data["min_spend_per_package"] is not None
-                                else None
-                            ),
-                        )
-                        db_session.add(pricing_option)
+                        parsed.tenant_id = tenant_id
+                        parsed.product_id = product.product_id
+                        db_session.add(parsed)
 
                 # Delete excess existing options (if new list is shorter)
                 if len(existing_options) > len(pricing_options_data):
@@ -1859,10 +1835,10 @@ def edit_product(tenant_id, product_id):
                     # Add pricing info to manifest if available
                     if pricing_options_data and len(pricing_options_data) > 0:
                         first_option = pricing_options_data[0]
-                        product.product_card["manifest"]["pricing_model"] = first_option.get("pricing_model", "CPM")
-                        if first_option.get("is_fixed") and first_option.get("rate"):
-                            product.product_card["manifest"]["pricing_amount"] = str(first_option["rate"])
-                            product.product_card["manifest"]["pricing_currency"] = first_option.get("currency", "USD")
+                        product.product_card["manifest"]["pricing_model"] = first_option.pricing_model
+                        if first_option.is_fixed and first_option.rate:
+                            product.product_card["manifest"]["pricing_amount"] = str(first_option.rate)
+                            product.product_card["manifest"]["pricing_currency"] = first_option.currency
 
                     from sqlalchemy.orm import attributes
 

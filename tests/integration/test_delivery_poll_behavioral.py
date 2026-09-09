@@ -24,6 +24,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.schemas import GetMediaBuyDeliveryResponse
+from tests.factories import PricingOptionFactory
 from tests.factories.media_buy import request_package
 
 # ---------------------------------------------------------------------------
@@ -1459,7 +1460,7 @@ class TestPricingOptionStringLookup:
         Covers: UC-004-MAIN-14
         """
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import PricingOption, Product, Tenant
+        from src.core.database.models import Product, Tenant
         from src.core.database.repositories.product import ProductRepository
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
@@ -1485,7 +1486,7 @@ class TestPricingOptionStringLookup:
             session.add(product)
             session.flush()
             session.add(
-                PricingOption(
+                PricingOptionFactory.build(
                     tenant_id="t1",
                     product_id="prod1",
                     pricing_model="cpm",
@@ -1511,7 +1512,7 @@ class TestPricingOptionStringLookup:
         Covers: UC-004-MAIN-14
         """
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import PricingOption, Product, Tenant
+        from src.core.database.models import Product, Tenant
         from src.core.database.repositories.product import ProductRepository
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
@@ -1537,7 +1538,7 @@ class TestPricingOptionStringLookup:
             session.add(product)
             session.flush()
             session.add(
-                PricingOption(
+                PricingOptionFactory.build(
                     tenant_id="t1",
                     product_id="prod1",
                     pricing_model="cpm",
@@ -1617,7 +1618,7 @@ class TestPricingOptionStringToIntComparisonRejected:
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
         """
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import PricingOption, Product, Tenant
+        from src.core.database.models import Product, Tenant
         from src.core.database.repositories.product import ProductRepository
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
@@ -1642,7 +1643,7 @@ class TestPricingOptionStringToIntComparisonRejected:
             )
             session.add(product)
             session.flush()
-            po = PricingOption(
+            po = PricingOptionFactory.build(
                 tenant_id="t1",
                 product_id="prod1",
                 pricing_model="cpm",
@@ -1672,7 +1673,7 @@ class TestPricingOptionStringToIntComparisonRejected:
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
         """
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import PricingOption, Product, Tenant
+        from src.core.database.models import Product, Tenant
         from src.core.database.repositories.product import ProductRepository
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
@@ -1698,7 +1699,7 @@ class TestPricingOptionStringToIntComparisonRejected:
             session.add(product)
             session.flush()
             session.add(
-                PricingOption(
+                PricingOptionFactory.build(
                     tenant_id="t1",
                     product_id="prod1",
                     pricing_model="cpc",

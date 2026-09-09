@@ -17,7 +17,7 @@ from adcp.types import MediaBuyStatus
 from factory import LazyAttribute, Sequence, SubFactory
 
 from src.core.database.models import MediaBuy, MediaPackage, PricingOption, is_media_buy_seller_confirmed
-from src.core.helpers.pricing_helpers import pricing_info_for, synthetic_pricing_option_id
+from src.core.helpers.pricing_helpers import pricing_info_for
 from src.core.schemas import GetMediaBuysMediaBuy
 from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
 from tests.factories.core import TenantFactory
@@ -63,19 +63,16 @@ def default_request_packages() -> list[dict[str, Any]]:
     return [request_package()]
 
 
-#: The pricing option the default request package names, read off that package rather than
-#: restated, so the two cannot disagree.
-DEFAULT_PRICING_OPTION_ID: str = request_package()["pricing_option_id"]
-
-
 def pricing_option_for(pricing_option_id: str) -> PricingOption | None:
-    """The unpersisted ``PricingOption`` row whose synthetic id is *pricing_option_id*.
+    """The unpersisted ``PricingOption`` row a package naming *pricing_option_id* selects.
 
-    The inverse of production's ``synthetic_pricing_option_id``, which is imported rather
-    than reimplemented — the grammar has one owner, and this asks it what it produced.
-    A candidate row is built from the id's parts and kept only if production agrees it
-    names that row; anything outside the grammar returns ``None``, exactly as the real
-    lookup finds no row for one.
+    ``pricing_option_id`` is a stored column, so a row can carry any id its publisher
+    chose and this cannot invert an arbitrary one. What it inverts is the DEFAULT id
+    ``PricingOption.default_option_id`` assigns, which is what every fixture row carries:
+    the parts are read out of the id, a candidate row is built from them, and it is kept
+    only if the model agrees that row would be given that id back. An id outside the
+    default grammar returns ``None`` — a fixture wanting a custom id builds the row
+    itself and reads the id off it.
     """
     parts = pricing_option_id.rsplit("_", 2)
     if len(parts) != 3:
@@ -84,7 +81,7 @@ def pricing_option_for(pricing_option_id: str) -> PricingOption | None:
     option = PricingOptionFactory.build(
         pricing_model=pricing_model, currency=currency.upper(), is_fixed=fixed == "fixed"
     )
-    return option if synthetic_pricing_option_id(option) == pricing_option_id else None
+    return option if option.pricing_option_id == pricing_option_id else None
 
 
 def pricing_options_for(pricing_option_ids: Iterable[str]) -> dict[str, PricingOption]:

@@ -500,6 +500,7 @@ class PricingOption(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(50), nullable=False)
     product_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    pricing_option_id: Mapped[str] = mapped_column(String(100), nullable=False)
     pricing_model: Mapped[str] = mapped_column(String(20), nullable=False)
     rate: Mapped[Decimal | None] = mapped_column(DECIMAL(10, 2), nullable=True)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
@@ -518,7 +519,71 @@ class PricingOption(Base):
             ondelete="CASCADE",
         ),
         Index("idx_pricing_options_product", "tenant_id", "product_id"),
+        UniqueConstraint(
+            "tenant_id",
+            "product_id",
+            "pricing_option_id",
+            name="uq_pricing_options_option_id",
+        ),
     )
+
+    @staticmethod
+    def default_option_id(pricing_model: str, currency: str, is_fixed: bool) -> str:
+        """The id assigned to a row whose writer supplies none.
+
+        ``{model}_{currency}_{fixed|auction}``, lowercase. This is a DEFAULT for a new
+        row, not a derivation: once written, the column is what every reader reads, and a
+        publisher is free to give an option any id it likes.
+
+        CPA is the one model whose suffix ignores *is_fixed*. It always prices off
+        ``fixed_price`` (``pricing-options/cpa-option.json`` puts it in ``required``), so
+        an ``auction`` suffix would name a shape the option cannot take.
+        """
+        model = pricing_model.lower()
+        suffix = "fixed" if (is_fixed or model == "cpa") else "auction"
+        return f"{model}_{currency.lower()}_{suffix}"
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        pricing_model: str,
+        tenant_id: str | None = None,
+        product_id: str | None = None,
+        currency: str,
+        is_fixed: bool,
+        rate: Decimal | None = None,
+        pricing_option_id: str | None = None,
+        price_guidance: dict | None = None,
+        parameters: dict | None = None,
+        min_spend_per_package: Decimal | None = None,
+    ) -> "PricingOption":
+        """A row for *product_id*, defaulting ``pricing_option_id`` when the writer has none.
+
+        ``tenant_id``/``product_id`` are optional because a writer can build the row before
+        the product exists — the admin create form parses its pricing options out of the
+        submitted form, then stamps both ids once the product row has been flushed. The
+        columns stay NOT NULL, so a row that reaches the database without them is refused
+        there rather than accepted quietly.
+
+        Every writer goes through here so that no row can reach the database without the
+        identifier the spec requires. ``pricing-options/*.json`` puts ``pricing_option_id``
+        in ``required`` for all nine models, and ``media-buy/package-request.json`` marks
+        it ``x-entity: product_pricing_option`` — a reference to a stored entity, which is
+        what makes storing it rather than recomputing it the correct shape.
+        """
+        return cls(
+            tenant_id=tenant_id,
+            product_id=product_id,
+            pricing_option_id=pricing_option_id or cls.default_option_id(pricing_model, currency, is_fixed),
+            pricing_model=pricing_model,
+            rate=rate,
+            currency=currency,
+            is_fixed=is_fixed,
+            price_guidance=price_guidance,
+            parameters=parameters,
+            min_spend_per_package=min_spend_per_package,
+        )
 
 
 class CurrencyLimit(Base):

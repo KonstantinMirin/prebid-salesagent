@@ -411,7 +411,7 @@ def init_db_ci():
 
                     # Create corresponding pricing_option (required for pricing display)
                     pricing = p["pricing"]
-                    pricing_option = PricingOption(
+                    pricing_option = PricingOption.create(
                         tenant_id=tenant_id,
                         product_id=p["product_id"],
                         pricing_model=pricing["model"],
@@ -686,7 +686,7 @@ def init_db_ci():
 
                     pricing = p["pricing"]
                     iso_session.add(
-                        PricingOption(
+                        PricingOption.create(
                             tenant_id=iso_tenant_id,
                             product_id=p["product_id"],
                             pricing_model=pricing["model"],

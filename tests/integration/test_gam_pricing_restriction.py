@@ -44,6 +44,7 @@ from src.core.database.models import (
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
+from tests.factories import PricingOptionFactory
 from tests.helpers.adcp_factories import create_test_media_buy_request, create_test_package_request
 from tests.helpers.external_service import is_external_service_response_error
 from tests.utils.database_helpers import create_tenant_with_timestamps
@@ -156,7 +157,7 @@ def setup_gam_tenant_with_non_cpm_product(integration_db):
         session.flush()
 
         # Add CPCV pricing option
-        pricing_cpcv = PricingOption(
+        pricing_cpcv = PricingOptionFactory.build(
             tenant_id="test_gam_tenant",
             product_id="prod_gam_cpcv",
             pricing_model="cpcv",
@@ -195,7 +196,7 @@ def setup_gam_tenant_with_non_cpm_product(integration_db):
         session.flush()
 
         # Add CPM pricing option
-        pricing_cpm = PricingOption(
+        pricing_cpm = PricingOptionFactory.build(
             tenant_id="test_gam_tenant",
             product_id="prod_gam_cpm",
             pricing_model="cpm",
@@ -243,7 +244,7 @@ def setup_gam_tenant_with_non_cpm_product(integration_db):
         session.flush()
 
         # Add CPM (supported)
-        pricing_multi_cpm = PricingOption(
+        pricing_multi_cpm = PricingOptionFactory.build(
             tenant_id="test_gam_tenant",
             product_id="prod_gam_multi",
             pricing_model="cpm",
@@ -257,7 +258,7 @@ def setup_gam_tenant_with_non_cpm_product(integration_db):
         session.add(pricing_multi_cpm)
 
         # Add CPP (not supported by GAM)
-        pricing_multi_cpp = PricingOption(
+        pricing_multi_cpp = PricingOptionFactory.build(
             tenant_id="test_gam_tenant",
             product_id="prod_gam_multi",
             pricing_model="cpp",
@@ -355,7 +356,7 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
     )
 
     # This should succeed
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field
@@ -429,7 +430,7 @@ async def test_gam_accepts_cpm_from_multi_pricing_product(setup_gam_tenant_with_
     )
 
     # This should succeed - buyer chose CPM from multi-option product
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field

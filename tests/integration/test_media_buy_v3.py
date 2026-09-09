@@ -207,9 +207,9 @@ class TestCreateMediaBuyCurrencyValidation:
         Tenant has CurrencyLimit for USD only. Creating with EUR product
         should fail validation.
         """
-        from src.core.database.models import PricingOption as PricingOptionModel
         from src.core.database.models import Product
         from src.core.tools.media_buy_create import _create_media_buy_impl
+        from tests.factories import PricingOptionFactory
 
         with get_db_session() as session:
             eur_product = Product(
@@ -227,7 +227,7 @@ class TestCreateMediaBuyCurrencyValidation:
             session.add(eur_product)
             session.commit()
 
-            eur_po = PricingOptionModel(
+            eur_po = PricingOptionFactory.build(
                 tenant_id=mb_tenant["tenant_id"],
                 product_id="eur_display",
                 pricing_model="cpm",

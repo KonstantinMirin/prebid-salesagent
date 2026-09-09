@@ -499,8 +499,8 @@ def sample_account(integration_db, factory_session, sample_tenant, sample_princi
 def sample_products(integration_db, sample_tenant):
     """Create sample products that comply with AdCP protocol."""
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import PricingOption as PricingOptionModel
     from src.core.database.models import Product
+    from tests.factories import PricingOptionFactory
 
     with get_db_session() as session:
         products = [
@@ -578,9 +578,8 @@ def sample_products(integration_db, sample_tenant):
         session.commit()
 
         # Create pricing_options for each product (required per AdCP PR #88)
-        # Note: Database model uses auto-increment 'id', not 'pricing_option_id'
         pricing_options = [
-            PricingOptionModel(
+            PricingOptionFactory.build(
                 tenant_id=sample_tenant["tenant_id"],
                 product_id="guaranteed_display",
                 pricing_model="cpm",
@@ -589,7 +588,7 @@ def sample_products(integration_db, sample_tenant):
                 is_fixed=True,
                 price_guidance=None,  # Not used for fixed pricing
             ),
-            PricingOptionModel(
+            PricingOptionFactory.build(
                 tenant_id=sample_tenant["tenant_id"],
                 product_id="non_guaranteed_video",
                 pricing_model="cpm",
@@ -942,7 +941,8 @@ def create_test_product_with_pricing(
     import uuid
     from decimal import Decimal
 
-    from src.core.database.models import PricingOption, Product
+    from src.core.database.models import Product
+    from tests.factories import PricingOptionFactory
 
     if product_id is None:
         product_id = f"test_product_{uuid.uuid4().hex[:8]}"
@@ -1024,7 +1024,7 @@ def create_test_product_with_pricing(
     session.flush()
 
     pricing_model_lower = pricing_model.lower() if isinstance(pricing_model, str) else pricing_model
-    pricing_option = PricingOption(
+    pricing_option = PricingOptionFactory.build(
         tenant_id=tenant_id,
         product_id=product_id,
         pricing_model=pricing_model_lower,

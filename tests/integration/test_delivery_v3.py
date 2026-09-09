@@ -18,13 +18,11 @@ from src.core.database.models import (
     CurrencyLimit,
     MediaBuy,
     MediaPackage,
-    PricingOption,
     Principal,
     Product,
     PropertyTag,
     Tenant,
 )
-from src.core.helpers.pricing_helpers import synthetic_pricing_option_id
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -35,6 +33,7 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
+from tests.factories import PricingOptionFactory
 from tests.factories.media_buy import request_package
 
 # ---------------------------------------------------------------------------
@@ -164,7 +163,7 @@ def _setup_base_state(session) -> dict:
     session.add(product)
     session.flush()
 
-    pricing_option = PricingOption(
+    pricing_option = PricingOptionFactory.build(
         tenant_id=tenant_id,
         product_id="prod_display",
         pricing_model="cpm",
@@ -181,10 +180,8 @@ def _setup_base_state(session) -> dict:
         "tenant_id": tenant_id,
         "principal_id": principal_id,
         "product_id": "prod_display",
-        # The id a package names this option by. The pricing_options table has no id
-        # column, so _get_pricing_options matches on this string rebuilt from the row's
-        # own columns; the auto-increment PK names nothing that can resolve.
-        "pricing_option_id": synthetic_pricing_option_id(pricing_option),
+        # The id a package names this option by, read off the row rather than rebuilt.
+        "pricing_option_id": pricing_option.pricing_option_id,
     }
 
 
@@ -570,49 +567,6 @@ class TestDeliveryPricingOptionIntegration:
         # matched nothing (or matched a different option) fails here.
         package = response.media_buy_deliveries[0].by_package[0]
         assert (package.pricing_model, package.rate, package.currency) == ("cpm", 5.00, "USD")
-
-    def test_uppercase_pricing_model_resolves_through_a_lowercase_id(self, integration_db):
-        """An option stored with a non-lowercase pricing_model is still FOUND by its id.
-
-        The synthetic id is LOWERCASE, always. Nothing normalises ``pricing_model`` on the
-        way into ``pricing_options``, so a row can hold ``"CPM"`` — and the builder and the
-        matcher must still agree about what that row is called, or a package names an
-        option no reader can find.
-
-        It stops at the lookup, deliberately. Reporting such a package is a SEPARATE and
-        currently impossible thing: ``PackageDelivery.pricing_model`` is the pinned
-        lowercase-only enum (``enums/pricing-model.json``), so a row holding ``"CPM"`` is
-        refused by the response model whatever its id does. Normalising the column would
-        change what is stored, which is not this change's to decide.
-
-        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-01
-        """
-        from src.core.database.repositories.product import ProductRepository
-        from src.core.tools.media_buy_delivery import _get_pricing_options
-
-        with get_db_session() as session:
-            base = _setup_base_state(session)
-            uppercase_option = PricingOption(
-                tenant_id=base["tenant_id"],
-                product_id=base["product_id"],
-                pricing_model="CPM",
-                rate=Decimal("7.50"),
-                currency="USD",
-                is_fixed=False,
-            )
-            session.add(uppercase_option)
-            session.commit()
-
-            option_id = synthetic_pricing_option_id(uppercase_option)
-            assert option_id == "cpm_usd_auction", f"synthetic id is not lowercase: {option_id!r}"
-
-            # The matcher rebuilds the id from the row's own columns. It finds the row
-            # only if it cased it the same way the builder did.
-            found = _get_pricing_options(
-                [option_id], tenant_id=base["tenant_id"], product_repo=ProductRepository(session, base["tenant_id"])
-            )
-            assert option_id in found, f"{option_id!r} resolved to no option; matcher built {list(found)}"
-            assert found[option_id].rate == Decimal("7.50")
 
 
 @pytest.mark.requires_db

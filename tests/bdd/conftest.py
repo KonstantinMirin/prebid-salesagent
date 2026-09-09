@@ -80,6 +80,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc011_accounts",
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
+    "tests.bdd.steps.domain.uc_get_products_pricing",
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.codes_open_vocabulary",
@@ -5224,6 +5225,15 @@ ENV_ROUTES: list[EnvRoute] = [
     # Like the @egress rows above, these carry their own identity tags, so
     # storyboard_spec.detect_uc returns None and no coarse bucket can claim them.
     # They are UNSCOPED `when` rows naming the harness each one needs.
+    EnvRoute(
+        tag="get-products-pricing-options",
+        # BR-UC-GET-PRODUCTS pricing announcement: stores real PricingOption rows and
+        # reads them back off get_products, so it takes the UC-GET-PRODUCTS branch. It
+        # carries its own identity tag rather than @inventory_profile, so detect_uc
+        # returns None for it and no coarse bucket claims it.
+        when=lambda m: "pricing_option_announcement" in m,
+        env_builder=_build_product_env,
+    ),
     EnvRoute(
         tag="security-wire-error-safety",
         # BR-SECURITY-001 grades that an UNTYPED exception cannot leak internals to

@@ -29,6 +29,7 @@ from src.core.database.models import (
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
+from tests.factories import PricingOptionFactory
 from tests.helpers.adcp_factories import create_test_media_buy_request, create_test_package_request
 from tests.helpers.external_service import is_external_service_response_error
 from tests.utils.database_helpers import create_tenant_with_timestamps
@@ -155,7 +156,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
         session.add(product_cpm)
         session.flush()
 
-        pricing_cpm = PricingOption(
+        pricing_cpm = PricingOptionFactory.build(
             tenant_id="test_gam_pricing_tenant",
             product_id="prod_gam_cpm_guaranteed",
             pricing_model="cpm",
@@ -220,7 +221,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
         session.add(product_cpc)
         session.flush()
 
-        pricing_cpc = PricingOption(
+        pricing_cpc = PricingOptionFactory.build(
             tenant_id="test_gam_pricing_tenant",
             product_id="prod_gam_cpc",
             pricing_model="cpc",
@@ -269,7 +270,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
         session.add(product_vcpm)
         session.flush()
 
-        pricing_vcpm = PricingOption(
+        pricing_vcpm = PricingOptionFactory.build(
             tenant_id="test_gam_pricing_tenant",
             product_id="prod_gam_vcpm",
             pricing_model="vcpm",
@@ -334,7 +335,7 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
         session.add(product_flat)
         session.flush()
 
-        pricing_flat = PricingOption(
+        pricing_flat = PricingOptionFactory.build(
             tenant_id="test_gam_pricing_tenant",
             product_id="prod_gam_flatrate",
             pricing_model="flat_rate",
@@ -398,7 +399,7 @@ async def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_wi
         protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field
@@ -444,7 +445,7 @@ async def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_g
         protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field
@@ -491,7 +492,7 @@ async def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(set
         protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field
@@ -539,7 +540,7 @@ async def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_
         protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field
@@ -596,7 +597,7 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
         protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
     # Verify response is success (AdCP 2.4 compliant)
     # Success response has media_buy_id, error response has errors field
@@ -626,7 +627,7 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
 
     # Add auction CPC pricing option
     with get_db_session() as session:
-        pricing_auction = PricingOption(
+        pricing_auction = PricingOptionFactory.build(
             tenant_id="test_gam_pricing_tenant",
             product_id="prod_gam_cpc",
             pricing_model="cpc",
@@ -661,7 +662,7 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
         protocol="mcp",
     )
 
-    response, _ = await _create_media_buy_impl(req=request, identity=identity)
+    response = await _create_media_buy_impl(req=request, identity=identity)
 
     if is_external_service_response_error(response):
         pytest.skip(f"External creative agent unavailable: {response.errors}")

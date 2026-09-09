@@ -17,7 +17,6 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AdapterConfig,
     MediaBuy,
-    PricingOption,
     Principal,
     Product,
     Tenant,
@@ -25,7 +24,7 @@ from src.core.database.models import (
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
-from tests.factories.media_buy import synthetic_pricing_option_id
+from tests.factories import PricingOptionFactory
 
 
 def _create_test_tenant_and_principal(ad_server: str | None = None) -> tuple[str, str]:
@@ -95,7 +94,7 @@ def _create_basic_media_buy_with_webhook(
             property_tags=["all_inventory"],
         )
 
-        pricing_option = PricingOption(
+        pricing_option = PricingOptionFactory.build(
             tenant_id=tenant_id,
             pricing_model="cpm",
             rate=15.0,
@@ -121,11 +120,10 @@ def _create_basic_media_buy_with_webhook(
                     {
                         "package_id": "pkg_integration",
                         "product_id": product.product_id,
-                        # The option's synthetic id, not its integer primary key: the
-                        # delivery report resolves the package's required
-                        # pricing_model/rate/currency by rebuilding this string from the
-                        # row's columns, and a PK never matches it.
-                        "pricing_option_id": synthetic_pricing_option_id(pricing_option),
+                        # The option's own id, not its integer primary key: that is what
+                        # the delivery report resolves the package's required
+                        # pricing_model/rate/currency through.
+                        "pricing_option_id": pricing_option.pricing_option_id,
                     }
                 ],
                 "reporting_webhook": {

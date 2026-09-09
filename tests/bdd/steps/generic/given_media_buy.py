@@ -12,6 +12,7 @@ from __future__ import annotations
 import re as _re
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 
 from pytest_bdd import given, parsers
@@ -975,6 +976,26 @@ def given_bid_below_floor(ctx: dict, bid: float, floor: float) -> None:
     )
     kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(auction_po)
     kwargs["packages"][0]["bid_price"] = bid
+
+
+@given(
+    parsers.parse("a package budget of {budget:g} against a pricing option requiring a minimum spend of {minimum:g}")
+)
+def given_budget_below_minimum_spend(ctx: dict, budget: float, minimum: float) -> None:
+    """Give the option the package ALREADY names a minimum spend, then underbid it.
+
+    The existing option is modified rather than a second one added: a new fixed CPM/USD
+    option on the same product would carry the same default pricing_option_id, which the
+    uniqueness constraint refuses — correctly, since a duplicate id names two rows.
+    """
+    env = ctx["env"]
+    option = ctx["default_pricing_option"]
+    option.min_spend_per_package = Decimal(str(minimum))
+    env._commit_factory_data()
+    kwargs = _ensure_request_defaults(ctx)
+    assert kwargs.get("packages"), "No packages in request — nothing to set a budget on"
+    kwargs["packages"][0]["pricing_option_id"] = pricing_option_id(option)
+    kwargs["packages"][0]["budget"] = budget
 
 
 # ═══════════════════════════════════════════════════════════════════════

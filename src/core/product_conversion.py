@@ -78,7 +78,15 @@ def convert_pricing_option_to_adcp(
     is_fixed = get_attr(pricing_option, "is_fixed")  # Internal flag, not sent to API
     currency = get_attr(pricing_option, "currency")
 
-    pricing_option_id = f"{pricing_model}_{currency.lower()}_{'fixed' if is_fixed else 'auction'}"
+    # The stored identifier, never a recomputed one. ``pricing_option_id`` is REQUIRED by
+    # every ``pricing-options/*.json`` member and is what a buyer's ``PackageRequest``
+    # names back, so a row that has none names nothing a buyer can select.
+    pricing_option_id = get_attr(pricing_option, "pricing_option_id")
+    if not pricing_option_id:
+        raise ValueError(
+            f"{pricing_model} pricing option for {get_attr(pricing_option, 'product_id')} has no "
+            "pricing_option_id — build rows through PricingOption.create()"
+        )
 
     # Build common fields shared across all pricing options (V3 format)
     # Note: is_fixed and rate are added during serialization for v2.x compat
@@ -240,33 +248,30 @@ def convert_pricing_option_to_adcp(
 
     elif pricing_model == "cpa":
         # CPA (Cost Per Acquisition) - AdCP v3.1 pricing model for affiliate/conversion pricing.
-        # CPA always emits fixed_price; use a stable _fixed suffix regardless of is_fixed flag.
         # event_type is required per cpa-option.json; no default — an unknown value is a mispricing.
-        cpa_pricing_option_id = f"cpa_{currency.lower()}_fixed"
         if not rate:
-            raise ValueError(f"CPA pricing option {cpa_pricing_option_id} requires rate")
+            raise ValueError(f"CPA pricing option {pricing_option_id} requires rate")
         raw_event = parameters.get("event_type") if isinstance(parameters, dict) else None
         if not raw_event:
-            raise ValueError(f"CPA pricing option {cpa_pricing_option_id} requires parameters.event_type")
+            raise ValueError(f"CPA pricing option {pricing_option_id} requires parameters.event_type")
         try:
             event_type_val = EventType(raw_event)
         except ValueError:
             raise ValueError(
-                f"CPA pricing option {cpa_pricing_option_id} has unknown event_type '{raw_event}'. "
+                f"CPA pricing option {pricing_option_id} has unknown event_type '{raw_event}'. "
                 f"Supported values: {[e.value for e in EventType]}"
             )
         if event_type_val == EventType.custom:
             custom_event_name = parameters.get("custom_event_name") if isinstance(parameters, dict) else None
             if not custom_event_name:
                 raise ValueError(
-                    f"CPA pricing option {cpa_pricing_option_id} with event_type 'custom' requires parameters.custom_event_name"
+                    f"CPA pricing option {pricing_option_id} with event_type 'custom' requires parameters.custom_event_name"
                 )
         else:
             custom_event_name = None
         event_source_id = parameters.get("event_source_id") if isinstance(parameters, dict) else None
-        cpa_fields = {**common_fields, "pricing_option_id": cpa_pricing_option_id}
         return CpaPricingOption(
-            **cpa_fields,
+            **common_fields,
             event_type=event_type_val,
             custom_event_name=custom_event_name,
             event_source_id=event_source_id,

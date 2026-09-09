@@ -287,9 +287,9 @@ def test_every_precheck_handles_the_index_verdict():
 
 #: Measured against models.py. Counts, not just presence: a silently emptied
 #: inventory makes every scan below vacuously green.
-EXPECTED_DECLARED_TUPLES = 18
-EXPECTED_DECLARED_MODELS = 16
-EXPECTED_FORM_COUNTS = {"unique-constraint": 10, "unique-index": 5, "column-unique": 3}
+EXPECTED_DECLARED_TUPLES = 19
+EXPECTED_DECLARED_MODELS = 17
+EXPECTED_FORM_COUNTS = {"unique-constraint": 11, "unique-index": 5, "column-unique": 3}
 
 #: Excluded, never truncated — the column subset these name is NOT unique in the DB.
 EXPECTED_UNUSABLE = {

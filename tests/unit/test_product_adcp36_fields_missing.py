@@ -142,7 +142,7 @@ def _make_db_product_for_conversion(**overrides) -> ProductModel:
         delivery_measurement={"provider": "publisher"},
         **overrides,
     )
-    pricing = PricingOption(
+    pricing = PricingOption.create(
         tenant_id="conv_test",
         product_id="conv_test_001",
         pricing_model="cpm",

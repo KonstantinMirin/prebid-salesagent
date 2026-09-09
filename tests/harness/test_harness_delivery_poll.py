@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 from src.core.schemas import GetMediaBuyDeliveryResponse
-from tests.factories.media_buy import DEFAULT_PRICING_OPTION_ID
+from tests.factories.product import DEFAULT_PRICING_OPTION_ID
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
 #: adcp_version / adcp_major_version / ext are the version-envelope trio every request

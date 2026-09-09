@@ -245,7 +245,12 @@ class PackageRequestFactory(_RequestFactory):
 
     product_id = "prod-1"
     budget = 5000.0
-    pricing_option_id = "cpm_usd_fixed"
+    #: Read off ``PricingOptionFactory``'s own defaults, so a fixture package names the id
+    #: the fixture option row actually carries. Imported inside the lambda because
+    #: ``tests.factories.product`` imports ``_RequestFactory`` from this module.
+    pricing_option_id = factory.LazyFunction(
+        lambda: __import__("tests.factories.product", fromlist=["DEFAULT_PRICING_OPTION_ID"]).DEFAULT_PRICING_OPTION_ID
+    )
 
 
 class CreateMediaBuyRequestFactory(_RequestFactory):

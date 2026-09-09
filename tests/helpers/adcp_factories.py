@@ -19,6 +19,7 @@ from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adc
 # Import Package and PackageRequest from our schemas (they extend adcp library)
 from src.core.schemas import Package, PackageRequest, url
 from src.core.schemas.product import Product
+from tests.factories import PricingOptionFactory
 from tests.factories.creative_asset import build_assets, image_spec
 
 
@@ -961,13 +962,11 @@ def create_test_db_product_with_pricing(
     """
     from decimal import Decimal
 
-    from src.core.database.models import PricingOption
-
     # Create product
     product = create_test_db_product(tenant_id=tenant_id, product_id=product_id, **product_kwargs)
 
     # Create pricing option
-    pricing = PricingOption(
+    pricing = PricingOptionFactory.build(
         tenant_id=tenant_id,
         product_id=product_id,
         pricing_model=pricing_model,
