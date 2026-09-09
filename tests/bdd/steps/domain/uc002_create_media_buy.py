@@ -21,9 +21,10 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps._harness_db import db_session as _db_session
 from tests.bdd.steps._outcome_helpers import _get_response_field, payload_or_none, require_payload
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal, seed_natural_key_matches
-from tests.bdd.steps.generic._create_request import build_create_request_kwargs
+from tests.bdd.steps.generic._create_request import build_create_request_kwargs, pricing_option_id
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.factories.mint import mint
+from tests.harness.create_request import build_request_packages
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — request setup and account state
@@ -1470,24 +1471,45 @@ def given_media_buy_already_created_same_key(ctx: dict) -> None:
 @given(parsers.parse("the request includes {count:d} package with a valid product_id"))
 @given(parsers.parse("the request includes {count:d} packages with valid product_ids"))
 def given_request_includes_packages(ctx: dict, count: int) -> None:
-    """The pending create request's packages all carry a product_id.
+    """The pending create request carries ``count`` packages, each naming a seeded product.
 
-    The COUNT is deliberately not asserted, and that is a finding rather than an
-    omission: both feature lines using this sentence say "2 packages", while
-    ``build_create_request_kwargs`` puts exactly ONE in the request every
-    scenario dispatches. Asserting the count would fail those scenarios on a
-    seeding defect this change is not scoped to fix (the request literal is the
-    seeding ticket's), and quietly building the second package would change what
-    every UC-002 happy path grades. Neither belongs in a ctx-protocol cleanup.
+    The COUNT IS NOW BUILT AND ASSERTED. It previously was neither, on the reasoning that
+    building the second package "would change what every UC-002 happy path grades" -- a
+    real worry, now measured and smaller than it looked: exactly TWO feature lines in the
+    corpus declare this sentence (``BR-UC-002-create-media-buy`` and
+    ``BR-UC-002-media-buy-status-dual-emit``), and only the second one executes. The base
+    request built by ``build_create_request_kwargs`` is untouched, so the ~148 scenarios
+    that go through it and never say this sentence keep their single package.
 
-    What is checkable here is the other half of the sentence -- "with valid
-    product_ids" -- which nothing graded before either: the count went into a ctx
-    key no step read, so the sentence could claim any number of packages carrying
-    anything at all.
+    WHY THE COUNT IS THE OBLIGATION rather than decoration (grounded in salesagent-9p7oe.2
+    against the 3.1.1 pin): four of this scenario's other Givens and both of its unique
+    Thens are universally quantified over packages -- "each package has a positive budget",
+    'all packages use the same currency "USD"', "each package has a valid
+    pricing_option_id", "the response should include packages with allocations", "each
+    package should include product_id, budget, and pricing details". A universal quantifier
+    over a singleton grades nothing: at count=1 a seller that echoes a constant product_id,
+    collapses N packages into one, or misallocates budget across them satisfies all of
+    them. The pin agrees -- create_media_buy.mdx L226 makes the per-package ``product_id``
+    echo a MUST, L266 states a CROSS-package currency rule, and its canonical Quick Start
+    (L67) sends two packages with two different product_ids.
+
+    Each package beyond the first gets its OWN Product and PricingOption. Pointing them all
+    at one product would leave the per-package obligations just as vacuous as count=1 did.
     """
-    packages = ctx["request_kwargs"].get("packages") or []
-    assert packages, (
-        f"Step claims the request includes {count} package(s) with valid product_ids, but the request carries none."
+    env = ctx["env"]
+    kwargs = ctx["request_kwargs"]
+
+    extras = [env.setup_product_chain(ctx["tenant"], product_id=f"prod_pkg_{index}") for index in range(1, count)]
+    env._commit_factory_data()
+    ctx["extra_products"] = extras
+
+    pairs = [(ctx["default_product"].product_id, pricing_option_id(ctx["default_pricing_option"]))]
+    pairs += [(product.product_id, pricing_option_id(option)) for product, option in extras]
+    kwargs["packages"] = build_request_packages(pairs)
+
+    packages = kwargs["packages"]
+    assert len(packages) == count, (
+        f"Step claims the request includes {count} package(s), but it carries {len(packages)}."
     )
     missing = [i for i, pkg in enumerate(packages) if not pkg.get("product_id")]
     assert not missing, (

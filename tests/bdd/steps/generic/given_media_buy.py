@@ -591,35 +591,14 @@ def given_product_minimum_spend(ctx: dict, amount: int, currency: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given("the request includes 2 packages with valid product_ids")
-def given_request_2_packages(ctx: dict) -> None:
-    """Add 2 packages with valid product_ids to the request."""
-    kwargs = _ensure_request_defaults(ctx)
-    env = ctx["env"]
-    product2 = ProductFactory(
-        tenant=ctx["tenant"],
-        product_id="standard_video",
-        property_tags=["all_inventory"],
-    )
-    po2 = PricingOptionFactory(
-        product=product2,
-        pricing_model="cpm",
-        currency="USD",
-        is_fixed=True,
-    )
-    env._commit_factory_data()
-    kwargs["packages"] = [
-        {
-            "product_id": ctx["default_product"].product_id,
-            "budget": 5000.0,
-            "pricing_option_id": pricing_option_id(ctx["default_pricing_option"]),
-        },
-        {
-            "product_id": product2.product_id,
-            "budget": 3000.0,
-            "pricing_option_id": pricing_option_id(po2),
-        },
-    ]
+# "the request includes 2 packages with valid product_ids" is NOT defined here. It was —
+# hardcoded to 2, hand-writing the package dict — and it never ran: the parameterized
+# definition in uc002_create_media_buy.py shadowed it, because both modules are registered
+# in pytest_plugins and pytest takes the later-registered stepdef fixture. Deleted rather
+# than repaired, and deliberately not "fixed" by reordering pytest_plugins: that leaves two
+# definitions of one sentence and re-creates the shadow by a different route. The surviving
+# definition builds the array through ``build_request_packages`` (the DTO-bound factory), so
+# there is one owner of the package shape rather than the three there were.
 
 
 @given("each package has a positive budget meeting minimum spend")
@@ -651,23 +630,39 @@ def given_packages_same_currency(ctx: dict, currency: str) -> None:
     # unconditional create is an IntegrityError, and before that constraint existed it was
     # a SECOND row sharing one id, of which the reader's dict silently dropped one. Either
     # way the step was establishing a state the seller cannot hold.
-    product = ctx["default_product"]
+    # PER PACKAGE'S OWN PRODUCT, not the default product for all of them. The sentence is a
+    # CROSS-package rule (3.1.1 create_media_buy.mdx L266: "Every package's selected pricing
+    # option must declare the media-buy currency"), so it has to hold for each package
+    # against the product that package actually names.
+    #
+    # Resolving every package off ctx["default_product"] happened to work only because
+    # PricingOption.default_option_id is "{model}_{currency}_{fixed|auction}"
+    # (src/core/database/models.py:531-544), so two different products' cpm/USD/fixed
+    # options carry the SAME id string. That is a coincidence of the default-id grammar,
+    # not a design: the moment a product's option is minted with a publisher-chosen id,
+    # the step names an id that product does not have. It is now correct by construction
+    # instead of by that coincidence.
+    by_product = {ctx["default_product"].product_id: ctx["default_product"]}
+    by_product.update({product.product_id: product for product, _ in ctx.get("extra_products") or []})
+
     wanted = PricingOption.default_option_id("cpm", currency, True)
-    existing = next(
-        (po for po in getattr(product, "pricing_options", None) or [] if po.pricing_option_id == wanted),
-        None,
-    )
-    po = existing or PricingOptionFactory(
-        product=product,
-        pricing_model="cpm",
-        currency=currency,
-        is_fixed=True,
-    )
-    env._commit_factory_data()
-    new_po_id = pricing_option_id(po)
-    # Update ALL packages to use this pricing option
     for pkg in kwargs.get("packages", []):
-        pkg["pricing_option_id"] = new_po_id
+        product = by_product.get(pkg["product_id"])
+        assert product is not None, (
+            f"Package names product {pkg['product_id']!r}, which no Given seeded. Seeded: {sorted(by_product)}."
+        )
+        existing = next(
+            (po for po in getattr(product, "pricing_options", None) or [] if po.pricing_option_id == wanted),
+            None,
+        )
+        po = existing or PricingOptionFactory(
+            product=product,
+            pricing_model="cpm",
+            currency=currency,
+            is_fixed=True,
+        )
+        env._commit_factory_data()
+        pkg["pricing_option_id"] = pricing_option_id(po)
 
 
 @given("each package has a valid pricing_option_id")
