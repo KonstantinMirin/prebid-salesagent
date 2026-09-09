@@ -146,18 +146,22 @@ def _detect_tenant(headers: dict) -> str | None:
     return tenant_id
 
 
-def resolve_identity(
+def _resolve_identity(
     headers: dict,
     auth_token: str | None = None,
     protocol: Literal["mcp", "a2a", "rest"] = "mcp",
     require_valid_token: bool = True,
     testing_context: AdCPTestContext | None = None,
 ) -> ResolvedIdentity:
-    """Resolve identity from request headers at the transport boundary.
+    """Resolve identity from request headers. PRIVATE to the boundary.
 
-    This is the single entry point for identity resolution, called by each
-    transport boundary (MCP wrapper, A2A handler, REST middleware) before
-    invoking _impl functions.
+    The leading underscore is the design, not a style choice. This is the ONE identity
+    resolution in the tree and ``src/core/tools/_boundary.invoke_tool`` is its only caller;
+    a transport that wanted to resolve its own has no public name to reach for. Four of them
+    used to, and they disagreed twice -- A2A refusing a credential on a public task that MCP
+    and REST served, and REST's discovery dependency hardcoding require_valid_token=False.
+    ``ruff-boundary.toml`` bans importing it outside the boundary, so the privacy is enforced
+    at lint time rather than by convention.
 
     Args:
         headers: HTTP request headers dict

@@ -46,6 +46,9 @@ select = ["TID251"]
 # The registry must import all fourteen to build TOOLS. It is the ONLY exemption:
 # every other importer is the disease this table exists to prevent.
 "src/core/tools/registry.py" = ["TID251"]
+# The boundary owns the resolver and the stamped entry; the resolver's module defines it.
+"src/core/tools/_boundary.py" = ["TID251"]
+"src/core/resolved_identity.py" = ["TID251"]
 
 [lint.flake8-tidy-imports.banned-api]
 "src.core.tools.accounts._list_accounts_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
@@ -64,3 +67,19 @@ select = ["TID251"]
 "src.core.tools.task_management._complete_task_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
 "src.core.tools.task_management._get_task_status_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
 "src.core.tools.task_management._list_tasks_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+
+# Identity resolution and implementation selection. Same rule as the _impl bans above, one
+# layer up: invoke_tool is the only door, and what it does behind that door is private.
+#
+# Four transports used to resolve their own identity and read ToolSpec.auth themselves. They
+# disagreed twice -- A2A refusing a credential on a public task that MCP and REST served, and
+# REST's discovery dependency hardcoding require_valid_token=False so a rejected credential
+# was answered 200 there and 401 everywhere else. Neither was caught by a test; both were
+# found by driving the wire.
+#
+# The primary defence is that there is nothing to call: invoke_tool takes an AuthContext and
+# no identity, so a transport has nowhere to put one it resolved. These bans are the backstop
+# for the NAMES, so the property survives someone reaching for them again.
+"src.core.resolved_identity._resolve_identity".msg = "Identity is resolved once, in src/core/tools/_boundary.invoke_tool. A transport hands over an AuthContext; it does not resolve (salesagent-02rgd)."
+"src.core.tools._boundary._resolve_identity".msg = "Identity is resolved once, in invoke_tool. Do not re-export or re-import the resolver (salesagent-02rgd)."
+"src.core.tools._boundary._invoke_stamped".msg = "invoke_tool is the only door: it reads the registry row for both the implementation and the auth declaration. _invoke_stamped takes an already-chosen impl and an already-resolved identity -- which is how a transport used to select both (salesagent-02rgd)."

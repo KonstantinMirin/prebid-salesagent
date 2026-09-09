@@ -180,13 +180,13 @@ async def invoke_tool(
     """
     from starlette.concurrency import run_in_threadpool
 
-    from src.core.resolved_identity import resolve_identity
+    from src.core.resolved_identity import _resolve_identity
     from src.core.testing_hooks import AdCPTestContext
     from src.core.tools.registry import TOOLS
 
     spec = TOOLS[tool_name]
 
-    # In a worker thread because ``resolve_identity`` is SYNC and hits the database twice
+    # In a worker thread because ``_resolve_identity`` is SYNC and hits the database twice
     # (tenant detection, then the principal lookup). psycopg2 has no async path, so awaiting
     # it directly would block the event loop for both round-trips -- which is what MCP and
     # A2A did, while REST alone got the offload for free from FastAPI's sync-dependency
@@ -200,7 +200,7 @@ async def invoke_tool(
     testing_context = AdCPTestContext.from_headers(dict(credential.headers))
 
     identity = await run_in_threadpool(
-        resolve_identity,
+        _resolve_identity,
         headers=dict(credential.headers),
         auth_token=credential.auth_token,
         require_valid_token=spec.requires_credential(),
@@ -215,7 +215,7 @@ async def invoke_tool(
     # tool_error_logging. That is the same defect as the auth decision, in the observability
     # dimension: a value the caller already has, derived again somewhere else.
     try:
-        return await invoke(tool_name, spec.impl, req, identity)
+        return await _invoke_stamped(tool_name, spec.impl, req, identity)
     except Exception as exc:
         from src.core.tool_error_logging import record_boundary_error
 
@@ -236,7 +236,7 @@ async def invoke_tool(
     # laziness exists to defer. ``require_tenant(identity)`` is the explicit path.
 
 
-async def invoke(
+async def _invoke_stamped(
     tool_name: str,
     impl: Callable[..., Any],
     req: BuyerRequest,
