@@ -25,6 +25,26 @@ from unittest.mock import patch
 from src.core.resolved_identity import ResolvedIdentity
 from tests.factories.principal import PrincipalFactory
 
+#: The one patch target. Spelled once, here, and nowhere else in tests/.
+#:
+#: ``ruff-boundary.toml`` bans IMPORTING ``_resolve_identity`` outside the boundary, which a
+#: ``mock.patch`` string sails straight past -- a patch names a module path, it does not import
+#: it. So the ban cannot police this, and the sixteen REST tests that each spelled
+#: ``"src.core.resolved_identity.resolve_identity"`` in a decorator are exactly how the seam's
+#: location ends up recorded in sixteen places and renamed in one.
+_RESOLVER = "src.core.resolved_identity._resolve_identity"
+
+
+def resolves_to(identity: ResolvedIdentity):
+    """``resolved_as`` as a DECORATOR, for tests that take the mock as an argument.
+
+    ``mock.patch`` objects are both, so this is the same substitution wearing the shape a
+    ``@patch(...)``-decorated test already has. It exists so migrating those tests is a change
+    of name, not a rewrite of every test body into a ``with`` block -- a rewrite is where
+    assertions get dropped by accident.
+    """
+    return patch(_RESOLVER, return_value=identity)
+
 
 @contextmanager
 def resolved_as(identity: ResolvedIdentity | None = None) -> Iterator[ResolvedIdentity]:

@@ -988,24 +988,26 @@ class BaseTestEnv:
         auth_token = mcp_identity.auth_token if mcp_identity else None
 
         if auth_token:
-            # Real auth chain: header → token → DB lookup → identity.
-            # Patch get_http_headers in BOTH modules that import it:
-            # transport_helpers (called by resolve_identity_from_context) and
-            # mcp_auth_middleware (called for context_id extraction).
+            # Real auth chain: header -> token -> DB lookup -> identity.
+            #
+            # ONE patch, at the source. This used to patch get_http_headers in two importing
+            # modules (transport_helpers and mcp_auth_middleware), and the comment explaining
+            # why conceded the hole: "if a third module imports get_http_headers without being
+            # patched, this won't catch it". Both of those modules have since stopped
+            # importing it -- mcp_auth_middleware no longer exists at all -- so the patches
+            # named nothing and raised AttributeError instead of failing usefully.
+            #
+            # src/core/main.py imports it from fastmcp.server.dependencies inside the call, so
+            # patching the DEFINING module is what a function-local import actually sees, and
+            # it covers any further importer for free.
             headers = self._credential_headers(mcp_identity)
 
             async def _call():
-                mock_th = patch("src.core.transport_helpers.get_http_headers", return_value=headers)
-                mock_mw = patch("src.core.mcp_auth_middleware.get_http_headers", return_value=headers)
-                with mock_th as patched_th, mock_mw as patched_mw:
+                with patch("fastmcp.server.dependencies.get_http_headers", return_value=headers) as patched:
                     async with Client(mcp) as client:
                         result = await client.call_tool(tool_name, arguments)
-                        # Guard: verify the header patches were called.
-                        # If a third module imports get_http_headers without being
-                        # patched, this won't catch it — but at least we verify
-                        # the known auth paths were exercised.
-                        assert patched_th.called or patched_mw.called, (
-                            f"Auth chain not exercised for {tool_name} — get_http_headers patches were not called"
+                        assert patched.called, (
+                            f"Auth chain not exercised for {tool_name} — get_http_headers was never called"
                         )
                         return DeliverResult(
                             payload=response_cls(**result.structured_content),
@@ -1013,12 +1015,13 @@ class BaseTestEnv:
                         )
 
         else:
-            # Unit mode: inject identity directly.
+            # Unit mode: inject identity directly, through the one seam that names the
+            # resolver (tests/helpers/boundary_identity.py). Identity is resolved in
+            # invoke_tool now, not in a per-transport middleware.
             async def _call():
-                with patch(
-                    "src.core.mcp_auth_middleware.resolve_identity_from_context",
-                    return_value=mcp_identity,
-                ):
+                from tests.helpers.boundary_identity import resolved_as
+
+                with resolved_as(mcp_identity):
                     async with Client(mcp) as client:
                         result = await client.call_tool(tool_name, arguments)
                         return DeliverResult(

@@ -354,19 +354,44 @@ class TestDiscoveryEndpointsInvalidAuth:
             # Verify the identity was anonymous
             assert identity.principal_id is None
 
-    def test_authenticated_tools_use_require_valid_token_true_by_default(self):
-        """Verify resolve_identity uses the default require_valid_token=True behavior.
+    async def test_the_boundary_asks_the_tool_whether_a_credential_is_required(self):
+        """Whether a credential must verify comes from the TOOL's declaration, per call.
 
-        resolve_identity has require_valid_token parameter that defaults to True.
-        This means invalid tokens raise AdCPAuthenticationError at the boundary
-        for authenticated endpoints.
+        This replaces an assertion that ``resolve_identity``'s ``require_valid_token``
+        parameter DEFAULTED to True. That default is now unreachable: the boundary supplies
+        the argument on every call, from ``ToolSpec.requires_credential()``. A test on a
+        default nothing takes grades nothing -- and worse, it would keep passing if the
+        boundary started passing a constant, which is the exact defect this refactor removed
+        (four sites each deciding, and two of them disagreeing).
+
+        So the claim under test is the live one: a protected tool and a public tool produce
+        DIFFERENT values, and each matches its own registry row.
         """
-        # Verify the default parameter value is True
-        import inspect
+        from types import MappingProxyType
+        from unittest.mock import patch
 
-        from src.core.resolved_identity import resolve_identity
+        from src.core.auth_context import AuthContext
+        from src.core.schemas import GetProductsRequest, ListCreativesRequest
+        from src.core.tools._boundary import invoke_tool
+        from src.core.tools.registry import TOOLS
 
-        sig = inspect.signature(resolve_identity)
-        require_param = sig.parameters.get("require_valid_token")
-        assert require_param is not None, "require_valid_token parameter should exist"
-        assert require_param.default is True, f"require_valid_token should default to True, got {require_param.default}"
+        credential = AuthContext(auth_token=None, headers=MappingProxyType({}))
+
+        async def required_flag_for(tool_name, req):
+            identity = PrincipalFactory.make_identity(principal_id="p", tenant_id="t")
+            with patch("src.core.resolved_identity._resolve_identity", return_value=identity) as resolver:
+                try:
+                    await invoke_tool(tool_name, req, credential, "rest")
+                except Exception:
+                    pass  # the implementation may fail without a database; resolution is the subject
+            assert resolver.called, f"{tool_name}: the boundary never resolved"
+            return resolver.call_args.kwargs["require_valid_token"]
+
+        assert await required_flag_for("list_creatives", ListCreativesRequest()) is True, (
+            "list_creatives declares auth='required'; the boundary must demand a valid credential"
+        )
+        assert await required_flag_for("get_products", GetProductsRequest(brief="x")) is False, (
+            "get_products declares auth='optional'; the boundary must not demand a credential"
+        )
+        assert TOOLS["list_creatives"].requires_credential() is True
+        assert TOOLS["get_products"].requires_credential() is False

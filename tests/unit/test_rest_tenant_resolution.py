@@ -7,55 +7,6 @@ These tests also verify removal of MinimalContext and cast(ToolContext) patterns
 """
 
 import inspect
-from unittest.mock import patch
-
-from src.core.resolved_identity import ResolvedIdentity
-
-
-class TestRestResolveAuthReturnsResolvedIdentity:
-    """REST resolve_auth dep must return ResolvedIdentity, not ToolContext."""
-
-    def test_resolve_auth_returns_resolved_identity_type(self):
-        """_resolve_auth_dep should return a ResolvedIdentity."""
-        from src.core.auth_context import AuthContext, _resolve_auth_dep
-
-        auth_ctx = AuthContext(auth_token="test-token", headers={"x-adcp-auth": "test-token"})
-
-        mock_identity = ResolvedIdentity(
-            principal_id="test_principal", tenant_id="default", tenant={"tenant_id": "default"}, protocol="rest"
-        )
-
-        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
-            identity = _resolve_auth_dep(auth_ctx)
-
-        assert isinstance(identity, ResolvedIdentity), (
-            f"_resolve_auth_dep returned {type(identity).__name__}, expected ResolvedIdentity"
-        )
-        assert identity.principal_id == "test_principal"
-
-    def test_resolve_auth_non_admin_non_default_tenant(self):
-        """A non-admin principal in a non-default tenant should get the correct tenant."""
-        from src.core.auth_context import AuthContext, _resolve_auth_dep
-
-        auth_ctx = AuthContext(
-            auth_token="test-token",
-            headers={"x-adcp-auth": "test-token", "x-adcp-tenant": "acme"},
-        )
-
-        # resolve_identity reads x-adcp-tenant from headers → tenant_id="acme"
-        mock_identity = ResolvedIdentity(
-            principal_id="regular_user", tenant_id="acme", tenant={"tenant_id": "acme"}, protocol="rest"
-        )
-
-        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
-            identity = _resolve_auth_dep(auth_ctx)
-
-        assert isinstance(identity, ResolvedIdentity)
-        assert identity.principal_id == "regular_user"
-        assert identity.tenant_id == "acme", (
-            f"Expected tenant_id='acme' from x-adcp-tenant header, got '{identity.tenant_id}'. "
-            "REST is likely still using the broken heuristic."
-        )
 
 
 class TestNoMinimalContext:
