@@ -35,7 +35,13 @@ from src.a2a_server.adcp_a2a_server import (
 from src.a2a_server.context_builder import AdCPCallContextBuilder
 from src.admin.app import create_app
 from src.core.agent_identity import agent_identity_for_tenant_id
-from src.core.auth_middleware import McpCredentialGate, UnifiedAuthMiddleware, challenge_for_code
+from src.core.auth_middleware import (
+    AuthChallengeResponder,
+    McpCredentialGate,
+    UnifiedAuthMiddleware,
+    adcp_error_code_in,
+    challenge_for_code,
+)
 from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
 from src.core.domain_routing import route_landing_page
 from src.core.errors.issues import issues_from_validation_error
@@ -110,7 +116,19 @@ async def app_lifespan(app: FastAPI):
 
 # Build the MCP sub-application.
 # path="/" because we mount it at /mcp — routes inside are relative.
-mcp_app = mcp.http_app(path="/")
+#
+# json_response=True makes every response a BUFFERED application/json body instead of an
+# SSE stream, and that is what lets a refused credential be answered the same way it is on
+# A2A: read the AdCP code off the outgoing body, lift the status to 401. Under SSE it could
+# not be, because streamable-HTTP sends http.response.start -- 200, text/event-stream --
+# before the tool is dispatched, so the status was already on the wire before the error
+# existed. That asymmetry was a property of the RESPONSE MODE, not of MCP.
+#
+# Costs nothing this seller uses: nothing in src/ streams MCP output (no report_progress,
+# no partial results), the tools are request/response, and MCP's streamable-HTTP transport
+# specifies JSON responses as a first-class alternative. The SSE handling that does exist
+# here is in the creative-agent CLIENT, consuming another agent's stream, and is untouched.
+mcp_app = mcp.http_app(path="/", json_response=True)
 
 # Create the root FastAPI app with combined lifespans so that both
 # the MCP schedulers (delivery webhooks, media-buy status) and any
@@ -129,7 +147,7 @@ app = FastAPI(
 # because streamable-HTTP sends the response status before the tool is ever dispatched --
 # see McpCredentialGate. Wrapping the sub-app (rather than adding app-level middleware)
 # keeps it off every other route: REST and A2A render their own refusals.
-app.mount("/mcp", McpCredentialGate(mcp_app))
+app.mount("/mcp", McpCredentialGate(AuthChallengeResponder(mcp_app)))
 
 
 # ---------------------------------------------------------------------------
@@ -388,22 +406,6 @@ async def tool_error_handler(request: Request, exc: ToolError) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
-def _a2a_error_code(body: object) -> str | None:
-    """The AdCP error code inside a JSON-RPC error body, or None if there isn't one.
-
-    Every level is type-checked rather than assumed. ``error`` is not always an object:
-    a bare JSON-RPC failure can carry a STRING there, and the obvious
-    ``(body.get("error") or {}).get("data")`` blows up on it -- a non-empty string is
-    truthy, so the ``or {}`` never fires and ``.get`` lands on a str. That is not
-    hypothetical; it broke two of this file's own regression tests.
-    """
-    error = body.get("error") if isinstance(body, dict) else None
-    data = error.get("data") if isinstance(error, dict) else None
-    adcp_error = data.get("adcp_error") if isinstance(data, dict) else None
-    code = adcp_error.get("code") if isinstance(adcp_error, dict) else None
-    return code if isinstance(code, str) else None
-
-
 def _restore_a2a_wire_integers(
     endpoint: Callable[[Request], Awaitable[Response]],
 ) -> Callable[[Request], Awaitable[Response]]:
@@ -436,7 +438,7 @@ def _restore_a2a_wire_integers(
             fixed = restore_a2a_integer_types(json.loads(bytes(response.body)))
             headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
             status_code = response.status_code
-            if challenge := challenge_for_code(_a2a_error_code(fixed)):
+            if challenge := challenge_for_code(adcp_error_code_in(fixed)):
                 status_code = 401
                 headers["WWW-Authenticate"] = challenge
             return JSONResponse(fixed, status_code=status_code, headers=headers)

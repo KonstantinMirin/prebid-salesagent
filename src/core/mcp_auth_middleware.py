@@ -36,10 +36,20 @@ class MCPAuthMiddleware(Middleware):
         tool_name = context.message.name
         require_auth = TOOLS[tool_name].auth == "required"
 
+        # A PRESENTED credential is always validated, whatever the tool needs -- the same
+        # rule A2A applies, and for the same reason its comment gives: absent token on a
+        # discovery tool is legitimately anonymous, but a token that was sent and does not
+        # resolve must be answered AUTH_INVALID rather than silently downgraded to
+        # anonymous. This read ``require_valid_token=require_auth``, so an invalid token on
+        # one of the three auth="optional" tools was swallowed here while A2A rejected it --
+        # the same request, two answers, decided by which transport it arrived on.
+        from src.core.auth_middleware import credential_present
+
+        headers = get_http_headers(include_all=True) or {}
         try:
             identity = resolve_identity_from_context(
                 context.fastmcp_context,
-                require_valid_token=require_auth,
+                require_valid_token=require_auth or credential_present(headers),
             )
         except AdCPSalesAgentError as exc:
             # This middleware runs OUTSIDE the tool functions, so its raise never

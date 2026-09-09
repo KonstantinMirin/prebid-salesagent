@@ -156,6 +156,123 @@ class McpCredentialGate:
         await self.app(scope, replay, send)
 
 
+def adcp_error_code_in(body: object) -> str | None:
+    """The AdCP error code inside a two-layer envelope, or None if there isn't one.
+
+    Finds it whether the envelope is the whole body (REST, MCP tool payloads) or nested
+    under a JSON-RPC ``error.data`` (A2A). Every level is type-checked rather than assumed:
+    ``error`` is not always an object -- a bare JSON-RPC failure can carry a STRING there,
+    and the obvious ``(body.get("error") or {}).get("data")`` blows up on it, because a
+    non-empty string is truthy so the ``or {}`` never fires.
+    """
+    if not isinstance(body, dict):
+        return None
+
+    # 1. The envelope is the whole body -- REST.
+    envelope = body.get("adcp_error")
+
+    # 2. Nested under a JSON-RPC error's ``data`` -- A2A.
+    if not isinstance(envelope, dict):
+        error = body.get("error")
+        data = error.get("data") if isinstance(error, dict) else None
+        envelope = data.get("adcp_error") if isinstance(data, dict) else None
+
+    # 3. Inside an MCP tool RESULT. MCP does not report a tool failure as a JSON-RPC error:
+    #    it answers `result.content[].text` with isError set, and that text is the envelope
+    #    re-encoded as a JSON STRING. So the code is two decodes deep, which is why a reader
+    #    that knew only shapes 1 and 2 silently found nothing here.
+    if not isinstance(envelope, dict):
+        result = body.get("result")
+        content = result.get("content") if isinstance(result, dict) else None
+        for part in content or []:
+            text = part.get("text") if isinstance(part, dict) else None
+            if not isinstance(text, str):
+                continue
+            try:
+                inner = json.loads(text)
+            except (ValueError, TypeError):
+                continue
+            candidate = inner.get("adcp_error") if isinstance(inner, dict) else None
+            if isinstance(candidate, dict):
+                envelope = candidate
+                break
+
+    code = envelope.get("code") if isinstance(envelope, dict) else None
+    return code if isinstance(code, str) else None
+
+
+class AuthChallengeResponder:
+    """Lift a refused credential out of a buffered JSON body and onto the HTTP status.
+
+    THE shared rendering rule for the two transports that answer inside a 200. MCP and A2A
+    both frame a failure as a protocol-level error in the body, which is right for an
+    application code and wrong for a refused credential: the caller has no identity and
+    needs the 401 handshake to learn how to authenticate. This reads the AdCP code off the
+    outgoing envelope and, when it is one of the auth codes, rewrites the status and adds
+    the challenge -- the "read the code, set the status, in one place" rule, applied
+    identically to both.
+
+    It buffers, and it must: the ASGI ``http.response.start`` message carries the status and
+    arrives BEFORE the body, so the status has to be held until the body has been seen. That
+    is only sound for a finite, buffered response, which is why the MCP app is built with
+    ``json_response=True``. Under SSE this cannot work at all, and pretending otherwise is
+    the mistake an earlier attempt made.
+
+    What it CANNOT cover, and why the MCP gate still exists: a request the app rejects
+    before dispatch produces no envelope to read. MCP's session handshake does exactly that
+    to a sessionless ``tools/call`` -- 400, "Missing session ID", tool never runs -- and that
+    is the shape the storyboard's unauthenticated probe sends. A2A and REST have no session,
+    so they have nothing equivalent. That is the one genuine difference between the
+    transports here; everything else is now the same rule.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        start: Message | None = None
+        chunks: list[bytes] = []
+
+        async def buffer(message: Message) -> None:
+            nonlocal start
+            if message["type"] == "http.response.start":
+                start = message
+                return
+            if message["type"] != "http.response.body":
+                await send(message)
+                return
+            chunks.append(message.get("body", b"") or b"")
+            if message.get("more_body", False):
+                return
+            await _flush(send, start, b"".join(chunks))
+
+        await self.app(scope, receive, buffer)
+
+
+async def _flush(send: Send, start: Message | None, body: bytes) -> None:
+    """Emit the held response, upgrading it to 401 when it carries an auth refusal."""
+    if start is None:
+        return
+    try:
+        code = adcp_error_code_in(json.loads(body)) if body else None
+    except (ValueError, TypeError):
+        code = None
+    challenge = challenge_for_code(code)
+    if challenge:
+        start = dict(start)
+        start["status"] = 401
+        start["headers"] = [
+            *(h for h in start.get("headers", []) if h[0].lower() != b"www-authenticate"),
+            (b"www-authenticate", challenge.encode("latin-1")),
+        ]
+    await send(start)
+    await send({"type": "http.response.body", "body": body})
+
+
 def _tool_requires_credential(tool_name: str) -> bool:
     """Whether the registry says this tool needs a caller.
 
