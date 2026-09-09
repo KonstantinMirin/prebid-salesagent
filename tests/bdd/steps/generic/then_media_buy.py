@@ -66,61 +66,14 @@ def then_response_field_matches(ctx: dict, field: str, value: str) -> None:
     assert str(actual) == value, f"Expected {field}='{value}', got '{actual}'"
 
 
-@then("the response should include packages with allocations")
-def then_response_has_packages(ctx: dict) -> None:
-    """Assert response includes packages array with allocated packages (product_id assigned).
-
-    Verifies the exact expected count from request_kwargs and that
-    each package has a product_id proving allocation occurred.
-    """
-    resp = require_payload(ctx)
-    packages = _get_response_field(resp, "packages")
-    assert packages is not None, "Expected 'packages' in response"
-    # Verify exact count matches what was requested (scenario sets up N packages)
-    request_kwargs = ctx.get("request_kwargs", {})
-    expected_packages = request_kwargs.get("packages")
-    if expected_packages is not None:
-        assert len(packages) == len(expected_packages), (
-            f"Expected {len(expected_packages)} packages (matching request), got {len(packages)}"
-        )
-    else:
-        assert packages, "Expected at least one package in response"
-    # "with allocations" means each package has a product_id (allocation to a product)
-    for i, pkg in enumerate(packages):
-        pkg_dict = pkg if isinstance(pkg, dict) else pkg.model_dump()
-        assert pkg_dict.get("product_id"), f"Package {i} missing product_id — not allocated"
-
-
-@then("each package should include product_id, budget, and pricing details")
-def then_packages_have_details(ctx: dict) -> None:
-    """Assert each package has product_id, budget, AND pricing details with concrete values."""
-    resp = require_payload(ctx)
-    packages = _get_response_field(resp, "packages")
-    assert packages is not None, "No packages field in response"
-    assert isinstance(packages, list), f"Expected packages to be a list, got {type(packages).__name__}"
-    assert packages, f"Expected non-empty packages list but got empty: {packages}"
-    for i, pkg in enumerate(packages):
-        pkg_dict = pkg if isinstance(pkg, dict) else (pkg.model_dump() if hasattr(pkg, "model_dump") else vars(pkg))
-        # product_id must be present AND non-empty (proves allocation occurred)
-        product_id = pkg_dict.get("product_id")
-        assert product_id is not None, f"Package {i} has product_id=None — expected a concrete product allocation"
-        assert isinstance(product_id, str), f"Package {i} product_id is {type(product_id).__name__}, expected str"
-        assert product_id != "", f"Package {i} has empty product_id string"
-        # budget must be present AND be a numeric value or dict with amount
-        budget = pkg_dict.get("budget")
-        assert budget is not None, f"Package {i} has budget=None — step claims 'budget' is included"
-        if isinstance(budget, dict):
-            assert "amount" in budget, f"Package {i} budget dict missing 'amount' key: {budget}"
-            assert budget["amount"] is not None, f"Package {i} budget.amount is None"
-        # pricing details: pricing_option_id must be a non-empty value
-        pricing_option_id = pkg_dict.get("pricing_option_id")
-        assert pricing_option_id is not None, (
-            f"Package {i} has pricing_option_id=None — step claims 'pricing details' are included"
-        )
-        assert isinstance(pricing_option_id, str), (
-            f"Package {i} pricing_option_id is {type(pricing_option_id).__name__}, expected str"
-        )
-        assert pricing_option_id != "", f"Package {i} has empty pricing_option_id string"
+# "the response should include packages with allocations" and "each package should include
+# product_id, budget, and pricing details" are NOT defined here any more. They moved to
+# tests/bdd/steps/domain/uc002_create_media_buy.py, which is REGISTERED in pytest_plugins --
+# this module is not, so both definitions were unreachable and the only scenario declaring
+# either sentence never graded it. Both were also existence checks on result.payload; the
+# replacements compare values on the wire against the request. Registering this module
+# instead was measured and rejected: it steals 127 already-bound step instances across 5
+# modules (salesagent-uokuq).
 
 
 # ═══════════════════════════════════════════════════════════════════════

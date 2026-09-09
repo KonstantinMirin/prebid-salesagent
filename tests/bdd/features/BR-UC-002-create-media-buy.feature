@@ -38,8 +38,8 @@ Feature: BR-UC-002 Create Media Buy
     | field          | value                        |
     | account        | account_id "acc-001"         |
     | brand          | domain "acme.com"            |
-    | start_time     | 2026-04-01T00:00:00Z         |
-    | end_time       | 2026-04-30T23:59:59Z         |
+    | start_time     | {1 day from now}             |
+    | end_time       | {30 days from now}           |
     And the request includes 2 packages with valid product_ids
     And each package has a positive budget meeting minimum spend
     And all packages use the same currency "USD"

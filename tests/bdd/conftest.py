@@ -5625,6 +5625,16 @@ ENV_ROUTES: list[EnvRoute] = [
             "UC-002",
             lambda m: (
                 any(t.startswith("T-UC-002-ext-") for t in m)
+                # T-UC-002-main, the auto-approved main flow, shares this row rather than
+                # getting its own: it needs EXACTLY what the ext scenarios need — the create
+                # chain plus dispatch_mode="create", so the When dispatches the request the
+                # Givens built instead of rebuilding it. It sat on the uc002-not-wired
+                # catch-all until now, which xfailed it at fixture setup, so it dispatched
+                # nothing and its two unique Thens had never executed anywhere in the corpus
+                # (salesagent-9p7oe). The sibling already on this row,
+                # @T-UC-002-ext-dual-emit, has the byte-identical Given block and passes on
+                # a2a/mcp/rest/e2e_rest, which is why this is a row-share and not new wiring.
+                or "T-UC-002-main" in m
                 or "nfr-highvalue" in m
                 or "T-UC-002-nfr-001-enforcement" in m
             ),
