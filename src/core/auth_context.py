@@ -73,19 +73,22 @@ def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
     Apx-Incoming-Host), regardless of whether a credential was presented or
     resolved to a principal — matching resolve_identity_from_context()'s
     MCP/A2A contract (transport_helpers.py). Discovery responses describe the
-    SELLER, not the caller (AdCP INV-4, v3.1.1), so an anonymous or
-    presented-but-unresolvable-token caller must still receive the same
-    tenant-scoped data an authenticated caller would (salesagent-zna9).
-    Never raises on missing or invalid tokens — identity.principal_id being
-    None is how downstream code distinguishes "no credentials" from a
+    SELLER, not the caller (AdCP INV-4, v3.1.1), so an ANONYMOUS caller must
+    still receive the same tenant-scoped data an authenticated caller would
+    (salesagent-zna9). Anonymous, not "sent a token that does not work":
+    ``must_validate_credential`` draws that line, so a rejected credential is
+    refused AUTH_INVALID here exactly as it already was on MCP and A2A.
+    Never raises for a caller who presented NOTHING — identity.principal_id
+    being None is how downstream code distinguishes "no credentials" from a
     resolved principal (require_principal_id, brand_manifest_policy checks).
     """
+    from src.core.auth_middleware import must_validate_credential
     from src.core.resolved_identity import resolve_identity
 
     identity = resolve_identity(
         headers=dict(auth_ctx.headers),
         auth_token=auth_ctx.auth_token,
-        require_valid_token=False,
+        require_valid_token=must_validate_credential(False, auth_ctx.headers),
         protocol="rest",
     )
 

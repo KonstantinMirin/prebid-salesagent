@@ -130,6 +130,37 @@ class TestResolveAuthDepBehavior:
         assert isinstance(result, ResolvedIdentity)
         assert result.principal_id is None
 
+    def test_presented_credential_is_validated_on_a_discovery_route(self):
+        """A credential the caller DID present is validated, even by the discovery dep.
+
+        The other half of the rule the test above pins. ``_resolve_auth_dep`` hardcoded
+        ``require_valid_token=False``, so a rejected token got 200-as-anonymous over REST
+        while MCP and A2A both answered 401 AUTH_INVALID — one request, two answers, decided
+        by the transport it arrived on. The pinned 3.1 ``error-code`` enum keys AUTH_INVALID
+        on "credentials were presented but rejected" and says nothing about which tool was
+        called, so presence is what decides, not the tool's ``ToolSpec.auth``.
+
+        Anonymous discovery is unaffected: with no credential the flag is still False, which
+        ``test_returns_identity_without_token`` above holds (AdCP INV-4, salesagent-zna9).
+        """
+        from unittest.mock import patch
+
+        from src.core.auth_context import AuthContext, _resolve_auth_dep
+        from tests.factories.principal import PrincipalFactory
+
+        auth_ctx = AuthContext(auth_token="rejected-token", headers={"x-adcp-auth": "rejected-token"})
+        mock_identity = PrincipalFactory.make_identity(principal_id=None, tenant_id=None, tenant=None, protocol="rest")
+
+        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity) as mock_resolve:
+            _resolve_auth_dep(auth_ctx)
+
+        mock_resolve.assert_called_once_with(
+            headers={"x-adcp-auth": "rejected-token"},
+            auth_token="rejected-token",
+            require_valid_token=True,
+            protocol="rest",
+        )
+
     def test_returns_identity_with_valid_token(self):
         """resolve_auth dep should return ResolvedIdentity with valid token."""
         from unittest.mock import patch

@@ -7,7 +7,7 @@ Supports both standard A2A message format and JSON-RPC 2.0.
 import json
 import logging
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
 from datetime import UTC, datetime
@@ -54,6 +54,7 @@ from google.protobuf import json_format, struct_pb2
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
+from src.core.auth_middleware import must_validate_credential
 from src.core.domain_config import get_a2a_server_url
 from src.core.errors.codes import AppErrorCode
 from src.core.errors.issues import ErrorIssue, JsonPointer
@@ -308,6 +309,17 @@ class AdCPRequestHandler(RequestHandler):
         auth_ctx = context.state.get(AUTH_CONTEXT_STATE_KEY)
         return auth_ctx.auth_token if auth_ctx else None
 
+    def _headers_of(self, context: ServerCallContext | None = None) -> Mapping[str, str]:
+        """The request headers UnifiedAuthMiddleware parked on the call context.
+
+        Empty when there is no context, which is how the SDK calls a handler directly in a
+        test: no headers means no credential presented, which is the right reading.
+        """
+        if context is None:
+            return {}
+        auth_ctx = context.state.get(AUTH_CONTEXT_STATE_KEY)
+        return auth_ctx.headers if auth_ctx else {}
+
     def _resolve_a2a_identity(
         self,
         auth_token: str | None,
@@ -557,9 +569,13 @@ class AdCPRequestHandler(RequestHandler):
             # The `except AdCPAuthenticationError` below renders whichever it raises --
             # AdCPAuthRequiredError subclasses it, so one branch covers both codes, and each
             # carries its own code into the envelope.
+            #
+            # The flag comes from must_validate_credential rather than being spelled here as
+            # `bool(auth_token) or requires_auth`. Same three outcomes, but it is the SAME
+            # expression MCP and REST evaluate: the local spellings drifted once already.
             identity = self._resolve_a2a_identity(
                 auth_token,
-                require_valid_token=bool(auth_token) or requires_auth,
+                require_valid_token=must_validate_credential(requires_auth, self._headers_of(context)),
                 context=context,
             )
 

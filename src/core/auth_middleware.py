@@ -67,6 +67,25 @@ def credential_present(headers: Mapping[str, str]) -> bool:
     return authorization.lower().startswith("bearer ") and bool(authorization[7:].strip())
 
 
+def must_validate_credential(tool_requires_auth: bool, headers: Mapping[str, str]) -> bool:
+    """Whether this request's credential has to resolve to a principal.
+
+    ONE rule, and the value every transport passes as ``resolve_identity``'s
+    ``require_valid_token``: validate when the TOOL needs a caller, or when the caller
+    presented a credential at all. The second half is what makes a presented-and-rejected
+    token an ``AUTH_INVALID`` refusal on a discovery tool rather than a silent downgrade to
+    anonymous -- the pinned 3.1 enum keys ``AUTH_INVALID`` on "credentials were presented
+    but rejected", which says nothing about which tool was called.
+
+    It exists because the three transports each spelled this rule themselves and only two of
+    them agreed: MCP wrote ``require_auth or credential_present(headers)``, A2A wrote
+    ``bool(auth_token) or requires_auth``, and REST's discovery dependency hardcoded
+    ``False`` -- so an invalid token got 401 AUTH_INVALID over MCP and A2A and 200 over
+    REST. Three spellings of one rule is how they drifted; one function is how they stop.
+    """
+    return tool_requires_auth or credential_present(headers)
+
+
 def adcp_error_code_in(body: object) -> str | None:
     """The AdCP error code inside a two-layer envelope, or None if there isn't one.
 

@@ -9,6 +9,13 @@ def assert_resolve_auth_dep_passes_token(auth_token: str = "pre-extracted-token"
     Shared assertion used by multiple test files to verify the token passthrough
     contract: the pre-extracted token must be forwarded without redundant
     re-extraction from headers.
+
+    ``require_valid_token`` is True here because this fixture PRESENTS a credential. The
+    discovery dependency no longer hardcodes False: it asks ``must_validate_credential``,
+    which validates whenever the tool needs a caller OR a credential was presented. A caller
+    who presents nothing still resolves anonymously; this one presents
+    ``Authorization: Bearer``, so a token that does not resolve is AUTH_INVALID — the answer
+    MCP and A2A already gave, while REST answered 200.
     """
     from unittest.mock import patch
 
@@ -32,7 +39,7 @@ def assert_resolve_auth_dep_passes_token(auth_token: str = "pre-extracted-token"
     mock_resolve.assert_called_once_with(
         headers=expected_headers,
         auth_token=auth_token,
-        require_valid_token=False,
+        require_valid_token=True,
         protocol="rest",
     )
 
