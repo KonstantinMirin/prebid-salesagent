@@ -112,9 +112,14 @@ _SCENARIO_PREFIXES = ("Scenario:", "Scenario Outline:")
 #     the disposition table's row-12 verdict.
 _ALLOWLIST: frozenset[tuple[str, int]] = frozenset(
     {
+        # Shifted down by one on 2026-09-09: the DO-NOT-EDIT header line was removed from
+        # all 28 feature files (the features are no longer regenerated), so every line below
+        # it moved. The citations themselves are unchanged -- 149/150/868 became 148/149/867.
+        # This allowlist is keyed by (file, LINE NUMBER), so any edit above a cited line
+        # invalidates it silently; the guard's own staleness check is what caught it.
+        ("BR-UC-017-account-financials-usage.feature", 148),
         ("BR-UC-017-account-financials-usage.feature", 149),
-        ("BR-UC-017-account-financials-usage.feature", 150),
-        ("BR-UC-017-account-financials-usage.feature", 868),
+        ("BR-UC-017-account-financials-usage.feature", 867),
     }
 )
 
