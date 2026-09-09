@@ -42,3 +42,20 @@ def resolved_as(identity: ResolvedIdentity | None = None) -> Iterator[ResolvedId
         )
     with patch("src.core.resolved_identity.resolve_identity", return_value=identity):
         yield identity
+
+
+@contextmanager
+def refused_as(error: Exception) -> Iterator[Exception]:
+    """Make the boundary REFUSE, raising *error* instead of touching the database.
+
+    The counterpart to ``resolved_as``. Resolution both resolves and refuses -- a protected
+    tool's refusal happens INSIDE it, which is what makes the postcondition ("returns a
+    resolved principal or raises") worth relying on. A test that grades what happens on a
+    refusal therefore has to make the resolver raise, not return something unusable.
+
+    Before the collapse a test could inject an identity carrying a tenant and no principal
+    and watch a downstream guard reject it. That state is now unconstructable: the tools
+    declare auth="required", so resolution refuses first and nothing partial reaches them.
+    """
+    with patch("src.core.resolved_identity.resolve_identity", side_effect=error):
+        yield error
