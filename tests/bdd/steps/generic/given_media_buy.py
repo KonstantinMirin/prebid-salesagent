@@ -18,6 +18,7 @@ from typing import Any
 from adcp.types import ErrorCode
 from pytest_bdd import given, parsers
 
+from src.core.database.models import PricingOption
 from tests.bdd.steps.generic._create_request import (
     build_create_request_kwargs,
     pricing_option_id,
@@ -643,9 +644,21 @@ def given_packages_same_currency(ctx: dict, currency: str) -> None:
     """
     env = ctx["env"]
     kwargs = _ensure_request_defaults(ctx)
-    # Create a pricing option with the desired currency
-    po = PricingOptionFactory(
-        product=ctx["default_product"],
+    # GET-OR-CREATE, not create. The sentence says the packages USE an option in this
+    # currency; it does not say a second one is minted. The env already seeds the product
+    # a cpm/USD/fixed option, and pricing_options now carries
+    # UNIQUE (tenant_id, product_id, pricing_option_id) -- so for the default currency an
+    # unconditional create is an IntegrityError, and before that constraint existed it was
+    # a SECOND row sharing one id, of which the reader's dict silently dropped one. Either
+    # way the step was establishing a state the seller cannot hold.
+    product = ctx["default_product"]
+    wanted = PricingOption.default_option_id("cpm", currency, True)
+    existing = next(
+        (po for po in getattr(product, "pricing_options", None) or [] if po.pricing_option_id == wanted),
+        None,
+    )
+    po = existing or PricingOptionFactory(
+        product=product,
         pricing_model="cpm",
         currency=currency,
         is_fixed=True,
