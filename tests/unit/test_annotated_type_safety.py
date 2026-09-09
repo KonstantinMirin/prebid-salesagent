@@ -6,7 +6,6 @@ every dependency parameter gets its real type, never Any.
 These tests verify:
 1. Auth dependency exports are Annotated types (not bare Any)
 2. context_builder.build() accepts typed Request (not object)
-3. _log_a2a_operation has proper Optional annotations
 
 """
 
@@ -40,16 +39,3 @@ class TestContextBuilderTypeSafety:
         hints = get_type_hints(AdCPCallContextBuilder.build)
         request_type = hints.get("request")
         assert request_type is Request, f"build(request) should be typed as Request, got {request_type}"
-
-
-class TestLogOperationTypeSafety:
-    """_log_a2a_operation should have proper Optional annotations."""
-
-    def test_details_param_accepts_none(self):
-        """details param should be dict | None, not bare dict."""
-        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-
-        hints = get_type_hints(AdCPRequestHandler._log_a2a_operation)
-        details_type = hints.get("details")
-        # Should be dict[str, Any] | None — check it accepts None
-        assert details_type is not dict, f"details should be dict[str, Any] | None, got {details_type}"

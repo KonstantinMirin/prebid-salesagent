@@ -192,18 +192,6 @@ class TestAuthenticationFlow:
         assert hasattr(handler, "_get_auth_token"), "Handler should have _get_auth_token method"
         assert callable(handler._get_auth_token), "_get_auth_token should be callable"
 
-    def test_tool_context_creation_method_exists(self):
-        """Test that identity resolution and ToolContext creation methods exist."""
-        handler = AdCPRequestHandler()
-
-        # Transport boundary identity resolution
-        assert hasattr(handler, "_resolve_a2a_identity"), "Handler should have _resolve_a2a_identity method"
-        assert callable(handler._resolve_a2a_identity), "_resolve_a2a_identity should be callable"
-
-        # ToolContext factory (cheap, no DB calls)
-        assert hasattr(handler, "_make_tool_context"), "Handler should have _make_tool_context method"
-        assert callable(handler._make_tool_context), "_make_tool_context should be callable"
-
 
 class TestHTTPBehaviorRegression:
     """Tests to prevent HTTP-level bugs like redirect issues."""

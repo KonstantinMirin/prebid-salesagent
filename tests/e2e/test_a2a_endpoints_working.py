@@ -430,11 +430,10 @@ class TestA2ARequestHandler:
 
     def test_auth_methods_exist(self):
         """Test that authentication-related methods exist."""
-        auth_methods = [
-            "_get_auth_token",
-            "_resolve_a2a_identity",
-            "_make_tool_context",
-        ]
+        # ``_resolve_a2a_identity`` and ``_make_tool_context`` are gone by design: A2A neither
+        # resolves an identity nor builds a tool context. Reading the credential off the call
+        # context is the only auth-shaped thing it still does.
+        auth_methods = ["_get_auth_token"]
 
         for method_name in auth_methods:
             assert hasattr(self.handler, method_name), f"Handler missing auth method: {method_name}"

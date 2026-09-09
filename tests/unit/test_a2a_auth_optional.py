@@ -15,11 +15,18 @@ from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.auth_context import AuthContext
 from src.core.schemas import GetProductsResponse, ListCreativeFormatsResponse
 from tests.factories.principal import PrincipalFactory
+from tests.helpers.boundary_identity import resolved_as
 from tests.helpers.capture_wrapper_req import stub_impl
 
 
 class TestAuthOptionalSkills:
-    """Test auth-optional skill handling in A2A server."""
+    """Test auth-optional skill handling in A2A server.
+
+    The with-auth / without-auth pairs below express the difference through the RESOLVER,
+    because that is where it now lives. They used to express it by handing _dispatch_skill a
+    different identity -- a parameter dispatch ignored, so the two halves of each pair ran
+    the identical code path and the pair graded nothing.
+    """
 
     def setup_method(self):
         """Set up test fixtures."""
@@ -34,10 +41,10 @@ class TestAuthOptionalSkills:
     @pytest.mark.asyncio
     async def test_list_creative_formats_without_auth(self):
         """list_creative_formats should work with anonymous identity (no principal)."""
-        with stub_impl("list_creative_formats") as mock_tool:
+        with stub_impl("list_creative_formats") as mock_tool, resolved_as(self.anon_identity):
             mock_tool.return_value = ListCreativeFormatsResponse(formats=[])
 
-            result = await self.handler._dispatch_skill("list_creative_formats", {}, self.anon_identity, AuthContext())
+            result = await self.handler._dispatch_skill("list_creative_formats", {}, AuthContext())
 
             assert result is not None
             assert "formats" in result
@@ -46,10 +53,10 @@ class TestAuthOptionalSkills:
     @pytest.mark.asyncio
     async def test_list_creative_formats_with_auth(self):
         """list_creative_formats should work with authenticated identity."""
-        with stub_impl("list_creative_formats") as mock_tool:
+        with stub_impl("list_creative_formats") as mock_tool, resolved_as(self.mock_identity):
             mock_tool.return_value = ListCreativeFormatsResponse(formats=[])
 
-            result = await self.handler._dispatch_skill("list_creative_formats", {}, self.mock_identity, AuthContext())
+            result = await self.handler._dispatch_skill("list_creative_formats", {}, AuthContext())
 
             assert result is not None
             mock_tool.assert_called_once()
@@ -57,12 +64,10 @@ class TestAuthOptionalSkills:
     @pytest.mark.asyncio
     async def test_get_products_without_auth(self):
         """get_products should work with anonymous identity."""
-        with stub_impl("get_products") as mock_tool:
+        with stub_impl("get_products") as mock_tool, resolved_as(self.anon_identity):
             mock_tool.return_value = GetProductsResponse(products=[])
 
-            result = await self.handler._dispatch_skill(
-                "get_products", {"brief": "test campaign"}, self.anon_identity, AuthContext()
-            )
+            result = await self.handler._dispatch_skill("get_products", {"brief": "test campaign"}, AuthContext())
 
             assert result is not None
             mock_tool.assert_called_once()
@@ -70,12 +75,10 @@ class TestAuthOptionalSkills:
     @pytest.mark.asyncio
     async def test_get_products_with_auth(self):
         """get_products should work with authenticated identity."""
-        with stub_impl("get_products") as mock_tool:
+        with stub_impl("get_products") as mock_tool, resolved_as(self.mock_identity):
             mock_tool.return_value = GetProductsResponse(products=[])
 
-            result = await self.handler._dispatch_skill(
-                "get_products", {"brief": "test campaign"}, self.mock_identity, AuthContext()
-            )
+            result = await self.handler._dispatch_skill("get_products", {"brief": "test campaign"}, AuthContext())
 
             assert result is not None
             mock_tool.assert_called_once()
