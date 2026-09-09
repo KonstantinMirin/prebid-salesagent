@@ -90,7 +90,7 @@ def _rest_handler(tool_name: str, spec: Any, body_model: type[BaseModel]) -> Any
 
     handler.__name__ = tool_name
     handler.__doc__ = (spec.impl.__doc__ or "").strip().split("\n")[0]
-    dep = resolve_auth if spec.auth == "optional" else require_auth
+    dep = require_auth if spec.requires_credential() else resolve_auth
     path_params = [
         # Typed from the DTO field, so the path segment is validated as the field it fills.
         inspect.Parameter(
@@ -110,7 +110,7 @@ def _rest_handler(tool_name: str, spec: Any, body_model: type[BaseModel]) -> Any
                     "identity",
                     inspect.Parameter.POSITIONAL_OR_KEYWORD,
                     default=dep,
-                    annotation=ResolvedIdentity if spec.auth != "optional" else (ResolvedIdentity | None),
+                    annotation=ResolvedIdentity if spec.requires_credential() else (ResolvedIdentity | None),
                 ),
             ]
         ),

@@ -34,7 +34,7 @@ class MCPAuthMiddleware(Middleware):
         from src.core.tools.registry import TOOLS
 
         tool_name = context.message.name
-        require_auth = TOOLS[tool_name].auth == "required"
+        require_auth = TOOLS[tool_name].requires_credential()
 
         # ``ToolSpec.auth`` alone decides, on every transport. The pinned 3.1.1 graded
         # suite (dist/compliance/3.1.1/universal/security.yaml) runs BOTH the unauth probe

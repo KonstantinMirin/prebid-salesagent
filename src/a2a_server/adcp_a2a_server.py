@@ -531,7 +531,7 @@ class AdCPRequestHandler(RequestHandler):
             if skill_invocations:
                 # If ANY skill requires auth (not in discovery set), then require auth
                 requested_skills = {inv["skill"] for inv in skill_invocations}
-                requires_auth = any(s not in TOOLS or TOOLS[s].auth == "required" for s in requested_skills)
+                requires_auth = any(s not in TOOLS or TOOLS[s].requires_credential() for s in requested_skills)
 
             # ── Transport boundary: resolve identity ONCE ──
             # Like REST's _resolve_auth(), identity is resolved here and passed to all
@@ -1198,7 +1198,7 @@ class AdCPRequestHandler(RequestHandler):
             available_skills = [name for name, spec in TOOLS.items() if spec.a2a]
             raise MethodNotFoundError(message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}")
 
-        if TOOLS[skill_name].auth == "required" and (identity is None or not identity.principal_id):
+        if TOOLS[skill_name].requires_credential() and (identity is None or not identity.principal_id):
             raise InvalidRequestError(
                 message="Authentication required for skill invocation",
                 data=build_two_layer_error_envelope(AdCPAuthRequiredError()),

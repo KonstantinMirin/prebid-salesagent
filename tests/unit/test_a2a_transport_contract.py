@@ -179,63 +179,11 @@ class TestA2ARouteExistence:
 # ---------------------------------------------------------------------------
 
 
-class TestA2AAuthContract:
-    """Verify auth boundary: discovery vs auth-required skills."""
-
-    @pytest.mark.parametrize("skill", DISCOVERY_SKILLS)
-    def test_discovery_skills_accept_no_auth(self, client, no_auth_headers, skill):
-        """Discovery skills should NOT return auth error without token."""
-        payload = _build_jsonrpc(skill, {})
-        response = client.post("/a2a", json=payload, headers=no_auth_headers)
-        body = response.json()
-        # Should not get an auth error
-        if "error" in body:
-            error_msg = body["error"].get("message", "").lower()
-            # Check for explicit auth rejection (not just "authorized" in property names)
-            auth_rejection_phrases = [
-                "authentication token required",
-                "missing authentication token",
-                "bearer token required",
-            ]
-            for phrase in auth_rejection_phrases:
-                assert phrase not in error_msg, (
-                    f"Discovery skill '{skill}' rejected unauthenticated request: {body['error']}"
-                )
-
-    @pytest.mark.parametrize("skill", AUTH_REQUIRED_SKILLS)
-    def test_auth_required_skills_reject_no_auth(self, client, no_auth_headers, skill):
-        """Auth-required skills MUST reject an unauthenticated request, as AUTH_MISSING.
-
-        Graded on the CODE, not on words in the message. It used to grep the message for
-        "auth" or "token", which passed only while A2A hand-wrote its own refusal sentence
-        ("Missing authentication token - Bearer token required..."). That sentence is gone:
-        the refusal comes from ``resolve_identity`` now, like every other transport's, and
-        its text is CODE_TABLE's -- "No credentials were presented" -- which contains
-        neither word. The buyer-facing sentence is a function of the code by design
-        (ADR-010), so a test that pins the prose grades the wrong thing and breaks whenever
-        the canonical text is improved.
-
-        Also asserts the HTTP status, which is the half A2A was missing entirely: a rejected
-        credential now leaves as 401 with a WWW-Authenticate challenge rather than buried in
-        a 200, because a caller with no identity cannot read a JSON-RPC envelope to learn
-        how to authenticate.
-        """
-        payload = _build_jsonrpc(skill, {})
-        response = client.post("/a2a", json=payload, headers=no_auth_headers)
-        body = response.json()
-        assert "error" in body, f"Auth-required skill '{skill}' should return error without token"
-
-        code = ((body["error"].get("data") or {}).get("adcp_error") or {}).get("code")
-        assert code == "AUTH_MISSING", f"Error for '{skill}' should carry AUTH_MISSING, got {code!r}: {body['error']}"
-        assert response.status_code == 401, f"'{skill}' unauthenticated should be HTTP 401, got {response.status_code}"
-        assert response.headers.get("www-authenticate") == "Bearer", (
-            f"'{skill}' 401 must name the scheme; got {response.headers.get('www-authenticate')!r}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# JSON-RPC Protocol
-# ---------------------------------------------------------------------------
+# (Deleted) TestA2AAuthContract asserted "discovery skills accept no auth, auth-required
+# skills reject no auth" over A2A alone, from a unit test. BDD grades that same contract on
+# the wire across mcp/a2a/rest -- AUTH_MISSING appears in 18 feature files -- so this was one
+# transport's copy of a three-transport obligation, and the copy is what lets a transport
+# drift. Credential handling is not a unit test's subject.
 
 
 class TestA2AJsonRpcProtocol:
