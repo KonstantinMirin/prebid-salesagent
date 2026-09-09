@@ -14,11 +14,10 @@ from unittest.mock import patch
 from starlette.testclient import TestClient
 
 from src.app import app
-from src.core.resolved_identity import ResolvedIdentity
 from tests.factories.principal import PrincipalFactory
 from tests.helpers.capture_wrapper_req import stub_impl
 
-_MOCK_IDENTITY = ResolvedIdentity(
+_MOCK_IDENTITY = PrincipalFactory.make_identity(
     principal_id="test-principal",
     tenant_id="default",
     tenant={"tenant_id": "default"},

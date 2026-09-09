@@ -12,7 +12,7 @@ from adcp.types.generated_poc.protocol.list_tasks_request import Filters as List
 
 from src.core.database.models import WorkflowStep
 from src.core.exceptions import AdCPTaskNotFoundError
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.principal import PrincipalFactory
 
 
 def _impl_caller(tool_name: str):
@@ -85,7 +85,7 @@ class TestListTasksTool:
 
     def _make_identity(self, sample_tenant):
         """Create a ResolvedIdentity for testing."""
-        return ResolvedIdentity(
+        return PrincipalFactory.make_identity(
             principal_id="principal_123",
             tenant_id=sample_tenant["tenant_id"],
             tenant=sample_tenant,
@@ -188,7 +188,7 @@ class TestGetTaskTool:
 
     def _make_identity(self, sample_tenant):
         """Create a ResolvedIdentity for testing."""
-        return ResolvedIdentity(
+        return PrincipalFactory.make_identity(
             principal_id="principal_123",
             tenant_id=sample_tenant["tenant_id"],
             tenant=sample_tenant,
@@ -450,7 +450,7 @@ class TestCompleteTaskTool:
 
     def _make_identity(self, sample_tenant):
         """Create a ResolvedIdentity for testing."""
-        return ResolvedIdentity(
+        return PrincipalFactory.make_identity(
             principal_id="principal_123",
             tenant_id=sample_tenant["tenant_id"],
             tenant=sample_tenant,

@@ -32,11 +32,15 @@ class ResolvedIdentity(BaseModel):
 
     principal_id: str | None = None
     tenant_id: str | None = None
-    # A tenant CONTEXT, hydrated or lazy -- never a dict. Production builds the lazy one at
-    # the boundary (id now, row on first field access, cached); a hydrated TenantContext is
-    # equally valid and is what tests supply without a database. What the type excludes is
-    # the dict, which is what it used to be: ``Any``, commented
-    # "TenantContext | dict[str, Any] | None (transitional)".
+    # ONE tenant type, not a union. Production builds it at the boundary (id now, row on
+    # first field access, cached). A caller that already holds the row -- a test factory with
+    # no database, or code that just read it -- hands over the SAME type via
+    # ``LazyTenantContext.already(row)``, which resolves immediately and never queries.
+    # Laziness is about when the row loads, not about which type flows.
+    #
+    # What the annotation excludes is both the dict and the hydrated ``TenantContext``. It
+    # used to be ``Any``, commented "TenantContext | dict[str, Any] | None (transitional)",
+    # and that union is how dict-shaped tenant handling spread through production.
     tenant: LazyTenantContext | None = None
     auth_token: str | None = None
     protocol: Literal["mcp", "a2a", "rest"] = "mcp"

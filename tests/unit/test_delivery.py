@@ -49,6 +49,7 @@ from src.core.testing_hooks import AdCPTestContext
 from src.core.tools._boundary import invoke_tool
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.services.webhook_delivery_service import CircuitBreaker, CircuitState, WebhookDeliveryService
+from tests.factories.principal import PrincipalFactory
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
 # ---------------------------------------------------------------------------
@@ -1263,7 +1264,7 @@ class TestDeliveryAuthErrors:
         Spec: UNSPECIFIED (implementation-defined authentication/authorization boundary).
         Covers: UC-004-EXT-A-01
         """
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant"},
@@ -1300,7 +1301,7 @@ class TestDeliveryAuthErrors:
         or adapter calls. Verifies that get_adapter and _get_target_media_buys are never called.
         Covers: UC-004-EXT-A-02
         """
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant"},

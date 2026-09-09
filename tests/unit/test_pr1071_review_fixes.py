@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.core.schemas import GetProductsRequest
+from tests.factories.principal import PrincipalFactory
 
 
 class TestDeliveryLoopErrorHandling:
@@ -24,7 +25,6 @@ class TestDeliveryLoopErrorHandling:
     @pytest.mark.asyncio
     async def test_single_media_buy_error_returns_partial_results(self):
         """When one media buy raises during processing, others still appear in response."""
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import GetMediaBuyDeliveryRequest
         from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 
@@ -39,7 +39,7 @@ class TestDeliveryLoopErrorHandling:
             "brand_manifest_policy": "public",
             "advertising_policy": {},
         }
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="p1",
             tenant_id="test",
             tenant=tenant,
@@ -120,7 +120,6 @@ class TestBrandExtractionFromPydanticModel:
         coerces dict to BrandReference, so the check always returned False,
         offering was always None, and require_brand rejected ALL requests.
         """
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.products import _get_products_impl
 
         req = GetProductsRequest(
@@ -133,7 +132,7 @@ class TestBrandExtractionFromPydanticModel:
             "brand_manifest_policy": "require_brand",
             "advertising_policy": {},
         }
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="p1",
             tenant_id="test",
             tenant=tenant,
@@ -166,7 +165,6 @@ class TestAuditLogBrandFieldName:
     @pytest.mark.asyncio
     async def test_audit_log_records_has_brand_not_has_brand_manifest(self):
         """Audit log details dict must contain 'has_brand', not 'has_brand_manifest'."""
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.products import _get_products_impl
 
         req = GetProductsRequest(
@@ -179,7 +177,7 @@ class TestAuditLogBrandFieldName:
             "brand_manifest_policy": "public",
             "advertising_policy": {},
         }
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="p1",
             tenant_id="test",
             tenant=tenant,

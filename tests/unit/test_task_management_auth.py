@@ -27,12 +27,13 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CompleteTaskRequest, GetTaskStatusRequest, ListTasksRequest
 from src.core.tenant_context import TenantContext
 from src.core.tools._boundary import invoke_tool
+from tests.factories.principal import PrincipalFactory
 from tests.helpers.boundary_identity import refused_as, resolved_as
 
 
 def _authenticated() -> ResolvedIdentity:
     """What the boundary resolves for a caller whose credential is good."""
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id="principal-abc",
         tenant_id="test-tenant",
         tenant=TenantContext(tenant_id="test-tenant", name="Test"),

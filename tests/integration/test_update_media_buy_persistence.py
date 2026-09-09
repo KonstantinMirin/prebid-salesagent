@@ -24,6 +24,7 @@ from src.core.exceptions import AdCPAuthenticationError, AdCPMediaBuyNotFoundErr
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories.principal import PrincipalFactory
 
 # Note: _verify_principal is now internal to _update_media_buy_impl
 # Tests that used _verify_principal directly will need to test through the public API
@@ -31,7 +32,7 @@ from src.core.tools.media_buy_update import _update_media_buy_impl
 
 def _make_identity(tenant_id: str, principal_id: str, token: str) -> ResolvedIdentity:
     """Create a ResolvedIdentity for testing."""
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant={"tenant_id": tenant_id},

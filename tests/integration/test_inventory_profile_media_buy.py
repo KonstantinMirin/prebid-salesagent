@@ -24,12 +24,13 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
+from tests.factories.principal import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_db_product, create_test_package_request
 
 
 def _make_context(tenant_id: str, principal_id: str) -> ResolvedIdentity:
     """Create a ResolvedIdentity for testing."""
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant={"tenant_id": tenant_id},

@@ -23,6 +23,7 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.principal import PrincipalFactory
 
 
 @contextmanager
@@ -34,7 +35,7 @@ def resolved_as(identity: ResolvedIdentity | None = None) -> Iterator[ResolvedId
     if identity is None:
         from src.core.tenant_context import TenantContext
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="test_tenant",
             tenant=TenantContext(tenant_id="test_tenant"),

@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from src.core.schemas import Creative, FormatId, SyncCreativesRequest
 from tests.factories.creative_asset import build_assets, image_spec, make_creative_asset_request
+from tests.factories.principal import PrincipalFactory
 from tests.helpers.creative_test_helpers import creative_payload, sync_creatives_request
 
 
@@ -45,10 +46,9 @@ class TestSyncCreativesCreativeIdsFilter:
     @patch("src.core.tools.creatives._sync.CreativeUoW")
     def test_sync_creatives_filters_by_creative_ids(self, mock_uow_cls, mock_tenant):
         """Test _sync_creatives_impl filters creatives by creative_ids."""
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="principal_1",
             tenant_id="tenant_1",
             tenant={"tenant_id": "tenant_1", "adapter_type": "mock"},

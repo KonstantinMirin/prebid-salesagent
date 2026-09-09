@@ -59,6 +59,7 @@ from src.core.schemas import (
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools._boundary import invoke_tool
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
+from tests.factories.principal import PrincipalFactory
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -133,7 +134,7 @@ def _make_identity(
     dry_run: bool = False,
 ) -> ResolvedIdentity:
     """Build a ResolvedIdentity with default test values."""
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant={"tenant_id": tenant_id},
@@ -377,7 +378,7 @@ class TestCreateMediaBuyValidation:
             ]
         )
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="principal_1",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "human_review_required": False, "auto_create_media_buys": True},
@@ -452,7 +453,7 @@ class TestCreateMediaBuyValidation:
         cl.max_daily_package_spend = Decimal("500")
         cl.min_package_budget = None
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="principal_1",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "human_review_required": False, "auto_create_media_buys": True},
@@ -1218,7 +1219,7 @@ class TestCreateMediaBuyImplAuth:
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = _make_request()
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant=None,
@@ -1243,7 +1244,7 @@ class TestCreateMediaBuyImplAuth:
         from src.services.setup_checklist_service import SetupIncompleteError
 
         req = _make_request()
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant"},
@@ -1289,7 +1290,7 @@ class TestCreateMediaBuyImplAuth:
         from src.services.setup_checklist_service import SetupIncompleteError
 
         req = _make_request()
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant"},
@@ -4370,11 +4371,10 @@ class TestGetMediaBuysImplAuth:
         Covers: #1651
         """
         from src.core.exceptions import AdCPAuthRequiredError
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
         req = GetMediaBuysRequest()
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="tenant_1",
             tenant={"tenant_id": "tenant_1", "adapter_type": "mock"},

@@ -12,8 +12,8 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
+from tests.factories.principal import PrincipalFactory
 
 
 class TestCreateMediaBuyDryRunResponseStructure:
@@ -73,7 +73,7 @@ class TestUpdateMediaBuyDryRunNoPersistence:
     @pytest.fixture
     def mock_identity(self):
         """Create a ResolvedIdentity with dry_run testing context."""
-        return ResolvedIdentity(
+        return PrincipalFactory.make_identity(
             principal_id="principal_123",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "name": "Test Tenant"},

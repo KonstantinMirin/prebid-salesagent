@@ -30,11 +30,11 @@ from src.core.database.models import (
     MediaBuy,
     Principal,
 )
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest, ListCreativesResponse, SyncCreativesRequest, SyncCreativesResponse
 from src.core.schemas.creative import ListCreativesRequest
 from src.core.testing_hooks import AdCPTestContext
 from tests.factories.creative_asset import asset_spec, build_assets, image_spec
+from tests.factories.principal import PrincipalFactory
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -117,7 +117,7 @@ class TestCreativeLifecycleMCP:
         tenant_dict = {"tenant_id": tid}
         if tenant_overrides:
             tenant_dict.update(tenant_overrides)
-        return ResolvedIdentity(
+        return PrincipalFactory.make_identity(
             principal_id=pid,
             tenant_id=tid,
             tenant=tenant_dict,
@@ -986,10 +986,9 @@ class TestCreativeLifecycleMCP:
         creative_ids = [c["creative_id"] for c in sample_creatives]
 
         # Build ResolvedIdentity instead of patching removed auth functions
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.testing_hooks import AdCPTestContext
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=self.test_principal_id,
             tenant_id=self.test_tenant_id,
             tenant={"tenant_id": self.test_tenant_id, "approval_mode": "require-human"},

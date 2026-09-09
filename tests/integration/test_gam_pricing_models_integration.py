@@ -27,8 +27,8 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.testing_hooks import AdCPTestContext
+from tests.factories.principal import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_media_buy_request, create_test_package_request
 from tests.helpers.external_service import is_external_service_response_error
 from tests.utils.database_helpers import create_tenant_with_timestamps
@@ -390,7 +390,7 @@ async def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_wi
         end_time=_FUTURE_END_30D,
     )
 
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser_pricing",
         tenant_id="test_gam_pricing_tenant",
         tenant={"tenant_id": "test_gam_pricing_tenant"},
@@ -436,7 +436,7 @@ async def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_g
         end_time=_FUTURE_END_30D,
     )
 
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser_pricing",
         tenant_id="test_gam_pricing_tenant",
         tenant={"tenant_id": "test_gam_pricing_tenant"},
@@ -483,7 +483,7 @@ async def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(set
         end_time=_FUTURE_END_30D,
     )
 
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser_pricing",
         tenant_id="test_gam_pricing_tenant",
         tenant={"tenant_id": "test_gam_pricing_tenant"},
@@ -531,7 +531,7 @@ async def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_
         end_time=_FUTURE_END_10D,
     )
 
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser_pricing",
         tenant_id="test_gam_pricing_tenant",
         tenant={"tenant_id": "test_gam_pricing_tenant"},
@@ -588,7 +588,7 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
         end_time=_FUTURE_END_30D,
     )
 
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser_pricing",
         tenant_id="test_gam_pricing_tenant",
         tenant={"tenant_id": "test_gam_pricing_tenant"},
@@ -653,7 +653,7 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
         end_time=_FUTURE_END_30D,
     )
 
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser_pricing",
         tenant_id="test_gam_pricing_tenant",
         tenant={"tenant_id": "test_gam_pricing_tenant"},

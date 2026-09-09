@@ -19,6 +19,7 @@ from src.core.exceptions import AdCPAuthenticationError, AdCPSalesAgentError, Ad
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas.creative import ListCreativesRequest
 from src.services.policy_check_service import PolicyStatus
+from tests.factories.principal import PrincipalFactory
 from tests.helpers.creative_test_helpers import sync_creatives_request
 
 # --- Helpers ---
@@ -32,7 +33,7 @@ def _make_identity(
     """Create a ResolvedIdentity for testing."""
     if tenant is None:
         tenant = {"tenant_id": tenant_id, "name": "Test"}
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,
@@ -195,7 +196,7 @@ class TestDiscoveryEndpointsAnonymousAccess:
 
         # brand_manifest_policy="public" allows anonymous access without auth requirement
         mock_tenant = {"tenant_id": "test-tenant", "name": "Test", "brand_manifest_policy": "public"}
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="test-tenant",
             tenant=mock_tenant,
@@ -294,7 +295,7 @@ class TestDiscoveryEndpointsInvalidAuth:
         # With require_valid_token=False at the transport boundary, invalid tokens
         # result in an anonymous ResolvedIdentity (principal_id=None)
         mock_tenant = {"tenant_id": "test-tenant"}
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="test-tenant",
             tenant=mock_tenant,

@@ -9,9 +9,9 @@ from sqlalchemy import select
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.exceptions import AdCPCreativeRejectedError
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories.principal import PrincipalFactory
 from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
     read_media_buy_state,
@@ -108,7 +108,7 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
         session.commit()
 
     # Create identity for the new _update_media_buy_impl signature
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_principal",
         tenant_id="test_tenant",
         tenant={"tenant_id": "test_tenant"},
@@ -290,7 +290,7 @@ def test_update_media_buy_replaces_creatives(integration_db):
         session.commit()
 
     # Create identity for the new _update_media_buy_impl signature
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_principal",
         tenant_id="test_tenant",
         tenant={"tenant_id": "test_tenant"},
@@ -422,7 +422,7 @@ def test_update_media_buy_rejects_missing_creatives(integration_db):
         session.commit()
 
     # Create identity for the new _update_media_buy_impl signature
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_principal",
         tenant_id="test_tenant",
         tenant={"tenant_id": "test_tenant"},
@@ -556,7 +556,7 @@ def test_creative_assignments_with_weights(integration_db):
         session.commit()
 
     # Create ResolvedIdentity for transport-agnostic _impl call
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_principal",
         tenant_id="test_tenant",
         tenant={"tenant_id": "test_tenant"},
@@ -720,7 +720,7 @@ def test_creative_assignments_replaces_all(integration_db):
         session.commit()
 
     # Create ResolvedIdentity for transport-agnostic _impl call
-    identity = ResolvedIdentity(
+    identity = PrincipalFactory.make_identity(
         principal_id="test_principal",
         tenant_id="test_tenant",
         tenant={"tenant_id": "test_tenant"},
