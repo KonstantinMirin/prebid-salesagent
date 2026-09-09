@@ -42,14 +42,13 @@ _CHALLENGE_BY_CODE: Final[dict[str, str]] = {
 }
 
 
-def challenge_for_code(code: str | None) -> str | None:
+def _challenge_for_code(code: str | None) -> str | None:
     """The ``WWW-Authenticate`` value for *code*, or None if it is not an auth refusal.
 
-    One owner for "which codes are answered with a 401 challenge", so the three transports
-    render the same refusal the same way. Each still emits it through its OWN framework's
-    mechanism -- a FastAPI exception handler for REST, the shared AuthChallengeResponder for
-    MCP and A2A -- because that is the part that legitimately differs; only the decision is
-    shared.
+    PRIVATE, and that is the point. ``_flush`` is the only caller: asking this question has
+    no purpose except writing the header, so a second caller would be a second renderer.
+    Three transports each answered it once and disagreed, and the module-private name is
+    what keeps a fourth from starting -- there is nothing importable to build one from.
     """
     return _CHALLENGE_BY_CODE.get(code or "")
 
@@ -207,21 +206,31 @@ class AuthChallengeResponder:
 
 
 async def _flush(send: Send, start: Message | None, body: bytes) -> None:
-    """Emit the held response, upgrading it to 401 when it carries an auth refusal."""
+    """Emit the held response, upgrading it to 401 when it carries an auth refusal.
+
+    The inbound ``WWW-Authenticate`` is stripped UNCONDITIONALLY, then re-derived from the
+    body. Not a tidy-up: it is what makes a second renderer pointless rather than merely
+    discouraged. Anything further in that writes its own challenge has it overwritten here,
+    so the only way to change what a buyer receives is to change this function -- which is
+    the property an architecture guard would otherwise have to police by inspection.
+
+    Safe because this is reached only for ``application/json`` (see ``_is_json_response``):
+    the admin UI's HTML and its ``text/event-stream`` feed never pass through here, so no
+    other authentication scheme's challenge can be caught by it.
+    """
     if start is None:
         return
     try:
         code = adcp_error_code_in(json.loads(body)) if body else None
     except (ValueError, TypeError):
         code = None
-    challenge = challenge_for_code(code)
+    challenge = _challenge_for_code(code)
+    start = dict(start)
+    headers = [h for h in start.get("headers", []) if h[0].lower() != b"www-authenticate"]
     if challenge:
-        start = dict(start)
         start["status"] = 401
-        start["headers"] = [
-            *(h for h in start.get("headers", []) if h[0].lower() != b"www-authenticate"),
-            (b"www-authenticate", challenge.encode("latin-1")),
-        ]
+        headers.append((b"www-authenticate", challenge.encode("latin-1")))
+    start["headers"] = headers
     await send(start)
     await send({"type": "http.response.body", "body": body})
 
