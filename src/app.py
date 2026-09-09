@@ -35,11 +35,10 @@ from src.a2a_server.adcp_a2a_server import (
 from src.a2a_server.context_builder import AdCPCallContextBuilder
 from src.admin.app import create_app
 from src.core.agent_identity import agent_identity_for_tenant_id
+from src.core.auth_context import RESOLVED_IDENTITY_STATE_KEY
 from src.core.auth_middleware import (
     AuthChallengeResponder,
     UnifiedAuthMiddleware,
-    adcp_error_code_in,
-    challenge_for_code,
 )
 from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
 from src.core.domain_routing import route_landing_page
@@ -53,7 +52,6 @@ from src.core.exceptions import (
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 from src.core.lifecycle import run_all_shutdown_callbacks
 from src.core.main import mcp
-from src.core.resolved_identity import resolve_identity
 from src.core.tool_error_logging import handle_tool_error, record_boundary_error
 from src.landing import generate_tenant_landing_page
 from src.landing.landing_page import generate_fallback_landing_page
@@ -139,7 +137,7 @@ app = FastAPI(
     lifespan=combine_lifespans(app_lifespan, mcp_app.lifespan),
 )
 
-# Mount MCP at /mcp behind the shared response rule -- and behind NOTHING else.
+# Mount MCP at /mcp behind NOTHING.
 #
 # There is deliberately no auth gate in front of this. A middleware here cannot know which
 # tool is being called: the name is inside the JSON-RPC body, and a middleware that parsed
@@ -150,10 +148,10 @@ app = FastAPI(
 #
 # So auth is decided where the tool IS known -- MCPAuthMiddleware.on_call_tool, which reads
 # context.message.name and passes ToolSpec.auth to resolve_identity, exactly as the A2A
-# dispatch and the REST dependency do. Only the RENDERING happens out here, and it needs no
-# knowledge of the tool at all: read the AdCP code off the outgoing envelope, and if it is
-# an auth refusal, set 401 and the challenge.
-app.mount("/mcp", AuthChallengeResponder(mcp_app))
+# dispatch and the REST dependency do. The RENDERING is app-wide: AuthChallengeResponder is
+# registered as middleware over the whole app (see the middleware stack below), so MCP, A2A
+# and REST are all answered by the same code and no transport can grow its own 401.
+app.mount("/mcp", mcp_app)
 
 
 # ---------------------------------------------------------------------------
@@ -171,13 +169,14 @@ def _envelope_response(request: Request, exc: AdCPSalesAgentError, *, log_as: Ex
 
     Symmetric with the MCP and A2A boundaries: all three transports delegate
     to ``record_boundary_error`` so log severity, activity-feed publishing,
-    and audit logging stay in lockstep. Identity is not resolved on
-    ``request.state`` at the exception-handler boundary, so we resolve it
-    best-effort here (auth token + tenant headers) to populate the
-    tenant-scoped sinks (activity feed, audit log) for REST errors the same
-    way MCP and A2A do. Identity resolution never raises into the error path —
-    a lookup miss degrades to anonymous and ``record_boundary_error`` falls
-    back to the WARNING log line carrying the error code, message, and path.
+    and audit logging stay in lockstep — and all three now scope that record
+    with the identity their boundary ALREADY resolved, never by resolving
+    again. The REST route stashes it on ``request.state`` (src/routes/api_v1.py).
+    This used to call ``resolve_identity`` a second time, which meant a failed
+    REST auth cost two full resolutions and roughly eight DB session
+    acquisitions, the second set re-validating a credential that had just been
+    rejected. When auth failed the route never ran, so there is no identity and
+    the record is unscoped — exactly A2A's "unknown" on the same path.
 
     ``log_as``: the object handed to ``record_boundary_error`` for logging,
     defaulting to ``exc`` (existing behavior, unchanged for typed handlers).
@@ -190,41 +189,23 @@ def _envelope_response(request: Request, exc: AdCPSalesAgentError, *, log_as: Ex
     and the original message from server-side logs, unlike the MCP/A2A
     boundaries which always log the original exception.
     """
-    tenant_id, principal_id = _best_effort_rest_identity(request)
+    identity = getattr(request.state, RESOLVED_IDENTITY_STATE_KEY, None)
     record_boundary_error(
-        "rest", request.url.path, log_as if log_as is not None else exc, tenant_id=tenant_id, principal_id=principal_id
+        "rest",
+        request.url.path,
+        log_as if log_as is not None else exc,
+        tenant_id=getattr(identity, "tenant_id", None) or "unknown",
+        principal_id=getattr(identity, "principal_id", None) or "unknown",
     )
-    # A 401 MUST name a scheme the caller can authenticate with (RFC 7235; graded by the
-    # storyboard's security_baseline, which requires WWW-Authenticate on any 401). Attaching
-    # it to the response the handler already builds is FastAPI's own pattern -- its security
-    # classes raise HTTPException(401, headers=...) for exactly this -- so there is no new
-    # machinery here and nothing below the boundary needs to know about HTTP.
-    #
-    # challenge_for_code returns None for every non-auth code, so this is inert for the rest.
-    challenge = challenge_for_code(exc.error_code)
+    # No WWW-Authenticate here. A 401 MUST name a scheme the caller can authenticate with
+    # (RFC 7235; graded by the storyboard's security_baseline), and AuthChallengeResponder
+    # attaches it app-wide by reading the code off this very envelope. Setting it here too
+    # was the third copy of one rule -- REST's status happened to agree with MCP's and A2A's,
+    # which is not the same as being decided once.
     return JSONResponse(
         status_code=exc.status_code,
         content=build_two_layer_error_envelope(exc),
-        headers={"WWW-Authenticate": challenge} if challenge else None,
     )
-
-
-def _best_effort_rest_identity(request: Request) -> tuple[str | None, str | None]:
-    """Resolve ``(tenant_id, principal_id)`` for boundary observability only.
-
-    Used solely to scope the activity-feed and audit-log sinks in
-    ``record_boundary_error`` — never to make an authorization decision.
-    ``require_valid_token=False`` so an invalid/expired token (which may be
-    the very error being handled) still yields a tenant from the host headers
-    instead of raising. Any failure degrades to ``(None, None)``; observability
-    must not shadow the buyer's original error.
-    """
-    try:
-        identity = resolve_identity(dict(request.headers), protocol="rest", require_valid_token=False)
-        return identity.tenant_id, identity.principal_id
-    except Exception:
-        logger.debug("REST boundary: best-effort identity resolution failed", exc_info=True)
-        return None, None
 
 
 @app.exception_handler(AdCPSalesAgentError)
@@ -441,13 +422,13 @@ def _restore_a2a_wire_integers(
     async def _wrapped(request: Request) -> Response:
         response = await endpoint(request)
         if isinstance(response, JSONResponse) and response.body:
+            # Integer restoration ONLY. This used to also lift an auth refusal to 401 and
+            # attach the challenge -- a second copy of AuthChallengeResponder, living in a
+            # function whose job is protobuf number coercion. The responder is app-wide
+            # middleware now and answers this route like every other.
             fixed = restore_a2a_integer_types(json.loads(bytes(response.body)))
             headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
-            status_code = response.status_code
-            if challenge := challenge_for_code(adcp_error_code_in(fixed)):
-                status_code = 401
-                headers["WWW-Authenticate"] = challenge
-            return JSONResponse(fixed, status_code=status_code, headers=headers)
+            return JSONResponse(fixed, status_code=response.status_code, headers=headers)
         return response
 
     # Marker for test_guards_a2a_integer_restoration.py -- lets the structural
@@ -696,8 +677,9 @@ app.include_router(health_debug_router)
 
 # ---------------------------------------------------------------------------
 # Middleware stack (via add_middleware — outermost = last registered):
-#   1. CORSMiddleware (outermost — adds CORS headers to all responses)
-#   2. UnifiedAuthMiddleware (extracts auth token, sets scope["state"]["auth_context"])
+#   1. AuthChallengeResponder (outermost — renders EVERY transport's 401)
+#   2. CORSMiddleware (adds CORS headers to all responses)
+#   3. UnifiedAuthMiddleware (extracts auth token, sets scope["state"]["auth_context"])
 # ---------------------------------------------------------------------------
 
 app.add_middleware(UnifiedAuthMiddleware)
@@ -711,6 +693,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Outermost, so it sees the FINAL response of every transport -- the MCP mount, the A2A
+# routes and the REST routers alike. This is the only place a 401 challenge is written.
+app.add_middleware(AuthChallengeResponder)
 
 # ---------------------------------------------------------------------------
 # Admin UI — mount Flask admin via WSGIMiddleware

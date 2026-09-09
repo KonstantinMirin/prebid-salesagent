@@ -32,6 +32,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC = str(REPO_ROOT / "src")
@@ -55,6 +56,7 @@ class Frame:
     location: str
     started: float
     elapsed_ms: float = 0.0
+    thread: str = "MainThread"
 
 
 @dataclass
@@ -81,50 +83,87 @@ class Trace:
         return f"{self.transport} · {self.tool} ({self.case})"
 
 
+#: The scenario currently recording, or None. ONE hook function is installed for the whole
+#: process and routes here; scenarios swap this instead of installing their own hook.
+#:
+#: Why it has to work this way. A profile hook is per-thread, and FastAPI runs a SYNC
+#: dependency (``def``, not ``async def``) in an anyio worker thread -- both REST auth
+#: dependencies are sync, so their whole subtree runs off the event-loop thread.
+#: ``threading.setprofile`` only arms threads created AFTER the call, and anyio REUSES its
+#: workers across requests. A per-scenario ``threading.setprofile`` therefore leaves an
+#: earlier scenario's hook installed on an already-existing worker: its frames get filed
+#: under the WRONG scenario, or dropped once that scenario stops recording. That is exactly
+#: what happened -- ``resolve_identity`` was missing from REST/no-credential/optional and
+#: REST/no-credential/required carried 127 frames, having absorbed the neighbour's.
+_ACTIVE: SrcTracer | None = None
+
+
+def _profile_hook(frame: object, event: str, _arg: object) -> None:
+    """Route one profile event to the recording scenario, whatever thread it fired on."""
+    tracer = _ACTIVE
+    if tracer is None:
+        return
+    code = getattr(frame, "f_code", None)
+    if code is None or not code.co_filename.startswith(SRC):
+        return
+    tracer.record(code, event)
+
+
+def install_profile_hook() -> None:
+    """Arm every thread, once, before the app creates any worker.
+
+    Call before the first request. Threads created later inherit the hook; the main thread
+    is armed directly. Nothing is ever uninstalled -- ``_ACTIVE`` gates recording instead,
+    so a reused worker cannot hold a stale hook.
+    """
+    threading.setprofile(_profile_hook)
+    sys.setprofile(_profile_hook)
+
+
 class SrcTracer:
     """Capture calls whose code object lives under ``src/``.
 
-    Everything else -- framework internals, stdlib, the test client -- is dropped. The
+    Everything else -- framework internals, stdlib, the HTTP client -- is dropped. The
     point is the shape of OUR path, and unfiltered output is thousands of frames of
     starlette and pydantic that hide it.
+
+    Call depth is tracked PER THREAD: the event-loop thread and each worker running a sync
+    dependency have separate stacks, and sharing one would interleave them into nonsense.
     """
 
     def __init__(self) -> None:
         self.frames: list[Frame] = []
-        self._stack: list[Frame] = []
+        self._stacks: dict[int, list[Frame]] = {}
 
     def __enter__(self) -> SrcTracer:
-        # BOTH hooks. TestClient runs the ASGI app on a worker thread via anyio's portal,
-        # and sys.setprofile only arms the CALLING thread -- which is why the first run of
-        # this script captured zero frames while the requests plainly worked.
-        # threading.setprofile arms threads created AFTER it is set.
-        threading.setprofile(self._hook)
-        sys.setprofile(self._hook)
+        global _ACTIVE
+        _ACTIVE = self
         return self
 
     def __exit__(self, *exc: object) -> None:
-        sys.setprofile(None)
-        threading.setprofile(None)
+        global _ACTIVE
+        _ACTIVE = None
         now = time.perf_counter()
-        for frame in self._stack:  # anything still open when the request ended
-            frame.elapsed_ms = (now - frame.started) * 1000
+        for stack in self._stacks.values():  # anything still open when the request ended
+            for frame in stack:
+                frame.elapsed_ms = (now - frame.started) * 1000
 
-    def _hook(self, frame: object, event: str, _arg: object) -> None:
-        code = getattr(frame, "f_code", None)
-        if code is None or not code.co_filename.startswith(SRC):
-            return
+    def record(self, code: Any, event: str) -> None:
+        # list.append and list.pop are atomic under the GIL, and each thread touches only
+        # its own stack, so no lock is needed for what this collects.
+        stack = self._stacks.setdefault(threading.get_ident(), [])
         if event == "call":
-            rel = os.path.relpath(code.co_filename, REPO_ROOT)
             captured = Frame(
-                depth=len(self._stack),
+                depth=len(stack),
                 qualname=code.co_qualname,
-                location=f"{rel}:{code.co_firstlineno}",
+                location=f"{os.path.relpath(code.co_filename, REPO_ROOT)}:{code.co_firstlineno}",
                 started=time.perf_counter(),
+                thread=threading.current_thread().name,
             )
-            self._stack.append(captured)
+            stack.append(captured)
             self.frames.append(captured)
-        elif event == "return" and self._stack:
-            done = self._stack.pop()
+        elif event == "return" and stack:
+            done = stack.pop()
             done.elapsed_ms = (time.perf_counter() - done.started) * 1000
 
 
@@ -208,6 +247,7 @@ async def run_scenarios() -> list[Trace]:
     }
 
     traces: list[Trace] = []
+    install_profile_hook()
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://profile") as client:
@@ -401,7 +441,8 @@ def main() -> int:
                 "challenge": t.challenge,
                 "code": t.code,
                 "frames": [
-                    {"d": f.depth, "q": f.qualname, "at": f.location, "ms": round(f.elapsed_ms, 3)} for f in t.frames
+                    {"d": f.depth, "q": f.qualname, "at": f.location, "ms": round(f.elapsed_ms, 3), "thread": f.thread}
+                    for f in t.frames
                 ],
             }
             for t in traces

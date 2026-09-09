@@ -147,9 +147,44 @@ def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
 # needs the real type at alias definition time).
 from src.core.resolved_identity import ResolvedIdentity  # noqa: E402
 
-ResolveAuth = Annotated[ResolvedIdentity | None, Depends(_resolve_auth_dep)]
-RequireAuth = Annotated[ResolvedIdentity, Depends(_require_auth_dep)]
+#: Where the exception handler looks for the identity this request resolved.
+RESOLVED_IDENTITY_STATE_KEY = "resolved_identity"
+
+
+def _publishing(dep: Any) -> Any:
+    """Wrap an identity dependency so the resolved identity reaches the error boundary.
+
+    ``@app.exception_handler`` receives only ``(request, exc)``, so REST's handler used to
+    RE-RESOLVE identity from headers just to scope an audit record — a second full lookup,
+    principal DB retry included, on a credential that had usually just been rejected. Every
+    failed REST auth cost two resolutions where MCP and A2A cost one.
+
+    The identity is published here instead, in the one place that has both the request and
+    the resolved identity. Not in the route handler: ``test_no_route_takes_a_raw_request``
+    forbids a route touching ``Request`` at all, and rightly — a handler holding the request
+    is a handler that can start resolving auth by hand again. A dependency is the layer whose
+    job this already is.
+
+    When the wrapped dependency RAISES there is nothing to publish and this never runs, so
+    the record is unscoped — the same "unknown" A2A reports on the same path. The boundary
+    reports what it resolved and never goes looking for more.
+    """
+
+    # Bound before the def, not inline in the parameter list: B008 bans a call in an
+    # argument default, and this file already reads defaults from a name for that reason
+    # (``auth_ctx: AuthContext = get_auth_context``).
+    wrapped: Any = Depends(dep)
+
+    def _publishing_dep(request: Request, identity: Any = wrapped) -> Any:
+        setattr(request.state, RESOLVED_IDENTITY_STATE_KEY, identity)
+        return identity
+
+    return _publishing_dep
+
+
+ResolveAuth = Annotated[ResolvedIdentity | None, Depends(_publishing(_resolve_auth_dep))]
+RequireAuth = Annotated[ResolvedIdentity, Depends(_publishing(_require_auth_dep))]
 
 # Backward-compatible Depends instances (for dependency chaining):
-resolve_auth: Any = Depends(_resolve_auth_dep)
-require_auth: Any = Depends(_require_auth_dep)
+resolve_auth: Any = Depends(_publishing(_resolve_auth_dep))
+require_auth: Any = Depends(_publishing(_require_auth_dep))

@@ -131,22 +131,38 @@ def adcp_error_code_in(body: object) -> str | None:
     return code if isinstance(code, str) else None
 
 
-class AuthChallengeResponder:
-    """Lift a refused credential out of a buffered JSON body and onto the HTTP status.
+def _is_json_response(message: Message) -> bool:
+    """Whether an ``http.response.start`` announces a JSON body.
 
-    THE shared rendering rule for the two transports that answer inside a 200. MCP and A2A
-    both frame a failure as a protocol-level error in the body, which is right for an
-    application code and wrong for a refused credential: the caller has no identity and
-    needs the 401 handshake to learn how to authenticate. This reads the AdCP code off the
-    outgoing envelope and, when it is one of the auth codes, rewrites the status and adds
-    the challenge -- the "read the code, set the status, in one place" rule, applied
-    identically to both.
+    The gate on buffering. An AdCP envelope is always JSON, so a non-JSON response can never
+    carry a code worth lifting -- and MUST be streamed through untouched, because the admin
+    UI serves an ``text/event-stream`` activity feed that buffering would hold open forever.
+    """
+    for name, value in message.get("headers", []):
+        if name.lower() == b"content-type":
+            return b"application/json" in value.lower()
+    return False
+
+
+class AuthChallengeResponder:
+    """Lift a refused credential out of a JSON body and onto the HTTP status.
+
+    THE renderer. Every transport's 401 is written here and nowhere else, because when each
+    wrote its own they disagreed: MCP was wrapped in this, A2A hand-rolled the identical lift
+    inside its integer-restoration decorator, and REST set the header in its exception
+    handler. Three copies of "read the AdCP code, set 401, attach the challenge" is three
+    places to edit and two places to forget.
+
+    It is mounted app-wide rather than around one transport, so a NEW transport gets the
+    same 401 for free and cannot render its own. ``tests/unit/test_architecture_single_auth_challenge_renderer.py``
+    fails the build if a second site starts emitting ``WWW-Authenticate``.
 
     It buffers, and it must: the ASGI ``http.response.start`` message carries the status and
     arrives BEFORE the body, so the status has to be held until the body has been seen. That
-    is only sound for a finite, buffered response, which is why the MCP app is built with
-    ``json_response=True``. Under SSE this cannot work at all, and pretending otherwise is
-    the mistake an earlier attempt made.
+    is only sound for a finite response, which is why it buffers JSON alone (see
+    ``_is_json_response``) and why the MCP app is built with ``json_response=True``. Under
+    SSE this cannot work at all, and pretending otherwise is the mistake an earlier attempt
+    made.
 
     It knows nothing about tools, and that is the point. Which tool was called, and whether
     that tool requires a caller, is decided where the name is actually available -- the MCP
@@ -168,13 +184,18 @@ class AuthChallengeResponder:
 
         start: Message | None = None
         chunks: list[bytes] = []
+        buffering = True
 
         async def buffer(message: Message) -> None:
-            nonlocal start
+            nonlocal start, buffering
             if message["type"] == "http.response.start":
-                start = message
+                if _is_json_response(message):
+                    start = message  # hold it: the body may change the status
+                else:
+                    buffering = False
+                    await send(message)
                 return
-            if message["type"] != "http.response.body":
+            if message["type"] != "http.response.body" or not buffering:
                 await send(message)
                 return
             chunks.append(message.get("body", b"") or b"")
