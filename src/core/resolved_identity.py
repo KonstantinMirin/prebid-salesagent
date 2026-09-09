@@ -9,9 +9,9 @@ This eliminates isinstance checks and auth extraction inside business logic.
 import logging
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
-from src.core.tenant_context import LazyTenantContext
+from src.core.tenant_context import LazyTenantContext, TenantContext
 from src.core.testing_hooks import AdCPTestContext
 
 logger = logging.getLogger(__name__)
@@ -32,13 +32,39 @@ class ResolvedIdentity(BaseModel, frozen=True):
 
     principal_id: str | None = None
     tenant_id: str | None = None
-    tenant: LazyTenantContext | None = None
+    # A tenant CONTEXT, hydrated or lazy -- never a dict. Production builds the lazy one at
+    # the boundary (id now, row on first field access, cached); a hydrated TenantContext is
+    # equally valid and is what tests supply without a database. What the type excludes is
+    # the dict, which is what it used to be: ``Any``, commented
+    # "TenantContext | dict[str, Any] | None (transitional)".
+    tenant: TenantContext | LazyTenantContext | None = None
     auth_token: str | None = None
     protocol: Literal["mcp", "a2a", "rest"] = "mcp"
     testing_context: AdCPTestContext | None = None
     account_id: str | None = None  # Resolved account ID (from AccountReference at transport boundary)
     # Tenant-level billing policy (BR-RULE-059) and account approval mode (BR-RULE-060)
     # are NOT fields on ResolvedIdentity — they live on identity.tenant (TenantContext).
+
+    @field_validator("tenant", mode="before")
+    @classmethod
+    def _as_tenant_context(cls, v: object) -> object:
+        """Coerce a dict to a TenantContext at construction. No dict is ever STORED.
+
+        Production never reaches this: the boundary builds a LazyTenantContext. It exists so
+        a caller holding tenant DATA -- overwhelmingly a test factory, with no database to
+        lazy-load from -- can construct without hand-building the model, while the FIELD
+        stays typed.
+
+        That distinction is the whole point. The field was ``Any``, so a dict passed in was a
+        dict everywhere downstream, and ``isinstance(x, dict)`` branches grew to meet it. A
+        dict passed in now becomes a TenantContext at the door and attribute access works
+        from then on.
+        """
+        if isinstance(v, dict):
+            from src.core.tenant_context import TenantContext
+
+            return TenantContext.from_dict(v)
+        return v
 
     @property
     def is_authenticated(self) -> bool:

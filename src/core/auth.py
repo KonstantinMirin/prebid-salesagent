@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from adcp.types import ContextObject
 
     from src.core.resolved_identity import ResolvedIdentity
+    from src.core.tenant_context import LazyTenantContext
     from src.core.tool_context import ToolContext
 from fastmcp.server.dependencies import get_http_headers
 from sqlalchemy import select
@@ -366,13 +367,19 @@ def require_tenant(
     identity: "ResolvedIdentity | None",
     *,
     context: "ContextObject | dict[str, Any] | None" = None,
-) -> dict[str, Any]:
+) -> "LazyTenantContext":
     """Return ``identity.tenant`` or raise ``AdCPAuthenticationError``.
 
     Single source of truth for the "no tenant context available" guard — the
     most-repeated ``_impl`` prologue. Use this instead of open-coding the check
     across tool modules. The canonical message carries the actionable
     diagnostic (token + host headers) so buyer agents can self-correct.
+
+    It returns a LazyTenantContext, and said ``dict[str, Any]`` for a long time while
+    returning whatever ``identity.tenant`` held. An annotation that disagrees with the
+    value is worse than none: it tells every reader, and every type checker, that
+    subscripting is safe and attribute access is not, which is how dict-shaped handling
+    spread from here. The context supports both, and the annotation now says what it is.
     """
     from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError
 

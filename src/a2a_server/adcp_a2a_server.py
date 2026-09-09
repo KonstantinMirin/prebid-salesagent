@@ -338,9 +338,9 @@ class AdCPRequestHandler(RequestHandler):
         if not context_id:
             context_id = f"a2a_{datetime.now(UTC).timestamp()}"
 
-        tenant_id = identity.tenant_id or (
-            identity.tenant.get("tenant_id", "unknown") if identity.tenant else "unknown"
-        )
+        # identity.tenant_id, not identity.tenant.get(...) -- the id is carried directly and
+        # reaching through the context would hydrate its row to re-read what we already have.
+        tenant_id = identity.tenant_id or "unknown"
 
         return ToolContext(
             context_id=context_id,

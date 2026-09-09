@@ -57,13 +57,20 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         test_session_id for harness routing).
 
         ``tenant`` is typed ``Any`` to match the underlying
-        ``ResolvedIdentity.tenant`` field, which accepts plain dicts in
-        most call sites and lazy proxies (``LazyTenantContext``) in tests
-        that need deferred config resolution.
+        ``ResolvedIdentity.tenant`` field, which is typed
+        ``TenantContext | LazyTenantContext | None`` -- a tenant CONTEXT, never a dict.
         """
         resolved_tenant = (
             TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides) if tenant is _UNSET else tenant
         )
+        # A TenantContext, not a dict. ResolvedIdentity.tenant is typed
+        # `TenantContext | LazyTenantContext | None`, so a raw dict no longer validates --
+        # deliberately: `Any` on that field is how dict-shaped tenant handling spread through
+        # production. Tests keep supplying data (no DB), they just supply it typed.
+        if isinstance(resolved_tenant, dict):
+            from src.core.tenant_context import TenantContext
+
+            resolved_tenant = TenantContext.from_dict(resolved_tenant)
         if testing_context is None:
             testing_context = AdCPTestContext(
                 dry_run=dry_run,
