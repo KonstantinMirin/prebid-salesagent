@@ -1,5 +1,20 @@
 """Then steps for create_media_buy response assertions.
 
+THIS MODULE IS NOT REGISTERED in tests/bdd/conftest.py's ``pytest_plugins``, so none of
+these definitions is reachable: pytest-bdd resolves a step to a FIXTURE, and a module that
+is neither a registered plugin nor imported by a test module contributes none. Registering
+it was measured and rejected -- it steals 127 already-bound step instances across 5 modules
+(salesagent-uokuq). Its remaining steps are candidates for PROMOTION into a registered
+module when a scenario needs them, one at a time, which is how the two UC-002 package Thens
+left here (see salesagent-9p7oe.4).
+
+Eleven patterns across seven functions have been removed rather than left: five functions
+whose six patterns were SHADOWED by a registered module (so they were dead twice over --
+unregistered and outranked), plus the two UC-002 package Thens that moved. A shadowed copy
+is worse than an absent one: it reads as the definition when you grep, and the two bodies
+drift apart silently -- 'the response should include a "{field}"' had already diverged from
+its live twin.
+
 Asserts on the dispatch payload (CreateMediaBuyResult or CreateMediaBuySuccess)
 and ``ctx["error"]`` (AdCPSalesAgentError or CreateMediaBuyError).
 """
@@ -10,16 +25,31 @@ from pytest_bdd import parsers, then
 
 from tests.bdd.steps._harness_db import db_session as _db_session
 
+# RE-EXPORTED, therefore LIVE despite this module being unregistered. then_success.py
+# imports this function and re-declares it under its own @then, and `from ... import name`
+# moves the FUNCTION, never the fixture -- so the registration that counts is the one over
+# there. Its own @then decorators are removed here: two registrations of one sentence, one
+# of them unreachable, is the shadowing this file was just cleaned of.
+
+
+def then_no_media_buy_persisted(ctx: dict) -> None:
+    """Assert no new media buy was created in the database."""
+    from sqlalchemy import func, select
+
+    from src.core.database.models import MediaBuy
+
+    tenant = ctx.get("tenant")
+    assert tenant is not None, "No tenant in ctx"
+    with _db_session(ctx) as session:
+        count = session.scalar(select(func.count()).select_from(MediaBuy).filter_by(tenant_id=tenant.tenant_id))
+        # Allow existing media buys created by Given steps
+        existing_count = 1 if ctx.get("existing_media_buy") else 0
+        assert count == existing_count, f"Expected {existing_count} media buy(s) in DB, found {count}"
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Response success assertions
 # ═══════════════════════════════════════════════════════════════════════
-
-
-@then("the response should succeed")
-def then_response_succeeds(ctx: dict) -> None:
-    """Assert the response is a success (no error, has response object)."""
-    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-    resp = require_payload(ctx)
 
 
 @then("the pricing validation should pass")
@@ -31,15 +61,6 @@ def then_pricing_validation_passes(ctx: dict) -> None:
     assert media_buy_id, "Expected media_buy_id in response — pricing validation passed but no media buy created"
 
 
-@then("the budget validation should pass")
-def then_budget_validation_passes(ctx: dict) -> None:
-    """Assert budget validation passed — no error, response has media_buy_id."""
-    assert "error" not in ctx, f"Expected budget validation to pass but got error: {ctx.get('error')}"
-    resp = require_payload(ctx)
-    media_buy_id = _get_response_field(resp, "media_buy_id")
-    assert media_buy_id, "Expected media_buy_id in response — budget validation passed but no media buy created"
-
-
 @then("the date validation should pass")
 def then_date_validation_passes(ctx: dict) -> None:
     """Assert date validation passed — no error, response has media_buy_id."""
@@ -47,15 +68,6 @@ def then_date_validation_passes(ctx: dict) -> None:
     resp = require_payload(ctx)
     media_buy_id = _get_response_field(resp, "media_buy_id")
     assert media_buy_id, "Expected media_buy_id in response — date validation passed but no media buy created"
-
-
-@then(parsers.parse('the response should include a "{field}"'))
-def then_response_includes_field(ctx: dict, field: str) -> None:
-    """Assert response includes the specified field with a non-None value."""
-    resp = require_payload(ctx)
-    # Check on the response object — may be CreateMediaBuyResult wrapping a Success
-    value = _get_response_field(resp, field)
-    assert value is not None, f"Expected '{field}' in response, got None"
 
 
 @then(parsers.parse('the response should include "{field}" matching "{value}"'))
@@ -184,36 +196,6 @@ def then_pending_state(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@then(parsers.parse('the media buy status should be "{status}"'))
-def then_media_buy_status(ctx: dict, status: str) -> None:
-    """Assert the media buy has the expected status.
-
-    Checks response first (preferred), then falls back to DB query.
-    Both paths must assert the exact status — no silent fallthrough.
-    """
-    resp = payload_or_none(ctx)
-    media_buy = ctx.get("existing_media_buy")
-    assert resp is not None or media_buy is not None, (
-        "No response or existing media buy to check status — "
-        f"step claims status should be '{status}' but nothing to verify against"
-    )
-    if resp is not None:
-        actual = _get_response_field(resp, "status")
-        assert actual == status, f"Expected media buy status '{status}' in response, got '{actual}'"
-        return
-    # Fallback: check existing media buy in DB (explicit path, not silent)
-    env = ctx["env"]
-    env._commit_factory_data()
-    from sqlalchemy import select
-
-    from src.core.database.models import MediaBuy
-
-    with _db_session(ctx) as session:
-        mb = session.scalars(select(MediaBuy).filter_by(media_buy_id=media_buy.media_buy_id)).first()
-        assert mb is not None, f"Media buy {media_buy.media_buy_id} not found in DB"
-        assert mb.status == status, f"Expected DB status '{status}', got '{mb.status}'"
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # Notification assertions
 # ═══════════════════════════════════════════════════════════════════════
@@ -222,23 +204,6 @@ def then_media_buy_status(ctx: dict, status: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 # Persistence assertions
 # ═══════════════════════════════════════════════════════════════════════
-
-
-@then("no media buy record should be persisted in the database")
-@then("no media buy record should be persisted")
-def then_no_media_buy_persisted(ctx: dict) -> None:
-    """Assert no new media buy was created in the database."""
-    from sqlalchemy import func, select
-
-    from src.core.database.models import MediaBuy
-
-    tenant = ctx.get("tenant")
-    assert tenant is not None, "No tenant in ctx"
-    with _db_session(ctx) as session:
-        count = session.scalar(select(func.count()).select_from(MediaBuy).filter_by(tenant_id=tenant.tenant_id))
-        # Allow existing media buys created by Given steps
-        existing_count = 1 if ctx.get("existing_media_buy") else 0
-        assert count == existing_count, f"Expected {existing_count} media buy(s) in DB, found {count}"
 
 
 @then("the media buy record should be persisted in the database")

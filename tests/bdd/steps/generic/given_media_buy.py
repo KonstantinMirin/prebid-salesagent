@@ -711,35 +711,12 @@ def given_packages_valid_pricing(ctx: dict) -> None:
             )
 
 
-@given("a valid create_media_buy request with 2 packages")
-def given_request_2_packages_simple(ctx: dict) -> None:
-    """Set up request with 2 packages (for duplicate product testing)."""
-    kwargs = _ensure_request_defaults(ctx)
-    env = ctx["env"]
-    product2 = ProductFactory(
-        tenant=ctx["tenant"],
-        product_id="standard_video",
-        property_tags=["all_inventory"],
-    )
-    po2 = PricingOptionFactory(
-        product=product2,
-        pricing_model="cpm",
-        currency="USD",
-        is_fixed=True,
-    )
-    env._commit_factory_data()
-    kwargs["packages"] = [
-        {
-            "product_id": ctx["default_product"].product_id,
-            "budget": 5000.0,
-            "pricing_option_id": pricing_option_id(ctx["default_pricing_option"]),
-        },
-        {
-            "product_id": product2.product_id,
-            "budget": 3000.0,
-            "pricing_option_id": pricing_option_id(po2),
-        },
-    ]
+# "a valid create_media_buy request with 2 packages" is RETIRED. It was a sibling
+# spelling that did the work of the canonical pair -- "a valid create_media_buy request"
+# (94 scenarios) plus "the request includes {count:d} packages with valid product_ids" --
+# and its body was a FOURTH hand-written copy of the package dict. Its one binding
+# scenario, @T-UC-002-ext-e, now says both canonical sentences instead. One sibling
+# sentence retired, one step definition deleted, one copy of the shape gone.
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -246,7 +246,8 @@ Feature: BR-UC-002 Create Media Buy
 
   @T-UC-002-ext-e @extension @ext-e @error @post-f1 @post-f2 @post-f3
   Scenario: Duplicate product_id across packages
-    Given a valid create_media_buy request with 2 packages
+    Given a valid create_media_buy request
+    And the request includes 2 packages with valid product_ids
     And the account exists and is active
     But both packages reference the same product_id "prod-001"
     When the Buyer Agent sends the create_media_buy request
