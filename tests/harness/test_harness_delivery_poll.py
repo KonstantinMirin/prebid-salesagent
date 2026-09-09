@@ -10,9 +10,11 @@ import asyncio
 import inspect
 from datetime import UTC, date, datetime
 
+from src.core.auth_context import AuthContext
 from src.core.schemas import GetMediaBuyDeliveryRequest, GetMediaBuyDeliveryResponse
 from src.core.tools._boundary import invoke_tool
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
+from tests.helpers.boundary_identity import resolved_as
 
 #: adcp_version / adcp_major_version / ext are the version-envelope trio every request
 #: model carries; they are transport-envelope concerns, not per-tool buyer fields, and no
@@ -243,7 +245,8 @@ class TestDeliveryPollEnvContract:
             declared = set(GetMediaBuyDeliveryRequest.model_fields) - _VERSION_ENVELOPE_FIELDS
             assert declared <= buildable, f"builder cannot construct declared fields: {declared - buildable}"
 
-            response = asyncio.run(invoke_tool("get_media_buy_delivery", req, env.identity))
+            with resolved_as(env.identity):
+                response = asyncio.run(invoke_tool("get_media_buy_delivery", req, AuthContext(), "mcp"))
 
             assert isinstance(response, GetMediaBuyDeliveryResponse)
 

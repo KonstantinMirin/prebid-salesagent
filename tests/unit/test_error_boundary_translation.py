@@ -726,7 +726,7 @@ class TestA2AExplicitSkillReraise:
         handler = AdCPRequestHandler()
         raised = AdCPValidationError(field="packages[0].budget")
 
-        async def mock_skill(skill_name, parameters, identity):
+        async def mock_skill(skill_name, parameters, identity, credential):
             raise raised
 
         with patch.object(handler, "_dispatch_skill", mock_skill):
@@ -753,7 +753,7 @@ class TestA2AExplicitSkillReraise:
 
         handler = AdCPRequestHandler()
 
-        async def mock_skill(skill_name, parameters, identity):
+        async def mock_skill(skill_name, parameters, identity, credential):
             raise raised
 
         with patch.object(handler, "_dispatch_skill", mock_skill):
@@ -773,7 +773,7 @@ class TestA2AExplicitSkillReraise:
         handler = AdCPRequestHandler()
         raised = MethodNotFoundError(message="not found")
 
-        async def mock_skill(skill_name, parameters, identity):
+        async def mock_skill(skill_name, parameters, identity, credential):
             raise raised
 
         with patch.object(handler, "_dispatch_skill", mock_skill):

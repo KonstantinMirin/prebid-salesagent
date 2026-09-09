@@ -23,6 +23,7 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+from src.core.auth_context import AuthContext
 from src.core.errors.codes import CODE_TABLE
 from src.core.exceptions import (
     AdCPAuthenticationError,
@@ -60,6 +61,7 @@ from src.core.testing_hooks import AdCPTestContext
 from src.core.tools._boundary import invoke_tool
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from tests.factories.principal import PrincipalFactory
+from tests.helpers.boundary_identity import resolved_as
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -1437,13 +1439,16 @@ class TestCreateMediaBuyIdempotency:
             # Account resolution is the boundary's OTHER database read, and it is not what
             # these two grade; a pass-through keeps the probe the only DB call in play.
             patch("src.core.transport_helpers.enrich_identity_with_account", side_effect=lambda i, a=None: i),
+            # The boundary RESOLVES the identity now; it is not handed one. Substituting the
+            # resolver is how a test names the caller it wants.
+            resolved_as(identity),
         ):
             mock_princ = MagicMock()
             mock_princ.principal_id = "test_principal"
             mock_princ.name = "Test Buyer"
             mock_principal.return_value = mock_princ
 
-            result = await invoke_tool("create_media_buy", req, identity)
+            result = await invoke_tool("create_media_buy", req, AuthContext(), "mcp")
 
         assert isinstance(result, CreateMediaBuyResult)
         assert isinstance(result, CreateMediaBuySuccess)
@@ -1506,6 +1511,7 @@ class TestCreateMediaBuyIdempotency:
             patch("src.core.tools.media_buy_create.get_context_manager") as mock_ctx_mgr,
             patch("src.core.database.repositories.MediaBuyUoW", side_effect=uow_instances),
             patch("src.core.transport_helpers.enrich_identity_with_account", side_effect=lambda i, a=None: i),
+            resolved_as(identity),
         ):
             mock_princ = MagicMock()
             mock_princ.principal_id = "test_principal"
@@ -1521,7 +1527,7 @@ class TestCreateMediaBuyIdempotency:
             # which fails with the typed AdCPProductNotFoundError. Capture it so
             # we can still assert the idempotency probe ran.
             with pytest.raises(AdCPProductNotFoundError):
-                await invoke_tool("create_media_buy", req, identity)
+                await invoke_tool("create_media_buy", req, AuthContext(), "mcp")
 
         # β idempotency probe ran (verbatim success cache), found nothing → proceeded
         mock_idem_attempts_repo.find_by_key.assert_called_once_with(
