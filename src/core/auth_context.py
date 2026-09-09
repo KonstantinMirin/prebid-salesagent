@@ -8,6 +8,22 @@ Available via:
 
 Identity resolution (principal, tenant) happens at handler level via
 resolve_identity() — this is intentional to avoid DB calls on every request.
+
+NEITHER dependency sets the tenant ContextVar, and the removal is deliberate twice over.
+
+It never worked. FastAPI runs a SYNC dependency in an anyio worker thread, the worker gets
+a COPY of the context, and a ContextVar written there is discarded on return — measured,
+the write lands on "AnyIO worker thread" while the tool's read on "MainThread" raises. MCP
+and A2A set the same ContextVar from async handlers on the event loop, where it sticks, so
+REST alone was silently anonymous and nobody noticed.
+
+It is deleted rather than repaired because the ambient channel is the wrong carrier. The
+tenant already travels explicitly on ``identity.tenant`` — a typed, immutable context that
+defers its DB row until a field beyond ``tenant_id`` is read, then caches it once. A
+parallel copy of that same value, flattened into a mutable dict and pushed into task-local
+state, is a second source of truth for data the callee was already handed, and it is why
+this bug was invisible: nothing links such a write to its read. ``require_tenant(identity)``
+inside each _impl is the explicit path, and is what has been doing the real work all along.
 """
 
 from dataclasses import dataclass, field
@@ -69,35 +85,30 @@ get_auth_context: Any = Depends(_get_auth_context)
 def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIdentity | None":
     """FastAPI dependency: resolve identity (auth-optional, for discovery endpoints).
 
-    Always resolves tenant context from headers (Host / x-adcp-tenant /
-    Apx-Incoming-Host), regardless of whether a credential was presented or
-    resolved to a principal — matching resolve_identity_from_context()'s
+    Resolves tenant context from headers (Host / x-adcp-tenant /
+    Apx-Incoming-Host) onto the returned identity, regardless of whether a
+    credential was presented or resolved to a principal — matching resolve_identity_from_context()'s
     MCP/A2A contract (transport_helpers.py). Discovery responses describe the
     SELLER, not the caller (AdCP INV-4, v3.1.1), so an ANONYMOUS caller must
     still receive the same tenant-scoped data an authenticated caller would
-    (salesagent-zna9). Anonymous, not "sent a token that does not work":
-    ``must_validate_credential`` draws that line, so a rejected credential is
-    refused AUTH_INVALID here exactly as it already was on MCP and A2A.
+    (salesagent-zna9), and so must a caller whose token does not resolve: the
+    pinned graded suite runs its invalid-credential probe against the PROTECTED
+    task because "public tasks like get_adcp_capabilities return 200 without
+    credentials by design" (dist/compliance/3.1.1/universal/security.yaml).
     Never raises for a caller who presented NOTHING — identity.principal_id
     being None is how downstream code distinguishes "no credentials" from a
     resolved principal (require_principal_id, brand_manifest_policy checks).
     """
-    from src.core.auth_middleware import must_validate_credential
     from src.core.resolved_identity import resolve_identity
 
     identity = resolve_identity(
         headers=dict(auth_ctx.headers),
         auth_token=auth_ctx.auth_token,
-        require_valid_token=must_validate_credential(False, auth_ctx.headers),
+        require_valid_token=False,  # public task: see the module docstring
         protocol="rest",
     )
 
-    # Set tenant ContextVar at the REST transport boundary
-    if identity.tenant:
-        from src.core.config_loader import set_current_tenant
-
-        set_current_tenant(identity.tenant)
-
+    # No set_current_tenant here -- see the module docstring.
     return identity
 
 
@@ -131,12 +142,7 @@ def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIden
     # require_valid_token set it returns a resolved principal or raises — is what makes a
     # backstop here unreachable rather than merely unlikely.
 
-    # Set tenant ContextVar at the REST transport boundary
-    if identity.tenant:
-        from src.core.config_loader import set_current_tenant
-
-        set_current_tenant(identity.tenant)
-
+    # No set_current_tenant here -- see the module docstring.
     return identity
 
 

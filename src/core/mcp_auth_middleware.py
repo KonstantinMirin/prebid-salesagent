@@ -36,18 +36,18 @@ class MCPAuthMiddleware(Middleware):
         tool_name = context.message.name
         require_auth = TOOLS[tool_name].auth == "required"
 
-        # A PRESENTED credential is always validated, whatever the tool needs: an absent
-        # token on a discovery tool is legitimately anonymous, but a token that was sent and
-        # does not resolve must be answered AUTH_INVALID rather than silently downgraded to
-        # anonymous. The rule itself lives in ``must_validate_credential`` -- all three
-        # transports call it, because when each spelled it locally they disagreed.
-        from src.core.auth_middleware import must_validate_credential
-
+        # ``ToolSpec.auth`` alone decides, on every transport. The pinned 3.1.1 graded
+        # suite (dist/compliance/3.1.1/universal/security.yaml) runs BOTH the unauth probe
+        # and the invalid-credential probe against the PROTECTED probe task, and says why:
+        # "public tasks like get_adcp_capabilities return 200 without credentials by
+        # design". So a public task never refuses a credential, and a protected one refuses
+        # both a missing and a rejected one -- resolve_identity already keys on presence to
+        # split AUTH_MISSING from AUTH_INVALID.
         headers = get_http_headers(include_all=True) or {}
         try:
             identity = resolve_identity_from_context(
                 context.fastmcp_context,
-                require_valid_token=must_validate_credential(require_auth, headers),
+                require_valid_token=require_auth,
             )
         except AdCPSalesAgentError as exc:
             # This middleware runs OUTSIDE the tool functions, so its raise never

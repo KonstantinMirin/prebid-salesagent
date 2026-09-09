@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Final
 
@@ -51,38 +50,6 @@ def _challenge_for_code(code: str | None) -> str | None:
     what keeps a fourth from starting -- there is nothing importable to build one from.
     """
     return _CHALLENGE_BY_CODE.get(code or "")
-
-
-def credential_present(headers: Mapping[str, str]) -> bool:
-    """Whether the caller presented ANY credential this seller accepts.
-
-    Presence only, never validity: validating means a database lookup, and the point of
-    asking this at the HTTP layer is to answer an anonymous caller without doing any. The
-    same two headers ``UnifiedAuthMiddleware`` extracts, in the same precedence.
-    """
-    if (headers.get("x-adcp-auth") or "").strip():
-        return True
-    authorization = (headers.get("authorization") or "").strip()
-    return authorization.lower().startswith("bearer ") and bool(authorization[7:].strip())
-
-
-def must_validate_credential(tool_requires_auth: bool, headers: Mapping[str, str]) -> bool:
-    """Whether this request's credential has to resolve to a principal.
-
-    ONE rule, and the value every transport passes as ``resolve_identity``'s
-    ``require_valid_token``: validate when the TOOL needs a caller, or when the caller
-    presented a credential at all. The second half is what makes a presented-and-rejected
-    token an ``AUTH_INVALID`` refusal on a discovery tool rather than a silent downgrade to
-    anonymous -- the pinned 3.1 enum keys ``AUTH_INVALID`` on "credentials were presented
-    but rejected", which says nothing about which tool was called.
-
-    It exists because the three transports each spelled this rule themselves and only two of
-    them agreed: MCP wrote ``require_auth or credential_present(headers)``, A2A wrote
-    ``bool(auth_token) or requires_auth``, and REST's discovery dependency hardcoded
-    ``False`` -- so an invalid token got 401 AUTH_INVALID over MCP and A2A and 200 over
-    REST. Three spellings of one rule is how they drifted; one function is how they stop.
-    """
-    return tool_requires_auth or credential_present(headers)
 
 
 def adcp_error_code_in(body: object) -> str | None:
