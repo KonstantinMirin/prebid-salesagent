@@ -16,6 +16,7 @@ from src.core.schemas import GetProductsRequest, PricingModel
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.products import _get_products_impl
+from tests.factories import PricingOptionFactory
 from tests.helpers.adcp_factories import create_test_media_buy_request, create_test_package_request
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
@@ -93,7 +94,7 @@ def setup_tenant_with_pricing_products(integration_db):
         session.add(product_cpm_fixed)
         session.flush()
 
-        pricing_cpm_fixed = PricingOption(
+        pricing_cpm_fixed = PricingOptionFactory.build(
             tenant_id="test_pricing_tenant",
             product_id="prod_cpm_fixed",
             pricing_model="cpm",
@@ -118,7 +119,7 @@ def setup_tenant_with_pricing_products(integration_db):
         session.add(product_cpm_auction)
         session.flush()
 
-        pricing_cpm_auction = PricingOption(
+        pricing_cpm_auction = PricingOptionFactory.build(
             tenant_id="test_pricing_tenant",
             product_id="prod_cpm_auction",
             pricing_model="cpm",
@@ -144,7 +145,7 @@ def setup_tenant_with_pricing_products(integration_db):
         session.add(product_cpcv)
         session.flush()
 
-        pricing_cpcv = PricingOption(
+        pricing_cpcv = PricingOptionFactory.build(
             tenant_id="test_pricing_tenant",
             product_id="prod_cpcv",
             pricing_model="cpcv",
@@ -174,7 +175,7 @@ def setup_tenant_with_pricing_products(integration_db):
         session.flush()
 
         # Add CPM option
-        pricing_multi_cpm = PricingOption(
+        pricing_multi_cpm = PricingOptionFactory.build(
             tenant_id="test_pricing_tenant",
             product_id="prod_multi",
             pricing_model="cpm",
@@ -185,7 +186,7 @@ def setup_tenant_with_pricing_products(integration_db):
         session.add(pricing_multi_cpm)
 
         # Add CPCV option
-        pricing_multi_cpcv = PricingOption(
+        pricing_multi_cpcv = PricingOptionFactory.build(
             tenant_id="test_pricing_tenant",
             product_id="prod_multi",
             pricing_model="cpcv",
@@ -196,7 +197,7 @@ def setup_tenant_with_pricing_products(integration_db):
         session.add(pricing_multi_cpcv)
 
         # Add CPP option with demographics
-        pricing_multi_cpp = PricingOption(
+        pricing_multi_cpp = PricingOptionFactory.build(
             tenant_id="test_pricing_tenant",
             product_id="prod_multi",
             pricing_model="cpp",

@@ -10,13 +10,13 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     CurrencyLimit,
-    PricingOption,
     Principal,
     Product,
     PropertyTag,
     Tenant,
 )
 from src.core.product_conversion import convert_product_model_to_schema
+from tests.factories import PricingOptionFactory
 
 
 @pytest.mark.requires_db
@@ -184,7 +184,7 @@ def test_convert_product_includes_allowed_principal_ids(integration_db):
         session.add(product_model)
 
         # Create pricing option (required for valid products)
-        pricing_option = PricingOption(
+        pricing_option = PricingOptionFactory.build(
             tenant_id=tenant_id,
             product_id="convert_test_product",
             pricing_model="cpm",
@@ -253,7 +253,7 @@ def test_allowed_principal_ids_excluded_from_serialization(integration_db):
         )
         session.add(product_model)
 
-        pricing_option = PricingOption(
+        pricing_option = PricingOptionFactory.build(
             tenant_id=tenant_id,
             product_id="serialize_test_product",
             pricing_model="cpm",

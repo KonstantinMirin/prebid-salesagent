@@ -17,12 +17,13 @@ from decimal import Decimal
 import pytest
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import PricingOption, Product
+from src.core.database.models import Product
 from src.core.exceptions import AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
+from tests.factories import PricingOptionFactory
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.utils.database_helpers import future_iso_date_range, seed_targeting_test_tenant
 
@@ -58,7 +59,7 @@ def targeting_tenant(integration_db):
         session.flush()
 
         session.add(
-            PricingOption(
+            PricingOptionFactory.build(
                 tenant_id=TENANT_ID,
                 product_id="prod_display",
                 pricing_model="cpm",

@@ -1,6 +1,7 @@
 import os
 import secrets
 from datetime import UTC, datetime
+from typing import cast
 
 from sqlalchemy import func, select
 
@@ -309,9 +310,9 @@ def init_db(exit_on_error=False):
                     db_session.flush()
 
                     # Create pricing_option for this product (new system)
-                    new_pricing_option = PricingOptionModel(
+                    new_pricing_option = PricingOptionModel.create(
                         tenant_id="default",
-                        product_id=p["product_id"],
+                        product_id=cast("str", p["product_id"]),
                         pricing_model=pricing_opt_data["pricing_model"],
                         rate=pricing_opt_data.get("rate"),
                         currency=pricing_opt_data["currency"],

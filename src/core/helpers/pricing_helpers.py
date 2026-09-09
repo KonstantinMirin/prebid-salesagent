@@ -1,27 +1,10 @@
 """Pricing option helper utilities.
 
 Handles the RootModel wrapper pattern used by adcp 2.14.0+ for discriminated unions,
-and owns the two projections of a pricing option that several callers need: the
-synthetic id a package names it by, and the ``pricing_info`` a package row stores.
+and owns the ``pricing_info`` projection a package row stores.
 """
 
 from typing import Any
-
-
-def synthetic_pricing_option_id(pricing_option: Any) -> str:
-    """The id a package names *pricing_option* by: ``{model}_{currency}_{fixed|auction}``.
-
-    The ``pricing_options`` table has no id column, so this string IS the identifier:
-    ``get_products`` announces it, a ``PackageRequest`` names it, and
-    ``_get_pricing_options`` resolves it by rebuilding the same string from each row. Four
-    call sites built it independently and a fifth compared against them; a grammar spelled
-    five times is one edit away from a package naming an option no reader can resolve.
-
-    Accepts a RootModel-wrapped option or a bare row/model.
-    """
-    option = getattr(pricing_option, "root", pricing_option)
-    fixed_str = "fixed" if option.is_fixed else "auction"
-    return f"{option.pricing_model}_{option.currency.lower()}_{fixed_str}"
 
 
 def pricing_info_for(pricing_option: Any, *, bid_price: float | None = None) -> dict[str, Any]:

@@ -481,6 +481,25 @@ Feature: BR-UC-002 Create Media Buy
     And the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
+
+  # Two siblings were written here and removed: a fixed option with no rate, and a product
+  # with no options at all. Neither state can exist -- check_fixed_has_rate rejects the
+  # first at INSERT and the enforce_min_one_pricing_option trigger rejects the second -- so
+  # production can never meet either, and a scenario demanding its response graded nothing.
+
+  @T-UC-002-ext-n-min-spend @extension @ext-n @error
+  Scenario: Package budget below the pricing option's minimum spend
+    # pricing-options/*.json declare min_spend_per_package. A budget under it cannot buy
+    # the option, and the buyer can fix it by raising the budget — so it is correctable,
+    # not the seller's own defect.
+    Given a valid create_media_buy request
+    And the account exists and is active
+    And a package budget of 500 against a pricing option requiring a minimum spend of 1000
+    When the Buyer Agent sends the create_media_buy request
+    Then the error is compliant with the AdCP error spec
+    And the operation should fail
+    And the error code should be "VALIDATION_ERROR"
+
     # --- ext-o: Creative Not Found in Library ---
 
   @T-UC-002-ext-webhook-ssrf @extension @ext-webhook-ssrf @error @post-f1 @post-f2 @post-f3

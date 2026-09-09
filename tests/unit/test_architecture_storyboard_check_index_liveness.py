@@ -161,6 +161,18 @@ def _ledgered_scenario_result(monkeypatch, tmp_path: Path, scenario_id: str, *, 
     monkeypatch.setattr(scenario_liveness_join, "load_env_routes", lambda: [])  # not registry-wired at all
     if exercised is not None:
         monkeypatch.setattr(storyboard_check_index, "_exercised_storyboards", lambda _repo: exercised)
+    else:
+        # PIN THE OTHER INPUT TOO. `_exercised_storyboards` prefers a published
+        # storyboard_collected.json (salesagent-v03pe.3) and falls back to the failure
+        # ledger only when none exists. test-results/ is gitignored, so whether that file
+        # is on disk depends on whether someone has run the storyboard suite in this
+        # worktree -- and a partial artifact from a degraded run narrows the exercised set.
+        # A guard whose verdict moves with ambient disk state is not a guard, so point the
+        # reader at a path that cannot exist and let it use the committed ledger, which is
+        # the input these cases are actually about.
+        monkeypatch.setattr(
+            storyboard_check_index, "_collected_artifact_path", lambda _repo: tmp_path / "no-such-artifact.json"
+        )
     return storyboard_check_index.build(REPO_ROOT, ADCP_HOME)
 
 

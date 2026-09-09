@@ -157,16 +157,14 @@ def _make_identity(
 
 
 def _mock_product(product_id: str = "prod_1", currency: str = "USD") -> MagicMock:
-    """Create a mock DB Product with pricing_options."""
-    pricing_option = MagicMock(
-        spec=["pricing_model", "currency", "is_fixed", "rate", "min_spend_per_package", "root"],
-    )
-    pricing_option.pricing_model = "cpm"
-    pricing_option.currency = currency
-    pricing_option.is_fixed = True
-    pricing_option.rate = Decimal("5.00")
-    pricing_option.min_spend_per_package = None
-    pricing_option.root = pricing_option
+    """Create a mock DB Product whose pricing option is a REAL unpersisted row.
+
+    The option was a ``MagicMock(spec=[...])`` listing the model's columns by hand, so it
+    went stale the moment the model gained one — ``pricing_option_id`` was added and every
+    test through here started raising ``AttributeError`` on a shape production never
+    produces. The factory cannot drift from the model that way.
+    """
+    pricing_option = PricingOptionFactory.build(product_id=product_id, currency=currency, min_spend_per_package=None)
 
     product = MagicMock()
     product.product_id = product_id
@@ -672,16 +670,12 @@ class TestCreateMediaBuyValidation:
         """
         from src.core.tools.media_buy_create import _validate_pricing_model_selection
 
-        pricing_option = MagicMock(
-            spec=["pricing_model", "currency", "is_fixed", "rate", "min_spend_per_package", "price_guidance", "root"],
+        pricing_option = PricingOptionFactory.build(
+            is_fixed=False,  # auction
+            rate=None,
+            price_guidance={"floor": "5.00"},
+            min_spend_per_package=None,
         )
-        pricing_option.pricing_model = "cpm"
-        pricing_option.currency = "USD"
-        pricing_option.is_fixed = False  # auction
-        pricing_option.rate = None
-        pricing_option.price_guidance = {"floor": "5.00"}
-        pricing_option.min_spend_per_package = None
-        pricing_option.root = pricing_option
 
         product = MagicMock()
         product.product_id = "prod_1"
@@ -713,16 +707,7 @@ class TestCreateMediaBuyValidation:
         """
         from src.core.tools.media_buy_create import _validate_pricing_model_selection
 
-        pricing_option = MagicMock(
-            spec=["pricing_model", "currency", "is_fixed", "rate", "min_spend_per_package", "floor_price", "root"],
-        )
-        pricing_option.pricing_model = "cpm"
-        pricing_option.currency = "USD"
-        pricing_option.is_fixed = True
-        pricing_option.rate = Decimal("5.00")
-        pricing_option.min_spend_per_package = Decimal("1000")
-        pricing_option.floor_price = None
-        pricing_option.root = pricing_option
+        pricing_option = PricingOptionFactory.build(min_spend_per_package=Decimal("1000"))
 
         product = MagicMock()
         product.product_id = "prod_1"
@@ -1644,14 +1629,10 @@ class TestCreateMediaBuyAdapterInteraction:
         mock_schema_product.channels = []
         mock_schema_product.property_list_id = None
 
-        # Build mock pricing option (shared between schema product and DB product)
-        mock_pricing_option = MagicMock()
-        mock_pricing_option.pricing_model = "cpm"
-        mock_pricing_option.currency = "USD"
-        mock_pricing_option.is_fixed = True
-        mock_pricing_option.rate = Decimal("5.00")
-        mock_pricing_option.min_spend_per_package = None
-        mock_pricing_option.root = mock_pricing_option
+        # A real unpersisted row, shared between schema product and DB product: a bare
+        # MagicMock answers every attribute, so pricing_option_id came back as a Mock and
+        # matched nothing the request could name.
+        mock_pricing_option = PricingOptionFactory.build(min_spend_per_package=None)
 
         # Set pricing_options on schema product for CPM calculation
         mock_schema_product.pricing_options = [mock_pricing_option]

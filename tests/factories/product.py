@@ -38,6 +38,14 @@ class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
 
 
 class PricingOptionFactory(factory.alchemy.SQLAlchemyModelFactory):
+    """A ``PricingOption`` row. The ONLY way a test builds one.
+
+    Takes a ``product``, or the ``tenant_id``/``product_id`` pair that names one. Give it
+    the pair and it attaches NO parent object: the SubFactory would otherwise build a
+    second ``Product`` that nothing asked for, and adding the option to a session would
+    cascade an INSERT for it — against ids the caller has already created itself.
+    """
+
     class Meta:
         model = PricingOption
         sqlalchemy_session = None
@@ -47,9 +55,49 @@ class PricingOptionFactory(factory.alchemy.SQLAlchemyModelFactory):
     tenant_id = LazyAttribute(lambda o: o.product.tenant_id)
     product_id = LazyAttribute(lambda o: o.product.product_id)
     pricing_model = "cpm"
-    rate = Decimal("5.00")
     currency = "USD"
     is_fixed = True
+    #: Derived from is_fixed, because the two are not independent: the DB enforces
+    #: check_fixed_has_rate (fixed => rate) and check_auction_has_price_guidance
+    #: (auction => a floor, and no rate is meaningful). A flat Decimal default gave every
+    #: auction fixture a fixed rate — a row shape the seller cannot hold.
+    rate = LazyAttribute(lambda o: Decimal("5.00") if o.is_fixed else None)
+    price_guidance = LazyAttribute(lambda o: None if o.is_fixed else {"floor": 1.0})
+    #: Asked of the model rather than spelled here, so a row this factory builds carries
+    #: the id a row ``PricingOption.create()`` writes would carry.
+    pricing_option_id = LazyAttribute(
+        lambda o: PricingOption.default_option_id(o.pricing_model, o.currency, o.is_fixed)
+    )
+
+    @classmethod
+    def _adjust_kwargs(cls, **kwargs):
+        """Keep the parent OBJECT only when it is the parent the ids name.
+
+        A caller that passes ``tenant_id``/``product_id`` overrides the two LazyAttributes
+        but not the SubFactory, so a ``Product`` is still built — one with different ids,
+        which nothing asked for and which a ``session.add`` would cascade an INSERT for.
+        Comparing the two is what tells the cases apart: they agree exactly when the
+        product IS the one being named.
+
+        The key is REMOVED, never set to ``None``. ``product`` is a relationship over
+        ``(tenant_id, product_id)``, so an explicit ``None`` is not "no opinion" — it is
+        "this row has no parent", and SQLAlchemy honours it at flush by nulling both FK
+        columns, discarding the ids the caller passed. That reads as correct right up
+        until the INSERT, because the attributes hold the caller's values until then.
+        """
+        product = kwargs.get("product")
+        if product is not None and (product.tenant_id, product.product_id) != (
+            kwargs["tenant_id"],
+            kwargs["product_id"],
+        ):
+            del kwargs["product"]
+        return kwargs
+
+
+#: The id a default-shaped pricing option carries, read off the factory rather than
+#: restated. ``PackageRequestFactory`` names it, so a fixture package and the option row
+#: it selects cannot drift apart.
+DEFAULT_PRICING_OPTION_ID: str = PricingOptionFactory.build().pricing_option_id
 
 
 class PricingOptionRequestFactory(_RequestFactory):

@@ -181,7 +181,7 @@ def given_package_pricing(ctx: dict, pkg_id: str, pricing_model: str, rate: floa
     Rewrites the buy's persisted request to name *pkg_id* and stores the matching
     ``MediaPackage`` row, both through the fixture machinery: the request package comes
     from ``request_package`` (bound to ``PackageRequest``), the option is named by
-    ``synthetic_pricing_option_id``, and the row's ``pricing_info`` is the same projection
+    the option row's own ``pricing_option_id``, and its ``pricing_info`` is the same projection
     production writes. Nothing here restates a shape.
 
     Fixed-rate terms. The auction Given below is separate because auction pricing carries
@@ -3685,7 +3685,7 @@ def _seed_package_terms(
     from sqlalchemy.orm import attributes
 
     from src.core.database.models import MediaBuy
-    from src.core.helpers.pricing_helpers import pricing_info_for, synthetic_pricing_option_id
+    from src.core.helpers.pricing_helpers import pricing_info_for
     from tests.factories import MediaPackageFactory, PricingOptionFactory
     from tests.factories.media_buy import request_package
 
@@ -3695,7 +3695,7 @@ def _seed_package_terms(
         is_fixed=is_fixed,
         rate=Decimal(str(rate)) if rate is not None else None,
     )
-    package = request_package(package_id=pkg_id, pricing_option_id=synthetic_pricing_option_id(option))
+    package = request_package(package_id=pkg_id, pricing_option_id=option.pricing_option_id)
     if bid_price is not None:
         package["bid_price"] = bid_price
 

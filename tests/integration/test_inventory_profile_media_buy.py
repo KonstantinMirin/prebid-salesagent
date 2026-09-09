@@ -17,13 +17,13 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     InventoryProfile,
-    PricingOption,
     Principal,
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
+from tests.factories import PricingOptionFactory
 from tests.helpers.adcp_factories import create_test_db_product, create_test_package_request
 
 
@@ -85,7 +85,7 @@ async def test_create_media_buy_with_profile_based_product(sample_tenant):
         )
         session.add(product)
 
-        pricing = PricingOption(
+        pricing = PricingOptionFactory.build(
             tenant_id=sample_tenant["tenant_id"],
             product_id=product.product_id,
             pricing_model="cpm",
@@ -179,7 +179,7 @@ async def test_create_media_buy_with_profile_formats(sample_tenant):
         )
         session.add(product)
 
-        pricing = PricingOption(
+        pricing = PricingOptionFactory.build(
             tenant_id=sample_tenant["tenant_id"],
             product_id=product.product_id,
             pricing_model="cpm",
@@ -268,7 +268,7 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
             )
             session.add(product)
 
-            pricing = PricingOption(
+            pricing = PricingOptionFactory.build(
                 tenant_id=sample_tenant["tenant_id"],
                 product_id=product.product_id,
                 pricing_model="cpm",
@@ -365,7 +365,7 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
         )
         session.add(product)
 
-        pricing = PricingOption(
+        pricing = PricingOptionFactory.build(
             tenant_id=sample_tenant["tenant_id"],
             product_id=product.product_id,
             pricing_model="cpm",

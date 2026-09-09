@@ -108,10 +108,11 @@ class TestDeliveryPollEnvContract:
     def test_pricing_options(self):
         """set_pricing_options makes pricing data available to _impl.
 
-        The option states its TERMS and lets production's ``synthetic_pricing_option_id``
-        name it, so the key the lookup answers under is the one the package below names.
-        An id passed by hand could be one no reader resolves while the fixture answered
-        for it anyway — which is how a package naming an unresolvable option went green.
+        The option states its TERMS and the key is read off the row's stored
+        ``pricing_option_id`` column, so the key the lookup answers under is the one the
+        package below names. An id passed by hand could be one no reader resolves while
+        the fixture answered for it anyway — which is how a package naming an
+        unresolvable option went green.
         """
         with DeliveryPollEnv() as env:
             env.set_pricing_options(pricing_options_named(pricing_model="cpm", rate="5.00"))

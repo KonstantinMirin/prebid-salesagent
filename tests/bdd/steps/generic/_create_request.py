@@ -15,13 +15,13 @@ from typing import Any
 
 
 def pricing_option_id(pricing_option: Any) -> str:
-    """Synthetic pricing_option_id string from a PricingOption ORM row.
+    """The id a ``PricingOption`` row carries — the same one get_products announces.
 
-    Matches the production/`given_media_buy` convention
-    ``{pricing_model}_{currency_lower}_{fixed|auction}``.
+    Read off the row rather than rebuilt from its other columns. Rebuilding was a sixth
+    copy of a grammar the readers did not agree on, and it could only ever produce the
+    DEFAULT id, so a row whose publisher chose its own id would be named wrongly here.
     """
-    fixed_str = "fixed" if pricing_option.is_fixed else "auction"
-    return f"{pricing_option.pricing_model}_{pricing_option.currency.lower()}_{fixed_str}"
+    return pricing_option.pricing_option_id
 
 
 def build_create_request_kwargs(

@@ -36,9 +36,17 @@ class _Error:
         return f"_Error({self.message!r})"
 
 
-def _ctx(message: str, *, requested: list[str] | None = ["mb-other"]) -> dict:
+#: The id the buyer sent. A sentinel rather than a mutable default (B006), and NOT
+#: ``None``: ``None`` already means "the step recorded nothing", which is the case the
+#: unrecorded-request test drives, so the two cannot share a spelling.
+_SENT_ID = "mb-other"
+
+
+def _ctx(message: str, *, requested: list[str] | None | object = _SENT_ID) -> dict:
     ctx: dict = {"error": _Error(message)}
-    if requested is not None:
+    if requested is _SENT_ID:
+        ctx["requested_media_buy_ids"] = [_SENT_ID]
+    elif requested is not None:
         ctx["requested_media_buy_ids"] = requested
     return ctx
 

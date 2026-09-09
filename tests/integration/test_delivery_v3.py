@@ -18,13 +18,11 @@ from src.core.database.models import (
     CurrencyLimit,
     MediaBuy,
     MediaPackage,
-    PricingOption,
     Principal,
     Product,
     PropertyTag,
     Tenant,
 )
-from src.core.helpers.pricing_helpers import synthetic_pricing_option_id
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
@@ -35,6 +33,7 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
+from tests.factories import PricingOptionFactory
 from tests.factories.media_buy import request_package
 
 # ---------------------------------------------------------------------------
@@ -164,7 +163,7 @@ def _setup_base_state(session) -> dict:
     session.add(product)
     session.flush()
 
-    pricing_option = PricingOption(
+    pricing_option = PricingOptionFactory.build(
         tenant_id=tenant_id,
         product_id="prod_display",
         pricing_model="cpm",
@@ -181,10 +180,8 @@ def _setup_base_state(session) -> dict:
         "tenant_id": tenant_id,
         "principal_id": principal_id,
         "product_id": "prod_display",
-        # The id a package names this option by. The pricing_options table has no id
-        # column, so _get_pricing_options matches on this string rebuilt from the row's
-        # own columns; the auto-increment PK names nothing that can resolve.
-        "pricing_option_id": synthetic_pricing_option_id(pricing_option),
+        # The id a package names this option by, read off the row rather than rebuilt.
+        "pricing_option_id": pricing_option.pricing_option_id,
     }
 
 
@@ -571,66 +568,15 @@ class TestDeliveryPricingOptionIntegration:
         package = response.media_buy_deliveries[0].by_package[0]
         assert (package.pricing_model, package.rate, package.currency) == ("cpm", 5.00, "USD")
 
-    def test_uppercase_pricing_model_resolves_through_its_own_id(self, integration_db, factory_session):
-        """An option stored with a non-lowercase pricing_model is still FOUND by its id.
-
-        THE INVARIANT IS AGREEMENT, NOT CASE. Nothing normalises ``pricing_model`` on the
-        way into ``pricing_options``, so a row can hold ``"CPM"`` — and the builder and the
-        matcher must still agree about what that row is called, or a package names an
-        option no reader can find. Both go through
-        ``synthetic_pricing_option_id``, so they agree whatever the case is.
-
-        This test used to additionally assert the id was LOWERCASE — ``option_id ==
-        "cpm_usd_auction"`` — and that claim is simply false:
-        ``synthetic_pricing_option_id`` lowercases ``currency`` and does NOT touch
-        ``pricing_model``, so a ``"CPM"`` row yields ``"CPM_usd_auction"``. The test failed
-        on its own premise, one line before reaching the lookup it exists to exercise. The
-        agreement it names never got tested.
-
-        LOWERCASING THE BUILDER WOULD NOT BE A TEST FIX. That id is announced by
-        get_products and named by a PackageRequest, so changing its case changes what is on
-        the wire — the same "not this change's to decide" the paragraph below draws about
-        normalising the column.
-
-        It stops at the lookup, deliberately. Reporting such a package is a SEPARATE and
-        currently impossible thing: ``PackageDelivery.pricing_model`` is the pinned
-        lowercase-only enum (``enums/pricing-model.json``), so a row holding ``"CPM"`` is
-        refused by the response model whatever its id does. Normalising the column would
-        change what is stored, which is not this change's to decide.
-
-        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-01
-        """
-        from sqlalchemy import select
-
-        from src.core.database.repositories.product import ProductRepository
-        from src.core.tools.media_buy_delivery import _get_pricing_options
-        from tests.factories.product import PricingOptionFactory
-
-        session = factory_session
-        base = _setup_base_state(session)
-        product = session.scalars(
-            select(Product).filter_by(tenant_id=base["tenant_id"], product_id=base["product_id"])
-        ).one()
-        uppercase_option = PricingOptionFactory(
-            product=product,
-            pricing_model="CPM",
-            rate=Decimal("7.50"),
-            currency="USD",
-            is_fixed=False,
-        )
-
-        option_id = synthetic_pricing_option_id(uppercase_option)
-        assert option_id == "CPM_usd_auction", (
-            f"the builder passes pricing_model through and lowercases only currency; got {option_id!r}"
-        )
-
-        # The matcher rebuilds the id from the row's own columns. It finds the row
-        # only if it cased it the same way the builder did — which is the point.
-        found = _get_pricing_options(
-            [option_id], tenant_id=base["tenant_id"], product_repo=ProductRepository(session, base["tenant_id"])
-        )
-        assert option_id in found, f"{option_id!r} resolved to no option; matcher built {list(found)}"
-        assert found[option_id].rate == Decimal("7.50")
+    # test_uppercase_pricing_model_resolves_through_a_lowercase_id lived here. It
+    # graded builder/matcher AGREEMENT about the case of an id that both sides
+    # recomputed from pricing_model/currency/is_fixed. pricing_options now stores the
+    # id in its own column and _get_pricing_options keys on it, so there is no second
+    # derivation left to disagree with — the hazard is structurally gone, not merely
+    # unobserved. The surviving obligation, that the DEFAULT id lowercases a seller's
+    # "CPM", is graded live on a2a/mcp/rest by "the announced pricing_option_id is
+    # lowercase whatever case the seller stored" in
+    # tests/bdd/features/BR-UC-GET-PRODUCTS-pricing-options.feature.
 
 
 @pytest.mark.requires_db

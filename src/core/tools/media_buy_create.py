@@ -131,7 +131,7 @@ from src.core.helpers.creative_helpers import (
     extract_media_url_and_dimensions,
     process_and_upload_package_creatives,
 )
-from src.core.helpers.pricing_helpers import pricing_info_for, synthetic_pricing_option_id
+from src.core.helpers.pricing_helpers import pricing_info_for
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -1647,8 +1647,8 @@ def _validate_pricing_model_selection(
     selected_option = None
     for option in product.pricing_options:
         opt_inner = unwrap_option(option)
-        # The same id get_products announces and _get_pricing_options resolves.
-        option_id = synthetic_pricing_option_id(opt_inner)
+        # The stored id -- the same one get_products announced and the buyer sent back.
+        option_id = opt_inner.pricing_option_id
 
         # Try matching by pricing_option_id first (AdCP spec)
         if pricing_option_id and pricing_option_id.lower() == option_id.lower():
@@ -1666,7 +1666,8 @@ def _validate_pricing_model_selection(
     if not selected_option:
         # Show available options in same format as matching logic expects
         available_options = [
-            f"{synthetic_pricing_option_id(opt)} ({unwrap_option(opt).pricing_model} - {unwrap_option(opt).currency})"
+            f"{unwrap_option(opt).pricing_option_id} "
+            f"({unwrap_option(opt).pricing_model} - {unwrap_option(opt).currency})"
             for opt in product.pricing_options
         ]
         # The four accumulated branches used to build a sentence; each branch's VALUE is
@@ -2341,14 +2342,10 @@ async def _create_media_buy_impl(
                         product = product_map[package.product_id]
                         # Use the first pricing option from the product
                         if product.pricing_options and len(product.pricing_options) > 0:
-                            # Use the generated pricing_option_id format from the product's first option
                             # Unwrap RootModel wrapper if present (adcp 2.14.0+ uses RootModel)
                             first_option = product.pricing_options[0]
                             first_option = getattr(first_option, "root", first_option)
-                            pricing_model = first_option.pricing_model.lower()
-                            currency = first_option.currency.lower()
-                            is_fixed = "fixed" if first_option.is_fixed else "auction"
-                            package.pricing_option_id = f"{pricing_model}_{currency}_{is_fixed}"
+                            package.pricing_option_id = first_option.pricing_option_id
                             logger.info(
                                 f"Resolved legacy pricing_option_id for product {package.product_id}: {package.pricing_option_id}"
                             )

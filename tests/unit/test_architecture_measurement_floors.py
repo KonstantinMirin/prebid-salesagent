@@ -56,6 +56,7 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "egress-sync",
         "egress-sync-creds",
         "egress-update",
+        "get-products-pricing-options",
         "security-wire-error-safety",
         "uc002-account",
         "uc002-ext",

@@ -17,12 +17,12 @@ from adcp.types import MediaBuyStatus
 from factory import LazyAttribute, Sequence, SubFactory
 
 from src.core.database.models import MediaBuy, MediaPackage, PricingOption, is_media_buy_seller_confirmed
-from src.core.helpers.pricing_helpers import pricing_info_for, synthetic_pricing_option_id
+from src.core.helpers.pricing_helpers import pricing_info_for
 from src.core.schemas import GetMediaBuysMediaBuy
 from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
 from tests.factories.core import TenantFactory
 from tests.factories.principal import PrincipalFactory
-from tests.factories.product import PricingOptionFactory
+from tests.factories.product import DEFAULT_PRICING_OPTION_ID, PricingOptionFactory
 from tests.factories.request import PackageRequestFactory
 
 #: The product a fixture package points at. Held here rather than taken from the request
@@ -63,19 +63,16 @@ def default_request_packages() -> list[dict[str, Any]]:
     return [request_package()]
 
 
-#: The pricing option the default request package names, read off that package rather than
-#: restated, so the two cannot disagree.
-DEFAULT_PRICING_OPTION_ID: str = request_package()["pricing_option_id"]
-
-
 def pricing_option_for(pricing_option_id: str) -> PricingOption | None:
-    """The unpersisted ``PricingOption`` row whose synthetic id is *pricing_option_id*.
+    """The unpersisted ``PricingOption`` row a package naming *pricing_option_id* selects.
 
-    The inverse of production's ``synthetic_pricing_option_id``, which is imported rather
-    than reimplemented — the grammar has one owner, and this asks it what it produced.
-    A candidate row is built from the id's parts and kept only if production agrees it
-    names that row; anything outside the grammar returns ``None``, exactly as the real
-    lookup finds no row for one.
+    ``pricing_option_id`` is a stored column, so a row can carry any id its publisher
+    chose and this cannot invert an arbitrary one. What it inverts is the DEFAULT id
+    ``PricingOption.default_option_id`` assigns, which is what every fixture row carries:
+    the parts are read out of the id, a candidate row is built from them, and it is kept
+    only if the model agrees that row would be given that id back. An id outside the
+    default grammar returns ``None`` — a fixture wanting a custom id builds the row
+    itself and reads the id off it.
     """
     parts = pricing_option_id.rsplit("_", 2)
     if len(parts) != 3:
@@ -84,7 +81,7 @@ def pricing_option_for(pricing_option_id: str) -> PricingOption | None:
     option = PricingOptionFactory.build(
         pricing_model=pricing_model, currency=currency.upper(), is_fixed=fixed == "fixed"
     )
-    return option if synthetic_pricing_option_id(option) == pricing_option_id else None
+    return option if option.pricing_option_id == pricing_option_id else None
 
 
 def pricing_options_for(pricing_option_ids: Iterable[str]) -> dict[str, PricingOption]:
@@ -110,11 +107,13 @@ def pricing_options_named(
     the grammar is ``{model}_{currency}_{fixed|auction}`` — so it cannot be recovered by
     inverting an id, and a test asserting a cpc buy billed 0.50 has to state it.
 
-    The KEY is still derived: production's ``synthetic_pricing_option_id`` is asked what
-    this option is named, rather than the caller passing an id alongside the terms. That
-    is the whole difference from the helper this replaces, which took an arbitrary id
-    (``"po_cpc"``) and fabricated an option for it — so a package could name an id no
-    reader resolves and the fixture would still answer.
+    The KEY is READ OFF THE ROW, not computed here. ``pricing_option_id`` is a stored
+    column now, and the row the factory builds already carries the id
+    ``PricingOption.default_option_id`` assigned it — so this asks the row what it is
+    named instead of spelling the grammar a second time. That is the whole difference
+    from the helper this replaces, which took an arbitrary id (``"po_cpc"``) and
+    fabricated an option for it, so a package could name an id no reader resolves and
+    the fixture would still answer.
     """
     option = PricingOptionFactory.build(
         pricing_model=pricing_model,
@@ -122,7 +121,7 @@ def pricing_options_named(
         currency=currency,
         is_fixed=is_fixed,
     )
-    return {synthetic_pricing_option_id(option): option}
+    return {option.pricing_option_id: option}
 
 
 def package_config_for(package: dict[str, Any]) -> dict[str, Any]:
@@ -409,7 +408,7 @@ def package_pricing_fields(
     reports on.
     """
     option = pricing_option_for(DEFAULT_PRICING_OPTION_ID)
-    assert option is not None  # DEFAULT_PRICING_OPTION_ID comes from request_package()
+    assert option is not None  # DEFAULT_PRICING_OPTION_ID is a default-grammar id by construction
     return {
         "pricing_model": pricing_model if pricing_model is not None else option.pricing_model,
         "rate": rate if rate is not None else float(option.rate),
@@ -429,8 +428,7 @@ def seed_delivery_pricing(
     The integration ``DeliveryPollEnv`` runs the REAL ``_get_pricing_options``, which reads
     the tenant's ``pricing_options`` rows and reconstructs each synthetic id, so a package
     naming an id no row produces resolves to nothing. The returned id is produced by
-    ``synthetic_pricing_option_id`` — production's own grammar, asked rather than
-    reimplemented.
+    the row's own ``pricing_option_id`` column, read back rather than recomputed.
 
     Pass ``tenant`` (the object, not the id: ``ProductFactory`` derives ``tenant_id`` from
     its ``tenant`` SubFactory, so an id kwarg alone leaves the row on a freshly-minted
@@ -446,4 +444,4 @@ def seed_delivery_pricing(
         currency=currency,
         is_fixed=True,
     )
-    return synthetic_pricing_option_id(option)
+    return option.pricing_option_id

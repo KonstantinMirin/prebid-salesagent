@@ -24,6 +24,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.schemas import GetMediaBuyDeliveryResponse, PricingModel
+from tests.factories import PricingOptionFactory
 from tests.factories.media_buy import request_package, seed_delivery_pricing
 
 # ---------------------------------------------------------------------------
@@ -1462,7 +1463,7 @@ class TestPricingOptionStringLookup:
         Covers: UC-004-MAIN-14
         """
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import PricingOption, Product, Tenant
+        from src.core.database.models import Product, Tenant
         from src.core.database.repositories.product import ProductRepository
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
@@ -1488,7 +1489,7 @@ class TestPricingOptionStringLookup:
             session.add(product)
             session.flush()
             session.add(
-                PricingOption(
+                PricingOptionFactory.build(
                     tenant_id="t1",
                     product_id="prod1",
                     pricing_model="cpm",
@@ -1514,7 +1515,7 @@ class TestPricingOptionStringLookup:
         Covers: UC-004-MAIN-14
         """
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import PricingOption, Product, Tenant
+        from src.core.database.models import Product, Tenant
         from src.core.database.repositories.product import ProductRepository
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
@@ -1540,7 +1541,7 @@ class TestPricingOptionStringLookup:
             session.add(product)
             session.flush()
             session.add(
-                PricingOption(
+                PricingOptionFactory.build(
                     tenant_id="t1",
                     product_id="prod1",
                     pricing_model="cpm",
@@ -1620,7 +1621,7 @@ class TestPricingOptionStringToIntComparisonRejected:
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
         """
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import PricingOption, Product, Tenant
+        from src.core.database.models import Product, Tenant
         from src.core.database.repositories.product import ProductRepository
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
@@ -1645,7 +1646,7 @@ class TestPricingOptionStringToIntComparisonRejected:
             )
             session.add(product)
             session.flush()
-            po = PricingOption(
+            po = PricingOptionFactory.build(
                 tenant_id="t1",
                 product_id="prod1",
                 pricing_model="cpm",
@@ -1675,7 +1676,7 @@ class TestPricingOptionStringToIntComparisonRejected:
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
         """
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import PricingOption, Product, Tenant
+        from src.core.database.models import Product, Tenant
         from src.core.database.repositories.product import ProductRepository
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
@@ -1701,7 +1702,7 @@ class TestPricingOptionStringToIntComparisonRejected:
             session.add(product)
             session.flush()
             session.add(
-                PricingOption(
+                PricingOptionFactory.build(
                     tenant_id="t1",
                     product_id="prod1",
                     pricing_model="cpc",
@@ -1805,7 +1806,7 @@ class TestEndToEndDeliveryMetricsCpmPricing:
         pricing_option_id on a by_package item and no pricing_options on a delivery item,
         so the old `hasattr(delivery, "pricing_options") or any(hasattr(pkg, ...))` could
         only ever evaluate False -- it never ran, because the buy named a pricing option
-        that no row produced and the impl refused to price the package.
+        no stored row carried and the impl refused to price the package.
 
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-03
         """
@@ -1939,8 +1940,8 @@ class TestEndToEndDeliveryMetricsCpcPricing:
 
         Graded on the three fields the pin requires on a by_package entry. The old
         assertion looked for `pricing_option_id` on the item, which the pin does not
-        declare, and the buy named "cpc_usd_standard" -- an id `_get_pricing_options`
-        cannot produce, since it reconstructs `{model}_{currency}_{fixed|auction}`.
+        declare, and the buy named "cpc_usd_standard" -- an id no stored row carries, so
+        `_get_pricing_options` resolved it to nothing.
 
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-04
         """
@@ -1950,9 +1951,10 @@ class TestEndToEndDeliveryMetricsCpcPricing:
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            # Synthetic ids are {model}_{currency}_{fixed|auction} (_get_pricing_options);
-            # the seeded row is what makes "cpc_usd_fixed" resolve, and "cpc_usd_standard"
-            # -- what this named before -- is outside that vocabulary entirely.
+            # `pricing_option_id` is a STORED column and `_get_pricing_options` keys on
+            # it verbatim, so only an id some row actually carries resolves. The seeded
+            # row's own id is taken from the seeder; "cpc_usd_standard" -- what this named
+            # before -- was carried by no row at all.
             option_id = seed_delivery_pricing(tenant, product_id="prod_cpc2", pricing_model="cpc", rate="0.50")
             buy = MediaBuyFactory(
                 tenant=tenant,
@@ -2030,8 +2032,9 @@ class TestDeliveryMetricsFlatRatePricing:
                         {
                             "package_id": "pkg_flat",
                             "product_id": "prod_flat",
-                            # Synthetic ids are {model}_{currency}_{fixed|auction}; the
-                            # package's own rate is stated on the row below.
+                            # No pricing_options row carries this id; the package's own
+                            # package_config["pricing_info"] below is what prices it, and
+                            # _package_pricing reads that source first.
                             "pricing_option_id": "flat_rate_usd_fixed",
                         }
                     ],
@@ -2074,8 +2077,8 @@ class TestDeliveryMetricsFlatRatePricing:
         """FLAT_RATE pricing option should be identifiable in the delivery response.
 
         Graded on the three fields the pin requires on a by_package entry, for the same
-        reason as the CPM and CPC siblings; "flat_rate_premium" was an id
-        `_get_pricing_options` cannot produce.
+        reason as the CPM and CPC siblings; "flat_rate_premium" was an id no stored
+        pricing_options row carried.
 
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-05
         """
@@ -2085,9 +2088,9 @@ class TestDeliveryMetricsFlatRatePricing:
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            # Synthetic ids are {model}_{currency}_{fixed|auction} (_get_pricing_options);
-            # the seeded row is what makes "flat_rate_usd_fixed" resolve, and
-            # "flat_rate_premium" -- what this named before -- is outside that vocabulary.
+            # `pricing_option_id` is a STORED column and `_get_pricing_options` keys on
+            # it verbatim: the seeded row's own id is what the package must name.
+            # "flat_rate_premium" -- what this named before -- was carried by no row.
             option_id = seed_delivery_pricing(
                 tenant, product_id="prod_flat2", pricing_model="flat_rate", rate="5000.00"
             )
@@ -2473,7 +2476,7 @@ class TestCpcPackageClicksDerivation:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
             product = ProductFactory(tenant=tenant)
-            PricingOptionFactory(
+            option = PricingOptionFactory(
                 product=product,
                 pricing_model="cpc",
                 rate=Decimal("0.50"),
@@ -2481,8 +2484,10 @@ class TestCpcPackageClicksDerivation:
                 is_fixed=True,
             )
 
-            # Use SYNTHETIC pricing_option_id (how _get_pricing_options keys results)
-            synthetic_po_id = "cpc_usd_fixed"
+            # Read the id off the row: pricing_option_id is a stored column now, and
+            # `_get_pricing_options` keys on it verbatim rather than rebuilding it from
+            # the row's terms, so a hand-spelled id is a guess about what was written.
+            po_id = option.pricing_option_id
 
             MediaBuyFactory(
                 tenant=tenant,
@@ -2493,7 +2498,7 @@ class TestCpcPackageClicksDerivation:
                         {
                             "package_id": "pkg_cpc",
                             "product_id": product.product_id,
-                            "pricing_option_id": synthetic_po_id,
+                            "pricing_option_id": po_id,
                         }
                     ],
                 },
