@@ -208,14 +208,32 @@ async def invoke_tool(
         testing_context=testing_context,
     )
 
-    # No ``set_current_tenant`` here, deliberately. The tenant travels on ``identity.tenant``
-    # as a LazyTenantContext: it holds ``tenant_id`` immediately and loads the row on first
-    # access to any other field, once, cached. Pushing that into a ContextVar would flatten
-    # it to a mutable dict -- ``set_current_tenant`` does ``dict(tenant_data)``, which
-    # ITERATES the lazy context and so forces exactly the query the laziness exists to defer
-    # -- and would re-create the ambient second channel for a value the callee is already
-    # handed. ``require_tenant(identity)`` is the explicit path.
-    return await invoke(tool_name, spec.impl, req, identity)
+    # Recording lives HERE because this is the only place holding all three things a record
+    # needs: the tool name, the resolved identity, and the exception. Each transport used to
+    # record for itself, and two of them RE-RESOLVED an identity purely to obtain the tenant
+    # and principal to scope it with -- REST from headers in its exception handler, MCP via
+    # tool_error_logging. That is the same defect as the auth decision, in the observability
+    # dimension: a value the caller already has, derived again somewhere else.
+    try:
+        return await invoke(tool_name, spec.impl, req, identity)
+    except Exception as exc:
+        from src.core.tool_error_logging import record_boundary_error
+
+        record_boundary_error(
+            protocol,
+            tool_name,
+            exc,
+            tenant_id=identity.tenant_id,
+            principal_id=identity.principal_id,
+        )
+        raise
+
+    # No ``set_current_tenant`` anywhere on this path, deliberately. The tenant travels on
+    # ``identity.tenant`` as a LazyTenantContext: it holds ``tenant_id`` immediately and
+    # loads the row on first access to any other field, once, cached. Pushing it into a
+    # ContextVar would flatten it to a mutable dict -- ``set_current_tenant`` does
+    # ``dict(tenant_data)``, which ITERATES the lazy context and forces exactly the query the
+    # laziness exists to defer. ``require_tenant(identity)`` is the explicit path.
 
 
 async def invoke(

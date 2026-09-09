@@ -59,7 +59,6 @@ from src.core.errors.codes import AppErrorCode
 from src.core.errors.issues import ErrorIssue, JsonPointer
 from src.core.exceptions import (
     AdCPAuthenticationError,
-    AdCPAuthRequiredError,
     AdCPCapabilityNotSupportedError,
     AdCPSalesAgentError,
     AdCPUrlNotAllowedError,
@@ -318,86 +317,10 @@ class AdCPRequestHandler(RequestHandler):
             return AuthContext()
         return context.state.get(AUTH_CONTEXT_STATE_KEY) or AuthContext()
 
-    def _resolve_a2a_identity(
-        self,
-        auth_token: str | None,
-        require_valid_token: bool = True,
-        context: ServerCallContext | None = None,
-    ) -> ResolvedIdentity:
-        """Resolve identity at the A2A transport boundary — called ONCE per request.
-
-        This is the A2A equivalent of REST's _resolve_auth(). It calls
-        resolve_identity() once and returns the result. All downstream handlers
-        receive the pre-resolved identity instead of re-resolving from auth_token.
-
-        Args:
-            auth_token: Bearer token from Authorization header (None for unauthenticated)
-            require_valid_token: If True, auth failures raise A2AError
-            context: ServerCallContext from SDK (None when called directly in tests).
-
-        Returns:
-            ResolvedIdentity with tenant and (optionally) principal info
-
-        Raises:
-            A2AError: If require_valid_token=True and authentication fails
-        """
-        from src.core.resolved_identity import resolve_identity
-        from src.core.testing_hooks import AdCPTestContext
-
-        auth_ctx = context.state.get(AUTH_CONTEXT_STATE_KEY) if context is not None else None
-        headers = auth_ctx.headers if auth_ctx else {}
-
-        # No presence guard here either: resolve_identity raises AdCPAuthRequiredError for an
-        # absent credential when require_valid_token is set, and the handler below renders it.
-        # This one and the caller's were the two places A2A answered that question itself.
-
-        # Extract testing context from A2A request headers (same as MCP does)
-        testing_context = AdCPTestContext.from_headers(headers)
-
-        try:
-            identity = resolve_identity(
-                headers=headers,
-                auth_token=auth_token,
-                require_valid_token=require_valid_token,
-                protocol="a2a",
-                testing_context=testing_context,
-            )
-        except AdCPAuthenticationError as e:
-            # resolve_identity raises AdCPAuthenticationError (AUTH_INVALID)
-            # for a presented-but-invalid token. Route through the same
-            # two-layer envelope builder used elsewhere in this file instead
-            # of dropping the wire code entirely (a recorded gap — this
-            # branch previously re-wrapped as a bare InvalidRequestError with
-            # no error_code/wire-code field at all).
-            raise InvalidRequestError(message=str(e), data=build_two_layer_error_envelope(e)) from e
-
-        if require_valid_token:
-            # The `not identity.principal_id` branch that stood here is gone: with
-            # require_valid_token set, resolve_identity either returns a resolved principal
-            # or raises, so this could only ever have fired if that postcondition broke --
-            # and then it answered AUTH_MISSING for a credential that may well have been
-            # presented, which is the wrong code. Its own comment cited the v3.1.1 split
-            # while contradicting it.
-
-            if not identity.tenant:
-                # DEFER: tenant-axis, out of scope for the AUTH_MISSING/
-                # AUTH_INVALID split — left unchanged.
-                raise InvalidRequestError(
-                    message=f"Unable to determine tenant from authentication. Principal: {identity.principal_id}"
-                )
-
-            tenant_id = identity.tenant_id or identity.tenant.get("tenant_id", "unknown")
-            logger.info(
-                f"[A2A AUTH] ✅ Authentication successful: tenant={tenant_id}, principal={identity.principal_id}"
-            )
-
-        # Set tenant ContextVar at the A2A transport boundary
-        if identity.tenant:
-            from src.core.config_loader import set_current_tenant
-
-            set_current_tenant(identity.tenant)
-
-        return identity
+    # (Deleted) _resolve_a2a_identity resolved A2A's own identity, including the
+    # set_current_tenant push that forced the lazy tenant to hydrate on every request. The
+    # boundary resolves once from the credential; A2A supplies the credential and nothing
+    # else.
 
     def _make_tool_context(
         self, identity: ResolvedIdentity, tool_name: str, context_id: str | None = None
@@ -535,54 +458,16 @@ class AdCPRequestHandler(RequestHandler):
             # Get authentication token
             auth_token = self._get_auth_token(context)
 
-            # Check if any requested skills require authentication
-            # Default to not requiring auth - only require if we have non-discovery skills
-            requires_auth = False
-            if skill_invocations:
-                # If ANY skill requires auth (not in discovery set), then require auth
-                requested_skills = {inv["skill"] for inv in skill_invocations}
-                requires_auth = any(s not in TOOLS or TOOLS[s].requires_credential() for s in requested_skills)
-
-            # ── Transport boundary: resolve identity ONCE ──
-            # Like REST's _resolve_auth(), identity is resolved here and passed to all
-            # downstream handlers. No handler should call resolve_identity().
-            # Its `= None` initialisation used to live HERE, which is why a failure in the
-            # push-config gate above reached the error handler with the name unbound; it now
-            # sits before the `try` so every branch can read it.
-            #
-            # ONE call, where there used to be a hand-rolled `requires_auth and not
-            # auth_token` refusal followed by a two-branch resolve. The three outcomes are
-            # unchanged, and the flag says exactly which is which:
-            #
-            #   token presented          -> strict, WHATEVER the skill needs. A presented
-            #                               credential is always validated, so an invalid
-            #                               token on a discovery-only request is still
-            #                               AUTH_INVALID rather than silently anonymous.
-            #   absent, skill requires   -> strict, and resolve_identity answers AUTH_MISSING.
-            #   absent, discovery only   -> lenient, resolves anonymously from headers.
-            #
-            # The refusal that used to be written out here is gone because it was A2A
-            # deciding, on its own, a question every transport answers: resolve_identity owns
-            # presence and validity now, and returns an identity with a principal or raises.
-            # The `except AdCPAuthenticationError` below renders whichever it raises --
-            # AdCPAuthRequiredError subclasses it, so one branch covers both codes, and each
-            # carries its own code into the envelope.
-            #
-            # ``requires_auth`` alone, which is what MCP and REST pass too. This read
-            # `bool(auth_token) or requires_auth`, making A2A the one transport that refused
-            # a rejected credential on a PUBLIC task -- the graded suite runs its
-            # invalid-credential probe against the protected task precisely because "public
-            # tasks like get_adcp_capabilities return 200 without credentials by design"
-            # (dist/compliance/3.1.1/universal/security.yaml).
-            # The credential the boundary will resolve from. Same AuthContext
-            # UnifiedAuthMiddleware parked on the call context -- A2A does not build its own.
+            # NO decision and NO resolution here. Both belong to the boundary, which reads
+            # ``ToolSpec.requires_credential()`` per tool and resolves once from this
+            # credential. A2A used to compute ``requires_auth`` for the whole BATCH --
+            # `any(... requires_credential() ...)` over every requested skill -- so a mixed
+            # public/protected batch forced auth on the public one too, and a second check
+            # downstream re-asked the same question. Per-tool resolution replaces both; the
+            # pinned 3.1.1 spec says nothing about multi-skill batching, and auth is a
+            # property of the tool.
             credential = self._credential_of(context)
-
-            identity = self._resolve_a2a_identity(
-                auth_token,
-                require_valid_token=requires_auth,
-                context=context,
-            )
+            identity = None
 
             # Route: Handle explicit skill invocations first, then natural language fallback
             if skill_invocations:
@@ -608,6 +493,21 @@ class AdCPRequestHandler(RequestHandler):
                         # are now caught below and surfaced as failed Tasks with a
                         # two-layer envelope in the artifact DataPart.
                         raise
+                    except AdCPAuthenticationError as e:
+                        # A REFUSED CREDENTIAL IS NOT AN ASYNC-TASK FAILURE. It is a
+                        # transport-level refusal: the caller has no identity and needs the
+                        # 401 handshake to learn how to authenticate, which
+                        # AuthChallengeResponder derives from a JSON-RPC error envelope --
+                        # not from a 200 carrying a failed Task.
+                        #
+                        # This branch must precede the AdCPSalesAgentError one below, which
+                        # would otherwise swallow it (AdCPAuthenticationError is a subclass).
+                        # The translation used to live in _resolve_a2a_identity, before the
+                        # boundary owned resolution; it belongs wherever the raise now lands.
+                        # AdCPAuthRequiredError subclasses AdCPAuthenticationError, so one
+                        # branch covers AUTH_MISSING and AUTH_INVALID and each keeps its own
+                        # code.
+                        raise InvalidRequestError(message=str(e), data=build_two_layer_error_envelope(e)) from e
                     except AdCPSalesAgentError as e:
                         # AdCP-level errors are async-task failures, not JSON-RPC
                         # errors. Mirrors the SDK's _send_adcp_error reference for
@@ -1222,11 +1122,10 @@ class AdCPRequestHandler(RequestHandler):
             available_skills = [name for name, spec in TOOLS.items() if spec.a2a]
             raise MethodNotFoundError(message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}")
 
-        if TOOLS[skill_name].requires_credential() and (identity is None or not identity.principal_id):
-            raise InvalidRequestError(
-                message="Authentication required for skill invocation",
-                data=build_two_layer_error_envelope(AdCPAuthRequiredError()),
-            )
+        # (Deleted) A second auth check stood here, re-asking what the boundary already
+        # answered. It was load-bearing only because the batch decision above could resolve
+        # leniently and then dispatch a protected skill; with the decision per tool, the
+        # boundary refuses before dispatch and this could never fire.
 
         try:
             return await self._dispatch_skill(skill_name, parameters, identity, credential)

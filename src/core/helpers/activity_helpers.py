@@ -9,7 +9,6 @@ from src.core.config_loader import get_current_tenant, set_current_tenant
 from src.core.database.repositories.principal_lookup import read_principal_name
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tool_context import ToolContext
-from src.core.transport_helpers import resolve_identity_from_context
 from src.services.activity_feed import activity_feed
 
 logger = logging.getLogger(__name__)
@@ -38,9 +37,11 @@ def log_tool_activity(context: Context | ToolContext | ResolvedIdentity, tool_na
             tenant = {"tenant_id": context.tenant_id}
         else:
             # Get principal and tenant context from FastMCP Context via unified path
-            identity = resolve_identity_from_context(context, require_valid_token=False, protocol="mcp")
-            principal_id = identity.principal_id if identity else None
-            tenant = identity.tenant if identity and isinstance(identity.tenant, dict) else None
+            # (Deleted) A resolve-from-Context fallback stood here. All four production
+            # callers of log_tool_activity pass a ResolvedIdentity, so the branch was dead
+            # AND it forced the lazy tenant to hydrate via `isinstance(identity.tenant, dict)`.
+            principal_id = None
+            tenant = None
 
         # Set tenant context if returned
         if tenant:

@@ -89,14 +89,11 @@ def _extract_tenant_and_principal(context: Any) -> tuple[str | None, str | None]
     # Try to extract from FastMCP Context
     if isinstance(context, FastMCPContext):
         try:
-            from src.core.transport_helpers import resolve_identity_from_context
-
-            identity = resolve_identity_from_context(context, require_valid_token=False, protocol="mcp")
-            if identity:
-                if identity.tenant_id:
-                    tenant_id = identity.tenant_id
-                if identity.principal_id:
-                    principal_id = identity.principal_id
+            # (Deleted) A re-resolution stood here, deriving tenant and principal from
+            # headers purely to scope an error record -- MCP's twin of the REST
+            # `_best_effort_rest_identity` already removed. The boundary records the error
+            # with the identity it resolved, so nothing needs deriving twice.
+            pass
         except Exception:
             logger.debug("Could not extract identity for error logging", exc_info=True)
 
