@@ -7,15 +7,11 @@ This eliminates isinstance checks and auth extraction inside business logic.
 """
 
 import logging
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
-from src.core.config_loader import (
-    get_tenant_by_id,
-    get_tenant_by_subdomain,
-    get_tenant_by_virtual_host,
-)
+from src.core.tenant_context import LazyTenantContext
 from src.core.testing_hooks import AdCPTestContext
 
 logger = logging.getLogger(__name__)
@@ -28,9 +24,15 @@ class ResolvedIdentity(BaseModel, frozen=True):
     Immutable after creation — identity should not change during request processing.
     """
 
+    # LazyTenantContext is a plain slotted class, not a pydantic model, so it needs an
+    # explicit pass. Keeping the field TYPED is the point -- it was ``Any`` with a comment
+    # reading "TenantContext | dict[str, Any] | None (transitional)", which is how a dict
+    # ended up flowing where a context was meant.
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     principal_id: str | None = None
     tenant_id: str | None = None
-    tenant: Any = None  # TenantContext | dict[str, Any] | None (transitional)
+    tenant: LazyTenantContext | None = None
     auth_token: str | None = None
     protocol: Literal["mcp", "a2a", "rest"] = "mcp"
     testing_context: AdCPTestContext | None = None
@@ -72,62 +74,50 @@ def _extract_auth_token(headers: dict) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _detect_tenant(headers: dict) -> tuple[str | None, dict | None]:
-    """Detect tenant from request headers using 4-strategy resolution.
+def _detect_tenant(headers: dict) -> str | None:
+    """The tenant_id this request names, by four header strategies. NO row is loaded.
 
-    Strategy order:
-    1. Host header → virtual host lookup, then subdomain extraction
-    2. x-adcp-tenant header → subdomain lookup, then direct tenant_id
-    3. Apx-Incoming-Host header → virtual host lookup
-    4. localhost fallback → "default" tenant
+    Identification only. The token check is scoped by tenant_id, so which tenant cannot be
+    deferred; the tenant's FIELDS can be, and ``LazyTenantContext`` defers them.
 
-    Returns:
-        (tenant_id, tenant_dict) tuple
+    Every strategy used to call a ``get_tenant_by_*`` helper ending in
+    ``serialize_tenant_to_dict``, so identification loaded the entire row -- which
+    ``resolve_identity`` then discarded, re-querying it on first field access. One indexed
+    column per strategy instead.
+
+    Strategy order, unchanged:
+    1. Host header -> virtual host, then subdomain
+    2. x-adcp-tenant header -> subdomain, then the literal id
+    3. Apx-Incoming-Host -> virtual host
+    4. localhost -> the "default" tenant
     """
-    tenant_id = None
-    tenant_context = None
+    from src.core.config_loader import tenant_id_for
 
-    # 1. Host header: try virtual host FIRST, then subdomain
     host = _get_header_case_insensitive(headers, "host") or ""
 
-    tenant_context = get_tenant_by_virtual_host(host)
-    if tenant_context:
-        tenant_id = tenant_context["tenant_id"]
-    else:
-        subdomain = host.split(".")[0] if "." in host else None
-        if subdomain and subdomain not in ["localhost", "adcp-sales-agent", "www", "admin"]:
-            tenant_context = get_tenant_by_subdomain(subdomain)
-            if tenant_context:
-                tenant_id = tenant_context["tenant_id"]
+    tenant_id = tenant_id_for(virtual_host=host)
+    if not tenant_id and "." in host:
+        subdomain = host.split(".")[0]
+        if subdomain not in ["localhost", "adcp-sales-agent", "www", "admin"]:
+            tenant_id = tenant_id_for(subdomain=subdomain)
 
-    # 2. x-adcp-tenant header (nginx path-based routing)
     if not tenant_id:
-        tenant_hint = _get_header_case_insensitive(headers, "x-adcp-tenant")
-        if tenant_hint:
-            tenant_context = get_tenant_by_subdomain(tenant_hint)
-            if tenant_context:
-                tenant_id = tenant_context["tenant_id"]
-            else:
-                tenant_id = tenant_hint
-                tenant_context = get_tenant_by_id(tenant_hint)
+        hint = _get_header_case_insensitive(headers, "x-adcp-tenant")
+        if hint:
+            # The hint is a subdomain when one matches, and otherwise taken as the id
+            # itself -- unverified, exactly as before. An id that names no tenant fails
+            # later, at the principal lookup that is scoped by it.
+            tenant_id = tenant_id_for(subdomain=hint) or hint
 
-    # 3. Apx-Incoming-Host header (Approximated.app virtual hosts)
     if not tenant_id:
         apx_host = _get_header_case_insensitive(headers, "apx-incoming-host")
         if apx_host:
-            tenant_context = get_tenant_by_virtual_host(apx_host)
-            if tenant_context:
-                tenant_id = tenant_context["tenant_id"]
+            tenant_id = tenant_id_for(virtual_host=apx_host)
 
-    # 4. Localhost fallback → "default" tenant
-    if not tenant_id:
-        hostname = host.split(":")[0]
-        if hostname in ["localhost", "127.0.0.1", "localhost.localdomain"]:
-            tenant_context = get_tenant_by_subdomain("default")
-            if tenant_context:
-                tenant_id = tenant_context["tenant_id"]
+    if not tenant_id and host.split(":")[0] in ["localhost", "127.0.0.1", "localhost.localdomain"]:
+        tenant_id = tenant_id_for(subdomain="default")
 
-    return tenant_id, tenant_context
+    return tenant_id
 
 
 def resolve_identity(
@@ -204,7 +194,7 @@ def resolve_identity(
         raise AdCPAuthRequiredError()
 
     # Step 3: Detect tenant from headers
-    tenant_id, tenant_context = _detect_tenant(headers)
+    tenant_id = _detect_tenant(headers)
 
     # Step 4: Validate token → principal_id (and discover tenant from token if needed)
     principal_id = None
@@ -217,10 +207,11 @@ def resolve_identity(
 
                 raise AdCPAuthenticationError()
             # For discovery endpoints, continue without auth
-        elif not tenant_context and token_tenant:
-            # Tenant discovered from token lookup (no headers matched)
-            tenant_context = token_tenant
-            tenant_id = token_tenant.get("tenant_id", tenant_id)
+        elif not tenant_id and token_tenant:
+            # Tenant discovered from the token lookup when no header identified one. Only
+            # its ID is taken: the row it carries is hydration, and hydration is the lazy
+            # context's job.
+            tenant_id = token_tenant.get("tenant_id") or tenant_id
 
     # The identity always carries the tenant_id; the tenant's FIELDS load lazily, once.
     #
@@ -231,11 +222,7 @@ def resolve_identity(
     # whatever dict detection happened to return, so every request paid for the whole row
     # whether or not anything read a field off it, and LazyTenantContext was dead weight
     # everywhere except the ToolContext path.
-    tenant_model: Any = tenant_context
-    if tenant_id:
-        from src.core.tenant_context import LazyTenantContext
-
-        tenant_model = LazyTenantContext(tenant_id)
+    tenant_model: LazyTenantContext | None = LazyTenantContext(tenant_id) if tenant_id else None
 
     return ResolvedIdentity(
         principal_id=principal_id,
