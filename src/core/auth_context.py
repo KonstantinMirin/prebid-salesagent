@@ -82,115 +82,13 @@ get_auth_context: Any = Depends(_get_auth_context)
 # ---------------------------------------------------------------------------
 
 
-def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIdentity | None":
-    """FastAPI dependency: resolve identity (auth-optional, for discovery endpoints).
-
-    Resolves tenant context from headers (Host / x-adcp-tenant /
-    Apx-Incoming-Host) onto the returned identity, regardless of whether a
-    credential was presented or resolved to a principal — matching resolve_identity_from_context()'s
-    MCP/A2A contract (transport_helpers.py). Discovery responses describe the
-    SELLER, not the caller (AdCP INV-4, v3.1.1), so an ANONYMOUS caller must
-    still receive the same tenant-scoped data an authenticated caller would
-    (salesagent-zna9), and so must a caller whose token does not resolve: the
-    pinned graded suite runs its invalid-credential probe against the PROTECTED
-    task because "public tasks like get_adcp_capabilities return 200 without
-    credentials by design" (dist/compliance/3.1.1/universal/security.yaml).
-    Never raises for a caller who presented NOTHING — identity.principal_id
-    being None is how downstream code distinguishes "no credentials" from a
-    resolved principal (require_principal_id, brand_manifest_policy checks).
-    """
-    from src.core.resolved_identity import resolve_identity
-
-    identity = resolve_identity(
-        headers=dict(auth_ctx.headers),
-        auth_token=auth_ctx.auth_token,
-        require_valid_token=False,  # public task: see the module docstring
-        protocol="rest",
-    )
-
-    # No set_current_tenant here -- see the module docstring.
-    return identity
-
-
-def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIdentity":
-    """FastAPI dependency: resolve identity (auth-required, raises 401 if missing).
-
-    Returns ResolvedIdentity on success. Raises AdCPAuthRequiredError if
-    no token is present or the token is invalid. The error carries the shared
-    AUTH_MISSING suggestion so the REST 401 envelope tells the buyer how to
-    recover (parity with require_identity on the _impl path; AdCP POST-F3).
-    """
-    from src.core.resolved_identity import resolve_identity
-
-    # No presence guard here. resolve_identity raises AdCPAuthRequiredError (AUTH_MISSING)
-    # for an absent credential and AdCPAuthenticationError (AUTH_INVALID) for one that is
-    # presented and does not resolve, keyed on presence exactly as the v3.1.1 enum is.
-    # REST, A2A and MCP each used to answer that question themselves and did not agree; the
-    # app's exception handler turns whichever is raised into 401 + WWW-Authenticate.
-    identity = resolve_identity(
-        headers=dict(auth_ctx.headers),
-        auth_token=auth_ctx.auth_token,
-        require_valid_token=True,
-        protocol="rest",
-    )
-
-    # The `not identity.principal_id` backstop that stood here is gone with the guard it
-    # backstopped. Its reasoning was right and is preserved where the decision now lives:
-    # the spec keys AUTH_MISSING and AUTH_INVALID on whether a credential was PRESENTED, so
-    # the two answer different questions and must not be shaped alike. resolve_identity
-    # makes both calls on that same signal, and its postcondition — with
-    # require_valid_token set it returns a resolved principal or raises — is what makes a
-    # backstop here unreachable rather than merely unlikely.
-
-    # No set_current_tenant here -- see the module docstring.
-    return identity
-
-
-# Annotated type aliases for route signatures (modern FastAPI pattern):
-#   def my_route(identity: ResolveAuth):
-#   def my_route(identity: RequireAuth):
-# Import at module level for Annotated (cannot be deferred — Annotated
-# needs the real type at alias definition time).
-from src.core.resolved_identity import ResolvedIdentity  # noqa: E402
-
-#: Where the exception handler looks for the identity this request resolved.
-RESOLVED_IDENTITY_STATE_KEY = "resolved_identity"
-
-
-def _publishing(dep: Any) -> Any:
-    """Wrap an identity dependency so the resolved identity reaches the error boundary.
-
-    ``@app.exception_handler`` receives only ``(request, exc)``, so REST's handler used to
-    RE-RESOLVE identity from headers just to scope an audit record — a second full lookup,
-    principal DB retry included, on a credential that had usually just been rejected. Every
-    failed REST auth cost two resolutions where MCP and A2A cost one.
-
-    The identity is published here instead, in the one place that has both the request and
-    the resolved identity. Not in the route handler: ``test_no_route_takes_a_raw_request``
-    forbids a route touching ``Request`` at all, and rightly — a handler holding the request
-    is a handler that can start resolving auth by hand again. A dependency is the layer whose
-    job this already is.
-
-    When the wrapped dependency RAISES there is nothing to publish and this never runs, so
-    the record is unscoped — the same "unknown" A2A reports on the same path. The boundary
-    reports what it resolved and never goes looking for more.
-    """
-
-    # Bound before the def, not inline in the parameter list: B008 bans a call in an
-    # argument default, and this file already reads defaults from a name for that reason
-    # (``auth_ctx: AuthContext = get_auth_context``).
-    wrapped: Any = Depends(dep)
-
-    def _publishing_dep(request: Request, identity: Any = wrapped) -> Any:
-        setattr(request.state, RESOLVED_IDENTITY_STATE_KEY, identity)
-        return identity
-
-    return _publishing_dep
-
-
-ResolveAuth = Annotated[ResolvedIdentity | None, Depends(_publishing(_resolve_auth_dep))]
-RequireAuth = Annotated[ResolvedIdentity, Depends(_publishing(_require_auth_dep))]
-
-# Backward-compatible Depends instances (for dependency chaining):
-resolve_auth: Any = Depends(_publishing(_resolve_auth_dep))
-require_auth: Any = Depends(_publishing(_require_auth_dep))
+# (Deleted) _resolve_auth_dep / _require_auth_dep / resolve_auth / require_auth / _publishing.
+#
+# REST resolved identity in a dependency, choosing between two of them by reading
+# ToolSpec.auth at the route builder. That was one of the four places the decision lived,
+# and the one that hardcoded require_valid_token=False -- so REST alone served a rejected
+# credential on a public tool. The boundary resolves now, from the AuthContext the route
+# hands it, and a route that cannot resolve cannot disagree.
+#
+# _publishing went with them: it existed so the REST error path could read the resolved
+# identity off request.state, which the boundary now holds directly.

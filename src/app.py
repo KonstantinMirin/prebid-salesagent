@@ -35,7 +35,6 @@ from src.a2a_server.adcp_a2a_server import (
 from src.a2a_server.context_builder import AdCPCallContextBuilder
 from src.admin.app import create_app
 from src.core.agent_identity import agent_identity_for_tenant_id
-from src.core.auth_context import RESOLVED_IDENTITY_STATE_KEY
 from src.core.auth_middleware import (
     AuthChallengeResponder,
     UnifiedAuthMiddleware,
@@ -189,7 +188,11 @@ def _envelope_response(request: Request, exc: AdCPSalesAgentError, *, log_as: Ex
     and the original message from server-side logs, unlike the MCP/A2A
     boundaries which always log the original exception.
     """
-    identity = getattr(request.state, RESOLVED_IDENTITY_STATE_KEY, None)
+    # No identity to read. It was published on request.state by a dependency wrapper that
+    # is gone: the boundary resolves and holds it, so scoping this record belongs with
+    # the recording move into _invoke (manifest A3). Until then the record is unscoped --
+    # the same "unknown" A2A already reports on its own error path.
+    identity = None
     record_boundary_error(
         "rest",
         request.url.path,
