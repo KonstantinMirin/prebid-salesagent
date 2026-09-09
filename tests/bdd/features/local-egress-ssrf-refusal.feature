@@ -192,7 +192,7 @@ Feature: Egress refusal of a buyer-supplied URL (local, L1 SSRF)
   Scenario: a refused creative-agent agent_url is a correctable buyer error at sync ingest
     Given the outbound private-range egress hatch is open
     When the buyer syncs a creative whose format agent is at "https://169.254.169.254"
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the sync_creatives success spec
     And the creative is rejected with VALIDATION_ERROR naming field "creatives[0].format_id.agent_url"
 
   # The ingest twin: the same obligation — a buyer-supplied URL we refuse comes
