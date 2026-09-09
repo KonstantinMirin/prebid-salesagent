@@ -83,7 +83,9 @@ async def test_get_task_no_principal_raises_auth_error() -> None:
     """get_task_status must reject identity that has tenant but no principal_id."""
     with pytest.raises(AdCPAuthenticationError) as exc_info:
         with refused_as(AdCPAuthenticationError()):
-            await invoke_tool("get_task_status", GetTaskStatusRequest(task_id="step-123"), _unresolvable_credential(), "mcp")
+            await invoke_tool(
+                "get_task_status", GetTaskStatusRequest(task_id="step-123"), _unresolvable_credential(), "mcp"
+            )
 
 
 @pytest.mark.asyncio
@@ -104,15 +106,20 @@ async def test_complete_task_no_principal_raises_auth_error() -> None:
     with pytest.raises(AdCPAuthenticationError) as exc_info:
         with refused_as(AdCPAuthenticationError()):
             await invoke_tool(
-            "complete_task", CompleteTaskRequest(task_id="step-123", status="completed"), _unresolvable_credential(), "mcp"
-        )
+                "complete_task",
+                CompleteTaskRequest(task_id="step-123", status="completed"),
+                _unresolvable_credential(),
+                "mcp",
+            )
 
 
 @pytest.mark.asyncio
 async def test_complete_task_no_identity_raises_auth_error() -> None:
     """complete_task must reject a completely missing identity."""
     with pytest.raises(AdCPAuthenticationError):
-        await invoke_tool("complete_task", CompleteTaskRequest(task_id="step-123", status="completed"), _no_credential(), "mcp")
+        await invoke_tool(
+            "complete_task", CompleteTaskRequest(task_id="step-123", status="completed"), _no_credential(), "mcp"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +156,9 @@ async def test_get_task_authenticated_proceeds_past_auth_check(
 
     with pytest.raises(AdCPNotFoundError) as _ei:
         with resolved_as(_authenticated()):
-            await invoke_tool("get_task_status", GetTaskStatusRequest(task_id="step-999"), _unresolvable_credential(), "mcp")
+            await invoke_tool(
+                "get_task_status", GetTaskStatusRequest(task_id="step-999"), _unresolvable_credential(), "mcp"
+            )
     # The old pattern matched the AUTHORED sentence; the sentence is the
     # code's table entry now, so assert it exactly.
 
@@ -169,9 +178,10 @@ async def test_complete_task_authenticated_proceeds_past_auth_check(
         # second check inside the impl.
         with resolved_as(_authenticated()):
             await invoke_tool(
-            "complete_task",
-            CompleteTaskRequest(task_id="step-999", status="completed"),
-            _unresolvable_credential(), "mcp",
-        )
+                "complete_task",
+                CompleteTaskRequest(task_id="step-999", status="completed"),
+                _unresolvable_credential(),
+                "mcp",
+            )
     # The old pattern matched the AUTHORED sentence; the sentence is the
     # code's table entry now, so assert it exactly.
