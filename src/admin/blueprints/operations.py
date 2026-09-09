@@ -534,6 +534,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         details=RejectionReasonDetails(rejection_reason=reason) if reason else None
                     )
                     create_media_buy_rejected_result = CreateMediaBuyError(
+                        status=AdcpTaskStatus.rejected,
                         errors=[Error.from_exception(rejection)],
                         message="Media buy creation encountered 1 error(s).",
                     )
