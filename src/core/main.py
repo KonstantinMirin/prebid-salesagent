@@ -464,18 +464,23 @@ class RegistryTool(Tool):
     """
 
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
-        from fastmcp.server.dependencies import get_context
+        from fastmcp.server.dependencies import get_context, get_http_headers
 
+        from src.core.auth_context import AuthContext
         from src.core.tool_error_logging import _handle_tool_exception
-        from src.core.tools._boundary import invoke
+        from src.core.tools._boundary import invoke_tool
         from src.core.tools._mcp import mcp_result
 
         spec = TOOLS[self.name]
         ctx = get_context()
         try:
             req = spec.dto.model_validate(arguments)
-            identity = await ctx.get_state("identity")
-            return mcp_result(await invoke(self.name, spec.impl, req, identity))
+            # The credential, not an identity. MCPAuthMiddleware used to resolve one and
+            # stash it on ctx state for this line to read; the boundary resolves now, so the
+            # middleware is gone and MCP enters through invoke_tool like A2A and REST rather
+            # than through the lower-level invoke() with spec.impl already selected.
+            credential = AuthContext(headers=get_http_headers(include_all=True) or {})
+            return mcp_result(await invoke_tool(self.name, req, credential, "mcp"))
         except Exception as exc:
             # Records to the activity feed and audit log, then raises AdCPToolError carrying
             # the two-layer envelope. Validation raises inside the try because the buyer's

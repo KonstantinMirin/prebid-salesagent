@@ -56,8 +56,9 @@ import inspect
 import logging
 import typing
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
+from src.core.auth_context import AuthContext
 from src.core.idempotency_canonical import canonical_request_hash
 from src.core.idempotency_replay import cache_success, lookup_cached_replay, maybe_evict_expired
 from src.core.resolved_identity import ResolvedIdentity
@@ -154,16 +155,57 @@ def _keyed_scope(req: BuyerRequest, identity: ResolvedIdentity | None) -> tuple[
     return identity.tenant_id, identity.principal_id, identity.account_id, key
 
 
-async def invoke_tool(tool_name: str, req: BuyerRequest, identity: ResolvedIdentity | None = None) -> AdcpResponse:
-    """Run the registry's tool named ``tool_name``.
+async def invoke_tool(
+    tool_name: str,
+    req: BuyerRequest,
+    credential: AuthContext,
+    protocol: Literal["mcp", "a2a", "rest"],
+) -> AdcpResponse:
+    """Run the registry's tool named ``tool_name``, for the caller holding *credential*.
 
     The form every transport calls. A transport names the TOOL and hands over the request it
-    validated; which function runs is the registry's answer, not the caller's, so no transport
-    can reach a different implementation than the others.
+    validated plus the credential the request arrived with; which function runs, and whether
+    that credential must verify, are the registry's answers -- not the caller's.
+
+    IT TAKES A CREDENTIAL, NOT AN IDENTITY, AND THAT IS THE POINT. It used to accept an
+    already-resolved ``ResolvedIdentity``, so each transport resolved its own and read
+    ``ToolSpec.auth`` itself to decide how strictly. Four sites did that and they disagreed
+    twice -- A2A refusing a credential on a public task that MCP and REST served, and REST's
+    discovery dependency hardcoding ``require_valid_token=False`` where the others passed the
+    tool's declaration. A transport cannot disagree about a decision it no longer makes, and
+    with no identity parameter there is nowhere to put one.
+
+    ``protocol`` stays a per-transport argument: it labels the resulting identity, it does not
+    decide anything, so passing it reintroduces no per-transport branch.
     """
+    from starlette.concurrency import run_in_threadpool
+
+    from src.core.resolved_identity import resolve_identity
     from src.core.tools.registry import TOOLS
 
-    return await invoke(tool_name, TOOLS[tool_name].impl, req, identity)
+    spec = TOOLS[tool_name]
+
+    # In a worker thread because ``resolve_identity`` is SYNC and hits the database twice
+    # (tenant detection, then the principal lookup). psycopg2 has no async path, so awaiting
+    # it directly would block the event loop for both round-trips -- which is what MCP and
+    # A2A did, while REST alone got the offload for free from FastAPI's sync-dependency
+    # handling. One await here gives all three the offload.
+    identity = await run_in_threadpool(
+        resolve_identity,
+        headers=dict(credential.headers),
+        auth_token=credential.auth_token,
+        require_valid_token=spec.requires_credential(),
+        protocol=protocol,
+    )
+
+    # No ``set_current_tenant`` here, deliberately. The tenant travels on ``identity.tenant``
+    # as a LazyTenantContext: it holds ``tenant_id`` immediately and loads the row on first
+    # access to any other field, once, cached. Pushing that into a ContextVar would flatten
+    # it to a mutable dict -- ``set_current_tenant`` does ``dict(tenant_data)``, which
+    # ITERATES the lazy context and so forces exactly the query the laziness exists to defer
+    # -- and would re-create the ambient second channel for a value the callee is already
+    # handed. ``require_tenant(identity)`` is the explicit path.
+    return await invoke(tool_name, spec.impl, req, identity)
 
 
 async def invoke(

@@ -1145,15 +1145,20 @@ class BaseTestEnv:
         ``_resolve_auth_dep`` (auth-OPTIONAL discovery routes) keeps returning
         the identity in both cases: production returns an identity there too,
         with ``principal_id`` None, which is exactly what these identities are.
-        """
-        from src.app import app
-        from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
+                NOTHING TO CONFIGURE ANY MORE. Identity is resolved at the boundary
+        (``src/core/tools/_boundary.invoke_tool``) from the credential the request
+        carries, so a REST route has no identity dependency to override -- and
+        in-process REST now drives the same real chain as A2A, MCP and e2e_rest
+        instead of modelling it. The credential still arrives the ordinary way, via
+        ``_credential_headers`` on the request (``Authorization: Bearer``).
 
-        if identity is None or cls._presents_unresolvable_credential(identity):
-            app.dependency_overrides.pop(_require_auth_dep, None)
-        else:
-            app.dependency_overrides[_require_auth_dep] = lambda: identity
-        app.dependency_overrides[_resolve_auth_dep] = lambda: identity
+        That closes what this method's own history documents: the override treated
+        ANY non-None identity as an already-resolved valid token, so REST answered
+        AUTH_MISSING to a caller who HAD presented a credential while every other
+        transport answered AUTH_INVALID (GH #1886). A seam that can express an
+        identity the wire never carried is a seam that can disagree with the wire.
+        """
+        return
 
     def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
         """Shared REST dispatch: configure auth → build body → POST → return Response.

@@ -222,15 +222,20 @@ def resolve_identity(
             tenant_context = token_tenant
             tenant_id = token_tenant.get("tenant_id", tenant_id)
 
-    # Wrap raw dict in TenantContext if possible (both paths produce typed model)
-    tenant_model = tenant_context
-    if isinstance(tenant_context, dict) and "tenant_id" in tenant_context:
-        from src.core.tenant_context import TenantContext
+    # The identity always carries the tenant_id; the tenant's FIELDS load lazily, once.
+    #
+    # Identification cannot be deferred -- step 4 above scopes the token check by tenant_id,
+    # so we must know WHICH tenant before we can verify a credential. Hydration can: a
+    # LazyTenantContext holds the id immediately and loads the row on first access to any
+    # other field, caching the result. This used to build a fully-hydrated TenantContext from
+    # whatever dict detection happened to return, so every request paid for the whole row
+    # whether or not anything read a field off it, and LazyTenantContext was dead weight
+    # everywhere except the ToolContext path.
+    tenant_model: Any = tenant_context
+    if tenant_id:
+        from src.core.tenant_context import LazyTenantContext
 
-        try:
-            tenant_model = TenantContext.from_dict(tenant_context)  # type: ignore[assignment]  # TenantContext is a dict-compatible proxy
-        except Exception:
-            tenant_model = tenant_context  # Keep dict if model construction fails
+        tenant_model = LazyTenantContext(tenant_id)
 
     return ResolvedIdentity(
         principal_id=principal_id,

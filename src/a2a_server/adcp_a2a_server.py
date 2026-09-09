@@ -53,7 +53,7 @@ from adcp.types import ProtocolEnvelope
 from google.protobuf import json_format, struct_pb2
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
+from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 from src.core.domain_config import get_a2a_server_url
 from src.core.errors.codes import AppErrorCode
 from src.core.errors.issues import ErrorIssue, JsonPointer
@@ -307,6 +307,16 @@ class AdCPRequestHandler(RequestHandler):
             return None
         auth_ctx = context.state.get(AUTH_CONTEXT_STATE_KEY)
         return auth_ctx.auth_token if auth_ctx else None
+
+    def _credential_of(self, context: ServerCallContext | None = None) -> AuthContext:
+        """The AuthContext UnifiedAuthMiddleware parked on the call context.
+
+        Empty when there is no context -- the SDK calls a handler directly that way in tests,
+        and "no context" means "no credential presented", which is the correct reading.
+        """
+        if context is None:
+            return AuthContext()
+        return context.state.get(AUTH_CONTEXT_STATE_KEY) or AuthContext()
 
     def _resolve_a2a_identity(
         self,
@@ -564,6 +574,10 @@ class AdCPRequestHandler(RequestHandler):
             # invalid-credential probe against the protected task precisely because "public
             # tasks like get_adcp_capabilities return 200 without credentials by design"
             # (dist/compliance/3.1.1/universal/security.yaml).
+            # The credential the boundary will resolve from. Same AuthContext
+            # UnifiedAuthMiddleware parked on the call context -- A2A does not build its own.
+            credential = self._credential_of(context)
+
             identity = self._resolve_a2a_identity(
                 auth_token,
                 require_valid_token=requires_auth,
@@ -584,6 +598,7 @@ class AdCPRequestHandler(RequestHandler):
                             skill_name,
                             parameters,
                             identity,
+                            credential,
                         )
                         results.append({"skill": skill_name, "result": result, "success": True})
                     except A2AError:
@@ -749,7 +764,7 @@ class AdCPRequestHandler(RequestHandler):
                 # -- a second declaration of one tool on one transport, which is how it kept
                 # a lazy import of a deleted builder alive after every other caller was
                 # rewired: nothing enumerating the registry could see it.
-                result = await self._dispatch_skill("get_products", {"brief": combined_text}, identity)
+                result = await self._dispatch_skill("get_products", {"brief": combined_text}, identity, credential)
                 tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
                 principal_id = (identity.principal_id or "unknown") if identity else "unknown"
 
@@ -773,7 +788,7 @@ class AdCPRequestHandler(RequestHandler):
                 )
             elif any(word in combined_text for word in ["price", "pricing", "cost", "cpm", "budget"]):
                 # Redirect pricing queries to get_products which has real price_guidance
-                result = await self._dispatch_skill("get_products", {"brief": combined_text}, identity)
+                result = await self._dispatch_skill("get_products", {"brief": combined_text}, identity, credential)
                 tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
                 principal_id = (identity.principal_id or "unknown") if identity else "unknown"
 
@@ -798,7 +813,7 @@ class AdCPRequestHandler(RequestHandler):
                 )
             elif any(word in combined_text for word in ["target", "audience"]):
                 # Redirect targeting queries to get_adcp_capabilities which has real targeting info
-                result = await self._dispatch_skill("get_adcp_capabilities", {}, identity)
+                result = await self._dispatch_skill("get_adcp_capabilities", {}, identity, credential)
                 tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
                 principal_id = (identity.principal_id or "unknown") if identity else "unknown"
 
@@ -1113,6 +1128,7 @@ class AdCPRequestHandler(RequestHandler):
         skill_name: str,
         parameters: dict,
         identity: ResolvedIdentity | None,
+        credential: AuthContext,
     ) -> dict[str, Any]:
         """Validate a parameter bag into the row's DTO, run the tool, serialize the answer.
 
@@ -1142,7 +1158,14 @@ class AdCPRequestHandler(RequestHandler):
         artifact is that it has no integer type, and pydantic's non-strict mode already coerces
         ``2.0`` to an ``int`` field.
         """
-        response = await invoke_tool(skill_name, TOOLS[skill_name].dto.model_validate(parameters), identity)
+        # TRANSITIONAL: this handler still receives ``identity`` because A2A scopes its audit
+        # records and log lines with it at ~15 sites. The boundary resolves its own from
+        # ``credential``, so an A2A request currently resolves TWICE. That is a known,
+        # temporary cost, not an oversight: it disappears when error and activity recording
+        # move into ``_invoke`` (which is the only place holding tool name, identity and
+        # exception together) and A2A stops needing an identity of its own. Tracked on
+        # salesagent-02rgd.
+        response = await invoke_tool(skill_name, TOOLS[skill_name].dto.model_validate(parameters), credential, "a2a")
         return self._serialize_for_a2a(response)
 
     async def _handle_explicit_skill(
@@ -1150,6 +1173,7 @@ class AdCPRequestHandler(RequestHandler):
         skill_name: str,
         parameters: dict,
         identity: ResolvedIdentity | None,
+        credential: AuthContext,
     ) -> dict:
         """Handle explicit AdCP skill invocations.
 
@@ -1205,7 +1229,7 @@ class AdCPRequestHandler(RequestHandler):
             )
 
         try:
-            return await self._dispatch_skill(skill_name, parameters, identity)
+            return await self._dispatch_skill(skill_name, parameters, identity, credential)
         except A2AError:
             # Re-raise A2AError as-is (already properly formatted)
             raise
