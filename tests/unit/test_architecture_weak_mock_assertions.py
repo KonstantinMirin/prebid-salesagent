@@ -40,8 +40,6 @@ SCAN_DIRS = (ROOT / "tests",)
 # are upgraded to assert_called_once_with().
 # FIXME(#1370): each entry below should be upgraded to assert_called_once_with()
 WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
-    ("tests/unit/test_a2a_tenant_detection_order.py", "test_a2a_delegates_to_resolve_identity"),
-    ("tests/unit/test_a2a_testing_context_extraction.py", "test_dry_run_header_passed_to_resolve_identity"),
     ("tests/unit/test_creative.py", "test_webhook_delivered_on_approval"),
     ("tests/unit/test_creative_coverage_gaps.py", "test_slack_notification_for_rejected_creative"),
     ("tests/unit/test_creative_repository.py", "test_creates_and_flushes"),
@@ -53,11 +51,8 @@ WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_gam_creatives_manager.py", "test_line_item_matching_no_match_logs_warning"),
     ("tests/unit/test_gam_service_account_auth.py", "test_service_account_credentials_creation"),
     ("tests/unit/test_get_media_buys.py", "test_snapshot_requested_calls_adapter"),
-    ("tests/unit/test_mcp_auth_middleware.py", "test_auth_required_tool_stores_identity"),
-    ("tests/unit/test_mcp_auth_middleware.py", "test_discovery_tool_stores_identity_without_requiring_auth"),
     ("tests/unit/test_pr1071_review_fixes.py", "test_audit_log_records_has_brand_not_has_brand_manifest"),
     ("tests/unit/test_sync_creatives_behavioral.py", "test_slack_notification_only_when_webhook_configured"),
-    ("tests/unit/test_transport_tenant_resolution.py", "test_ensure_resolved_sets_current_tenant"),
     ("tests/unit/test_update_media_buy_behavioral.py", "test_update_both_start_and_end_time"),
     # FIXME(#1370): pre-existing split assertions outside tests/unit/ (surfaced by SCAN_DIRS widen)
     ("tests/integration/test_creative_async_lifecycle_obligations.py", "test_async_input_required_response"),
@@ -207,7 +202,6 @@ BARE_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_naming_agent.py", "test_generates_name_successfully"),
     ("tests/unit/test_no_model_dump_in_impl_fixes.py", "test_create_from_request_adds_to_session"),
     ("tests/unit/test_review_agent.py", "test_returns_approval"),
-    ("tests/unit/test_transport_tenant_resolution.py", "test_db_queried_only_once"),
     ("tests/unit/test_update_media_buy_behavioral.py", "test_valid_date_range_persists_to_db"),
     # FIXME(#1370): pre-existing bare assertions outside tests/unit/ (surfaced by SCAN_DIRS widen)
     ("tests/bdd/steps/domain/uc006_sync_creatives.py", "then_background_ai_review_submitted"),
