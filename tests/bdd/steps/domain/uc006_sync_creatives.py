@@ -127,6 +127,59 @@ def _product_format_entry(ctx: dict, env: object) -> dict[str, str]:
     return {"agent_url": env.DEFAULT_AGENT_URL, "id": "display_300x250"}
 
 
+def _scenario_format_entry(ctx: dict, env: object) -> dict[str, str]:
+    """The ``{id, agent_url}`` a PERSISTED creative row must carry for this scenario.
+
+    Both halves together, and that is the point. A format's identity is the PAIR
+    ``(agent_url, id)`` -- ``format_id_identity`` in src/core/schemas/_base.py treats it that
+    way -- so switching the id while leaving the agent_url pinned to the in-process default
+    produces a row claiming the real catalog format at an agent that does not serve it, which
+    resolves to nothing. That is the same defect as salesagent-6mm5z with the halves swapped,
+    and it is easy to introduce while fixing the original: the id is the visible half.
+
+    The id honours ``ctx["creative_format_id"]`` when a Given set one, because a scenario
+    testing a specific format must persist that format. The agent_url always comes from the
+    transport switch: formats live at the transport's own agent whichever id is named.
+    """
+    _default_id, agent_url, _assets = _format_payload(ctx, env)
+    return {"id": _scenario_format_id(ctx, env), "agent_url": agent_url}
+
+
+def _creative_format_id_entry(ctx: dict, env: object) -> dict[str, str]:
+    """The ``format_id`` object a creative payload carries, for the current transport.
+
+    The creative-side twin of :func:`_product_format_entry`. Both read the same switch, which
+    is the whole point: a creative and the product it is checked against must name the same
+    format on every transport, and they only did in-process by coincidence
+    (salesagent-6mm5z).
+
+    Returns only the identity. Callers that also need the matching ASSETS -- the two formats
+    have different asset ids, so a switched format with unswitched assets fails just as
+    surely -- take them from :func:`_format_payload` directly.
+    """
+    format_id, agent_url, _assets = _format_payload(ctx, env)
+    return {"id": format_id, "agent_url": agent_url}
+
+
+def _scenario_format_id(ctx: dict, env: object) -> str:
+    """The format id this scenario is using: what a Given recorded, else the transport default.
+
+    ``ctx["creative_format_id"]`` is this module's carrier for "the format under test" -- 30
+    steps write it and several read it back. The reads used to default to the literal
+    ``"display_300x250"``, which is the quiet half of salesagent-6mm5z: a scenario that never
+    wrote the key got the IN-PROCESS format on every transport, including e2e_rest where the
+    creative it is compared against had switched to ``display_300x250_image``.
+
+    Defaulting through :func:`_format_payload` keeps the fallback on the same switch as the
+    value it stands in for. A literal default is the same bug one level down.
+    """
+    recorded = ctx.get("creative_format_id")
+    if recorded:
+        return recorded
+    format_id, _agent_url, _assets = _format_payload(ctx, env)
+    return format_id
+
+
 def _e2e_unique_id(prefix: str) -> str:
     """Generate a UUID-based unique ID for e2e tests.
 
@@ -872,7 +925,7 @@ def given_creative_with_specific_format(ctx: dict, creative_format: str) -> None
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
         name="Test Creative (format partition)",
-        format_id={"id": creative_format, "agent_url": env.DEFAULT_AGENT_URL},
+        format_id=_scenario_format_entry(ctx, env),
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = creative_format
@@ -1080,7 +1133,7 @@ def given_creative_already_assigned_to_package(ctx: dict) -> None:
         given_creative_with_format(ctx)
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package = MediaPackageFactory(
         media_buy=media_buy,
         package_config={"product_id": product.product_id, "budget": 1000.0},
@@ -1093,8 +1146,8 @@ def given_creative_already_assigned_to_package(ctx: dict) -> None:
         principal=principal,
         creative_id=creative_id,
         name=creative_payload["name"],
-        agent_url=agent_url,
-        format="display_300x250",
+        agent_url=_scenario_format_entry(ctx, env)["agent_url"],
+        format=_scenario_format_entry(ctx, env)["id"],
     )
     existing_assignment = CreativeAssignmentFactory(
         creative=creative,
@@ -1142,11 +1195,10 @@ def given_package_in_different_tenant(ctx: dict) -> None:
     if not ctx.get("creatives"):
         given_creative_with_format(ctx)
 
-    agent_url = env.DEFAULT_AGENT_URL
     other_tenant = TenantFactory(tenant_id="other_tenant_xtz", subdomain="other_xtz")
     other_principal = PrincipalFactory(tenant=other_tenant, principal_id="other_principal_xtz")
     other_buy = MediaBuyFactory(tenant=other_tenant, principal=other_principal, status="active")
-    other_product = ProductFactory(tenant=other_tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    other_product = ProductFactory(tenant=other_tenant, format_ids=[_product_format_entry(ctx, env)])
     other_package = MediaPackageFactory(
         media_buy=other_buy,
         package_config={"product_id": other_product.product_id, "budget": 1000.0},
@@ -1201,10 +1253,9 @@ def given_assignment_with_ids(ctx: dict, creative_id: str, package_id: str) -> N
     ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package = MediaPackageFactory(
         media_buy=media_buy,
         package_id=package_id,
@@ -1269,9 +1320,8 @@ def given_assignment_with_weight_zero(ctx: dict) -> None:
     ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package = MediaPackageFactory(
         media_buy=media_buy,
         package_config={"product_id": product.product_id, "budget": 1000.0},
@@ -1296,9 +1346,8 @@ def given_assignment_with_placement_ids(ctx: dict) -> None:
     ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package = MediaPackageFactory(
         media_buy=media_buy,
         package_config={"product_id": product.product_id, "budget": 1000.0},
@@ -1395,12 +1444,11 @@ def given_assignments_mapping_creative_to_valid_packages(ctx: dict) -> None:
     ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
     product = ProductFactory(
         tenant=tenant,
-        format_ids=[{"agent_url": agent_url, "id": "display_300x250"}],
+        format_ids=[_product_format_entry(ctx, env)],
     )
     pkg1 = MediaPackageFactory(
         media_buy=media_buy,
@@ -1431,12 +1479,11 @@ def given_assignments_mapping_creative_to_two_packages(ctx: dict, creative_id: s
     ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
     product = ProductFactory(
         tenant=tenant,
-        format_ids=[{"agent_url": agent_url, "id": "display_300x250"}],
+        format_ids=[_product_format_entry(ctx, env)],
     )
     package1 = MediaPackageFactory(
         media_buy=media_buy,
@@ -1922,7 +1969,7 @@ def given_creative_with_unreachable_agent(ctx: dict) -> None:
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
 
-    format_id = "display_300x250"
+    format_id, _, _ = _format_payload(ctx, env)
     creative_id = "creative-unreachable-001"
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
@@ -2087,7 +2134,7 @@ def given_creative_with_known_format_no_media_url(ctx: dict) -> None:
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
 
-    format_id = "display_300x250"
+    format_id, _, _ = _format_payload(ctx, env)
     creative_id = "creative-no-media-url-001"
     creative_payload = malformed(
         "absent_key",
@@ -2134,7 +2181,7 @@ def given_creative_agent_no_preview_urls(ctx: dict) -> None:
     from adcp.types import FormatId as LibraryFormatId
 
     env = ctx["env"]
-    creative_format_id = ctx.get("creative_format_id", "display_300x250")
+    creative_format_id = _scenario_format_id(ctx, env)
 
     mock_format = MagicMock()
     mock_format.format_id = LibraryFormatId(agent_url=env.DEFAULT_AGENT_URL, id=creative_format_id)
@@ -2704,10 +2751,10 @@ def given_creative_format_id_empty_name(ctx: dict) -> None:
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-fmt-empty-name-001",
         name="",
-        format_id={"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+        format_id=_creative_format_id_entry(ctx, env),
     )
     ctx.setdefault("creatives", []).append(creative_payload)
-    ctx["creative_format_id"] = "display_300x250"
+    ctx["creative_format_id"] = _scenario_format_id(ctx, env)
 
 
 @given("a creative with invalid schema structure")
@@ -2729,7 +2776,7 @@ def given_creative_invalid_schema(ctx: dict) -> None:
         CreativeAssetRequestFactory.payload(
             creative_id="creative-invalid-schema-001",
             name="Invalid Schema Creative",
-            format_id={"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+            format_id=_creative_format_id_entry(ctx, env),
             assets="not-a-valid-assets-structure",
         ),
         obligation=ErrorCode.INVALID_REQUEST,
@@ -3045,13 +3092,12 @@ def given_assignments_to_package_in_that_media_buy(ctx: dict) -> None:
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
-    agent_url = env.DEFAULT_AGENT_URL
     media_buy = ctx["media_buy"]
 
     if not ctx.get("creatives"):
         given_creative_with_format(ctx)
 
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package = MediaPackageFactory(
         media_buy=media_buy,
         package_config={"product_id": product.product_id, "budget": 1000.0},
@@ -3077,7 +3123,6 @@ def given_assignment_to_package_in_media_buy_with(ctx: dict, buy_state: str) -> 
     ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
 
     if "draft" in buy_state and "approved_at set" in buy_state:
         _create_media_buy_with_status(ctx, status="draft", approved_at_set=True)
@@ -3089,7 +3134,7 @@ def given_assignment_to_package_in_media_buy_with(ctx: dict, buy_state: str) -> 
         raise ValueError(f"Unknown buy_state phrase: {buy_state!r}")
 
     media_buy = ctx["media_buy"]
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package = MediaPackageFactory(
         media_buy=media_buy,
         package_config={"product_id": product.product_id, "budget": 1000.0},
@@ -3125,7 +3170,7 @@ def given_existing_assignment_in_media_buy(ctx: dict) -> None:
     if not ctx.get("creatives"):
         given_creative_with_format(ctx)
 
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package_1 = MediaPackageFactory(
         media_buy=media_buy,
         package_config={"product_id": product.product_id, "budget": 500.0},
@@ -3138,8 +3183,8 @@ def given_existing_assignment_in_media_buy(ctx: dict) -> None:
         principal=principal,
         creative_id=creative_id,
         name=creative_payload["name"],
-        agent_url=agent_url,
-        format="display_300x250",
+        agent_url=_scenario_format_entry(ctx, env)["agent_url"],
+        format=_scenario_format_entry(ctx, env)["id"],
     )
     CreativeAssignmentFactory(
         creative=creative,
@@ -3165,9 +3210,8 @@ def given_new_assignment_to_another_package(ctx: dict) -> None:
     env = ctx["env"]
     tenant = ctx["tenant"]
     media_buy = ctx["media_buy"]
-    agent_url = env.DEFAULT_AGENT_URL
 
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     package_2 = MediaPackageFactory(
         media_buy=media_buy,
         package_config={"product_id": product.product_id, "budget": 500.0},
@@ -3886,7 +3930,7 @@ def given_creative_with_format_agent_url(ctx: dict, agent_url: str) -> None:
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    format_id = ctx.get("creative_format_id", "display_300x250")
+    format_id = _scenario_format_id(ctx, env)
     creative_id = "creative-url-norm-001"
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
@@ -3910,7 +3954,7 @@ def given_product_with_format_agent_url(ctx: dict, agent_url: str) -> None:
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    format_id = ctx.get("creative_format_id", "display_300x250")
+    format_id = _scenario_format_id(ctx, env)
     ctx["product_agent_url"] = agent_url
     # Don't create package yet — 'matching format_id strings' step may do it
 
@@ -3957,12 +4001,12 @@ def given_matching_format_id_strings(ctx: dict) -> None:
     env = ctx["env"]
     creative_format = ctx.get("creative_format_id")
     if not creative_format:
-        creative_format = "display_300x250"
+        creative_format, _, _ = _format_payload(ctx, env)
         ctx["creative_format_id"] = creative_format
     # If no product/package exists yet, create one with matching format_id
     # but the agent_url is already set by the preceding Given step
     if "package" not in ctx:
-        product_agent_url = ctx.get("product_agent_url", env.DEFAULT_AGENT_URL)
+        product_agent_url = ctx.get("product_agent_url") or _scenario_format_entry(ctx, env)["agent_url"]
         _setup_assignment_package_for_format(
             ctx,
             product_format_ids=[{"agent_url": product_agent_url, "id": creative_format}],
@@ -3981,7 +4025,7 @@ def given_creative_agent_is_reachable(ctx: dict) -> None:
 
     env = ctx["env"]
     agent_url = env.DEFAULT_AGENT_URL
-    format_id = ctx.get("creative_format_id", "display_300x250")
+    format_id = _scenario_format_id(ctx, env)
 
     from tests.factories.format import FormatFactory, FormatIdFactory
 
@@ -4062,7 +4106,7 @@ def given_creative_with_provenance_source_type(ctx: dict, source_type: str) -> N
     """Build a creative payload with creative-level provenance.digital_source_type."""
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    format_id = "display_300x250"
+    format_id, _, _ = _format_payload(ctx, env)
     creative_id = "creative-provenance-source-001"
     payload: dict = CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
@@ -4322,8 +4366,8 @@ def given_creative_exists_for_principal(ctx: dict, creative_id: str, principal_i
         principal=principal,
         creative_id=creative_id,
         name=f"Pre-existing creative {creative_id}",
-        agent_url=env.DEFAULT_AGENT_URL,
-        format="display_300x250",
+        agent_url=_scenario_format_entry(ctx, env)["agent_url"],
+        format=_scenario_format_entry(ctx, env)["id"],
     )
     env._commit_factory_data()
     ctx["pre_existing_creative_id"] = creative_id
@@ -4337,7 +4381,7 @@ def when_sync_specific_creative(ctx: dict, creative_id: str) -> None:
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
         name=f"Synced creative {creative_id}",
-        format_id={"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+        format_id=_creative_format_id_entry(ctx, env),
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     dispatch_request(ctx, creatives=ctx["creatives"])
@@ -4647,10 +4691,9 @@ def given_assignments_two_packages_one_valid_one_missing(ctx: dict) -> None:
     ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "display_300x250"}])
+    product = ProductFactory(tenant=tenant, format_ids=[_product_format_entry(ctx, env)])
     valid_package = MediaPackageFactory(
         media_buy=media_buy,
         package_config={"product_id": product.product_id, "budget": 1000.0},
@@ -4956,10 +4999,10 @@ def given_creative_empty_name_known_format(ctx: dict) -> None:
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-empty-name-001",
         name="",
-        format_id={"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+        format_id=_creative_format_id_entry(ctx, env),
     )
     ctx.setdefault("creatives", []).append(creative_payload)
-    ctx["creative_format_id"] = "display_300x250"
+    ctx["creative_format_id"] = _scenario_format_id(ctx, env)
 
 
 # Format validation partition outcomes are handled by the existing
@@ -5866,7 +5909,7 @@ def given_assignments_two_packages_format_compat(ctx: dict) -> None:
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     agent_url = ctx.get("creative_agent_url", env.DEFAULT_AGENT_URL)
-    creative_format = ctx.get("creative_format_id", "display_300x250")
+    creative_format = _scenario_format_id(ctx, env)
 
     # Use UUID-based IDs for e2e_rest to avoid collisions in shared Docker DB
     extra_mb: dict = {}
@@ -5886,7 +5929,7 @@ def given_assignments_two_packages_format_compat(ctx: dict) -> None:
     # Compatible package: product accepts the creative's format
     compatible_product = ProductFactory(
         tenant=tenant,
-        format_ids=[{"agent_url": agent_url, "id": creative_format}],
+        format_ids=[_scenario_format_entry(ctx, env)],
         **extra_prod_compat,
     )
     compatible_package = MediaPackageFactory(
@@ -6027,7 +6070,7 @@ def when_sync_creative_as_principal(ctx: dict, creative_id: str, principal_id: s
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
         name=f"Synced creative {creative_id}",
-        format_id={"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+        format_id=_creative_format_id_entry(ctx, env),
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     dispatch_request(ctx, creatives=ctx["creatives"])
@@ -6345,12 +6388,12 @@ def given_assignments_to_existing_package(ctx: dict) -> None:
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     agent_url = env.DEFAULT_AGENT_URL
-    creative_format = ctx.get("creative_format_id", "display_300x250")
+    creative_format = _scenario_format_id(ctx, env)
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
     product = ProductFactory(
         tenant=tenant,
-        format_ids=[{"agent_url": agent_url, "id": creative_format}],
+        format_ids=[_scenario_format_entry(ctx, env)],
     )
     package = MediaPackageFactory(
         media_buy=media_buy,
@@ -6383,12 +6426,12 @@ def given_creative_already_assigned_to_package_partition(ctx: dict) -> None:
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     agent_url = env.DEFAULT_AGENT_URL
-    creative_format = ctx.get("creative_format_id", "display_300x250")
+    creative_format = _scenario_format_id(ctx, env)
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
     product = ProductFactory(
         tenant=tenant,
-        format_ids=[{"agent_url": agent_url, "id": creative_format}],
+        format_ids=[_scenario_format_entry(ctx, env)],
     )
     package = MediaPackageFactory(
         media_buy=media_buy,
@@ -7091,7 +7134,7 @@ def _build_creative_scope_payload(ctx: dict, creative_id: str) -> dict:
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
         name=f"Creative {creative_id}",
-        format_id={"id": "display_300x250", "agent_url": env.DEFAULT_AGENT_URL},
+        format_id=_creative_format_id_entry(ctx, env),
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     return creative_payload
@@ -7132,8 +7175,8 @@ def _preseed_creative_for_principal(ctx: dict, creative_id: str, principal_id: s
         principal=owner_principal,
         creative_id=creative_id,
         name=f"Pre-existing creative {creative_id}",
-        agent_url=env.DEFAULT_AGENT_URL,
-        format="display_300x250",
+        agent_url=_scenario_format_entry(ctx, env)["agent_url"],
+        format=_scenario_format_entry(ctx, env)["id"],
     )
     env._commit_factory_data()
     ctx["pre_existing_creative_id"] = creative_id
@@ -7284,10 +7327,9 @@ def given_creative_assigned_to_package_with_weight(ctx: dict, creative_id: str, 
     # Create the package if it doesn't exist yet
     packages = ctx.setdefault("_packages", {})
     if package_id not in packages:
-        agent_url = env.DEFAULT_AGENT_URL
         product = ProductFactory(
             tenant=tenant,
-            format_ids=[{"agent_url": agent_url, "id": "display_300x250"}],
+            format_ids=[_product_format_entry(ctx, env)],
         )
         package = MediaPackageFactory(
             media_buy=ctx["media_buy"],

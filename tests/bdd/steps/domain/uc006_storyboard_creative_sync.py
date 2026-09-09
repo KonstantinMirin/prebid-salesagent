@@ -42,10 +42,10 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._outcome_helpers import is_e2e, payload_or_none, wire_dict
 from tests.bdd.steps.domain.uc006_sync_creatives import (
-    _E2E_AGENT_URL,
-    _E2E_FORMAT_ID,
     _action_str,
     _build_creative_payload,
+    _creative_format_id_entry,
+    _product_format_entry,
     _setup_product_with_creative_policy,
     when_sync_creative,
 )
@@ -186,7 +186,7 @@ def given_three_creatives_three_formats(ctx: dict) -> None:
         CreativeAssetRequestFactory.payload(
             creative_id="creative-bulk-display-001",
             name="Bulk Display Creative",
-            format_id={"id": "display_300x250", "agent_url": agent_url},
+            format_id=_creative_format_id_entry(ctx, env),
             assets=build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
         ),
         CreativeAssetRequestFactory.payload(
@@ -239,14 +239,13 @@ def given_captured_format_id_from_get_products_for_sync(ctx: dict) -> None:
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
-    if is_e2e(ctx):
-        agent_url = _E2E_AGENT_URL
-        format_id = _E2E_FORMAT_ID
-    else:
-        agent_url = env.DEFAULT_AGENT_URL
-        format_id = "display_300x250"
+    # The switch lives in _product_format_entry, not inline here. An inline copy is a second
+    # place the two transports' formats can drift apart, which is the defect this module's
+    # sibling site at given_three_creatives_three_formats actually had (salesagent-6mm5z).
+    entry = _product_format_entry(ctx, env)
+    agent_url, format_id = entry["agent_url"], entry["id"]
 
-    product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": format_id}])
+    product = ProductFactory(tenant=tenant, format_ids=[entry])
     PricingOptionFactory(product=product)
     env._commit_factory_data()
 
