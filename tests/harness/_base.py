@@ -1105,18 +1105,20 @@ class BaseTestEnv:
 
     @classmethod
     def _rest_request_headers(cls, identity: Any) -> dict[str, str]:
-        """Auth headers for a REST request whose ``_require_auth_dep`` is NOT overridden.
+        """Auth headers for a REST request — the same ones MCP and A2A send.
 
-        A valid identity is injected through the dependency override, so its
-        request needs no headers. The presented-but-unresolvable identity is
-        the one case where the real dependency runs (see
-        ``_configure_rest_auth``) — and the real dependency reads the
-        credential off the REQUEST, so without these headers it would see an
-        empty ``AuthContext`` and answer AUTH_MISSING to a caller that did
-        present a token.
+        It used to return ``{}`` for a VALID identity, on the reasoning that the
+        dependency override supplied it so "its request needs no headers", and
+        send real headers only for a presented-but-unresolvable credential. That
+        made REST the one transport whose requests did not carry the credential
+        they were testing with: MCP calls ``_credential_headers`` unconditionally
+        (see ``_run_mcp_client``), and A2A puts it on the call context.
+
+        With identity resolved at the boundary there is no override to supply
+        anything, and no reason for the asymmetry: every transport now presents
+        the same credential the same way, and the production chain reads it off
+        the request on all three.
         """
-        if not cls._presents_unresolvable_credential(identity):
-            return {}
         return cls._credential_headers(identity)
 
     @classmethod

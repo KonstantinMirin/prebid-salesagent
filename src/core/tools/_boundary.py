@@ -181,6 +181,7 @@ async def invoke_tool(
     from starlette.concurrency import run_in_threadpool
 
     from src.core.resolved_identity import resolve_identity
+    from src.core.testing_hooks import AdCPTestContext
     from src.core.tools.registry import TOOLS
 
     spec = TOOLS[tool_name]
@@ -190,12 +191,21 @@ async def invoke_tool(
     # it directly would block the event loop for both round-trips -- which is what MCP and
     # A2A did, while REST alone got the offload for free from FastAPI's sync-dependency
     # handling. One await here gives all three the offload.
+    # The testing context rides the same headers, so it is resolved here too. Omitting it
+    # was a silent functional regression when resolution moved: thirteen readers under
+    # src/core/tools branch on ``identity.testing_context`` for dry-run and delivery
+    # simulation, and MCP and A2A used to carry it in from their own context objects. A
+    # boundary that resolves the caller must resolve the WHOLE caller, or every transport
+    # loses what the transports used to supply individually.
+    testing_context = AdCPTestContext.from_headers(dict(credential.headers))
+
     identity = await run_in_threadpool(
         resolve_identity,
         headers=dict(credential.headers),
         auth_token=credential.auth_token,
         require_valid_token=spec.requires_credential(),
         protocol=protocol,
+        testing_context=testing_context,
     )
 
     # No ``set_current_tenant`` here, deliberately. The tenant travels on ``identity.tenant``
