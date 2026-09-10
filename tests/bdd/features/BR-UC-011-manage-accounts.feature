@@ -180,8 +180,12 @@ Feature: BR-UC-011 Manage Accounts
     Then the response is compliant with the list_accounts spec
     And the response contains an accounts array with 3 items
     And the response includes context {"correlation_id": "uc011-read-idem"}
-    # Graduated: ListAccountsRequest.idempotency_key added -- the read wrapper now tolerates
-    # the 3.1 idempotency envelope instead of rejecting it under extra=forbid.
+    # NOT graduated, and the note that said so was stale: ListAccountsRequest.idempotency_key
+    # was declared once and REMOVED again, on the reasoning recorded in that model's docstring
+    # -- declaring it "satisfied a tolerance obligation by inventing a spec field". That
+    # reasoning stands. This scenario currently FAILS on all three in-process transports
+    # because deep_strip_to_schema ignores additionalProperties (salesagent-1x3lp), so a
+    # pin-permitted extra is rejected in non-production the same as a forbidden one.
     # list-accounts-request.json does NOT declare idempotency_key as a property at 3.1.1;
     # the duty is TOLERANCE (additionalProperties: true + graded storyboard step), not a declared field
     # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/read-tool-idempotency.yaml pointer=phases/read_requests_accept_idempotency_key/steps/list_accounts_with_idempotency_key
