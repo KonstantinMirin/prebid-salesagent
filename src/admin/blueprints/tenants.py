@@ -15,6 +15,7 @@ from babel import numbers as babel_numbers
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import func, select
 
+from src.admin.form_validation import sanitize_form_data, validate_form_data
 from src.admin.services import DashboardService
 from src.admin.utils import get_tenant_config_from_db, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
@@ -22,7 +23,6 @@ from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal, Tenant
 from src.core.domain_config import get_sales_agent_domain
-from src.core.validation import sanitize_form_data, validate_form_data
 from src.services.setup_checklist_service import SetupChecklistService
 from src.services.slack_notifier import SlackNotifier
 
