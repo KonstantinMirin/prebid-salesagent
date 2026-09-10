@@ -95,8 +95,16 @@ def _create_sync_workflow_steps(
         if context:
             request_data_for_workflow["context"] = context
 
-        # Store protocol type for webhook payload creation
-        request_data_for_workflow["protocol"] = identity.protocol if identity else "mcp"
+        # (Deleted) The caller's transport was stored here "for webhook payload creation".
+        # Nothing ever read it back -- the approval webhook is built in
+        # src/admin/blueprints/creatives.py from push_notification_config and context, and
+        # never from this field -- and the premise was wrong anyway. What this path fires is
+        # creative.status_changed, an ACCOUNT-level notification whose shape is fixed by
+        # creative-status-changed-webhook.json and fired per registered notification_configs[]
+        # subscriber; which transport the original sync_creatives arrived on has no bearing on
+        # it. (3.1 does make one envelope transport-dependent -- mcp-webhook-payload.json says
+        # in terms that it is not used for A2A, which carries the payload in native Task
+        # events -- but that is the task-status push envelope, not this one.)
 
         step = uow.workflows.create_step(
             context=persistent_ctx,

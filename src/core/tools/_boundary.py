@@ -56,12 +56,12 @@ import inspect
 import logging
 import typing
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Any
 
 from src.core.auth_context import AuthContext
 from src.core.idempotency_canonical import canonical_request_hash
 from src.core.idempotency_replay import cache_success, lookup_cached_replay, maybe_evict_expired
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import ResolvedIdentity, TransportProtocol
 from src.core.schemas._base import AdcpResponse, BuyerRequest
 from src.core.version_negotiation import SERVED_ADCP_VERSION, negotiate_adcp_version
 
@@ -159,7 +159,7 @@ async def invoke_tool(
     tool_name: str,
     req: BuyerRequest,
     credential: AuthContext,
-    protocol: Literal["mcp", "a2a", "rest"],
+    protocol: TransportProtocol,
 ) -> AdcpResponse:
     """Run the registry's tool named ``tool_name``, for the caller holding *credential*.
 
