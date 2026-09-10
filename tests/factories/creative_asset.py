@@ -20,9 +20,11 @@ def make_legacy_asset_dict(asset_id: str, **fields: object) -> dict:
 
     The v1 shape has NO ``asset_type`` discriminator and is NOT a list — it keys
     each role directly to a flat dict of fields (e.g. ``url``/``width``/``height``,
-    ``url_type``, ``content``, ``duration_ms``). This is the shape the legacy
-    adapter converter (``_convert_creative_to_adapter_asset``) consumes, and the
-    shape that SDK 5.7's discriminated union rejects.
+    ``url_type``, ``content``, ``duration_ms``). The pinned SDK's discriminated
+    asset union rejects this shape. The legacy adapter converter that consumed it,
+    ``_convert_creative_to_adapter_asset``, is deleted; the live path is
+    ``media_buy_create._build_adapter_asset_from_creative``, which reads the ORM
+    row rather than a schema object.
 
     Use this ONLY for legacy-input / negative tests that deliberately exercise the
     old shape. New or valid creative assets must use the AssetSpec mechanism

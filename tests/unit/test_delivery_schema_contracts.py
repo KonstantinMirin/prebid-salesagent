@@ -25,12 +25,10 @@ from src.core.schemas import (
     GetAllMediaBuyDeliveryResponse,
     GetMediaBuyDeliveryRequest,
     GetMediaBuyDeliveryResponse,
-    ListCreativeFormatsRequest,
     PackageDelivery,
     PackageRequest,
     ReportingPeriod,
 )
-from src.core.schemas.product import ProductFilters
 from tests.factories.media_buy import package_pricing_fields
 
 # ---------------------------------------------------------------------------
@@ -301,43 +299,31 @@ class TestDeprecatedDeliverySchemas:
 
 
 # ---------------------------------------------------------------------------
-# upgrade_legacy_format_ids validator
+# format_ids coercion
 # ---------------------------------------------------------------------------
 
 
-class TestUpgradeLegacyFormatIds:
-    """Tests that the upgrade_legacy_format_ids validator works on all 3 classes."""
+class TestFormatIdsCoercion:
+    """A dict reaches these three request models as the annotated FormatId type.
 
-    LEGACY_FORMAT_ID = {"agent_url": "https://example.com/agent", "id": "fmt_banner"}
+    Three sibling cases asserting ``isinstance(..., FormatId)`` against OUR
+    subclass were deleted with the ``upgrade_legacy_format_ids`` validator they
+    graded. All three fields are annotated ``list[FormatReferenceStructuredObject]``
+    -- the library type -- so the subclass they demanded was something the
+    annotation never promised, and only a ``mode="before"`` validator overriding
+    the annotation made them pass. Pydantic performs the dict coercion unaided.
+    """
 
-    def test_package_request_upgrades_dict_format_ids(self):
-        from src.core.schemas import FormatId
-
+    def test_dict_format_ids_coerce_to_the_annotated_type(self):
         pkg = PackageRequest(
             budget=1000,
             pricing_option_id="po_1",
             product_id="prod_1",
-            format_ids=[self.LEGACY_FORMAT_ID],
+            format_ids=[{"agent_url": "https://example.com/agent", "id": "fmt_banner"}],
         )
         assert len(pkg.format_ids) == 1
-        assert isinstance(pkg.format_ids[0], FormatId)
         assert pkg.format_ids[0].id == "fmt_banner"
-
-    def test_product_filters_upgrades_dict_format_ids(self):
-        from src.core.schemas import FormatId
-
-        filters = ProductFilters(format_ids=[self.LEGACY_FORMAT_ID])
-        assert len(filters.format_ids) == 1
-        assert isinstance(filters.format_ids[0], FormatId)
-        assert filters.format_ids[0].id == "fmt_banner"
-
-    def test_list_creative_formats_request_upgrades_dict_format_ids(self):
-        from src.core.schemas import FormatId
-
-        req = ListCreativeFormatsRequest(format_ids=[self.LEGACY_FORMAT_ID])
-        assert len(req.format_ids) == 1
-        assert isinstance(req.format_ids[0], FormatId)
-        assert req.format_ids[0].id == "fmt_banner"
+        assert str(pkg.format_ids[0].agent_url).rstrip("/") == "https://example.com/agent"
 
     def test_already_object_format_ids_pass_through(self):
         from src.core.schemas import FormatId

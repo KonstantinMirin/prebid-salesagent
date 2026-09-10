@@ -24,7 +24,6 @@ from src.core.schemas._base import (
     FormatId,
     NestedModelSerializerMixin,
     SalesAgentBaseModel,
-    _upgrade_legacy_format_ids,
     strip_none_deep,
 )
 
@@ -249,11 +248,6 @@ class ProductFilters(LibraryFilters):
     accepted-shape strip refuses it in development and drops it in production before the
     filter could ever run.
     """
-
-    @model_validator(mode="before")
-    @classmethod
-    def upgrade_legacy_format_ids(cls, values: dict) -> dict:
-        return _upgrade_legacy_format_ids(values)
 
 
 class GetProductsRequest(BuyerRequest, LibraryGetProductsRequest):

@@ -38,8 +38,8 @@ sys.path.insert(0, str(REPO_ROOT))
 
 # Canonical agent_url stamped into every fixture format_id. The pinned agent may
 # report its own container URL (e.g. http://localhost:9999/...); we normalize to the
-# canonical public URL so all existing references (legacy_id_map, ProductFactory,
-# upgrade_legacy_format_id) keep resolving. The raw source is recorded in metadata.
+# canonical public URL so existing references such as ProductFactory keep resolving.
+# The raw source is recorded in metadata.
 CANONICAL_AGENT_URL = "https://creative.adcontextprotocol.org"
 PUBLIC_CREATIVE_AGENT_HOST = "creative.adcontextprotocol.org"
 
@@ -87,7 +87,7 @@ async def _capture_formats(url: str):
     return await registry.get_formats_for_agent(agent, force_refresh=True)
 
 
-def _build_fixture(formats, source_url: str, legacy_id_map: dict[str, str]) -> dict:
+def _build_fixture(formats, source_url: str) -> dict:
     """Normalize, validate, sort, and assemble the v2 fixture payload.
 
     Every entry is dumped via the production model and re-validated against Format —
@@ -127,7 +127,6 @@ def _build_fixture(formats, source_url: str, legacy_id_map: dict[str, str]) -> d
             "source_url": source_url,
         },
         "agent_url": CANONICAL_AGENT_URL,
-        "legacy_id_map": legacy_id_map,
         "formats": entries,
     }
 
@@ -146,23 +145,13 @@ def main() -> None:
         sys.exit("No --url given and CREATIVE_AGENT_URL unset. See scripts/creative-agent-stack.sh url.")
     _check_url_guard(url)
 
-    from src.core.format_cache import CACHE_FILE, load_format_cache
-
-    # Preserve the existing legacy_id_map verbatim — its keys (display_300x250, audio_30s,
-    # native_1x1, ...) are deprecated string ids, NOT agent catalog ids, and must not be
-    # regenerated from the capture (upgrade_legacy_format_id raises on unknown ids).
-    legacy_id_map = load_format_cache()
-    if not legacy_id_map:
-        sys.exit(
-            f"Existing legacy_id_map is empty at {CACHE_FILE}. It must be preserved across refreshes "
-            "(it backs upgrade_legacy_format_id). Aborting rather than dropping it."
-        )
+    from src.core.format_cache import CACHE_FILE
 
     print(f"[refresh] capturing formats from {url} (pin {ADCP_PIN})")
     formats = asyncio.run(_capture_formats(url))
     print(f"[refresh] captured {len(formats)} format(s)")
 
-    fixture = _build_fixture(formats, source_url=url, legacy_id_map=legacy_id_map)
+    fixture = _build_fixture(formats, source_url=url)
 
     CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(CACHE_FILE, "w") as f:

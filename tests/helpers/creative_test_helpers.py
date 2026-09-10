@@ -286,7 +286,7 @@ def make_test_creative(
     so asset shapes stay declared through AssetSpec rather than hand-rolled here.
 
     ``variants`` is NOT passed. It is a pre-3.1.1 delivery-only field that the local
-    Creative validator pops unread (src/core/schemas/creative.py:267), so seeding it
+    Creative validator pops unread (``Creative.validate_format_id``), so seeding it
     changed no model and only kept the old shape visible for the next author to copy.
     """
     from src.core.schemas import Creative
@@ -294,7 +294,7 @@ def make_test_creative(
     kwargs: dict = {
         "creative_id": creative_id,
         "name": name,
-        "format": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
+        "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
         "assets": build_assets(image_spec("banner", url="https://example.com/banner.jpg"))
         if assets is None
         else assets,
@@ -316,7 +316,7 @@ def make_test_creative_list(count: int = 3) -> list:
         Creative(
             creative_id=f"creative_{i}",
             name=f"Test Creative {i}",
-            format={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
+            format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
             assets=build_assets(image_spec("banner", url=f"https://example.com/banner{i}.jpg")),
             principal_id=f"principal_{i}",
             created_date=datetime.now(UTC),
