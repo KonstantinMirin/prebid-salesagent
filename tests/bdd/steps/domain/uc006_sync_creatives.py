@@ -3991,28 +3991,6 @@ def given_creative_with_matching_format(ctx: dict) -> None:
         given_creative_with_format(ctx)
 
 
-@given("matching format_id strings")
-def given_matching_format_id_strings(ctx: dict) -> None:
-    """Ensure the creative and product use the same format_id string.
-
-    For URL normalization testing: the agent_urls may differ (trailing slash,
-    /mcp suffix) but the format_id strings must match exactly.
-    """
-    env = ctx["env"]
-    creative_format = ctx.get("creative_format_id")
-    if not creative_format:
-        creative_format, _, _ = _format_payload(ctx, env)
-        ctx["creative_format_id"] = creative_format
-    # If no product/package exists yet, create one with matching format_id
-    # but the agent_url is already set by the preceding Given step
-    if "package" not in ctx:
-        product_agent_url = ctx.get("product_agent_url") or _scenario_format_entry(ctx, env)["agent_url"]
-        _setup_assignment_package_for_format(
-            ctx,
-            product_format_ids=[{"agent_url": product_agent_url, "id": creative_format}],
-        )
-
-
 @given("the creative agent is reachable")
 def given_creative_agent_is_reachable(ctx: dict) -> None:
     """Ensure the creative agent mock returns valid format data (agent reachable).
@@ -4074,25 +4052,6 @@ def then_formats_match_using_format_id_key(ctx: dict) -> None:
     assigned = _get_creative_assigned_to(ctx)
     expected = ctx["package"].package_id
     assert expected in assigned, f"Expected {expected!r} in assigned_to (format_id key variant), got {assigned}"
-
-
-@then("the formats should match after URL normalization")
-def then_formats_match_after_url_normalization(ctx: dict) -> None:
-    """Assert the format check passed after URL normalization.
-
-    This is the same assertion as 'the assignment should match after URL normalization'
-    but named for the rule-039-inv1 scenario.
-    """
-    error = ctx.get("error")
-    assert error is None, (
-        f"The seller refused a pairing that canonicalization should equate: {error!r}. "
-        f"canonical_agent_url (src/core/schemas/_base.py) normalizes scheme/host/port and "
-        f"strips a trailing slash, so two spellings differing only by that MUST match."
-    )
-    resp = require_payload(ctx)
-    assigned = _get_creative_assigned_to(ctx)
-    expected = ctx["package"].package_id
-    assert expected in assigned, f"Expected {expected!r} in assigned_to after URL normalization, got {assigned}"
 
 
 # --- rx9u: asset-level provenance replaces creative-level (BR-RULE-094 INV-5) ---

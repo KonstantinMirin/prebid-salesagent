@@ -622,24 +622,25 @@ Feature: BR-UC-006 Sync Creative Assets
     And the media buy status should remain "active"
     # --- BR-RULE-039: Assignment Format Compatibility ---
 
-  # NARROWED from "strips trailing slash and /mcp". The /mcp half asserted a rule the pin
-  # does not state and production does not implement: adcp.signing.canonicalize_target_uri
-  # normalizes scheme/host/port and PRESERVES the path, so canonical_agent_url turns
-  # "https://agent.example.com/mcp/" into ".../mcp" — which correctly does NOT equal
-  # "https://agent.example.com". Stripping the path would be wrong, not missing: one host can
-  # serve MCP at /mcp and A2A at /a2a, and collapsing them would conflate two agents.
-  # The trailing-slash half IS the implemented rule, so that is what this now grades.
-  # Nothing in _schemas/3.1 mentions stripping /mcp; if it should, that is an upstream spec
-  # question, not a local normalizer change asserted by a test.
-  @T-UC-006-rule-039-inv1 @invariant @BR-RULE-039
-  Scenario: INV-1 — URL normalization strips a trailing slash
-    Given the Buyer is authenticated
-    And a creative with format agent_url "https://agent.example.com/"
-    And a product with format agent_url "https://agent.example.com"
-    And matching format_id strings
-    When format compatibility is checked
-    Then the response is compliant with the sync_creatives success spec
-    And the formats should match after URL normalization
+  # DELETED: "INV-1 — URL normalization strips a trailing slash".
+  # It graded a PURE FUNCTION through a full sync_creatives dispatch. canonical_agent_url is
+  # string in, string out -- no agent, no registry, no wire -- so there was nothing for four
+  # transports to grade. To drive it the scenario seeded a product and a creative at the
+  # FICTIONAL agent.example.com, which cannot work on e2e_rest in principle: a live registry
+  # has no format there, so no assignment is created and the Then reads an empty assigned_to.
+  # In-process it only appeared to pass because the registry is mocked, so the comparison it
+  # claims to test never ran on ANY transport.
+  #
+  # The rule is real and is now graded where it lives, as a pure-function unit test:
+  # tests/unit/test_format_resolver.py::TestFormatIdentityCanonicalization --
+  # test_a_trailing_slash_does_not_change_identity (plus host-case and default-port cases)
+  # and test_a_differing_PATH_does_change_identity, the negative half this scenario never
+  # had. That is STRICTLY more coverage than the scenario provided, on a test that can
+  # actually fail.
+  #
+  # Retired rather than declared E2EUnsupportedSetup: an unsupported declaration would move a
+  # scenario out of live grading to hide the fact that it cannot function, which is the same
+  # move as the inline pytest.xfail it used to carry. salesagent-td4xw.
 
   @T-UC-006-rule-039-inv2 @invariant @BR-RULE-039 @error
   Scenario: INV-2 — match requires both normalized agent_url AND exact format_id
