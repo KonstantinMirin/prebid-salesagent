@@ -2249,12 +2249,20 @@ class TestFormatCompatibilityExtended:
     package-without-product scenarios through CreativeSyncEnv.
     """
 
-    def test_url_normalization_strips_mcp_suffix(self, integration_db):
-        """Covers: UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-01 — /mcp suffix stripped for comparison."""
+    def test_mcp_suffix_is_a_different_agent_url(self, integration_db):
+        """Covers: UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-01 — the path is part of the identity.
+
+        This test used to assert the opposite: that a product declaring its format at
+        ``<agent>/mcp/`` accepted a creative whose format names the bare ``<agent>``,
+        because ``_assignments.py`` carried a private ``removesuffix("/mcp")``. Nothing
+        in the pin asks for that — ``core/format-id.json`` requires the AdCP canonical
+        form, which preserves the path — and a host serving MCP at /mcp and A2A at /a2a
+        read as a single agent under it.
+        """
         with CreativeSyncEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
-            # Product format has /mcp/ suffix on agent_url
+            # Product format is served at a DIFFERENT path on the same host.
             product = ProductFactory(
                 tenant=tenant,
                 format_ids=[
@@ -2267,20 +2275,54 @@ class TestFormatCompatibilityExtended:
                 package_config={"product_id": product.product_id, "package_id": "pkg_norm"},
             )
 
-            # Creative has plain URL without /mcp — should still match after normalization
+            with pytest.raises(AdCPCreativeRejectedError):
+                env.call_impl(
+                    creatives=[
+                        _make_creative_asset(
+                            creative_id="c_norm",
+                            name="Bare Origin",
+                            format_id=AdcpFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250"),
+                        )
+                    ],
+                    assignments=[{"creative_id": "c_norm", "package_id": pkg.package_id}],
+                    validation_mode="strict",
+                )
+
+    def test_format_match_after_url_canonicalization(self, integration_db):
+        """Spellings the AdCP canonical form collapses do not split format identity.
+
+        The other half of UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-01: host case, the
+        default port and a trailing slash ARE spellings of one agent_url, and the
+        pin makes canonicalizing them before comparing a MUST.
+        """
+        # Same agent, three spellings the canonical form collapses: host case, the
+        # default port, a trailing slash.
+        host_variant = "https://Creative.AdContextProtocol.org:443/"
+        with CreativeSyncEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+            product = ProductFactory(
+                tenant=tenant,
+                format_ids=[{"agent_url": host_variant, "id": "display_300x250"}],
+            )
+            media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
+            pkg = MediaPackageFactory(
+                media_buy=media_buy,
+                package_config={"product_id": product.product_id, "package_id": "pkg_canon"},
+            )
+
             response = env.call_impl(
                 creatives=[
                     _make_creative_asset(
-                        creative_id="c_norm",
-                        name="URL Normalized",
+                        creative_id="c_canon",
+                        name="Canonical Match",
                         format_id=AdcpFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250"),
                     )
                 ],
-                assignments=[{"creative_id": "c_norm", "package_id": pkg.package_id}],
+                assignments=[{"creative_id": "c_canon", "package_id": pkg.package_id}],
                 validation_mode="strict",
             )
 
-        # Should succeed — URL normalization strips /mcp/ before comparison
         result = response.creatives[0]
         assert result.action != "failed", f"Expected success but got: {result.errors}"
 

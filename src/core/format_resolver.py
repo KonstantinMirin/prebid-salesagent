@@ -15,6 +15,7 @@ from typing import Any
 
 from adcp.canonical_formats import CANONICAL_CREATIVE_AGENT_URL, format_is_supported
 from adcp.types import FormatId as LibraryFormatId
+from pydantic import ValidationError
 
 from src.core.database.database_session import get_db_session
 from src.core.errors.details import EntityRefDetails
@@ -64,11 +65,10 @@ logger = logging.getLogger(__name__)
 # thin, named delegations so there is ONE answer to "same format?" instead of
 # one per call site. A second rule (the SDK's own ``formats_are_equivalent``,
 # which additionally legacy-upgrades ``display_300x250`` into a parameterized
-# canonical id) would answer differently for the same pair of references, which
-# is precisely the split ``tests/unit/test_guards_format_id_value_comparison.py``
-# exists to prevent — so equivalence is asked of ``format_id_identity`` and of
-# nothing else. Directional SUPPORT is a different question, and that one is
-# still the SDK's (see :func:`format_accepted_by`).
+# canonical id) would answer differently for the same pair of references — so
+# equivalence is asked of ``format_id_identity`` and of nothing else.
+# Directional SUPPORT is a different question, and that one is still the SDK's
+# (see :func:`format_accepted_by`).
 
 
 def format_ref_id(ref: FormatRef) -> str | None:
@@ -119,6 +119,71 @@ def same_format(left: FormatRef, right: FormatRef) -> bool:
     MUST, and :func:`format_identity` is where that happens.
     """
     return format_identity(left) == format_identity(right)
+
+
+def format_identity_or_none(entry: Any) -> tuple[str, str] | None:
+    """The federation identity of a format reference, or None if it is not one.
+
+    Two things separate this from :func:`format_identity`. It absorbs the ONE
+    shape variance a persisted reference has — ``Product.format_ids`` is
+    ``list[FormatId]`` in the schema but a JSON ``list[dict]`` in the column,
+    and rows predating the AdCP v3.1 rename key the id as ``format_id`` rather
+    than ``id`` — and it answers ``None`` instead of raising when the value is
+    not a usable reference at all. A ``None`` field is read as ABSENT, so a
+    reference carrying ``agent_url: None`` takes the same canonical-agent
+    default a reference omitting the key does.
+
+    ``None`` is the right answer here because both callers act on it correctly
+    without a second code path: a product entry that yields None declares no
+    restriction, and a creative that yields None matches no product entry,
+    which is exactly "this format is not one the product accepts". Raising
+    would turn one corrupt row into a 500 on a buyer's request.
+
+    Asking here is what lets a call site pose the identity question instead of
+    re-deciding what "the same agent_url" means. The three sites that check a
+    creative against its product each grew a private ``normalize_url`` doing a
+    bare ``rstrip("/")`` and, in two of them, an unmandated
+    ``removesuffix("/mcp")`` that collapsed one host's MCP and A2A endpoints
+    into a single agent. The pinned ``core/format-id.json`` requires the AdCP
+    canonical form before two references may be treated as the same, and
+    :func:`format_identity` is the one place that applies it.
+    """
+    # A model is dumped to its wire dict so the absent-field handling below applies
+    # uniformly, whatever shape the reference arrived in.
+    ref: Any = _as_ref(entry) if not isinstance(entry, (str, Mapping)) else entry
+    if isinstance(ref, Mapping):
+        ref = {k: v for k, v in ref.items() if v is not None}
+        if "id" not in ref and "format_id" in ref:
+            ref["id"] = ref["format_id"]
+        ref.pop("format_id", None)
+        if "id" not in ref:
+            return None
+    try:
+        return format_identity(ref)
+    except (ValidationError, ValueError, TypeError, AttributeError):
+        logger.warning("Unusable stored format reference, ignored: %r", entry)
+        return None
+
+
+def product_format_identities(format_ids: Iterable[Any] | None) -> set[tuple[str, str]]:
+    """The federation identities a product's declared ``format_ids`` accept.
+
+    Empty means the product imposes no format restriction — the same reading
+    an empty column has, and the reading every caller already applied.
+    """
+    identities = (format_identity_or_none(entry) for entry in format_ids or [])
+    return {identity for identity in identities if identity is not None}
+
+
+def format_display(identity: tuple[str, str]) -> str:
+    """``<canonical agent_url>/<id>`` — how a format identity is spelled to a buyer.
+
+    The identity, not the raw reference: an error that lists "supported
+    formats" spelled differently from the values actually compared reads as a
+    contradiction to whoever has to act on it.
+    """
+    agent_url, format_id = identity
+    return f"{agent_url}/{format_id}"
 
 
 def format_accepted_by(requested: FormatRef, supported: FormatRef) -> bool:

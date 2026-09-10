@@ -1642,17 +1642,18 @@ class TestExtensionObligations:
             mock_registry._get_tenant_agents.return_value = []  # No agents registered
             mock_registry_cls.return_value = mock_registry
 
-            with patch("src.core.validation.normalize_agent_url", side_effect=lambda x: x):
-                from src.core.exceptions import AdCPAuthorizationError
+            from src.core.exceptions import AdCPAuthorizationError
 
-                with pytest.raises(AdCPAuthorizationError) as exc_info:
-                    await _validate_and_convert_format_ids(
-                        format_ids=[{"agent_url": "https://unknown-agent.example.com", "id": "banner_300x250"}],
-                        tenant_id="test_tenant",
-                        package_idx=0,
-                    )
+            # No normalizer to neutralize: both sides of the registration check go through
+            # `canonical_agent_url`, so the comparison is exact by construction.
+            with pytest.raises(AdCPAuthorizationError) as exc_info:
+                await _validate_and_convert_format_ids(
+                    format_ids=[{"agent_url": "https://unknown-agent.example.com", "id": "banner_300x250"}],
+                    tenant_id="test_tenant",
+                    package_idx=0,
+                )
 
-                assert exc_info.value.error_code == "PERMISSION_DENIED"
+            assert exc_info.value.error_code == "PERMISSION_DENIED"
 
     @pytest.mark.asyncio
     async def test_format_not_found_on_agent(self):
@@ -1665,10 +1666,7 @@ class TestExtensionObligations:
         mock_agent = MagicMock()
         mock_agent.agent_url = "https://creative.example.com"
 
-        with (
-            patch("src.core.creative_agent_registry.CreativeAgentRegistry") as mock_registry_cls,
-            patch("src.core.validation.normalize_agent_url", side_effect=lambda x: x),
-        ):
+        with patch("src.core.creative_agent_registry.CreativeAgentRegistry") as mock_registry_cls:
             mock_registry = MagicMock()
             mock_registry._get_tenant_agents.return_value = [mock_agent]
             mock_registry.get_format = AsyncMock(return_value=None)  # Format not found

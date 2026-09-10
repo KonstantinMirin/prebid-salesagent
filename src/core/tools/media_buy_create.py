@@ -1771,13 +1771,17 @@ async def _validate_and_convert_format_ids(
     registry = CreativeAgentRegistry()
     validated_format_ids = []
 
-    # Get registered agents for this tenant
+    # Get registered agents for this tenant.
+    #
+    # Both sides of the registration check go through `canonical_agent_url` — the AdCP
+    # canonical form, which PRESERVES the path. This check used to run on
+    # `validation.normalize_agent_url`, which additionally stripped `/mcp`, `/a2a` and
+    # `/.well-known/adcp/sales`. Nothing in the pin asks for that, and it decided an
+    # AUTHORIZATION outcome: an agent registered at `https://x.com` also authorized
+    # `https://x.com/mcp`, and one host serving MCP at /mcp and A2A at /a2a read as a
+    # single agent.
     registered_agents = registry._get_tenant_agents(tenant_id)
-    # Normalize agent URLs for consistent comparison (strips /mcp, /a2a, /.well-known/*, trailing slashes)
-    # This ensures all URL variations match: "https://example.com/mcp/" -> "https://example.com"
-    from src.core.validation import normalize_agent_url
-
-    registered_agent_urls = {normalize_agent_url(agent.agent_url) for agent in registered_agents}
+    registered_agent_urls = {canonical_agent_url(agent.agent_url) for agent in registered_agents}
 
     for idx, fmt_id in enumerate(format_ids):
         # Every rejection here is per-package AND per-format, so the position and the
@@ -1806,10 +1810,9 @@ async def _validate_and_convert_format_ids(
                 field=field, details=ValidationDetails(**where, agent_url=agent_url, format_id=format_id)
             )
 
-        # VALIDATION: Check agent is registered
-        # Normalize incoming agent_url for comparison (strips /mcp, /a2a, /.well-known/*, trailing slashes)
-        normalized_agent_url = normalize_agent_url(agent_url)
-        if normalized_agent_url not in registered_agent_urls:
+        # VALIDATION: Check agent is registered. `agent_url` is already canonical (above),
+        # and so is every member of `registered_agent_urls` — one form, both sides.
+        if agent_url not in registered_agent_urls:
             raise AdCPAuthorizationError(field=field, details=EntityRefDetails(**where, agent_url=agent_url))
 
         # VALIDATION: Verify format exists on agent
@@ -3261,58 +3264,23 @@ async def _create_media_buy_impl(
 
             # If found and has format_ids, validate and use those
             if matching_package and matching_package.format_ids:
-                # Validate that requested formats are supported by product
-                # Format is composite key: (agent_url, id) per AdCP spec
-                product_format_keys: set[tuple[str | None, str]] = set()
-                if pkg_product.format_ids:
-                    for fmt in pkg_product.format_ids:
-                        agent_url = fmt.agent_url
-                        normalized_url = canonical_agent_url(agent_url) if agent_url else None
-                        product_format_keys.add((normalized_url, fmt.id))
+                from src.core.format_resolver import (
+                    format_display,
+                    format_identity_or_none,
+                    product_format_identities,
+                )
 
-                # Build set of requested format keys for comparison
-                requested_format_keys: set[tuple[str | None, str]] = set()
-                for fmt in matching_package.format_ids:
-                    normalized_url = canonical_agent_url(fmt.agent_url) if fmt.agent_url else None
-                    requested_format_keys.add((normalized_url, fmt.id))
-
-                def format_display(url: str | None, fid: str) -> str:
-                    """Format a (url, id) pair for display, handling trailing slashes."""
-                    if not url:
-                        return fid
-                    # Remove trailing slash from URL to avoid double slashes
-                    # Convert to string in case it's an AnyUrl object
-                    clean_url = str(url).rstrip("/")
-                    return f"{clean_url}/{fid}"
-
-                def _has_supported_key(url: str | None, fid: str, keys: set = product_format_keys) -> bool:
-                    """Check if (url, fid) is supported, allowing an '/mcp' URL variant.
-
-                    This does not mutate any of the underlying key sets; it only checks
-                    for the presence of either the exact key or an alternative where
-                    '/mcp' is appended to the end of the URL path.
-
-                    Args:
-                        url: The format URL to check
-                        fid: The format ID to check
-                        keys: The set of supported (url, fid) tuples (bound at function definition)
-                    """
-                    # Exact match first
-                    if (url, fid) in keys:
-                        return True
-
-                    # If URL provided, also try with '/mcp' appended (idempotent if already present)
-                    if url:
-                        # Convert to string in case it's an AnyUrl object
-                        base = str(url).rstrip("/")
-                        mcp_url = base if base.endswith("/mcp") else f"{base}/mcp"
-                        if (mcp_url, fid) in keys:
-                            return True
-
-                    return False
+                # Validate that requested formats are supported by product.
+                # Identity is (canonical agent_url, id) per the pinned core/format-id.json,
+                # asked of format_resolver. This branch used to additionally accept a
+                # supported key with "/mcp" APPENDED to the requested URL — an unmandated
+                # widening that made one host's MCP endpoint and its bare origin the same
+                # agent; the path is part of the canonical form and stays part of it.
+                product_format_keys = product_format_identities(pkg_product.format_ids)
+                requested_format_keys = product_format_identities(matching_package.format_ids)
 
                 unsupported_formats = [
-                    format_display(url, fid) for url, fid in requested_format_keys if not _has_supported_key(url, fid)
+                    format_display(key) for key in sorted(requested_format_keys - product_format_keys)
                 ]
 
                 if unsupported_formats:
@@ -3324,35 +3292,27 @@ async def _create_media_buy_impl(
                             f"Please configure format_ids on the product or contact the publisher."
                         )
                     else:
-                        supported_formats_str = ", ".join(
-                            [format_display(url, fid) for url, fid in product_format_keys]
-                        )
+                        supported_formats_str = ", ".join(format_display(key) for key in sorted(product_format_keys))
                         error_msg = (
                             f"Product '{pkg_product.name}' ({pkg_product.product_id}) does not support requested format(s): "
                             f"{', '.join(unsupported_formats)}. Supported formats: {supported_formats_str}"
                         )
                     raise AdCPValidationError()
 
-                # Merge dimensions from product's format_ids if request format_ids don't have them
-                # This handles the case where buyer specifies format_id but not dimensions
-                # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]]
+                # Merge dimensions from product's format_ids if request format_ids don't have them.
+                # This handles the case where buyer specifies a format but not dimensions.
+                # Keyed on the same federation identity the support check above compares on,
+                # so a format that PASSED that check cannot then miss its own dimensions.
+                product_format_dimensions: dict[tuple[str, str], tuple[int | None, int | None, float | None]]
                 product_format_dimensions = {}
-                if pkg_product.format_ids:
-                    for fmt in pkg_product.format_ids:
-                        agent_url = fmt.agent_url
-                        fmt_id = fmt.id
-                        normalized_url = canonical_agent_url(agent_url) if agent_url else None
-                        if fmt_id:
-                            product_format_dimensions[(normalized_url, fmt_id)] = (
-                                fmt.width,
-                                fmt.height,
-                                fmt.duration_ms,
-                            )
+                for fmt in pkg_product.format_ids or []:
+                    fmt_identity = format_identity_or_none(fmt)
+                    if fmt_identity:
+                        product_format_dimensions[fmt_identity] = (fmt.width, fmt.height, fmt.duration_ms)
 
                 # Process request format_ids, merging dimensions from product if missing
                 for req_fmt in matching_package.format_ids:
-                    normalized_url = canonical_agent_url(req_fmt.agent_url) if req_fmt.agent_url else None
+                    req_fmt_identity = format_identity_or_none(req_fmt)
                     # Check if request format has dimensions
                     if req_fmt.width is not None and req_fmt.height is not None:
                         # Request has dimensions, convert to our FormatId type
@@ -3367,7 +3327,7 @@ async def _create_media_buy_impl(
                         )
                     else:
                         # Try to get dimensions from product's format_ids
-                        product_dims = product_format_dimensions.get((normalized_url, req_fmt.id))
+                        product_dims = product_format_dimensions.get(req_fmt_identity) if req_fmt_identity else None
                         if product_dims and (product_dims[0] is not None or product_dims[1] is not None):
                             # Merge dimensions from product
                             format_ids_to_use.append(

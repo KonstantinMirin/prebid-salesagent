@@ -3286,37 +3286,61 @@ class TestFormatCompatibility:
 
         return mock_uow, mock_media_buy
 
-    def test_format_match_after_url_normalization(self):
-        """agent_url trailing slashes and /mcp stripped before comparison.
-
-        Spec: UNSPECIFIED (implementation-defined format compatibility logic).
-        The normalize_url function in _assignments.py strips trailing '/' and '/mcp'
-        from agent URLs before comparison (lines 121-124).
-        Covers: UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-01
-        """
+    def _assign(self, mock_db, *, creative_agent_url, product_agent_url):
+        """Run one strict assignment of a creative against a product's one format."""
         from src.core.tools.creatives._assignments import _process_assignments
 
+        self._setup_assignment_mocks(
+            mock_db,
+            creative_agent_url=creative_agent_url,
+            creative_format="display_300x250",
+            product_format_ids=[{"agent_url": product_agent_url, "id": "display_300x250"}],
+        )
+        return _process_assignments(
+            assignments={"c1": ["pkg_1"]},
+            results=[SyncCreativeResult(creative_id="c1", action="created")],
+            tenant={"tenant_id": "t1"},
+            validation_mode="strict",
+            principal_id="principal_1",
+        )
+
+    def test_format_match_after_url_canonicalization(self):
+        """Spellings the AdCP canonical form collapses do not split format identity.
+
+        Spec: core/format-id.json — "Callers comparing two format-id values MUST
+        canonicalize agent_url per the AdCP URL canonicalization rules before
+        treating two formats as the same." Host case, the default port, and a
+        trailing slash are all spellings of ONE agent_url.
+        Covers: UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-01
+        """
         with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
-            # Creative has URL without trailing slash; product has URL with /mcp suffix
-            self._setup_assignment_mocks(
+            assignment_list = self._assign(
                 mock_db,
                 creative_agent_url="https://creative.example.com",
-                creative_format="display_300x250",
-                product_format_ids=[{"agent_url": "https://creative.example.com/mcp/", "id": "display_300x250"}],
+                product_agent_url="https://Creative.Example.com:443/",
             )
 
-            results = [SyncCreativeResult(creative_id="c1", action="created")]
-            assignment_list = _process_assignments(
-                assignments={"c1": ["pkg_1"]},
-                results=results,
-                tenant={"tenant_id": "t1"},
-                validation_mode="strict",
-                principal_id="principal_1",
-            )
-
-            # URL normalization should strip /mcp and trailing / so formats match
             assert len(assignment_list) == 1
             assert assignment_list[0].creative_id == "c1"
+
+    def test_mcp_suffix_is_a_different_agent_url(self):
+        """`/mcp` is a path, and the canonical form preserves the path.
+
+        Two normalizers used to `removesuffix("/mcp")` before comparing, which made
+        one host's MCP endpoint and its bare origin the same agent — and this test
+        used to assert that. Nothing in the pin asks for it: a host may serve MCP at
+        /mcp and A2A at /a2a, and collapsing the path merges two agents into one.
+        Covers: UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-01
+        """
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
+            from src.core.exceptions import AdCPCreativeRejectedError
+
+            with pytest.raises(AdCPCreativeRejectedError):
+                self._assign(
+                    mock_db,
+                    creative_agent_url="https://creative.example.com",
+                    product_agent_url="https://creative.example.com/mcp/",
+                )
 
     def test_format_mismatch_lenient_logs_error(self):
         """Lenient mode: incompatible format skipped, added to assignment_errors.

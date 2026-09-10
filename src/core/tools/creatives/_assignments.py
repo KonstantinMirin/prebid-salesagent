@@ -13,6 +13,7 @@ from src.core.exceptions import (
     AdCPPackageNotFoundError,
     AdCPValidationError,
 )
+from src.core.format_resolver import format_display, format_identity_or_none, product_format_identities
 from src.core.logging_config import log_safe
 from src.core.schemas import SyncCreativeResult
 from src.core.tenant_context import LazyTenantContext
@@ -213,50 +214,27 @@ def _process_assignments(
                         product = assignment_repo.get_product_by_id(product_id)
 
                         if product and product.format_ids:
-                            # Build set of supported formats (agent_url, format_id) tuples
-                            supported_formats: set[tuple[str, str]] = set()
-                            for fmt in product.format_ids:
-                                if isinstance(fmt, dict):
-                                    agent_url_val = fmt.get("agent_url")
-                                    format_id_val = fmt.get("id") or fmt.get("format_id")
-                                    if agent_url_val and format_id_val:
-                                        supported_formats.add((str(agent_url_val), str(format_id_val)))
+                            # Identity is (canonical agent_url, id) per the pinned
+                            # core/format-id.json, asked of format_resolver so this path and
+                            # the media_buy_update assignment path cannot disagree about
+                            # whether a creative's format is one the product declares.
+                            supported_formats = product_format_identities(product.format_ids)
+                            creative_identity = format_identity_or_none(
+                                {"agent_url": db_creative_result.agent_url, "id": db_creative_result.format}
+                            )
 
-                            # Check creative format against supported formats
-                            creative_agent_url = db_creative_result.agent_url
-                            creative_format_id = db_creative_result.format
-
-                            # Allow /mcp URL variant (creative agent may return format with /mcp suffix)
-                            def normalize_url(url: str | None) -> str | None:
-                                if not url:
-                                    return None
-                                return url.rstrip("/").removesuffix("/mcp")
-
-                            normalized_creative_url = normalize_url(creative_agent_url)
-                            is_supported = False
-
-                            for supported_url, supported_format_id in supported_formats:
-                                normalized_supported_url = normalize_url(supported_url)
-                                if (
-                                    normalized_creative_url == normalized_supported_url
-                                    and creative_format_id == supported_format_id
-                                ):
-                                    is_supported = True
-                                    break
-
-                            if not supported_formats:
-                                # Product has no format restrictions - allow all
-                                is_supported = True
+                            # A product with no usable format entries imposes no restriction.
+                            is_supported = not supported_formats or creative_identity in supported_formats
 
                             if not is_supported:
                                 # Creative format not supported by product
                                 creative_format_display = (
-                                    f"{creative_agent_url}/{creative_format_id}"
-                                    if creative_agent_url
-                                    else creative_format_id
+                                    format_display(creative_identity)
+                                    if creative_identity
+                                    else str(db_creative_result.format)
                                 )
                                 supported_formats_display = ", ".join(
-                                    [f"{url}/{fmt_id}" if url else fmt_id for url, fmt_id in supported_formats]
+                                    format_display(identity) for identity in sorted(supported_formats)
                                 )
                                 error_msg = (
                                     f"Creative {creative_id} format '{creative_format_display}' "

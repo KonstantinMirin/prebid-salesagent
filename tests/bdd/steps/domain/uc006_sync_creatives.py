@@ -3945,18 +3945,34 @@ def given_creative_with_format_agent_url(ctx: dict, agent_url: str) -> None:
     ctx["creative_agent_url"] = agent_url
 
 
-@given(parsers.parse('a product with format agent_url "{agent_url}"'))
-def given_product_with_format_agent_url(ctx: dict, agent_url: str) -> None:
-    """Set up a product with a specific agent_url and the same format_id as the creative.
+@given("a product whose format agent_url is the same agent with a trailing slash")
+def given_product_agent_url_trailing_slash(ctx: dict) -> None:
+    """Seed the product at the SAME agent the creative uses, spelled with a trailing slash.
 
-    For URL normalization testing: this product's agent_url may differ from the
-    creative's (e.g., no trailing slash) but should still match after normalization.
+    Grades BR-RULE-039 INV-1 on the wire: the seller must treat "https://agent/" and
+    "https://agent" as one agent, so the product's format resolves against the creative's and
+    the assignment is created. If canonicalization stopped equating them, the resolve would
+    fail and assigned_to would come back empty -- an observable difference, which is why this
+    belongs in a scenario and not in a unit test of the string helper.
+
+    The agent comes from _product_format_entry, so it is whatever the CURRENT transport
+    actually serves. The previous version used a fictional "https://agent.example.com", which
+    no live registry can resolve: the scenario could not succeed on e2e_rest in principle, and
+    in-process it only appeared to because the registry is mocked (salesagent-td4xw).
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    format_id = _scenario_format_id(ctx, env)
-    ctx["product_agent_url"] = agent_url
-    # Don't create package yet — 'matching format_id strings' step may do it
+    # The WHOLE entry from the shared helper, then one spelling change to its agent_url:
+    # a format's identity is the pair, and a re-spelled agent paired with a hand-picked id
+    # would name a format that agent does not serve.
+    entry = dict(_scenario_format_entry(ctx, env))
+    unslashed = entry["agent_url"]
+    entry["agent_url"] = unslashed.rstrip("/") + "/"
+    assert entry["agent_url"] != unslashed, (
+        f"this step exists to make the two spellings DIFFER, but {unslashed!r} already "
+        f"ends in a slash, so the scenario would grade nothing"
+    )
+    _setup_assignment_package_for_format(ctx, product_format_ids=[entry])
 
 
 @given('a product with format_ids using "format_id" key')

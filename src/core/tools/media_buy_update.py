@@ -47,6 +47,7 @@ from src.core.exceptions import (
     AdCPInvalidRequestError,
     AdCPValidationError,
 )
+from src.core.format_resolver import format_display, format_identity_or_none, product_format_identities
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
 
@@ -167,17 +168,6 @@ def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
     return actions
 
 
-def _normalize_creative_agent_url(url: str | None) -> str | None:
-    """Normalize a creative/format agent_url for comparison.
-
-    Strips a trailing slash and an optional ``/mcp`` suffix so the two
-    URL variants a buyer may use compare equal.
-    """
-    if not url:
-        return None
-    return url.rstrip("/").removesuffix("/mcp")
-
-
 def _validate_creatives_for_assignment(
     creative_ids: list[str],
     *,
@@ -260,29 +250,22 @@ def _validate_creatives_for_assignment(
 
     display_name = product_name or getattr(product, "name", None) or getattr(product, "product_id", "")
 
-    # Build the set of supported (normalized_agent_url, format_id) pairs.
-    supported_formats: set[tuple[str | None, str]] = set()
-    for fmt in product.format_ids:
-        if isinstance(fmt, dict):
-            agent_url = fmt.get("agent_url")
-            format_id = fmt.get("id") or fmt.get("format_id")
-            if format_id:
-                supported_formats.add((_normalize_creative_agent_url(agent_url), format_id))
-
+    # Identity is (canonical agent_url, id) per the pinned core/format-id.json, asked of
+    # format_resolver so this path and the sync-creatives assignment path cannot disagree
+    # about whether a creative's format is one the product declares.
+    supported_formats = product_format_identities(product.format_ids)
     if not supported_formats:
         return  # No usable format restrictions — allow all.
 
     incompatible: list[str] = []
     for creative in creatives_list:
-        creative_pair = (_normalize_creative_agent_url(creative.agent_url), creative.format)
-        if creative_pair not in supported_formats:
-            display = f"{creative.agent_url}/{creative.format}" if creative.agent_url else str(creative.format)
+        creative_identity = format_identity_or_none({"agent_url": creative.agent_url, "id": creative.format})
+        if creative_identity is None or creative_identity not in supported_formats:
+            display = format_display(creative_identity) if creative_identity else str(creative.format)
             incompatible.append(f"{creative.creative_id} (format '{display}')")
 
     if incompatible:
-        supported_display = ", ".join(
-            f"{url}/{fmt_id}" if url else fmt_id for url, fmt_id in sorted(supported_formats, key=lambda p: p[1])
-        )
+        supported_display = ", ".join(format_display(i) for i in sorted(supported_formats, key=lambda p: p[1]))
         raise AdCPCreativeRejectedError(
             # FIXME(#2099): the product's DISPLAY NAME is prose, and product_id already
             # identifies it. Preserved for now because removing it changes the wire.

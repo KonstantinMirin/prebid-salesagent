@@ -104,7 +104,6 @@ _ENTITY_PATTERNS: dict[str, list[str]] = {
         "formatid",
         "build_creative_data",
         "extract_url_from_assets",
-        "normalize_agent_url",
         "list_creative_formats",
     ],
     "product": [
