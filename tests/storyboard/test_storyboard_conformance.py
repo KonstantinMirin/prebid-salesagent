@@ -75,12 +75,29 @@ _PROTOCOLS: tuple[str, ...] = ("mcp", "a2a")
 # `idempotency_key` -- a field AdCP 3.1 puts on every task request and
 # compliance/universal/read-tool-idempotency.yaml requires sellers to TOLERATE.
 #
-# Port 8080, no proxy hop: nginx-development.conf is a pass-through that forwards `Host`
-# unchanged, so it changes nothing the storyboard grades, and the FastAPI process serves
-# /mcp/ and /a2a on 8080 directly (SKIP_NGINX is true on the service).
+# MCP goes straight to the service on 8080: nginx-development.conf is a pass-through that
+# forwards `Host` unchanged, so a proxy hop changes nothing MCP grades, and the FastAPI
+# process serves /mcp/ there directly (SKIP_NGINX is true on the service).
+#
+# A2A CANNOT, and the scheme is why. A2A is card-first: the runner reads the RPC endpoint
+# off `/.well-known/agent-card.json`, and `src/app.py`'s `get_protocol` renders **https**
+# for any host that is not loopback. Dialed plaintext on :8080, the card therefore
+# published `https://adcp-server-storyboard:8080/a2a` — TLS to a plaintext port — and
+# every call derived from it failed with `fetch failed`: 25 checks on run sa-0c74d963,
+# including the capability probe that SELECTS which storyboards run, so the A2A axis
+# graded 25 storyboards where MCP graded 44 and passed 3 checks where MCP passed 33.
+#
+# The card is not wrong; the origin was. Behind `tls-proxy` (docker-compose.e2e.yml, SNI
+# map in config/nginx/nginx-tls-test.conf.template) `storyboard.adcp.test:8443` speaks
+# the https the card advertises, and the front forwards `Host` verbatim with
+# `X-Forwarded-Proto`, which is the signal `get_protocol` prefers.
+#
+# MCP deliberately stays on plaintext :8080 rather than moving here too: its 33 passes
+# are the control for this change. Moving both at once would leave two variables and no
+# way to attribute a shift in either axis.
 _DEFAULT_AGENT_URLS: dict[str, str] = {
     "mcp": "http://adcp-server-storyboard:8080/mcp/",
-    "a2a": "http://adcp-server-storyboard:8080",
+    "a2a": "https://storyboard.adcp.test:8443",
 }
 
 # Env vars the storyboard-conformance job MAY set. The compliance/schema paths
@@ -125,6 +142,25 @@ def _summary_path(protocol: str) -> Path:
     summary, silently grading one protocol twice.
     """
     return _RUNNER_DIR / "results" / f"ci-summary-{protocol}.json"
+
+
+def _node_ca_env(agent_url: str) -> dict[str, str]:
+    """``NODE_EXTRA_CA_CERTS`` for an https agent, or nothing for plaintext.
+
+    The runner is Node, and the TLS front serves a leaf signed by the test CA that
+    ``scripts/dev/gen_test_tls.py`` generates. Node trusts its own bundle only, so
+    without this every https call fails the handshake — indistinguishable, in the
+    runner's output, from the plaintext-port failure this URL change fixes.
+
+    The path comes from ``E2E_CA_BUNDLE``, the variable compose already sets and tox
+    already passes through, with the same repo-relative fallback ``tests/e2e/conftest.py``
+    uses. Absent for an http URL: pointing Node at a CA it does not need would make a
+    missing bundle look like a passing configuration.
+    """
+    if not agent_url.startswith("https://"):
+        return {}
+    bundle = os.environ.get("E2E_CA_BUNDLE") or str(_REPO_ROOT / ".test-tls" / "ca.pem")
+    return {"NODE_EXTRA_CA_CERTS": bundle}
 
 
 def _webhook_port(protocol: str) -> str:
@@ -414,6 +450,7 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
     ]
     webhook_args, webhook_env = _webhook_receiver_args(protocol)
     cmd += webhook_args
+    tls_env = _node_ca_env(agent_url)
     # Grade only what THIS invocation measured. A summary left by an earlier run
     # would otherwise be read as if it were fresh whenever the runner dies before
     # writing one — inferred rather than measured, which is the Core Invariant.
@@ -430,7 +467,7 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
         capture_output=True,
         text=True,
         timeout=700,
-        env={**os.environ, **webhook_env},
+        env={**os.environ, **webhook_env, **tls_env},
     )
     if not summary_path.exists():
         pytest.fail(

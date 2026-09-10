@@ -338,6 +338,7 @@ services:
       - ./.test-tls:/app/.test-tls:ro
     depends_on:
       - adcp-server
+      - adcp-server-storyboard
       - creative-agent
       - webhook-capture
     networks:
@@ -350,6 +351,16 @@ services:
           - proxy.adcp.test
           - creative-agent.adcp.test
           - webhooks.adcp.test
+          # The storyboard agent, fronted here for A2A's sake. A2A is card-first:
+          # the runner reads the RPC endpoint off /.well-known/agent-card.json, and
+          # the card renders https for any non-loopback host (src/app.py
+          # get_protocol). Dialed plaintext on :8080 it therefore published
+          # `https://adcp-server-storyboard:8080/a2a` — TLS against a plaintext port
+          # — and every card-derived call failed with `fetch failed`, taking 25
+          # checks and, with them, the capability probe that SELECTS storyboards: the
+          # A2A axis graded 25 storyboards where MCP graded 44. Behind this front the
+          # scheme the card publishes is the scheme the origin speaks.
+          - storyboard.adcp.test
     healthcheck:
       test:
         [
