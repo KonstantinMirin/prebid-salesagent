@@ -38,7 +38,7 @@ def make_mcp_client(
     """
     headers: dict[str, str] = {}
     if token is not None:
-        headers["x-adcp-auth"] = token
+        headers["Authorization"] = f"Bearer {token}"
     if tenant is not None:
         headers["x-adcp-tenant"] = tenant
     if session_id is not None:

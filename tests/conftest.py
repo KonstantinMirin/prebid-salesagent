@@ -589,7 +589,7 @@ def targeting_builder():
 @pytest.fixture
 def auth_headers(sample_principal):
     """Provide authentication headers."""
-    return {"x-adcp-auth": sample_principal["access_token"]}
+    return {"Authorization": f"Bearer {sample_principal['access_token']}"}
 
 
 @pytest.fixture

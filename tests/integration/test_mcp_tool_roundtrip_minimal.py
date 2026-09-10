@@ -31,7 +31,7 @@ class TestMCPToolRoundtripMinimal:
     async def mcp_client(self, mcp_server, sample_tenant, sample_principal, sample_account, sample_products):
         """Create MCP client for testing with test data."""
         # Use the mcp_server fixture which provides port and manages lifecycle
-        headers = {"x-adcp-auth": sample_principal["access_token"]}
+        headers = {"Authorization": f"Bearer {sample_principal['access_token']}"}
         transport = StreamableHttpTransport(url=f"http://localhost:{mcp_server.port}/mcp/", headers=headers)
         client = Client(transport=transport)
 

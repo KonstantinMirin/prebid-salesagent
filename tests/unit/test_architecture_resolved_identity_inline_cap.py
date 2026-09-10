@@ -49,7 +49,6 @@ RESOLVED_IDENTITY_PER_FILE_CAP: dict[str, int] = {
     "tests/integration/test_property_list_crud.py": 1,
     "tests/integration/test_property_list_validation.py": 1,
     "tests/unit/test_auth_requirements.py": 3,
-    "tests/unit/test_resolved_identity.py": 7,
 }
 
 

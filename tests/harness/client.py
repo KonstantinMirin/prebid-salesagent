@@ -202,14 +202,14 @@ def e2e_identity_headers(identity: Any) -> dict[str, str]:
     resolved identity.
 
     Shared by e2e REST, e2e MCP, and e2e A2A DELIVER (below) — production's
-    identity resolution (``resolve_identity()``,
-    ``src/core/resolved_identity.py``) reads the same
-    ``x-adcp-auth``/``x-adcp-tenant``/``x-dry-run`` headers regardless of
-    transport protocol (MCP's ``mcp_auth_middleware`` and A2A's
-    ``UnifiedAuthMiddleware`` resolve through the identical
-    ``resolve_identity_from_context`` -> header extraction chain REST does),
-    so this is one function, not an independently reinvented convention per
-    transport (this project's DRY invariant, CLAUDE.md).
+    ``UnifiedAuthMiddleware`` (``src/core/auth_middleware.py``) extracts the
+    credential from ``Authorization: Bearer`` for every transport, so this is one
+    function rather than a convention reinvented per transport (this project's DRY
+    invariant, CLAUDE.md). The ``x-adcp-auth`` alias this used to send is no longer
+    read: pinned 3.1.1 ``L2/authentication.mdx:71`` says the credential MUST ride
+    ``Authorization`` and sellers MUST NOT require non-canonical aliases. A caller
+    still sending the alias presents nothing the seam can see, which surfaces as
+    AUTH_MISSING rather than a header error.
 
     ``identity=None`` means "dispatch without auth headers" (explicit
     unauthenticated) — the live server's own auth middleware then returns the
@@ -221,7 +221,7 @@ def e2e_identity_headers(identity: Any) -> dict[str, str]:
     if identity is None:
         return headers
     if identity.auth_token is not None:
-        headers["x-adcp-auth"] = identity.auth_token
+        headers["Authorization"] = f"Bearer {identity.auth_token}"
     tenant = getattr(identity, "tenant", None)
     if tenant is not None:
         subdomain = tenant.get("subdomain") if isinstance(tenant, dict) else getattr(tenant, "subdomain", None)

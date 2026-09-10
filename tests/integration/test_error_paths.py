@@ -61,7 +61,7 @@ class TestRestBoundaryAuditObservability:
             response = client.post(
                 "/api/v1/capabilities",
                 json={},
-                headers={"x-adcp-auth": sample_principal["access_token"]},
+                headers={"Authorization": f"Bearer {sample_principal['access_token']}"},
             )
 
         assert response.status_code == 404

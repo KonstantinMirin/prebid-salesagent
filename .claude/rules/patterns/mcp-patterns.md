@@ -7,7 +7,7 @@ Reference patterns for working with MCP tools and A2A integration. Read this whe
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-headers = {"x-adcp-auth": "your_token"}
+headers = {"Authorization": "Bearer your_token"}
 transport = StreamableHttpTransport(url="http://localhost:8000/mcp/", headers=headers)
 client = Client(transport=transport)
 

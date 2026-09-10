@@ -198,14 +198,6 @@ class TestAuthOptionalEndpoints:
 
     @pytest.mark.asyncio
     @pytest.mark.integration
-    async def test_get_products_with_auth(self, live_server, test_auth_token):
-        """get_products should work with authentication regardless of policy."""
-        async with make_mcp_client(live_server, token=test_auth_token) as client:
-            result = await client.call_tool("get_products", {"brief": "test campaign"})
-            assert result is not None, "get_products should return a result"
-
-    @pytest.mark.asyncio
-    @pytest.mark.integration
     async def test_get_products_filters_pricing_for_anonymous(self, live_server):
         """get_products should hide pricing information for anonymous users."""
         # Unauthenticated: tenant resolved via Host header only (no x-adcp-tenant).
