@@ -1,17 +1,19 @@
 """Fitness function for the storyboard-conformance ledger.
 
-``tests/bdd/e2e_rest_known_failures.txt`` has one
-(``tests/unit/test_e2e_rest_ledger_fitness.py::
-test_every_ledger_entry_resolves_to_a_collected_item``);
-``tests/storyboard/known_failures.txt`` — whose exact contents are pinned by
-``EXPECTED_LEDGER`` — has none. The consequence is written into the ledger's own header, which
-claims "a graduation (entry no longer failing) or a regression (new un-ledgered
-failure) both fail CI". Only the second half is true today: the ledger xfails
-NON-STRICTLY by nodeid, and ``test_storyboard_conformance._collect_checks``
-enumerates only failures and skips, so a check that GRADUATES stops being
-parametrized at all. It produces no test item, no xpass, and no signal — the
-ledger entry simply becomes dead weight, and the same happens to an entry whose
-check is renamed upstream.
+The mechanism graded here is DE-COLLECTION: a ledger entry that resolves to no collected
+check must fail the session. Nothing else catches it. The ledger xfails NON-STRICTLY by
+nodeid, and ``test_storyboard_conformance._collect_checks`` enumerates only failures and
+skips, so a check that GRADUATES stops being parametrized at all — it produces no test
+item, no xpass and no signal, and the entry becomes dead weight. An entry renamed
+upstream goes the same way. ``tests/bdd/e2e_rest_known_failures.txt`` has its own
+fitness function for the same reason (``tests/unit/test_e2e_rest_ledger_fitness.py::
+test_every_ledger_entry_resolves_to_a_collected_item``).
+
+Every case below drives a SYNTHETIC ledger, injected through
+``STORYBOARD_LEDGER_PATH``, because ``tests/storyboard/known_failures.txt`` is empty:
+the storyboard grades all of its checks, so no entry is routed to xfail. A mechanism
+whose only subject is an empty file grades nothing, and this one has to keep working for
+whenever an entry is seeded again.
 
 **Why the e2e_rest test cannot be ported verbatim.** That one re-collects the
 suite in a subprocess (``pytest tests/bdd --collect-only``) and joins the ledger
@@ -101,39 +103,68 @@ _BUNDLE_ABSENT_ID = "bundle-not-present"
 _LEDGER_FITNESS_ID = "ledger::fitness::ledger_fitness::stale_entries"
 
 
+# The ledger every case below drives. SYNTHETIC, and deliberately not the production
+# ledger at tests/storyboard/known_failures.txt: that file is empty, and a mechanism
+# whose only subject is an empty file grades nothing. tests/storyboard/conftest.py
+# redirects its loader to STORYBOARD_LEDGER_PATH so these entries become the session's
+# ledger.
+#
+# Both protocols are present because the join keys on protocol as the first id segment,
+# and one storyboard carries a hyphenated step id because parse() must store the RAW
+# segment -- a normalizing parse() would break round-tripping for exactly that shape.
+_SYNTHETIC_LEDGER: tuple[ledger.LedgerCheckId, ...] = (
+    ledger.LedgerCheckId("mcp", "core", "read_tool_idempotency", "assert_omitted_key_grace_handled"),
+    ledger.LedgerCheckId("mcp", "security_transport", "signed_requests", "negative-001-no-signature-header"),
+    ledger.LedgerCheckId("a2a", "core", "capability_discovery", "get_capabilities"),
+    ledger.LedgerCheckId("a2a", "error_handling", "error_compliance", "nonexistent_product"),
+)
+
+_NODEID = "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[{}]"
+
+
 def _ledger_entries() -> list[ledger.LedgerCheckId]:
-    entries = ledger.load(LEDGER)
-    # The premise of every case below: a ledger that has been emptied, or whose
-    # grammar drifted, would make all three vacuous.
-    #
-    # Pinned against EXPECTED_LEDGER — the ONE place the ledger's exact contents
-    # are fixed — rather than against a literal count. A bare integer here has
-    # now rotted on every re-seed (44 -> 75 -> 101 -> 81) and each time it went
-    # stale in a DIFFERENT file from the one being re-seeded, so the re-seeder
-    # never saw it. Comparing sets, not lengths, also makes the failure name the
-    # entries that moved instead of just the arithmetic.
-    # Both sides as NODEIDs: LedgerCheckId.format() emits the bracket CONTENT
-    # (`mcp::core::…`), while EXPECTED_LEDGER holds full pytest nodeids.
-    expected = ledger_state.EXPECTED_LEDGER
-    actual = load_ledger_nodeids(LEDGER)
-    if actual != expected:
-        only_ledger = sorted(actual - expected)
-        only_expected = sorted(expected - actual)
-        raise AssertionError(
-            "the storyboard ledger disagrees with EXPECTED_LEDGER in "
-            "tests/unit/test_storyboard_ledger_state.py — re-seed both together. "
-            f"ledger={len(actual)} EXPECTED_LEDGER={len(expected)}\n"
-            f"  only in the ledger ({len(only_ledger)}): {only_ledger[:5]}\n"
-            f"  only in EXPECTED_LEDGER ({len(only_expected)}): {only_expected[:5]}"
-        )
+    """The synthetic ledger, re-parsed from the lines it will be written as.
+
+    Round-tripping through the file grammar is what makes these entries the same kind of
+    object production loads. A literal list that never passes through ``parse()`` could
+    describe a shape the parser rejects, and every case here would then grade a ledger
+    the real loader would have read as empty.
+    """
+    lines = [_NODEID.format(e.format()) for e in _SYNTHETIC_LEDGER]
+    entries = [ledger.LedgerCheckId.parse(line) for line in lines]
+    assert all(e is not None for e in entries), f"synthetic ledger does not parse: {lines}"
+    assert [e.format() for e in entries] == [e.format() for e in _SYNTHETIC_LEDGER]
     assert {e.protocol for e in entries} == {"mcp", "a2a"}
-    return entries
+    return entries  # type: ignore[return-value]
+
+
+def _write_ledger(tmp_path: Path, entries: list[ledger.LedgerCheckId]) -> dict[str, str]:
+    """Write ``entries`` as a ledger file and return the env that points the loader at it."""
+    path = tmp_path / "synthetic_known_failures.txt"
+    path.write_text("\n".join(_NODEID.format(e.format()) for e in entries) + "\n")
+    return {"STORYBOARD_LEDGER_PATH": str(path)}
+
+
+def test_production_ledger_matches_its_pin() -> None:
+    """The production ledger still agrees with ``EXPECTED_LEDGER``.
+
+    The cases below no longer read that file, so nothing else in this module would
+    notice it drifting from its pin.
+    """
+    assert load_ledger_nodeids(LEDGER) == ledger_state.EXPECTED_LEDGER
 
 
 def _run_storyboard_session(
-    tmp_path: Path, entries: list[ledger.LedgerCheckId] | None
+    tmp_path: Path,
+    reported: list[ledger.LedgerCheckId] | None,
+    *,
+    ledgered: list[ledger.LedgerCheckId],
 ) -> subprocess.CompletedProcess[str]:
-    """Run ``pytest`` on the conformance module for real; ``entries=None`` leaves it unconfigured.
+    """Run ``pytest`` on the conformance module for real; ``reported=None`` leaves it unconfigured.
+
+    ``ledgered`` is what the session's ledger CONTAINS; ``reported`` is what the stubbed
+    runner GRADED. The join under test is the difference between them, so both are
+    supplied per case rather than one of them being ambient.
 
     Unconfigured means the pinned bundle does not RESOLVE, so the two overrides point
     at a path that does not exist. Removing them instead would no longer work: the
@@ -146,7 +177,8 @@ def _run_storyboard_session(
     to decide its outcome, and the configured cases would reach it for nothing.
     """
     fetch_name, fetch_env = rig.stub_unmaterializable_bundle(tmp_path, _MATERIALIZE_FAILURE_MESSAGE)
-    if entries is None:
+    ledger_env = _write_ledger(tmp_path, ledgered)
+    if reported is None:
         absent = tmp_path / "no-bundle-here"
         return rig.run_conformance_session(
             tmp_path,
@@ -154,16 +186,18 @@ def _run_storyboard_session(
                 "STORYBOARD_COMPLIANCE_DIR": str(absent / "compliance"),
                 "STORYBOARD_SCHEMA_ROOT": str(absent / "schemas"),
                 **fetch_env,
+                **ledger_env,
             },
             plugins=(fetch_name,),
         )
 
-    stub_name, stub_env = rig.stub_runner(tmp_path, rig.synthetic_summaries(entries, _SYNTHETIC_REASON))
+    stub_name, stub_env = rig.stub_runner(tmp_path, rig.synthetic_summaries(reported, _SYNTHETIC_REASON))
     return rig.run_conformance_session(
         tmp_path,
         env={
             **stub_env,
             **fetch_env,
+            **ledger_env,
             # These two are the overrides that make the bundle resolve, so the
             # session counts as configured; the stub means the paths themselves are
             # never dereferenced. tmp_path exists, which is all the gate checks.
@@ -188,7 +222,7 @@ def test_a_ledger_entry_whose_check_no_longer_collects_fails_the_session(tmp_pat
     """
     entries = _ledger_entries()
     graduated = entries[0]
-    proc = _run_storyboard_session(tmp_path, [e for e in entries if e is not graduated])
+    proc = _run_storyboard_session(tmp_path, [e for e in entries if e is not graduated], ledgered=entries)
 
     output = proc.stdout + proc.stderr
     assert proc.returncode != 0, f"session passed despite a stale ledger entry:\n{output[-4000:]}"
@@ -209,7 +243,7 @@ def test_a_fully_resolving_ledger_passes_the_session(tmp_path: Path) -> None:
     that fires on a healthy ledger would make the in-network job permanently red.
     """
     entries = _ledger_entries()
-    proc = _run_storyboard_session(tmp_path, entries)
+    proc = _run_storyboard_session(tmp_path, entries, ledgered=entries)
 
     output = proc.stdout + proc.stderr
     counts = _outcome_counts(proc)
@@ -228,12 +262,12 @@ def test_unconfigured_session_does_not_report_stale_entries(tmp_path: Path) -> N
     EXPECTED to be red, and the one failure it reports is that one.
 
     What must not happen is the join firing against that lone id. Treating it as
-    "every ledger entry but this one graduated" would bury the real reason under
-    ~100 phantom stale entries; it is the failure mode that makes a verbatim port
+    "every ledger entry but this one graduated" would bury the real reason under one
+    phantom stale entry per ledgered check; it is the failure mode that makes a verbatim port
     of the e2e_rest fitness test unusable, and it would misdiagnose every offline
     run of this suite.
     """
-    proc = _run_storyboard_session(tmp_path, None)
+    proc = _run_storyboard_session(tmp_path, None, ledgered=_ledger_entries())
 
     output = proc.stdout + proc.stderr
     counts = _outcome_counts(proc)

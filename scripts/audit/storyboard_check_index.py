@@ -151,7 +151,7 @@ class CheckRecord:
 def _ledger_steps(repo: Path) -> dict[tuple[str, str], list[str]]:
     """(storyboard_id, step_id) -> protocols on which the ledger records a failure."""
     failures: dict[tuple[str, str], list[str]] = {}
-    for check_id in ledger.load(repo / ledger.LEDGER):
+    for check_id in ledger.load(ledger.ledger_path(repo)):
         failures.setdefault((check_id.storyboard_key, check_id.step_id), []).append(check_id.protocol)
     return failures
 
@@ -200,7 +200,7 @@ def _collected_artifact_path(repo: Path) -> Path:
 
 def _ledger_storyboards(repo: Path) -> set[str]:
     """The pre-artifact inference: storyboards the FAILURE ledger holds a row for."""
-    return {check_id.storyboard_key for check_id in ledger.load(repo / ledger.LEDGER)}
+    return {check_id.storyboard_key for check_id in ledger.load(ledger.ledger_path(repo))}
 
 
 def binding_buckets(repo: Path, adcp: Path) -> dict[str, str]:
@@ -467,7 +467,7 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     )
     orphan_ledger_rows = sorted(
         f"{storyboard_id}::{step_id}"
-        for storyboard_id, step_id in {(c.storyboard_key, c.step_id) for c in ledger.load(repo / ledger.LEDGER)}
+        for storyboard_id, step_id in {(c.storyboard_key, c.step_id) for c in ledger.load(ledger.ledger_path(repo))}
         if (storyboard_id, step_id) not in known_step_keys
     )
     if orphan_ledger_rows:
