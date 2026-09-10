@@ -15,14 +15,15 @@ from adcp.types import ContextObject, ExtensionObject, PushNotificationConfig, R
 from starlette.testclient import TestClient
 
 from src.app import app
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.principal import PrincipalFactory
 from tests.factories.webhook import ReportingWebhookRequestFactory
 from tests.helpers import assert_envelope_shape
+from tests.helpers.boundary_identity import resolves_to
 from tests.helpers.capture_wrapper_req import stub_impl
 
 client = TestClient(app)
 
-_MOCK_IDENTITY = ResolvedIdentity(
+_MOCK_IDENTITY = PrincipalFactory.make_identity(
     principal_id="test-principal",
     tenant_id="default",
     tenant={"tenant_id": "default"},
@@ -101,7 +102,7 @@ class TestCreateMediaBuyScalarForwarding:
         [(f, w, e) for f, (w, e) in _CREATE_FORWARDED_SCALARS.items()],
         ids=list(_CREATE_FORWARDED_SCALARS),
     )
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    @resolves_to(_MOCK_IDENTITY)
     @stub_impl("create_media_buy")
     def test_scalar_forwards_to_impl(self, mock_impl, mock_resolve, field, wire_value, expected):
         mock_impl.return_value = MagicMock(model_dump=lambda **kw: {})
@@ -135,7 +136,7 @@ class TestCreateMediaBuyScalarForwarding:
 class TestGetMediaBuyDeliveryEndpoint:
     """Verify POST /api/v1/media-buys/delivery endpoint."""
 
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    @resolves_to(_MOCK_IDENTITY)
     @patch("src.core.transport_helpers.enrich_identity_with_account")
     @stub_impl("get_media_buy_delivery")
     def test_account_is_coerced_before_enriching_identity(self, mock_impl, mock_enrich, mock_resolve):
@@ -169,7 +170,7 @@ class TestGetMediaBuyDeliveryEndpoint:
         assert mock_impl.call_args.kwargs["req"].account == expected_account
         assert mock_impl.call_args.kwargs["identity"] is enriched_identity
 
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    @resolves_to(_MOCK_IDENTITY)
     @patch("src.core.transport_helpers.enrich_identity_with_account")
     @stub_impl("get_media_buy_delivery")
     def test_malformed_account_returns_validation_error(self, mock_impl, mock_enrich, mock_resolve):
@@ -195,7 +196,7 @@ class TestPathFieldsBindFromTheUrl:
     both got the BODY's value while the URL said something else.
     """
 
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    @resolves_to(_MOCK_IDENTITY)
     @stub_impl("get_task_status")
     def test_path_value_reaches_the_impl_without_a_body_field(self, mock_impl, mock_resolve):
         mock_impl.return_value = MagicMock(model_dump=lambda **kw: {"task": {}})
@@ -209,7 +210,7 @@ class TestPathFieldsBindFromTheUrl:
         assert response.status_code == 200
         assert mock_impl.call_args.kwargs["req"].task_id == "task_from_url"
 
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    @resolves_to(_MOCK_IDENTITY)
     @stub_impl("get_task_status")
     def test_the_url_wins_over_a_body_that_disagrees(self, mock_impl, mock_resolve):
         """The URL is the resource identity, so it overrides a conflicting body value."""

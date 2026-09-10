@@ -353,11 +353,7 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_tenant_dashboard.py", "test_tenant_config_building"),
     ("tests/integration/test_tenant_dashboard.py", "test_dashboard_with_empty_tenant"),
     # tests/integration/test_tenant_isolation_breach_fix.py
-    ("tests/integration/test_tenant_isolation_breach_fix.py", "test_cross_tenant_token_rejected"),
     # tests/integration/test_tenant_isolation_fix.py
-    ("tests/integration/test_tenant_isolation_fix.py", "test_tenant_isolation_with_subdomain_and_cross_tenant_token"),
-    ("tests/integration/test_tenant_isolation_fix.py", "test_global_token_lookup_sets_tenant_from_principal"),
-    ("tests/integration/test_tenant_isolation_fix.py", "test_admin_token_with_subdomain_preserves_tenant_context"),
     # tests/integration/test_tenant_management_api_integration.py
     ("tests/integration/test_tenant_management_api_integration.py", "mock_api_key_auth"),
     ("tests/integration/test_tenant_management_api_integration.py", "test_tenant"),
@@ -1271,12 +1267,7 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_tenant_dashboard.py", "test_dashboard_with_empty_tenant"),
     ("tests/integration/test_tenant_dashboard.py", "test_dashboard_with_media_buys"),
     ("tests/integration/test_tenant_dashboard.py", "test_tenant_config_building"),
-    ("tests/integration/test_tenant_isolation_breach_fix.py", "test_cross_tenant_token_rejected"),
     ("tests/integration/test_tenant_isolation_breach_fix.py", "test_no_fallback_to_first_tenant"),
-    ("tests/integration/test_tenant_isolation_breach_fix.py", "test_tenant_isolation_with_valid_subdomain"),
-    ("tests/integration/test_tenant_isolation_fix.py", "test_admin_token_with_subdomain_preserves_tenant_context"),
-    ("tests/integration/test_tenant_isolation_fix.py", "test_global_token_lookup_sets_tenant_from_principal"),
-    ("tests/integration/test_tenant_isolation_fix.py", "test_tenant_isolation_with_subdomain_and_cross_tenant_token"),
     ("tests/integration/test_tenant_management_api_integration.py", "mock_api_key_auth"),
     ("tests/integration/test_tenant_management_api_integration.py", "test_tenant"),
     ("tests/integration/test_tenant_settings_comprehensive.py", "test_database_queries"),

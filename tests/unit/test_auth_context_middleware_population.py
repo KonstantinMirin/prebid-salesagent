@@ -15,16 +15,6 @@ Regression prevention: https://github.com/prebid/salesagent/pull/1066
 from src.core.auth_context import AuthContext
 
 
-class TestResolveAuthTokenPassthrough:
-    """_resolve_auth_dep should pass the pre-extracted token to resolve_identity."""
-
-    def test_resolve_auth_passes_extracted_token(self):
-        """_resolve_auth_dep should pass auth_ctx.auth_token to resolve_identity()."""
-        from tests.helpers import assert_resolve_auth_dep_passes_token
-
-        assert_resolve_auth_dep_passes_token()
-
-
 class TestAuthContextNoDeadFields:
     """AuthContext should not declare fields that nobody populates."""
 

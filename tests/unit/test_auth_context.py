@@ -4,7 +4,7 @@ Validates that:
 - AuthContext model exists with correct attributes (auth_token, headers)
 - Middleware populates request.state.auth_context
 - get_auth_context() dependency reads from request.state
-- Token extraction from Authorization and x-adcp-auth headers
+- Token extraction from the Authorization header
 - Unauthenticated requests get AuthContext with auth_token=None
 
 """
@@ -106,16 +106,6 @@ class TestAuthContextMiddleware:
         )
         assert response.status_code == 200
         assert response.json()["token"] == "my-test-token"
-
-    def test_adcp_auth_header_extracted(self, middleware_test_app):
-        """Middleware extracts token from x-adcp-auth header."""
-        client = TestClient(middleware_test_app)
-        response = client.get(
-            "/test-auth/adcp-check",
-            headers={"x-adcp-auth": "adcp-token-123"},
-        )
-        assert response.status_code == 200
-        assert response.json()["token"] == "adcp-token-123"
 
     def test_no_auth_gives_none_token(self, middleware_test_app):
         """Requests without auth headers get AuthContext with auth_token=None."""

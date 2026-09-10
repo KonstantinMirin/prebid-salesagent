@@ -1,0 +1,399 @@
+<title>Auth path by transport</title>
+<style>
+ :root{--bg:#fff;--fg:#16181d;--muted:#5b6472;--line:#e3e6ea;--accent:#0b5cad;--ok:#0a7d33;--warn:#a4551a;--code:#f6f7f9}
+ :root:not([data-theme=light]) @media (prefers-color-scheme:dark){}
+ @media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#14161a;--fg:#e7e9ec;--muted:#98a2b3;--line:#2a2f37;--accent:#6aa9e9;--ok:#5fce86;--warn:#e0a56b;--code:#1c1f25}}
+ :root[data-theme=dark]{--bg:#14161a;--fg:#e7e9ec;--muted:#98a2b3;--line:#2a2f37;--accent:#6aa9e9;--ok:#5fce86;--warn:#e0a56b;--code:#1c1f25}
+ body{background:var(--bg);color:var(--fg);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;margin:0;padding:2.2rem 1.4rem 5rem}
+ main{max-width:1180px;margin:0 auto}
+ h1{font-size:1.7rem;margin:0 0 .3rem} h2{font-size:1.15rem;margin:2.4rem 0 .7rem;padding-bottom:.3rem;border-bottom:1px solid var(--line)}
+ .sub{color:var(--muted);margin:0 0 1.6rem}
+ table{border-collapse:collapse;width:100%;font-size:13.5px;margin:.6rem 0 1.2rem}
+ th,td{text-align:left;padding:.42rem .6rem;border-bottom:1px solid var(--line);vertical-align:top}
+ th{color:var(--muted);font-weight:600;white-space:nowrap}
+ code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+ .ok{color:var(--ok);font-weight:600}.warn{color:var(--warn);font-weight:600}
+ .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:1rem}
+ .col{border:1px solid var(--line);border-radius:8px;overflow:hidden}
+ .col h3{margin:0;padding:.55rem .75rem;background:var(--code);font-size:13px;border-bottom:1px solid var(--line)}
+ ol{margin:0;padding:.5rem .5rem .6rem 2.2rem} li{margin:.12rem 0;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+ li.shared{color:var(--fg)} li.only{color:var(--warn)}
+ .scroll{overflow-x:auto}
+ .note{background:var(--code);border-left:3px solid var(--accent);padding:.6rem .85rem;border-radius:0 6px 6px 0;margin:.8rem 0;color:var(--muted);font-size:13.5px}
+</style>
+<main>
+<h1>Auth path by transport</h1>
+<p class="sub">Twelve requests through the real ASGI app — three transports, two tools
+(auth-required and auth-optional), two credential states (absent and invalid) — traced with
+<code>sys.setprofile</code>. Every call into <code>src/</code> was captured; the paths below are
+filtered to the frames that decide or render an auth outcome.</p>
+<h2>Verdict — 4 of 4 cases agree across transports</h2>
+<div class="scroll"><table>
+<tr><th>case</th><th>agree?</th><th>MCP</th><th>A2A</th><th>REST</th></tr>
+<tr><td>no credential, auth=required</td><td><span class="ok">yes</span></td><td class="mono">401 · Bearer · AUTH_MISSING</td><td class="mono">401 · Bearer · AUTH_MISSING</td><td class="mono">401 · Bearer · AUTH_MISSING</td></tr>
+<tr><td>invalid credential, auth=required</td><td><span class="ok">yes</span></td><td class="mono">401 · Bearer error=&quot;invalid_token&quot; · AUTH_INVALID</td><td class="mono">401 · Bearer error=&quot;invalid_token&quot; · AUTH_INVALID</td><td class="mono">401 · Bearer error=&quot;invalid_token&quot; · AUTH_INVALID</td></tr>
+<tr><td>no credential, auth=optional</td><td><span class="ok">yes</span></td><td class="mono">200 · — · —</td><td class="mono">200 · — · —</td><td class="mono">200 · — · —</td></tr>
+<tr><td>invalid credential, auth=optional</td><td><span class="ok">yes</span></td><td class="mono">200 · — · —</td><td class="mono">200 · — · —</td><td class="mono">200 · — · —</td></tr>
+</table></div>
+<div class="note">Each cell is <code>status · WWW-Authenticate · AdCP code</code>. The three transports are asked the same question in each row, so a row that does not agree is a divergence in behaviour, not in rendering.</div>
+<h2>What each transport answered</h2><div class="scroll"><table>
+<tr><th>transport</th><th>tool</th><th>auth</th><th>credential</th><th>status</th><th>WWW-Authenticate</th><th>code</th><th>decided by</th><th>src frames</th></tr>
+<tr><td><b>MCP</b></td><td class=mono>list_accounts</td><td>required</td><td>no</td><td class=ok>401</td><td class=mono>Bearer</td><td class=mono>AUTH_MISSING</td><td class='mono ok'>resolve_identity, resolve_identity_from_context</td><td>46</td></tr>
+<tr><td><b>A2A</b></td><td class=mono>list_accounts</td><td>required</td><td>no</td><td class=ok>401</td><td class=mono>Bearer</td><td class=mono>AUTH_MISSING</td><td class='mono ok'>resolve_identity</td><td>64</td></tr>
+<tr><td><b>REST</b></td><td class=mono>list_accounts</td><td>required</td><td>no</td><td class=ok>401</td><td class=mono>Bearer</td><td class=mono>AUTH_MISSING</td><td class='mono ok'>resolve_identity</td><td>87</td></tr>
+<tr><td><b>MCP</b></td><td class=mono>list_accounts</td><td>required</td><td>invalid</td><td class=ok>401</td><td class=mono>Bearer error=&quot;invalid_token&quot;</td><td class=mono>AUTH_INVALID</td><td class='mono ok'>resolve_identity, resolve_identity_from_context</td><td>59</td></tr>
+<tr><td><b>A2A</b></td><td class=mono>list_accounts</td><td>required</td><td>invalid</td><td class=ok>401</td><td class=mono>Bearer error=&quot;invalid_token&quot;</td><td class=mono>AUTH_INVALID</td><td class='mono ok'>resolve_identity</td><td>77</td></tr>
+<tr><td><b>REST</b></td><td class=mono>list_accounts</td><td>required</td><td>invalid</td><td class=ok>401</td><td class=mono>Bearer error=&quot;invalid_token&quot;</td><td class=mono>AUTH_INVALID</td><td class='mono ok'>resolve_identity</td><td>89</td></tr>
+<tr><td><b>MCP</b></td><td class=mono>get_adcp_capabilities</td><td>optional</td><td>no</td><td class=ok>200</td><td class=mono>—</td><td class=mono>—</td><td class='mono ok'>resolve_identity, resolve_identity_from_context</td><td>64</td></tr>
+<tr><td><b>A2A</b></td><td class=mono>get_adcp_capabilities</td><td>optional</td><td>no</td><td class=ok>200</td><td class=mono>—</td><td class=mono>—</td><td class='mono ok'>resolve_identity</td><td>142</td></tr>
+<tr><td><b>REST</b></td><td class=mono>get_adcp_capabilities</td><td>optional</td><td>no</td><td class=ok>200</td><td class=mono>—</td><td class=mono>—</td><td class='mono ok'>resolve_identity</td><td>61</td></tr>
+<tr><td><b>MCP</b></td><td class=mono>get_adcp_capabilities</td><td>optional</td><td>invalid</td><td class=ok>200</td><td class=mono>—</td><td class=mono>—</td><td class='mono ok'>resolve_identity, resolve_identity_from_context</td><td>67</td></tr>
+<tr><td><b>A2A</b></td><td class=mono>get_adcp_capabilities</td><td>optional</td><td>invalid</td><td class=ok>200</td><td class=mono>—</td><td class=mono>—</td><td class='mono ok'>resolve_identity</td><td>146</td></tr>
+<tr><td><b>REST</b></td><td class=mono>get_adcp_capabilities</td><td>optional</td><td>invalid</td><td class=ok>200</td><td class=mono>—</td><td class=mono>—</td><td class='mono ok'>resolve_identity</td><td>65</td></tr>
+</table></div>
+<h2>Path comparison — invalid credential, auth=optional</h2>
+<div class="note">Frames in <b>every</b> transport are shown plain; frames unique to one are highlighted. Shared frames: <b>9</b>.</div>
+<div class="cols">
+<div class="col"><h3>MCP · get_adcp_capabilities (invalid credential, auth=optional) → 200</h3><ol>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.12ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.10ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="only">MCPAuthMiddleware.on_call_tool <span style="color:var(--muted)">6.69ms</span></li>
+<li class="only">&nbsp;resolve_identity_from_context <span style="color:var(--muted)">6.49ms</span></li>
+<li class="shared">&nbsp;&nbsp;resolve_identity <span style="color:var(--muted)">6.43ms</span></li>
+<li class="only">MCPAuthMiddleware.on_call_tool <span style="color:var(--muted)">0.33ms</span></li>
+<li class="shared">&nbsp;&nbsp;invoke <span style="color:var(--muted)">0.11ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;_invoke <span style="color:var(--muted)">0.08ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;_get_adcp_capabilities_impl <span style="color:var(--muted)">0.05ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.01ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.10ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.09ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.06ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;adcp_error_code_in <span style="color:var(--muted)">0.02ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;_challenge_for_code <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+</ol></div>
+<div class="col"><h3>A2A · get_adcp_capabilities (invalid credential, auth=optional) → 200</h3><ol>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.14ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.13ms</span></li>
+<li class="only">_restore_a2a_wire_integers.&lt;locals&gt;._wrapped <span style="color:var(--muted)">0.07ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="only">_restore_a2a_wire_integers.&lt;locals&gt;._wrapped <span style="color:var(--muted)">12.30ms</span></li>
+<li class="only">&nbsp;&nbsp;AdCPRequestHandler._resolve_a2a_identity <span style="color:var(--muted)">5.60ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;resolve_identity <span style="color:var(--muted)">5.57ms</span></li>
+<li class="only">&nbsp;&nbsp;&nbsp;&nbsp;invoke_tool <span style="color:var(--muted)">0.15ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;invoke <span style="color:var(--muted)">0.14ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;_invoke <span style="color:var(--muted)">0.10ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;_get_adcp_capabilities_impl <span style="color:var(--muted)">0.06ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.01ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.08ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.08ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;adcp_error_code_in <span style="color:var(--muted)">0.01ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;_challenge_for_code <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+</ol></div>
+<div class="col"><h3>REST · get_adcp_capabilities (invalid credential, auth=optional) → 200</h3><ol>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.12ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.11ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="only">_resolve_auth_dep <span style="color:var(--muted)">3.44ms</span></li>
+<li class="shared">&nbsp;resolve_identity <span style="color:var(--muted)">3.43ms</span></li>
+<li class="only">&nbsp;invoke_tool <span style="color:var(--muted)">0.12ms</span></li>
+<li class="shared">&nbsp;&nbsp;invoke <span style="color:var(--muted)">0.11ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;_invoke <span style="color:var(--muted)">0.08ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;_get_adcp_capabilities_impl <span style="color:var(--muted)">0.05ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.01ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.08ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.08ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.05ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;adcp_error_code_in <span style="color:var(--muted)">0.01ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;_challenge_for_code <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+</ol></div>
+</div>
+<h2>Path comparison — invalid credential, auth=required</h2>
+<div class="note">Frames in <b>every</b> transport are shown plain; frames unique to one are highlighted. Shared frames: <b>6</b>.</div>
+<div class="cols">
+<div class="col"><h3>MCP · list_accounts (invalid credential, auth=required) → 401</h3><ol>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.15ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.14ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="only">MCPAuthMiddleware.on_call_tool <span style="color:var(--muted)">7.44ms</span></li>
+<li class="only">&nbsp;resolve_identity_from_context <span style="color:var(--muted)">7.35ms</span></li>
+<li class="shared">&nbsp;&nbsp;resolve_identity <span style="color:var(--muted)">7.29ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.01ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.10ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.10ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.06ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;adcp_error_code_in <span style="color:var(--muted)">0.02ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;_challenge_for_code <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+</ol></div>
+<div class="col"><h3>A2A · list_accounts (invalid credential, auth=required) → 401</h3><ol>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.15ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.13ms</span></li>
+<li class="only">_restore_a2a_wire_integers.&lt;locals&gt;._wrapped <span style="color:var(--muted)">0.09ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="only">_restore_a2a_wire_integers.&lt;locals&gt;._wrapped <span style="color:var(--muted)">5.75ms</span></li>
+<li class="only">&nbsp;&nbsp;AdCPRequestHandler._resolve_a2a_identity <span style="color:var(--muted)">5.16ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;resolve_identity <span style="color:var(--muted)">5.09ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.05ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.01ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.08ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.08ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;adcp_error_code_in <span style="color:var(--muted)">0.01ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;_challenge_for_code <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+</ol></div>
+<div class="col"><h3>REST · list_accounts (invalid credential, auth=required) → 401</h3><ol>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.12ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.11ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="only">_require_auth_dep <span style="color:var(--muted)">4.32ms</span></li>
+<li class="shared">&nbsp;resolve_identity <span style="color:var(--muted)">4.31ms</span></li>
+<li class="only">&nbsp;_envelope_response <span style="color:var(--muted)">6.51ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.05ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.01ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.09ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.08ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.05ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;adcp_error_code_in <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;_challenge_for_code <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.01ms</span></li>
+</ol></div>
+</div>
+<h2>Path comparison — no credential, auth=optional</h2>
+<div class="note">Frames in <b>every</b> transport are shown plain; frames unique to one are highlighted. Shared frames: <b>9</b>.</div>
+<div class="cols">
+<div class="col"><h3>MCP · get_adcp_capabilities (no credential, auth=optional) → 200</h3><ol>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.12ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.11ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="only">MCPAuthMiddleware.on_call_tool <span style="color:var(--muted)">2.17ms</span></li>
+<li class="only">&nbsp;resolve_identity_from_context <span style="color:var(--muted)">2.00ms</span></li>
+<li class="shared">&nbsp;&nbsp;resolve_identity <span style="color:var(--muted)">1.94ms</span></li>
+<li class="only">MCPAuthMiddleware.on_call_tool <span style="color:var(--muted)">4.36ms</span></li>
+<li class="shared">&nbsp;&nbsp;invoke <span style="color:var(--muted)">0.56ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;_invoke <span style="color:var(--muted)">0.52ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;_get_adcp_capabilities_impl <span style="color:var(--muted)">0.44ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.01ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.10ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.10ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.06ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;adcp_error_code_in <span style="color:var(--muted)">0.02ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;_challenge_for_code <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.01ms</span></li>
+</ol></div>
+<div class="col"><h3>A2A · get_adcp_capabilities (no credential, auth=optional) → 200</h3><ol>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.13ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.12ms</span></li>
+<li class="only">_restore_a2a_wire_integers.&lt;locals&gt;._wrapped <span style="color:var(--muted)">0.07ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+<li class="only">_restore_a2a_wire_integers.&lt;locals&gt;._wrapped <span style="color:var(--muted)">7.76ms</span></li>
+<li class="only">&nbsp;&nbsp;AdCPRequestHandler._resolve_a2a_identity <span style="color:var(--muted)">2.13ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;resolve_identity <span style="color:var(--muted)">2.11ms</span></li>
+<li class="only">&nbsp;&nbsp;&nbsp;&nbsp;invoke_tool <span style="color:var(--muted)">0.13ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;invoke <span style="color:var(--muted)">0.12ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;_invoke <span style="color:var(--muted)">0.09ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;_get_adcp_capabilities_impl <span style="color:var(--muted)">0.06ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.06ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.05ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.01ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.09ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.08ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;adcp_error_code_in <span style="color:var(--muted)">0.01ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;_challenge_for_code <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+</ol></div>
+<div class="col"><h3>REST · get_adcp_capabilities (no credential, auth=optional) → 200</h3><ol>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.13ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.12ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="only">_resolve_auth_dep <span style="color:var(--muted)">2.36ms</span></li>
+<li class="shared">&nbsp;resolve_identity <span style="color:var(--muted)">2.35ms</span></li>
+<li class="only">&nbsp;invoke_tool <span style="color:var(--muted)">0.13ms</span></li>
+<li class="shared">&nbsp;&nbsp;invoke <span style="color:var(--muted)">0.12ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;_invoke <span style="color:var(--muted)">0.09ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;_get_adcp_capabilities_impl <span style="color:var(--muted)">0.06ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.05ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.01ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.09ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.08ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.05ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;adcp_error_code_in <span style="color:var(--muted)">0.01ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;_challenge_for_code <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+</ol></div>
+</div>
+<h2>Path comparison — no credential, auth=required</h2>
+<div class="note">Frames in <b>every</b> transport are shown plain; frames unique to one are highlighted. Shared frames: <b>6</b>.</div>
+<div class="cols">
+<div class="col"><h3>MCP · list_accounts (no credential, auth=required) → 401</h3><ol>
+<li class="only">AuthChallengeResponder.__init__ <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.20ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.18ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.06ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.06ms</span></li>
+<li class="only">MCPAuthMiddleware.on_call_tool <span style="color:var(--muted)">0.22ms</span></li>
+<li class="only">&nbsp;resolve_identity_from_context <span style="color:var(--muted)">0.12ms</span></li>
+<li class="shared">&nbsp;&nbsp;resolve_identity <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.05ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.01ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.11ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.11ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.07ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;adcp_error_code_in <span style="color:var(--muted)">0.02ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;_challenge_for_code <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+</ol></div>
+<div class="col"><h3>A2A · list_accounts (no credential, auth=required) → 401</h3><ol>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.17ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.16ms</span></li>
+<li class="only">_restore_a2a_wire_integers.&lt;locals&gt;._wrapped <span style="color:var(--muted)">0.09ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.03ms</span></li>
+<li class="only">_restore_a2a_wire_integers.&lt;locals&gt;._wrapped <span style="color:var(--muted)">1.09ms</span></li>
+<li class="only">&nbsp;&nbsp;AdCPRequestHandler._resolve_a2a_identity <span style="color:var(--muted)">0.10ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;resolve_identity <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.05ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.04ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.01ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.14ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.14ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.06ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;adcp_error_code_in <span style="color:var(--muted)">0.01ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;_challenge_for_code <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+</ol></div>
+<div class="col"><h3>REST · list_accounts (no credential, auth=required) → 401</h3><ol>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.15ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.13ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.05ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.04ms</span></li>
+<li class="only">_require_auth_dep <span style="color:var(--muted)">0.06ms</span></li>
+<li class="shared">&nbsp;resolve_identity <span style="color:var(--muted)">0.04ms</span></li>
+<li class="only">&nbsp;_envelope_response <span style="color:var(--muted)">153.84ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.05ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.05ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.01ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.09ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.09ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">&nbsp;&nbsp;AuthChallengeResponder.__call__.&lt;locals&gt;.buffer <span style="color:var(--muted)">0.05ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;adcp_error_code_in <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">&nbsp;&nbsp;&nbsp;&nbsp;_challenge_for_code <span style="color:var(--muted)">0.00ms</span></li>
+<li class="shared">AuthChallengeResponder.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+<li class="shared">&nbsp;UnifiedAuthMiddleware.__call__ <span style="color:var(--muted)">0.02ms</span></li>
+</ol></div>
+</div>
+<h2>Slowest src frames per scenario</h2><div class=scroll><table>
+<tr><th>scenario</th><th>frame</th><th>location</th><th>ms</th></tr>
+<tr><td>MCP · list_accounts (no credential, auth=required)</td><td class=mono>MCPAuthMiddleware.on_call_tool</td><td class=mono>src/core/mcp_auth_middleware.py:29</td><td>0.22</td></tr>
+<tr><td>MCP · list_accounts (no credential, auth=required)</td><td class=mono>AuthChallengeResponder.__call__</td><td class=mono>src/core/auth_middleware.py:146</td><td>0.20</td></tr>
+<tr><td>MCP · list_accounts (no credential, auth=required)</td><td class=mono>UnifiedAuthMiddleware.__call__</td><td class=mono>src/core/auth_middleware.py:216</td><td>0.18</td></tr>
+<tr><td>MCP · list_accounts (no credential, auth=required)</td><td class=mono>resolve_identity_from_context</td><td class=mono>src/core/transport_helpers.py:37</td><td>0.12</td></tr>
+<tr><td>MCP · list_accounts (no credential, auth=required)</td><td class=mono>AuthChallengeResponder.__call__</td><td class=mono>src/core/auth_middleware.py:146</td><td>0.11</td></tr>
+<tr><td>A2A · list_accounts (no credential, auth=required)</td><td class=mono>_restore_a2a_wire_integers.&lt;locals&gt;._wrapped</td><td class=mono>src/app.py:422</td><td>1.09</td></tr>
+<tr><td>A2A · list_accounts (no credential, auth=required)</td><td class=mono>AdCPRequestHandler.on_message_send</td><td class=mono>src/a2a_server/adcp_a2a_server.py:450</td><td>0.22</td></tr>
+<tr><td>A2A · list_accounts (no credential, auth=required)</td><td class=mono>AuthChallengeResponder.__call__</td><td class=mono>src/core/auth_middleware.py:146</td><td>0.17</td></tr>
+<tr><td>A2A · list_accounts (no credential, auth=required)</td><td class=mono>UnifiedAuthMiddleware.__call__</td><td class=mono>src/core/auth_middleware.py:216</td><td>0.16</td></tr>
+<tr><td>A2A · list_accounts (no credential, auth=required)</td><td class=mono>AuthChallengeResponder.__call__</td><td class=mono>src/core/auth_middleware.py:146</td><td>0.14</td></tr>
+<tr><td>REST · list_accounts (no credential, auth=required)</td><td class=mono>adcp_error_handler</td><td class=mono>src/app.py:211</td><td>153.85</td></tr>
+<tr><td>REST · list_accounts (no credential, auth=required)</td><td class=mono>_envelope_response</td><td class=mono>src/app.py:162</td><td>153.84</td></tr>
+<tr><td>REST · list_accounts (no credential, auth=required)</td><td class=mono>record_boundary_error</td><td class=mono>src/core/tool_error_logging.py:169</td><td>153.74</td></tr>
+<tr><td>REST · list_accounts (no credential, auth=required)</td><td class=mono>AuditLogger.log_operation</td><td class=mono>src/core/audit_logger.py:199</td><td>153.63</td></tr>
+<tr><td>REST · list_accounts (no credential, auth=required)</td><td class=mono>get_engine.&lt;locals&gt;.set_statement_timeout</td><td class=mono>src/core/database/database_session.py:142</td><td>1.09</td></tr>
+<tr><td>MCP · list_accounts (invalid credential, auth=required)</td><td class=mono>MCPAuthMiddleware.on_call_tool</td><td class=mono>src/core/mcp_auth_middleware.py:29</td><td>7.44</td></tr>
+<tr><td>MCP · list_accounts (invalid credential, auth=required)</td><td class=mono>resolve_identity_from_context</td><td class=mono>src/core/transport_helpers.py:37</td><td>7.35</td></tr>
+<tr><td>MCP · list_accounts (invalid credential, auth=required)</td><td class=mono>resolve_identity</td><td class=mono>src/core/resolved_identity.py:129</td><td>7.29</td></tr>
+<tr><td>MCP · list_accounts (invalid credential, auth=required)</td><td class=mono>_detect_tenant</td><td class=mono>src/core/resolved_identity.py:71</td><td>4.11</td></tr>
+<tr><td>MCP · list_accounts (invalid credential, auth=required)</td><td class=mono>get_tenant_by_virtual_host</td><td class=mono>src/core/config_loader.py:252</td><td>4.06</td></tr>
+<tr><td>A2A · list_accounts (invalid credential, auth=required)</td><td class=mono>_restore_a2a_wire_integers.&lt;locals&gt;._wrapped</td><td class=mono>src/app.py:422</td><td>5.75</td></tr>
+<tr><td>A2A · list_accounts (invalid credential, auth=required)</td><td class=mono>AdCPRequestHandler.on_message_send</td><td class=mono>src/a2a_server/adcp_a2a_server.py:450</td><td>5.26</td></tr>
+<tr><td>A2A · list_accounts (invalid credential, auth=required)</td><td class=mono>AdCPRequestHandler._resolve_a2a_identity</td><td class=mono>src/a2a_server/adcp_a2a_server.py:311</td><td>5.16</td></tr>
+<tr><td>A2A · list_accounts (invalid credential, auth=required)</td><td class=mono>resolve_identity</td><td class=mono>src/core/resolved_identity.py:129</td><td>5.09</td></tr>
+<tr><td>A2A · list_accounts (invalid credential, auth=required)</td><td class=mono>_detect_tenant</td><td class=mono>src/core/resolved_identity.py:71</td><td>2.93</td></tr>
+<tr><td>REST · list_accounts (invalid credential, auth=required)</td><td class=mono>adcp_error_handler</td><td class=mono>src/app.py:211</td><td>6.52</td></tr>
+<tr><td>REST · list_accounts (invalid credential, auth=required)</td><td class=mono>_envelope_response</td><td class=mono>src/app.py:162</td><td>6.51</td></tr>
+<tr><td>REST · list_accounts (invalid credential, auth=required)</td><td class=mono>record_boundary_error</td><td class=mono>src/core/tool_error_logging.py:169</td><td>6.40</td></tr>
+<tr><td>REST · list_accounts (invalid credential, auth=required)</td><td class=mono>AuditLogger.log_operation</td><td class=mono>src/core/audit_logger.py:199</td><td>6.27</td></tr>
+<tr><td>REST · list_accounts (invalid credential, auth=required)</td><td class=mono>_require_auth_dep</td><td class=mono>src/core/auth_context.py:115</td><td>4.32</td></tr>
+<tr><td>MCP · get_adcp_capabilities (no credential, auth=optional)</td><td class=mono>MCPAuthMiddleware.on_call_tool</td><td class=mono>src/core/mcp_auth_middleware.py:29</td><td>4.36</td></tr>
+<tr><td>MCP · get_adcp_capabilities (no credential, auth=optional)</td><td class=mono>RegistryTool.run</td><td class=mono>src/core/main.py:466</td><td>3.28</td></tr>
+<tr><td>MCP · get_adcp_capabilities (no credential, auth=optional)</td><td class=mono>BuyerRequest._accept_only_declared_fields</td><td class=mono>src/core/schemas/_base.py:638</td><td>2.35</td></tr>
+<tr><td>MCP · get_adcp_capabilities (no credential, auth=optional)</td><td class=mono>MCPAuthMiddleware.on_call_tool</td><td class=mono>src/core/mcp_auth_middleware.py:29</td><td>2.17</td></tr>
+<tr><td>MCP · get_adcp_capabilities (no credential, auth=optional)</td><td class=mono>resolve_identity_from_context</td><td class=mono>src/core/transport_helpers.py:37</td><td>2.00</td></tr>
+<tr><td>A2A · get_adcp_capabilities (no credential, auth=optional)</td><td class=mono>_restore_a2a_wire_integers.&lt;locals&gt;._wrapped</td><td class=mono>src/app.py:422</td><td>7.76</td></tr>
+<tr><td>A2A · get_adcp_capabilities (no credential, auth=optional)</td><td class=mono>AdCPRequestHandler.on_message_send</td><td class=mono>src/a2a_server/adcp_a2a_server.py:450</td><td>7.11</td></tr>
+<tr><td>A2A · get_adcp_capabilities (no credential, auth=optional)</td><td class=mono>AdCPRequestHandler._log_a2a_operation</td><td class=mono>src/a2a_server/adcp_a2a_server.py:422</td><td>4.24</td></tr>
+<tr><td>A2A · get_adcp_capabilities (no credential, auth=optional)</td><td class=mono>AuditLogger.log_operation</td><td class=mono>src/core/audit_logger.py:199</td><td>4.22</td></tr>
+<tr><td>A2A · get_adcp_capabilities (no credential, auth=optional)</td><td class=mono>AdCPRequestHandler._resolve_a2a_identity</td><td class=mono>src/a2a_server/adcp_a2a_server.py:311</td><td>2.13</td></tr>
+<tr><td>REST · get_adcp_capabilities (no credential, auth=optional)</td><td class=mono>_resolve_auth_dep</td><td class=mono>src/core/auth_context.py:85</td><td>2.36</td></tr>
+<tr><td>REST · get_adcp_capabilities (no credential, auth=optional)</td><td class=mono>resolve_identity</td><td class=mono>src/core/resolved_identity.py:129</td><td>2.35</td></tr>
+<tr><td>REST · get_adcp_capabilities (no credential, auth=optional)</td><td class=mono>_detect_tenant</td><td class=mono>src/core/resolved_identity.py:71</td><td>2.31</td></tr>
+<tr><td>REST · get_adcp_capabilities (no credential, auth=optional)</td><td class=mono>get_tenant_by_virtual_host</td><td class=mono>src/core/config_loader.py:252</td><td>2.26</td></tr>
+<tr><td>REST · get_adcp_capabilities (no credential, auth=optional)</td><td class=mono>get_db_session</td><td class=mono>src/core/database/database_session.py:197</td><td>0.46</td></tr>
+<tr><td>MCP · get_adcp_capabilities (invalid credential, auth=optional)</td><td class=mono>MCPAuthMiddleware.on_call_tool</td><td class=mono>src/core/mcp_auth_middleware.py:29</td><td>6.69</td></tr>
+<tr><td>MCP · get_adcp_capabilities (invalid credential, auth=optional)</td><td class=mono>resolve_identity_from_context</td><td class=mono>src/core/transport_helpers.py:37</td><td>6.49</td></tr>
+<tr><td>MCP · get_adcp_capabilities (invalid credential, auth=optional)</td><td class=mono>resolve_identity</td><td class=mono>src/core/resolved_identity.py:129</td><td>6.43</td></tr>
+<tr><td>MCP · get_adcp_capabilities (invalid credential, auth=optional)</td><td class=mono>_detect_tenant</td><td class=mono>src/core/resolved_identity.py:71</td><td>4.04</td></tr>
+<tr><td>MCP · get_adcp_capabilities (invalid credential, auth=optional)</td><td class=mono>get_tenant_by_virtual_host</td><td class=mono>src/core/config_loader.py:252</td><td>4.00</td></tr>
+<tr><td>A2A · get_adcp_capabilities (invalid credential, auth=optional)</td><td class=mono>_restore_a2a_wire_integers.&lt;locals&gt;._wrapped</td><td class=mono>src/app.py:422</td><td>12.30</td></tr>
+<tr><td>A2A · get_adcp_capabilities (invalid credential, auth=optional)</td><td class=mono>AdCPRequestHandler.on_message_send</td><td class=mono>src/a2a_server/adcp_a2a_server.py:450</td><td>11.65</td></tr>
+<tr><td>A2A · get_adcp_capabilities (invalid credential, auth=optional)</td><td class=mono>AdCPRequestHandler._resolve_a2a_identity</td><td class=mono>src/a2a_server/adcp_a2a_server.py:311</td><td>5.60</td></tr>
+<tr><td>A2A · get_adcp_capabilities (invalid credential, auth=optional)</td><td class=mono>resolve_identity</td><td class=mono>src/core/resolved_identity.py:129</td><td>5.57</td></tr>
+<tr><td>A2A · get_adcp_capabilities (invalid credential, auth=optional)</td><td class=mono>AdCPRequestHandler._log_a2a_operation</td><td class=mono>src/a2a_server/adcp_a2a_server.py:422</td><td>5.31</td></tr>
+<tr><td>REST · get_adcp_capabilities (invalid credential, auth=optional)</td><td class=mono>_resolve_auth_dep</td><td class=mono>src/core/auth_context.py:85</td><td>3.44</td></tr>
+<tr><td>REST · get_adcp_capabilities (invalid credential, auth=optional)</td><td class=mono>resolve_identity</td><td class=mono>src/core/resolved_identity.py:129</td><td>3.43</td></tr>
+<tr><td>REST · get_adcp_capabilities (invalid credential, auth=optional)</td><td class=mono>_detect_tenant</td><td class=mono>src/core/resolved_identity.py:71</td><td>1.97</td></tr>
+<tr><td>REST · get_adcp_capabilities (invalid credential, auth=optional)</td><td class=mono>get_tenant_by_virtual_host</td><td class=mono>src/core/config_loader.py:252</td><td>1.93</td></tr>
+<tr><td>REST · get_adcp_capabilities (invalid credential, auth=optional)</td><td class=mono>get_principal_from_token</td><td class=mono>src/core/auth_utils.py:14</td><td>1.43</td></tr>
+</table></div></main>

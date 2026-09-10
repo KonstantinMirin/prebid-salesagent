@@ -23,6 +23,7 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
+from src.core.auth_context import AuthContext
 from src.core.errors.codes import CODE_TABLE
 from src.core.exceptions import (
     AdCPAuthenticationError,
@@ -66,7 +67,9 @@ from tests.factories.media_buy import (
     pricing_options_named,
     request_package,
 )
+from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory
+from tests.helpers.boundary_identity import resolved_as
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -141,7 +144,7 @@ def _make_identity(
     dry_run: bool = False,
 ) -> ResolvedIdentity:
     """Build a ResolvedIdentity with default test values."""
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant={"tenant_id": tenant_id},
@@ -383,7 +386,7 @@ class TestCreateMediaBuyValidation:
             ]
         )
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="principal_1",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "human_review_required": False, "auto_create_media_buys": True},
@@ -458,7 +461,7 @@ class TestCreateMediaBuyValidation:
         cl.max_daily_package_spend = Decimal("500")
         cl.min_package_budget = None
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="principal_1",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "human_review_required": False, "auto_create_media_buys": True},
@@ -1211,7 +1214,7 @@ class TestCreateMediaBuyImplAuth:
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         req = _make_request()
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant=None,
@@ -1236,7 +1239,7 @@ class TestCreateMediaBuyImplAuth:
         from src.services.setup_checklist_service import SetupIncompleteError
 
         req = _make_request()
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant"},
@@ -1282,7 +1285,7 @@ class TestCreateMediaBuyImplAuth:
         from src.services.setup_checklist_service import SetupIncompleteError
 
         req = _make_request()
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant"},
@@ -1429,13 +1432,16 @@ class TestCreateMediaBuyIdempotency:
             # Account resolution is the boundary's OTHER database read, and it is not what
             # these two grade; a pass-through keeps the probe the only DB call in play.
             patch("src.core.transport_helpers.enrich_identity_with_account", side_effect=lambda i, a=None: i),
+            # The boundary RESOLVES the identity now; it is not handed one. Substituting the
+            # resolver is how a test names the caller it wants.
+            resolved_as(identity),
         ):
             mock_princ = MagicMock()
             mock_princ.principal_id = "test_principal"
             mock_princ.name = "Test Buyer"
             mock_principal.return_value = mock_princ
 
-            result = await invoke_tool("create_media_buy", req, identity)
+            result = await invoke_tool("create_media_buy", req, AuthContext(), "mcp")
 
         assert isinstance(result, CreateMediaBuyResult)
         assert isinstance(result, CreateMediaBuySuccess)
@@ -1498,6 +1504,7 @@ class TestCreateMediaBuyIdempotency:
             patch("src.core.tools.media_buy_create.get_context_manager") as mock_ctx_mgr,
             patch("src.core.database.repositories.MediaBuyUoW", side_effect=uow_instances),
             patch("src.core.transport_helpers.enrich_identity_with_account", side_effect=lambda i, a=None: i),
+            resolved_as(identity),
         ):
             mock_princ = MagicMock()
             mock_princ.principal_id = "test_principal"
@@ -1513,7 +1520,7 @@ class TestCreateMediaBuyIdempotency:
             # which fails with the typed AdCPProductNotFoundError. Capture it so
             # we can still assert the idempotency probe ran.
             with pytest.raises(AdCPProductNotFoundError):
-                await invoke_tool("create_media_buy", req, identity)
+                await invoke_tool("create_media_buy", req, AuthContext(), "mcp")
 
         # β idempotency probe ran (verbatim success cache), found nothing → proceeded
         mock_idem_attempts_repo.find_by_key.assert_called_once_with(
@@ -4252,11 +4259,10 @@ class TestGetMediaBuysImplAuth:
         Covers: #1651
         """
         from src.core.exceptions import AdCPAuthRequiredError
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_list import _get_media_buys_impl
 
         req = GetMediaBuysRequest()
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="tenant_1",
             tenant={"tenant_id": "tenant_1", "adapter_type": "mock"},

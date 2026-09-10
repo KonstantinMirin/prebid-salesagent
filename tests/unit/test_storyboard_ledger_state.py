@@ -35,36 +35,44 @@ from scripts.audit import ledger
 from tests.helpers.ledger import load_ledger_nodeids
 
 # --- ledger pin ---
-# RE-SEEDED from a real in-network CI run of THIS tree: run 32478296091, job
-# 96759107129, head_sha 0ec6637dd (2026-08-21). Measured, not derived --
-# 96 collected, 13 failed, 1 passed, 13 skipped, 69 xfailed, 0 xpassed.
+# Two measured halves, seeded from two different in-network CI runs. Measured,
+# never derived: the runner's host-side numbers do not carry over to the
+# in-network receiver topology.
 #
-# Current total, through scripts.audit.ledger.load: 81 entries (80 mcp + 1 a2a).
+# Current total, through scripts.audit.ledger.load: 115 entries (79 mcp + 36 a2a).
 #
-# mcp (80) = the 69 previously-ledgered entries, ALL of which xfailed at this
-# head (zero graduations), plus the 11 measured un-ledgered failures. Every one
-# of the 11 carries `VALIDATION_ERROR: Unexpected keyword argument` -- #1512
-# (adcp_version rejected). Four of them (the wholesale_feed family) were not in
-# the previous seed run's collection set at all: collection grew 83 -> 96, so
-# they are newly gradable rather than newly broken.
+# mcp (79) — RE-SEEDED from run 32478296091, job 96759107129, head_sha 0ec6637dd
+# (2026-08-21): 96 collected, 13 failed, 1 passed, 13 skipped, 69 xfailed,
+# 0 xpassed. That seed was 80 entries: the 69 previously-ledgered ones, ALL of
+# which xfailed at that head (zero graduations), plus the 11 measured
+# un-ledgered failures. Every one of the 11 carries `VALIDATION_ERROR:
+# Unexpected keyword argument` -- #1512 (adcp_version rejected). Four of them
+# (the wholesale_feed family) were not in the previous seed run's collection set
+# at all: collection grew 83 -> 96, so they are newly gradable rather than newly
+# broken. One has since GRADUATED --
+# `mcp::core::version_negotiation::get_capabilities_with_version`: the seller now
+# echoes adcp_version on the response envelope, stamped once at the one response
+# seam, so the entry is deliberately absent rather than merely unmeasured. 80 - 1
+# = 79.
 #
-# a2a (1) = `a2a::_runner::agent_reachability::graded_checks_produced`, the
-# `_no_graded_checks` synthetic. The axis grades ZERO checks at this head: the
-# card-discovery fix was a production change and 19116bf7e reverted every one
-# (#1440). The 32 per-check a2a entries seeded pre-revert were REMOVED -- they
-# resolved to no collected check, graded nothing, and made
-# ledger/fitness::stale_entries a permanent hard failure. "Not measured" is
-# still not "graduated", and this single entry is how the file says so: it
-# XPASSes the day the card is fixed, and the axis's real checks then arrive
-# un-ledgered and redden CI until triaged.
+# a2a (36) — the axis's FIRST measurement, ledgered by #2191. Before that change
+# the A2A protocol pass graded ZERO checks (overall_status=unreachable, #1440):
+# the app served the card on one path in an A2A 1.0 shape the runner's bundled
+# `@a2a-js/sdk` client could not read. These 36 are first-sight gaps, not
+# regressions -- 35 conformance gaps under #2192 (22 of them a2a twins of gaps
+# already ledgered for mcp, which is exactly the cross-transport drift the
+# two-protocol split exists to expose; 14 a2a-only), plus
+# `a2a::security::security_baseline::probe_unauth` under #1859, kept on its own
+# issue so a bulk graduation of #2192 can never silently carry a security gap
+# with it.
+#
+# `a2a::_runner::agent_reachability::graded_checks_produced` -- the
+# `_no_graded_checks` synthetic that recorded "this protocol graded NOTHING" --
+# GRADUATED with that same change and is deliberately absent: the protocol grades
+# 36 checks now. It is the mechanism to reach for again if the axis ever goes
+# unreachable, since "not measured" is still not "graduated".
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     (
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::_runner::agent_reachability::graded_checks_produced]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::capability_discovery::get_capabilities]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::capability_discovery::get_capabilities_filtered]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_lifecycle::sync_accounts_create_paused_notification_config]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_rejections::sync_accounts_rejects_duplicate_subscriber_id]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::assert_omitted_key_grace_handled]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::get_capabilities_with_idempotency_key]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::get_capabilities_without_idempotency_key_3_1_accept]",
@@ -73,20 +81,6 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::list_accounts_with_idempotency_key]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::list_creative_formats_with_idempotency_key]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::list_creatives_with_idempotency_key]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::v3_envelope_integrity::no_legacy_status_fields]",
-        # version_negotiation::get_capabilities_with_version GRADUATED (salesagent-lpfa0):
-        # the seller echoes adcp_version on the response envelope now.
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::assert_webhook_signing_key_present]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::fetch_brand_json]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::get_capabilities]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_idempotent_webhook_initial]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_operation_id_echo]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_retry_scenario]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_signed_webhook]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_webhook_operation]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::wholesale_feed_bulk_webhooks::register_bulk_change_webhook]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::billing_gate_dispatch::get_capabilities]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::billing_gate_dispatch::sync_accounts_passthrough_rejects_agent]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::get_capabilities]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::missing_fields]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::nonexistent_product]",
@@ -94,12 +88,26 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::supported_major_version]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::unsupported_major_version]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::unsupported_release_version]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::stale_response_advisory::get_capabilities]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::stale_response_advisory::no_stale_on_healthy_upstream]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::wholesale_feed_product_webhooks::register_product_pricing_webhook]",
-        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::wholesale_feed_products::bootstrap_products]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::billing_gate_dispatch::get_capabilities]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::billing_gate_dispatch::sync_accounts_passthrough_rejects_agent]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::capability_discovery::get_capabilities]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::capability_discovery::get_capabilities_filtered]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security::security_baseline::assert_mechanism]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security::security_baseline::probe_unauth]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::stale_response_advisory::get_capabilities]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::stale_response_advisory::no_stale_on_healthy_upstream]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_lifecycle::sync_accounts_create_paused_notification_config]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_rejections::sync_accounts_rejects_duplicate_subscriber_id]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::v3_envelope_integrity::no_legacy_status_fields]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::get_capabilities]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::assert_webhook_signing_key_present]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::fetch_brand_json]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_idempotent_webhook_initial]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_operation_id_echo]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_retry_scenario]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_signed_webhook]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::webhook_emission::trigger_webhook_operation]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::get_capabilities]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-001-no-signature-header]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::negative-002-wrong-tag]",
@@ -140,9 +148,50 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-010-percent-encoded-slash-preserved]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-011-ipv6-authority]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security_transport::signed_requests::positive-012-ipv6-authority-default-port-stripped]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::wholesale_feed_bulk_webhooks::register_bulk_change_webhook]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::wholesale_feed_product_webhooks::register_product_pricing_webhook]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::wholesale_feed_products::bootstrap_products]",
         "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::signals::wholesale_feed_signal_webhooks::register_signal_pricing_webhook]",
+        # --- a2a axis, first measured by #2191 ---
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::capability_discovery::get_capabilities]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::capability_discovery::get_capabilities_filtered]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_lifecycle::sync_accounts_create_paused_notification_config]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_rejections::sync_accounts_rejects_duplicate_subscriber_id]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::read_tool_idempotency::assert_omitted_key_grace_handled]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::read_tool_idempotency::get_capabilities_with_idempotency_key]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::read_tool_idempotency::get_capabilities_without_idempotency_key_3_1_accept]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::read_tool_idempotency::get_capabilities_without_idempotency_key_3_1_reject]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::read_tool_idempotency::list_creative_formats_with_idempotency_key]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::v3_envelope_integrity::no_legacy_status_fields]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::version_negotiation::get_capabilities_with_version]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::creative::media_buy_seller/creative_reception::get_capabilities]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::creative::media_buy_seller/creative_reception::sync_creatives]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::billing_gate_dispatch::get_capabilities]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::billing_gate_dispatch::sync_accounts_passthrough_rejects_agent]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::error_compliance::get_capabilities]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::error_compliance::nonexistent_product]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::error_compliance::reversed_dates_error]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::error_compliance::unsupported_major_version]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::error_compliance::unsupported_release_version]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::stale_response_advisory::get_capabilities]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/creative_fate_after_cancellation::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inline_creatives_without_sync::get_capabilities]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_canonical_format]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_legacy_format]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/invalid_transitions::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/invalid_transitions::update_unknown_package]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inventory_list_no_match::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inventory_list_targeting::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/measurement_terms_rejected::create_media_buy_aggressive_terms]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/measurement_terms_rejected::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/refine_products::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/refine_products::sync_accounts]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::security::security_baseline::assert_mechanism]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::security::security_baseline::probe_unauth]",
     )
 )
+
 
 _LEDGER_PATH = Path(__file__).parent.parent / "storyboard" / "known_failures.txt"
 

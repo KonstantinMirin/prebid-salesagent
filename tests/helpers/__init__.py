@@ -9,6 +9,7 @@ def assert_resolve_auth_dep_passes_token(auth_token: str = "pre-extracted-token"
     Shared assertion used by multiple test files to verify the token passthrough
     contract: the pre-extracted token must be forwarded without redundant
     re-extraction from headers.
+
     """
     from unittest.mock import patch
 

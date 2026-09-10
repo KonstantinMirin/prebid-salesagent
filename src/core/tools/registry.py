@@ -86,8 +86,31 @@ class ToolSpec:
     a2a: bool = True
     #: Whether a request reaches the implementation without an authenticated caller. A
     #: property of the TOOL, not of a transport: it cannot be true that a tool needs a
-    #: caller over REST and not over MCP. All three gates read this field.
+    #: caller over REST and not over MCP.
+    #:
+    #: This is the DECLARATION, written once per row. Ask about it through
+    #: ``requires_credential()`` -- never by comparing it -- for the reason that method
+    #: documents.
     auth: Literal["required", "optional"] = "required"
+
+    def requires_credential(self) -> bool:
+        """Whether a caller must present a credential that resolves to a principal.
+
+        THE question, asked one way. Consumers used to compare ``auth`` directly and drifted
+        into three spellings of the same test -- ``== "required"``, ``== "optional"`` and
+        ``!= "optional"`` -- across five sites. Three spellings is why a hand-written audit
+        of "who decides?" found four of them and missed the fifth
+        (``src/routes/api_v1.py``), and why the census that did find all five had to walk the
+        AST instead of grepping. One name is greppable, and cannot be spelled two ways.
+
+        What it means is fixed by the pinned graded contract:
+        ``dist/compliance/3.1.1/universal/security.yaml`` runs BOTH its unauth probe and its
+        invalid-credential probe against the PROTECTED probe task, and says why -- "public
+        tasks like get_adcp_capabilities return 200 without credentials by design". So a
+        protected tool refuses a missing credential (AUTH_MISSING) and a rejected one
+        (AUTH_INVALID); a public tool refuses neither and does not check.
+        """
+        return self.auth == "required"
 
 
 #: Every tool this seller implements, keyed by its AdCP tool name.

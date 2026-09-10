@@ -203,8 +203,11 @@ trap cleanup EXIT
 echo "Building pinned creative-agent image (single-sourced)..."
 scripts/creative-agent-stack.sh build
 
+# adcp-server-storyboard is named explicitly even though it shares adcp-server's build
+# context: `dc up -d` would otherwise build it mid-bringup, after this step reported the
+# build done. Same Dockerfile, so it is a layer-cache hit, not a second real build.
 echo "Building image + bringing up the app stack in-network (project: $COMPOSE_PROJECT_NAME)..."
-dc build postgres adcp-server proxy tests
+dc build postgres adcp-server adcp-server-storyboard proxy tests
 
 # Pre-create logs/ group-writable + setgid BEFORE anything else touches the
 # bind mount: adcp-server bind-mounts .:/app and creates logs/audit.log at
@@ -294,15 +297,21 @@ scripts/dev/ensure-test-tls.sh || dc run --rm --no-deps -T tests python scripts/
 # https origins it fronts (proxy.adcp.test, creative-agent.adcp.test) pointing
 # at nothing while every scenario that depends on either reported green on the
 # http branch instead (E2E_TLS_BASE_URL / CREATIVE_AGENT_URL, salesagent-amht.2).
-dc up -d postgres adcp-server proxy tls-proxy creative-pg creative-agent
+# adcp-server-storyboard is named here for the same reason every other service is: this
+# list is EXPLICIT, so a service absent from it is built and never started. It was, once —
+# the storyboard suite then reported `overall_status=unreachable` and graded 0 checks,
+# which the ledger-fitness check turned into a wall of "stale entry" noise. Exactly the
+# shape the comment below exists to prevent, one service over.
+dc up -d postgres adcp-server adcp-server-storyboard proxy tls-proxy creative-pg creative-agent
 
 echo "Waiting for Postgres + server health (in-network)..."
 deadline=$(( $(date +%s) + 360 ))
-pg=false srv=false
+pg=false srv=false sbs=false
 while [ "$(date +%s)" -lt "$deadline" ]; do
     [ "$pg" = false ] && dc exec -T postgres pg_isready -U adcp_user >/dev/null 2>&1 && pg=true && echo "  Postgres ready"
     [ "$srv" = false ] && dc exec -T adcp-server curl -sf http://localhost:8080/health >/dev/null 2>&1 && srv=true && echo "  Server ready"
-    [ "$pg" = true ] && [ "$srv" = true ] && break
+    [ "$sbs" = false ] && dc exec -T adcp-server-storyboard curl -sf http://localhost:8080/health >/dev/null 2>&1 && sbs=true && echo "  Storyboard server ready"
+    [ "$pg" = true ] && [ "$srv" = true ] && [ "$sbs" = true ] && break
     sleep 3
 done
 [ "$pg" = true ] || { echo "Postgres never became ready"; dc logs postgres; exit 1; }
@@ -326,6 +335,18 @@ done
     echo "       (waited on http://localhost:8080/health inside adcp-server; every" >&2
     echo "        server-dependent suite would otherwise error en masse)" >&2
     dc logs --tail=120 adcp-server >&2
+    exit 1
+}
+# Same fail-fast for the storyboard's own agent. Without it an unreachable agent reaches
+# the runner, which grades 0 checks and reports overall_status=unreachable — and the
+# ledger-fitness check then declares EVERY ledger entry stale, because none of them
+# resolves to a collected check. One dead container, a hundred lines of unrelated-looking
+# failure. That is the noise this whole block exists to convert into one message.
+[ "$sbs" = true ] || {
+    echo "ERROR: adcp-server-storyboard never became healthy within the 360s deadline — aborting" >&2
+    echo "       (the storyboard suite grades this agent, not the one behind proxy:8000;" >&2
+    echo "        it runs the same image with ENVIRONMENT=production)" >&2
+    dc logs --tail=120 adcp-server-storyboard >&2
     exit 1
 }
 

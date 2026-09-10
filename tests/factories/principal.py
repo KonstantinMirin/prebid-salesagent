@@ -37,7 +37,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         dry_run: bool = False,
         auth_token: str | None = None,
         tenant: Any = _UNSET,
-        testing_context: AdCPTestContext | None = None,
+        testing_context: AdCPTestContext | None | Any = _UNSET,
         account_id: str | None = None,
         **tenant_overrides: object,
     ) -> ResolvedIdentity:
@@ -56,15 +56,33 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         Pass testing_context to override the default (e.g. set
         test_session_id for harness routing).
 
-        ``tenant`` is typed ``Any`` to match the underlying
-        ``ResolvedIdentity.tenant`` field, which accepts plain dicts in
-        most call sites and lazy proxies (``LazyTenantContext``) in tests
-        that need deferred config resolution.
+        ``tenant`` accepts whatever a test has to hand -- a dict, a ``TenantContext``, a
+        ``LazyTenantContext``, or None -- and normalizes it. THIS IS THE ONE NORMALIZER.
+        ``ResolvedIdentity.tenant`` is typed ``LazyTenantContext | None``, a single type
+        rather than a union, so a dict and a hydrated ``TenantContext`` both fail
+        validation at construction. Tests are not asked to know that: they pass data and
+        this converts it, which is why inline ``ResolvedIdentity(...)`` in a test is capped
+        by ``tests/unit/test_architecture_resolved_identity_inline_cap.py``. An inline site
+        carries its own copy of the conversion below, and 98 copies is how the previous
+        shape broke -- the union widened to fit them instead of them narrowing to fit it.
         """
         resolved_tenant = (
             TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides) if tenant is _UNSET else tenant
         )
-        if testing_context is None:
+        if resolved_tenant is not None:
+            from src.core.tenant_context import LazyTenantContext, TenantContext
+
+            if isinstance(resolved_tenant, dict):
+                resolved_tenant = TenantContext.from_dict(resolved_tenant)
+            if isinstance(resolved_tenant, TenantContext):
+                # ``already`` wraps a row the caller already holds, so nothing queries.
+                resolved_tenant = LazyTenantContext.already(resolved_tenant)
+        # An explicit ``testing_context=None`` MEANS none, and is not the same as omitting
+        # the argument. The sentinel keeps them apart: without it, a caller converted from
+        # an inline ``ResolvedIdentity(..., testing_context=None)`` silently acquired the
+        # default context below, and a test reading ``if identity.testing_context`` would
+        # take the other branch.
+        if testing_context is _UNSET:
             testing_context = AdCPTestContext(
                 dry_run=dry_run,
                 mock_time=None,

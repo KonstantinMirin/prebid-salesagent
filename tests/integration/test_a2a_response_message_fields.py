@@ -35,6 +35,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
+from src.core.auth_context import AuthContext
 from tests.factories.principal import PrincipalFactory
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -241,7 +242,7 @@ class TestA2AErrorHandling:
                 # _dispatch_skill IS A2A's whole request path: validate the parameter bag into
                 # the registry row's DTO, invoke_tool, then _serialize_for_a2a. It returns the
                 # serialized dict, so there is nothing left to serialize here.
-                result = await handler._dispatch_skill("create_media_buy", params, identity=_MOCK_IDENTITY)
+                result = await handler._dispatch_skill("create_media_buy", params, _MOCK_IDENTITY, AuthContext())
                 # If it doesn't raise, the failure has to be readable from the body itself.
                 # `success` is gone, so `errors` IS the signal a buyer reads — the same
                 # field A2A used to derive `success` from before writing it in.

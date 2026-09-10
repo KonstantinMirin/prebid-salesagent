@@ -14,11 +14,11 @@ from unittest.mock import patch
 from starlette.testclient import TestClient
 
 from src.app import app
-from src.core.resolved_identity import ResolvedIdentity
 from tests.factories.principal import PrincipalFactory
+from tests.helpers.boundary_identity import resolves_to
 from tests.helpers.capture_wrapper_req import stub_impl
 
-_MOCK_IDENTITY = ResolvedIdentity(
+_MOCK_IDENTITY = PrincipalFactory.make_identity(
     principal_id="test-principal",
     tenant_id="default",
     tenant={"tenant_id": "default"},
@@ -41,7 +41,7 @@ client = TestClient(app)
 class TestRESTProductsEndpoint:
     """Verify POST /api/v1/products endpoint."""
 
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    @resolves_to(_MOCK_IDENTITY)
     @stub_impl("get_products")
     def test_endpoint_returns_200(self, mock_impl, mock_resolve):
         """POST /api/v1/products should return 200 with valid request."""
@@ -56,7 +56,7 @@ class TestRESTProductsEndpoint:
         )
         assert response.status_code == 200
 
-    @patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY)
+    @resolves_to(_MOCK_IDENTITY)
     @stub_impl("get_products")
     def test_response_has_products_field(self, mock_impl, mock_resolve):
         """Response must contain 'products' list."""
@@ -73,7 +73,7 @@ class TestRESTProductsEndpoint:
         assert "products" in body
         assert isinstance(body["products"], list)
 
-    @patch("src.core.resolved_identity.resolve_identity")
+    @patch("src.core.resolved_identity._resolve_identity")
     @stub_impl("get_products")
     def test_works_without_auth(self, mock_impl, mock_resolve):
         """get_products is a discovery skill — should work without auth.
@@ -98,7 +98,7 @@ class TestRESTProductsEndpoint:
         # Should return 200, not 401 — discovery skill allows unauthenticated access
         assert response.status_code == 200, f"Discovery skill should work without auth, got {response.status_code}"
 
-    @patch("src.core.resolved_identity.resolve_identity")
+    @patch("src.core.resolved_identity._resolve_identity")
     def test_endpoint_not_404(self, mock_resolve):
         """POST /api/v1/products must exist (not 404)."""
         mock_resolve.return_value = PrincipalFactory.make_identity(

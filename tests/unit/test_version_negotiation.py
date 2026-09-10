@@ -163,6 +163,7 @@ class TestBoundaryNegotiatesForEveryTool:
     """
 
     async def test_bad_version_pin_raises_even_without_tenant(self):
+        from src.core.auth_context import AuthContext
         from src.core.config_loader import current_tenant
         from src.core.exceptions import AdCPVersionUnsupportedError
         from src.core.tools._boundary import invoke_tool
@@ -170,8 +171,12 @@ class TestBoundaryNegotiatesForEveryTool:
         current_tenant.set(None)
         req = GetAdcpCapabilitiesRequest(adcp_version="0.1")
 
+        # A bare AuthContext -- no credential at all -- because the claim is that the pin is
+        # refused BEFORE anything about the caller matters. invoke_tool takes the credential
+        # and the protocol now, not a pre-resolved identity: the boundary resolves its own,
+        # and negotiation runs ahead of that.
         with pytest.raises(AdCPVersionUnsupportedError):
-            await invoke_tool("get_adcp_capabilities", req, None)
+            await invoke_tool("get_adcp_capabilities", req, AuthContext(), "mcp")
 
     async def test_capabilities_impl_no_longer_negotiates_on_its_own(self):
         """The call site MOVED; it was not duplicated.

@@ -31,6 +31,7 @@ from src.core.tools.media_buy_delivery import (
     _get_media_buy_delivery_impl,
     _resolve_delivery_status_filter,
 )
+from tests.factories.principal import PrincipalFactory
 from tests.helpers.capture_wrapper_req import mcp_tool, registry_impl
 
 # ---------------------------------------------------------------------------
@@ -336,9 +337,8 @@ class TestMissingPrincipalIdReturnsError:
 
     def test_none_principal_id_raises_auth_error(self):
         from src.core.exceptions import AdCPAuthenticationError
-        from src.core.resolved_identity import ResolvedIdentity
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="t1",
             tenant=MagicMock(),
@@ -350,9 +350,8 @@ class TestMissingPrincipalIdReturnsError:
 
     def test_empty_string_principal_id_raises_auth_error(self):
         from src.core.exceptions import AdCPAuthenticationError
-        from src.core.resolved_identity import ResolvedIdentity
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="",
             tenant_id="t1",
             tenant=MagicMock(),
@@ -371,9 +370,8 @@ class TestMissingTenantRaisesAuthError:
 
     def test_none_tenant_raises_auth_error(self):
         from src.core.exceptions import AdCPAuthenticationError
-        from src.core.resolved_identity import ResolvedIdentity
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="p1",
             tenant_id="t1",
             tenant=None,

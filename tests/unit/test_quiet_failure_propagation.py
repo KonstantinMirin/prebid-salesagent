@@ -12,19 +12,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import GetProductsRequest
+from tests.factories.principal import PrincipalFactory
 
 
 def _make_identity(tenant_id="test-tenant"):
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id="user-1",
         tenant_id=tenant_id,
         tenant={
             "tenant_id": tenant_id,
             "name": "Test",
             "subdomain": "test",
-            "ad_server": {"adapter": "mock"},
+            "ad_server": "mock",
             "advertising_policy": None,
         },
         protocol="mcp",
@@ -234,14 +234,14 @@ class TestAIRankingExceptionPropagation:
         mock_uow = _mock_uow_with_products([product])
 
         # Need tenant with product_ranking_prompt to trigger AI ranking path
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="user-1",
             tenant_id="test-tenant",
             tenant={
                 "tenant_id": "test-tenant",
                 "name": "Test",
                 "subdomain": "test",
-                "ad_server": {"adapter": "mock"},
+                "ad_server": "mock",
                 "advertising_policy": None,
                 "product_ranking_prompt": "Rank by relevance",
             },

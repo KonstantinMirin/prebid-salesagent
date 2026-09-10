@@ -222,18 +222,21 @@ class TestCreativeSchemaCompliance:
         assert isinstance(data["status"], str)
         assert data["status"] == "pending_review"
 
-    def test_creative_format_id_auto_upgrade_from_dict(self):
-        """Creative accepts dict format_id and upgrades to FormatId object.
+    def test_creative_coerces_dict_format_id_to_the_annotated_type(self):
+        """Creative accepts a dict format_id and coerces it to the annotated type.
 
         Spec: CONFIRMED -- format-id.json requires object with agent_url + id;
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/format-id.json
         Covers: UC-006-CREATIVE-FORMAT-VALIDATION-01
+
+        Spelled ``format_id`` rather than the ``format`` alias this once used.
+        The alias was a non-spec key the removed ``validate_format_id`` branch
+        moved onto ``format_id``; the pin declares no ``format`` property.
         """
         creative = Creative(
             creative_id="c_upgrade",
             name="Test Creative",
-            variants=[],
-            format={"agent_url": DEFAULT_AGENT_URL, "id": "display_728x90"},
+            format_id={"agent_url": DEFAULT_AGENT_URL, "id": "display_728x90"},
         )
         assert creative.format_id is not None
         assert creative.format_id.id == "display_728x90"

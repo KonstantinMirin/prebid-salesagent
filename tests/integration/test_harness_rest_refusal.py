@@ -3,8 +3,10 @@
 ``MediaBuyCreateListEnv`` routes ``req=GetMediaBuysRequest`` to the get_media_buys
 dispatch. On IMPL/A2A/MCP it always did; on REST it does now, because
 ``get_media_buys`` HAS a REST route — ``@router.post("/media-buys/query")`` in
-``src/routes/api_v1.py`` — and ``_NO_REST_UC_TAG_PREFIXES`` is EMPTY, so every UC-019
-scenario is parametrized on rest and e2e_rest.
+``src/routes/api_v1.py`` — so every UC-019 scenario is parametrized on rest and e2e_rest.
+The per-UC ``_NO_REST_UC_TAG_PREFIXES`` exclusion that once withheld them is gone
+entirely: reachability is the ``ToolSpec`` row's answer, and every row carries a
+``RestBinding``.
 
 That is a change of fact, not of obligation. The obligation is and was: a list request
 must never be dispatched as something else. While the route did not exist, the only way

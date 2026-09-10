@@ -70,7 +70,6 @@ from src.core.schemas._base import (
     NestedModelSerializerMixin,
     SalesAgentBaseModel,
     Targeting,
-    _upgrade_legacy_format_ids,
     copy_before_mutating,
     strip_none_deep,
 )
@@ -248,24 +247,20 @@ class Creative(LibraryCreative):
     @model_validator(mode="before")
     @classmethod
     def validate_format_id(cls, values):
-        """Validate and upgrade format_id to AdCP namespaced format."""
-        from src.core.format_cache import upgrade_legacy_format_id
+        """Strip fields this model does not declare.
 
+        It used to also accept a bare-string ``format_id`` and a ``format`` alias,
+        upgrading both into a ``FormatId`` by looking the id up in the reference
+        cache. Both are shapes the pinned schema does not define, and a DTO is the
+        pinned schema -- see docs/design/one-tool-registry-remaining.md. Neither had
+        a producer: ``CreativeAssetRequest`` refuses a string on the buyer path, and
+        the listing path builds the ``FormatId`` explicitly from the row's own
+        ``agent_url`` and ``format`` columns (creatives/listing.py).
+        """
         if not isinstance(values, dict):
             return values
 
         values = copy_before_mutating(values)
-
-        # Handle both 'format' and 'format_id' keys
-        format_val = values.get("format_id") or values.get("format")
-        if format_val is not None:
-            try:
-                upgraded = upgrade_legacy_format_id(format_val)
-                values["format_id"] = upgraded
-                # Remove 'format' alias to avoid extra field rejection
-                values.pop("format", None)
-            except ValueError as e:
-                raise ValueError(f"Invalid format_id: {e}")
 
         # Strip delivery-only fields that callers may still pass from old code.
         # These fields existed on the delivery Creative base but not on the listing base.
@@ -630,12 +625,6 @@ class ListCreativeFormatsRequest(BuyerRequest, LibraryListCreativeFormatsRequest
     )
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
-
-    @model_validator(mode="before")
-    @classmethod
-    def upgrade_legacy_format_ids(cls, values: dict) -> dict:
-        """Convert dict format_ids to FormatId objects (AdCP v2.4 compliance)."""
-        return _upgrade_legacy_format_ids(values)
 
 
 class ListCreativeFormatsResponse(NestedModelSerializerMixin, LibraryListCreativeFormatsResponse, AdcpResponse):

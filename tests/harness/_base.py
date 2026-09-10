@@ -826,7 +826,7 @@ class BaseTestEnv:
             from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 
             headers = {
-                "x-adcp-auth": auth_token,
+                "Authorization": f"Bearer {auth_token}",
                 "x-adcp-tenant": a2a_identity.tenant_id or "",
             }
             server_context = ServerCallContext(
@@ -834,19 +834,31 @@ class BaseTestEnv:
             )
         else:
             # _get_auth_token must return a non-None value when identity exists,
-            # otherwise the handler rejects the request before _resolve_a2a_identity
-            # is called. Use auth_token from identity, falling back to a sentinel.
-            handler._resolve_a2a_identity = lambda *args, **kw: a2a_identity  # type: ignore[assignment]
+            # otherwise the handler rejects the request before the boundary resolves.
+            # Use auth_token from identity, falling back to a sentinel.
+            #
+            # The sibling assignment to ``handler._resolve_a2a_identity`` is gone: that
+            # method is deleted, so assigning it created a fresh attribute nothing reads and
+            # left the harness looking like it still injected an identity when it did not.
             handler._get_auth_token = lambda *args, **kw: (  # type: ignore[assignment]
                 (a2a_identity.auth_token or "harness-test-token") if a2a_identity else None
             )
             server_context = ServerCallContext()
 
-        # Set tenant ContextVar so production code can read it
-        if a2a_identity and a2a_identity.tenant:
+        # Seed the ambient tenant ContextVar for production code that still reads it.
+        #
+        # ``getattr``, not attribute access: a scenario whose SUBJECT is tenant resolution
+        # dispatches a bare credential (a token/tenant pair), not a resolved identity, and
+        # must not have a tenant pushed here at all -- doing so would answer the question the
+        # scenario is asking, from the test's own belief rather than from the resolver.
+        #
+        # This block is the ambient channel salesagent-02rgd Phase 2 removes. Until then it
+        # stays for the readers that have not moved to identity.tenant.
+        ambient_tenant = getattr(a2a_identity, "tenant", None) if a2a_identity else None
+        if ambient_tenant is not None:
             from src.core.config_loader import set_current_tenant
 
-            set_current_tenant(a2a_identity.tenant)
+            set_current_tenant(ambient_tenant)
 
         message = create_a2a_message_with_skill(skill_name=skill_name, parameters=parameters)
         if protocol_push_config is None:
@@ -995,24 +1007,26 @@ class BaseTestEnv:
         auth_token = mcp_identity.auth_token if mcp_identity else None
 
         if auth_token:
-            # Real auth chain: header → token → DB lookup → identity.
-            # Patch get_http_headers in BOTH modules that import it:
-            # transport_helpers (called by resolve_identity_from_context) and
-            # mcp_auth_middleware (called for context_id extraction).
+            # Real auth chain: header -> token -> DB lookup -> identity.
+            #
+            # ONE patch, at the source. This used to patch get_http_headers in two importing
+            # modules (transport_helpers and mcp_auth_middleware), and the comment explaining
+            # why conceded the hole: "if a third module imports get_http_headers without being
+            # patched, this won't catch it". Both of those modules have since stopped
+            # importing it -- mcp_auth_middleware no longer exists at all -- so the patches
+            # named nothing and raised AttributeError instead of failing usefully.
+            #
+            # src/core/main.py imports it from fastmcp.server.dependencies inside the call, so
+            # patching the DEFINING module is what a function-local import actually sees, and
+            # it covers any further importer for free.
             headers = self._credential_headers(mcp_identity)
 
             async def _call():
-                mock_th = patch("src.core.transport_helpers.get_http_headers", return_value=headers)
-                mock_mw = patch("src.core.mcp_auth_middleware.get_http_headers", return_value=headers)
-                with mock_th as patched_th, mock_mw as patched_mw:
+                with patch("fastmcp.server.dependencies.get_http_headers", return_value=headers) as patched:
                     async with Client(mcp) as client:
                         result = await client.call_tool(tool_name, arguments)
-                        # Guard: verify the header patches were called.
-                        # If a third module imports get_http_headers without being
-                        # patched, this won't catch it — but at least we verify
-                        # the known auth paths were exercised.
-                        assert patched_th.called or patched_mw.called, (
-                            f"Auth chain not exercised for {tool_name} — get_http_headers patches were not called"
+                        assert patched.called, (
+                            f"Auth chain not exercised for {tool_name} — get_http_headers was never called"
                         )
                         return DeliverResult(
                             payload=response_cls(**result.structured_content),
@@ -1020,12 +1034,13 @@ class BaseTestEnv:
                         )
 
         else:
-            # Unit mode: inject identity directly.
+            # Unit mode: inject identity directly, through the one seam that names the
+            # resolver (tests/helpers/boundary_identity.py). Identity is resolved in
+            # invoke_tool now, not in a per-transport middleware.
             async def _call():
-                with patch(
-                    "src.core.mcp_auth_middleware.resolve_identity_from_context",
-                    return_value=mcp_identity,
-                ):
+                from tests.helpers.boundary_identity import resolved_as
+
+                with resolved_as(mcp_identity):
                     async with Client(mcp) as client:
                         result = await client.call_tool(tool_name, arguments)
                         return DeliverResult(
@@ -1079,14 +1094,38 @@ class BaseTestEnv:
         One builder for both in-process wire transports: MCP patches
         ``get_http_headers`` to return it, REST sends it on the TestClient
         request. Shape is what production reads off the request
-        (``src/core/auth_middleware.py``: ``x-adcp-auth`` for the token,
-        ``x-adcp-tenant`` for tenant detection). Empty when no credential is
-        presented, so callers can splat it unconditionally.
+        (``src/core/auth_middleware.py``: ``Authorization: Bearer`` for the
+        token, ``x-adcp-tenant`` for tenant detection). Empty when no credential
+        is presented, so callers can splat it unconditionally.
+
+        ``Authorization``, not ``x-adcp-auth``. The alias is no longer accepted
+        anywhere in production (pinned 3.1.1 L2/authentication.mdx:71 and :153),
+        and while the harness still sent it, every transport's "invalid
+        credential" scenario was really testing an UNRECOGNIZED HEADER -- which
+        is why BR-UC-010 graded A2A as AUTH_INVALID where its sibling rows
+        graded success.
         """
         token = getattr(identity, "auth_token", None)
-        if not token:
-            return {}
-        return {"x-adcp-auth": token, "x-adcp-tenant": getattr(identity, "tenant_id", None) or ""}
+        tenant_id = getattr(identity, "tenant_id", None)
+
+        # The two headers are INDEPENDENT, and collapsing them was a harness-only fiction.
+        # ``Authorization`` says who the buyer is; ``x-adcp-tenant`` says which seller was
+        # addressed. Returning {} whenever there was no token dropped the tenant along with
+        # the credential, so a credential-less request arrived naming no seller -- a state
+        # production cannot produce, because a buyer who presents nothing has still CONNECTED
+        # to a host, and the host is the only thing that names the tenant (the request payload
+        # cannot: get-adcp-capabilities-request.json declares only protocols/context/ext).
+        #
+        # That fiction is what failed BR-UC-010's "authentication state does not affect
+        # response data content" on all three transports: unauthenticated requests were served
+        # minimal capabilities for want of a tenant, so the data DID differ by auth state --
+        # in the harness, never in production.
+        headers: dict[str, str] = {}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        if tenant_id:
+            headers["x-adcp-tenant"] = tenant_id
+        return headers
 
     @staticmethod
     def _presents_unresolvable_credential(identity: Any) -> bool:
@@ -1102,18 +1141,20 @@ class BaseTestEnv:
 
     @classmethod
     def _rest_request_headers(cls, identity: Any) -> dict[str, str]:
-        """Auth headers for a REST request whose ``_require_auth_dep`` is NOT overridden.
+        """Auth headers for a REST request — the same ones MCP and A2A send.
 
-        A valid identity is injected through the dependency override, so its
-        request needs no headers. The presented-but-unresolvable identity is
-        the one case where the real dependency runs (see
-        ``_configure_rest_auth``) — and the real dependency reads the
-        credential off the REQUEST, so without these headers it would see an
-        empty ``AuthContext`` and answer AUTH_MISSING to a caller that did
-        present a token.
+        It used to return ``{}`` for a VALID identity, on the reasoning that the
+        dependency override supplied it so "its request needs no headers", and
+        send real headers only for a presented-but-unresolvable credential. That
+        made REST the one transport whose requests did not carry the credential
+        they were testing with: MCP calls ``_credential_headers`` unconditionally
+        (see ``_run_mcp_client``), and A2A puts it on the call context.
+
+        With identity resolved at the boundary there is no override to supply
+        anything, and no reason for the asymmetry: every transport now presents
+        the same credential the same way, and the production chain reads it off
+        the request on all three.
         """
-        if not cls._presents_unresolvable_credential(identity):
-            return {}
         return cls._credential_headers(identity)
 
     @classmethod
@@ -1142,15 +1183,20 @@ class BaseTestEnv:
         ``_resolve_auth_dep`` (auth-OPTIONAL discovery routes) keeps returning
         the identity in both cases: production returns an identity there too,
         with ``principal_id`` None, which is exactly what these identities are.
-        """
-        from src.app import app
-        from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
+                NOTHING TO CONFIGURE ANY MORE. Identity is resolved at the boundary
+        (``src/core/tools/_boundary.invoke_tool``) from the credential the request
+        carries, so a REST route has no identity dependency to override -- and
+        in-process REST now drives the same real chain as A2A, MCP and e2e_rest
+        instead of modelling it. The credential still arrives the ordinary way, via
+        ``_credential_headers`` on the request (``Authorization: Bearer``).
 
-        if identity is None or cls._presents_unresolvable_credential(identity):
-            app.dependency_overrides.pop(_require_auth_dep, None)
-        else:
-            app.dependency_overrides[_require_auth_dep] = lambda: identity
-        app.dependency_overrides[_resolve_auth_dep] = lambda: identity
+        That closes what this method's own history documents: the override treated
+        ANY non-None identity as an already-resolved valid token, so REST answered
+        AUTH_MISSING to a caller who HAD presented a credential while every other
+        transport answered AUTH_INVALID (GH #1886). A seam that can express an
+        identity the wire never carried is a seam that can disagree with the wire.
+        """
+        return
 
     def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
         """Shared REST dispatch: configure auth → build body → POST → return Response.
@@ -1762,23 +1808,25 @@ class IntegrationEnv(BaseTestEnv):
         return list(self.get_session().scalars(stmt).all())
 
     def get_rest_client(self) -> Any:
-        """Return FastAPI TestClient with default auth dep override.
+        """Return the FastAPI TestClient. NO auth dependency override.
 
-        The default dep override returns ``self.identity_for(Transport.REST)``.
-        ``_run_rest_request`` overrides this per-request for multi-agent and
-        no-auth scenarios. Direct callers of ``get_rest_client()`` get the
-        default identity.
+        There is nothing left to override. REST routes take a ``GetAuthContext`` and the
+        identity is resolved once, inside ``invoke_tool``, from the credential on the
+        request -- so this used to install ``dependency_overrides`` for ``_require_auth_dep``
+        and ``_resolve_auth_dep``, and both of those are deleted.
+
+        Removing it is what makes a REST scenario grade resolution rather than assume it.
+        With the override in place every REST request ran as a pre-built identity handed in
+        by the test, so the header -> ``_detect_tenant`` -> tenant-scoped principal lookup
+        chain never executed and a scenario could not tell a correct resolution from a broken
+        one. The request now carries a real credential (``_rest_request_headers``) and the
+        server resolves it, the same way MCP and A2A already did.
         """
         if self._rest_client is None:
             from starlette.testclient import TestClient
 
             from src.app import app
-            from src.core.auth_context import _require_auth_dep, _resolve_auth_dep
-            from tests.harness.transport import Transport
 
-            rest_identity = self.identity_for(Transport.REST)
-            app.dependency_overrides[_require_auth_dep] = lambda: rest_identity
-            app.dependency_overrides[_resolve_auth_dep] = lambda: rest_identity
             self._rest_client = TestClient(app, raise_server_exceptions=self.REST_RAISE_SERVER_EXCEPTIONS)
 
         return self._rest_client

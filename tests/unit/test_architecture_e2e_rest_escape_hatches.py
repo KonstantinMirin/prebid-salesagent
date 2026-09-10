@@ -172,11 +172,17 @@ def find_e2e_rest_parametrize_gates(tree: ast.Module) -> tuple[str, ...]:
     """Every ``if`` in the module that gates an e2e transport append.
 
     A gate is an ``if`` whose condition names ``BDD_E2E_ENABLED`` and whose body
-    reaches an ``.append(...)``. The append half is what separates the gate from
-    the xdist-incompatibility check at the top of the conftest, which reads the
+    reaches an ``.append(...)`` or ``.extend(...)``. That half is what separates the gate
+    from the xdist-incompatibility check at the top of the conftest, which reads the
     same env var and raises. Reported in source order; an EMPTY tuple (the
     append became unconditional, or moved somewhere this scan cannot see) fails
     the pin below rather than passing vacuously.
+
+    ``extend`` is here because the helper now takes a SEQUENCE of e2e transports rather
+    than one, so it extends instead of appending. Matching only ``append`` made this
+    finder return an empty tuple the moment that changed -- and the empty tuple failed
+    the pin, which is the behaviour the paragraph above promises and the reason this was
+    caught instead of quietly becoming a detector that watches nothing.
     """
     gates: list[tuple[int, str]] = []
     for node in ast.walk(tree):
@@ -186,7 +192,7 @@ def find_e2e_rest_parametrize_gates(tree: ast.Module) -> tuple[str, ...]:
         if _E2E_ENABLED_FLAG not in literals:
             continue
         appends = any(
-            isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) and sub.func.attr == "append"
+            isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) and sub.func.attr in ("append", "extend")
             for sub in ast.walk(node)
         )
         if appends:
@@ -196,9 +202,7 @@ def find_e2e_rest_parametrize_gates(tree: ast.Module) -> tuple[str, ...]:
 
 # The pinned gate conditions. Update IN THE SAME CHANGE as any edit to them, and
 # say why in the commit — exactly like EXPECTED_XFAIL_ROUTES.
-EXPECTED_E2E_REST_PARAMETRIZE_GATES: tuple[str, ...] = (
-    "e2e_member is not None and os.environ.get('BDD_E2E_ENABLED') == 'true'",
-)
+EXPECTED_E2E_REST_PARAMETRIZE_GATES: tuple[str, ...] = ("e2e_members and os.environ.get('BDD_E2E_ENABLED') == 'true'",)
 
 
 def test_e2e_rest_parametrize_gates_match_pin() -> None:
@@ -249,12 +253,12 @@ def find_e2e_rest_append_expressions(tree: ast.Module) -> tuple[str, ...]:
 
 
 # The pinned call sites. Same discipline as the gate pin above.
-EXPECTED_E2E_REST_APPEND_EXPRESSIONS: tuple[str, ...] = (
-    (
-        "_parametrize_ctx(metafunc, transports, ids, None if no_rest_uc else Transport.E2E_REST, "
-        "None if no_rest_uc else 'e2e_rest')"
-    ),
-)
+# E2E_REST is named UNCONDITIONALLY here, and that is the property this pin now protects:
+# the list it seeds carries no gate, so no scenario can lose e2e_rest. E2E_MCP and E2E_A2A
+# are appended under BDD_E2E_TRANSPORTS=all on the following line, which this detector does
+# not see because it looks for E2E_REST — deliberate. Those two are a capacity rollout
+# (salesagent-e0enw); e2e_rest is the transport this module exists to keep ungated.
+EXPECTED_E2E_REST_APPEND_EXPRESSIONS: tuple[str, ...] = ("[Transport.E2E_REST]",)
 
 
 def test_e2e_rest_append_expressions_match_the_pin() -> None:
@@ -352,11 +356,16 @@ EXPECTED_E2E_REST_EXCLUSION_POINTS: tuple[str, ...] = (
     "marker_names & _TRANSPORT_SPECIFIC_TAGS",
     # The UC-010 auth outline dispatches per-row via its own channel column and
     # has no e2e leg (#1592); it returns before any transport list is built.
-    "marker_names & _CHANNEL_COLUMN_TAGS",
     "single",
     "any((t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names))",
     "any((t.startswith(tag_prefix) for t in marker_names)) and required_tag in marker_names",
-    "no_rest_uc",
+    # "no_rest_uc" was here: a per-UC exclusion for tools with no REST route, driven by a
+    # hand-maintained tag-prefix tuple that had been permanently empty. Deleted rather
+    # than kept as a dormant branch -- a tool's reachability is the ToolSpec row's answer
+    # (MCP registration, the A2A card and the REST route are all generated from it, and
+    # all 14 rows carry a RestBinding), so a tag list restating it was a second
+    # declaration free to drift. One fewer way to withhold a transport, which is the
+    # direction this pin exists to enforce.
 )
 
 
@@ -826,20 +835,18 @@ def pytest_generate_tests(metafunc):
 # The same disease written in the helper shape: the drop moves into the ARGUMENT,
 # leaving the gate condition itself untouched.
 _SYNTHETIC_GENERATE_TESTS_SNEAKY_CALL_SITE = """
-def _parametrize_ctx(metafunc, base_transports, base_ids, e2e_member, e2e_id):
+def _parametrize_ctx(metafunc, base_transports, e2e_members):
     transports = list(base_transports)
-    ids = list(base_ids)
-    if e2e_member is not None and os.environ.get("BDD_E2E_ENABLED") == "true":
-        transports.append(e2e_member)
-        ids.append(e2e_id)
-    metafunc.parametrize("ctx", transports, ids=ids, indirect=True)
+    if e2e_members and os.environ.get("BDD_E2E_ENABLED") == "true":
+        transports.extend(e2e_members)
+    metafunc.parametrize("ctx", transports, ids=[t.value for t in transports], indirect=True)
 
 
 def pytest_generate_tests(metafunc):
     transports = [Transport.A2A, Transport.MCP, Transport.REST]
     ids = ["a2a", "mcp", "rest"]
     quiet = marker_names & _NEW_QUIET_TAGS
-    _parametrize_ctx(metafunc, transports, ids, None if quiet else Transport.E2E_REST, "e2e_rest")
+    _parametrize_ctx(metafunc, transports, [] if quiet else [Transport.E2E_REST])
 """
 
 
@@ -893,9 +900,7 @@ def test_append_expression_detector_catches_a_sneaky_call_site_drop() -> None:
     expressions = find_e2e_rest_append_expressions(tree)
     assert expressions != EXPECTED_E2E_REST_APPEND_EXPRESSIONS
     assert "_NEW_QUIET_TAGS" not in expressions[0]
-    assert expressions == (
-        "_parametrize_ctx(metafunc, transports, ids, None if quiet else Transport.E2E_REST, 'e2e_rest')",
-    )
+    assert expressions == ("_parametrize_ctx(metafunc, transports, [] if quiet else [Transport.E2E_REST])",)
 
 
 # ---------------------------------------------------------------------------

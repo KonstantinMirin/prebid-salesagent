@@ -14,8 +14,7 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, create_model
 
-from src.core.auth_context import require_auth, resolve_auth
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.auth_context import AuthContext, get_auth_context
 from src.core.tools._announced_shape import apply_signature
 from src.core.tools._boundary import invoke_tool
 from src.core.tools._wire import to_wire
@@ -79,18 +78,22 @@ def _rest_handler(tool_name: str, spec: Any, body_model: type[BaseModel]) -> Any
     # replaced wholesale with one carrying body_model, which is what FastAPI reads. The
     # inline annotation was a runtime variable in a type position -- decorative, and it
     # cost a type: ignore to say so.
-    async def handler(body: Any, identity: ResolvedIdentity | None = None, **path_values: Any) -> Any:
+    async def handler(body: Any, auth_ctx: AuthContext = get_auth_context, **path_values: Any) -> Any:
         if path_values:
             body = spec.dto.model_validate({**body.model_dump(exclude_unset=True), **path_values})
         # Named, not frozen: the handler names the TOOL and ``invoke_tool`` reads the registry
         # per call. A route that froze the callable at import could not be substituted -- the
         # registry row and the thing the route invoked were two different objects.
-        response = await invoke_tool(tool_name, body, identity)
+        #
+        # It hands over the CREDENTIAL, not an identity. Resolving it here meant reading
+        # ToolSpec.auth here too -- via two dependencies picked by `spec.auth == "optional"`,
+        # one of which hardcoded require_valid_token=False and made REST the only transport
+        # that served a rejected credential on a public tool.
+        response = await invoke_tool(tool_name, body, auth_ctx, "rest")
         return to_wire(response)
 
     handler.__name__ = tool_name
     handler.__doc__ = (spec.impl.__doc__ or "").strip().split("\n")[0]
-    dep = resolve_auth if spec.auth == "optional" else require_auth
     path_params = [
         # Typed from the DTO field, so the path segment is validated as the field it fills.
         inspect.Parameter(
@@ -106,11 +109,14 @@ def _rest_handler(tool_name: str, spec: Any, body_model: type[BaseModel]) -> Any
             [
                 *path_params,
                 inspect.Parameter("body", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=body_model),
+                # ONE parameter for every row. It used to be an ``identity`` whose
+                # dependency and annotation both keyed off ``spec.auth``; the boundary
+                # decides now, so the route carries the same credential either way.
                 inspect.Parameter(
-                    "identity",
+                    "auth_ctx",
                     inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                    default=dep,
-                    annotation=ResolvedIdentity if spec.auth != "optional" else (ResolvedIdentity | None),
+                    default=get_auth_context,
+                    annotation=AuthContext,
                 ),
             ]
         ),

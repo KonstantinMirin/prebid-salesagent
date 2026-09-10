@@ -27,14 +27,14 @@ import pytest
 from adcp.types import FormatId
 
 from src.core.exceptions import AdCPAuthenticationError
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import GetProductsRequest
+from tests.factories.principal import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_cpm_pricing_option, create_test_product
 
 
 def _make_identity(principal_id=None, tenant=None, tenant_id=None):
     """Create a ResolvedIdentity for testing."""
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,
@@ -48,7 +48,7 @@ def _make_tenant(tenant_id="test-tenant"):
         "tenant_id": tenant_id,
         "name": "Test Tenant",
         "subdomain": "test",
-        "ad_server": {"adapter": "mock"},
+        "ad_server": "mock",
         "advertising_policy": None,
     }
 
@@ -133,7 +133,7 @@ class TestIdentityValidation:
     @pytest.mark.asyncio
     async def test_empty_tenant_dict_treated_as_no_tenant(self):
         """Empty tenant dict {} is falsy and treated as no tenant."""
-        identity = _make_identity(principal_id="user-1", tenant={})
+        identity = _make_identity(principal_id="user-1", tenant=None)
         req = _make_request()
 
         from src.core.tools.products import _get_products_impl

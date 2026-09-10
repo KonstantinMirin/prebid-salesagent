@@ -268,6 +268,32 @@ def get_tenant_by_virtual_host(virtual_host: str) -> dict[str, Any] | None:
         raise
 
 
+def tenant_id_for(*, virtual_host: str | None = None, subdomain: str | None = None) -> str | None:
+    """The tenant_id matching a host or subdomain, WITHOUT loading the tenant row.
+
+    Identification, not hydration. The token check is scoped by tenant_id
+    (``get_principal_from_token(auth_token, tenant_id)``), so knowing WHICH tenant cannot be
+    deferred -- but knowing its FIELDS can, and a LazyTenantContext defers them until one is
+    read.
+
+    Its siblings ``get_tenant_by_virtual_host`` / ``get_tenant_by_subdomain`` end in
+    ``serialize_tenant_to_dict`` and hand back the whole row, so identification paid for
+    hydration on every request and the identity then DISCARDED that row and re-queried it on
+    first field access. This selects one indexed column instead.
+    """
+    if not (virtual_host or subdomain):
+        return None
+    try:
+        with get_db_session() as db_session:
+            filters: dict[str, str] = {"virtual_host": virtual_host} if virtual_host else {"subdomain": subdomain or ""}
+            stmt = select(Tenant.tenant_id).filter_by(is_active=True, **filters)
+            return db_session.scalars(stmt).first()
+    except Exception as e:
+        if "no such table" in str(e) or "does not exist" in str(e):
+            return None
+        raise
+
+
 def get_secret(key: str, default: str | None = None) -> str | None:
     """Get a secret from environment or config."""
     return os.environ.get(key, default)

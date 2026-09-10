@@ -15,6 +15,7 @@ from src.core.exceptions import (
 )
 from src.core.logging_config import log_safe
 from src.core.schemas import SyncCreativeResult
+from src.core.tenant_context import LazyTenantContext
 from src.core.tools.creatives._processing import _failed_sync_result
 
 logger = logging.getLogger(__name__)
@@ -71,7 +72,7 @@ def _normalise_assignments(entries: list[Any]) -> dict[str, list[str]]:
 def _process_assignments(
     assignments: dict | list | None,
     results: list[SyncCreativeResult],
-    tenant: dict[str, Any],
+    tenant: LazyTenantContext,
     validation_mode: str,
     principal_id: str,
     uow: CreativeUoW | None = None,

@@ -17,6 +17,7 @@ from src.core.helpers import enum_value, log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 from src.core.schemas.creative import SyncCreativesRequest
+from src.core.tenant_context import LazyTenantContext
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
 from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
@@ -78,7 +79,7 @@ def sync_creatives(
     *,
     identity: ResolvedIdentity,
     principal_id: str,
-    tenant: dict,
+    tenant: LazyTenantContext,
 ) -> SyncCreativesResponse:
     """Sync creative assets to the centralized creative library.
 

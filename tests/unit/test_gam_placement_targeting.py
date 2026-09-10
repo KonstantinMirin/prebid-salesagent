@@ -9,6 +9,8 @@ These tests verify the creative-level placement targeting implementation:
 
 from unittest.mock import MagicMock
 
+from tests.factories.principal import PrincipalFactory
+
 
 class TestPlacementTargetingSchema:
     """Test PlacementTargeting schema in GAM implementation config."""
@@ -110,7 +112,6 @@ class TestPlacementIdsValidation:
         _update_media_buy_impl returns UpdateMediaBuyError with code='invalid_placement_ids'."""
         from unittest.mock import MagicMock, Mock, patch
 
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import UpdateMediaBuyRequest
         from src.core.testing_hooks import AdCPTestContext
         from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -118,7 +119,7 @@ class TestPlacementIdsValidation:
         MODULE = "src.core.tools.media_buy_update"
         DB_MODULE = "src.core.database.database_session"
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="principal_test",
             tenant_id="t1",
             tenant={"tenant_id": "t1", "name": "Test"},
@@ -228,7 +229,6 @@ class TestPlacementIdsValidation:
         _update_media_buy_impl returns UpdateMediaBuyError with code='placement_targeting_not_supported'."""
         from unittest.mock import MagicMock, Mock, patch
 
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.schemas import UpdateMediaBuyRequest
         from src.core.testing_hooks import AdCPTestContext
         from src.core.tools.media_buy_update import _update_media_buy_impl
@@ -236,7 +236,7 @@ class TestPlacementIdsValidation:
         MODULE = "src.core.tools.media_buy_update"
         DB_MODULE = "src.core.database.database_session"
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="principal_test",
             tenant_id="t1",
             tenant={"tenant_id": "t1", "name": "Test"},

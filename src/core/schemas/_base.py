@@ -2128,29 +2128,6 @@ class BrandAsset(SalesAgentBaseModel):
 # --- Package Schemas (Extend adcp library for proper request/response separation) ---
 
 
-def _upgrade_legacy_format_ids(values: dict) -> dict:
-    """Convert dict format_ids to FormatId objects (AdCP v2.4 compliance).
-
-    Shared validator used by PackageRequest, ProductFilters, and ListCreativeFormatsRequest.
-    """
-    if not isinstance(values, dict):
-        return values
-
-    values = copy_before_mutating(values)
-
-    format_ids = values.get("format_ids")
-    if format_ids and isinstance(format_ids, list):
-        upgraded = []
-        for fmt_id in format_ids:
-            if isinstance(fmt_id, dict) and "agent_url" in fmt_id and "id" in fmt_id:
-                upgraded.append(FormatId(**fmt_id))
-            else:
-                upgraded.append(fmt_id)
-        values["format_ids"] = upgraded
-
-    return values
-
-
 class PackageRequest(LibraryPackageRequest):
     """Package request schema (for CreateMediaBuyRequest).
 
@@ -2247,11 +2224,6 @@ class PackageRequest(LibraryPackageRequest):
         values.pop("package_id", None)
 
         return values
-
-    @model_validator(mode="before")
-    @classmethod
-    def upgrade_legacy_format_ids(cls, values: dict) -> dict:
-        return _upgrade_legacy_format_ids(values)
 
 
 class Package(LibraryPackage):

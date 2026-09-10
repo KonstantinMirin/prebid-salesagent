@@ -75,7 +75,7 @@ def _make_identity(
     """Build a ResolvedIdentity for integration tests."""
     if tenant is None:
         tenant = {"tenant_id": tenant_id}
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,

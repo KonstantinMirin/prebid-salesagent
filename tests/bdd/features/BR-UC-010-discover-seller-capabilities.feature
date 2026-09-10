@@ -297,48 +297,44 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # fails at "should include the creative section" (strict xfail, #1724).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/creative/properties/supports_compliance
 
-  # Deliberately transport-specific: auth policy genuinely differs per channel and the
-  # channel column is the subject of the outline. Spec is silent on auth for this task
-  # (capability-discovery.yaml: "No prerequisites ... the very first call a buyer makes"),
-  # so the per-channel policy is production-authoritative; the ERROR CODE once rejecting a
-  # presented credential is spec-governed: AUTH_INVALID, recovery terminal
-  # (enums/error-code.json: AUTH_REQUIRED is a deprecated 3.x alias).
+  # NOT transport-specific. Auth policy is a property of the TOOL, not of the channel: this
+  # outline names no channel, and the harness runs every row on mcp/a2a/rest alike, so a
+  # per-transport answer cannot be written here even by accident. The previous version had a
+  # `channel` column and graded A2A differently from MCP and REST -- which is how a
+  # production divergence came to be recorded as the contract ("spec-silent -> production
+  # authoritative"). It was a defect on both sides: A2A alone refused a presented credential
+  # on a public task, AND the harness sent every credential as `x-adcp-auth`, which pinned
+  # 3.1.1 L2/authentication.mdx:153 says A2A does not recognize at all.
+  #
+  # get_adcp_capabilities is a PUBLIC task. dist/compliance/3.1.1/universal/security.yaml
+  # runs its unauth and invalid-credential probes against the PROTECTED probe task and says
+  # why: "public tasks like get_adcp_capabilities return 200 without credentials by design".
+  # A public task therefore does not check a credential at all -- absent, valid or invalid,
+  # the answer is the same seller-scoped discovery response (INV-4).
+  # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/security.yaml pointer=/steps
+  # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/required
   @T-UC-010-auth @auth @invariant @partition @boundary @post-s1 @post-s2
   Scenario Outline: Authentication policy for capabilities discovery
     Given a tenant is resolvable from the request context
     And the tenant has full capabilities configured
     And the Buyer has <token_state> authentication
-    When the Buyer Agent invokes get_adcp_capabilities via <channel>
+    When the Buyer Agent invokes get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
     And the response should be <outcome>
     And a success outcome should carry adcp.major_versions, adcp.idempotency, supported_protocols and the media_buy section
     # INV-1 (no token -> full data), INV-2 (valid token -> full data),
-    # INV-3 (invalid MCP/REST -> treated absent; local contract — this project's token rides
-    # x-adcp-auth, not Authorization, and discovery is the no-prerequisite first call),
-    # INV-4 (auth irrelevant to data), INV-5 (invalid A2A -> AUTH_INVALID error)
+    # INV-3 (invalid token -> credential not checked on a public task, full data),
+    # INV-4 (auth state never affects the data a discovery response carries).
     # A success <outcome> is graded as a non-error completed discovery envelope: no wire
     # error envelope was produced and the spec-required top-level blocks (adcp,
     # supported_protocols) are present (salesagent-ytq6, was existence-only "response is not
-    # None"). The invalid-A2A error row is wire-pinned to AUTH_INVALID / recovery terminal
-    # (canonical code; graduated salesagent-7moz — A2A now validates a presented token and
-    # rejects invalid ones with AUTH_INVALID, so the row passes; the former AUTH_REQUIRED
-    # production gap is closed).
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/required
-    # REST rows pin the same treat-as-absent local contract as MCP (spec-silent -> production
-    # authoritative; confirm on wiring).
+    # None").
 
     Examples:
-      | partition_boundary                      | token_state | channel | outcome            |
-      | no_token no token                       | no          | MCP     | success            |
-      | no_token no token                       | no          | A2A     | success            |
-      | no_token no token                       | no          | REST    | success            |
-      | valid_token valid token                 | valid       | MCP     | success            |
-      | valid_token valid token                 | valid       | A2A     | success            |
-      | valid_token valid token                 | valid       | REST    | success            |
-      | invalid_token_mcp invalid token (MCP)   | invalid     | MCP     | success            |
-      | invalid_token_rest invalid token (REST) | invalid     | REST    | success            |
-      | invalid_token_a2a invalid token (A2A)   | invalid     | A2A     | AUTH_INVALID       |
+      | partition_boundary            | token_state | outcome |
+      | no_token no token             | no          | success |
+      | valid_token valid token       | valid       | success |
+      | invalid_token invalid token   | invalid     | success |
 
   @T-UC-010-auth-data-identity @auth @invariant
   Scenario: Authentication state does not affect response data content
@@ -512,49 +508,35 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | creative_absent creative not in supported_protocols → creative section absent  | "creative" is NOT in supported_protocols  | absent         |
       | full_response creative in supported_protocols → creative section present       | "creative" is in supported_protocols      | present        |
 
-  # Deliberately A2A-specific: this scenario IS the A2A auth policy (per-channel behavior is
-  # the subject; REST/MCP invalid-token policy is pinned by @T-UC-010-auth rows).
-  @T-UC-010-ext-c-a2a @extension @ext-c @error @a2a @post-f1 @post-f2 @post-f3
-  Scenario: A2A request with invalid auth token — error returned
+  # ONE scenario, no transport in it. This replaced two -- "A2A request with invalid auth
+  # token -- error returned" (expecting AUTH_INVALID) and "MCP request with invalid auth
+  # token -- silently ignored" (expecting success) -- each headed "Deliberately
+  # A2A/MCP-specific: this scenario IS the <channel> auth policy". Two scenarios grading
+  # opposite answers to one question is not a policy, it is a divergence written down.
+  #
+  # The MCP one justified itself with "this project's MCP token rides x-adcp-auth, not
+  # Authorization". That is no longer true and should never have been load-bearing: pinned
+  # 3.1.1 L2/authentication.mdx:71 requires the credential in `Authorization` and forbids
+  # requiring non-canonical aliases, :153 says `x-adcp-auth` is unrecognized on A2A, and the
+  # alias is now accepted nowhere in production.
+  #
+  # A public task does not check a credential. security.yaml probes unauth and
+  # invalid-credential against the PROTECTED task precisely because "public tasks like
+  # get_adcp_capabilities return 200 without credentials by design", so absent, valid and
+  # invalid all yield the same seller-scoped response (INV-4: capabilities describe the
+  # SELLER, not the caller, so a bad credential must not degrade adapter-derived data).
+  @T-UC-010-ext-c-invalid-credential @extension @ext-c @auth @degradation @post-f1
+  Scenario: An invalid credential is not checked on a public task
     Given a tenant is resolvable from the request context
     And the Buyer has an invalid authentication token
-    When the Buyer Agent sends a get_adcp_capabilities skill request via A2A with the token
-    Then the error is compliant with the AdCP error spec
-    And the response arrives
-    And the response contains error code AUTH_INVALID
-    # Graduated (salesagent-7moz): A2A now always validates a presented token
-    # regardless of the requested skill's own auth requirement.
-    # POST-F2: Buyer knows what failed and the error code
-    # POST-F1: No state change (read-only)
-    # The message substring is pinned to production's ACTUAL AUTH_INVALID wording
-    # (core/error.json message is a free string, so the spec cannot pin content):
-    # resolved_identity.py raises "Authentication token is invalid for tenant '...'"
-    # and adcp_a2a_server.py emits "Authentication token is invalid or expired." —
-    # both contain "token" and "invalid", and neither is the AUTH_REQUIRED
-    # missing-credential wording ("authentication required"), the deprecated 3.x alias.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/error.json pointer=/properties/message (free string — content pinned to production)
-    # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/get_adcp_capabilities.mdx (error table L1083-1084)
-
-  # Deliberately MCP-specific: this scenario IS the MCP auth policy (treat-invalid-as-absent).
-  @T-UC-010-ext-c-mcp @extension @ext-c @auth @mcp @degradation
-  Scenario: MCP request with invalid auth token — silently ignored
-    Given a tenant is resolvable from the request context
-    And the Buyer has an invalid authentication token
-    When the Buyer Agent calls get_adcp_capabilities via MCP with the token
+    When the Buyer Agent invokes get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
     And the response should be a success carrying adcp.major_versions, adcp.idempotency and supported_protocols
     And the response should carry the tenant's normal capabilities, not gated on the invalid token
-    # LOCAL CONTRACT (documented reading): treat-invalid-as-absent sits in tension with the
-    # AUTH_INVALID seller-MUST, which governs an Authorization header; this project's MCP
-    # token rides x-adcp-auth and discovery is the spec's no-prerequisite first call —
-    # production is authoritative on the policy (spec-silent), the reading is pinned here.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/AUTH_INVALID
-    # INV-4: capabilities describe the seller, not the caller — the invalid
-    # token must not degrade adapter-derived data (channels). Graduated: MCP ToolResult now
-    # pre-serializes via model_dump(mode="json"), so audience_targeting is correctly omitted
-    # instead of serialized as null.
+    # POST-F1: no state change (read-only)
+    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/security.yaml pointer=/steps
     # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/get_adcp_capabilities.mdx (L23)
+
 
   @T-UC-010-ext-d-filter @extension @ext-d @boundary @partition
   Scenario: media_buy (first enum value) — protocol filter honored, response filtered to requested domain
