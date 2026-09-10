@@ -1074,7 +1074,13 @@ def create_agent_card() -> AgentCard:
         description="AI agent for programmatic advertising campaigns via AdCP protocol",
         version=sales_agent_version,
         supported_interfaces=[
-            AgentInterface(url=server_url, protocol_version="1.0"),
+            # protocol_binding is REQUIRED in practice, not decorative. An A2A 1.x client
+            # selects its interface with `i.protocolBinding?.toUpperCase() === "JSONRPC"`
+            # (@a2a-js/sdk pick_interface.ts), so a card that omits it matches NOTHING: the
+            # client finds no usable interface and reports the agent UNREACHABLE, having
+            # never sent a request. Measured against @adcp/sdk 14.0.0-rc.35, whose runner
+            # graded 0 checks for exactly this reason.
+            AgentInterface(url=server_url, protocol_binding="JSONRPC", protocol_version="1.0"),
         ],
         capabilities=AgentCapabilities(
             push_notifications=False,
