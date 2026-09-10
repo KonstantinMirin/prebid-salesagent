@@ -566,6 +566,24 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "set_adapter_error",
             "adapter fault-injection has no server surface; needs an ADCP_TESTING fault-injection control (#1418)",
         ),
+        # Added by 9921b8189 ("uc011 scenarios that never dispatched now let the seller
+        # answer"), and noted against this pin's shrink-only direction like the
+        # precedents above. It is a NET GAIN even so: the step it replaces constructed an
+        # AdCPSalesAgentError in the TEST process and returned without dispatching, so the
+        # scenario graded an object the test had just made and never exercised the
+        # boundary's error translation at all -- on any transport. Now three transports
+        # grade it for real and one declares it cannot, which is strictly more coverage
+        # than four transports grading nothing. The declaration is honest rather than
+        # convenient: the fault is injected at the REPOSITORY, one layer below the impl,
+        # so everything between it and the wire stays real -- and reaching that layer
+        # needs in-process patching, which a live HTTP server has no equivalent of.
+        # Lifting it needs a server-side fault-injection control, the same build
+        # set_adapter_error above is waiting on (#1418).
+        (
+            "tests/harness/account_sync.py",
+            "fail_the_sync_internally",
+            "the live server exposes no fault-injection surface for sync_accounts",
+        ),
         # #1802 replaces the old _NO_E2E_REST_TAGS silent
         # parametrize-drop (invisible to both detectors in this module) with a
         # reviewable, pinned declaration. then_webhook_skipped_no_post's other
