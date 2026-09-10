@@ -47,7 +47,9 @@ class TestCacheKeyAcceptsAnyUrl:
         registry = CreativeAgentRegistry()
         agent_url = AnyUrl("https://creative.adcontextprotocol.org/")
         result = registry._cache_key(agent_url)
-        assert result == "https://creative.adcontextprotocol.org"
+        # The canonical form renders an empty path as "/" (the algorithm's step 5), which
+        # is what makes "https://x.org" and "https://x.org/" one cache entry rather than two.
+        assert result == "https://creative.adcontextprotocol.org/"
 
     def test_cache_key_normalizes_anyurl_same_as_str(self):
         """AnyUrl and equivalent str must produce the same cache key."""

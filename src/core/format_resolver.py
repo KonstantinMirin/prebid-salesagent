@@ -181,9 +181,19 @@ def format_display(identity: tuple[str, str]) -> str:
     The identity, not the raw reference: an error that lists "supported
     formats" spelled differently from the values actually compared reads as a
     contradiction to whoever has to act on it.
+
+    The single-slash join is DISPLAY ONLY and never a comparison. A canonical
+    agent_url whose path is empty ends in ``/`` (the algorithm's step 5), so a
+    naive ``f"{url}/{id}"`` renders ``https://x.org//display_300x250`` for the
+    common case. Collapsing that pair of slashes makes two identities that
+    differ ONLY by a trailing slash on a non-empty path (``/a`` vs ``/a/``,
+    which the spec keeps distinct) render alike; that is accepted here because
+    this string is read by a human deciding what to resubmit, and nothing
+    parses it back.
     """
     agent_url, format_id = identity
-    return f"{agent_url}/{format_id}"
+    separator = "" if agent_url.endswith("/") else "/"
+    return f"{agent_url}{separator}{format_id}"
 
 
 def format_accepted_by(requested: FormatRef, supported: FormatRef) -> bool:

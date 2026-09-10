@@ -3945,34 +3945,70 @@ def given_creative_with_format_agent_url(ctx: dict, agent_url: str) -> None:
     ctx["creative_agent_url"] = agent_url
 
 
-@given("a product whose format agent_url is the same agent with a trailing slash")
-def given_product_agent_url_trailing_slash(ctx: dict) -> None:
-    """Seed the product at the SAME agent the creative uses, spelled with a trailing slash.
+def _product_format_at_respelled_agent(ctx: dict, respell) -> None:
+    """Seed the product's format at the SAME agent the creative uses, spelled differently.
 
-    Grades BR-RULE-039 INV-1 on the wire: the seller must treat "https://agent/" and
-    "https://agent" as one agent, so the product's format resolves against the creative's and
-    the assignment is created. If canonicalization stopped equating them, the resolve would
-    fail and assigned_to would come back empty -- an observable difference, which is why this
-    belongs in a scenario and not in a unit test of the string helper.
+    Both INV-1 scenarios are this, with one function swapped: re-spell the agent_url on an
+    axis the pinned canonicalization algorithm COLLAPSES (host case) or one it PRESERVES
+    (the path), and let the wire say whether the seller agrees.
 
-    The agent comes from _product_format_entry, so it is whatever the CURRENT transport
-    actually serves. The previous version used a fictional "https://agent.example.com", which
-    no live registry can resolve: the scenario could not succeed on e2e_rest in principle, and
-    in-process it only appeared to because the registry is mocked (salesagent-td4xw).
+    The WHOLE entry comes from the shared helper before ``respell`` touches only its
+    agent_url. A format's identity is the (agent_url, id) PAIR, so a re-spelled agent
+    carrying a hand-picked id would name a format that agent does not serve, and the
+    scenario would grade the wrong thing.
+
+    The agent is whatever the CURRENT transport actually serves. The original version used
+    a fictional "https://agent.example.com", which no live registry can resolve: the
+    scenario could not succeed on e2e_rest in principle, and in-process it only appeared to
+    because the registry is mocked (salesagent-td4xw).
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    # The WHOLE entry from the shared helper, then one spelling change to its agent_url:
-    # a format's identity is the pair, and a re-spelled agent paired with a hand-picked id
-    # would name a format that agent does not serve.
     entry = dict(_scenario_format_entry(ctx, env))
-    unslashed = entry["agent_url"]
-    entry["agent_url"] = unslashed.rstrip("/") + "/"
-    assert entry["agent_url"] != unslashed, (
-        f"this step exists to make the two spellings DIFFER, but {unslashed!r} already "
-        f"ends in a slash, so the scenario would grade nothing"
+    original = entry["agent_url"]
+    entry["agent_url"] = respell(original)
+    assert entry["agent_url"] != original, (
+        f"this step exists to make the two spellings DIFFER, but re-spelling {original!r} "
+        f"produced the same string, so the scenario would grade nothing"
     )
     _setup_assignment_package_for_format(ctx, product_format_ids=[entry])
+
+
+@given("a product whose format agent_url is the same agent with the host upper-cased")
+def given_product_agent_url_host_upper_cased(ctx: dict) -> None:
+    """BR-RULE-039 INV-1: host case is collapsed at step 2, for ANY URL.
+
+    Wire-observable: if canonicalization stopped equating the two spellings the product's
+    format would not resolve against the creative's, no assignment would be created, and
+    assigned_to would come back empty. That is why this is a scenario and not a unit test
+    of a string helper.
+
+    Host case rather than a trailing slash: step 5 collapses a trailing slash only on an
+    EMPTY path, so a trailing-slash scenario is true of the in-process seed and false of
+    the e2e one, whose agent_url carries "/api/creative-agent". Host case is spec-true on
+    every transport, so the expectation does not need revisiting per transport -- or when
+    the vendored canonicalizer is replaced by the SDK's (salesagent-3xcdk).
+    """
+
+    def upper_host(url: str) -> str:
+        scheme, sep, rest = url.partition("://")
+        host, slash, path = rest.partition("/")
+        return f"{scheme}{sep}{host.upper()}{slash}{path}"
+
+    _product_format_at_respelled_agent(ctx, upper_host)
+
+
+@given("a product whose format agent_url is the same host at a different path")
+def given_product_agent_url_different_path(ctx: dict) -> None:
+    """BR-RULE-039 INV-1b: the PATH is preserved, so a different path is a different agent.
+
+    The negative half. ``remove_dot_segments`` normalizes a path but never discards one,
+    and the pin's own example agent_url is path-bearing
+    ("https://publisher.com/.well-known/adcp/sales") -- so one host may serve MCP at /mcp
+    and A2A at /a2a as two distinct agents. A canonicalizer that collapsed too much would
+    satisfy INV-1 and fail here; only the pair pins the rule.
+    """
+    _product_format_at_respelled_agent(ctx, lambda url: url.rstrip("/") + "/some-other-agent")
 
 
 @given('a product with format_ids using "format_id" key')

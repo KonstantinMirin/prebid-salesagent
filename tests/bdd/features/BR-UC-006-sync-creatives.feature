@@ -628,14 +628,38 @@ Feature: BR-UC-006 Sync Creative Assets
   # in-process it only appeared to because the registry is mocked. The rule is real and
   # wire-observable: if canonicalization stopped equating the two spellings, the seller would
   # not resolve the product's format and no assignment would be created (salesagent-td4xw).
+  #
+  # The axis is HOST CASE, not a trailing slash. core/format-id.json's algorithm
+  # (docs/reference/url-canonicalization) collapses host case at step 2 for ANY URL,
+  # whereas a trailing slash is collapsed only on an EMPTY path (step 5) -- so a
+  # trailing-slash scenario asserts something true of the in-process seed
+  # ("https://creative.test.example.com") and FALSE of the e2e one
+  # (".../api/creative-agent"), where the spec makes ".../creative-agent" and
+  # ".../creative-agent/" two different agents. It passed on e2e only because
+  # canonical_agent_url used to rstrip("/"), an "additional transformation before
+  # comparison" the algorithm forbids. Host case is spec-true on every transport.
   @T-UC-006-rule-039-inv1 @invariant @BR-RULE-039
-  Scenario: INV-1 — a trailing slash on the agent_url does not split format identity
+  Scenario: INV-1 — agent_url host case does not split format identity
     Given the Buyer is authenticated
     And a creative with a known format_id
-    And a product whose format agent_url is the same agent with a trailing slash
+    And a product whose format agent_url is the same agent with the host upper-cased
     When the Buyer Agent syncs the creative with assignments
     Then the response is compliant with the sync_creatives success spec
     And the assignment should be created
+
+  # The negative half INV-1 never had. Canonicalization that collapsed too much would
+  # pass the scenario above and fail this one, and only the pair pins the rule: the
+  # spec preserves the PATH, so an agent serving MCP at /mcp and A2A at /a2a on one
+  # host is two agents, not one.
+  @T-UC-006-rule-039-inv1b @invariant @BR-RULE-039 @error
+  Scenario: INV-1b — a different path on the same host IS a different agent
+    Given the Buyer is authenticated
+    And a creative with a known format_id
+    And a product whose format agent_url is the same host at a different path
+    And validation_mode is "strict"
+    When the Buyer Agent syncs the creative with assignments
+    Then the error is compliant with the AdCP error spec
+    And the assignment should fail with "VALIDATION_ERROR"
 
   @T-UC-006-rule-039-inv2 @invariant @BR-RULE-039 @error
   Scenario: INV-2 — match requires both normalized agent_url AND exact format_id

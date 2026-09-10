@@ -13,13 +13,15 @@ from pydantic import AnyUrl
 from src.core.format_resolver import format_display, format_identity_or_none
 from src.core.schemas import FormatId
 
-AGENT = "https://creative.adcontextprotocol.org"
+# The CANONICAL form: an empty path renders as "/" (algorithm step 5).
+AGENT_INPUT = "https://creative.adcontextprotocol.org"
+AGENT = "https://creative.adcontextprotocol.org/"
 
 
 def test_anyurl_agent_url_does_not_raise_and_ignores_a_trailing_slash():
     """A trailing slash is not part of the identity, and AnyUrl is not string-mangled."""
-    with_slash = FormatId(agent_url=f"{AGENT}/", id="display_300x250")
-    without_slash = FormatId(agent_url=AGENT, id="display_300x250")
+    with_slash = FormatId(agent_url=AGENT, id="display_300x250")
+    without_slash = FormatId(agent_url=AGENT_INPUT, id="display_300x250")
 
     assert isinstance(with_slash.agent_url, AnyUrl), "FormatId must keep agent_url typed"
 
@@ -29,18 +31,18 @@ def test_anyurl_agent_url_does_not_raise_and_ignores_a_trailing_slash():
 
 def test_product_and_package_references_compare_equal_across_url_spellings():
     """The two sides create_media_buy compares are built by different producers."""
-    product_format = FormatId(agent_url=f"{AGENT}/", id="display_300x250")
-    package_format = {"agent_url": AGENT, "id": "display_300x250"}  # off the wire, a dict
+    product_format = FormatId(agent_url=AGENT, id="display_300x250")
+    package_format = {"agent_url": AGENT_INPUT, "id": "display_300x250"}  # off the wire, a dict
 
     assert format_identity_or_none(product_format) == format_identity_or_none(package_format)
 
 
 def test_display_spells_the_identity_that_was_compared():
     """An error listing supported formats must not contradict the values compared."""
-    identity = format_identity_or_none(FormatId(agent_url=f"{AGENT}/", id="display_300x250"))
+    identity = format_identity_or_none(FormatId(agent_url=AGENT, id="display_300x250"))
 
     assert identity is not None
-    assert format_display(identity) == f"{AGENT}/display_300x250"
+    assert format_display(identity) == f"{AGENT}display_300x250"  # AGENT ends in "/"
 
 
 def test_path_is_part_of_the_identity():
@@ -50,8 +52,8 @@ def test_path_is_part_of_the_identity():
     one host's MCP endpoint and its bare origin the same agent. Nothing in the pin
     asks for that; ``canonicalize_target_uri`` preserves the path.
     """
-    assert format_identity_or_none(FormatId(agent_url=f"{AGENT}/mcp", id="d")) != format_identity_or_none(
-        FormatId(agent_url=AGENT, id="d")
+    assert format_identity_or_none(FormatId(agent_url=f"{AGENT_INPUT}/mcp", id="d")) != format_identity_or_none(
+        FormatId(agent_url=AGENT_INPUT, id="d")
     )
 
 

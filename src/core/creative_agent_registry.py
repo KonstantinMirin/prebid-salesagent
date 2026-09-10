@@ -485,7 +485,12 @@ class CreativeAgentRegistry:
         """
         import json
 
-        agent_url = canonical_agent_url(agent.agent_url)
+        # The DESTINATION is the URL the operator registered, not its canonical identity
+        # form. `canonical_agent_url` answers "are these the same agent?" -- it applies the
+        # spec's comparison algorithm, which among other things renders an empty path as
+        # "/" (step 5), so building a path onto its output yields `https://agent//mcp`.
+        # Identity and destination are different questions and this one is the destination.
+        agent_url = str(agent.agent_url).rstrip("/")
         # MCP endpoint may be at /mcp (as per adcp SDK fallback behavior)
         mcp_url = f"{agent_url}/mcp" if not agent_url.endswith("/mcp") else agent_url
 
