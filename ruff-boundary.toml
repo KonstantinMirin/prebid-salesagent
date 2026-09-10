@@ -49,6 +49,8 @@ select = ["TID251"]
 # The boundary owns the resolver and the stamped entry; the resolver's module defines it.
 "src/core/tools/_boundary.py" = ["TID251"]
 "src/core/resolved_identity.py" = ["TID251"]
+# Defines get_principal_from_token, so it cannot be banned from naming it.
+"src/core/auth_utils.py" = ["TID251"]
 # The two places a ToolError legitimately exists. ``tool_error_logging`` MINTS one, on the
 # way out to MCP, from an already-typed AdCPSalesAgentError; ``app.py`` registers the handler
 # that renders one. Both are the transport edge. Everything between them raises
@@ -101,3 +103,18 @@ select = ["TID251"]
 # TID251 ban is global over src/ and scripts/ by construction, has no list to keep current,
 # and fails at lint time rather than at test time.
 "fastmcp.exceptions.ToolError".msg = "ToolError is MCP's wire type, minted on the way OUT by src/core/tool_error_logging.py. Business logic raises an AdCPSalesAgentError subclass; the boundary (src/core/tools/_boundary.invoke_tool) types anything untyped that escapes. Nothing in between may import it (salesagent-02rgd)."
+
+# The two primitives identity resolution is MADE OF. Banning the resolver itself (above) stops
+# a caller reaching for the finished answer; these stop one assembling its own from the parts,
+# which is how the second resolver got there in the first place.
+#
+# src/core/auth.py carried get_principal_from_context until this change: a FastMCP-Context
+# resolver with its OWN x-adcp-tenant handling running alongside _detect_tenant. Zero
+# production callers -- seven test modules kept it breathing, and one of them said so, holding
+# it "in auth.py for test compat". Nothing detected it because nothing was looking: a second
+# resolver is invisible to a rule that only bans the first.
+#
+# Exempt: src/core/resolved_identity.py, which is where the assembling is SUPPOSED to happen,
+# and src/core/auth_utils.py, which defines one of them.
+"src.core.auth_utils.get_principal_from_token".msg = "Resolving a principal from a token is identity resolution, and it happens once, in src/core/resolved_identity._resolve_identity, called only from the tool boundary. A second caller is a second resolver -- which this codebase had, unnoticed, until it was deleted (salesagent-02rgd)."
+"src.core.resolved_identity._detect_tenant".msg = "Detecting the tenant from request headers happens once, inside _resolve_identity. A caller that detects its own tenant is a second tenant resolver, and the two WILL disagree -- the deleted get_principal_from_context disagreed by reading x-adcp-tenant with different fallbacks (salesagent-02rgd)."

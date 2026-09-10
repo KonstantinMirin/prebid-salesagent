@@ -161,11 +161,16 @@ class TestAuthHelperFamilySuggestion:
         _assert_auth_missing_with_suggestion(build_two_layer_error_envelope(exc_info.value))
 
     def test_invalid_token_carries_suggestion(self, integration_db):
-        """get_principal_from_context with an invalid token (require_valid_token=True)
-        raises AUTH_INVALID (presented-but-rejected credential) whose envelope
-        must carry the top-level suggestion.
+        """A PRESENTED credential that resolves to nobody raises AUTH_INVALID with a suggestion.
+
+        Driven through ``_resolve_identity`` -- the one resolver -- rather than the deleted
+        ``get_principal_from_context``, and with the credential in ``Authorization`` rather
+        than the removed ``x-adcp-auth`` alias. Under the alias this test was really grading
+        an UNRECOGNIZED HEADER: nothing was presented, so the honest answer would have been
+        AUTH_MISSING, and it only reached AUTH_INVALID because the old resolver read a header
+        production no longer accepts.
         """
-        from src.core.auth import get_principal_from_context
+        from src.core.resolved_identity import _resolve_identity
         from tests.factories import TenantFactory
         from tests.harness._base import BareIntegrationEnv
 
@@ -173,17 +178,14 @@ class TestAuthHelperFamilySuggestion:
             TenantFactory(tenant_id="auth_sugg_t2")
             env.get_session()  # commit factory data
 
-            class _HeaderCarrier:
-                """Duck-typed context: get_http_headers() returns {} outside an
-                HTTP request, so get_principal_from_context falls back to
-                ``context.headers`` — the documented sync-tool seam."""
-
-                headers = {
-                    "x-adcp-auth": "not-a-real-token",
-                    "x-adcp-tenant": "auth_sugg_t2",
-                }
-
             with pytest.raises(AdCPSalesAgentError) as exc_info:
-                get_principal_from_context(_HeaderCarrier())
+                _resolve_identity(
+                    headers={
+                        "Authorization": "Bearer not-a-real-token",
+                        "x-adcp-tenant": "auth_sugg_t2",
+                    },
+                    require_valid_token=True,
+                    protocol="mcp",
+                )
 
         _assert_auth_invalid_with_suggestion(build_two_layer_error_envelope(exc_info.value))

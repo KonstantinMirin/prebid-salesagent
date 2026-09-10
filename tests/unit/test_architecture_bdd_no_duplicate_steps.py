@@ -20,8 +20,24 @@ import pytest
 
 _BDD_STEPS_DIR = Path(__file__).resolve().parents[1] / "bdd" / "steps"
 
-# Threshold: flag when N or more functions share the same body
-_DUPLICATE_THRESHOLD = 3
+# Threshold: flag when N or more functions share the same body.
+#
+# TWO, not three. A PAIR of step functions with byte-identical bodies is the disease in its
+# smallest form, and holding the threshold at 3 made the smallest form invisible: "the Buyer
+# has no authentication credentials" and "no tenant can be resolved from the request context"
+# were two functions whose bodies were both ``ctx["identity"] = None``, so five scenarios
+# asserting that NO tenant could be resolved were served one, and graded the opposite of what
+# they said. Two sentences that must express different states cannot share a body.
+_DUPLICATE_THRESHOLD = 2
+
+# The pairs that already exist, as a COUNT that may only fall -- the same ratchet shape as
+# .duplication-baseline, and for the same reason: lowering the threshold to 2 does not create
+# these, it reveals 54 that were always there. An enumerated allowlist of 54 would be 54 lines
+# nobody reads; a number fails the moment a 55th appears, which is the property that matters.
+#
+# Lower it when you collapse a pair. Never raise it: a new pair is a new defect, and the
+# scenario above is what one costs.
+_DUPLICATE_GROUP_BASELINE = 54
 
 # Steps exempt from the 3+ identical-body scan (load-bearing: each suppresses a
 # cluster that would otherwise fail test_no_excessive_duplicate_step_bodies).
@@ -111,8 +127,6 @@ class TestBddNoDuplicateSteps:
         be collapsed into a regex step or shared helper.
         """
         duplicates = _scan_bdd_steps()
-        if not duplicates:
-            return
 
         lines = []
         for preview, funcs in duplicates:
@@ -120,9 +134,18 @@ class TestBddNoDuplicateSteps:
             for f in funcs:
                 lines.append(f"    {f}")
 
-        assert not duplicates, (
+        assert len(duplicates) <= _DUPLICATE_GROUP_BASELINE, (
             f"Found {len(duplicates)} group(s) of step functions with identical bodies "
-            f"(threshold: {_DUPLICATE_THRESHOLD}+):" + "".join(lines)
+            f"(threshold: {_DUPLICATE_THRESHOLD}+), above the recorded baseline of "
+            f"{_DUPLICATE_GROUP_BASELINE}. Two sentences sharing one body cannot express two "
+            f"states -- give the new one its own body, or collapse the pair into a single "
+            f"parametrized step:" + "".join(lines)
+        )
+        assert len(duplicates) == _DUPLICATE_GROUP_BASELINE, (
+            f"Only {len(duplicates)} duplicate group(s) remain but the baseline still says "
+            f"{_DUPLICATE_GROUP_BASELINE}. Lower _DUPLICATE_GROUP_BASELINE to "
+            f"{len(duplicates)} in the same change that removed them, so the ratchet cannot "
+            f"drift back up unnoticed."
         )
 
     @pytest.mark.arch_guard
